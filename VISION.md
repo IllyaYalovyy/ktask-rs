@@ -116,7 +116,8 @@ Terminal states: `done`, `failed`, `cancelled`.
 
 - `preflight` proves the world is sane before spending tokens: clean fetched mainline, green `baseline_command`, provider available, disk space, lock acquired.
 - `waiting_input` is the mechanism behind invariant 8: the agent (or a gate) surfaces a structured decision request (question, options, trade-offs, impact); the queue pauses; `ktask resolve` records the answer as an ADR that is injected into the context of subsequent tasks.
-- Crash recovery is deterministic: on restart, inspect the live process table, the worktree, and the last persisted transition, then either resume the in-flight phase or mark the attempt `interrupted`. Never guess.
+- **Crash recovery is deterministic and is a first-class feature, not an edge case.** A machine can lose power mid-gate, mid-commit, or mid-push; the supervisor must come back knowing exactly what happened. On restart it inspects the live process table, the worktree, and the last persisted transition, then either resumes the in-flight phase or marks the attempt `interrupted`. It never guesses, and it never silently re-runs work that may already have taken effect.
+- Every state transition is journaled **before** its side effect, so an interruption is always recoverable to a known state rather than an ambiguous one. Recovery from an interruption at any phase boundary — including mid-publication, the dangerous one — is exercised by tests that kill the process at each point, not merely reasoned about.
 - Every attempt is preserved separately: executor session ID, timestamps, configured and provider-reported model IDs, exit reason, commands run, gate results, git SHAs, tokens, and cost.
 - Task context is assembled by the runner, never hand-injected per task: in v0.1 it is a static context document from the private prompt library plus every ADR recorded so far; typed-source assembly under a size budget (VISION excerpt, relevant ADRs, prior resolutions) arrives in v0.2.
 
@@ -232,7 +233,19 @@ A stable capability interface, with adapters:
 
 ## 13. TUI
 
-Operational, not decorative. Screens:
+**The TUI is the primary interface**, not a decorative view over the CLI. It is
+where an operator lives while work is running: watching a task execute, reading
+why one failed, answering a blocking question, inspecting a diff before it is
+published. It is held to the same standard as the engine — a terminal UI that
+merely prints what the CLI already prints has failed its purpose.
+
+The CLI remains a first-class, complete interface for everything scriptable and
+everything quick: adding tasks, checking status, resolving input, driving
+unattended runs. Neither is a subset of the other in capability; they differ in
+posture. Both are views over the same `ktask-core`, and no behavior may exist in
+one that cannot be reached from the other.
+
+Screens:
 
 - **Queue**: ordered tasks, blockers, current phase, attempts.
 - **Task inspector**: objective, acceptance criteria, dependencies, completion gates, work protocol and current phase.
@@ -245,6 +258,14 @@ Operational, not decorative. Screens:
 - **Configuration and doctor results.**
 
 Essential actions: pause, interrupt, resume, retry, resolve, acknowledge, cancel, attach, open diff, rerun gate, export sanitized diagnostics. Every action is also a CLI command; the TUI is a view over the same core.
+
+Requirements that make it a real TUI rather than a rendering of log output:
+
+- **Live, not polled-looking**: output streams as it is produced, with visible phase and progress; the interface stays responsive while a task runs.
+- **Navigable**: keyboard-driven throughout, discoverable (a key map that is always reachable), consistent bindings across screens, and no action that is available only by editing files.
+- **Attachable mid-flight**: opening the TUI while a run is in progress shows the live state immediately, and closing it never disturbs the run.
+- **Honest under stress**: long output, tiny terminals, resize, and unicode content degrade gracefully and never corrupt the display.
+- **Testable headlessly**: see §15. A TUI that can only be checked by eye is not finished.
 
 ## 14. Development Plan
 

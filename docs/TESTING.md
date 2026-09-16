@@ -26,6 +26,13 @@ Required coverage:
 All of it runs headlessly from `scripts/quality.sh`. If a behavior can only be
 checked by eye, restructure until it can be checked by a test.
 
+## Crash recovery
+
+Recoverability is tested by actually interrupting the supervisor, not by
+reasoning about it. For every phase boundary — including mid-publication —
+a test kills the process there and asserts the next start reaches the correct
+state, re-runs nothing that already took effect, and loses no evidence.
+
 ## Test quality
 
 Suite quality is measured by mutation testing (`cargo mutants`). A surviving
