@@ -5,7 +5,7 @@
 
 ## 1. Project Brief (the prompt)
 
-Build **ktask v2**, a single-binary Rust tool that supervises unattended AI-agent work on a local machine: it drains an ordered queue of tasks, hands each task to a coding-agent CLI (Claude, Codex, Kiro, and future tools), and refuses to call the work done until it has been mechanically verified, cleanly published, and confirmed present on remote mainline. It is a **local delivery supervisor**, not a multi-agent platform. Its market position is deterministic execution, verifiable completion, privacy, and recovery.
+Build **ktask v2**, a single-binary Rust tool that supervises unattended AI-agent work on a local machine: it drains an ordered queue of tasks, hands each task to a coding-agent CLI (Claude and Codex at launch; further tools are additive), and refuses to call the work done until it has been mechanically verified, cleanly published, and confirmed present on remote mainline. It is a **local delivery supervisor**, not a multi-agent platform. Its market position is deterministic execution, verifiable completion, privacy, and recovery.
 
 ktask v2 is opinionated by design. It is the distillation of long practical experience building applications with AI agents. Everything that experience taught us, which today lives in prompt prose and discipline, becomes mechanism: enforced by a typed state machine, mechanical gates, and a git transaction model that no agent can bypass. The design test for every feature: *could an agent ignore this?* If yes, it is not done.
 
@@ -22,7 +22,7 @@ The product distinction in one sentence: **other tools automate agents; ktask gu
 - Git transaction model: isolated task worktrees, serialized publication, verified against the exact candidate commit; all four publication modes (`direct-mainline`, `local-merge`, `pull-request`, `review-only`).
 - Work protocols: opinionated per-task state machines (`direct` and `tdd` at launch), enforced by the runner with per-phase write scopes, gates, and evidence.
 - Privacy by construction: all operational state (prompts, context, logs, reports, task state) lives outside the repository by default.
-- Stable provider layer with capability detection; Claude, Codex, Kiro parity at launch.
+- Stable provider layer with capability detection; `dummy`, Claude and Codex at launch, with adapters shaped so further CLIs are additive.
 - Headless CLI backed by a core library; a full operational TUI on top. The TUI is never required for scripting or testing.
 - Import of existing v1 `.ktask/` directories (tasks.md, reports, logs).
 - Flight recorder: every attempt preserved with executor session, timestamps, model IDs, exit reason, commands, results, git SHAs, tokens, and cost.
@@ -222,7 +222,7 @@ No `.ktask/` in project repositories by default.
 
 A stable capability interface, with adapters:
 
-- Claude, Codex, Kiro at parity for launch; adapters designed so OpenCode, Goose, and future CLIs are straightforward.
+- Claude and Codex at launch. Kiro, OpenCode, Goose and further CLIs are additive: the adapter interface is designed for them, but they are backlog and no launch behavior depends on them.
 - A built-in `dummy` provider ships as a first-class adapter: it replays predefined, deterministic responses (success, failure, hang, limit message, input request) on cue. It powers the scenario suite, CI, and offline development of ktask itself.
 - Startup capability detection: structured output, model selection, usage telemetry, approval modes. (Session identifiers are still recorded in attempt evidence, but no correctness path depends on session resume.)
 - `ktask doctor` performs a minimal real provider preflight.
@@ -269,14 +269,19 @@ Requirements that make it a real TUI rather than a rendering of log output:
 
 ## 14. Development Plan
 
+Scope note: the TUI is **v1 scope, not a later addition**. It is the primary
+interface (§13), so a release without it is not a release. It is listed under
+v0.2 below only in the sense of build order — the engine must exist before it
+can be rendered — and both phases are required for v1.
+
 **v0.1 (foundation, the minimum honest product):**
 state machine + SQLite journal; headless CLI with v1 command parity; structured Markdown task format with `plan lint`; `import` for v1 `.ktask/`; gates (baseline, targeted, verify, lint, format, build, basic privacy scan); git transaction model with all four publication modes; work protocols `direct` and `tdd`; failure classifier with bounded fresh-session remediation and circuit breaker; static context + ADR recording and injection; `dummy`, Claude, and Codex adapters; `doctor`; attempt records including tokens and cost; `stats`.
 
-**v0.2 (operations):**
-TUI (queue, live run, logs, failures, inspector first; input inbox, history, git, config after); `waiting_limit` exact-reset handling; `flake_command`; full `privacy audit`; Kiro adapter; typed-source context assembly with size budgets; `spec-first` protocol with per-phase provider selection.
+**v0.2 (operations, and equally required for v1):**
+The complete TUI — all nine screens of §13 (queue, live run, logs, failures and inspector first; input inbox, history, git, configuration and doctor after); `waiting_limit` exact-reset handling; `flake_command`; full `privacy audit`; typed-source context assembly with size budgets; `spec-first` protocol with per-phase provider selection.
 
 **Backlog (post-v1, explicitly deferred):**
-independent read-only review agent before publication; dependency DAGs with strict serial default and opt-in parallelism for explicitly independent tasks; test-impact-based targeted checks; built-in flaky-test investigation with persisted reproduction evidence; shared task templates and verification profiles; GitHub/GitLab issue import and closure; desktop notifications; enforced cost/token/time budgets (recording ships in v0.1, enforcement is backlog); reproducible sanitized execution bundles; retrospective generation proposing prompt/context patches as human-merged PRs; provider fallback; protocol composition from typed phase primitives; reuse of `ktask-core` (journal, state machines, providers, TUI widgets) by other supervisors, such as an article-authoring frontend.
+independent read-only review agent before publication; dependency DAGs with strict serial default and opt-in parallelism for explicitly independent tasks; test-impact-based targeted checks; built-in flaky-test investigation with persisted reproduction evidence; shared task templates and verification profiles; GitHub/GitLab issue import and closure; desktop notifications; enforced cost/token/time budgets (recording ships in v0.1, enforcement is backlog); reproducible sanitized execution bundles; retrospective generation proposing prompt/context patches as human-merged PRs; provider fallback; further provider adapters (Kiro, OpenCode, Goose); protocol composition from typed phase primitives; reuse of `ktask-core` (journal, state machines, providers, TUI widgets) by other supervisors, such as an article-authoring frontend.
 
 ## 15. Testing Strategy
 
