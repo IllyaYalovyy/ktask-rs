@@ -24,13 +24,13 @@ The product distinction in one sentence: **other tools automate agents; ktask gu
 - Privacy by construction: all operational state (prompts, context, logs, reports, task state) lives outside the repository by default.
 - Stable provider layer with capability detection; `dummy`, Claude and Codex at launch, with adapters shaped so further CLIs are additive.
 - Headless CLI backed by a core library; a full operational TUI on top. The TUI is never required for scripting or testing.
-- Import of existing v1 `.ktask/` directories (tasks.md, reports, logs).
 - Flight recorder: every attempt preserved with executor session, timestamps, model IDs, exit reason, commands, results, git SHAs, tokens, and cost.
 
 ### Non-Goals (v1)
 
 - Not a multi-agent orchestration platform, cloud service, or CI/CD system. ktask never configures, runs, or waits on a hosted pipeline; every check is local.
-- No parallel task execution (strict serial is the default and the only v1 mode; DAG-based parallelism is backlog).
+- No backward compatibility and no migration. ktask-rs is a new tool, not a successor that must read another tool's files. There is no importer and no parity obligation; anything worth keeping is re-entered by hand, once.
+- No parallel task execution (strict serial is the default and the only mode in v1; DAG-based parallelism is backlog).
 - No agent-to-agent conversation, no model routing intelligence, no prompt optimization.
 - No web UI, no daemon requirement for basic operation.
 - Not a content or article pipeline. Non-code workflows (for example the Medium authoring pipeline) may eventually reuse `ktask-core` crates as a separate frontend with their own rules; their work never becomes ktask tasks.
@@ -62,7 +62,6 @@ ktask-rs doctor                  # provider preflight, git, toolchain, permissio
 
 # Per project (no .ktask/ created in the repo)
 ktask-rs init                    # registers project; state under $XDG_STATE_HOME/ktask
-ktask-rs import ~/Projects/foo/.ktask   # migrate a v1 queue, reports, logs
 
 # Queue management
 ktask-rs add                     # $EDITOR with a structured task template; malformed tasks are rejected
@@ -263,6 +262,7 @@ Essential actions: pause, interrupt, resume, retry, resolve, acknowledge, cancel
 Requirements that make it a real TUI rather than a rendering of log output:
 
 - **Live, not polled-looking**: output streams as it is produced, with visible phase and progress; the interface stays responsive while a task runs.
+- **The output pane is the thing an operator watches, and it must be solid.** Agent CLIs emit ANSI colour, cursor movement, carriage returns, progress spinners, very long lines and occasionally invalid UTF-8. None of that may corrupt the display, move the cursor outside the pane, or break the surrounding layout. Output is sanitized before it is rendered, arrives in bounded chunks, and is always attributable to a task, a phase and a moment in time.
 - **Navigable**: keyboard-driven throughout, discoverable (a key map that is always reachable), consistent bindings across screens, and no action that is available only by editing files.
 - **Attachable mid-flight**: opening the TUI while a run is in progress shows the live state immediately, and closing it never disturbs the run.
 - **Honest under stress**: long output, tiny terminals, resize, and unicode content degrade gracefully and never corrupt the display.
@@ -276,18 +276,18 @@ v0.2 below only in the sense of build order — the engine must exist before it
 can be rendered — and both phases are required for v1.
 
 **v0.1 (foundation, the minimum honest product):**
-state machine + SQLite journal; headless CLI with v1 command parity; structured Markdown task format with `plan lint`; `import` for v1 `.ktask/`; gates (baseline, targeted, verify, lint, format, build, basic privacy scan); git transaction model with commit-and-push publication; work protocols `direct` and `tdd`; failure classifier with bounded fresh-session remediation and circuit breaker; static context + ADR recording and injection; `dummy`, Claude, and Codex adapters; `doctor`; attempt records including tokens and cost; `stats`.
+state machine + SQLite journal; headless CLI; structured Markdown task format with `plan lint`; gates (baseline, targeted, verify, lint, format, build, basic privacy scan); git transaction model with commit-and-push publication; work protocols `direct` and `tdd`; failure classifier with bounded fresh-session remediation and circuit breaker; static context + ADR recording and injection; `dummy`, Claude, and Codex adapters; `doctor`; attempt records including tokens and cost; `stats`.
 
 **v0.2 (operations, and equally required for v1):**
 The complete TUI — all nine screens of §13 (queue, live run, logs, failures and inspector first; input inbox, history, git, configuration and doctor after); `waiting_limit` exact-reset handling; `flake_command`; full `privacy audit`; typed-source context assembly with size budgets; `spec-first` protocol with per-phase provider selection.
 
 **Backlog (post-v1, explicitly deferred):**
-independent read-only review agent before publication; dependency DAGs with strict serial default and opt-in parallelism for explicitly independent tasks; test-impact-based targeted checks; built-in flaky-test investigation with persisted reproduction evidence; shared task templates and verification profiles; GitHub/GitLab issue import and closure; desktop notifications; enforced cost/token/time budgets (recording ships in v0.1, enforcement is backlog); reproducible sanitized execution bundles; retrospective generation proposing prompt/context patches as human-merged PRs; provider fallback; further provider adapters (Kiro, OpenCode, Goose); protocol composition from typed phase primitives; reuse of `ktask-core` (journal, state machines, providers, TUI widgets) by other supervisors, such as an article-authoring frontend.
+independent read-only review agent before publication; dependency DAGs with strict serial default and opt-in parallelism for explicitly independent tasks; test-impact-based targeted checks; built-in flaky-test investigation with persisted reproduction evidence; shared task templates and verification profiles; desktop notifications; enforced cost/token/time budgets (recording ships in v0.1, enforcement is backlog); reproducible sanitized execution bundles; retrospective generation proposing prompt/context patches as human-merged PRs; provider fallback; further provider adapters (Kiro, OpenCode, Goose); protocol composition from typed phase primitives; reuse of `ktask-core` (journal, state machines, providers, TUI widgets) by other supervisors, such as an article-authoring frontend.
 
 ## 15. Testing Strategy
 
 - The core state machine and classifier are pure logic: exhaustive unit tests, property tests on journal replay (materialized state must always equal the journal projection).
-- **Scenario suite**: the built-in `dummy` provider drives full end-to-end runs with deterministic outcomes; assertions on final states, journal contents, exit codes, and git results. v1 ktask behavior on shared scenarios serves as the semantic baseline.
+- **Scenario suite**: the built-in `dummy` provider drives full end-to-end runs with deterministic outcomes; assertions on final states, journal contents, exit codes, and git results.
 - Git layer tested against disposable local remotes (bare repos), including conflict, rejected-push, and drift scenarios.
 - An optional integration tier (off by default, behind a flag) smoke-tests real provider adapters against a cheap model. It exists for adapter development only and is never part of scored or gating test runs.
 - TUI tested headlessly via ratatui `TestBackend` snapshots; no screen-watching required anywhere in the suite.
@@ -302,6 +302,5 @@ independent read-only review agent before publication; dependency DAGs with stri
 | TDD phase enforcement misclassifies files | Medium | per-language test-path globs, explicit exception categories, loud recorded overrides |
 | Protocol engine drifts toward a workflow DSL | High | fixed built-ins only in v1; composition restricted to typed primitives; completion gates structurally mandatory |
 | SQLite state corruption | Low | append-only journal as source of truth; materialized state rebuildable; periodic backup |
-| Migration friction from v1 `.ktask/` | Medium | first-class `import`; v1 kept runnable until parity is proven |
 | Scope is large enough that a run may not finish | High | tasks are ordered so each phase boundary is a coherent, demonstrable product; an unfinished run is a real result, not a void one |
 | TUI becomes a time sink | High | headless CLI first; TUI is a view over the event stream, phased in v0.2 |

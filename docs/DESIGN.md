@@ -22,6 +22,10 @@ thiserror   = "2"
 time        = { version = "0.3", features = ["formatting", "parsing", "macros", "serde"] }
 sha2        = "0.10"
 unicode-width = "0.2"
+unicode-segmentation = "1.13"
+regex       = "1.13"
+nix         = { version = "0.31", features = ["signal", "fs", "process"] }
+signal-hook = "0.4"
 
 [dev-dependencies]
 proptest    = "1"
@@ -29,12 +33,23 @@ insta       = "1"
 tempfile    = "3"
 ```
 
-Two consequences that shape everything:
+`nix` and `signal-hook` exist so that `unsafe_code = "forbid"` can stay
+absolute. Killing a process group, handling SIGINT, checking whether a pid is
+alive and measuring free disk space all need syscalls and none has a safe std
+API; `forbid` cannot be lifted by any `allow`. Rather than carve out an
+audited unsafe module, the unsafe lives in these two widely-used crates and
+there is none in ktask-rs at all.
+
+Three consequences that shape everything:
 
 - **No async runtime.** Threads and channels only. A supervisor that waits on
   subprocesses does not need one, and it halves the concepts in play.
-- **Git is the `git` command**, run as a subprocess. No libgit2, no gix. It
-  matches v1, it is what a human would run, and its output is inspectable.
+- **Git is the `git` command**, run as a subprocess. No libgit2, no gix. It is
+  what a human would run, and its output is inspectable. Git is the tool's
+  responsibility, not the agent's: the supervisor creates the worktree, makes
+  the commit and performs the publication.
+- **No unsafe code.** `unsafe_code = "forbid"` holds everywhere; syscalls go
+  through `nix` and `signal-hook`.
 
 ## Crate and module layout
 

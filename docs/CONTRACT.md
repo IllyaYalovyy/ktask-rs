@@ -23,7 +23,7 @@ intent and this document wins on surface.
 
 ## 1. Exit codes
 
-Semantic and stable, matching v1 so existing habits and scripts carry over.
+Semantic and stable. Scripts depend on these, so they are a compatibility surface.
 
 | Code | Meaning |
 |---|---|
@@ -68,13 +68,6 @@ Registers the current repository. Creates state under
 `$XDG_STATE_HOME/ktask-rs/<project-id>/`, never inside the repository. Project
 identity is the canonical repository path plus remote identity. Idempotent:
 re-running prints the existing registration and exits 0.
-
-### `ktask-rs import <path>`
-
-Migrates a v1 `.ktask/` directory: `tasks.md` becomes queued tasks preserving
-order and status markers, reports and logs become attempt evidence. Prints a
-summary of what was imported. Refuses with exit 2 if the project already has a
-non-empty queue, unless `--merge` is given.
 
 ### `ktask-rs add [--file <path>]`
 
@@ -180,6 +173,16 @@ Bindings are consistent across screens: a key never means two different things.
 2. **Live run** — streaming agent output, the command being executed, gate
    results as they land, elapsed time. Follow mode on by default; any scroll
    detaches follow, `f` re-attaches.
+
+   The output pane is the primary thing an operator watches, and it is held to
+   a higher standard than the rest of the interface. Provider output is
+   untrusted bytes: it is sanitized before rendering, never interpreted as
+   terminal control. Specifically, escape sequences and control characters are
+   stripped or rendered visibly, carriage returns do not overwrite earlier
+   output, invalid UTF-8 is replaced rather than dropped or panicked on, lines
+   longer than the pane are wrapped or truncated at a grapheme boundary, and no
+   volume of output can push the cursor outside the pane or disturb any other
+   region of the screen.
 3. **Logs** — raw and structured views, filter by level and phase, search,
    follow mode, jump between errors.
 4. **Failures** — classified causes, repeated signatures, circuit-breaker
