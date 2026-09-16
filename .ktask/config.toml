@@ -1,0 +1,54 @@
+# ktask configuration for implementing ktask-rs.
+#
+# Everything here is part of the template, so every run is configured
+# identically. Exactly two settings are supplied per experiment, by the
+# harness, and are deliberately absent below:
+#
+#   executor = "claude" | "codex"
+#   model    = "<provider model id>"
+#
+# Changing anything else changes the experiment. Do not edit per run.
+
+project_dir = "."
+
+# --- Executor commands -------------------------------------------------------
+codex_cmd  = "codex"
+claude_cmd = "claude"
+kiro_cmd   = "kiro-cli"
+
+# --- Time budgets ------------------------------------------------------------
+# A from-clean cargo build plus the full gate suite can legitimately run long;
+# these bound genuine hangs, not slow work.
+timeout             = 14400   # 4h per attempt
+verification_timeout = 1800   # gates from a cold target/ are slow
+idle_timeout        = 1800    # kill an attempt silent for 30m (hung API/agent)
+
+# --- Attempt budget ----------------------------------------------------------
+# One normal attempt, then one dedicated remediation pass that must diagnose
+# the root cause rather than retry blindly. A task that fails both is a real
+# finding and is left [FAIL] for a human.
+max_retries                = 2
+max_remediation_attempts   = 1
+# Automatic resolution is off: a second opinion from the same model would
+# contaminate the comparison between contestants.
+autoresolve_attempts       = 0
+
+# --- Completion proof --------------------------------------------------------
+# A clean exit code is not evidence of delivery. All three checks are on.
+verify_task_report    = true   # require a fresh KTASK_RESULT report
+verify_remote_mainline = true  # local HEAD must equal the fetched remote tip
+verify_issue_closed   = false  # no issue tracker in this experiment
+
+# The gates are the definition of done, and they run after every task.
+verification_command = ["./scripts/quality.sh"]
+
+mainline_remote = "origin"
+# mainline_branch is set per run by the harness: each contestant's own branch
+# is its mainline, so runs cannot contaminate one another.
+
+# --- Usage limits ------------------------------------------------------------
+# Hitting a plan limit is the world saying "pause", not the task going wrong:
+# ktask waits for the reset and resumes the same attempt.
+limit_auto_wait            = true
+limit_wait_margin_seconds  = 60
+limit_max_wait_seconds     = 86400

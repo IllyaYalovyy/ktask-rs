@@ -25,8 +25,10 @@ working unattended: no one will answer a question mid-task.
 - Tests assert behavior, not execution. Test-suite quality is scored by
   mutation testing; a test that passes against a broken implementation is
   worse than no test.
-- Never commit anything under `.ktask/`. It is operational state, excluded
-  from the repository by construction.
+- `.ktask/config.toml`, `.ktask/prompt.md` and `.ktask/context.md` are
+  versioned configuration and must not be edited — they are how every run is
+  made identical. `.ktask/queue/` and `.ktask/logs/` are per-run state and are
+  never committed.
 - Record significant design decisions as ADRs in `docs/adr/` (template:
   `0000-template.md`). Adding a dependency is a design decision.
 
