@@ -1,0 +1,12 @@
+[package]
+name = "ktask-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+ktask-core = { path = "../ktask-core" }
+
+[lints]
+workspace = true
