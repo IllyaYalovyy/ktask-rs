@@ -15,12 +15,22 @@ run() {
   else printf '%s\n' "--- $name: FAILED"; FAILED+=("$name"); fi
 }
 
+# A gate whose tool is absent has not passed: it is unverified, which is a
+# failure. Say so clearly rather than leaving "no such command" to be decoded.
+require() {
+  command -v "$1" >/dev/null 2>&1 || cargo "${1#cargo-}" --version >/dev/null 2>&1 || {
+    echo "MISSING TOOL: $1 is not installed, so this gate cannot be verified." >&2
+    echo "  install with: cargo install --locked $1" >&2
+    return 1
+  }
+}
+
 gate_fmt()    { cargo fmt --all --check; }
 gate_build()  { cargo build --workspace --locked --all-targets; }
 gate_test()   { cargo test --workspace --locked; }
 gate_clippy() { cargo clippy --workspace --locked --all-targets -- -D warnings; }
 # Offline-safe: advisories need the network and are checked separately.
-gate_deny()   { cargo deny check bans licenses sources; }
+gate_deny()   { require cargo-deny && cargo deny check bans licenses sources; }
 
 GATES=("$@")
 [[ ${#GATES[@]} -eq 0 ]] && GATES=(fmt build test clippy deny)

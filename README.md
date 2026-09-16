@@ -45,7 +45,9 @@ markers that the first tasks replace.
 ./scripts/quality.sh fmt test     # a subset
 ```
 
-Gates are not advisory and are never to be weakened to get a green result.
+Gates are not advisory and are never to be weakened to get a green result. A
+gate whose tool is not installed reports as failed, because it is unverified;
+`cargo-deny` is the one gate needing a separate install.
 `cargo deny check advisories` needs network access and is run separately from
 the offline gate set.
 
