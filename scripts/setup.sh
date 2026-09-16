@@ -15,6 +15,7 @@ CARGO_MACHETE_VERSION=0.9.2
 TYPOS_VERSION=1.50.2
 CARGO_NEXTEST_VERSION=0.9.109
 CARGO_MUTANTS_VERSION=25.3.1
+CARGO_LLVM_COV_VERSION=0.9.0
 
 CHECK_ONLY=0
 [[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
@@ -47,7 +48,7 @@ if ! have rustup; then
 fi
 # rust-toolchain.toml pins the version and components; this materializes them.
 rustup show active-toolchain
-rustup component add clippy rustfmt >/dev/null 2>&1 || true
+rustup component add clippy rustfmt llvm-tools-preview >/dev/null 2>&1 || true
 printf '  %-16s %s\n' rustc  "$(ver rustc --version)"
 printf '  %-16s %s\n' clippy "$(ver cargo clippy --version)"
 printf '  %-16s %s\n' rustfmt "$(ver cargo fmt --version)"
@@ -61,6 +62,7 @@ ensure typos         "$TYPOS_VERSION"         "typos-cli"     typos --version   
 echo "== test and scoring tools =="
 ensure cargo-nextest "$CARGO_NEXTEST_VERSION" "cargo-nextest" cargo nextest --version || RC=1
 ensure cargo-mutants "$CARGO_MUTANTS_VERSION" "cargo-mutants" cargo mutants --version || RC=1
+ensure cargo-llvm-cov "$CARGO_LLVM_COV_VERSION" "cargo-llvm-cov" cargo llvm-cov --version || RC=1
 
 echo
 if [[ $RC -ne 0 ]]; then

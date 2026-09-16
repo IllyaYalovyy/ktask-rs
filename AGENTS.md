@@ -11,8 +11,13 @@ working unattended: no one will answer a question mid-task.
 2. Do the work described by the task, and only that work. Scope creep is the
    top-ranked risk in VISION.md §16.
 3. Run `scripts/quality.sh` until every gate passes.
-4. Commit. Small, self-contained, message says what changed and why.
-5. Report using the `KTASK_RESULT:` header (see below).
+4. Run `scripts/review-tests.sh`. It mutates the lines you changed and checks
+   that your tests notice. A surviving mutant means your code was made wrong
+   and every test still passed. Add an assertion that catches it, delete the
+   code it mutated, or state in your report why it is unreachable. Never
+   weaken a test to get past it.
+5. Commit. Small, self-contained, message says what changed and why.
+6. Report using the `KTASK_RESULT:` header (see below).
 
 ## Non-negotiables
 
@@ -28,9 +33,10 @@ working unattended: no one will answer a question mid-task.
 - Test-first for behavior-bearing code. Write the failing test, see it fail,
   then make it pass. Exceptions: documentation, pure refactoring with existing
   coverage, build configuration.
-- Tests assert behavior, not execution. Test-suite quality is scored by
-  mutation testing; a test that passes against a broken implementation is
-  worse than no test.
+- Tests assert behavior, not execution. Coverage only proves a line ran;
+  `scripts/review-tests.sh` proves your tests would fail if that line were
+  wrong, and it runs on every task. A test that passes against a broken
+  implementation is worse than no test, because it buys false confidence.
 - `.ktask/config.toml`, `.ktask/prompt.md` and `.ktask/context.md` are
   versioned configuration and must not be edited — they are how every run is
   made identical. `.ktask/queue/` and `.ktask/logs/` are per-run state and are

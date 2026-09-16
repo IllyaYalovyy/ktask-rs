@@ -11,11 +11,13 @@ stop and report that — it is a finding, not something to work around.
 
 ## Finishing
 
-1. Every gate in `./scripts/quality.sh` passes.
-2. Your work is committed in small, self-contained commits, each of them green,
+1. Every gate in `./scripts/quality.sh` passes, including coverage.
+2. `./scripts/review-tests.sh` reports no surviving mutants in the lines you
+   changed, or your report explains why each survivor is unreachable.
+3. Your work is committed in small, self-contained commits, each of them green,
    with messages saying what changed and why.
-3. The branch is pushed, and the local tip matches the fetched remote tip.
-4. Your report is written to the path named in the orchestrator context, and
+4. The branch is pushed, and the local tip matches the fetched remote tip.
+5. Your report is written to the path named in the orchestrator context, and
    its first line is exactly one of:
    `KTASK_RESULT: DONE`, `KTASK_RESULT: FAILED`, `KTASK_RESULT: NEEDS_INPUT`.
 

@@ -14,6 +14,7 @@ Install everything they need with `./scripts/setup.sh`.
 | `deny` | `cargo deny check bans licenses sources` | disallowed license, wildcard or unknown-source dependency |
 | `unused` | `cargo machete` | a declared dependency nothing uses |
 | `typos` | `typos` | misspellings in prose and identifiers |
+| `coverage` | `cargo llvm-cov --fail-under-lines 80` | line coverage below the floor (binary entry points excluded) |
 
 Run a subset while iterating: `./scripts/quality.sh fmt clippy`.
 
@@ -51,12 +52,35 @@ level, with a comment explaining why the rule does not apply there — as
 to make a specific violation go away, is weakening a gate and fails the task
 that did it.
 
+## Test review: `scripts/review-tests.sh`
+
+Coverage is a floor, and a low one. It proves a line was executed; it says
+nothing about whether anything would notice if that line were wrong. A test
+that calls a function and asserts nothing scores 100% coverage.
+
+So every task also runs `scripts/review-tests.sh`, which mutates **only the
+lines that task changed** and checks whether the tests fail. A surviving mutant
+means the code was deliberately broken, every test still passed, and nobody
+noticed. Three answers are acceptable: add an assertion that catches it, delete
+the code the mutant proved was untested, or state in the task report why it is
+unreachable. Weakening a test to get past it is a task failure.
+
+Scoping to the diff is what makes this affordable. A full mutation sweep of a
+mature crate is hours; the lines one task touched are seconds, so test quality
+is reviewed continuously as the work happens rather than discovered at the end.
+
+```bash
+./scripts/review-tests.sh              # since the upstream branch, else HEAD~1
+./scripts/review-tests.sh <base-ref>   # since a specific commit
+```
+
+`KTASK_MAX_SURVIVORS` (default 0) sets the tolerance; raise it only with a
+recorded reason.
+
 ## Not in the gate suite
 
 - **Advisories** (`cargo deny check advisories`) need network access and a
   current advisory database, so they are not part of the offline gate run.
   Run them separately and deliberately.
-- **Mutation testing** (`cargo mutants`) measures whether the tests actually
-  constrain the code rather than merely executing it. It is far too slow for
-  an inner loop; it is run against finished work. Surviving mutants are a
-  finding, not a formality.
+- **Full mutation sweeps** over whole crates remain a release-time activity.
+  The per-task review above is the continuous version.

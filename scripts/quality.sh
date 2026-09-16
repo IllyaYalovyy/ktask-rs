@@ -5,7 +5,7 @@
 #   scripts/quality.sh            all gates
 #   scripts/quality.sh fmt test   only the named gates
 #
-# Gates: fmt build test clippy doc deny unused typos
+# Gates: fmt build test clippy doc deny unused typos coverage
 # Install everything they need with scripts/setup.sh.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -41,9 +41,18 @@ gate_doc()    { RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --doc
 gate_unused() { require cargo-machete && cargo machete; }
 # Spelling, in prose and identifiers alike.
 gate_typos()  { require typos && typos; }
+# Coverage is a floor, not a target. It proves code is exercised; it says
+# nothing about whether the tests would notice if that code were wrong.
+# scripts/review-tests.sh answers that question.
+gate_coverage() {
+  require cargo-llvm-cov || return 1
+  cargo llvm-cov --workspace --summary-only \
+    --ignore-filename-regex 'main\.rs$' \
+    --fail-under-lines "${KTASK_MIN_COVERAGE:-80}"
+}
 
 GATES=("$@")
-[[ ${#GATES[@]} -eq 0 ]] && GATES=(fmt build test clippy doc deny unused typos)
+[[ ${#GATES[@]} -eq 0 ]] && GATES=(fmt build test clippy doc deny unused typos coverage)
 
 for g in "${GATES[@]}"; do
   if declare -F "gate_$g" >/dev/null; then run "$g" "gate_$g"
