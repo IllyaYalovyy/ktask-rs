@@ -6,6 +6,7 @@ unattended AI coding work. Read these before doing anything else:
 - `VISION.md` — the design you are implementing. It is authoritative. If a task
   appears to contradict it, that is a finding to report, not a decision to make.
 - `AGENTS.md` — how work is done here, and the reporting contract.
+- `docs/CONTRACT.md` — the exact CLI and TUI surface you are building against.
 - `docs/PROCESS.md` — definition of done, commits, ADRs, scope.
 - `docs/TESTING.md` — test layers, crash-recovery testing, mandatory TUI coverage.
 

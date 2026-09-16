@@ -35,6 +35,7 @@ markers that the first tasks replace.
 | `docs/adr/` | architecture decision records — the only operational docs kept in-repo |
 | `scripts/setup.sh` | installs the pinned toolchain and analysis tools |
 | `scripts/quality.sh` | the single entry point for every mechanical gate |
+| `docs/CONTRACT.md` | the CLI and TUI surface: commands, exit codes, screens, keys |
 | `docs/QUALITY.md` | what each gate enforces, and why |
 | `rustfmt.toml`, `clippy.toml`, `_typos.toml` | static analysis configuration |
 | `deny.toml` | dependency license and source policy |

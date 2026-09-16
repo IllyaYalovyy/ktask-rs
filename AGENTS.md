@@ -1,6 +1,7 @@
 # Working rules
 
-Read this first, then `VISION.md`, then the task you were given. You are
+Read this first, then `VISION.md`, then `docs/CONTRACT.md`, then the task
+you were given. You are
 working unattended: no one will answer a question mid-task.
 
 ## The loop for every task
