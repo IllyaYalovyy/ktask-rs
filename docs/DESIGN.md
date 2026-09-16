@@ -113,6 +113,7 @@ pub enum TaskState {
     Publishing { attempt: AttemptId },
     PublishedVerified { commit: String },
     Done,
+    Acknowledged { by: String, at: OffsetDateTime },
     Paused { reason: PauseReason, resume_to: Box<TaskState> },
     Failed { class: FailureClass, detail: String },
     Cancelled,
@@ -137,6 +138,147 @@ pub fn apply(state: &TaskState, event: &EventKind) -> Result<TaskState>;
 
 It is pure: no I/O, no clock, no randomness. Illegal transitions return
 `Error::InvalidTransition { from, event }`.
+
+## Error variants
+
+Exact payloads. Later tasks require these fields by name.
+
+```rust
+pub enum Error {
+    Io(#[from] std::io::Error),
+    Database(#[from] rusqlite::Error),
+    Serde(#[from] serde_json::Error),
+    Config { key: String, detail: String },
+    Git { args: Vec<String>, stderr: String },
+    Provider { provider: String, detail: String },
+    Gate { kind: GateKind, detail: String },
+    Policy { detail: String, paths: Vec<PathBuf> },
+    InvalidTransition { from: String, event: String },
+    NotFound { what: String },
+    Corrupt { detail: String, seq: Option<EventSeq> },
+}
+```
+
+`Policy` carries every offending path, not a count. `Git` carries the argument
+vector so a failure names the command that produced it.
+
+## Configuration defaults
+
+```rust
+provider:                 "dummy"
+model:                    None
+attempt_timeout_secs:     14400   // 4h
+gate_timeout_secs:        1800    // cold Rust builds are slow
+idle_timeout_secs:        1800    // kill a silent agent, not a quiet build
+max_attempts:             2       // one normal, one remediation
+max_remediation_attempts: 1
+circuit_breaker_threshold: 3      // identical signatures before tripping
+mainline_remote:          "origin"
+mainline_branch:          "main"
+context_budget_bytes:     65536
+failure_bundle_bytes:     16384
+output_ring_lines:        4096
+limit_wait_margin_secs:   60
+limit_max_wait_secs:      86400
+```
+
+## Event catalog
+
+`EventKind` is `#[serde(tag = "kind")]`. Every payload is listed; nothing else
+may be added without extending `state::apply` in the same task.
+
+| Variant | Payload fields |
+|---|---|
+| `TaskQueued` | `title: String` |
+| `PreflightStarted` | *(none)* |
+| `PreflightPassed` | `base_sha: String` |
+| `PreflightFailed` | `class: FailureClass, detail: String` |
+| `AttemptStarted` | `attempt: AttemptId, protocol: String, pid: u32, base_sha: String` |
+| `PhaseEntered` | `attempt: AttemptId, phase: Phase` |
+| `AgentOutput` | `attempt: AttemptId, stream: Stream, text: String` |
+| `AttemptFinished` | `attempt: AttemptId, exit_code: i32, usage: Option<Usage>, session_id: Option<String>, model_reported: Option<String>` |
+| `GateStarted` | `kind: GateKind` |
+| `GateFinished` | `result: GateResult` |
+| `VerifyPassed` | `attempt: AttemptId, tree_hash: String` |
+| `VerifyFailed` | `attempt: AttemptId, class: FailureClass, detail: String` |
+| `PublishStarted` | `attempt: AttemptId, candidate_sha: String` |
+| `PublishVerified` | `commit: String, remote_sha: String` |
+| `TaskDone` | `commit: String` |
+| `TaskFailed` | `class: FailureClass, detail: String` |
+| `TaskCancelled` | `reason: String` |
+| `Paused` | `reason: PauseReason` |
+| `Resumed` | *(none)* |
+| `Interrupted` | `phase: Phase` |
+| `RecoveryDecision` | `decision: Recovery, detail: String` |
+| `ProviderDetected` | `provider: String, capabilities: Capabilities, version: String` |
+| `TddExceptionUsed` | `exception: TddException, reason: String` |
+| `DecisionRaised` | `request: DecisionRequest` |
+| `DecisionResolved` | `adr_path: PathBuf, answer: String` |
+| `GateAcknowledged` | `by: String` |
+| `AttemptRecorded` | `record: AttemptRecord` |
+| `SelfHealingReport` | `attempt: AttemptId, class: FailureClass, repairs: Vec<String>, outcome: String` |
+
+```rust
+pub enum Stream { Stdout, Stderr }
+pub enum Recovery { Resume, MarkInterrupted, AlreadyApplied }
+
+pub struct DecisionRequest {
+    pub question: String,
+    pub options: Vec<String>,
+    pub tradeoffs: String,
+    pub impact: String,
+    pub recommended: Option<String>,
+}
+```
+
+## Phases and screens
+
+```rust
+pub enum Phase {
+    Goal, Scope, AcceptanceTests, Implement, Red, Green, Refactor,
+    Review, Harden, DoneCheck, Verify, Publish,
+}
+
+pub enum Screen {
+    Queue = 1, LiveRun = 2, Logs = 3, Failures = 4, Inspector = 5,
+    InputInbox = 6, History = 7, Git = 8, Config = 9,
+}
+```
+
+`Phase` carries every variant any protocol needs, including `spec-first`, so
+no later task has to widen it. `Screen`'s discriminants are the number keys.
+
+## Other fixed types
+
+```rust
+pub enum RunOutcome {
+    Drained,                       // 0
+    TaskFailed { task: TaskId },   // 1
+    Usage { detail: String },      // 2
+    ProviderLimit { until: Option<OffsetDateTime> }, // 3
+    HumanGate { task: TaskId },    // 4
+    NeedsInput { task: TaskId },   // 5
+    Interrupted,                   // 130
+}
+
+pub struct App {
+    pub screen: Screen,
+    pub selected: BTreeMap<Screen, usize>,
+    pub scroll: BTreeMap<Screen, usize>,
+    pub follow: bool,
+    pub search: Option<String>,
+    pub overlay: Option<Overlay>,
+    pub tasks: Vec<TaskView>,
+    pub output: VecDeque<String>,
+    pub size: (u16, u16),
+}
+pub enum Overlay { KeyMap, Confirm { action: Action, prompt: String } }
+```
+
+The event bus is a **bounded ring per subscriber**: capacity
+`output_ring_lines`, drop-oldest on overflow, recording a `dropped: usize`
+count the interface can display. Publishing never blocks, and a subscriber
+that stops reading loses old events rather than stalling the run.
 
 ## Database schema
 

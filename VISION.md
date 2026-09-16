@@ -42,12 +42,12 @@ The product distinction in one sentence: **other tools automate agents; ktask gu
 Enforced by the state machine and the git layer, not by prompts:
 
 1. Exactly one task is active at a time; parallel execution does not exist in v1.
-2. A successor cannot start until its predecessor reaches `published_verified`.
+2. A successor cannot start until its predecessor has reached a terminal success state: `done` for an executable task, `acknowledged` for a gate, `cancelled` where a human has said so.
 3. Every state transition is persisted atomically before it takes effect.
 4. A task is never done based only on an agent exit code or statement.
 5. Self-healing cannot weaken checks, change policy, install host software, or conceal failures.
 6. Prompts, context, logs, reports, and task state remain outside the repository.
-7. Completion requires local verification, clean publication, and fetched remote-mainline equality.
+7. Completion of an executable task requires local verification, clean publication, and fetched remote-mainline equality. A gate is not an executable task: it produces no commit, and it completes only by human acknowledgement, which is recorded with who and when.
 8. Design decisions belong to the human. An unresolved product or technical decision is a first-class pause state, and its resolution is recorded as a decision record (ADR) available to future tasks.
 
 v1 is strict-only: no relaxation knobs, no dev mode, no per-invariant overrides. An opinion you can silently disable is not an opinion. A non-strict mode may exist one day, but only alongside DAG-based parallel execution (backlog), and it will be loud.
@@ -111,7 +111,13 @@ queued -> preflight -> running -> verifying -> publishing -> published_verified 
 ```
 
 Durable pause states: `waiting_limit`, `waiting_input`, `human_gate`, `interrupted`, `blocked`.
-Terminal states: `done`, `failed`, `cancelled`.
+Terminal states: `done`, `acknowledged`, `failed`, `cancelled`.
+
+A **gate** is a queue entry that asks a human for something before the work
+after it may proceed. It is never handed to an agent, produces no commit, and
+reaches `acknowledged` through `ktask-rs ack` rather than through publication.
+Without this distinction a gate could never satisfy invariant 2, and one gate
+would deadlock the rest of the queue forever.
 
 - `preflight` proves the world is sane before spending tokens: clean fetched mainline, green `baseline_command`, provider available, disk space, lock acquired.
 - `waiting_input` is the mechanism behind invariant 8: the agent (or a gate) surfaces a structured decision request (question, options, trade-offs, impact); the queue pauses; `ktask-rs resolve` records the answer as an ADR that is injected into the context of subsequent tasks.
