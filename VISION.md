@@ -5,7 +5,7 @@
 
 ## 1. Project Brief (the prompt)
 
-Build **ktask v2**, a single-binary Rust tool that supervises unattended AI-agent work on a local machine: it drains an ordered queue of tasks, hands each task to a coding-agent CLI (Claude and Codex at launch; further tools are additive), and refuses to call the work done until it has been mechanically verified, cleanly published, and confirmed present on remote mainline. It is a **local delivery supervisor**, not a multi-agent platform. Its market position is deterministic execution, verifiable completion, privacy, and recovery.
+Build **ktask v2**, shipped as the single binary `ktask-rs`, a Rust tool that supervises unattended AI-agent work on a local machine: it drains an ordered queue of tasks, hands each task to a coding-agent CLI (Claude and Codex at launch; further tools are additive), and refuses to call the work done until it has been mechanically verified, cleanly published, and confirmed present on remote mainline. It is a **local delivery supervisor**, not a multi-agent platform. Its market position is deterministic execution, verifiable completion, privacy, and recovery.
 
 ktask v2 is opinionated by design. It is the distillation of long practical experience building applications with AI agents. Everything that experience taught us, which today lives in prompt prose and discipline, becomes mechanism: enforced by a typed state machine, mechanical gates, and a git transaction model that no agent can bypass. The design test for every feature: *could an agent ignore this?* If yes, it is not done.
 
@@ -19,7 +19,7 @@ The product distinction in one sentence: **other tools automate agents; ktask gu
 - Completion that is never based on an agent's exit code or self-report: local verification, clean publication, and fetched remote-mainline equality are all required.
 - Structured failure classification with bounded, class-specific self-healing and a circuit breaker.
 - Mechanical quality gates (baseline, tests, lint, format, build, privacy) executed by the runner, out-of-band from the agent.
-- Git transaction model: isolated task worktrees, serialized publication, verified against the exact candidate commit; all four publication modes (`direct-mainline`, `local-merge`, `pull-request`, `review-only`).
+- Git transaction model: isolated task worktrees, serialized publication, verified against the exact candidate commit. Publication is by commit and push to mainline; pull-request handoff is deliberately out of scope.
 - Work protocols: opinionated per-task state machines (`direct` and `tdd` at launch), enforced by the runner with per-phase write scopes, gates, and evidence.
 - Privacy by construction: all operational state (prompts, context, logs, reports, task state) lives outside the repository by default.
 - Stable provider layer with capability detection; `dummy`, Claude and Codex at launch, with adapters shaped so further CLIs are additive.
@@ -29,7 +29,7 @@ The product distinction in one sentence: **other tools automate agents; ktask gu
 
 ### Non-Goals (v1)
 
-- Not a multi-agent orchestration platform, cloud service, or CI/CD system.
+- Not a multi-agent orchestration platform, cloud service, or CI/CD system. ktask never configures, runs, or waits on a hosted pipeline; every check is local.
 - No parallel task execution (strict serial is the default and the only v1 mode; DAG-based parallelism is backlog).
 - No agent-to-agent conversation, no model routing intelligence, no prompt optimization.
 - No web UI, no daemon requirement for basic operation.
@@ -58,28 +58,28 @@ One deliberate exception to invariant 6: ADRs. Recorded design decisions are com
 
 ```bash
 # One-time, per machine
-ktask doctor                  # provider preflight, git, toolchain, permissions
+ktask-rs doctor                  # provider preflight, git, toolchain, permissions
 
 # Per project (no .ktask/ created in the repo)
-ktask init                    # registers project; state under $XDG_STATE_HOME/ktask
-ktask import ~/Projects/foo/.ktask   # migrate a v1 queue, reports, logs
+ktask-rs init                    # registers project; state under $XDG_STATE_HOME/ktask
+ktask-rs import ~/Projects/foo/.ktask   # migrate a v1 queue, reports, logs
 
 # Queue management
-ktask add                     # $EDITOR with a structured task template; malformed tasks are rejected
-ktask plan lint               # validate the whole queue before running anything
-ktask status                  # headless dashboard
+ktask-rs add                     # $EDITOR with a structured task template; malformed tasks are rejected
+ktask-rs plan lint               # validate the whole queue before running anything
+ktask-rs status                  # headless dashboard
 
 # Execution
-ktask run                     # drain the queue, strict serial
-ktask run --task 7            # single task
-ktask tui                     # the full operational interface
+ktask-rs run                     # drain the queue, strict serial
+ktask-rs run --task 7            # single task
+ktask-rs tui                     # the full operational interface
 
 # Recovery and decisions
-ktask retry --task 7          # fresh remediation with the failure bundle
-ktask resolve --task 7        # answer a waiting_input question; stored as ADR
-ktask ack                     # pass a human gate
-ktask privacy audit           # scan repo and optionally git history for leaked artifacts
-ktask stats                   # tokens, cost, durations, success rates per task/queue
+ktask-rs retry --task 7          # fresh remediation with the failure bundle
+ktask-rs resolve --task 7        # answer a waiting_input question; stored as ADR
+ktask-rs ack                     # pass a human gate
+ktask-rs privacy audit           # scan repo and optionally git history for leaked artifacts
+ktask-rs stats                   # tokens, cost, durations, success rates per task/queue
 ```
 
 Exit codes remain semantic and scriptable (drained, task failed, provider limit, human gate, needs input, interrupted).
@@ -115,7 +115,7 @@ Durable pause states: `waiting_limit`, `waiting_input`, `human_gate`, `interrupt
 Terminal states: `done`, `failed`, `cancelled`.
 
 - `preflight` proves the world is sane before spending tokens: clean fetched mainline, green `baseline_command`, provider available, disk space, lock acquired.
-- `waiting_input` is the mechanism behind invariant 8: the agent (or a gate) surfaces a structured decision request (question, options, trade-offs, impact); the queue pauses; `ktask resolve` records the answer as an ADR that is injected into the context of subsequent tasks.
+- `waiting_input` is the mechanism behind invariant 8: the agent (or a gate) surfaces a structured decision request (question, options, trade-offs, impact); the queue pauses; `ktask-rs resolve` records the answer as an ADR that is injected into the context of subsequent tasks.
 - **Crash recovery is deterministic and is a first-class feature, not an edge case.** A machine can lose power mid-gate, mid-commit, or mid-push; the supervisor must come back knowing exactly what happened. On restart it inspects the live process table, the worktree, and the last persisted transition, then either resumes the in-flight phase or marks the attempt `interrupted`. It never guesses, and it never silently re-runs work that may already have taken effect.
 - Every state transition is journaled **before** its side effect, so an interruption is always recoverable to a known state rather than an ambiguous one. Recovery from an interruption at any phase boundary — including mid-publication, the dangerous one — is exercised by tests that kill the process at each point, not merely reasoned about.
 - Every attempt is preserved separately: executor session ID, timestamps, configured and provider-reported model IDs, exit reason, commands run, gate results, git SHAs, tokens, and cost.
@@ -199,12 +199,13 @@ Isolated worktrees even for strictly serial execution; the user's normal checkou
 6. Push mainline, fetch again, and require local candidate SHA to equal remote mainline SHA.
 7. Only after that comparison does the task reach `published_verified`.
 
-Publication modes:
+Publication is **commit and push to mainline**, and that is the only mode in
+v1. No pull requests, no forge integration, no CI system to wait on: the gates
+have already run locally, and a green gate run against the exact candidate
+commit is the evidence. Adding a review handoff would mean adding a second
+definition of done, which is the one thing this design refuses.
 
-- `direct-mainline`: the default workflow.
-- `local-merge`: merge locally; a human pushes.
-- `pull-request`: GitHub/GitLab handoff.
-- `review-only`: leave a verified worktree for human inspection.
+`local-merge`, `review-only` and `pull-request` handoff are backlog.
 
 ## 11. Privacy by Construction
 
@@ -216,7 +217,7 @@ No `.ktask/` in project repositories by default.
 - Before every push, the complete outgoing commit range is inspected for forbidden paths and content patterns; detection covers already-tracked AI artifacts, not only newly staged files.
 - Tokens, credentials, and configured secret patterns are redacted from logs.
 - Restrictive filesystem permissions; configurable retention for logs and attempt evidence.
-- `ktask privacy audit` reports on the repo and, optionally, git history.
+- `ktask-rs privacy audit` reports on the repo and, optionally, git history.
 
 ## 12. Provider Layer
 
@@ -225,7 +226,7 @@ A stable capability interface, with adapters:
 - Claude and Codex at launch. Kiro, OpenCode, Goose and further CLIs are additive: the adapter interface is designed for them, but they are backlog and no launch behavior depends on them.
 - A built-in `dummy` provider ships as a first-class adapter: it replays predefined, deterministic responses (success, failure, hang, limit message, input request) on cue. It powers the scenario suite, CI, and offline development of ktask itself.
 - Startup capability detection: structured output, model selection, usage telemetry, approval modes. (Session identifiers are still recorded in attempt evidence, but no correctness path depends on session resume.)
-- `ktask doctor` performs a minimal real provider preflight.
+- `ktask-rs doctor` performs a minimal real provider preflight.
 - Rate limits, authentication errors, input requests, and session identifiers are normalized into the failure taxonomy and pause states.
 - Configured vs provider-reported model IDs are both recorded; unexpected mismatches are rejected.
 - Provider selection by task type is supported (for example: one provider implements, another reviews).
@@ -275,7 +276,7 @@ v0.2 below only in the sense of build order — the engine must exist before it
 can be rendered — and both phases are required for v1.
 
 **v0.1 (foundation, the minimum honest product):**
-state machine + SQLite journal; headless CLI with v1 command parity; structured Markdown task format with `plan lint`; `import` for v1 `.ktask/`; gates (baseline, targeted, verify, lint, format, build, basic privacy scan); git transaction model with all four publication modes; work protocols `direct` and `tdd`; failure classifier with bounded fresh-session remediation and circuit breaker; static context + ADR recording and injection; `dummy`, Claude, and Codex adapters; `doctor`; attempt records including tokens and cost; `stats`.
+state machine + SQLite journal; headless CLI with v1 command parity; structured Markdown task format with `plan lint`; `import` for v1 `.ktask/`; gates (baseline, targeted, verify, lint, format, build, basic privacy scan); git transaction model with commit-and-push publication; work protocols `direct` and `tdd`; failure classifier with bounded fresh-session remediation and circuit breaker; static context + ADR recording and injection; `dummy`, Claude, and Codex adapters; `doctor`; attempt records including tokens and cost; `stats`.
 
 **v0.2 (operations, and equally required for v1):**
 The complete TUI — all nine screens of §13 (queue, live run, logs, failures and inspector first; input inbox, history, git, configuration and doctor after); `waiting_limit` exact-reset handling; `flake_command`; full `privacy audit`; typed-source context assembly with size budgets; `spec-first` protocol with per-phase provider selection.
@@ -302,5 +303,5 @@ independent read-only review agent before publication; dependency DAGs with stri
 | Protocol engine drifts toward a workflow DSL | High | fixed built-ins only in v1; composition restricted to typed primitives; completion gates structurally mandatory |
 | SQLite state corruption | Low | append-only journal as source of truth; materialized state rebuildable; periodic backup |
 | Migration friction from v1 `.ktask/` | Medium | first-class `import`; v1 kept runnable until parity is proven |
-| PR mode adds forge surface to v0.1 | Medium | shell out to `gh`/`glab`, never speak forge APIs directly; degrade to `local-merge` when the forge CLI is absent |
+| Scope is large enough that a run may not finish | High | tasks are ordered so each phase boundary is a coherent, demonstrable product; an unfinished run is a real result, not a void one |
 | TUI becomes a time sink | High | headless CLI first; TUI is a view over the event stream, phased in v0.2 |

@@ -50,3 +50,9 @@ KTASK_RESULT: NEEDS_INPUT
 Then state what you did, what you verified, and anything you deliberately left
 undone. `NEEDS_INPUT` is for genuine ambiguity a decision-maker must resolve —
 not for work you found hard.
+
+If you cannot complete the task, say so and stop. Report `FAILED` with what you
+tried and what blocked you. Do not weaken a gate, claim a success the gates do
+not support, or keep retrying an approach that is not working — a recorded
+failure is a usable result, while a fabricated success is not, and thrashing
+spends the budget that later tasks need.

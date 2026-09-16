@@ -19,6 +19,10 @@ stop and report that — it is a finding, not something to work around.
    its first line is exactly one of:
    `KTASK_RESULT: DONE`, `KTASK_RESULT: FAILED`, `KTASK_RESULT: NEEDS_INPUT`.
 
+If the task cannot be completed, stop and report `FAILED` with the evidence.
+That is an acceptable outcome. Weakening a check, reporting an unsupported
+success, or thrashing until the budget runs out are not.
+
 State what you verified and how, not merely what you changed. If you left
 something deliberately undone, say so. Use `NEEDS_INPUT` only for genuine
 ambiguity a human must resolve — never for work that turned out to be hard.

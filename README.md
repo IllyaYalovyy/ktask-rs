@@ -1,6 +1,7 @@
 # ktask-rs
 
 A Rust rewrite of `ktask`: a supervisor for unattended AI coding work.
+Ships as a single binary, `ktask-rs`.
 
 Other tools automate agents. ktask guarantees that ordered work was actually
 verified, published, and recoverable — without leaking its operational context
@@ -38,7 +39,7 @@ markers that the first tasks replace.
 | `rustfmt.toml`, `clippy.toml`, `_typos.toml` | static analysis configuration |
 | `deny.toml` | dependency license and source policy |
 | `crates/ktask-core` | state machine, journal, gates, providers — pure logic, no I/O |
-| `crates/ktask-cli` | headless command-line interface |
+| `crates/ktask-cli` | headless command-line interface; builds the `ktask-rs` binary |
 | `crates/ktask-tui` | terminal interface, headlessly testable |
 | `tests/scenarios/` | end-to-end acceptance scenarios |
 
