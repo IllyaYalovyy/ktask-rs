@@ -24,3 +24,7 @@ target
 # the queue and logs are per-run state and must never be committed.
 .ktask/queue/
 .ktask/logs/
+# The queue is rewritten in place as tasks complete ([DONE]/[FAIL] markers).
+# Tracking it would dirty the tree after every task, sweep progress markers
+# into the agent's own commits, and let an agent edit its own task list.
+.ktask/tasks.md

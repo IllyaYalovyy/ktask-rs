@@ -7,9 +7,13 @@ Versioned, and part of the template so every run is configured identically:
 | `config.toml` | budgets, attempt policy, completion proof, gate command |
 | `prompt.md` | prompt template wrapped around each task (`{{TASK}}`) |
 | `context.md` | project context prepended to every task |
-| `tasks.md` | the queue — tasks separated by `---`, executed in order |
+| `tasks.md` | the queue — supplied per run, **not versioned** |
 
-Not versioned (see `.gitignore`): `queue/` and `logs/` are per-run state.
+Not versioned (see `.gitignore`): `queue/` and `logs/` are per-run state, and
+so is `tasks.md`. The supervisor rewrites the queue in place as tasks finish,
+prefixing lines with `[DONE]` or `[FAIL]`. Tracking it would dirty the working
+tree after every task, sweep progress markers into the commits under review,
+and — worst — put an agent's own task list inside its write scope.
 
 Two settings are supplied per run by the harness and are absent from
 `config.toml` on purpose — `executor` and `model`. Everything else is fixed:
