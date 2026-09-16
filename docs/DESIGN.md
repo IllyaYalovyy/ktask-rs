@@ -186,3 +186,12 @@ failure the design exists to prevent.
   tests, which live in `tests/`.
 - Test names state the behavior: `rejects_transition_from_done`, not `test_apply`.
 - No `unwrap`, `expect` or `panic` outside tests. Errors are values.
+- **Tests never write inside the repository.** Every fixture — scratch git
+  repositories, bare origins, project directories, state directories — is
+  created with `tempfile::TempDir`, which lives under the system temp
+  directory, outside this working tree. A test that leaves a file in the
+  repository dirties the tree, and a dirty tree at verification time is a
+  policy failure, so a stray fixture does not merely litter: it fails the task
+  that created it and every task after it.
+- A test that touches project state sets `XDG_STATE_HOME` into its own
+  `TempDir`, so it can never read or write the developer's real state.

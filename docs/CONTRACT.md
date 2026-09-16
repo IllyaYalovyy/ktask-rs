@@ -136,6 +136,25 @@ Tokens, cost, durations and success rates per task and per queue, from recorded
 attempt evidence. `--json` emits the same data unrounded. Where a provider
 reports no usage, the field is `null` and the source is marked, never guessed.
 
+### `ktask-rs pause` / `ktask-rs interrupt` / `ktask-rs cancel`
+
+Control of a run in progress, from any terminal. `pause` stops the queue after
+the current task reaches a safe boundary. `interrupt` terminates the running
+attempt now, leaving durable resumable state and recording it as interrupted.
+`cancel --task <id>` marks a task cancelled so the queue may proceed past it.
+Each exits 2 when nothing is in a state the command applies to.
+
+### `ktask-rs rerun-gate --task <id> [--gate <kind>]`
+
+Re-runs a gate against the current worktree, discarding any cached result, and
+prints the structured outcome. Without `--gate`, runs the whole completion set.
+
+### `ktask-rs export-diagnostics --task <id> [--out <path>]`
+
+Writes a redacted diagnostic bundle — task definition, attempt evidence, gate
+output, journal excerpt — for sharing. Secrets are redacted at the write
+boundary; the command fails rather than emitting an unredacted bundle.
+
 ### `ktask-rs tui`
 
 Launches the interface described below. Requires a terminal; exits 2 with a
@@ -201,8 +220,13 @@ Bindings are consistent across screens: a key never means two different things.
 ### Actions
 
 Every action is also a CLI command: pause, interrupt, resume, retry, resolve,
-acknowledge, cancel, attach, open diff, rerun gate, export sanitized
-diagnostics.
+acknowledge, cancel, rerun gate, export diagnostics.
+
+Attaching to a run and opening a diff are **view operations**, not actions:
+they change what the interface shows, not what the supervisor does. The
+equivalence rule covers actions and state, and the state behind both is
+reachable from the CLI — `status` for the live run, `git` for the diff — so
+neither needs a command of its own.
 
 ### Behavior under stress
 
