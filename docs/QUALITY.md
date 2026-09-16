@@ -65,6 +65,14 @@ noticed. Three answers are acceptable: add an assertion that catches it, delete
 the code the mutant proved was untested, or state in the task report why it is
 unreachable. Weakening a test to get past it is a task failure.
 
+Some code cannot be killed by a headless test: the line that spawns a process,
+sends a signal, or enters raw mode. The answer is not to lower the bar but to
+shrink the part that needs it. Keep the syscall in a named function of a few
+lines that only makes the call, put every decision above it in a pure function,
+and test that. Then list the shell's surviving mutants by name in the task
+report, one line each on why a headless test cannot reach them. A named,
+explained survivor is an accepted answer; an unexamined one is not.
+
 Scoping to the diff is what makes this affordable. A full mutation sweep of a
 mature crate is hours; the lines one task touched are seconds, so test quality
 is reviewed continuously as the work happens rather than discovered at the end.

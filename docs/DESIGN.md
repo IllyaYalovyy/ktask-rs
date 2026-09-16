@@ -123,6 +123,11 @@ pub enum PauseReason { Limit { until: Option<OffsetDateTime> }, Input, HumanGate
 
 // Phase is defined once, under "Phases and screens" below.
 
+// gate.rs
+pub enum GateKind {
+    Baseline, Targeted, Verify, Lint, Format, Build, Privacy, Flake, Review,
+}
+
 // classify.rs
 pub enum FailureClass {
     AgentFailure, VerificationFailure, ProviderLimit, ProviderTransient,

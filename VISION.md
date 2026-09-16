@@ -165,6 +165,7 @@ Gates are runner-executed commands, defined per project in a verification profil
 - `lint_command`, `format_command`, `build_command`.
 - `privacy_command`: scan staged files, tracked files, and the full outgoing commit range for forbidden paths and content patterns.
 - `flake_command`: repeated or randomized execution of affected tests (optional, recommended).
+- `review_command`: mutation testing scoped to the task's own diff. Coverage proves a line ran; this proves the tests would fail if that line were wrong. It is the one gate that judges the tests rather than the code, and it runs on every task, so test quality is reviewed continuously as the work happens instead of discovered at the end. Surviving mutants are reported with the attempt; a task may account for a survivor it cannot reach, and may never silence one.
 
 Each gate has its own timeout, environment, working directory, and retry policy. Green results are cached only against the exact tree hash plus the gate-configuration hash; any file change invalidates all cached evidence. Common test output formats (Cargo, JUnit, pytest, Flutter) are parsed into structured results while raw output is retained.
 
