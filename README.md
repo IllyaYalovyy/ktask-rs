@@ -16,7 +16,8 @@ checkable from the very first task.
 
 ```bash
 git switch -c my-run template
-./scripts/quality.sh
+./scripts/setup.sh        # install the pinned toolchain and analysis tools
+./scripts/quality.sh      # verify the seed is green
 ```
 
 Nothing on this branch implements ktask yet. The crates hold placeholder
@@ -31,7 +32,10 @@ markers that the first tasks replace.
 | `docs/PROCESS.md` | definition of done, commits, ADRs, scope |
 | `docs/TESTING.md` | test layers, and the mandatory TUI coverage |
 | `docs/adr/` | architecture decision records — the only operational docs kept in-repo |
+| `scripts/setup.sh` | installs the pinned toolchain and analysis tools |
 | `scripts/quality.sh` | the single entry point for every mechanical gate |
+| `docs/QUALITY.md` | what each gate enforces, and why |
+| `rustfmt.toml`, `clippy.toml`, `_typos.toml` | static analysis configuration |
 | `deny.toml` | dependency license and source policy |
 | `crates/ktask-core` | state machine, journal, gates, providers — pure logic, no I/O |
 | `crates/ktask-cli` | headless command-line interface |
@@ -41,13 +45,21 @@ markers that the first tasks replace.
 ## Quality gates
 
 ```bash
-./scripts/quality.sh              # fmt, build, test, clippy, deny
-./scripts/quality.sh fmt test     # a subset
+./scripts/quality.sh                 # fmt build test clippy doc deny unused typos
+./scripts/quality.sh fmt clippy      # a subset, while iterating
 ```
 
-Gates are not advisory and are never to be weakened to get a green result. A
-gate whose tool is not installed reports as failed, because it is unverified;
-`cargo-deny` is the one gate needing a separate install.
+Eight gates, every one of them failing the build on violation: formatting,
+compilation against a locked dependency set, tests, `clippy` with
+`-D warnings` over `all` + `pedantic` plus project-specific denials,
+documentation (undocumented public items and broken links fail),
+dependency licenses and sources, unused dependencies, and spelling.
+`docs/QUALITY.md` explains each one.
+
+Gates are never to be weakened to get a green result, and a gate whose tool is
+missing reports as failed rather than skipped — an unverified gate has not
+passed. `./scripts/setup.sh --check` tells you if anything is missing or at the
+wrong version.
 `cargo deny check advisories` needs network access and is run separately from
 the offline gate set.
 

@@ -4,6 +4,9 @@
 #
 #   scripts/quality.sh            all gates
 #   scripts/quality.sh fmt test   only the named gates
+#
+# Gates: fmt build test clippy doc deny unused typos
+# Install everything they need with scripts/setup.sh.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -31,9 +34,16 @@ gate_test()   { cargo test --workspace --locked; }
 gate_clippy() { cargo clippy --workspace --locked --all-targets -- -D warnings; }
 # Offline-safe: advisories need the network and are checked separately.
 gate_deny()   { require cargo-deny && cargo deny check bans licenses sources; }
+# Documentation is part of the build: a broken link or an undocumented public
+# item fails here, not in someone's browser six months from now.
+gate_doc()    { RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items; }
+# A dependency nobody uses is a supply-chain and compile-time cost for nothing.
+gate_unused() { require cargo-machete && cargo machete; }
+# Spelling, in prose and identifiers alike.
+gate_typos()  { require typos && typos; }
 
 GATES=("$@")
-[[ ${#GATES[@]} -eq 0 ]] && GATES=(fmt build test clippy deny)
+[[ ${#GATES[@]} -eq 0 ]] && GATES=(fmt build test clippy doc deny unused typos)
 
 for g in "${GATES[@]}"; do
   if declare -F "gate_$g" >/dev/null; then run "$g" "gate_$g"

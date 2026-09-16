@@ -1,0 +1,6 @@
+# Project vocabulary. Add a word here only when it is genuinely a term of art
+# in this codebase — the point of the gate is to catch real mistakes in prose
+# and identifiers, and an over-broad allowlist quietly switches it off.
+[default.extend-words]
+ratatui = "ratatui"
+ktask = "ktask"

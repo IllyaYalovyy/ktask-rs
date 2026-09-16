@@ -15,10 +15,15 @@ working unattended: no one will answer a question mid-task.
 
 ## Non-negotiables
 
-- `scripts/quality.sh` is the definition of done. Never weaken a gate to make
-  it pass: no `#[allow]` to silence clippy, no `#[ignore]` on a failing test,
-  no deleting an assertion. Fix the code instead. Weakening a check is a task
-  failure even if everything then goes green.
+- `scripts/quality.sh` is the definition of done — eight gates, all of which
+  fail the build on violation. See `docs/QUALITY.md`. Install what they need
+  with `scripts/setup.sh`; `scripts/setup.sh --check` verifies versions.
+- Never weaken a gate to make it pass: no `#[allow]` on the line that
+  triggered a lint, no `#[ignore]` on a failing test, no deleted assertion, no
+  loosened threshold in `clippy.toml`. Fix the code instead. Weakening a check
+  is a task failure even if everything then goes green. A lint may be
+  suppressed only at an architectural boundary, at module or crate level, with
+  a comment saying why the rule does not apply there.
 - Test-first for behavior-bearing code. Write the failing test, see it fail,
   then make it pass. Exceptions: documentation, pure refactoring with existing
   coverage, build configuration.

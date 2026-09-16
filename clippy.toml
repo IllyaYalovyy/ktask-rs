@@ -1,0 +1,20 @@
+# Clippy configuration. Thresholds are deliberately tighter than the defaults:
+# this codebase is small, long-lived, and read more often than it is written.
+
+msrv = "1.97"
+
+# `unwrap`/`expect` are denied in library code (see Cargo.toml lints) because a
+# supervisor that panics loses the run it was supervising. In tests they are
+# the clearest way to assert, so they stay allowed there.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+# A function past these thresholds is doing too much to be reviewed reliably.
+cognitive-complexity-threshold = 20
+too-many-lines-threshold = 120
+too-many-arguments-threshold = 7
+type-complexity-threshold = 250
+
+# Names that carry no information.
+disallowed-names = ["foo", "bar", "baz", "tmp", "data", "val"]

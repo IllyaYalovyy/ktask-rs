@@ -5,6 +5,7 @@
 
 /// Placeholder proving the workspace builds and tests at the seed commit.
 /// The first task replaces it.
+#[must_use]
 pub fn seed_marker() -> &'static str {
     "ktask-core"
 }

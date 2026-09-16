@@ -7,10 +7,43 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 license = "GPL-3.0-only"
+description = "A supervisor for unattended AI coding work"
+repository = "https://github.com/IllyaYalovyy/ktask-rs"
 
+# Every lint below is enforced: scripts/quality.sh runs clippy with
+# `-D warnings`, so a warning here fails the build like an error.
 [workspace.lints.rust]
 unsafe_code = "forbid"
+missing_docs = "warn"
 missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+unused_import_braces = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+future_incompatible = { level = "warn", priority = -1 }
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+bare_urls = "warn"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# `clippy::cargo` is not enabled: it demands crates.io publishing metadata
+# (keywords, categories) that this tool does not need. Dependency hygiene is
+# covered by deny.toml instead.
+
+# A supervisor that panics loses the run it was supervising. Errors are
+# values here; these are allowed in tests via clippy.toml.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+indexing_slicing = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
