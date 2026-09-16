@@ -9,6 +9,10 @@ msrv = "1.97"
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
+# Indexing a Vec is the clearest way to assert on one; denying it in tests
+# would force contortions with no safety benefit, since a panic in a test is
+# a failing test.
+allow-indexing-slicing-in-tests = true
 
 # A function past these thresholds is doing too much to be reviewed reliably.
 cognitive-complexity-threshold = 20

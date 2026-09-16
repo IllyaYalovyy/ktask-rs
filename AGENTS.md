@@ -21,7 +21,7 @@ working unattended: no one will answer a question mid-task.
 
 ## Non-negotiables
 
-- `scripts/quality.sh` is the definition of done — eight gates, all of which
+- `scripts/quality.sh` is the definition of done — nine gates, all of which
   fail the build on violation. See `docs/QUALITY.md`. Install what they need
   with `scripts/setup.sh`; `scripts/setup.sh --check` verifies versions.
 - Never weaken a gate to make it pass: no `#[allow]` on the line that
@@ -41,6 +41,9 @@ working unattended: no one will answer a question mid-task.
   versioned configuration and must not be edited — they are how every run is
   made identical. `.ktask/queue/` and `.ktask/logs/` are per-run state and are
   never committed.
+- Adding a dependency changes `Cargo.lock`, and the build gate runs with
+  `--locked`. Commit the updated lock file in the same commit, or the build
+  fails for the next task.
 - Record significant design decisions as ADRs in `docs/adr/` (template:
   `0000-template.md`). Adding a dependency is a design decision.
 

@@ -121,7 +121,7 @@ pub enum TaskState {
 
 pub enum PauseReason { Limit { until: Option<OffsetDateTime> }, Input, HumanGate, Interrupted, Blocked }
 
-pub enum Phase { Implement, Red, Green, Refactor, Verify, Publish }
+// Phase is defined once, under "Phases and screens" below.
 
 // classify.rs
 pub enum FailureClass {
@@ -180,6 +180,13 @@ failure_bundle_bytes:     16384
 output_ring_lines:        4096
 limit_wait_margin_secs:   60
 limit_max_wait_secs:      86400
+default_protocol:         "direct"
+dummy_scenario_path:      None
+test_globs:               ["**/tests/**", "**/*_test.rs", "src/**/tests.rs"]
+secret_patterns:          []
+flake_runs:               5
+retention_days:           90
+min_free_disk_bytes:      2147483648   // 2 GiB
 ```
 
 ## Event catalog
@@ -214,7 +221,7 @@ may be added without extending `state::apply` in the same task.
 | `TddExceptionUsed` | `exception: TddException, reason: String` |
 | `DecisionRaised` | `request: DecisionRequest` |
 | `DecisionResolved` | `adr_path: PathBuf, answer: String` |
-| `GateAcknowledged` | `by: String` |
+| `GateAcknowledged` | `by: String, at: OffsetDateTime` |
 | `AttemptRecorded` | `record: AttemptRecord` |
 | `SelfHealingReport` | `attempt: AttemptId, class: FailureClass, repairs: Vec<String>, outcome: String` |
 
@@ -335,5 +342,9 @@ failure the design exists to prevent.
   repository dirties the tree, and a dirty tree at verification time is a
   policy failure, so a stray fixture does not merely litter: it fails the task
   that created it and every task after it.
-- A test that touches project state sets `XDG_STATE_HOME` into its own
-  `TempDir`, so it can never read or write the developer's real state.
+- **No test sets an environment variable.** `std::env::set_var` is `unsafe` in
+  edition 2024 and `unsafe_code = "forbid"` cannot be lifted, so every API that
+  reads the environment takes it as a `&dyn Fn(&str) -> Option<String>`
+  parameter instead. Tests pass a closure; process-level tests use
+  `Command::env`. This is why `paths`, `config` and `project` all thread an
+  environment accessor rather than reading the process environment directly.

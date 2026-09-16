@@ -28,3 +28,7 @@ target
 # Tracking it would dirty the tree after every task, sweep progress markers
 # into the agent's own commits, and let an agent edit its own task list.
 .ktask/tasks.md
+
+# insta writes these when a snapshot test fails; they must never be committed
+# and must never dirty the tree between tasks.
+*.snap.new
