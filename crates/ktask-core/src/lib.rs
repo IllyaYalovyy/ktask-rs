@@ -5,6 +5,8 @@
 
 mod error;
 mod ids;
+mod paths;
 
 pub use error::{Error, Result};
 pub use ids::{AttemptId, EventSeq, TaskId};
+pub use paths::{config_file, state_root};
