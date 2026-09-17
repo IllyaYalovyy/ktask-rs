@@ -124,12 +124,6 @@ Answers a `waiting_input` question. The answer is recorded as an ADR in
 Passes a human gate. Marks the gate satisfied and leaves the queue paused;
 `resume` continues. Exits 2 if no gate is pending.
 
-### `ktask-rs privacy audit [--history]`
-
-Scans tracked files, the outgoing commit range and optionally full git history
-for operational artifacts and configured secret patterns. Prints one line per
-finding with path and reason. Exit 0 if clean, 1 if anything is found.
-
 ### `ktask-rs stats [--task <id>]`
 
 Tokens, cost, durations and success rates per task and per queue, from recorded

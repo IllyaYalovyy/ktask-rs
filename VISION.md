@@ -78,7 +78,6 @@ ktask-rs retry --task 7          # fresh remediation with the failure bundle
 ktask-rs resolve --task 7        # answer a waiting_input question; stored as ADR
 ktask-rs ack                     # pass a human gate
 ktask-rs privacy audit           # scan repo and optionally git history for leaked artifacts
-ktask-rs stats                   # tokens, cost, durations, success rates per task/queue
 ```
 
 Exit codes remain semantic and scriptable (drained, task failed, provider limit, human gate, needs input, interrupted).
@@ -283,7 +282,7 @@ v0.2 below only in the sense of build order — the engine must exist before it
 can be rendered — and both phases are required for v1.
 
 **v0.1 (foundation, the minimum honest product):**
-state machine + SQLite journal; headless CLI; structured Markdown task format with `plan lint`; gates (baseline, targeted, verify, lint, format, build, basic privacy scan); git transaction model with commit-and-push publication; work protocols `direct` and `tdd`; failure classifier with bounded fresh-session remediation and circuit breaker; static context + ADR recording and injection; `dummy`, Claude, and Codex adapters; `doctor`; attempt records including tokens and cost; `stats`.
+state machine + SQLite journal; headless CLI; structured Markdown task format with `plan lint`; gates (baseline, targeted, verify, lint, format, build, basic privacy scan); git transaction model with commit-and-push publication; work protocols `direct` and `tdd`; failure classifier with bounded fresh-session remediation and circuit breaker; static context + ADR recording and injection; `dummy`, Claude, and Codex adapters; `doctor`; attempt records including tokens and cost.
 
 **v0.2 (operations, and equally required for v1):**
 The complete TUI — all nine screens of §13 (queue, live run, logs, failures and inspector first; input inbox, history, git, configuration and doctor after); `waiting_limit` exact-reset handling; `flake_command`; full `privacy audit`; typed-source context assembly with size budgets; `spec-first` protocol with per-phase provider selection.
