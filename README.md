@@ -17,7 +17,7 @@ checkable from the very first task.
 
 ```bash
 git switch -c my-run template
-./scripts/setup.sh        # install the pinned toolchain and analysis tools
+./scripts/check-prereqs.sh   # what must be installed first
 ./scripts/quality.sh      # verify the seed is green
 ```
 
@@ -33,7 +33,7 @@ markers that the first tasks replace.
 | `docs/PROCESS.md` | definition of done, commits, ADRs, scope |
 | `docs/TESTING.md` | test layers, and the mandatory TUI coverage |
 | `docs/adr/` | architecture decision records — the only operational docs kept in-repo |
-| `scripts/setup.sh` | installs the pinned toolchain and analysis tools |
+| `scripts/check-prereqs.sh` | reports what must be installed before any task can run |
 | `scripts/quality.sh` | the single entry point for every mechanical gate |
 | `docs/CONTRACT.md` | the CLI and TUI surface: commands, exit codes, screens, keys |
 | `docs/QUALITY.md` | what each gate enforces, and why |
@@ -63,8 +63,8 @@ dependency licenses and sources, unused dependencies, and spelling.
 
 Gates are never to be weakened to get a green result, and a gate whose tool is
 missing reports as failed rather than skipped — an unverified gate has not
-passed. `./scripts/setup.sh --check` tells you if anything is missing or at the
-wrong version.
+passed. `./scripts/check-prereqs.sh` tells you what is missing and how to install it.
+It installs nothing.
 `cargo deny check advisories` needs network access and is run separately from
 the offline gate set.
 

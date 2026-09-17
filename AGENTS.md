@@ -22,8 +22,9 @@ working unattended: no one will answer a question mid-task.
 ## Non-negotiables
 
 - `scripts/quality.sh` is the definition of done — nine gates, all of which
-  fail the build on violation. See `docs/QUALITY.md`. Install what they need
-  with `scripts/setup.sh`; `scripts/setup.sh --check` verifies versions.
+  fail the build on violation. See `docs/QUALITY.md`. If a gate cannot run because a tool is
+  absent, `scripts/check-prereqs.sh` names it and the command that installs
+  it — that is a finding to report, not something to work around.
 - Never weaken a gate to make it pass: no `#[allow]` on the line that
   triggered a lint, no `#[ignore]` on a failing test, no deleted assertion, no
   loosened threshold in `clippy.toml`. Fix the code instead. Weakening a check

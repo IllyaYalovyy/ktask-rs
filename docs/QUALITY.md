@@ -2,7 +2,7 @@
 
 `./scripts/quality.sh` is the single entry point and the definition of done.
 Every gate fails the build on violation — none of them are advisory.
-Install everything they need with `./scripts/setup.sh`.
+`./scripts/check-prereqs.sh` reports anything missing, and installs nothing.
 
 | Gate | Command | Fails on |
 |---|---|---|

@@ -23,7 +23,7 @@ fi
 [[ -n "$BASE" ]] || { echo "no base commit to compare against" >&2; exit 2; }
 
 command -v cargo-mutants >/dev/null 2>&1 || cargo mutants --version >/dev/null 2>&1 || {
-  echo "MISSING TOOL: cargo-mutants. Install with scripts/setup.sh" >&2; exit 1; }
+  echo "MISSING TOOL: cargo-mutants. run scripts/check-prereqs.sh" >&2; exit 1; }
 
 DIFF="$(mktemp)"; trap 'rm -f "$DIFF"' EXIT
 git diff "$BASE" -- '*.rs' > "$DIFF"

@@ -6,7 +6,7 @@
 #   scripts/quality.sh fmt test   only the named gates
 #
 # Gates: fmt build test clippy doc deny unused typos coverage
-# Install everything they need with scripts/setup.sh.
+# scripts/check-prereqs.sh reports anything missing.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -23,7 +23,7 @@ run() {
 require() {
   command -v "$1" >/dev/null 2>&1 || cargo "${1#cargo-}" --version >/dev/null 2>&1 || {
     echo "MISSING TOOL: $1 is not installed, so this gate cannot be verified." >&2
-    echo "  install with: cargo install --locked $1" >&2
+    echo "  run ./scripts/check-prereqs.sh for the full list and how to install it" >&2
     return 1
   }
 }
