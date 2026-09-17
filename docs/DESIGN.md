@@ -131,7 +131,7 @@ pub enum PauseReason { Limit { until: Option<OffsetDateTime> }, Input, HumanGate
 
 // gate.rs
 pub enum GateKind {
-    Baseline, Targeted, Verify, Lint, Format, Build, Privacy, Flake, Review,
+    Baseline, Targeted, Verify, Lint, Format, Build, Privacy,
 }
 
 // classify.rs
@@ -198,8 +198,6 @@ secret_patterns:          []
 flake_runs:               5
 retention_days:           90
 min_free_disk_bytes:      2147483648   // 2 GiB
-review_command:           ["cargo", "mutants", "--in-diff"]
-max_surviving_mutants:    0
 ```
 
 ## Event catalog

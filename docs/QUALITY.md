@@ -58,8 +58,11 @@ Coverage is a floor, and a low one. It proves a line was executed; it says
 nothing about whether anything would notice if that line were wrong. A test
 that calls a function and asserts nothing scores 100% coverage.
 
-So every task also runs `scripts/review-tests.sh`, which mutates **only the
-lines that task changed** and checks whether the tests fail. A surviving mutant
+So `scripts/review-tests.sh` mutates **only the lines a given change touched**
+and checks whether the tests fail. It is not a per-task gate: every mutant
+re-runs the whole suite, so the cost grows with the suite while the value does
+not. Run it over finished work to measure how many tests were written that
+assert nothing. A surviving mutant
 means the code was deliberately broken, every test still passed, and nobody
 noticed. Three answers are acceptable: add an assertion that catches it, delete
 the code the mutant proved was untested, or state in the task report why it is
