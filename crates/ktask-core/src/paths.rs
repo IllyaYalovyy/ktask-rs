@@ -1,18 +1,25 @@
-//! XDG base-directory resolution for the two places ktask-rs keeps files.
+//! Where ktask-rs keeps its files, and what one repository is called.
 //!
 //! State and configuration live outside the repository being supervised, in the
 //! directories the XDG Base Directory Specification names, under a `ktask-rs`
-//! subdirectory of each. Nothing here touches the filesystem: resolution is a
-//! pure answer to "where would the file be", which is what makes it testable
-//! without a home directory to write into.
+//! subdirectory of each. Resolving those is a pure answer to "where would the
+//! file be": nothing is created or read, which is what makes it testable without
+//! a home directory to write into.
 //!
 //! The environment is never read by the helpers the tests call. `docs/DESIGN.md`
 //! forbids `std::env::set_var` (`unsafe` in edition 2024, and `unsafe_code` is
 //! `forbid`), so a lookup is threaded through a `&dyn Fn(&str) ->
 //! Option<String>` instead: the public entry points pass the process
 //! environment, a test passes a closure.
+//!
+//! [`project_id`] is the exception that asks the filesystem something: a
+//! repository's name comes from its canonical path, and only the filesystem
+//! knows that. It resolves and never writes.
 
+use std::fs;
 use std::path::{Path, PathBuf};
+
+use sha2::{Digest as _, Sha256};
 
 use crate::{Error, Result};
 
@@ -21,6 +28,10 @@ const APP_DIR: &str = "ktask-rs";
 
 /// The file layered configuration is read from, below [`APP_DIR`].
 const CONFIG_NAME: &str = "config.toml";
+
+/// How many hexadecimal characters each half of a project id carries — the
+/// first 16 of the 64 a SHA-256 digest prints as.
+const ID_HEX_CHARS: usize = 16;
 
 /// The base directory all ktask-rs state lives under: `$XDG_STATE_HOME/ktask-rs`,
 /// or `$HOME/.local/state/ktask-rs` when the variable is unset or empty.
@@ -106,11 +117,67 @@ fn unusable(variable: &str) -> Error {
     }
 }
 
+/// The name of one repository's state directory: the first 16 hexadecimal
+/// characters of the SHA-256 of its canonical path, then — when it has an
+/// origin remote — `-` and the same for the remote URL.
+///
+/// Identity is the canonical path rather than the path a caller happened to
+/// type because one directory has many spellings — through a symlink, with a
+/// `..` in it, relative to whatever the working directory was — and each
+/// spelling that produced a different id would buy the repository a second
+/// journal to disagree with the first. The remote is in the id because a clone
+/// moved or re-pointed is a different working copy: the events journaled
+/// against one are not evidence about the other.
+///
+/// An empty remote counts as no remote, for the same reason an empty `$HOME`
+/// does in [`state_root`]: two spellings of one repository must map to one id,
+/// and a configuration source that reports an absent origin as `""` is
+/// ordinary. The URL is hashed as the caller gives it, so a caller asking git
+/// for it trims the trailing newline first.
+///
+/// A path the filesystem cannot canonicalize is hashed as it was given. The
+/// answer is a `String` rather than a [`Result`] because there is no failure a
+/// caller could act on: registration resolves the working copy with git before
+/// asking, so it asks about a directory that exists.
+#[must_use]
+pub fn project_id(repo_path: &Path, remote: Option<&str>) -> String {
+    let canonical = canonical_path(repo_path);
+    let mut id = hex_prefix(&Sha256::digest(canonical.as_os_str().as_encoded_bytes()));
+    if let Some(url) = remote.filter(|reported| !reported.is_empty()) {
+        id.push('-');
+        id.push_str(&hex_prefix(&Sha256::digest(url.as_bytes())));
+    }
+    id
+}
+
+/// The path the filesystem considers `repo_path` to be, or the path it was
+/// given when there is none: [`fs::canonicalize`] requires the path to exist.
+fn canonical_path(repo_path: &Path) -> PathBuf {
+    fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf())
+}
+
+/// The first [`ID_HEX_CHARS`] lowercase hexadecimal characters of `digest`.
+fn hex_prefix(digest: &impl AsRef<[u8]>) -> String {
+    digest
+        .as_ref()
+        .iter()
+        .take(ID_HEX_CHARS / 2)
+        .flat_map(|byte| [byte >> 4, byte & 0x0f])
+        .filter_map(|nibble| char::from_digit(u32::from(nibble), 16))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{config_file_with, state_root_with};
+    use super::{config_file_with, project_id, state_root_with};
     use crate::{Error, config_file, state_root};
+    use sha2::{Digest as _, Sha256};
+    use std::ffi::{OsStr, OsString};
+    use std::fs;
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
+    use tempfile::{TempDir, tempdir};
 
     /// An environment that holds nothing but a home directory.
     fn home_only(home: &'static str) -> Vec<(&'static str, &'static str)> {
@@ -308,5 +375,244 @@ mod tests {
     /// A variable read straight from the process, an empty one treated as absent.
     fn process(key: &str) -> Option<String> {
         std::env::var(key).ok().filter(|found| !found.is_empty())
+    }
+
+    /// The id `docs/DESIGN.md` specifies, rebuilt here from the bytes of the
+    /// literal input rather than through the function under test: the two are
+    /// written from the same sentence but not from each other, so a change to
+    /// one does not quietly move the other.
+    fn specified_id(path: &Path, remote: Option<&str>) -> String {
+        let bytes = OsStr::as_bytes(path.as_os_str());
+        let mut id = hex16(Sha256::digest(bytes).as_ref());
+        if let Some(remote) = remote.filter(|url| !url.is_empty()) {
+            id.push('-');
+            id.push_str(&hex16(Sha256::digest(remote.as_bytes()).as_ref()));
+        }
+        id
+    }
+
+    /// The first 16 lowercase hexadecimal characters of `bytes`.
+    fn hex16(bytes: &[u8]) -> String {
+        bytes
+            .iter()
+            .take(8)
+            .flat_map(|byte| [byte >> 4, byte & 0x0f])
+            .filter_map(|nibble| char::from_digit(u32::from(nibble), 16))
+            .collect()
+    }
+
+    /// `to` spelled relative to `from`, both absolute. A test cannot simply
+    /// move itself into a directory: `set_current_dir` is `unsafe` in edition
+    /// 2024 and `unsafe_code` is `forbid`, so the relative spelling is built
+    /// from the working directory the process already has.
+    fn relative_from(from: &Path, to: &Path) -> PathBuf {
+        let from_parts: Vec<OsString> = from
+            .components()
+            .map(|part| part.as_os_str().to_os_string())
+            .collect();
+        let to_parts: Vec<OsString> = to
+            .components()
+            .map(|part| part.as_os_str().to_os_string())
+            .collect();
+        let shared = from_parts
+            .iter()
+            .zip(to_parts.iter())
+            .take_while(|(mine, theirs)| mine == theirs)
+            .count();
+        let mut relative = PathBuf::new();
+        for _ in shared..from_parts.len() {
+            relative.push("..");
+        }
+        for part in to_parts.iter().skip(shared) {
+            relative.push(part);
+        }
+        relative
+    }
+
+    /// A scratch directory, already in the form the filesystem considers it to
+    /// have, which is what `project_id` is specified to hash.
+    fn canonical_scratch(label: &str) -> (TempDir, PathBuf) {
+        let created = tempdir().expect("a scratch directory outside the repository");
+        let named = created.path().join(label);
+        fs::create_dir(&named).expect("the scratch directory was created");
+        let canonical =
+            fs::canonicalize(&named).expect("the scratch directory has a canonical form");
+        (created, canonical)
+    }
+
+    #[test]
+    fn project_id_is_the_same_on_every_call_for_the_same_repository() {
+        let (_scratch, repo) = canonical_scratch("stable");
+        let remote = "https://github.com/ada/ktask-rs.git";
+        assert_eq!(
+            project_id(&repo, Some(remote)),
+            project_id(&repo, Some(remote))
+        );
+    }
+
+    #[test]
+    fn project_id_is_the_first_16_hex_characters_of_the_sha256_of_the_path() {
+        // `/` is its own canonical form on every Unix, so the expected value is
+        // a constant: the first 16 hex characters of `printf / | sha256sum`,
+        // computed by a tool that shares no code with this crate.
+        assert_eq!(project_id(Path::new("/"), None), "8a5edab282632443");
+    }
+
+    #[test]
+    fn project_id_appends_the_hash_of_the_remote_after_one_dash() {
+        // The halves come from `sha256sum` of `/` and of the URL respectively.
+        assert_eq!(
+            project_id(Path::new("/"), Some("https://github.com/ada/ktask-rs.git")),
+            "8a5edab282632443-8289fe69e3931f4d"
+        );
+    }
+
+    #[test]
+    fn project_id_of_a_directory_reached_through_a_symlink_is_the_canonical_id() {
+        let scratch = tempdir().expect("a scratch parent for the repository and its symlink");
+        let repo = scratch.path().join("repository");
+        fs::create_dir(&repo).expect("the scratch repository directory");
+        let link = scratch.path().join("current");
+        symlink(&repo, &link).expect("a symlink to the scratch repository directory");
+        let canonical =
+            fs::canonicalize(&repo).expect("the scratch directory has a canonical form");
+        assert_ne!(
+            link, canonical,
+            "the symlink and its target must be different spellings"
+        );
+        assert_eq!(project_id(&link, None), project_id(&canonical, None));
+        assert_eq!(project_id(&link, None), specified_id(&canonical, None));
+    }
+
+    #[test]
+    fn project_id_of_a_relative_path_is_the_id_of_the_canonical_directory() {
+        let (_scratch, repo) = canonical_scratch("relative");
+        let working = std::env::current_dir().expect("the test process has a working directory");
+        let relative = relative_from(&working, &repo);
+        assert!(
+            relative.is_relative(),
+            "{relative:?} must be a relative path"
+        );
+        assert_eq!(project_id(&relative, None), project_id(&repo, None));
+    }
+
+    #[test]
+    fn project_id_of_a_path_with_dot_and_dot_dot_components_is_the_canonical_id() {
+        let (_scratch, repo) = canonical_scratch("decorated");
+        let name = repo.file_name().expect("the scratch directory has a name");
+        let decorated = repo.join("..").join(name);
+        assert_ne!(
+            decorated, repo,
+            "the decorated spelling must differ from the canonical one"
+        );
+        assert_eq!(project_id(&decorated, None), project_id(&repo, None));
+    }
+
+    #[test]
+    fn project_id_without_a_remote_differs_from_the_same_path_with_one() {
+        let (_scratch, repo) = canonical_scratch("remote-or-not");
+        let absent = project_id(&repo, None);
+        let present = project_id(&repo, Some("https://github.com/ada/ktask-rs.git"));
+        assert_ne!(
+            absent, present,
+            "a repository must not be identifiable as both"
+        );
+        assert_eq!(absent, specified_id(&repo, None));
+        assert_eq!(
+            present,
+            specified_id(&repo, Some("https://github.com/ada/ktask-rs.git"))
+        );
+    }
+
+    #[test]
+    fn project_id_of_one_repository_with_two_remotes_differs_per_remote() {
+        let (_scratch, repo) = canonical_scratch("two-remotes");
+        let https = project_id(&repo, Some("https://github.com/ada/ktask-rs.git"));
+        let ssh = project_id(&repo, Some("git@github.com:ada/ktask-rs.git"));
+        assert_ne!(
+            https, ssh,
+            "moving the origin must not keep the old identity"
+        );
+        assert_eq!(
+            ssh,
+            specified_id(&repo, Some("git@github.com:ada/ktask-rs.git"))
+        );
+    }
+
+    #[test]
+    fn project_id_treats_an_empty_remote_as_no_remote() {
+        // Two spellings of one repository have to map to one id, and a config
+        // source that yields `""` for an absent origin is the common case.
+        assert_eq!(
+            project_id(Path::new("/"), Some("")),
+            project_id(Path::new("/"), None)
+        );
+    }
+
+    #[test]
+    fn project_id_of_two_different_repositories_differs() {
+        let (_one_scratch, one) = canonical_scratch("one");
+        let (_two_scratch, two) = canonical_scratch("two");
+        let remote = "https://github.com/ada/ktask-rs.git";
+        assert_ne!(
+            project_id(&one, Some(remote)),
+            project_id(&two, Some(remote))
+        );
+    }
+
+    #[test]
+    fn project_id_with_a_remote_is_two_lowercase_hex_halves_joined_by_one_dash() {
+        let id = project_id(Path::new("/"), Some("git@github.com:ada/ktask-rs.git"));
+        let halves: Vec<&str> = id.split('-').collect();
+        assert_eq!(
+            halves.len(),
+            2,
+            "{id} must be a path half and a remote half"
+        );
+        for half in &halves {
+            assert_eq!(half.chars().count(), 16, "{id}");
+            assert!(
+                half.chars()
+                    .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f')),
+                "{id} must be lowercase hex"
+            );
+        }
+    }
+
+    #[test]
+    fn project_id_without_a_remote_is_one_hex_half_and_no_dash() {
+        let id = project_id(Path::new("/"), None);
+        assert!(!id.contains('-'), "{id} must have no remote half");
+        assert_eq!(id.chars().count(), 16, "{id}");
+    }
+
+    #[test]
+    fn project_id_of_a_path_that_cannot_be_canonicalized_uses_the_spelling_it_was_given() {
+        // Registration resolves the working copy with git before asking for an
+        // id, so this is the degenerate case rather than the normal one; it is
+        // pinned because an id that silently depended on something else would
+        // split one repository across two state directories.
+        let missing = Path::new("/ktask-rs-absent-repository-fixture");
+        assert!(
+            fs::canonicalize(missing).is_err(),
+            "the fixture must not exist, or this test stops pinning the fallback"
+        );
+        assert_eq!(project_id(missing, None), "942c6cf0f5dc1e99");
+        assert_eq!(project_id(missing, None), specified_id(missing, None));
+        assert_eq!(project_id(missing, None), project_id(missing, None));
+    }
+
+    #[test]
+    fn project_id_hashes_the_raw_bytes_of_a_path_that_is_not_valid_utf8() {
+        let scratch = tempdir().expect("a scratch parent for the odd-named directory");
+        let named = scratch.path().join(OsStr::from_bytes(b"w\xe9rk"));
+        fs::create_dir(&named).expect("a directory whose name is not valid UTF-8");
+        let canonical =
+            fs::canonicalize(&named).expect("the scratch directory has a canonical form");
+        assert!(
+            std::str::from_utf8(OsStr::as_bytes(canonical.as_os_str())).is_err(),
+            "the fixture must be unspellable as text, or it pins nothing"
+        );
+        assert_eq!(project_id(&canonical, None), specified_id(&canonical, None));
     }
 }
