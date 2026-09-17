@@ -36,6 +36,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension as _, params};
 
+use crate::journal::{CREATE_META_TABLE, journal_path};
 use crate::paths::{process_env, state_root_with};
 use crate::{Error, Result, project_id};
 
@@ -47,20 +48,8 @@ use crate::{Error, Result, project_id};
 /// listing those names reveals which repositories an operator supervises.
 const STATE_DIR_MODE: u32 = 0o700;
 
-/// The database a project's durable data lives in, below its state directory,
-/// as `docs/DESIGN.md` Database schema names it.
-const JOURNAL_DATABASE: &str = "journal.db";
-
 /// The `meta` key under which a registration records its repository's path.
 const REPOSITORY_KEY: &str = "repo_path";
-
-/// The DDL for the `meta` table, copied from `docs/DESIGN.md` Database schema.
-///
-/// Registration creates this table itself, because it has to write a row and
-/// the row lives there; the journal module creates the rest of the schema over
-/// the top of it when it opens the same file.
-const CREATE_META_TABLE: &str =
-    "CREATE TABLE IF NOT EXISTS meta (\n  key   TEXT PRIMARY KEY,\n  value TEXT NOT NULL\n);";
 
 /// A repository that ktask-rs has registered.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,7 +237,7 @@ fn record_repository(project: &Project) -> Result<()> {
             paths: vec![project.state_dir.clone(), PathBuf::from(recorded)],
         });
     }
-    let connection = Connection::open(journal_database(&project.state_dir))?;
+    let connection = Connection::open(journal_path(&project.state_dir))?;
     connection.execute_batch(CREATE_META_TABLE)?;
     connection.execute(
         "INSERT INTO meta (key, value) VALUES (?1, ?2) \
@@ -268,7 +257,7 @@ fn record_repository(project: &Project) -> Result<()> {
 ///
 /// [`Error::Database`] when the journal is there and cannot be read.
 fn recorded_repository(state_dir: &Path) -> Result<Option<String>> {
-    let database = journal_database(state_dir);
+    let database = journal_path(state_dir);
     if !database.is_file() {
         return Ok(None);
     }
@@ -311,17 +300,10 @@ fn registered_at(state_root: &Path, candidate: &Path) -> Result<Option<Project>>
     }
 }
 
-/// The journal database of one project's state directory.
-fn journal_database(state_dir: &Path) -> PathBuf {
-    state_dir.join(JOURNAL_DATABASE)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        CREATE_META_TABLE, JOURNAL_DATABASE, REPOSITORY_KEY, discover, discover_with,
-        journal_database, register, register_with,
-    };
+    use super::{REPOSITORY_KEY, discover, discover_with, register, register_with};
+    use crate::journal::{CREATE_META_TABLE, journal_path};
     use crate::{Error, project_id};
     use rusqlite::{Connection, OptionalExtension as _, params};
     use std::fs::{self, Permissions};
@@ -373,7 +355,7 @@ mod tests {
     fn write_registration(state_dir: &Path, named: &Path) {
         fs::create_dir_all(state_dir).expect("a scratch state directory");
         let connection =
-            Connection::open(journal_database(state_dir)).expect("a scratch journal database");
+            Connection::open(journal_path(state_dir)).expect("a scratch journal database");
         connection
             .execute_batch(CREATE_META_TABLE)
             .expect("a scratch `meta` table");
@@ -389,7 +371,7 @@ mod tests {
     fn journal_without_registration(state_dir: &Path) {
         fs::create_dir_all(state_dir).expect("a scratch state directory");
         let connection =
-            Connection::open(journal_database(state_dir)).expect("a scratch journal database");
+            Connection::open(journal_path(state_dir)).expect("a scratch journal database");
         connection
             .execute_batch(CREATE_META_TABLE)
             .expect("a scratch `meta` table");
@@ -397,7 +379,7 @@ mod tests {
 
     /// The value `key` holds in a project's `meta` table, if it holds one.
     fn meta_value(state_dir: &Path, key: &str) -> Option<String> {
-        let connection = Connection::open(journal_database(state_dir))
+        let connection = Connection::open(journal_path(state_dir))
             .expect("register creates the journal database");
         connection
             .query_row(
@@ -411,7 +393,7 @@ mod tests {
 
     /// How many rows a project's `meta` table holds.
     fn meta_rows(state_dir: &Path) -> i64 {
-        let connection = Connection::open(journal_database(state_dir))
+        let connection = Connection::open(journal_path(state_dir))
             .expect("register creates the journal database");
         connection
             .query_row("SELECT count(*) FROM meta", [], |row| row.get(0))
@@ -476,8 +458,8 @@ mod tests {
             .expect("a scratch working copy registers");
 
         assert!(
-            project.state_dir.join(JOURNAL_DATABASE).is_file(),
-            "the journal is `<state_dir>/{JOURNAL_DATABASE}` as docs/DESIGN.md fixes it"
+            journal_path(&project.state_dir).is_file(),
+            "the journal is `<state_dir>/journal.db`, as docs/DESIGN.md fixes it"
         );
         assert_eq!(
             meta_rows(&project.state_dir),
