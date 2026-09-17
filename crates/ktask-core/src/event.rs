@@ -31,11 +31,13 @@
 //!   that emits it and gives it an `apply` arm, so nothing can journal an
 //!   event whose effect on state no task has written yet.
 //! - `GateStarted` (`kind: GateKind`) cannot be defined at all: `GateKind` is
-//!   `gate.rs`, which no earlier task has written. A payload naming it would
-//!   not compile — which is the point of this catalog being a compile check.
-//!   `Error::Gate` waits on the same type for the same reason (ADR-0001);
-//!   `docs/adr/0011-the-event-catalog-names-only-types-that-exist.md` records
-//!   why this one waits instead of taking the underlying form.
+//!   `gate.rs`, which no earlier task has written, and a payload naming it
+//!   would not compile — which is the point of this catalog being a compile
+//!   check. `Error::Gate` waits on the same type for the same reason
+//!   (ADR-0001). It has a second problem waiting for T038: its documented
+//!   field is also called `kind`, the key `#[serde(tag = "kind")]` already
+//!   owns, so the derive refuses it until the field is renamed
+//!   (ADR-0011 records the measurement).
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -256,20 +258,55 @@ mod tests {
 
     /// The nine entries this catalog does not define yet.
     ///
-    /// Their absence is asserted, not assumed: a variant added ahead of its
-    /// payload type would start decoding, and the journal would begin accepting
-    /// events the plan says nothing may emit until the task that owns the
-    /// payload lands.
-    const DEFERRED: &[&str] = &[
-        "GateStarted",
-        "GateFinished",
-        "AttemptFinished",
-        "AttemptRecorded",
-        "ProviderDetected",
-        "TddExceptionUsed",
-        "DecisionRaised",
-        "DecisionResolved",
-        "SelfHealingReport",
+    /// Their absence is asserted, not assumed: an entry added ahead of its
+    /// producer would start decoding, and the journal would begin accepting
+    /// events the plan says nothing may emit until the task that writes that
+    /// producer lands.
+    ///
+    /// The second half of each pair is the payload `docs/DESIGN.md` documents
+    /// for the entry, minus the tag the test adds. The populated payload is
+    /// what makes the refusal an assertion: `{"kind":"GateFinished"}` is
+    /// refused for its missing field whether or not the entry exists, so a
+    /// bare name would prove nothing either way. `GateStarted` is the one
+    /// sample that renames a field, because its documented one is `kind` and
+    /// the tag owns that key (ADR-0011).
+    const DEFERRED_PAYLOADS: &[(&str, &str)] = &[
+        ("GateStarted", r#""gate":"Verify""#),
+        ("GateFinished", r#""result":"Passed""#),
+        (
+            "AttemptFinished",
+            concat!(
+                r#""attempt":2,"exit_code":0,"usage":null,"#,
+                r#""session_id":null,"model_reported":null"#,
+            ),
+        ),
+        ("AttemptRecorded", r#""record":{}"#),
+        (
+            "ProviderDetected",
+            r#""provider":"codex","capabilities":{},"version":"0.1.0""#,
+        ),
+        (
+            "TddExceptionUsed",
+            r#""exception":"Documentation","reason":"docs only""#,
+        ),
+        (
+            "DecisionRaised",
+            concat!(
+                r#""request":{"question":"which?","options":["a","b"],"#,
+                r#""tradeoffs":"cost","impact":"queue","recommended":"a"}"#,
+            ),
+        ),
+        (
+            "DecisionResolved",
+            r#""adr_path":"docs/adr/0011.md","answer":"a""#,
+        ),
+        (
+            "SelfHealingReport",
+            concat!(
+                r#""attempt":2,"class":"AgentFailure","#,
+                r#""repairs":["re-run fmt"],"outcome":"green""#,
+            ),
+        ),
     ];
 
     /// One instance of every documented entry, in [`DOCUMENTED`]'s order.
@@ -409,10 +446,7 @@ mod tests {
 
     #[test]
     fn event_kind_refuses_a_name_the_catalog_does_not_define() {
-        for name in DEFERRED
-            .iter()
-            .chain(["Unsupported", "taskDone", ""].iter())
-        {
+        for name in ["Unsupported", "taskDone", "Task_Queued", "TaskQueue", ""] {
             let rejected = format!(r#"{{"kind":"{name}"}}"#);
             assert!(
                 serde_json::from_str::<EventKind>(&rejected).is_err(),
@@ -423,15 +457,14 @@ mod tests {
 
     #[test]
     fn event_kind_refuses_a_deferred_entry_even_fully_populated() {
-        for payload in [
-            r#"{"kind":"GateFinished","result":"Passed"}"#,
-            r#"{"kind":"AttemptFinished","attempt":2,"exit_code":0}"#,
-            r#"{"kind":"TddExceptionUsed","exception":"Documentation","reason":"docs only"}"#,
-            r#"{"kind":"DecisionResolved","adr_path":"docs/adr/0011.md","answer":"yes"}"#,
-        ] {
+        for (name, fields) in DEFERRED_PAYLOADS {
+            let payload = format!(r#"{{"kind":"{name}",{fields}}}"#);
+            let _: Value = serde_json::from_str(&payload)
+                .expect("the sample payload must parse, or the refusal below proves nothing");
             assert!(
-                serde_json::from_str::<EventKind>(payload).is_err(),
-                "{payload} names an entry the catalog does not define yet",
+                serde_json::from_str::<EventKind>(&payload).is_err(),
+                "{name} has no entry in the catalog yet, so {payload} must be \
+                 refused rather than silently dropped",
             );
         }
     }
