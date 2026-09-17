@@ -1837,23 +1837,38 @@ mod projection {
                 .expect("a journal opens where its state directory is")
         }
 
-        /// One state from every half of the lifecycle the type describes: the two
-        /// that carry nothing, the ones that carry an attempt or a commit, the one
-        /// that carries a person and an instant, the pause that carries a boxed
-        /// state, and the ways a task ends without being done.
+        /// One state per `TaskState` variant, in the order the type declares them:
+        /// the four that carry nothing, the ones that carry an attempt or a commit,
+        /// the one that carries a person and an instant, the pause that carries a
+        /// boxed state, and the ways a task ends without being done.
+        ///
+        /// Every variant, because [`Journal::put_state`] is variant-blind — it
+        /// writes `serde`'s JSON of whatever it is handed — so the only thing that
+        /// can make a state unreadable through the projection is the encoding, and
+        /// an encoding nothing wrote is an encoding nothing read either. A state
+        /// left out of this list is a state whose round trip nobody has seen.
         fn states() -> Vec<TaskState> {
             vec![
                 TaskState::Queued,
+                TaskState::Preflight,
                 TaskState::Running {
                     attempt: AttemptId::new(2),
                     phase: Phase::Green,
                 },
+                TaskState::Remediating {
+                    attempt: AttemptId::new(4),
+                    phase: Phase::Red,
+                },
                 TaskState::Verifying {
                     attempt: AttemptId::new(1),
+                },
+                TaskState::Publishing {
+                    attempt: AttemptId::new(2),
                 },
                 TaskState::PublishedVerified {
                     commit: "b42c45f".to_owned(),
                 },
+                TaskState::Done,
                 TaskState::Acknowledged {
                     by: "operator".to_owned(),
                     at: datetime!(2026-09-17 12:34:56 UTC),
@@ -2092,11 +2107,13 @@ mod projection {
                 "one entry per task the projection holds, and none for a task that was \
                  never written"
             );
+            let next_in_queue =
+                TaskId::new(u32::try_from(written.len() + 1).expect("a scratch queue is short"));
             assert_eq!(
-                projection.get(&TaskId::new(9)),
+                projection.get(&next_in_queue),
                 None,
-                "the map is the projection, not the queue: a task nobody concluded is absent \
-                 from it"
+                "the map is the projection, not the queue: the task the queue reaches next, \
+                 which nobody has concluded, is absent from it"
             );
             for (index, state) in written.iter().enumerate() {
                 let task = task_holding(&written, index);
