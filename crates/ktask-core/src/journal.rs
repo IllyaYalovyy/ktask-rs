@@ -36,12 +36,33 @@
 //! holds is private (VISION.md section 11). A directory that [`Journal::open`] made on
 //! someone's behalf would be `0755` and would look exactly like a registration,
 //! so an absent directory is reported as the error it is.
+//!
+//! # Appending
+//!
+//! [`Journal::append`] is the only write the journal makes, and it is where
+//! invariant 3 of VISION.md section 3 becomes mechanical. Three values make a row
+//! and none of them comes from the caller: the sequence is the database's own
+//! `AUTOINCREMENT` counter, the instant is the clock read inside the call, and the
+//! payload is `serde_json`'s encoding of the catalog entry. A sequence a caller
+//! chose is a sequence two callers can choose, and an instant handed in from
+//! outside is one a caller can move — in a record whose whole purpose is to say
+//! what a run did, and when.
+//!
+//! One insert is one transaction, so "persisted atomically before it takes
+//! effect" is the transaction's guarantee rather than a promise: either the event
+//! is in the file with a sequence of its own, or the journal holds precisely what
+//! it held before the call, with no sequence number spent.
 
+use std::fmt::Display;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use rusqlite::{Connection, OptionalExtension as _, params};
+use serde::ser::Error as _;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
-use crate::{Error, Project, Result};
+use crate::{Error, EventKind, EventSeq, Project, Result, TaskId};
 
 /// The database a project's durable data lives in, below its state directory.
 const JOURNAL_DATABASE: &str = "journal.db";
@@ -57,6 +78,10 @@ const SCHEMA_VERSION_KEY: &str = "schema_version";
 /// a step of its own — every object it lacks is created by the same
 /// `IF NOT EXISTS` DDL that creates them in a new file.
 const SCHEMA_VERSION: i64 = 1;
+
+/// The nanoseconds in one second, so a clock reading keeps the part of itself
+/// below a second instead of rounding it away.
+const NANOSECONDS_PER_SECOND: i128 = 1_000_000_000;
 
 /// The `events` table, copied from `docs/DESIGN.md` Database schema.
 ///
@@ -190,6 +215,81 @@ impl Journal {
         Self::open(&journal_path(&project.state_dir))
     }
 
+    /// Append one event to the journal and return the sequence it was written
+    /// at.
+    ///
+    /// Nothing the row is made of is supplied by the caller except *what
+    /// happened*: `seq` comes from the database's `AUTOINCREMENT` counter, `ts`
+    /// from the clock read inside this call, and `payload` from `serde_json`.
+    /// That is why the signature takes `&mut self` and no timestamp — a sequence
+    /// a caller chose is a sequence two callers can choose, and an instant handed
+    /// in from outside is one a caller can move, in the one record that exists to
+    /// say what a run did and when (VISION.md section 3, invariant 3).
+    ///
+    /// The `kind` column gets [`EventKind::discriminant`] and the `payload`
+    /// column gets the tagged object whose own `kind` tag carries that same
+    /// string. The column is what an indexed `WHERE` reads without parsing JSON;
+    /// a test over every catalog entry keeps the two halves honest against each
+    /// other, rather than a comment promising they are.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Serde`] when the payload has no JSON encoding, or when the clock
+    /// reads an instant with no RFC 3339 spelling; [`Error::Database`] when
+    /// SQLite refuses the insert. Either way the journal holds exactly what it
+    /// held before the call and no sequence number has been spent, because the
+    /// encoding happens before a transaction opens and a refused insert is
+    /// rolled back rather than left for a replay to trip over.
+    pub fn append(&mut self, task_id: Option<TaskId>, kind: &EventKind) -> Result<EventSeq> {
+        self.append_encoded(task_id, kind.discriminant(), || {
+            serde_json::to_string(kind).map_err(Into::into)
+        })
+    }
+
+    /// The append pipeline with its payload step handed in by the caller.
+    ///
+    /// [`Journal::append`] supplies `serde_json`; a test supplies a serializer
+    /// that refuses, which is the only way to watch the first guarantee below
+    /// hold — no field of [`EventKind`] is one `serde_json` refuses today, and
+    /// everything else the two calls do is the same code, so the test measures
+    /// the pipeline rather than a copy of it.
+    ///
+    /// The order of the steps *is* the atomicity the invariant asks for:
+    ///
+    /// 1. encode the payload, then stamp the instant;
+    /// 2. open a transaction;
+    /// 3. insert, reading back the sequence the row was given;
+    /// 4. accept that sequence, or roll back;
+    /// 5. commit.
+    ///
+    /// A refusal at step 1 never reaches the database, so nothing is written and
+    /// no sequence number is spent. A refusal at any later step drops the
+    /// transaction without committing it, which `rusqlite` rolls back.
+    fn append_encoded(
+        &mut self,
+        task_id: Option<TaskId>,
+        kind: &str,
+        encode: impl FnOnce() -> Result<String>,
+    ) -> Result<EventSeq> {
+        let payload = encode()?;
+        let ts = stamp_text(clock_nanos())?;
+        let transaction = self.conn.transaction()?;
+        let written: i64 = transaction.query_row(
+            "INSERT INTO events (ts, task_id, kind, payload) VALUES (?1, ?2, ?3, ?4) \
+             RETURNING seq",
+            params![ts, task_id.map(|id| i64::from(id.get())), kind, payload],
+            |row| row.get(0),
+        )?;
+        // Read back rather than trusted: `seq` is the rowid the row was given,
+        // which is the only number in the file the journal can promise is unique.
+        // Checked before the commit, so a sequence this build cannot name rolls
+        // its own insert back rather than being reported and later contradicted
+        // by the file.
+        let seq = event_sequence(written)?;
+        transaction.commit()?;
+        Ok(seq)
+    }
+
     /// The schema version the file is recorded at, read back from `meta` rather
     /// than remembered from the call that opened it.
     ///
@@ -304,14 +404,108 @@ fn parse_version(stored: &str) -> Option<i64> {
     stored.trim().parse::<i64>().ok()
 }
 
+/// The clock, read now, in nanoseconds since the unix epoch.
+///
+/// The only line in the crate that reads a clock, and it decides nothing: the
+/// shape `docs/QUALITY.md` asks for, so every decision about a timestamp lives
+/// above a call a headless test cannot reach. Setting a machine's clock is not
+/// something a test may do, so the reading a test wants is the argument of
+/// [`reading_nanos`] rather than a stub of this function.
+fn clock_nanos() -> i128 {
+    reading_nanos(SystemTime::now())
+}
+
+/// One clock reading as nanoseconds since the unix epoch, signed.
+///
+/// `i128` is wide enough that no reading hardware can produce overflows it. The
+/// sign is the decision worth a test: `duration_since` reports the *distance*
+/// from the epoch whichever way the reading lies, so a clock set before the
+/// epoch has to keep the direction it was read with — otherwise a stamp says
+/// 1970 about an instant in 1969, in the one record that exists to say when
+/// something happened.
+fn reading_nanos(reading: SystemTime) -> i128 {
+    match reading.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(forward) => nanos(forward),
+        Err(went_backwards) => -nanos(went_backwards.duration()),
+    }
+}
+
+/// A span either side of the epoch, in nanoseconds.
+fn nanos(span: Duration) -> i128 {
+    i128::from(span.as_secs()) * NANOSECONDS_PER_SECOND + i128::from(span.subsec_nanos())
+}
+
+/// The `ts` text for one clock reading, in the one spelling the column
+/// documents: RFC 3339, in UTC.
+///
+/// `docs/DESIGN.md` Conventions fix that spelling, and ADR-0012 decided that an
+/// instant with no such text is a *serialization* failure — which is what the two
+/// refusals below return instead of a panic: a clock outside the range `time`
+/// represents, and one whose year RFC 3339 has no digits for. Both are reachable
+/// on a machine whose clock has been set absurdly, and a supervisor that panics
+/// loses the run it was supervising.
+///
+/// The instant is built at the UTC offset, so the conversion ADR-0012 adds for an
+/// envelope authored at a local offset has nothing to do here; the format is the
+/// `Rfc3339` one `time::serde::rfc3339` uses itself, so the column and the
+/// envelope's `ts` field cannot disagree about one event.
+fn stamp_text(since_epoch: i128) -> Result<String> {
+    let instant = OffsetDateTime::from_unix_timestamp_nanos(since_epoch)
+        .map_err(|range| no_text(since_epoch, &range))?;
+    instant
+        .format(&Rfc3339)
+        .map_err(|reason| no_text(since_epoch, &reason))
+        .map_err(Into::into)
+}
+
+/// The refusal [`stamp_text`] hands back: the reading it could not write, quoted,
+/// and the reason it had no spelling.
+fn no_text(since_epoch: i128, reason: &dyn Display) -> serde_json::Error {
+    serde_json::Error::custom(format_args!(
+        "the clock reading {since_epoch} ns since the epoch has no RFC 3339 spelling to store: \
+         {reason}"
+    ))
+}
+
+/// The [`EventSeq`] for the number `events` handed back, or the corruption
+/// report for a number that is not a sequence.
+///
+/// `seq` is an SQLite `INTEGER`, so it is signed, while a sequence number is a
+/// count of events that only ever grows. A negative one is therefore not a
+/// sequence but a file that no longer agrees with the schema it claims: the
+/// journal is the source of truth, so the disagreement is reported rather than
+/// quietly widened into a huge number that would look like a legitimate far
+/// future event.
+fn event_sequence(written: i64) -> Result<EventSeq> {
+    u64::try_from(written)
+        .map(EventSeq::new)
+        .map_err(|out_of_range| Error::Corrupt {
+            detail: format!(
+                "`events` handed back the sequence {written}, which is not one: {out_of_range}"
+            ),
+            seq: None,
+        })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CREATE_META_TABLE, Journal, SCHEMA_VERSION, SCHEMA_VERSION_KEY, journal_path};
-    use crate::{Error, Project};
+    use super::{
+        CREATE_META_TABLE, EventSeq, Journal, NANOSECONDS_PER_SECOND, SCHEMA_VERSION,
+        SCHEMA_VERSION_KEY, event_sequence, journal_path, reading_nanos, stamp_text,
+    };
+    use crate::{
+        AttemptId, Error, EventKind, FailureClass, PauseReason, Phase, Project, Recovery, Result,
+        Stream, TaskId,
+    };
     use rusqlite::{Connection, OptionalExtension as _, params};
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
     use tempfile::{TempDir, tempdir};
+    use time::OffsetDateTime;
+    use time::format_description::well_known::Rfc3339;
+    use time::macros::datetime;
 
     /// Every object a journal owns, as `sqlite_master` describes it, ordered by
     /// object name the way the test query orders them.
@@ -325,6 +519,11 @@ mod tests {
 
     /// The `ts` column wants an RFC 3339 instant; which one is nobody's business.
     const AN_INSTANT: &str = "2026-09-17T12:00:00+00:00";
+
+    /// The commit sha every catalog entry below is built from, so a field that
+    /// fails to reach the payload column is visible rather than mistaken for a
+    /// placeholder.
+    const SHA: &str = "0b78d3f1c2a4";
 
     /// A scratch parent for a journal, below the system temp directory:
     /// `docs/DESIGN.md` Conventions forbids a test from writing in here.
@@ -433,6 +632,130 @@ mod tests {
             params![AN_INSTANT, kind, "{}"],
         )
         .expect("an event appends");
+    }
+
+    /// One event as the `events` table holds it, in the types the schema
+    /// declares. Read back rather than assumed: every append assertion below is
+    /// against what the file ended up carrying.
+    #[derive(Debug)]
+    struct Stored {
+        seq: i64,
+        ts: String,
+        task_id: Option<i64>,
+        kind: String,
+        payload: String,
+    }
+
+    /// Every event the journal holds, oldest first. The whole table, because
+    /// "nothing else was written" is only measurable against all of it.
+    fn stored_events(conn: &Connection) -> Vec<Stored> {
+        let mut statement = conn
+            .prepare("SELECT seq, ts, task_id, kind, payload FROM events ORDER BY seq")
+            .expect("events is always readable");
+        statement
+            .query_map([], |row| {
+                Ok(Stored {
+                    seq: row.get(0)?,
+                    ts: row.get(1)?,
+                    task_id: row.get(2)?,
+                    kind: row.get(3)?,
+                    payload: row.get(4)?,
+                })
+            })
+            .expect("events is readable")
+            .collect::<rusqlite::Result<Vec<Stored>>>()
+            .expect("every column reads as the type the schema declares it")
+    }
+
+    /// The one event `append` returned the sequence of.
+    fn stored_at(conn: &Connection, seq: EventSeq) -> Stored {
+        let wanted = i64::try_from(seq.get()).expect("a scratch sequence is a positive number");
+        stored_events(conn)
+            .into_iter()
+            .find(|event| event.seq == wanted)
+            .unwrap_or_else(|| {
+                panic!(
+                    "append returned sequence {}, and no row holds it",
+                    seq.get()
+                )
+            })
+    }
+
+    /// One value of every catalog entry, so the append contract is measured
+    /// against each shape a payload can take — no fields, a string, a number, an
+    /// enum, an instant, an optional instant — rather than the easiest one.
+    fn every_catalog_entry() -> Vec<EventKind> {
+        vec![
+            EventKind::TaskQueued {
+                title: "Append an event".to_owned(),
+            },
+            EventKind::PreflightStarted,
+            EventKind::PreflightPassed {
+                base_sha: SHA.to_owned(),
+            },
+            EventKind::PreflightFailed {
+                class: FailureClass::EnvironmentFailure,
+                detail: "no remote configured".to_owned(),
+            },
+            EventKind::AttemptStarted {
+                attempt: AttemptId::new(2),
+                protocol: "tdd".to_owned(),
+                pid: 42_424,
+                base_sha: SHA.to_owned(),
+            },
+            EventKind::PhaseEntered {
+                attempt: AttemptId::new(2),
+                phase: Phase::Red,
+            },
+            EventKind::AgentOutput {
+                attempt: AttemptId::new(2),
+                stream: Stream::Stderr,
+                text: "cargo nextest run".to_owned(),
+            },
+            EventKind::VerifyPassed {
+                attempt: AttemptId::new(2),
+            },
+            EventKind::VerifyFailed {
+                attempt: AttemptId::new(3),
+                class: FailureClass::VerificationFailure,
+                detail: "1 test failed".to_owned(),
+            },
+            EventKind::PublishStarted {
+                attempt: AttemptId::new(3),
+                candidate_sha: SHA.to_owned(),
+            },
+            EventKind::PublishVerified {
+                commit: SHA.to_owned(),
+                remote_sha: SHA.to_owned(),
+            },
+            EventKind::TaskDone {
+                commit: SHA.to_owned(),
+            },
+            EventKind::TaskFailed {
+                class: FailureClass::NeedsInput,
+                detail: "the design is unresolved".to_owned(),
+            },
+            EventKind::TaskCancelled {
+                reason: "an operator stopped it".to_owned(),
+            },
+            EventKind::Paused {
+                reason: PauseReason::Limit {
+                    until: Some(datetime!(2026-09-17 13:00:00 UTC)),
+                },
+            },
+            EventKind::Resumed,
+            EventKind::Interrupted {
+                phase: Phase::Publish,
+            },
+            EventKind::RecoveryDecision {
+                decision: Recovery::MarkInterrupted,
+                detail: "no attempt was started".to_owned(),
+            },
+            EventKind::GateAcknowledged {
+                by: "operators.name".to_owned(),
+                at: datetime!(2026-09-17 12:34:56 UTC),
+            },
+        ]
     }
 
     /// A journal database holding the `meta` table, one `schema_version` row, and
@@ -873,6 +1196,368 @@ mod tests {
             matches!(error, Error::Corrupt { .. }),
             "the row is this open's own, so its absence is damage, not a version question: \
              {error}"
+        );
+    }
+
+    #[test]
+    fn every_catalog_entry_appends_under_its_own_name_and_carries_its_own_object() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        let entries = every_catalog_entry();
+
+        for (index, kind) in entries.iter().enumerate() {
+            let expected = u64::try_from(index + 1).expect("a scratch sequence is a small number");
+            let seq = journal
+                .append(None, kind)
+                .expect("every catalog entry appends, whatever fields it carries");
+
+            assert_eq!(
+                seq.get(),
+                expected,
+                "the first event of a journal is sequence 1 and each next one is exactly one \
+                 higher, whatever was appended between them"
+            );
+            let row = stored_at(&journal.conn, seq);
+            assert_eq!(
+                row.kind,
+                kind.discriminant(),
+                "the `kind` column holds `EventKind::discriminant()` for seq {}",
+                seq.get()
+            );
+            assert_eq!(
+                row.payload,
+                serde_json::to_string(kind).expect("a catalog entry encodes"),
+                "the payload column holds the tagged object itself, not a wrapper around it"
+            );
+            let read_back: EventKind = serde_json::from_str(&row.payload)
+                .expect("the payload decodes as the catalog it came from");
+            assert_eq!(
+                &read_back, kind,
+                "the stored payload is the entry, not a paraphrase"
+            );
+
+            let tagged: serde_json::Value =
+                serde_json::from_str(&row.payload).expect("the payload is one JSON object");
+            assert_eq!(
+                tagged.get("kind").and_then(serde_json::Value::as_str),
+                Some(row.kind.as_str()),
+                "the column and the tag inside the payload name the same entry, which is what \
+                 lets `WHERE kind = …` and a decoded enum agree about one row"
+            );
+        }
+
+        assert_eq!(
+            stored_events(&journal.conn).len(),
+            entries.len(),
+            "one row per append, and no row that no append wrote"
+        );
+    }
+
+    #[test]
+    fn a_task_event_stores_its_number_and_a_queue_event_stores_null() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+
+        let queue_level = journal
+            .append(None, &EventKind::PreflightStarted)
+            .expect("an event about the queue itself appends");
+        let numbered = journal
+            .append(Some(TaskId::new(u32::MAX)), &EventKind::Resumed)
+            .expect("an event about a task appends");
+
+        assert_eq!(
+            stored_at(&journal.conn, queue_level).task_id,
+            None,
+            "a queue-level event is the `task_id` NULL the schema documents: 0 is a queue \
+             position the queue never issues, so storing it would invent a task"
+        );
+        assert_eq!(
+            stored_at(&journal.conn, numbered).task_id,
+            Some(i64::from(u32::MAX)),
+            "the whole width of a queue position survives the INTEGER column"
+        );
+    }
+
+    #[test]
+    fn the_instant_is_the_clock_read_at_the_append_and_written_in_utc() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+
+        let before = OffsetDateTime::from(SystemTime::now());
+        let seq = journal
+            .append(
+                Some(TaskId::new(7)),
+                &EventKind::TaskQueued {
+                    title: "one".to_owned(),
+                },
+            )
+            .expect("an event appends");
+        let after = OffsetDateTime::from(SystemTime::now());
+
+        let row = stored_at(&journal.conn, seq);
+        let stamped = OffsetDateTime::parse(&row.ts, &Rfc3339)
+            .expect("the `ts` column holds RFC 3339 text, which is what its comment promises");
+        assert!(
+            stamped >= before && stamped <= after,
+            "the stamp is the clock read inside the call, not a constant or a caller's guess: \
+             {row:?} falls outside {before}..={after}"
+        );
+        assert!(
+            row.ts.ends_with('Z'),
+            "one spelling for one instant, whatever the machine's own offset is: {}",
+            row.ts
+        );
+    }
+
+    #[test]
+    fn the_sequence_keeps_climbing_across_appends_and_across_reopens() {
+        let parent = scratch();
+        let path = journal_file(parent.path());
+        let mut written = Vec::new();
+
+        for _ in 0..3 {
+            let mut reopened = Journal::open(&path).expect("the journal reopens");
+            for _ in 0..2 {
+                let seq = reopened
+                    .append(Some(TaskId::new(1)), &EventKind::Resumed)
+                    .expect("an event appends");
+                written.push(seq.get());
+            }
+            drop(reopened);
+        }
+
+        assert_eq!(
+            written,
+            [1, 2, 3, 4, 5, 6],
+            "every open continues the counter the last one left rather than starting over, so \
+             a restarted run never re-uses a sequence an earlier one already reported"
+        );
+        let reopened = Journal::open(&path).expect("the journal opens a fourth time");
+        let rows = stored_events(&reopened.conn);
+        assert_eq!(
+            rows.iter().map(|event| event.seq).collect::<Vec<i64>>(),
+            [1, 2, 3, 4, 5, 6],
+            "the table holds every sequence that was returned, in the order they were returned"
+        );
+    }
+
+    #[test]
+    fn a_payload_that_cannot_be_encoded_writes_no_row_and_spends_no_sequence() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        let kind = EventKind::TaskQueued {
+            title: "one".to_owned(),
+        };
+
+        let refused = journal
+            .append_encoded(
+                Some(TaskId::new(1)),
+                kind.discriminant(),
+                || -> Result<String> {
+                    // A map key that is not a string is a refusal `serde_json`
+                    // actually performs — a non-finite float is not, it becomes
+                    // `null`. Measured, not remembered, because no field of
+                    // [`EventKind`] is a value it refuses today: the test hands
+                    // the pipeline a payload step that really fails rather than
+                    // one that only looks like it could.
+                    let mut unmappable = BTreeMap::new();
+                    unmappable.insert(b"payload".to_vec(), 1u8);
+                    Ok(serde_json::to_string(&unmappable)?)
+                },
+            )
+            .expect_err("a payload that cannot be encoded cannot be appended");
+
+        assert!(
+            matches!(refused, Error::Serde(_)),
+            "the refusal is the encoder's own and is reported as it came: {refused}"
+        );
+        assert!(
+            stored_events(&journal.conn).is_empty(),
+            "the encoding is finished before a transaction opens, so a refusal leaves a \
+             journal that was never touched"
+        );
+
+        let next = journal
+            .append(None, &EventKind::Resumed)
+            .expect("a refusal leaves the journal usable");
+        assert_eq!(
+            next.get(),
+            1,
+            "the refused event spent no sequence number, so the first event of this journal is \
+             still its first"
+        );
+    }
+
+    #[test]
+    fn a_refused_insert_rolls_back_and_leaves_the_committed_events_alone() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        let kept = journal
+            .append(
+                None,
+                &EventKind::TaskQueued {
+                    title: "kept".to_owned(),
+                },
+            )
+            .expect("the first event appends");
+        journal
+            .conn
+            .execute(
+                "CREATE TRIGGER refuse_insert BEFORE INSERT ON events \
+                 BEGIN SELECT RAISE(ABORT, 'the test refuses the row'); END",
+                [],
+            )
+            .expect("a trigger can be put on the table by a test");
+
+        let refused = journal
+            .append(None, &EventKind::PreflightStarted)
+            .expect_err("an insert the database refuses cannot be appended");
+
+        assert!(
+            matches!(refused, Error::Database(_)),
+            "SQLite's own refusal is passed through as it came: {refused}"
+        );
+        let rows = stored_events(&journal.conn);
+        assert_eq!(rows.len(), 1, "the refused event left no row behind");
+        assert_eq!(
+            rows.first().expect("the one committed row").kind,
+            "TaskQueued",
+            "the event that did commit is still there, unchanged"
+        );
+
+        journal
+            .conn
+            .execute("DROP TRIGGER refuse_insert", [])
+            .expect("the test removes what it added");
+        let after = journal
+            .append(None, &EventKind::Resumed)
+            .expect("a rolled-back append does not poison the connection");
+        assert!(
+            after.get() > kept.get(),
+            "the rolled-back record took no number back and got a fresh one: {kept} then {after}"
+        );
+        assert_eq!(
+            stored_events(&journal.conn).len(),
+            2,
+            "the two events that committed are the two the table holds"
+        );
+    }
+
+    /// A sequence the file hands back is a number this build has to be able to
+    /// name, because it is the number every later reader will quote. The guard
+    /// runs on what `RETURNING seq` produced, so the test hands it the two
+    /// numbers that decide the rule rather than trying to make SQLite invent a
+    /// negative rowid.
+    #[test]
+    fn a_handed_back_sequence_is_accepted_or_reported_as_damage_by_its_number() {
+        assert_eq!(
+            event_sequence(1).expect("one is a sequence").get(),
+            1,
+            "the number the row was given is the sequence the caller is told, unchanged"
+        );
+
+        let refused =
+            event_sequence(-1).expect_err("a negative count of events is not a count of events");
+
+        assert!(
+            matches!(refused, Error::Corrupt { seq: None, .. }),
+            "a signed number that cannot be a count is the file disagreeing with the schema it \
+             claims, which is damage rather than a database refusal: {refused}"
+        );
+        assert!(
+            refused.to_string().contains("-1"),
+            "the report quotes the number it refused, so a reader is not left hunting for it: \
+             {refused}"
+        );
+    }
+
+    /// The stamp is a clock reading, and a headless test may not set a machine's
+    /// clock — so the reading is the argument, which is why the side of the epoch
+    /// and the sub-second part are decisions above the syscall rather than inside
+    /// it (`docs/QUALITY.md`).
+    #[test]
+    fn a_clock_reading_keeps_its_side_of_the_epoch_and_its_sub_second_part() {
+        let a_span = Duration::new(2, 250_000_000);
+
+        assert_eq!(
+            reading_nanos(SystemTime::UNIX_EPOCH),
+            0,
+            "the epoch is neither before nor after itself, so it is neither signed"
+        );
+
+        let after = SystemTime::UNIX_EPOCH
+            .checked_add(a_span)
+            .expect("two seconds past the epoch is a representable reading");
+        assert_eq!(
+            reading_nanos(after),
+            2 * NANOSECONDS_PER_SECOND + NANOSECONDS_PER_SECOND / 4,
+            "the part below a second survives the reading: two events a quarter-second apart              are two events, and rounding would make them one"
+        );
+
+        let before = SystemTime::UNIX_EPOCH
+            .checked_sub(a_span)
+            .expect("two seconds before the epoch is a representable reading");
+        let signed = reading_nanos(before);
+        assert_eq!(
+            signed,
+            -(2 * NANOSECONDS_PER_SECOND + NANOSECONDS_PER_SECOND / 4),
+            "`duration_since` reports the distance whichever way the clock lies, so the side              of the epoch has to be carried over into the number"
+        );
+        assert!(
+            stamp_text(signed)
+                .expect("1969 has an RFC 3339 spelling")
+                .starts_with("1969-12-31T23:59:57"),
+            "a clock behind the epoch is stamped on its own side of it, not as 1970"
+        );
+    }
+
+    #[test]
+    fn a_clock_reading_is_stamped_as_the_one_utc_spelling_the_column_documents() {
+        assert_eq!(
+            stamp_text(datetime!(2026-09-17 12:34:56 UTC).unix_timestamp_nanos())
+                .expect("an ordinary instant has a spelling"),
+            "2026-09-17T12:34:56Z"
+        );
+        assert_eq!(
+            stamp_text(0).expect("the epoch itself has a spelling"),
+            "1970-01-01T00:00:00Z"
+        );
+    }
+
+    #[test]
+    fn a_clock_reading_beyond_the_instants_this_crate_holds_is_refused_not_panicked_on() {
+        let beyond = NANOSECONDS_PER_SECOND * 400_000_000_000;
+
+        let refused = stamp_text(-beyond)
+            .expect_err("a clock twelve thousand years before the epoch names no instant");
+
+        assert!(
+            matches!(refused, Error::Serde(_)),
+            "a stamp that cannot be written is a serialization failure, which is what keeps \
+             the append from panicking: {refused}"
+        );
+        assert!(
+            refused.to_string().contains(&(-beyond).to_string()),
+            "the message quotes the reading it refused: {refused}"
+        );
+    }
+
+    #[test]
+    fn a_clock_reading_rfc_3339_has_no_digits_for_is_refused_not_panicked_on() {
+        let old = NANOSECONDS_PER_SECOND * 66_000_000_000;
+
+        let refused = stamp_text(-old).expect_err(
+            "a clock in a negative year is a real instant with no four digits to write",
+        );
+
+        assert!(
+            matches!(refused, Error::Serde(_)),
+            "the refusal is a value, not a panic: {refused}"
+        );
+        assert!(
+            refused.to_string().contains("RFC 3339"),
+            "the message names the format that refused, so the reader knows which rule the \
+             clock broke: {refused}"
         );
     }
 }
