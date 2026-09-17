@@ -5521,3 +5521,944 @@ mod tests {
         }
     }
 }
+
+/// Property tests for the invariant the whole recovery design rests on: the
+/// materialized state equals the journal's own projection, so a projection can
+/// be thrown away and built again.
+///
+/// VISION.md section 15 names this the property the core is tested with, and
+/// `docs/TESTING.md` states it as the one the design rests on. Two claims are
+/// checked here, and they are different claims:
+///
+/// - **Legal journals agree.** A generated walk of the state machine is written
+///   the way the recorder writes it — event appended, projection moved, once per
+///   accepted transition — and then rebuilt from the events alone. The two
+///   projections must be equal, task for task. A run and a replay are two code
+///   paths over one file (ADR-0024 gives them one row writer precisely so this
+///   can hold), and this is what proves they still agree: over the whole path to
+///   `Done`, over the path a signal catches mid-phase, over nested pauses, over a
+///   gate a human closed, over attempts that were recorded before they were
+///   adopted, and over journals where several tasks interleave and a queue-level
+///   record sits between their rows.
+/// - **Illegal journals refuse.** A journal can hold a record no run could have
+///   walked, because `append` never consults the machine (ADR-0016) while a
+///   replay must (ADR-0024). Such a journal is refused with its sequence number,
+///   and the projection it found is left standing, rows and stamps included.
+///
+/// # Why the generator generates legal sequences
+///
+/// It is the walk that is legal, not the text it is written in. Each step picks
+/// one of the catalog's nineteen entries and *aims* it at the state the walk has
+/// already reached — the attempt a `VerifyPassed` names is the attempt the task
+/// is on, the commit a `TaskDone` names is the one the remote was proved to hold
+/// — and [`crate::apply`] decides whether the state accepts it. Proposals it
+/// refuses are dropped rather than journaled, so every journal these tests write
+/// is one a run could have written.
+///
+/// That is deliberate, and it is the one choice a reader should stop on: the
+/// alternative — a generator holding its own list of what each state accepts —
+/// would put the transition table in this file a second time, where it could
+/// drift from `state::apply` unnoticed and buy a property that proves the
+/// generator agrees with itself. ADR-0025 records that. It does mean a
+/// machine-wide bug in `apply` is invisible *to these two properties*, which is
+/// what `state`'s exhaustive per-state tests are for; the fold, the encode, the
+/// row rewrite and the equivalence are what is proven here, and they are proven
+/// against every state the machine can reach.
+#[cfg(test)]
+mod replay {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+    use proptest::{prop_assert, prop_assert_eq, prop_oneof};
+    use tempfile::{TempDir, tempdir};
+    use time::OffsetDateTime;
+
+    use super::journal_path;
+    use crate::{
+        AttemptId, Error, EventKind, FailureClass, Journal, PauseReason, Phase, Recovery, Stream,
+        TaskId, TaskState, apply,
+    };
+
+    /// Every property in this module runs at least this many cases, so "at least
+    /// 256 cases" is answered by this file rather than by someone's configuration.
+    const CASES: u32 = 256;
+
+    /// The nineteen catalog entries, in the order [`EventKind`] declares them.
+    const ENTRIES: usize = 19;
+
+    /// How many tasks one generated journal may hold, so several accumulators are
+    /// always in play and a fold that merged two tasks would be caught.
+    const TASK_SLOTS: u32 = 4;
+
+    /// The longest generated journal. Every record is its own commit at
+    /// `synchronous = FULL`, so this is what keeps 256 cases a run of seconds.
+    const MAX_STEPS: usize = 12;
+
+    /// A task with nothing recorded about it, and the queue slot a generated step
+    /// aims at when it means the queue rather than a task.
+    const QUEUE_LEVEL: Option<TaskId> = None;
+
+    /// Every phase, so an entry phase, a gates phase and a publication phase can
+    /// all be proposed (only the first two are accepted anywhere; a proposal to
+    /// enter `Publish` is one of the refusals the second property feeds on).
+    const PHASES: [Phase; 12] = [
+        Phase::Goal,
+        Phase::Scope,
+        Phase::AcceptanceTests,
+        Phase::Implement,
+        Phase::Red,
+        Phase::Green,
+        Phase::Refactor,
+        Phase::Review,
+        Phase::Harden,
+        Phase::DoneCheck,
+        Phase::Verify,
+        Phase::Publish,
+    ];
+
+    /// Every pause reason, including the one that carries a reset instant and the
+    /// same one without it.
+    ///
+    /// A function rather than a `const` because the reset instant is read through
+    /// the fallible constructor `time` gives, and a `const` cannot call it.
+    fn parks() -> [PauseReason; 6] {
+        [
+            PauseReason::Input,
+            PauseReason::HumanGate,
+            PauseReason::Interrupted,
+            PauseReason::Blocked,
+            PauseReason::Limit { until: None },
+            PauseReason::Limit {
+                until: Some(instant_at(1_750_000_000)),
+            },
+        ]
+    }
+
+    /// The instant a generated payload is dated with.
+    fn instant_at(seconds: i64) -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(seconds)
+            .expect("a generated instant is inside the range an instant can hold")
+    }
+
+    /// The three verdicts recovery can reach.
+    const DECISIONS: [Recovery; 3] = [
+        Recovery::Resume,
+        Recovery::MarkInterrupted,
+        Recovery::AlreadyApplied,
+    ];
+
+    /// Every failure class, so a refusal is filed under a different one per case.
+    const CLASSES: [FailureClass; 9] = [
+        FailureClass::AgentFailure,
+        FailureClass::VerificationFailure,
+        FailureClass::ProviderLimit,
+        FailureClass::ProviderTransient,
+        FailureClass::ProviderConfiguration,
+        FailureClass::GitConflict,
+        FailureClass::EnvironmentFailure,
+        FailureClass::PolicyFailure,
+        FailureClass::NeedsInput,
+    ];
+
+    /// One recorder's intention: which catalog entry to journal next, and at which
+    /// task. Everything else an event carries comes from the state the walk has
+    /// reached, so a step holds only what a state cannot supply.
+    #[derive(Debug, Clone, Copy)]
+    struct Step {
+        /// The task the step is aimed at; [`None`] is an event about the queue.
+        task: Option<TaskId>,
+        dice: Dice,
+    }
+
+    /// The randomness one generated step carries.
+    #[derive(Debug, Clone, Copy)]
+    struct Dice {
+        /// Which of the nineteen catalog entries the step proposes.
+        entry: usize,
+        /// The attempt to name when the reached state holds none.
+        attempt: u32,
+        /// How many attempts later a `PhaseEntered` or `AttemptStarted` names,
+        /// which is what makes a remediation as reachable as another phase.
+        later: u32,
+        /// Which of the twelve phases to enter, or to name as the one lost.
+        phase: usize,
+        /// Whether a reading of the remote agrees with the commit it was asked about.
+        agrees: bool,
+        /// Which reason parks the run.
+        park: usize,
+        /// What recovery concluded.
+        decision: usize,
+        /// Which class a refusal is filed under.
+        class: usize,
+        /// Whether an output line arrived on stderr rather than stdout.
+        stderr: bool,
+        /// Seeds the free-text payloads and a process id, so a journal is not one
+        /// string repeated in every case.
+        text: u32,
+        /// The instant a gate acknowledgement carries, in seconds since the epoch.
+        seconds: i64,
+    }
+
+    /// A journal's worth of generated steps.
+    fn steps() -> impl Strategy<Value = Vec<Step>> {
+        vec(step(), 0..=MAX_STEPS)
+    }
+
+    /// One step: an event about the queue, or about one of the journal's tasks.
+    ///
+    /// Queue-level records are weighted to be the rarer half because that is what
+    /// they are in a run — and they are in every case often enough that a fold
+    /// which read a `NULL` task as some task would fail on the first shrink.
+    fn step() -> impl Strategy<Value = Step> {
+        (
+            prop_oneof![
+                8 => (0..TASK_SLOTS).prop_map(|slot| Some(TaskId::new(slot + 1))),
+                1 => Just(QUEUE_LEVEL),
+            ],
+            dice(),
+        )
+            .prop_map(|(task, dice)| Step { task, dice })
+    }
+
+    /// The raw material of one step. Eleven independent draws, because a step that
+    /// carried one number would journal the same event at every state it passed.
+    fn dice() -> impl Strategy<Value = Dice> {
+        (
+            0..ENTRIES,
+            1..=4u32,
+            0..=2u32,
+            0..PHASES.len(),
+            any::<bool>(),
+            0..parks().len(),
+            0..DECISIONS.len(),
+            0..CLASSES.len(),
+            any::<bool>(),
+            0..64u32,
+            0..2_000_000_000i64,
+        )
+            .prop_map(
+                |(
+                    entry,
+                    attempt,
+                    later,
+                    phase,
+                    agrees,
+                    park,
+                    decision,
+                    class,
+                    stderr,
+                    text,
+                    seconds,
+                )| Dice {
+                    entry,
+                    attempt,
+                    later,
+                    phase,
+                    agrees,
+                    park,
+                    decision,
+                    class,
+                    stderr,
+                    text,
+                    seconds,
+                },
+            )
+    }
+
+    /// The nineteen entries as proposals, each aimed at the state the walk reached.
+    ///
+    /// An array of functions rather than a `match` so the generated index selects
+    /// an entry the same way every other payload does, and so each entry states its
+    /// own aiming rule in its own five lines.
+    const PROPOSALS: [fn(&TaskState, Dice) -> EventKind; ENTRIES] = [
+        queued,
+        preflight_started,
+        preflight_passed,
+        preflight_failed,
+        attempt_started,
+        phase_entered,
+        agent_output,
+        verify_passed,
+        verify_failed,
+        publish_started,
+        publish_verified,
+        task_done,
+        task_failed,
+        task_cancelled,
+        paused,
+        resumed,
+        interrupted,
+        recovery_decision,
+        gate_acknowledged,
+    ];
+
+    /// The event a step proposes against `held`.
+    fn proposal(step: &Step, held: &TaskState) -> EventKind {
+        let index = step.dice.entry % PROPOSALS.len();
+        let chosen: fn(&TaskState, Dice) -> EventKind = PROPOSALS[index];
+        chosen(held, step.dice)
+    }
+
+    /// The attempt `held` is on, or the generated one for a state that holds none.
+    fn attempt(held: &TaskState, dice: Dice) -> AttemptId {
+        match held {
+            TaskState::Running { attempt, .. }
+            | TaskState::Remediating { attempt, .. }
+            | TaskState::Verifying { attempt }
+            | TaskState::Publishing { attempt } => *attempt,
+            _ => AttemptId::new(dice.attempt),
+        }
+    }
+
+    /// The attempt a step names when it is allowed to name a later one — which is
+    /// how a remediation becomes reachable.
+    fn later_attempt(held: &TaskState, dice: Dice) -> AttemptId {
+        AttemptId::new(attempt(held, dice).get().saturating_add(dice.later))
+    }
+
+    /// The phase `held` is in, or the generated one for a state that holds none.
+    ///
+    /// `Interrupted` names the phase the journal ended in, and `Running` refuses
+    /// any other, so an interruption is only ever proposed where it can land.
+    fn phase(held: &TaskState, dice: Dice) -> Phase {
+        match held {
+            TaskState::Running { phase, .. } | TaskState::Remediating { phase, .. } => *phase,
+            _ => PHASES[dice.phase % PHASES.len()],
+        }
+    }
+
+    /// The commit `held` proves the remote holds, or a generated one.
+    fn commit(held: &TaskState, dice: Dice) -> String {
+        match held {
+            TaskState::PublishedVerified { commit } => commit.clone(),
+            _ => format!("{:07x}", dice.text),
+        }
+    }
+
+    /// Free text that differs between cases while saying the same thing.
+    fn text(what: &str, dice: Dice) -> String {
+        format!("{what} {}", dice.text)
+    }
+
+    fn queued(_held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::TaskQueued {
+            title: text("task", dice),
+        }
+    }
+
+    fn preflight_started(_held: &TaskState, _dice: Dice) -> EventKind {
+        EventKind::PreflightStarted
+    }
+
+    fn preflight_passed(_held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::PreflightPassed {
+            base_sha: format!("{:07x}", dice.text),
+        }
+    }
+
+    fn preflight_failed(_held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::PreflightFailed {
+            class: CLASSES[dice.class % CLASSES.len()],
+            detail: text("preflight", dice),
+        }
+    }
+
+    fn attempt_started(held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::AttemptStarted {
+            attempt: later_attempt(held, dice),
+            protocol: text("direct", dice),
+            pid: dice.text,
+            base_sha: format!("{:07x}", dice.text),
+        }
+    }
+
+    fn phase_entered(held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::PhaseEntered {
+            attempt: later_attempt(held, dice),
+            phase: PHASES[dice.phase % PHASES.len()],
+        }
+    }
+
+    fn agent_output(held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::AgentOutput {
+            attempt: attempt(held, dice),
+            stream: if dice.stderr {
+                Stream::Stderr
+            } else {
+                Stream::Stdout
+            },
+            text: text("working", dice),
+        }
+    }
+
+    fn verify_passed(held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::VerifyPassed {
+            attempt: attempt(held, dice),
+        }
+    }
+
+    fn verify_failed(held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::VerifyFailed {
+            attempt: attempt(held, dice),
+            class: CLASSES[dice.class % CLASSES.len()],
+            detail: text("gate", dice),
+        }
+    }
+
+    fn publish_started(held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::PublishStarted {
+            attempt: attempt(held, dice),
+            candidate_sha: commit(held, dice),
+        }
+    }
+
+    /// The remote's own answer: the same commit when the step says it agrees, a
+    /// different one when it says the push did not land where it was aimed.
+    fn publish_verified(held: &TaskState, dice: Dice) -> EventKind {
+        let commit = commit(held, dice);
+        let remote_sha = if dice.agrees {
+            commit.clone()
+        } else {
+            format!("{commit}-remote")
+        };
+        EventKind::PublishVerified { commit, remote_sha }
+    }
+
+    fn task_done(held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::TaskDone {
+            commit: commit(held, dice),
+        }
+    }
+
+    fn task_failed(_held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::TaskFailed {
+            class: CLASSES[dice.class % CLASSES.len()],
+            detail: text("failed", dice),
+        }
+    }
+
+    fn task_cancelled(_held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::TaskCancelled {
+            reason: text("cancelled", dice),
+        }
+    }
+
+    fn paused(_held: &TaskState, dice: Dice) -> EventKind {
+        let parks = parks();
+        EventKind::Paused {
+            reason: parks[dice.park % parks.len()].clone(),
+        }
+    }
+
+    fn resumed(_held: &TaskState, _dice: Dice) -> EventKind {
+        EventKind::Resumed
+    }
+
+    fn interrupted(held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::Interrupted {
+            phase: phase(held, dice),
+        }
+    }
+
+    fn recovery_decision(_held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::RecoveryDecision {
+            decision: DECISIONS[dice.decision % DECISIONS.len()],
+            detail: text("recovery", dice),
+        }
+    }
+
+    fn gate_acknowledged(_held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::GateAcknowledged {
+            by: text("reviewer", dice),
+            at: instant_at(dice.seconds),
+        }
+    }
+
+    /// One step as it was written: the record the journal holds and the state the
+    /// task is in after it.
+    #[derive(Debug)]
+    struct Recorded {
+        /// The task the record names; [`None`] is a record about the queue.
+        task: Option<TaskId>,
+        event: EventKind,
+        /// The state after the record, absent for a queue record because nothing
+        /// about the queue moves a task.
+        after: Option<TaskState>,
+    }
+
+    /// What one generated sequence of steps wrote, and what it could not.
+    #[derive(Debug)]
+    struct Walked {
+        /// The steps a run would have journaled, in journal order.
+        recorded: Vec<Recorded>,
+        /// The state each task the journal mentions is in at the end — the answer
+        /// a projection has to give, built here rather than read back from the
+        /// file so that a fold and a write path cannot agree with each other and
+        /// both be wrong about the same task.
+        expected: BTreeMap<TaskId, TaskState>,
+    }
+
+    /// Walk the machine with generated proposals, keeping what it accepted.
+    ///
+    /// Every task starts where [`Journal::rebuild_state`] starts one: at
+    /// [`TaskState::Queued`], the state a [`EventKind::TaskQueued`] record is the
+    /// journal's record of. A proposal the machine refuses is not journaled, which
+    /// is the whole of what makes the generated journals legal.
+    fn walk(steps: &[Step]) -> Walked {
+        let mut recorded = Vec::new();
+        let mut expected: BTreeMap<TaskId, TaskState> = BTreeMap::new();
+        for step in steps {
+            let Some(task) = step.task else {
+                recorded.push(Recorded {
+                    task: QUEUE_LEVEL,
+                    event: proposal(step, &TaskState::Queued),
+                    after: None,
+                });
+                continue;
+            };
+            let held = expected.get(&task).cloned().unwrap_or(TaskState::Queued);
+            let event = proposal(step, &held);
+            let Ok(after) = apply(&held, &event) else {
+                continue;
+            };
+            expected.insert(task, after.clone());
+            recorded.push(Recorded {
+                task: Some(task),
+                event,
+                after: Some(after),
+            });
+        }
+        Walked { recorded, expected }
+    }
+
+    /// Write what a walk recorded the way the recorder writes it: the event
+    /// appended first, the projection moved second, one write per accepted
+    /// transition (ADR-0023, ADR-0024).
+    fn record(walked: &Walked, journal: &mut Journal) {
+        for step in &walked.recorded {
+            journal
+                .append(step.task, &step.event)
+                .expect("a well-formed entry appends, transition or not");
+            if let (Some(task), Some(state)) = (step.task, step.after.as_ref()) {
+                journal
+                    .put_state(task, state)
+                    .expect("the projection moves after the event it answers");
+            }
+        }
+    }
+
+    /// A proposal `held` refuses, aimed at `held` itself.
+    ///
+    /// `apply` is asked rather than consulted as an oracle of the outcome: what is
+    /// being tested is that a record the machine refuses makes the *journal*
+    /// unreplayable, and for that the record only has to be one the state will not
+    /// take. The last arm is a fallthrough rather than a formality — a `TaskDone`
+    /// naming a commit no reading of the remote proved is refused by every state
+    /// there is, so this always answers with a refusal.
+    fn refused_at(held: &TaskState, dice: Dice) -> EventKind {
+        for proposal in PROPOSALS {
+            let event = proposal(held, dice);
+            if apply(held, &event).is_err() {
+                return event;
+            }
+        }
+        EventKind::TaskDone {
+            commit: format!("{}-never-published", commit(held, dice)),
+        }
+    }
+
+    /// A scratch parent: `docs/DESIGN.md` Conventions forbids a test from writing
+    /// inside the repository.
+    fn scratch() -> TempDir {
+        tempdir().expect("a scratch directory below the system temp directory")
+    }
+
+    /// An opened journal at one path, so a case can close the file and open it
+    /// again — a rebuild that only works on the connection that wrote it would
+    /// never survive a crash of the supervisor.
+    fn open(path: &std::path::Path) -> Journal {
+        Journal::open(path).expect("a journal opens where its state directory is")
+    }
+
+    /// `task_state` exactly as the file holds it: every row, its JSON and the
+    /// instant that row was stamped, ordered by task.
+    fn rows(journal: &Journal) -> Vec<(i64, String, String)> {
+        journal
+            .conn
+            .prepare("SELECT task_id, state_json, updated_at FROM task_state ORDER BY task_id")
+            .expect("task_state is always readable")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .expect("task_state is readable")
+            .map(|row| row.expect("every projected row is legible to this read"))
+            .collect()
+    }
+
+    /// The dice for one proposal of catalog entry `entry`, with the four fields
+    /// that decide where it lands set to a sweep's values and everything else
+    /// fixed.
+    fn sweep_dice(entry: usize, phase: usize, park: usize, later: u32, agrees: bool) -> Dice {
+        Dice {
+            entry,
+            attempt: 1,
+            later,
+            phase,
+            agrees,
+            park,
+            decision: 0,
+            class: 0,
+            stderr: false,
+            text: u32::try_from(entry * 97 + phase * 7 + park)
+                .expect("a sweep index is small enough to seed a payload"),
+            seconds: 1_700_000_000,
+        }
+    }
+
+    /// Every proposal worth trying against one state: each catalog entry at each
+    /// phase, pause reason, attempt offset and answer from the remote the
+    /// generator can draw.
+    fn proposals_at(state: &TaskState) -> Vec<EventKind> {
+        let mut events = Vec::new();
+        let reasons = parks();
+        for (entry, propose) in PROPOSALS.iter().enumerate() {
+            for phase in 0..PHASES.len() {
+                for park in 0..reasons.len() {
+                    for later in 0..=2u32 {
+                        for agrees in [true, false] {
+                            let dice = sweep_dice(entry, phase, park, later, agrees);
+                            events.push(propose(state, dice));
+                        }
+                    }
+                }
+            }
+        }
+        events
+    }
+
+    /// What makes two states worth exploring separately: the variant, plus the
+    /// reason a [`TaskState::Paused`] is holding. A gate a human has to close and
+    /// a limit with a reset time are the same variant with different futures, and
+    /// exploring one as the other would miss the acknowledgement behind the gate.
+    fn address(state: &TaskState) -> (String, String) {
+        match state {
+            TaskState::Paused { reason, .. } => (state.name().to_owned(), format!("{reason:?}")),
+            other => (other.name().to_owned(), String::new()),
+        }
+    }
+
+    /// What exploring the machine turned up.
+    struct Explored {
+        /// The state variants a walk of generated proposals can arrive at.
+        reached: BTreeSet<&'static str>,
+        /// Each `(state, event)` pair the machine refused, by name.
+        refused: BTreeSet<(&'static str, &'static str)>,
+        /// Each `(state, event)` pair [`refused_at`] aimed at a state it reached.
+        aimed: BTreeSet<(&'static str, &'static str)>,
+    }
+
+    /// Walk the machine the way the generator can move through it: from every
+    /// state a proposal reached, propose every catalog entry again.
+    ///
+    /// This is the generator's own aiming functions doing the walking, so it is
+    /// not a second reading of the transition table. It answers the one question
+    /// that decides whether the two properties above are worth their claim: can a
+    /// generated journal actually arrive at every state the machine has, and can a
+    /// refused record be aimed at each of them? Without that answer "every legal
+    /// sequence" is a claim about whatever slice the generator happens to favour.
+    fn explored() -> Explored {
+        let mut reached = BTreeSet::new();
+        let mut refused = BTreeSet::new();
+        let mut aimed = BTreeSet::new();
+        let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+        let mut frontier = vec![TaskState::Queued];
+        while let Some(state) = frontier.pop() {
+            if !seen.insert(address(&state)) {
+                continue;
+            }
+            reached.insert(state.name());
+            let illegal = refused_at(&state, sweep_dice(0, 0, 0, 0, true));
+            assert!(
+                apply(&state, &illegal).is_err(),
+                "`refused_at` aimed `{}` at `{}`, which took it: the second property would \
+                 journal a legal record and call it damage",
+                illegal.discriminant(),
+                state.name(),
+            );
+            aimed.insert((state.name(), illegal.discriminant()));
+            for event in proposals_at(&state) {
+                match apply(&state, &event) {
+                    Ok(after) => {
+                        if !seen.contains(&address(&after)) {
+                            frontier.push(after);
+                        }
+                    }
+                    Err(_) => {
+                        refused.insert((state.name(), event.discriminant()));
+                    }
+                }
+            }
+        }
+        Explored {
+            reached,
+            refused,
+            aimed,
+        }
+    }
+
+    /// The twelve state names, spelled out a second time from
+    /// `docs/DESIGN.md` Core types, so a generator that stopped reaching one fails
+    /// here instead of narrowing the properties in silence.
+    fn every_state_name() -> BTreeSet<&'static str> {
+        [
+            "Queued",
+            "Preflight",
+            "Running",
+            "Remediating",
+            "Verifying",
+            "Publishing",
+            "PublishedVerified",
+            "Done",
+            "Acknowledged",
+            "Paused",
+            "Failed",
+            "Cancelled",
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    /// The nineteen catalog names, likewise spelled out from the schema's own
+    /// comment on `events.kind`.
+    fn every_entry_name() -> BTreeSet<&'static str> {
+        [
+            "TaskQueued",
+            "PreflightStarted",
+            "PreflightPassed",
+            "PreflightFailed",
+            "AttemptStarted",
+            "PhaseEntered",
+            "AgentOutput",
+            "VerifyPassed",
+            "VerifyFailed",
+            "PublishStarted",
+            "PublishVerified",
+            "TaskDone",
+            "TaskFailed",
+            "TaskCancelled",
+            "Paused",
+            "Resumed",
+            "Interrupted",
+            "RecoveryDecision",
+            "GateAcknowledged",
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(CASES))]
+
+        /// The projection a run wrote is the projection a replay rebuilds, for
+        /// every journal a legal walk of the machine could have written.
+        #[test]
+        fn what_a_run_projected_is_what_a_replay_rebuilds(steps in steps()) {
+            let walked = walk(&steps);
+            let parent = scratch();
+            let path = journal_path(parent.path());
+
+            let mut journal = open(&path);
+            record(&walked, &mut journal);
+
+            let written = journal
+                .all_states()
+                .expect("the projection a run wrote is readable");
+            prop_assert_eq!(
+                &written,
+                &walked.expected,
+                "the projection a run left is the state its own accepted transitions reached, \
+                 one row per task the journal mentions and no row for one it does not"
+            );
+            prop_assert_eq!(
+                journal
+                    .events()
+                    .expect("every appended record reads back")
+                    .len(),
+                walked.recorded.len(),
+                "every step that was journaled is a record, and nothing else was appended"
+            );
+
+            journal
+                .rebuild_state()
+                .expect("a journal a legal walk wrote always replays");
+            let rebuilt = journal
+                .all_states()
+                .expect("the rebuilt projection is readable");
+            prop_assert_eq!(
+                &rebuilt,
+                &written,
+                "replaying the events alone rebuilds exactly the projection the run wrote"
+            );
+
+            journal
+                .rebuild_state()
+                .expect("a rebuild of a rebuild is as replayable as the first");
+            prop_assert_eq!(
+                &journal.all_states().expect("the second rebuild is readable"),
+                &rebuilt,
+                "and it changes nothing further, because there is nothing left to repair"
+            );
+
+            drop(journal);
+            let mut reopened = open(&path);
+            prop_assert_eq!(
+                &reopened
+                    .all_states()
+                    .expect("the projection survives closing the file"),
+                &written,
+                "what was committed before the close is what the next open reads"
+            );
+            reopened
+                .rebuild_state()
+                .expect("a fresh connection replays the same journal");
+            prop_assert_eq!(
+                &reopened
+                    .all_states()
+                    .expect("and its projection is readable"),
+                &written,
+                "to the same answer, from a connection that saw none of the run's writes"
+            );
+        }
+
+        /// A journal that reaches a record the machine refuses is refused by a
+        /// replay, naming the record — and the projection it found is left
+        /// standing rather than replaced by the prefix the fold had reached.
+        #[test]
+        fn a_journal_holding_a_refused_record_is_not_projected_at_all(
+            steps in steps(),
+            slot in 0..TASK_SLOTS,
+            dice in dice(),
+        ) {
+            let walked = walk(&steps);
+            let task = TaskId::new(slot + 1);
+            let held = walked
+                .expected
+                .get(&task)
+                .cloned()
+                .unwrap_or(TaskState::Queued);
+            let event = refused_at(&held, dice);
+
+            let parent = scratch();
+            let mut journal = open(&journal_path(parent.path()));
+            record(&walked, &mut journal);
+            let before = journal
+                .all_states()
+                .expect("the projection a run wrote is readable");
+            let before_rows = rows(&journal);
+            prop_assert_eq!(
+                &before,
+                &walked.expected,
+                "the journal this case repairs a projection from is one a legal walk wrote"
+            );
+
+            let offending = journal
+                .append(Some(task), &event)
+                .expect("refusing a transition is not an append's job, so the row is written");
+
+            let refusal = journal
+                .rebuild_state()
+                .expect_err("a journal the machine cannot replay cannot come back as a projection");
+            let detail = refusal.to_string();
+            prop_assert!(
+                matches!(&refusal, Error::Corrupt { seq: Some(sequence), .. }
+                    if *sequence == offending.get()),
+                "the refusal is damage, and it names the record the replay could not use, \
+                 which is the one fact a human can act on: {detail}"
+            );
+            prop_assert!(
+                detail.contains(&format!("`{}`", held.name()))
+                    && detail.contains(&format!("`{}`", event.discriminant())),
+                "beside the sequence it says which state refused which event: {detail}"
+            );
+
+            prop_assert_eq!(
+                &journal
+                    .all_states()
+                    .expect("the projection a refused rebuild left is readable"),
+                &before,
+                "a replay that cannot finish reports rather than stops at what it reached: \
+                 the projection is the one the run left, not a run that quietly stopped"
+            );
+            prop_assert_eq!(
+                rows(&journal),
+                before_rows,
+                "which is every row and every stamp: nothing was rewritten on the way to the \
+                 refusal"
+            );
+            let projected = journal
+                .get_state(task)
+                .expect("one task's own row is always readable");
+            prop_assert_eq!(
+                projected.as_ref(),
+                walked.expected.get(&task),
+                "and the task the refusal is about is not half-projected either: it reads as \
+                 the state its own records put it in, or as no row at all when it has none"
+            );
+            prop_assert_eq!(
+                journal
+                    .events()
+                    .expect("the journal still reads back what it holds")
+                    .len(),
+                walked.recorded.len() + 1,
+                "the record was written: the refusal is about what the journal says, not \
+                 about a write that never happened"
+            );
+        }
+    }
+    /// A property over "every legal journal" is worth nothing if the generator
+    /// writes one shape of journal. Every state the machine has is one a walk of
+    /// these proposals reaches, from `Queued`, by records the machine accepted.
+    #[test]
+    fn a_generated_walk_arrives_at_every_state_the_machine_has() {
+        let explored = explored();
+        let missed = every_state_name()
+            .difference(&explored.reached)
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            missed,
+            Vec::<&str>::new(),
+            "a projection compared against a replay only proves the equivalence over the \
+             states a run can actually be in; these were never reached: {missed:?}"
+        );
+    }
+
+    /// The illegal half has the same obligation: a refusal must be aimable at
+    /// every state, and every catalog entry must be the refused side of some pair,
+    /// or the second property tests the three refusals a walk trips over.
+    #[test]
+    fn a_refused_record_can_be_aimed_at_every_state_and_every_entry_is_refused_somewhere() {
+        let explored = explored();
+        let refusers = explored
+            .aimed
+            .iter()
+            .map(|(from, _)| *from)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            refusers,
+            every_state_name(),
+            "`refused_at` answers with a refusal at every state, so the illegal property \
+             aims at each one rather than at the shallowest"
+        );
+        let refused_entries = explored
+            .refused
+            .iter()
+            .map(|(_, event)| *event)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            refused_entries,
+            every_entry_name(),
+            "every entry of the catalog is refused by some state, and the property's \
+             refusals run the catalog rather than a corner of it"
+        );
+    }
+}
