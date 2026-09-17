@@ -5,10 +5,10 @@
 
 ## Context
 
-T016 adds `Journal::append(task_id, kind) -> EventSeq`, the only write the
-journal makes. It is also where VISION.md section 3's third invariant becomes
-mechanical: an event is evidence about a run, and evidence a caller can date and
-number is evidence a caller can arrange.
+T016 adds `Journal::append(task_id, kind) -> EventSeq`, the only row the journal
+writes about what a run did. It is also where VISION.md section 3's third
+invariant becomes mechanical: an event is evidence about a run, and evidence a
+caller can date and number is evidence a caller can arrange.
 
 The signature the task fixes supplies *what happened* and nothing else, so three
 values in the row have no supplier: `seq`, `ts`, `payload`. Each has a tempting

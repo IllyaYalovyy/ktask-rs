@@ -39,8 +39,10 @@
 //!
 //! # Appending
 //!
-//! [`Journal::append`] is the only write the journal makes, and it is where
-//! invariant 3 of VISION.md section 3 becomes mechanical. Three values make a row
+//! [`Journal::append`] writes the only rows a run is judged on — opening the
+//! journal writes schema and a version row, but nothing about what happened — and
+//! it is where invariant 3 of VISION.md section 3 becomes mechanical. Three
+//! values make a row
 //! and none of them comes from the caller: the sequence is the database's own
 //! `AUTOINCREMENT` counter, the instant is the clock read inside the call, and the
 //! payload is `serde_json`'s encoding of the catalog entry. A sequence a caller
