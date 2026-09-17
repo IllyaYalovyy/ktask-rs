@@ -79,6 +79,18 @@
 //! thing whichever read a caller reached for, and holding a whole journal is a
 //! choice a caller makes rather than something a read assumes (ADR-0020).
 //!
+//! # The materialized state
+//!
+//! [`Journal::put_state`] writes the state one task is in and
+//! [`Journal::get_state`], [`Journal::all_states`] read it back, in `task_state` —
+//! the projection `docs/DESIGN.md` Database schema calls rebuildable by replay.
+//! Writing it is not recording: the recorder appends the event first and moves the
+//! projection second, so no `events` row is inserted and no sequence number is
+//! spent, and one row per task means an overwrite rather than a second answer to
+//! keep (ADR-0023). A row this build cannot decode is reported as damage rather
+//! than as no state, because a projection that quietly said "not started" would
+//! hand finished work to a provider again.
+//!
 //! # Append-only, enforced by the file
 //!
 //! Two triggers sit on `events` and refuse an `UPDATE` and a `DELETE` with
@@ -173,6 +185,11 @@ const CREATE_TASKS_TABLE: &str = "CREATE TABLE IF NOT EXISTS tasks (
 );";
 
 /// The materialized current state: a projection, rebuildable by replay.
+///
+/// [`Journal::put_state`] writes a row and [`Journal::get_state`],
+/// [`Journal::all_states`] read them back. Nothing else in this crate touches the
+/// table, and clearing it is ordinary work: what a run did is in `events`, and a
+/// projection can always be built again from there (ADR-0023).
 const CREATE_TASK_STATE_TABLE: &str = "CREATE TABLE IF NOT EXISTS task_state (
   task_id    INTEGER PRIMARY KEY,
   state_json TEXT    NOT NULL,
@@ -1561,6 +1578,780 @@ mod tasks {
             assert!(
                 error.to_string().contains(&widest.to_string()),
                 "the refusal quotes the number it refused: {error}"
+            );
+        }
+    }
+}
+
+/// The materialized state: the `task_state` rows the journal implies.
+///
+/// `docs/DESIGN.md` Database schema calls `task_state` "the materialized current
+/// state: a projection, rebuildable by replay", and that phrase decides
+/// everything below. The table holds the answer to *where is each task now*,
+/// which every screen, every `status` line and the supervisor's own next move ask
+/// on every tick; `events` holds what makes that answer true. A projection may be
+/// rewritten in place and may be dropped and built again, which is why this table
+/// carries none of the append-only guards (ADR-0017): what a run did belongs to
+/// the journal, and what it adds up to at this instant is a derived fact with no
+/// history of its own.
+///
+/// # Who writes it, and why writing it is not recording
+///
+/// [`Journal::put_state`] is the only writer, and it runs once per transition
+/// [`crate::apply`] accepted: the recorder appends the event first and moves the
+/// projection second, so the durable fact is in the file before the summary that
+/// depends on it changes (VISION.md section 3, invariant 2). Writing a state
+/// records nothing. No `events` row is inserted and no sequence number is spent —
+/// one transition is one event in the source of truth and one row here, and a
+/// second event for the same decision would be two histories a replay had to
+/// agree between.
+///
+/// # Why one row per task, stamped by the journal
+///
+/// A row is keyed by task, so writing a state twice overwrites it instead of
+/// leaving a reader to choose between two answers ([`Journal::get_state`],
+/// [`Journal::all_states`]). `updated_at` is stamped from the same clock
+/// [`Journal::append`] reads rather than handed in by a caller, for the reason an
+/// event's instant is: it says when *this file* learned the fact, and a caller
+/// able to move it could move the projection's own past. It dates a row and orders
+/// nothing — [`Journal::all_states`] goes by task id, because what is current is a
+/// set rather than a sequence.
+///
+/// # Why a module, and why this one
+///
+/// The row codec shares a connection and a schema with the event half of this file
+/// and nothing else, exactly as the queue module above does. The `impl` below is
+/// on [`Journal`] all the same, so the projection is reached through the journal
+/// that owns the file rather than through a second door a caller could hold open
+/// beside it.
+mod projection {
+    use std::collections::BTreeMap;
+
+    use rusqlite::{OptionalExtension as _, Row, params};
+
+    use super::{clock_nanos, stamp_text};
+    use crate::{Error, Journal, Result, TaskId, TaskState};
+
+    /// One projected row, in the types the schema declares its columns with.
+    ///
+    /// `updated_at` is absent on purpose: no read here hands it back, because the
+    /// column dates a row for whoever opens the file and answers no question the
+    /// state machine asks. Every write still fills it in.
+    struct StateRow {
+        task_id: i64,
+        state_json: String,
+    }
+
+    impl Journal {
+        /// Write the state one task is in, replacing whatever it had.
+        ///
+        /// The caller is the recorder, once per accepted transition: after the
+        /// event for that transition is already in `events`, and after
+        /// [`crate::apply`] has said the transition is legal. Nothing here decides
+        /// whether a transition is allowed and nothing here consults the queue —
+        /// the projection is written for the id it is handed, which is what lets a
+        /// rebuild replay events whose task has long since left the queue.
+        ///
+        /// The write is one statement, so it is one transaction: an overwrite
+        /// replaces the row rather than leaving a second one behind, and there is no
+        /// moment — not even a crash partway through the write — in which the task
+        /// has no state at all. Clearing the row and then inserting the new one has
+        /// exactly such a moment, which is why this pairs an insert with the
+        /// `ON CONFLICT` update of the row it collided with.
+        ///
+        /// `updated_at` is the clock read inside the call, in the same RFC 3339 UTC
+        /// spelling as an event's `ts` (see [`Journal::append`]); no caller hands it
+        /// in.
+        ///
+        /// # Errors
+        ///
+        /// [`Error::Serde`] when the state has no JSON encoding, or when the clock
+        /// reads an instant with no RFC 3339 spelling; [`Error::Database`] when
+        /// SQLite refuses the write. Either way the row the task held before the
+        /// call is the row it holds after: a statement that failed wrote nothing.
+        pub fn put_state(&mut self, task: TaskId, state: &TaskState) -> Result<()> {
+            let state_json = serde_json::to_string(state)?;
+            let updated_at = stamp_text(clock_nanos())?;
+            self.conn.execute(
+                "INSERT INTO task_state (task_id, state_json, updated_at) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(task_id) DO UPDATE SET state_json = excluded.state_json, \
+                 updated_at = excluded.updated_at",
+                params![i64::from(task.get()), state_json, updated_at],
+            )?;
+            Ok(())
+        }
+
+        /// The state one task is in, or `None` while nothing has concluded one.
+        ///
+        /// Absence is a real answer rather than damage: a task that has been queued
+        /// and never run has no row, and reading the projection of a queue that has
+        /// not started is the first thing every run does. It is not
+        /// [`Error::NotFound`] either — the caller asked what a task's state is, and
+        /// "nothing yet" is that answer. A task whose row cannot be decoded is
+        /// damage, and is refused as [`Journal::all_states`] refuses it.
+        ///
+        /// # Errors
+        ///
+        /// [`Error::Database`] when `task_state` cannot be read or a column is not
+        /// the type its schema declares; [`Error::Corrupt`] when the row's
+        /// `state_json` is not a [`TaskState`], which is refused rather than read as
+        /// absent — a projection that quietly answered `None` would start work a run
+        /// had already finished.
+        pub fn get_state(&self, task: TaskId) -> Result<Option<TaskState>> {
+            let found = self
+                .conn
+                .query_row(
+                    "SELECT task_id, state_json FROM task_state WHERE task_id = ?1",
+                    params![i64::from(task.get())],
+                    state_row,
+                )
+                .optional()?;
+            let Some(record) = found else {
+                return Ok(None);
+            };
+            let (_, state) = stored_state(record)?;
+            Ok(Some(state))
+        }
+
+        /// Every task the projection holds a state for, in id order.
+        ///
+        /// Keyed by [`TaskId`], which is what makes the order part of the type: a
+        /// `BTreeMap` iterates by id ascending, so queue order survives without a
+        /// caller remembering to sort. The SQL says `ORDER BY task_id` all the same
+        /// — the order is the read's, as it is for every read in this file, so a row
+        /// arrives already known to be the one after the last.
+        ///
+        /// A task with no row is simply absent: the map is the projection, not the
+        /// queue, and it is [`Journal::get_state`] that answers for one task.
+        /// Ordering is by id and never by `updated_at`, because what is current is a
+        /// set; a caller wanting the most recently moved task sorts what it was
+        /// handed.
+        ///
+        /// # Errors
+        ///
+        /// As [`Journal::get_state`], plus [`Error::Corrupt`] when a row is numbered
+        /// outside the ids a task can have. A read that refuses stops at the row it
+        /// could not decode rather than handing back a projection with a task missing
+        /// from the middle of it: a caller that read a short list would conclude work
+        /// had not happened.
+        pub fn all_states(&self) -> Result<BTreeMap<TaskId, TaskState>> {
+            let mut statement = self
+                .conn
+                .prepare("SELECT task_id, state_json FROM task_state ORDER BY task_id")?;
+            statement
+                .query_map([], state_row)?
+                .map(|row| stored_state(row?))
+                .collect()
+        }
+    }
+
+    /// Map one result row onto [`StateRow`], in the order both reads spell them.
+    ///
+    /// The two reads ask for the same two columns in the same order so that one
+    /// mapper and one decode step serve both: a second decoder would be a rule that
+    /// could drift from the first, and then one read could call a row legible while
+    /// the other called it damage.
+    fn state_row(row: &Row<'_>) -> rusqlite::Result<StateRow> {
+        Ok(StateRow {
+            task_id: row.get(0)?,
+            state_json: row.get(1)?,
+        })
+    }
+
+    /// The [`TaskId`] and [`TaskState`] a projected row holds, or the damage report
+    /// for a row that holds neither.
+    ///
+    /// Two columns, two questions, in the order `decode_event` asks them of an
+    /// `events` row: is the number a task at all, and is the text a state? A row
+    /// this build cannot read is a state it would otherwise invent, so every refusal
+    /// is [`Error::Corrupt`], naming the task the row claimed.
+    fn stored_state(record: StateRow) -> Result<(TaskId, TaskState)> {
+        let StateRow {
+            task_id,
+            state_json,
+        } = record;
+        let task = projected_task(task_id)?;
+        Ok((task, decode_state(&state_json, task)?))
+    }
+
+    /// The task a `task_id` names, or the damage report for a number that names
+    /// none.
+    ///
+    /// The column is a signed `INTEGER`, wider than the `u32` a [`TaskId`] wraps, so
+    /// a hand-edited file can hold a number no task has — and a projection that
+    /// answered by truncating it would quote a task that does not exist while hiding
+    /// the row that really was damaged.
+    fn projected_task(stored: i64) -> Result<TaskId> {
+        u32::try_from(stored)
+            .map(TaskId::new)
+            .map_err(|out_of_range| Error::Corrupt {
+                detail: format!(
+                    "`task_state` holds a row numbered {stored}, which is no task's \
+                     position: {out_of_range}, and no id is wider than {}",
+                    u32::MAX,
+                ),
+                seq: None,
+            })
+    }
+
+    /// The [`TaskState`] a row's JSON holds, or the damage report for text that
+    /// holds none.
+    ///
+    /// [`Journal::put_state`] writes `serde`'s encoding of a [`TaskState`] and
+    /// nothing else, so text outside that grammar did not come from this build.
+    /// Guessing at what it meant — reading an unknown variant as some state, or as no
+    /// state — is a projection inventing a fact about a task nobody recorded.
+    fn decode_state(payload: &str, task: TaskId) -> Result<TaskState> {
+        serde_json::from_str(payload).map_err(|undecodable| Error::Corrupt {
+            detail: format!(
+                "the projected state of task {task} is not a `TaskState`: {undecodable}"
+            ),
+            seq: None,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use crate::journal::{Journal, journal_path};
+        use crate::{
+            AttemptId, Error, EventKind, EventSeq, FailureClass, PauseReason, Phase, TaskId,
+            TaskState,
+        };
+        use rusqlite::{Connection, params};
+        use std::path::Path;
+        use std::time::Duration;
+        use tempfile::{TempDir, tempdir};
+        use time::OffsetDateTime;
+        use time::format_description::well_known::Rfc3339;
+        use time::macros::datetime;
+
+        /// A scratch parent for a journal: `docs/DESIGN.md` Conventions forbids a
+        /// test from writing inside the repository.
+        fn scratch() -> TempDir {
+            tempdir().expect("a scratch directory below the system temp directory")
+        }
+
+        /// An opened journal in a scratch state directory.
+        fn open_journal(state_dir: &Path) -> Journal {
+            Journal::open(&journal_path(state_dir))
+                .expect("a journal opens where its state directory is")
+        }
+
+        /// One state from every half of the lifecycle the type describes: the two
+        /// that carry nothing, the ones that carry an attempt or a commit, the one
+        /// that carries a person and an instant, the pause that carries a boxed
+        /// state, and the ways a task ends without being done.
+        fn states() -> Vec<TaskState> {
+            vec![
+                TaskState::Queued,
+                TaskState::Running {
+                    attempt: AttemptId::new(2),
+                    phase: Phase::Green,
+                },
+                TaskState::Verifying {
+                    attempt: AttemptId::new(1),
+                },
+                TaskState::PublishedVerified {
+                    commit: "b42c45f".to_owned(),
+                },
+                TaskState::Acknowledged {
+                    by: "operator".to_owned(),
+                    at: datetime!(2026-09-17 12:34:56 UTC),
+                },
+                TaskState::Paused {
+                    reason: PauseReason::Limit {
+                        until: Some(datetime!(2026-09-17 13:00:00 UTC)),
+                    },
+                    resume_to: Box::new(TaskState::Running {
+                        attempt: AttemptId::new(1),
+                        phase: Phase::Red,
+                    }),
+                },
+                TaskState::Failed {
+                    class: FailureClass::ProviderLimit,
+                    detail: "the provider advertised no reset".to_owned(),
+                },
+                TaskState::Cancelled,
+            ]
+        }
+
+        /// The task a test writes `state` under: the states list, numbered from the
+        /// first queue position.
+        fn task_holding(states: &[TaskState], index: usize) -> TaskId {
+            let position = u32::try_from(index + 1).expect("a scratch queue is short");
+            assert!(index < states.len(), "a scratch state index is in the list");
+            TaskId::new(position)
+        }
+
+        /// One projected row, as the table holds it.
+        #[derive(Debug, PartialEq)]
+        struct Stored {
+            task_id: i64,
+            state_json: String,
+            updated_at: String,
+        }
+
+        /// Every projected row, in id order. The whole row, because `updated_at`
+        /// and the JSON text are what the table holds and what no read hands back.
+        fn stored_rows(conn: &Connection) -> Vec<Stored> {
+            let mut statement = conn
+                .prepare("SELECT task_id, state_json, updated_at FROM task_state ORDER BY task_id")
+                .expect("task_state is always readable");
+            statement
+                .query_map([], |row| {
+                    Ok(Stored {
+                        task_id: row.get(0)?,
+                        state_json: row.get(1)?,
+                        updated_at: row.get(2)?,
+                    })
+                })
+                .expect("task_state is readable")
+                .collect::<rusqlite::Result<Vec<Stored>>>()
+                .expect("every column reads as the type the schema declares it")
+        }
+
+        /// Write a projected row directly, dated as stated.
+        ///
+        /// The only way to reach a projection whose rows no write can produce — a
+        /// number outside a task id, a `state_json` that is not a state — which is
+        /// what a read's refusal has to be tested against. The instant is a
+        /// parameter because the one thing a read's order can be confused with is
+        /// the order the rows arrived in, and only a writer outside this module
+        /// can date rows in an order that disagrees with both.
+        fn stage_row(conn: &Connection, task_id: i64, state_json: &str, updated_at: &str) {
+            conn.execute(
+                "INSERT INTO task_state (task_id, state_json, updated_at) VALUES (?1, ?2, ?3)",
+                params![task_id, state_json, updated_at],
+            )
+            .expect("a staged row is a row the schema accepts");
+        }
+
+        /// The JSON [`Journal::put_state`] is expected to have stored for `state`.
+        fn stored_json(state: &TaskState) -> String {
+            serde_json::to_string(state).expect("every state has a JSON encoding")
+        }
+
+        #[test]
+        fn every_state_round_trips_through_the_projection_exactly_as_it_was_written() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let written = states();
+
+            for (index, state) in written.iter().enumerate() {
+                let task = task_holding(&written, index);
+                journal
+                    .put_state(task, state)
+                    .expect("a fresh projection takes a state for any task");
+                assert_eq!(
+                    journal
+                        .get_state(task)
+                        .expect("the projection is readable")
+                        .as_ref(),
+                    Some(state),
+                    "task {task} reads back the state it was written with, payload and all"
+                );
+                assert_eq!(
+                    stored_rows(&journal.conn)[index].state_json,
+                    stored_json(state),
+                    "the row holds `serde`'s JSON of the state, which is what makes the column \
+                     legible to anything that opens the file"
+                );
+            }
+        }
+
+        #[test]
+        fn a_task_the_projection_was_never_given_a_state_for_reads_as_none() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            journal
+                .put_state(TaskId::new(2), &TaskState::Queued)
+                .expect("a fresh projection takes a state");
+
+            assert_eq!(
+                journal
+                    .get_state(TaskId::new(1))
+                    .expect("a read of an absent state is an answer, not a failure"),
+                None,
+                "a queued task that has never run has no state to report, and asking for one \
+                 buys nothing rather than a `NotFound`"
+            );
+            assert_eq!(
+                stored_rows(&journal.conn).len(),
+                1,
+                "reading a task the projection does not hold writes no row for it"
+            );
+        }
+
+        #[test]
+        fn writing_a_state_twice_overwrites_the_row_rather_than_adding_another_one() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let task = TaskId::new(7);
+            let later = TaskState::Running {
+                attempt: AttemptId::new(1),
+                phase: Phase::Green,
+            };
+
+            journal
+                .put_state(task, &TaskState::Queued)
+                .expect("the first write is an ordinary write");
+            journal
+                .put_state(task, &later)
+                .expect("the second write is an ordinary write too");
+
+            let rows = stored_rows(&journal.conn);
+            assert_eq!(
+                rows.len(),
+                1,
+                "one task is one row, however often its state was written: two rows would \
+                 leave a reader choosing between two answers"
+            );
+            assert_eq!(
+                rows[0].state_json,
+                stored_json(&later),
+                "the row holds the state last written and nothing of the one before it"
+            );
+            assert_eq!(
+                journal.get_state(task).expect("the projection is readable"),
+                Some(later),
+                "the overwritten state is gone, not shadowed"
+            );
+        }
+
+        #[test]
+        fn an_overwrite_of_one_task_leaves_every_other_task_as_it_was() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let untouched = TaskState::Verifying {
+                attempt: AttemptId::new(3),
+            };
+            journal
+                .put_state(TaskId::new(1), &TaskState::Queued)
+                .expect("a fresh projection takes a state");
+            journal
+                .put_state(TaskId::new(2), &untouched)
+                .expect("a fresh projection takes a state");
+
+            journal
+                .put_state(TaskId::new(1), &TaskState::Done)
+                .expect("overwriting task 1 is ordinary work");
+
+            assert_eq!(
+                journal
+                    .get_state(TaskId::new(2))
+                    .expect("the projection is readable"),
+                Some(untouched),
+                "the write was aimed at one task's row, and yet a state nobody handed in \
+                 appears beside another task"
+            );
+        }
+
+        #[test]
+        fn the_journal_stamps_updated_at_and_the_next_write_refreshes_it() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let task = TaskId::new(1);
+
+            journal
+                .put_state(task, &TaskState::Queued)
+                .expect("a fresh projection takes a state");
+            let first = stored_rows(&journal.conn)[0].updated_at.clone();
+            std::thread::sleep(Duration::from_millis(2));
+            journal
+                .put_state(task, &TaskState::Done)
+                .expect("overwriting a state is ordinary work");
+            let second = stored_rows(&journal.conn)[0].updated_at.clone();
+
+            let written = OffsetDateTime::parse(&first, &Rfc3339)
+                .expect("the stamp is the RFC 3339 UTC instant the column documents");
+            let refreshed = OffsetDateTime::parse(&second, &Rfc3339)
+                .expect("the refresh is stamped the same way");
+            assert!(
+                refreshed > written,
+                "the second write is stamped with when it happened, not with the instant the \
+                 first write used: {first} then {second}"
+            );
+        }
+
+        #[test]
+        fn all_states_hands_back_every_task_written_and_nobody_else() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let written = states();
+
+            for (index, state) in written.iter().enumerate() {
+                journal
+                    .put_state(task_holding(&written, index), state)
+                    .expect("a fresh projection takes a state");
+            }
+
+            let projection = journal.all_states().expect("the projection is readable");
+            assert_eq!(
+                projection.len(),
+                written.len(),
+                "one entry per task the projection holds, and none for a task that was \
+                 never written"
+            );
+            assert_eq!(
+                projection.get(&TaskId::new(9)),
+                None,
+                "the map is the projection, not the queue: a task nobody concluded is absent \
+                 from it"
+            );
+            for (index, state) in written.iter().enumerate() {
+                let task = task_holding(&written, index);
+                assert_eq!(
+                    projection.get(&task),
+                    Some(state),
+                    "task {task} is paired with the state it was written with, so a read \
+                     cannot mix the tasks up"
+                );
+            }
+        }
+
+        #[test]
+        fn all_states_returns_the_tasks_in_id_order_whatever_order_they_were_written() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let widest = TaskId::new(u32::MAX);
+
+            for task in [TaskId::new(11), widest, TaskId::new(2), TaskId::new(9)] {
+                journal
+                    .put_state(
+                        task,
+                        &TaskState::Running {
+                            attempt: AttemptId::new(task.get()),
+                            phase: Phase::Verify,
+                        },
+                    )
+                    .expect("a fresh projection takes a state");
+            }
+
+            let projection = journal.all_states().expect("the projection is readable");
+            assert_eq!(
+                projection
+                    .keys()
+                    .copied()
+                    .map(TaskId::get)
+                    .collect::<Vec<u32>>(),
+                [2, 9, 11, u32::MAX],
+                "queue order, not the order the rows happened to arrive — and `updated_at` \
+                 orders nothing"
+            );
+            assert_eq!(
+                projection.get(&widest),
+                Some(&TaskState::Running {
+                    attempt: AttemptId::new(u32::MAX),
+                    phase: Phase::Verify,
+                }),
+                "the widest id a task can have is a task like any other, and its state is \
+                 its own rather than its neighbour's"
+            );
+        }
+
+        #[test]
+        fn the_projection_of_a_journal_that_holds_nothing_is_empty_rather_than_missing() {
+            let parent = scratch();
+            let journal = open_journal(parent.path());
+
+            assert!(
+                journal
+                    .all_states()
+                    .expect("an empty projection is a readable projection")
+                    .is_empty(),
+                "every project starts with nothing materialized, and reading it is a fact \
+                 rather than an error"
+            );
+        }
+
+        #[test]
+        fn the_projection_survives_the_journal_being_closed_and_reopened() {
+            let parent = scratch();
+            let file = journal_path(parent.path());
+            let written = TaskState::Paused {
+                reason: PauseReason::Input,
+                resume_to: Box::new(TaskState::Verifying {
+                    attempt: AttemptId::new(1),
+                }),
+            };
+
+            {
+                let mut journal = Journal::open(&file).expect("a new journal");
+                journal
+                    .put_state(TaskId::new(3), &written)
+                    .expect("a fresh projection takes a state");
+            }
+
+            let reopened = Journal::open(&file).expect("the journal reopens");
+            assert_eq!(
+                reopened
+                    .get_state(TaskId::new(3))
+                    .expect("the projection is readable"),
+                Some(written),
+                "a pause survived the process that made it, boxed state and all — which is \
+                 what lets a resumed run resume that wait rather than guess one"
+            );
+        }
+
+        #[test]
+        fn a_state_write_records_no_event_and_spends_no_sequence() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+
+            for task in [TaskId::new(1), TaskId::new(2)] {
+                journal
+                    .put_state(task, &TaskState::Done)
+                    .expect("a fresh projection takes a state");
+                journal
+                    .put_state(task, &TaskState::Cancelled)
+                    .expect("overwriting a state is ordinary work");
+            }
+
+            assert!(
+                journal
+                    .events()
+                    .expect("the journal is readable")
+                    .is_empty(),
+                "a projection is derived from the journal, so writing it must not write the \
+                 journal: two records of one decision are two histories"
+            );
+            let seq = journal
+                .append(None, &EventKind::PreflightStarted)
+                .expect("an append after a state write still works");
+            assert_eq!(
+                seq,
+                EventSeq::new(1),
+                "four state writes spent no sequence number, so the first event this journal \
+                 holds is still seq 1"
+            );
+        }
+
+        #[test]
+        fn a_projected_row_whose_json_is_not_a_state_is_read_as_damage() {
+            let parent = scratch();
+            let journal = open_journal(parent.path());
+            stage_row(
+                &journal.conn,
+                5,
+                "not a state at all",
+                "2026-09-17T12:00:00+00:00",
+            );
+
+            let one = journal
+                .get_state(TaskId::new(5))
+                .expect_err("a row that is not JSON is not a state either");
+            let all = journal
+                .all_states()
+                .expect_err("the same row stops a whole-projection read");
+
+            for refusal in [one, all] {
+                assert!(
+                    matches!(refusal, Error::Corrupt { .. }),
+                    "a row this build cannot decode is damage, not an absent state: {refusal}"
+                );
+                assert!(
+                    refusal.to_string().contains("task 5"),
+                    "the report names the task whose state could not be read: {refusal}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_projected_row_holding_a_variant_this_build_does_not_name_is_damage() {
+            let parent = scratch();
+            let journal = open_journal(parent.path());
+            stage_row(
+                &journal.conn,
+                1,
+                r#"{"Nudging":{"attempt":1}}"#,
+                "2026-09-17T12:00:00+00:00",
+            );
+
+            let refusal = journal
+                .get_state(TaskId::new(1))
+                .expect_err("no state of this build is named `Nudging`");
+
+            assert!(
+                matches!(refusal, Error::Corrupt { .. }),
+                "an unknown variant is refused rather than read as some state, or as none: \
+                 {refusal}"
+            );
+        }
+
+        #[test]
+        fn a_projected_row_numbered_past_a_task_id_is_read_as_damage() {
+            let parent = scratch();
+            let journal = open_journal(parent.path());
+            let widest = i64::from(u32::MAX);
+            stage_row(
+                &journal.conn,
+                widest + 1,
+                r#""Done""#,
+                "2026-09-17T12:00:00+00:00",
+            );
+
+            let refusal = journal
+                .all_states()
+                .expect_err("a row numbered past every task id is not a projection");
+
+            assert!(
+                matches!(refusal, Error::Corrupt { .. }),
+                "the number is out of a task id's range, which is damage and not an empty \
+                 answer: {refusal}"
+            );
+            assert!(
+                refusal.to_string().contains(&(widest + 1).to_string()),
+                "the refusal quotes the number it refused: {refusal}"
+            );
+        }
+
+        #[test]
+        fn the_whole_projection_is_read_from_the_lowest_id_rather_than_the_earliest_stamp() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            journal
+                .put_state(TaskId::new(1), &TaskState::Queued)
+                .expect("a fresh projection takes a state");
+            // Dated so that the order of the stamps disagrees with the order of the
+            // ids: only a read ordered by id meets task 2 first. The order the rows
+            // arrived in cannot disagree — a `task_id` *is* the rowid (ADR-0023) — so
+            // the stamps are the one order a test can separate it from.
+            stage_row(&journal.conn, 4, "not a state", "2020-01-01T00:00:00+00:00");
+            stage_row(&journal.conn, 2, "{", "2030-01-01T00:00:00+00:00");
+
+            let refusal = journal
+                .all_states()
+                .expect_err("two undecodable rows cannot both be skipped");
+
+            assert!(
+                refusal.to_string().contains("task 2"),
+                "the read went through the projection in id order, so the first row it could \
+                 not decode is the lowest-numbered one: {refusal}"
+            );
+        }
+
+        #[test]
+        fn damage_in_one_tasks_row_does_not_blind_a_read_of_another() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            journal
+                .put_state(TaskId::new(1), &TaskState::Queued)
+                .expect("a fresh projection takes a state");
+            stage_row(&journal.conn, 2, "{", "2026-09-17T12:00:00+00:00");
+
+            assert_eq!(
+                journal
+                    .get_state(TaskId::new(1))
+                    .expect("task 1's own row is legible")
+                    .as_ref(),
+                Some(&TaskState::Queued),
+                "one damaged row stops the read that reaches it, and says nothing about the \
+                 task beside it"
+            );
+            assert!(
+                journal.all_states().is_err(),
+                "the whole-projection read cannot skip the damaged task, because a projection \
+                 with a task quietly missing from it is a run that lost a task"
             );
         }
     }
