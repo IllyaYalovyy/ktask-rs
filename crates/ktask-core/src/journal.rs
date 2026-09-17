@@ -91,6 +91,12 @@
 //! than as no state, because a projection that quietly said "not started" would
 //! hand finished work to a provider again.
 //!
+//! [`Journal::rebuild_state`] is what makes that rebuildability real: it folds
+//! every event through [`crate::apply`] before it touches a row, then clears and
+//! refills the table as one transaction, so a journal that cannot be replayed, or
+//! a write the database refuses, leaves the projection a run wrote rather than half
+//! of a new one (ADR-0024).
+//!
 //! # Append-only, enforced by the file
 //!
 //! Two triggers sit on `events` and refuse an `UPDATE` and a `DELETE` with
@@ -1597,11 +1603,13 @@ mod tasks {
 ///
 /// # Who writes it, and why writing it is not recording
 ///
-/// [`Journal::put_state`] is the only writer, and it runs once per transition
-/// [`crate::apply`] accepted: the recorder appends the event first and moves the
-/// projection second, so the durable fact is in the file before the summary that
-/// depends on it changes (VISION.md section 3, invariant 2). Writing a state
-/// records nothing. No `events` row is inserted and no sequence number is spent —
+/// Two calls write this table and they share one write path. The recorder moves
+/// one task with [`Journal::put_state`], once per transition [`crate::apply`]
+/// accepted: the event first and the projection second, so the durable fact is in
+/// the file before the summary that depends on it changes (VISION.md section 3,
+/// invariant 2). [`Journal::rebuild_state`] writes the whole table from the
+/// journal, which is what makes the table safe to be a summary at all. Neither
+/// records anything: no `events` row is inserted and no sequence number is spent —
 /// one transition is one event in the source of truth and one row here, and a
 /// second event for the same decision would be two histories a replay had to
 /// agree between.
@@ -1617,6 +1625,16 @@ mod tasks {
 /// nothing — [`Journal::all_states`] goes by task id, because what is current is a
 /// set rather than a sequence.
 ///
+/// # Why a rebuild clears and refills in one transaction
+///
+/// Rebuilding is the recovery path, so it has to be safer than the work it
+/// repairs. The fold is finished before the first row is touched, so a journal
+/// that cannot be replayed is refused with the projection still standing, and the
+/// clear-plus-rewrite runs as one transaction, so a write refused partway leaves
+/// the projection the run left rather than an empty table and two rows. An absent
+/// row reads as "this task has not started", which is the one misreading a
+/// supervisor cannot recover from: it hands finished work to a provider again.
+///
 /// # Why a module, and why this one
 ///
 /// The row codec shares a connection and a schema with the event half of this file
@@ -1627,10 +1645,10 @@ mod tasks {
 mod projection {
     use std::collections::BTreeMap;
 
-    use rusqlite::{OptionalExtension as _, Row, params};
+    use rusqlite::{Connection, OptionalExtension as _, Row, params};
 
     use super::{clock_nanos, stamp_text};
-    use crate::{Error, Journal, Result, TaskId, TaskState};
+    use crate::{Error, EventSeq, Journal, Result, TaskId, TaskState, apply};
 
     /// One projected row, in the types the schema declares its columns with.
     ///
@@ -1670,15 +1688,7 @@ mod projection {
         /// SQLite refuses the write. Either way the row the task held before the
         /// call is the row it holds after: a statement that failed wrote nothing.
         pub fn put_state(&mut self, task: TaskId, state: &TaskState) -> Result<()> {
-            let state_json = serde_json::to_string(state)?;
-            let updated_at = stamp_text(clock_nanos())?;
-            self.conn.execute(
-                "INSERT INTO task_state (task_id, state_json, updated_at) VALUES (?1, ?2, ?3) \
-                 ON CONFLICT(task_id) DO UPDATE SET state_json = excluded.state_json, \
-                 updated_at = excluded.updated_at",
-                params![i64::from(task.get()), state_json, updated_at],
-            )?;
-            Ok(())
+            write_state(&self.conn, task, state)
         }
 
         /// The state one task is in, or `None` while nothing has concluded one.
@@ -1743,6 +1753,112 @@ mod projection {
                 .map(|row| stored_state(row?))
                 .collect()
         }
+
+        /// Drop the materialized state and build it again from the events alone.
+        ///
+        /// This is the operation that makes `task_state` a projection rather than a
+        /// second source of truth (VISION.md section 5, `docs/DESIGN.md` Database
+        /// schema): the table is cleared, every event the journal holds is folded
+        /// through [`crate::apply`], and each task's state is written back. What a
+        /// rebuild leaves is exactly what the run's own [`Journal::put_state`] calls
+        /// left, so the projection can be thrown away after a crash instead of
+        /// trusted — and a caller that suspects it drifted has a repair that does not
+        /// need to know what drifted.
+        ///
+        /// Two orders make that equivalence, and both are the journal's rather than a
+        /// caller's. The fold reads in `seq` order (see [`Journal::for_each_event`]),
+        /// because a phase folded in before the attempt that entered it is a state no
+        /// run was ever in. And the fold finishes before the first row is touched,
+        /// with the clear and the rewrite as one transaction, so the projection is
+        /// never observed mid-rebuild: it is the old one, or it is the new one. The
+        /// fold keeps one state per task rather than one per event, so a journal of
+        /// ten thousand records costs a rebuild the memory of the tasks it holds.
+        ///
+        /// Rebuilt rows are stamped with the instant the rebuild wrote them, not with
+        /// the instant of the event behind them, which is what lets an operator tell a
+        /// repaired projection from one a run wrote (ADR-0023).
+        ///
+        /// # Errors
+        ///
+        /// [`Error::Corrupt`] when the replay reaches an event the state machine
+        /// refuses at the state it reaches, carrying the sequence of that record so
+        /// the journal can be opened at the line that contradicts it; [`Error::Serde`]
+        /// when a state has no JSON encoding, or the clock reads an instant with no
+        /// RFC 3339 spelling; [`Error::Database`] when `events` cannot be read or the
+        /// rewrite is refused. A refusal anywhere leaves the projection holding what
+        /// it held before the call, because nothing is written until the whole journal
+        /// has folded.
+        pub fn rebuild_state(&mut self) -> Result<()> {
+            let replayed = self.replayed_states()?;
+            let transaction = self.conn.transaction()?;
+            transaction.execute("DELETE FROM task_state", [])?;
+            for (task, state) in &replayed {
+                write_state(&transaction, *task, state)?;
+            }
+            transaction.commit()?;
+            Ok(())
+        }
+
+        /// Fold every event the journal holds into the state each task is in.
+        ///
+        /// Every task starts at [`TaskState::Queued`] — the state a parsed plan lands
+        /// in, and the state a [`crate::EventKind::TaskQueued`] record is the
+        /// journal's record of — and is moved on by each of its own events in
+        /// sequence order. An event whose `task_id` is `NULL` is about the queue: it
+        /// is in the journal to be read and belongs to no accumulator.
+        ///
+        /// A record the machine refuses is the only failure this fold has, and it is
+        /// reported rather than stopped at. A journal that reaches a state where its
+        /// own next event is illegal claims something no run could have done, which is
+        /// damage in the durable record; and the alternative — folding up to the
+        /// refusal and keeping the answer — would hand a caller the projection of a
+        /// run that quietly stopped, a lie about a task instead of an error about a
+        /// file. The sequence is carried because "which record" is the question an
+        /// operator can act on.
+        fn replayed_states(&self) -> Result<BTreeMap<TaskId, TaskState>> {
+            let mut folded: BTreeMap<TaskId, TaskState> = BTreeMap::new();
+            self.for_each_event(EventSeq::new(0), &mut |event| {
+                let Some(task) = event.task_id else {
+                    return Ok(());
+                };
+                let held = folded.entry(task).or_insert(TaskState::Queued);
+                let moved = apply(held, &event.kind).map_err(|refused| Error::Corrupt {
+                    detail: format!(
+                        "the journal does not replay: {refused}, and task {task} cannot be \
+                         projected past it",
+                    ),
+                    seq: Some(event.seq.get()),
+                })?;
+                *held = moved;
+                Ok(())
+            })?;
+            Ok(folded)
+        }
+    }
+
+    /// Put one [`TaskState`] in one task's row, overwriting whatever was there.
+    ///
+    /// [`Journal::put_state`] hands this its own connection and
+    /// [`Journal::rebuild_state`] hands it the transaction it has open — the only way
+    /// a rebuild can write through the same statement a run writes through, since
+    /// `rusqlite` borrows the connection for the life of a transaction and no method
+    /// of [`Journal`] can be called inside one. Two callers writing a table this
+    /// load-bearing is how a projection ends up disagreeing with itself, so the
+    /// encoding, the stamp and the statement live here and both of them come through.
+    ///
+    /// Splitting the write out is also what keeps the equivalence a rebuild is judged
+    /// on honest: the rows a replay leaves are the rows a run leaves, byte for byte,
+    /// because there is no second writer to drift from the first.
+    fn write_state(conn: &Connection, task: TaskId, state: &TaskState) -> Result<()> {
+        let state_json = serde_json::to_string(state)?;
+        let updated_at = stamp_text(clock_nanos())?;
+        conn.execute(
+            "INSERT INTO task_state (task_id, state_json, updated_at) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(task_id) DO UPDATE SET state_json = excluded.state_json, \
+             updated_at = excluded.updated_at",
+            params![i64::from(task.get()), state_json, updated_at],
+        )?;
+        Ok(())
     }
 
     /// Map one result row onto [`StateRow`], in the order both reads spell them.
@@ -1814,10 +1930,10 @@ mod projection {
     mod tests {
         use crate::journal::{Journal, journal_path};
         use crate::{
-            AttemptId, Error, EventKind, EventSeq, FailureClass, PauseReason, Phase, TaskId,
-            TaskState,
+            AttemptId, Error, EventKind, EventSeq, FailureClass, PauseReason, Phase, Stream,
+            TaskId, TaskState, apply,
         };
-        use rusqlite::{Connection, params};
+        use rusqlite::{Connection, OptionalExtension as _, params};
         use std::path::Path;
         use std::time::Duration;
         use tempfile::{TempDir, tempdir};
@@ -2369,6 +2485,566 @@ mod projection {
                 journal.all_states().is_err(),
                 "the whole-projection read cannot skip the damaged task, because a projection \
                  with a task quietly missing from it is a run that lost a task"
+            );
+        }
+
+        /// The commit the scripted task published, and the remote's own tip.
+        const PUBLISHED: &str = "b42c45f";
+
+        /// One step of a run, recorded the way the recorder records it: the event
+        /// appended first, the projection moved second, and one
+        /// [`Journal::put_state`] per accepted transition.
+        ///
+        /// A projection compared against a rebuild has to have been written as a run
+        /// writes it, or the comparison is between a replay and a shape no writer
+        /// produces. The state is not handed in — it is what [`crate::apply`]
+        /// concludes, which is the same function a replay folds with.
+        fn record(journal: &mut Journal, task: Option<TaskId>, event: &EventKind) {
+            journal
+                .append(task, event)
+                .expect("a legal event appends, transition or not");
+            let Some(id) = task else {
+                return;
+            };
+            let held = journal
+                .get_state(id)
+                .expect("one task's own row is always readable");
+            let to = apply(&held.unwrap_or(TaskState::Queued), event)
+                .expect("the scripted run is a legal walk of the machine");
+            journal
+                .put_state(id, &to)
+                .expect("the projection moves after the event it answers");
+        }
+
+        /// Three tasks whose records interleave, and one event about the queue.
+        ///
+        /// Task 1 goes the whole way to done, task 2 is caught by a signal mid-`Red`
+        /// and stays parked, task 3 was queued and never started: three different
+        /// answers, because a fold that gets the happy path right can still lose the
+        /// task that stopped early and the one that never began. Task 1's records are
+        /// split up by the other two on purpose — a replay that kept two tasks in one
+        /// accumulator would be caught by nothing else here — and the queue-level
+        /// event sits between them, where a fold that read a `NULL` task as some
+        /// task would trip over it.
+        fn record_a_run(journal: &mut Journal) {
+            let (one, two, three) = (TaskId::new(1), TaskId::new(2), TaskId::new(3));
+            let first = AttemptId::new(1);
+            let script = [
+                (
+                    Some(three),
+                    EventKind::TaskQueued {
+                        title: "three".to_owned(),
+                    },
+                ),
+                (
+                    Some(one),
+                    EventKind::TaskQueued {
+                        title: "one".to_owned(),
+                    },
+                ),
+                (Some(one), EventKind::PreflightStarted),
+                (
+                    Some(two),
+                    EventKind::TaskQueued {
+                        title: "two".to_owned(),
+                    },
+                ),
+                (None, EventKind::Resumed),
+                (
+                    Some(one),
+                    EventKind::PhaseEntered {
+                        attempt: first,
+                        phase: Phase::Implement,
+                    },
+                ),
+                (Some(two), EventKind::PreflightStarted),
+                (
+                    Some(two),
+                    EventKind::PhaseEntered {
+                        attempt: first,
+                        phase: Phase::Red,
+                    },
+                ),
+                (
+                    Some(one),
+                    EventKind::AgentOutput {
+                        attempt: first,
+                        stream: Stream::Stdout,
+                        text: "the fold is written".to_owned(),
+                    },
+                ),
+                (Some(two), EventKind::Interrupted { phase: Phase::Red }),
+                (Some(one), EventKind::VerifyPassed { attempt: first }),
+                (
+                    Some(one),
+                    EventKind::PublishVerified {
+                        commit: PUBLISHED.to_owned(),
+                        remote_sha: PUBLISHED.to_owned(),
+                    },
+                ),
+                (
+                    Some(one),
+                    EventKind::TaskDone {
+                        commit: PUBLISHED.to_owned(),
+                    },
+                ),
+            ];
+            for (task, event) in &script {
+                record(journal, *task, event);
+            }
+        }
+
+        /// The projection as the table holds it, less the stamp: one
+        /// `(task id, state JSON)` pair per row, in id order.
+        ///
+        /// The stamp is left out because a rebuild restamps every row it writes (see
+        /// [`Journal::rebuild_state`]), so the pair is everything the row says about
+        /// the task — which is exactly what a rebuild has to get right.
+        fn state_texts(conn: &Connection) -> Vec<(i64, String)> {
+            stored_rows(conn)
+                .into_iter()
+                .map(|row| (row.task_id, row.state_json))
+                .collect()
+        }
+
+        /// The sequence numbers `events` holds, in the order the journal gave them.
+        fn event_sequences(conn: &Connection) -> Vec<i64> {
+            let mut statement = conn
+                .prepare("SELECT seq FROM events ORDER BY seq")
+                .expect("events is always readable");
+            statement
+                .query_map([], |row| row.get(0))
+                .expect("events is readable")
+                .collect::<rusqlite::Result<Vec<i64>>>()
+                .expect("every sequence reads as the integer the schema declares")
+        }
+
+        /// The `AUTOINCREMENT` counter `events` has spent up to.
+        fn counter(conn: &Connection) -> i64 {
+            conn.query_row(
+                "SELECT seq FROM sqlite_sequence WHERE name = 'events'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .expect("the counter table is readable")
+            .unwrap_or(0)
+        }
+
+        #[test]
+        fn a_rebuilt_projection_is_exactly_the_projection_the_run_wrote() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            record_a_run(&mut journal);
+
+            let written = journal
+                .all_states()
+                .expect("a run's own projection is readable");
+            let written_rows = state_texts(&journal.conn);
+
+            journal
+                .rebuild_state()
+                .expect("a journal can rebuild the projection it materialized");
+
+            assert_eq!(
+                journal
+                    .all_states()
+                    .expect("the rebuilt projection is readable"),
+                written,
+                "replaying every event lands every task on the state the incremental writes \
+                 landed it on"
+            );
+            assert_eq!(
+                state_texts(&journal.conn),
+                written_rows,
+                "and the rows hold the same JSON for the same tasks, so the agreement is about \
+                 what the table holds rather than only about what a read chooses to show"
+            );
+            assert_eq!(
+                journal
+                    .get_state(TaskId::new(1))
+                    .expect("task 1's row is readable")
+                    .as_ref(),
+                Some(&TaskState::Done),
+                "the task that ran the whole path is rebuilt as done, not as whatever the \
+                 record before its last one said"
+            );
+            assert_eq!(
+                journal
+                    .get_state(TaskId::new(2))
+                    .expect("task 2's row is readable")
+                    .as_ref(),
+                Some(&TaskState::Paused {
+                    reason: PauseReason::Interrupted,
+                    resume_to: Box::new(TaskState::Running {
+                        attempt: AttemptId::new(1),
+                        phase: Phase::Red,
+                    }),
+                }),
+                "the task a signal caught is rebuilt parked, holding the phase it stopped in"
+            );
+            assert_eq!(
+                journal
+                    .get_state(TaskId::new(3))
+                    .expect("task 3's row is readable")
+                    .as_ref(),
+                Some(&TaskState::Queued),
+                "and a task that was only ever queued has a row, because the run wrote one for \
+                 it and a replay owes the same answer"
+            );
+        }
+
+        #[test]
+        fn a_projection_dropped_whole_comes_back_from_the_events_alone() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            record_a_run(&mut journal);
+            let written = journal
+                .all_states()
+                .expect("a run's own projection is readable");
+
+            journal
+                .conn
+                .execute("DELETE FROM task_state", [])
+                .expect("a projection can be dropped: that is what makes it a projection");
+            assert!(
+                journal
+                    .all_states()
+                    .expect("a projection with no rows is readable")
+                    .is_empty(),
+                "the drop is the whole of what is lost, so the table really is empty before \
+                 the rebuild rather than being compared against a projection still standing"
+            );
+            assert_eq!(
+                journal
+                    .get_state(TaskId::new(1))
+                    .expect("an absent row is an answer, not a failure"),
+                None,
+                "and one task reads back as absence, the way a task nobody has run does"
+            );
+
+            journal
+                .rebuild_state()
+                .expect("the events alone rebuild what was dropped");
+
+            assert_eq!(
+                journal
+                    .all_states()
+                    .expect("the rebuilt projection is readable"),
+                written,
+                "nothing but the journal was needed to get every state back, which is the \
+                 claim `docs/DESIGN.md` makes when it calls `task_state` rebuildable by replay"
+            );
+        }
+
+        #[test]
+        fn a_replay_that_refuses_an_event_reports_its_sequence_and_writes_nothing() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            record_a_run(&mut journal);
+            let written = journal
+                .all_states()
+                .expect("a run's own projection is readable");
+            let written_rows = stored_rows(&journal.conn);
+
+            journal
+                .append(
+                    Some(TaskId::new(4)),
+                    &EventKind::TaskQueued {
+                        title: "four".to_owned(),
+                    },
+                )
+                .expect("the journal records what it is told");
+            let offending = journal
+                .append(
+                    Some(TaskId::new(4)),
+                    &EventKind::TaskDone {
+                        commit: PUBLISHED.to_owned(),
+                    },
+                )
+                .expect("refusing a transition is not an append's job, so the row is written");
+
+            let refusal = journal.rebuild_state().expect_err(
+                "a journal the state machine cannot replay cannot come back as a projection",
+            );
+
+            assert!(
+                matches!(&refusal, Error::Corrupt { seq: Some(sequence), .. } if *sequence == offending.get()),
+                "the refusal names the record the replay could not use, which is the one \
+                 thing a human needs to go and read: {refusal}"
+            );
+            assert!(
+                refusal
+                    .to_string()
+                    .contains(&format!("seq {}", offending.get())),
+                "and it says so in words, not only in a field: {refusal}"
+            );
+            assert!(
+                refusal
+                    .to_string()
+                    .contains("illegal transition from `Queued` on event `TaskDone`"),
+                "beside the sequence it says which state refused which event, because a \
+                 sequence alone says where to look and not what was wrong: {refusal}"
+            );
+            assert_eq!(
+                journal
+                    .all_states()
+                    .expect("the projection a failed rebuild left is readable"),
+                written,
+                "a replay that cannot finish reports rather than stops: the projection is the \
+                 one the run left behind, not the prefix the fold had reached"
+            );
+            assert_eq!(
+                stored_rows(&journal.conn),
+                written_rows,
+                "which includes every stamp: nothing was rewritten on the way to the refusal"
+            );
+            assert_eq!(
+                journal
+                    .get_state(TaskId::new(4))
+                    .expect("an absent row is an answer, not a failure"),
+                None,
+                "and the task the refusal is about is not half-projected either"
+            );
+        }
+
+        #[test]
+        fn a_row_for_a_task_the_journal_says_nothing_about_is_gone_after_a_rebuild() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            record_a_run(&mut journal);
+            stage_row(
+                &journal.conn,
+                9,
+                &stored_json(&TaskState::Done),
+                "2026-09-17T12:00:00+00:00",
+            );
+
+            journal
+                .rebuild_state()
+                .expect("a projection holding a row no event explains is still rebuildable");
+
+            assert_eq!(
+                journal
+                    .get_state(TaskId::new(9))
+                    .expect("an absent row is an answer, not a failure"),
+                None,
+                "clearing the table is what makes a rebuild an answer rather than a patch: a \
+                 row a hand put there, or one an older build wrote from events this file no \
+                 longer holds, has no replay behind it and does not survive one"
+            );
+            assert_eq!(
+                journal
+                    .all_states()
+                    .expect("the rebuilt projection is readable")
+                    .keys()
+                    .copied()
+                    .collect::<Vec<TaskId>>(),
+                vec![TaskId::new(1), TaskId::new(2), TaskId::new(3)],
+                "the tasks the journal does speak of are all still there"
+            );
+        }
+
+        #[test]
+        fn a_rebuild_whose_write_is_refused_leaves_the_projection_it_found() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            record_a_run(&mut journal);
+            let written = journal
+                .all_states()
+                .expect("a run's own projection is readable");
+            let written_rows = stored_rows(&journal.conn);
+            journal
+                .conn
+                .execute(
+                    "CREATE TRIGGER task_state_refuse_two BEFORE INSERT ON task_state \
+                     WHEN NEW.task_id = 2 \
+                     BEGIN SELECT RAISE(ABORT, 'the test refuses the row'); END",
+                    [],
+                )
+                .expect("a trigger can be put on the projection by a test");
+
+            let refusal = journal
+                .rebuild_state()
+                .expect_err("a projection write the database refuses cannot rebuild anything");
+
+            assert!(
+                matches!(refusal, Error::Database(_)),
+                "SQLite's own refusal comes back as it came: {refusal}"
+            );
+            assert_eq!(
+                journal
+                    .all_states()
+                    .expect("the projection a refused rebuild left is readable"),
+                written,
+                "clearing and refilling the projection is one transaction, so a write refused \
+                 partway through leaves every task holding the state it had rather than an \
+                 empty table and two rows"
+            );
+            assert_eq!(
+                stored_rows(&journal.conn),
+                written_rows,
+                "and the rows themselves, stamps included, are the ones the run wrote"
+            );
+        }
+
+        #[test]
+        fn a_rebuild_records_no_event_and_spends_no_sequence() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            record_a_run(&mut journal);
+            let rows = event_sequences(&journal.conn);
+            let spent = counter(&journal.conn);
+
+            journal
+                .rebuild_state()
+                .expect("a journal can rebuild its own projection");
+
+            assert_eq!(
+                event_sequences(&journal.conn),
+                rows,
+                "a rebuild reads the journal and rewrites the projection; it records nothing, \
+                 because what a run did is already in `events` and a replay of it is not a new \
+                 fact about the run"
+            );
+            assert_eq!(
+                counter(&journal.conn),
+                spent,
+                "and it spends no sequence number, so the next event is the one after the last \
+                 the run wrote"
+            );
+            let next = journal
+                .append(None, &EventKind::PreflightStarted)
+                .expect("the journal still appends after being rebuilt");
+            assert_eq!(
+                next.get(),
+                u64::try_from(spent + 1).expect("a scratch journal stays inside a sequence number"),
+                "which is what the next record's number is the proof of"
+            );
+        }
+
+        #[test]
+        fn an_event_about_the_queue_moves_no_task_in_a_rebuild() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let task = TaskId::new(1);
+            record(
+                &mut journal,
+                Some(task),
+                &EventKind::TaskQueued {
+                    title: "one".to_owned(),
+                },
+            );
+            record(
+                &mut journal,
+                None,
+                &EventKind::TaskCancelled {
+                    reason: "the run was stopped".to_owned(),
+                },
+            );
+            record(&mut journal, Some(task), &EventKind::PreflightStarted);
+
+            journal
+                .rebuild_state()
+                .expect("a journal holding queue-level events is still replayable");
+
+            assert_eq!(
+                journal
+                    .get_state(task)
+                    .expect("the task's row is readable")
+                    .as_ref(),
+                Some(&TaskState::Preflight),
+                "an event naming no task belongs to no accumulator: it cancelled nothing, and \
+                 the task is where its own two records put it"
+            );
+        }
+
+        #[test]
+        fn rebuilding_a_journal_that_holds_no_events_leaves_an_empty_projection() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+
+            journal
+                .rebuild_state()
+                .expect("an empty journal has an empty projection, and rebuilding it is ordinary");
+
+            assert!(
+                journal
+                    .all_states()
+                    .expect("a projection with no rows is readable")
+                    .is_empty(),
+                "nothing was replayed, so nothing is projected — an empty projection is the \
+                 right answer here and not a reason to refuse"
+            );
+            assert_eq!(
+                journal
+                    .get_state(TaskId::new(1))
+                    .expect("an absent row is an answer, not a failure"),
+                None,
+                "and a task the journal has never heard of still reads as absence"
+            );
+        }
+
+        #[test]
+        fn a_rebuild_restamps_every_row_it_rewrites() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            record_a_run(&mut journal);
+            let before = stored_rows(&journal.conn);
+            std::thread::sleep(Duration::from_millis(2));
+
+            journal
+                .rebuild_state()
+                .expect("a journal can rebuild its own projection");
+
+            let after = stored_rows(&journal.conn);
+            assert_eq!(after.len(), before.len(), "one row per task, as before");
+            for (index, row) in after.iter().enumerate() {
+                let rebuilt = OffsetDateTime::parse(&row.updated_at, &Rfc3339)
+                    .expect("the stamp is the RFC 3339 UTC instant the column documents");
+                let original = OffsetDateTime::parse(&before[index].updated_at, &Rfc3339)
+                    .expect("the stamp a run wrote is spelled the same way");
+                assert!(
+                    rebuilt > original,
+                    "task {}'s row is dated when this file rebuilt it, not when the run wrote \
+                     it: an operator deciding whether to trust the projection needs to be able \
+                     to tell one from the other",
+                    row.task_id
+                );
+            }
+        }
+
+        #[test]
+        fn rebuilding_twice_leaves_the_projection_the_first_rebuild_produced() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            record_a_run(&mut journal);
+
+            journal
+                .rebuild_state()
+                .expect("a journal can rebuild its own projection");
+            let once = journal
+                .all_states()
+                .expect("the rebuilt projection is readable");
+            let once_rows = state_texts(&journal.conn);
+
+            journal
+                .rebuild_state()
+                .expect("and it can do it again, which is what makes a rebuild safe to re-run");
+
+            assert_eq!(
+                journal
+                    .all_states()
+                    .expect("the second projection is readable"),
+                once,
+                "a second replay of the same journal moves no task, so a rebuild is a repair \
+                 someone may run twice rather than an operation with a first-time-only effect"
+            );
+            assert_eq!(
+                state_texts(&journal.conn),
+                once_rows,
+                "and the rows are byte-identical, because the fold starts from `Queued` every \
+                 time and not from what the table happens to hold"
             );
         }
     }
