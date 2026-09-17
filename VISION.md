@@ -83,7 +83,7 @@ ktask-rs stats                   # tokens, cost, durations, success rates per ta
 
 Exit codes remain semantic and scriptable (drained, task failed, provider limit, human gate, needs input, interrupted).
 
-Tasks are authored as structured Markdown blocks: human-friendly to write, but with required sections (Outcome, Done-when, Verify, Refs) that `add` and `plan lint` validate; a malformed task never enters the queue. Plans live in ktask state, not in the repository.
+Tasks are authored as structured Markdown blocks with required sections (Outcome, Done-when, Verify, Refs) that `add` and `plan lint` validate; a malformed task never enters the queue. A plan file is an **input format**: it is imported once, and the queue itself lives in ktask state. Nothing is rewritten in place as work proceeds, so no file goes dirty, no status marker is edited into prose, and the plan document is a document — ordinary Markdown with headings, no rules about what a line may begin with, and no separators load-bearing enough to break it.
 
 ## 5. Architecture Overview
 

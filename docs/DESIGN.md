@@ -314,6 +314,18 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, seq);
 
+CREATE TABLE IF NOT EXISTS tasks (
+  id         INTEGER PRIMARY KEY,     -- queue position, 1-based
+  title      TEXT    NOT NULL,
+  outcome    TEXT    NOT NULL,
+  done_when  TEXT    NOT NULL,
+  verify     TEXT    NOT NULL,
+  refs       TEXT    NOT NULL,
+  protocol   TEXT,                     -- NULL means the configured default
+  body       TEXT    NOT NULL,         -- the block as authored
+  added_at   TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS task_state (
   task_id    INTEGER PRIMARY KEY,
   state_json TEXT    NOT NULL,
@@ -325,6 +337,12 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 ```
+
+The queue lives here, not in a file. A task's status is its `TaskState` in
+`task_state`, derived from the journal like everything else; nothing is ever
+rewritten in place and no file goes dirty as work proceeds. A plan file is an
+**input format** only: `ktask-rs add --file <plan.md>` imports its blocks once,
+after which the file is an ordinary document with no hold over the run.
 
 `events` is the source of truth and is append-only: no UPDATE, no DELETE, ever.
 `task_state` is a projection and may be dropped and rebuilt by replay. Journal
