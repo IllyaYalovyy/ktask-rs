@@ -19,6 +19,11 @@
 //! The state machine that drives a task through preflight, attempts and gates is
 //! `TaskState` in `state.rs`, a different and much richer type. This is the
 //! queue entry; that is the run.
+//!
+//! [`validate`] is what asks that a queue entry is still complete. The four
+//! required sections are the whole of the question, and it is asked of a task
+//! already in the database as well as of a block being read now, so an import
+//! and a lint cannot hold a task to two different standards.
 
 use std::collections::BTreeMap;
 
@@ -45,6 +50,11 @@ pub enum TaskStatus {
 }
 
 /// A task in the queue: its text, and what the supervisor concluded about it.
+///
+/// An empty required field means the task lacks that section. Nothing here is
+/// built so that it cannot happen — a row read out of the database holds what
+/// the database held — so the question is asked by [`validate`] rather than by
+/// the type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Task {
     /// Its position in queue order.
@@ -76,9 +86,6 @@ pub struct Task {
 /// written in any script: 80 Latin letters and 80 ideographs each fill the same
 /// slot.
 const TITLE_MAX_CHARS: usize = 80;
-
-/// The sections every task must carry, named as the document writes them.
-const REQUIRED_SECTIONS: [&str; 4] = ["Outcome", "Done-when", "Verify", "Refs"];
 
 /// The label whose section makes a task a human gate.
 const GATE_SECTION: &str = "Gate";
@@ -168,6 +175,37 @@ pub fn parse_plan(text: &str) -> Result<Vec<Task>> {
         .enumerate()
         .map(|(index, block)| build_task(task_id(index)?, block))
         .collect()
+}
+
+/// Whether a task may be in the queue: every section the format requires, in
+/// the field that section belongs to.
+///
+/// The queue holds a task once and re-checks it often — `add` asks before it
+/// writes a row, `plan lint` asks of every row before anything runs — so this
+/// is asked of the task, not of the document it came from. A block read from a
+/// document is held to exactly this predicate by [`parse_plan`]: two standards
+/// for one fact would mean a task that imports and then fails its own lint.
+///
+/// Nothing else is asked here. Whether a `Verify:` command parses and whether
+/// a `Refs:` path exists belong to `plan lint` (docs/CONTRACT.md), and a
+/// `**Gate:**` section is neither required nor excused: a gate is proved by a
+/// person, but it still has to say what it asks them to approve.
+///
+/// # Errors
+///
+/// [`Error::Policy`] naming every required section the task lacks, not only
+/// the first: a reader who has to run the check once per mistake learns that
+/// the check cannot be trusted to have looked. No path is listed, because a
+/// row of the queue broke the rule rather than a file.
+pub fn validate(task: &Task) -> Result<()> {
+    let missing = missing_sections(task);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(Error::Policy {
+        detail: format!("task {} is missing {}", task.id, missing_phrase(&missing)),
+        paths: Vec::new(),
+    })
 }
 
 /// The id of the task at `index` in document order, counted from one.
@@ -332,16 +370,7 @@ fn store<'a>(sections: &mut BTreeMap<&'a str, String>, label: Option<&'a str>, t
 /// The task a block describes, or the sections it is missing.
 fn build_task(id: TaskId, block: &Block<'_>) -> Result<Task> {
     let sections = labelled_sections(&block.lines);
-    let missing: Vec<&str> = REQUIRED_SECTIONS
-        .into_iter()
-        .filter(|name| !sections.contains_key(*name))
-        .collect();
-    if !missing.is_empty() {
-        return Err(Error::NotFound {
-            what: missing_message(block, &missing),
-        });
-    }
-    Ok(Task {
+    let task = Task {
         id,
         status: TaskStatus::Pending,
         body: block_text(&block.lines),
@@ -350,7 +379,74 @@ fn build_task(id: TaskId, block: &Block<'_>) -> Result<Task> {
         verify: text_of(&sections, "Verify"),
         refs: text_of(&sections, "Refs"),
         gate: sections.get(GATE_SECTION).cloned(),
+    };
+    // The same predicate [`validate`] asks of a row already in the queue. The
+    // report differs because the readers do: whoever holds this error is
+    // holding the document, so the message gives them the line to open.
+    let missing = missing_sections(&task);
+    if missing.is_empty() {
+        return Ok(task);
+    }
+    Err(Error::NotFound {
+        what: missing_message(block, &missing),
     })
+}
+
+/// Each required section of a task, under the label the document writes it
+/// under, in the order the format names them.
+///
+/// The labels are the ones [`build_task`] reads out of a block, so a section
+/// has one name from the document to the queue.
+fn required_sections(task: &Task) -> [(&'static str, &str); 4] {
+    [
+        ("Outcome", task.outcome.as_str()),
+        ("Done-when", task.done_when.as_str()),
+        ("Verify", task.verify.as_str()),
+        ("Refs", task.refs.as_str()),
+    ]
+}
+
+/// The required sections a task does not carry, in the order the format names
+/// them, and every one of them rather than the first.
+///
+/// A label with nothing but whitespace under it is missing rather than empty.
+/// A `**Verify:**` that holds nothing names no command to run, and the queue
+/// keeps a task because something mechanical can be proved about it; an empty
+/// `**Refs:**` answers the task to no document at all. A `**Gate:**` written
+/// with nothing under it is different: that section marks the task one a
+/// person must decide, so its presence is the fact and its text is a courtesy.
+fn missing_sections(task: &Task) -> Vec<&'static str> {
+    required_sections(task)
+        .into_iter()
+        .filter(|(_label, text)| text.trim().is_empty())
+        .map(|(label, _text)| label)
+        .collect()
+}
+
+/// The sections a task lacks, named as the document writes them, with the
+/// noun that fits the count: one missing reads `the Refs: section`, two read
+/// `the Verify: and Refs: sections`, and four are joined with commas before
+/// the last.
+fn missing_phrase(missing: &[&str]) -> String {
+    let word = if missing.len() == 1 {
+        "section"
+    } else {
+        "sections"
+    };
+    let mut named = String::new();
+    for (index, label) in missing.iter().enumerate() {
+        // The last name is joined with `and` and the ones before it with
+        // commas, so a task short of all four reads as a list of them rather
+        // than as four labels stacked up.
+        if index > 0 {
+            let before_the_last = index + 1 < missing.len();
+            named.push_str(if before_the_last { ", " } else { " and " });
+        }
+        named.push('`');
+        named.push_str(label);
+        named.push_str(":`");
+    }
+    format!("the {named} {word}")
 }
 
 /// The block's text byte for byte: what a task keeps as its body is the
@@ -367,25 +463,18 @@ fn text_of(sections: &BTreeMap<&str, String>, name: &str) -> String {
 /// Why a block cannot be queued: every section it lacks, the heading that
 /// opens it, and the line a reader should open the document at.
 fn missing_message(block: &Block<'_>, missing: &[&str]) -> String {
-    let named = missing
-        .iter()
-        .map(|name| format!("`{name}:`"))
-        .collect::<Vec<_>>()
-        .join(" and ");
-    let word = if missing.len() == 1 {
-        "section"
-    } else {
-        "sections"
-    };
     format!(
-        "the {named} {word} of `{}` (line {})",
-        block.heading, block.starts_at
+        "{} of `{}` (line {})",
+        missing_phrase(missing),
+        block.heading,
+        block.starts_at
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Task, TaskStatus, parse_plan, task_id};
+    use super::{Task, TaskStatus, parse_plan, task_id, validate};
+    use crate::error::Error;
     use crate::ids::TaskId;
 
     /// A task whose first line is `first_line` and whose rest is ordinary.
@@ -731,6 +820,138 @@ A horizontal rule is a horizontal rule.
         assert_eq!(
             error.to_string(),
             "not found: the `Refs:` section of `## T013 Almost complete` (line 1)"
+        );
+    }
+
+    #[test]
+    fn a_task_that_carries_every_required_section_validates() {
+        let task = task_with_first_line("Validate a task before it enters the queue");
+        validate(&task).expect("a task with all four sections is queueable");
+    }
+
+    #[test]
+    fn a_task_that_parses_also_validates() {
+        let document = task_block("T060 Import and lint ask for the same four sections");
+        let tasks = parse_plan(&document).expect("the block carries its four sections");
+        let task = tasks.first().expect("one task was parsed");
+        validate(task).expect("an imported task passes the check the queue re-runs");
+    }
+
+    #[test]
+    fn a_task_missing_two_sections_reports_both_by_name() {
+        let mut task = task_with_first_line("Reject a task that cannot be verified");
+        task.done_when = String::new();
+        task.verify = String::new();
+        let error =
+            validate(&task).expect_err("a task with no Done-when and no Verify proves nothing");
+        assert!(
+            matches!(error, Error::Policy { .. }),
+            "{error} is a broken rule"
+        );
+        assert_eq!(
+            error.to_string(),
+            "policy violation: task 7 is missing the `Done-when:` and `Verify:` sections \
+             (offending paths: )"
+        );
+    }
+
+    #[test]
+    fn a_task_missing_every_required_section_reports_all_four_by_name() {
+        let mut task = task_with_first_line("Name every section a task lacks, not the first");
+        task.outcome = String::new();
+        task.done_when = String::new();
+        task.verify = String::new();
+        task.refs = String::new();
+        let error = validate(&task).expect_err("a task with no sections at all cannot be queued");
+        assert_eq!(
+            error.to_string(),
+            "policy violation: task 7 is missing the `Outcome:`, `Done-when:`, `Verify:` and \
+             `Refs:` sections (offending paths: )"
+        );
+    }
+
+    #[test]
+    fn a_task_missing_one_section_names_that_one_section_in_the_singular() {
+        let mut task = task_with_first_line("One missing section reads as one");
+        task.refs = String::new();
+        let error = validate(&task).expect_err("a task with no Refs is not answerable to anything");
+        assert_eq!(
+            error.to_string(),
+            "policy violation: task 7 is missing the `Refs:` section (offending paths: )"
+        );
+    }
+
+    #[test]
+    fn a_required_section_whose_text_is_only_whitespace_is_missing() {
+        // Every one of these renders as nothing on the page, and a `Verify:`
+        // that renders as nothing verifies nothing.
+        for blank in ["", " ", "\t \t", "\n", "\u{00a0}"] {
+            let mut task = task_with_first_line("A blank section is a missing section");
+            task.verify = blank.to_owned();
+            let error = validate(&task).expect_err("an empty `Verify:` is no verification");
+            assert_eq!(
+                error.to_string(),
+                "policy violation: task 7 is missing the `Verify:` section (offending paths: )"
+            );
+        }
+    }
+
+    #[test]
+    fn a_required_label_with_nothing_written_under_it_fails_the_import() {
+        let document = "\
+## T061 A label with nothing under it
+
+**Outcome:** a blank required section is a missing one.
+
+**Done-when:** the import refuses the block, naming the label that holds nothing.
+
+**Verify:**
+   \t
+**Refs:** docs/adr/0008
+";
+        let error = parse_plan(document).expect_err("an empty `Verify:` is no verification");
+        assert_eq!(
+            error.to_string(),
+            "not found: the `Verify:` section of `## T061 A label with nothing under it` (line 1)"
+        );
+    }
+
+    #[test]
+    fn an_unknown_section_keeps_its_text_in_the_body_and_does_not_fail_validation() {
+        let document = "\
+## T062 A section the model does not keep
+
+**Outcome:** a label the model does not name is content, not a defect.
+
+**Do:** keep every label the model does not name.
+
+**Done-when:** a task with an extra section still validates.
+
+**Verify:** `cargo nextest run -p ktask-core`
+
+**Refs:** VISION.md section 4
+";
+        let tasks = parse_plan(document).expect("an extra label is not a malformed task");
+        let task = tasks.first().expect("one task was parsed");
+        validate(task).expect("validation asks for the four required sections and no others");
+        assert!(
+            task.body
+                .contains("**Do:** keep every label the model does not name."),
+            "the section no field holds is still in the body it came from"
+        );
+    }
+
+    #[test]
+    fn a_gate_is_validated_by_the_same_sections_as_an_executable_task() {
+        let mut task = task_with_first_line("A gate is a task, not an exemption");
+        task.gate = Some("approve the migration".to_owned());
+        validate(&task).expect("a gate still has to say how what it approves was proved");
+
+        task.verify = String::new();
+        let error = validate(&task).expect_err("a gate with no Verify asks to be trusted");
+        assert_eq!(
+            error.to_string(),
+            "policy violation: task 7 is missing the `Verify:` section (offending paths: )"
         );
     }
 
