@@ -54,6 +54,17 @@
 //! effect" is the transaction's guarantee rather than a promise: either the event
 //! is in the file with a sequence of its own, or the journal holds precisely what
 //! it held before the call, with no sequence number spent.
+//!
+//! # Append-only, enforced by the file
+//!
+//! Two triggers sit on `events` and refuse an `UPDATE` and a `DELETE` with
+//! `RAISE(ABORT, …)`, created by the same DDL as the table itself — so
+//! "append-only" is a fact about the journal rather than a habit of this module.
+//! The refusal comes from SQLite, which means a statement written anywhere (a
+//! later crate, a REPL, a recovery tool someone types by hand) is refused the same
+//! way, and an open never leaves behind a file missing its guards. `ABORT` undoes
+//! the rows a statement had already reached, so even a `DELETE FROM events` naming
+//! no row costs the journal nothing.
 
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
@@ -87,8 +98,9 @@ const NANOSECONDS_PER_SECOND: i128 = 1_000_000_000;
 
 /// The `events` table, copied from `docs/DESIGN.md` Database schema.
 ///
-/// It is the source of truth: append-only, with no `UPDATE` and no `DELETE`
-/// anywhere in this codebase.
+/// It is the source of truth, and the two guards below are what make it
+/// append-only: a rewrite and a removal are refused by the file itself, not merely
+/// absent from this codebase.
 const CREATE_EVENTS_TABLE: &str = "CREATE TABLE IF NOT EXISTS events (
   seq      INTEGER PRIMARY KEY AUTOINCREMENT,
   ts       TEXT    NOT NULL,          -- RFC 3339, UTC
@@ -96,6 +108,28 @@ const CREATE_EVENTS_TABLE: &str = "CREATE TABLE IF NOT EXISTS events (
   kind     TEXT    NOT NULL,          -- EventKind discriminant
   payload  TEXT    NOT NULL           -- JSON
 );";
+
+/// The guard that refuses to let a stored event be rewritten.
+///
+/// `BEFORE`, so the statement is refused before SQLite has written any of it, and
+/// `RAISE(ABORT, …)`, so a statement that had already reached some rows leaves
+/// none of them changed. The text is what a caller reads — a human in a REPL, or a
+/// later crate that reaches for the wrong statement — so it names the rule the
+/// statement broke rather than reporting a bare error.
+const CREATE_EVENT_UPDATE_TRIGGER: &str =
+    "CREATE TRIGGER IF NOT EXISTS events_refuse_update BEFORE UPDATE ON events BEGIN
+  SELECT RAISE(ABORT, 'the ktask journal is append-only: an events row is never updated');
+END;";
+
+/// The guard that refuses to take a stored event back out of the file.
+///
+/// The same refusal for the other half of mutation, because an event that vanishes
+/// is as much a rewritten history as an event rewritten: what a run did is known
+/// only from what the journal holds.
+const CREATE_EVENT_DELETE_TRIGGER: &str =
+    "CREATE TRIGGER IF NOT EXISTS events_refuse_delete BEFORE DELETE ON events BEGIN
+  SELECT RAISE(ABORT, 'the ktask journal is append-only: an events row is never deleted');
+END;";
 
 /// The index that makes "what happened to task N, in order" an indexed read.
 const CREATE_EVENT_INDEX: &str =
@@ -132,6 +166,8 @@ pub(crate) const CREATE_META_TABLE: &str =
 /// Every object the schema owns, in the order `docs/DESIGN.md` lists them.
 const SCHEMA: &[&str] = &[
     CREATE_EVENTS_TABLE,
+    CREATE_EVENT_UPDATE_TRIGGER,
+    CREATE_EVENT_DELETE_TRIGGER,
     CREATE_EVENT_INDEX,
     CREATE_TASKS_TABLE,
     CREATE_TASK_STATE_TABLE,
@@ -499,7 +535,7 @@ mod tests {
         AttemptId, Error, EventKind, FailureClass, PauseReason, Phase, Project, Recovery, Result,
         Stream, TaskId,
     };
-    use rusqlite::{Connection, OptionalExtension as _, params};
+    use rusqlite::{Connection, OptionalExtension as _, ffi::ErrorCode, params};
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -510,9 +546,13 @@ mod tests {
     use time::macros::datetime;
 
     /// Every object a journal owns, as `sqlite_master` describes it, ordered by
-    /// object name the way the test query orders them.
-    const SCHEMA_OBJECTS: [&str; 5] = [
+    /// object name the way the test query orders them. The two triggers are the
+    /// guards that make `events` append-only in the file rather than in this
+    /// module's good intentions.
+    const SCHEMA_OBJECTS: [&str; 7] = [
         "table events",
+        "trigger events_refuse_delete",
+        "trigger events_refuse_update",
         "index idx_events_task",
         "table meta",
         "table task_state",
@@ -544,7 +584,8 @@ mod tests {
         let mut statement = conn
             .prepare(
                 "SELECT type || ' ' || name FROM sqlite_master \
-                 WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%' ORDER BY name",
+                 WHERE type IN ('table', 'index', 'trigger') \
+                 AND name NOT LIKE 'sqlite_%' ORDER BY name",
             )
             .expect("sqlite_master is always readable");
         statement
@@ -598,6 +639,40 @@ mod tests {
             .expect("every covered column is named in text")
     }
 
+    /// The triggers attached to one table, by name.
+    fn triggers_on(conn: &Connection, table: &str) -> Vec<String> {
+        let mut statement = conn
+            .prepare(
+                "SELECT name FROM sqlite_master \
+                 WHERE type = 'trigger' AND tbl_name = ?1 ORDER BY name",
+            )
+            .expect("sqlite_master is always readable");
+        statement
+            .query_map(params![table], |row| row.get::<_, String>(0))
+            .expect("sqlite_master is readable")
+            .collect::<rusqlite::Result<Vec<String>>>()
+            .expect("every trigger is named in text")
+    }
+
+    /// What a refusal by an append-only guard has to look like: SQLite's own
+    /// constraint violation, quoting the words the guard was written with. A
+    /// statement refused for some other reason — a typo, a missing table — would
+    /// leave the same unchanged row and prove nothing, so both halves are
+    /// asserted for every refused mutation below.
+    fn assert_refused_by_an_append_only_guard(refused: &rusqlite::Error, guard_words: &str) {
+        assert_eq!(
+            refused.sqlite_error_code(),
+            Some(ErrorCode::ConstraintViolation),
+            "an append-only guard refuses with `RAISE(ABORT, ...)`, which SQLite reports as a \
+             constraint violation; anything else was refused for some other reason: {refused}"
+        );
+        assert!(
+            refused.to_string().contains(guard_words),
+            "the refusal quotes the guard's own words, so a reader learns which rule the \
+             statement broke rather than decoding a bare `error`: {refused}"
+        );
+    }
+
     /// The value a `meta` row holds, if that row is there.
     fn meta_value(conn: &Connection, key: &str) -> Option<String> {
         conn.query_row(
@@ -636,10 +711,25 @@ mod tests {
         .expect("an event appends");
     }
 
+    /// Move the `events` counter forward without writing a row, which is the state
+    /// an interrupted commit leaves behind when its tail record is lost: the
+    /// sequence is spent, the record is not in the file.
+    ///
+    /// Staged in the counter rather than by deleting a row, because the schema now
+    /// refuses a `DELETE` against `events`, and staging a loss by performing the
+    /// mutation the guard exists to forbid would test the wrong thing.
+    fn spend_the_next_sequence(conn: &Connection) {
+        conn.execute(
+            "UPDATE sqlite_sequence SET seq = seq + 1 WHERE name = 'events'",
+            [],
+        )
+        .expect("the number a lost record spent can be staged");
+    }
+
     /// One event as the `events` table holds it, in the types the schema
     /// declares. Read back rather than assumed: every append assertion below is
     /// against what the file ended up carrying.
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq)]
     struct Stored {
         seq: i64,
         ts: String,
@@ -804,8 +894,8 @@ mod tests {
         assert_eq!(
             objects(&journal.conn),
             SCHEMA_OBJECTS,
-            "the three tables and the index of `docs/DESIGN.md` Database schema, and nothing \
-             else, all created the first time"
+            "the three tables, the index and the two append-only guards of `docs/DESIGN.md` \
+             Database schema, and nothing else, all created the first time"
         );
         assert!(
             path.is_file(),
@@ -880,23 +970,23 @@ mod tests {
             append_event(&opened.conn, "TaskQueued");
             append_event(&opened.conn, "PreflightStarted");
             // Staging a lost tail record — what an interrupted commit leaves
-            // behind. Production code never deletes from `events`; a test does it
-            // here because the loss is the situation being tested. `AUTOINCREMENT`
-            // is what keeps the next record from claiming a sequence a run has
-            // already reported to a human.
-            opened
-                .conn
-                .execute("DELETE FROM events WHERE seq = 2", [])
-                .expect("the tail record can be lost");
+            // behind: the next sequence is spent, and the record that spent it
+            // never reached the file. Production code never mutates `events`, and
+            // the schema now refuses the `DELETE` this test used to stage the loss
+            // with, so the loss is staged where a lost record leaves it: in the
+            // counter. `AUTOINCREMENT` is what keeps the next record from claiming
+            // a sequence a run has already reported to a human.
+            spend_the_next_sequence(&opened.conn);
         }
         let reopened = Journal::open(&path).expect("the journal reopens");
         append_event(&reopened.conn, "PreflightPassed");
 
         assert_eq!(
             sequences(&reopened.conn),
-            [1, 3],
-            "sequence 2 is spent for good: a journal whose numbering repeats would read two \
-             records as one thing"
+            [1, 2, 4],
+            "sequence 3 is spent for good: a journal whose numbering repeats would read two \
+             records as one thing, and the hole a lost record leaves is never filled by a later \
+             one"
         );
     }
 
@@ -909,6 +999,182 @@ mod tests {
         assert_eq!(
             index_columns(&journal.conn, "idx_events_task"),
             ["task_id", "seq"]
+        );
+    }
+
+    #[test]
+    fn the_events_table_carries_the_two_append_only_guards_and_no_other_table_carries_one() {
+        let parent = scratch();
+        let journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+
+        assert_eq!(
+            triggers_on(&journal.conn, "events"),
+            ["events_refuse_delete", "events_refuse_update"],
+            "both halves of mutation are refused on the table the guards belong to: a rewrite \
+             and a removal"
+        );
+        for table in ["tasks", "task_state", "meta"] {
+            assert!(
+                triggers_on(&journal.conn, table).is_empty(),
+                "`{table}` is the queue or a projection, and rewriting it is ordinary work: the \
+                 guard is the journal's, not a rule imposed on every table"
+            );
+        }
+    }
+
+    /// The `UPDATE` half of what an append-only journal has to refuse: the statement
+    /// is answered by SQLite with an error, and the row it aimed at is the row that
+    /// was already there.
+    #[test]
+    fn an_update_of_a_stored_event_is_refused_and_the_row_is_left_as_it_was() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        let appended = journal
+            .append(
+                Some(TaskId::new(7)),
+                &EventKind::TaskQueued {
+                    title: "the record a mutation is aimed at".to_owned(),
+                },
+            )
+            .expect("the event appends");
+        let kept = stored_at(&journal.conn, appended);
+        let before = stored_events(&journal.conn);
+
+        let refused = journal
+            .conn
+            .execute(
+                "UPDATE events SET ts = ?1, kind = ?2, payload = ?3 WHERE seq = ?4",
+                params![AN_INSTANT, "TaskDone", r#"{"rewritten":true}"#, kept.seq],
+            )
+            .expect_err("a stored event is evidence, so rewriting it is not an operation");
+
+        assert_refused_by_an_append_only_guard(&refused, "never updated");
+        assert_eq!(
+            stored_events(&journal.conn),
+            before,
+            "the row the statement named is the row that was there, every column of it"
+        );
+    }
+
+    /// The `DELETE` half of the same refusal, measured against the whole table so a
+    /// guard that refused the named row while dropping another one cannot pass.
+    #[test]
+    fn a_delete_of_a_stored_event_is_refused_and_the_row_is_left_as_it_was() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        let appended = journal
+            .append(
+                None,
+                &EventKind::TaskQueued {
+                    title: "the record a removal is aimed at".to_owned(),
+                },
+            )
+            .expect("the event appends");
+        let kept = stored_at(&journal.conn, appended);
+        let before = stored_events(&journal.conn);
+
+        let refused = journal
+            .conn
+            .execute("DELETE FROM events WHERE seq = ?1", params![kept.seq])
+            .expect_err("what a run did cannot be taken back out of the file");
+
+        assert_refused_by_an_append_only_guard(&refused, "never deleted");
+        assert_eq!(
+            stored_events(&journal.conn),
+            before,
+            "neither the row the removal named nor any other left the table"
+        );
+    }
+
+    /// A mutation naming no row is the blunt way to rewrite a journal, and it is
+    /// answered the same way: refused, undone rather than applied as far as it got,
+    /// and with the journal left open for the next append.
+    #[test]
+    fn a_whole_table_mutation_is_refused_and_costs_the_journal_nothing() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        journal
+            .append(
+                None,
+                &EventKind::TaskQueued {
+                    title: "first".to_owned(),
+                },
+            )
+            .expect("the first event appends");
+        journal
+            .append(Some(TaskId::new(1)), &EventKind::PreflightStarted)
+            .expect("the second event appends");
+        let before = stored_events(&journal.conn);
+
+        for (statement, guard_words) in [
+            ("UPDATE events SET kind = 'TaskDone'", "never updated"),
+            ("DELETE FROM events", "never deleted"),
+        ] {
+            let refused = journal
+                .conn
+                .execute(statement, [])
+                .expect_err("a statement that names no row still names the guarded table");
+            assert_refused_by_an_append_only_guard(&refused, guard_words);
+        }
+
+        assert_eq!(
+            stored_events(&journal.conn),
+            before,
+            "`RAISE(ABORT)` aborts the statement and undoes the rows it had already reached, so \
+             a blunt rewrite leaves the journal exactly as it found it"
+        );
+
+        let next = journal
+            .append(None, &EventKind::Resumed)
+            .expect("a refused mutation leaves the journal usable");
+        assert_eq!(
+            stored_at(&journal.conn, next).kind,
+            "Resumed",
+            "the append that follows a refusal is an ordinary append, after the events the \
+             guards kept"
+        );
+        assert_eq!(
+            stored_events(&journal.conn).len(),
+            3,
+            "two guarded events and the one that followed them: a refusal wrote nothing and \
+             cost no row"
+        );
+    }
+
+    /// The guards belong to the file, not to the connection that created them, so a
+    /// handle this module never opened meets the same refusal — which is the point:
+    /// append-only here is a property of the journal, not a courtesy `Journal`
+    /// observes.
+    #[test]
+    fn the_guards_are_in_the_file_so_a_fresh_connection_is_refused_too() {
+        let parent = scratch();
+        let path = journal_file(parent.path());
+        let mut journal = Journal::open(&path).expect("a new journal");
+        let appended = journal
+            .append(
+                None,
+                &EventKind::TaskQueued {
+                    title: "written by one handle, guarded for every handle".to_owned(),
+                },
+            )
+            .expect("the event appends");
+        let kept = stored_at(&journal.conn, appended);
+        drop(journal);
+
+        let reopened = Journal::open(&path).expect("the journal reopens");
+        let refused = reopened
+            .conn
+            .execute(
+                "UPDATE events SET payload = '{}' WHERE seq = ?1",
+                params![kept.seq],
+            )
+            .expect_err("a second connection to the same file meets the same guards");
+
+        assert_refused_by_an_append_only_guard(&refused, "never updated");
+        assert_eq!(
+            stored_at(&reopened.conn, appended).payload,
+            kept.payload,
+            "the row the fresh handle could not rewrite is the row the first one wrote"
         );
     }
 

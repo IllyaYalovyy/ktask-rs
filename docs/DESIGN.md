@@ -310,6 +310,12 @@ CREATE TABLE IF NOT EXISTS events (
   kind     TEXT    NOT NULL,          -- EventKind discriminant
   payload  TEXT    NOT NULL           -- JSON
 );
+CREATE TRIGGER IF NOT EXISTS events_refuse_update BEFORE UPDATE ON events BEGIN
+  SELECT RAISE(ABORT, 'the ktask journal is append-only: an events row is never updated');
+END;
+CREATE TRIGGER IF NOT EXISTS events_refuse_delete BEFORE DELETE ON events BEGIN
+  SELECT RAISE(ABORT, 'the ktask journal is append-only: an events row is never deleted');
+END;
 CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, seq);
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -343,9 +349,11 @@ rewritten in place and no file goes dirty as work proceeds. A plan file is an
 after which the file is an ordinary document with no hold over the run.
 
 `events` is the source of truth and is append-only: no UPDATE, no DELETE, ever.
-`task_state` is a projection and may be dropped and rebuilt by replay. Journal
-mode is WAL; `synchronous = FULL`, because losing the last event is exactly the
-failure the design exists to prevent.
+The two triggers are that rule made mechanical — the refusal comes from SQLite, so
+it binds whoever writes the file, not only `ktask-core`. `task_state` is a
+projection and may be dropped and rebuilt by replay. Journal mode is WAL;
+`synchronous = FULL`, because losing the last event is exactly the failure the
+design exists to prevent.
 
 ## Paths
 
