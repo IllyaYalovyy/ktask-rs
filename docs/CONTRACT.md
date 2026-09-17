@@ -149,12 +149,6 @@ Each exits 2 when nothing is in a state the command applies to.
 Re-runs a gate against the current worktree, discarding any cached result, and
 prints the structured outcome. Without `--gate`, runs the whole completion set.
 
-### `ktask-rs export-diagnostics --task <id> [--out <path>]`
-
-Writes a redacted diagnostic bundle — task definition, attempt evidence, gate
-output, journal excerpt — for sharing. Secrets are redacted at the write
-boundary; the command fails rather than emitting an unredacted bundle.
-
 ### `ktask-rs tui`
 
 Launches the interface described below. Requires a terminal; exits 2 with a
@@ -220,7 +214,7 @@ Bindings are consistent across screens: a key never means two different things.
 ### Actions
 
 Every action is also a CLI command: pause, interrupt, resume, retry, resolve,
-acknowledge, cancel, rerun gate, export diagnostics.
+acknowledge, cancel, rerun gate.
 
 Attaching to a run and opening a diff are **view operations**, not actions:
 they change what the interface shows, not what the supervisor does. The
