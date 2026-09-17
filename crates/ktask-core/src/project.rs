@@ -31,7 +31,6 @@
 //! variables it means.
 
 use std::fs::{self, DirBuilder, Permissions};
-use std::io::ErrorKind;
 use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
@@ -204,7 +203,14 @@ fn create_state_dir(state_dir: &Path) -> Result<()> {
                 paths: vec![state_dir.to_path_buf()],
             });
         }
-        Err(error) if error.kind() == ErrorKind::NotFound => {
+        // The path could not be examined, so ask the filesystem to make it and
+        // let that call report the refusal. Splitting on the reason `metadata`
+        // gave is not possible to observe: measured over the two refusals a
+        // state root can produce — a component that is an ordinary file, and a
+        // state root the operator cannot write — `metadata` and a recursive
+        // `create` of the same path return the identical error kind and
+        // message, so a branch on the difference would be a branch on nothing.
+        Err(_) => {
             // `recursive` with a `mode` applies the mode to every directory it
             // creates, so the app directory above this one is no more open than
             // the project's own.
@@ -213,7 +219,6 @@ fn create_state_dir(state_dir: &Path) -> Result<()> {
                 .recursive(true)
                 .create(state_dir)?;
         }
-        Err(error) => return Err(error.into()),
     }
     fs::set_permissions(state_dir, Permissions::from_mode(STATE_DIR_MODE))?;
     Ok(())
@@ -320,6 +325,7 @@ mod tests {
     use crate::{Error, project_id};
     use rusqlite::{Connection, OptionalExtension as _, params};
     use std::fs::{self, Permissions};
+    use std::io::ErrorKind;
     use std::os::unix::fs::{PermissionsExt as _, symlink};
     use std::path::{Path, PathBuf};
     use tempfile::{TempDir, tempdir};
@@ -637,6 +643,27 @@ mod tests {
 
         assert!(matches!(&error, Error::Policy { .. }), "{error}");
         assert!(error.to_string().contains("occupied"), "{error}");
+    }
+
+    #[test]
+    fn register_reports_the_filesystems_own_refusal_when_the_state_root_is_a_file() {
+        let (_scratch, holder) = scratch_dir("state-home-is-a-file");
+        let state_home = holder.join("not-a-directory");
+        fs::write(&state_home, b"an ordinary file where state was asked for")
+            .expect("a scratch file to stand in for the state home");
+        let (_root_scratch, root) = scratch_dir("blocked-by-state-home");
+
+        let error = register_with(&state_home_env(&state_home), &root)
+            .expect_err("no directory can be made below an ordinary file");
+
+        assert!(
+            matches!(&error, Error::Io(io) if io.kind() == ErrorKind::NotADirectory),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("Not a directory"),
+            "the operator has to be told which refusal happened: {error}"
+        );
     }
 
     #[test]
