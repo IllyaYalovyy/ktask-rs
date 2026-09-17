@@ -38,6 +38,9 @@ markers that the first tasks replace.
 | `docs/CONTRACT.md` | the CLI and TUI surface: commands, exit codes, screens, keys |
 | `docs/QUALITY.md` | what each gate enforces, and why |
 | `rustfmt.toml`, `clippy.toml`, `_typos.toml` | static analysis configuration |
+
+There is no pinned toolchain file: the project builds with the Rust already on
+the machine, provided it meets the `rust-version` minimum.
 | `deny.toml` | dependency license and source policy |
 | `crates/ktask-core` | state machine, journal, gates, providers — pure logic, no I/O |
 | `crates/ktask-cli` | headless command-line interface; builds the `ktask-rs` binary |

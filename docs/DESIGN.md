@@ -33,6 +33,12 @@ insta       = "1"
 tempfile    = "3"
 ```
 
+There is no `rust-toolchain.toml`. Every contestant runs on the same machine,
+so that machine's Rust is already the constant a comparison needs, and pinning
+a second toolchain beside a distro-installed one only creates two rustc on one
+PATH. `rust-version` in the workspace manifest states the minimum; the actual
+version used is recorded with the run.
+
 `nix` and `signal-hook` exist so that `unsafe_code = "forbid"` can stay
 absolute. Killing a process group, handling SIGINT, checking whether a pid is
 alive and measuring free disk space all need syscalls and none has a safe std

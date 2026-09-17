@@ -39,19 +39,48 @@ ensure() { # binary  wanted-version  crate-name  version-command...
 }
 
 echo "== rust toolchain =="
-if ! have rustup; then
-  if [[ $CHECK_ONLY -eq 1 ]]; then echo "  rustup missing" >&2; exit 1; fi
-  echo "  installing rustup"
-  curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
-  # shellcheck disable=SC1091
-  . "$HOME/.cargo/env"
+# Use the Rust that is already on the machine. Every contestant runs on the
+# same box, so that toolchain is the constant the comparison needs — there is
+# nothing to gain by installing a second one, and a distro Rust plus a rustup
+# Rust on one PATH is a trap.
+MSRV_MAJOR=1
+MSRV_MINOR=97
+rust_ver() { rustc --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1; }
+RUSTC_VERSION="$(rust_ver)"
+
+if [[ -z "$RUSTC_VERSION" ]]; then
+  echo "  rustc not found." >&2
+  echo "  Install it with your package manager, for example:" >&2
+  echo "      sudo dnf install rust cargo clippy rustfmt" >&2
+  echo "  or install rustup from https://rustup.rs if you prefer." >&2
+  exit 1
 fi
-# rust-toolchain.toml pins the version and components; this materializes them.
-rustup show active-toolchain
-rustup component add clippy rustfmt llvm-tools-preview >/dev/null 2>&1 || true
-printf '  %-16s %s\n' rustc  "$(ver rustc --version)"
-printf '  %-16s %s\n' clippy "$(ver cargo clippy --version)"
-printf '  %-16s %s\n' rustfmt "$(ver cargo fmt --version)"
+
+MAJOR="${RUSTC_VERSION%%.*}"; REST="${RUSTC_VERSION#*.}"; MINOR="${REST%%.*}"
+if (( MAJOR < MSRV_MAJOR || (MAJOR == MSRV_MAJOR && MINOR < MSRV_MINOR) )); then
+  echo "  rustc $RUSTC_VERSION is older than the minimum ${MSRV_MAJOR}.${MSRV_MINOR}" >&2
+  exit 1
+fi
+printf '  %-16s %s\n' rustc "$RUSTC_VERSION (>= ${MSRV_MAJOR}.${MSRV_MINOR})"
+
+missing=()
+cargo clippy --version >/dev/null 2>&1 || missing+=(clippy)
+cargo fmt --version    >/dev/null 2>&1 || missing+=(rustfmt)
+cargo llvm-cov --version >/dev/null 2>&1 || true   # installed below
+if (( ${#missing[@]} )); then
+  if command -v rustup >/dev/null 2>&1 && rustup show active-toolchain >/dev/null 2>&1; then
+    echo "  adding components: ${missing[*]}"
+    [[ $CHECK_ONLY -eq 1 ]] && { echo "  missing: ${missing[*]}" >&2; exit 1; }
+    rustup component add "${missing[@]}" llvm-tools-preview
+  else
+    echo "  missing: ${missing[*]}" >&2
+    echo "      sudo dnf install ${missing[*]}" >&2
+    exit 1
+  fi
+else
+  printf '  %-16s %s\n' clippy  "$(cargo clippy --version 2>/dev/null)"
+  printf '  %-16s %s\n' rustfmt "$(cargo fmt --version 2>/dev/null)"
+fi
 
 echo "== analysis tools =="
 RC=0
