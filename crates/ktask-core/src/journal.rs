@@ -72,6 +72,13 @@
 //! a hole silently cut out of it is worse to replay than one that says it could not
 //! be read.
 //!
+//! Three of the four reads answer with a [`Vec`], and the fourth —
+//! [`Journal::for_each_event`] — answers by handing records to its caller one at a
+//! time, which is what lets a journal bigger than the reader be read at all. The
+//! four share one statement runner and one row decoder, so a record means the same
+//! thing whichever read a caller reached for, and holding a whole journal is a
+//! choice a caller makes rather than something a read assumes (ADR-0020).
+//!
 //! # Append-only, enforced by the file
 //!
 //! Two triggers sit on `events` and refuse an `UPDATE` and a `DELETE` with
@@ -418,17 +425,91 @@ impl Journal {
         )
     }
 
-    /// Run one of the three read statements and decode every row it returns.
+    /// Every event ahead of a cursor, handed to a callback one record at a time.
     ///
-    /// The statement comes from the caller because the three reads differ only in
-    /// their `WHERE` clause; the decoding is one rule over one row shape, and a third
-    /// copy of it would be a rule that could drift from the other two.
+    /// The same read as [`Journal::events_since`] — the same cursor, the same
+    /// order, the same rows — with one difference: it never holds them. A record
+    /// arrives as the prepared statement steps onto it and is dropped as soon as
+    /// `f` has taken it, so a journal of ten thousand events costs a reader the
+    /// memory of one event and a journal of ten million costs the same. That is
+    /// what lets a caller follow a run whose journal has outgrown the process
+    /// reading it: the history and logs screens of VISION.md section 13, and the
+    /// poll of section 12, are readers of a whole journal, not of a screenful.
+    ///
+    /// `from` means what it means to [`Journal::events_since`] — the newest
+    /// sequence the caller already holds, exclusive, and a cursor need not name a
+    /// record the journal still holds (ADR-0018). A cursor past the newest record
+    /// streams nothing and is not an error.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Database`] when `events` cannot be read; [`Error::Corrupt`] when a
+    /// row describes no event, refused exactly as the collected reads refuse it
+    /// and for the same reason — a stream with a record quietly skipped is a
+    /// replay that missed it. The error `f` returns is handed straight back,
+    /// unchanged, and the read stops there: a reader that took ten thousand
+    /// records and refused the next has read ten thousand, and the journal is left
+    /// precisely as the read found it, with no row written and no sequence spent.
+    pub fn for_each_event(
+        &self,
+        from: EventSeq,
+        f: &mut dyn FnMut(Event) -> Result<()>,
+    ) -> Result<()> {
+        // Clamped as `events_since` clamps it, because the two cursors mean the
+        // same thing: a sequence wider than the signed `INTEGER` the column holds
+        // is beyond every row the table can store, and the answer is the empty
+        // stream rather than a conversion this build would have to explain away.
+        let cursor = i64::try_from(from.get()).unwrap_or(i64::MAX);
+        self.for_each_read(
+            "SELECT seq, ts, task_id, kind, payload FROM events WHERE seq > ?1 ORDER BY seq",
+            params![cursor],
+            f,
+        )
+    }
+
+    /// Run one of the collected read statements and hand back every row it returned.
+    ///
+    /// The statement comes from the caller because the three collected reads differ
+    /// only in their `WHERE` clause, and the rule that turns a row into an [`Event`]
+    /// is [`Journal::for_each_read`]'s rather than a copy of it kept here — a second
+    /// decode step would be a rule that could drift from the one the streamed read
+    /// uses. The `Vec` belongs to this function and not to that one because these
+    /// three callers asked for every record at once; a caller that wants them one at
+    /// a time calls [`Journal::for_each_event`] and never builds this.
     fn read_events(&self, sql: &str, query: &[&dyn ToSql]) -> Result<Vec<Event>> {
+        let mut collected = Vec::new();
+        self.for_each_read(sql, query, &mut |event| {
+            collected.push(event);
+            Ok(())
+        })?;
+        Ok(collected)
+    }
+
+    /// The one statement runner behind every read in this file.
+    ///
+    /// It prepares the caller's statement, steps it, and hands each decoded row to
+    /// `f` — one row alive at a time, owned by the callback only for as long as the
+    /// callback takes it, and never gathered here. Four reads share that much and
+    /// differ only in the statement they hand in, so the row shape and the rule that
+    /// turns a row into an [`Event`] are stated once: a second copy of the decode
+    /// step would be a rule that could drift from the first, and a reader would
+    /// learn about it from a replay rather than from a refusal.
+    ///
+    /// `f`'s error ends the read. It is returned as the read's own error, which is
+    /// what lets a caller walk out of a journal it has read enough of (ADR-0020).
+    fn for_each_read(
+        &self,
+        sql: &str,
+        query: &[&dyn ToSql],
+        f: &mut dyn FnMut(Event) -> Result<()>,
+    ) -> Result<()> {
         let mut statement = self.conn.prepare(sql)?;
-        statement
-            .query_map(query, event_row)?
-            .map(|row| decode_event(row?))
-            .collect()
+        let mut rows = statement.query(query)?;
+        while let Some(row) = rows.next()? {
+            let event = decode_event(event_row(row)?)?;
+            f(event)?;
+        }
+        Ok(())
     }
 
     /// The schema version the file is recorded at, read back from `meta` rather
@@ -3447,5 +3528,512 @@ mod tests {
             error.to_string().contains("GateFinished"),
             "the report names the entry nobody defined: {error}"
         );
+    }
+
+    /// The streaming read: [`Journal::for_each_event`], which hands a record to its
+    /// reader one at a time and keeps none of them.
+    ///
+    /// Every assertion below is made by a callback that holds numbers and never a
+    /// collection, because that is the shape of the promise. A test that gathered
+    /// the stream into a `Vec` in order to compare it would prove only that this
+    /// journal fitted in memory — the thing the read exists to make unnecessary.
+    mod streaming {
+        use std::time::SystemTime;
+
+        use time::{OffsetDateTime, UtcOffset, macros::datetime};
+
+        use super::{AN_INSTANT, SHA, counter, journal_file, scratch, stage_row, stored_events};
+        use crate::{Error, Event, EventKind, EventSeq, Journal, Phase, TaskId};
+
+        /// How many records the read is measured against: far past what any screen
+        /// shows, and small enough for a test to write one at a time.
+        const TEN_THOUSAND: u64 = 10_000;
+
+        /// What a reader can know about a stream while holding none of it: how many
+        /// records arrived, which arrived first and last, and how many arrived no
+        /// later than the one before.
+        ///
+        /// Four numbers and no collection is what makes the count an assertion about
+        /// the read rather than an accident of the test. Together they are arithmetic:
+        /// a stream that counted `n` records, each later than the one before, running
+        /// from the first sequence to the last, delivered every record in that range
+        /// exactly once — a repeat would cost a count, and a gap would widen the
+        /// range past it.
+        #[derive(Debug, Default)]
+        struct Visited {
+            seen: u64,
+            first: Option<EventSeq>,
+            last: Option<EventSeq>,
+            out_of_order: u64,
+        }
+
+        impl Visited {
+            /// Note one handed-back record: keep its number, drop the record.
+            fn visit(&mut self, event: &Event) {
+                match self.last {
+                    Some(previous) if event.seq > previous => {}
+                    Some(_) => self.out_of_order += 1,
+                    None => self.first = Some(event.seq),
+                }
+                self.last = Some(event.seq);
+                self.seen += 1;
+            }
+        }
+
+        /// Append `count` events, one per journal sequence, in the order the journal
+        /// numbers them.
+        ///
+        /// Every record the stream is measured against comes from
+        /// [`Journal::append`], so the read is tested against the rows a run actually
+        /// leaves behind rather than a test's idea of them.
+        fn append_n(journal: &mut Journal, count: u64) {
+            for index in 0..count {
+                let position = u32::try_from(index % 8 + 1)
+                    .expect("a queue position inside the width of an identifier");
+                journal
+                    .append(
+                        Some(TaskId::new(position)),
+                        &EventKind::TaskQueued {
+                            title: format!("event {index}"),
+                        },
+                    )
+                    .expect("an event appends");
+            }
+        }
+
+        /// The refusal a callback raises, spelled once so an assertion can name whose
+        /// error came back out of the read.
+        fn reader_refused() -> Error {
+            Error::Policy {
+                detail: "the reader stopped at the record it was handed".to_owned(),
+                paths: Vec::new(),
+            }
+        }
+
+        /// One [`Event`] for [`Visited`] to be told about, differing from its
+        /// siblings only in the sequence it carries.
+        fn a_record_at(sequence: u64) -> Event {
+            Event {
+                seq: EventSeq::new(sequence),
+                ts: datetime!(2026-09-17 12:00:00 UTC),
+                task_id: Some(TaskId::new(1)),
+                kind: EventKind::PreflightStarted,
+            }
+        }
+
+        #[test]
+        fn the_counter_a_reader_keeps_notices_a_record_that_arrived_no_later_than_its_neighbour() {
+            // What the ten-thousand-event assertion claims is arithmetic: `n`
+            // records, each later than the one before, running from the first
+            // sequence to the last, are those records once each. That is worth
+            // asserting only if this counter *notices* a record that arrived out of
+            // order, so it is shown a backwards one and a repeat — a helper that saw
+            // neither would make every ordering assertion here quietly vacuous.
+            let mut visited = Visited::default();
+            visited.visit(&a_record_at(2));
+            visited.visit(&a_record_at(1));
+            visited.visit(&a_record_at(1));
+
+            assert_eq!(
+                visited.seen, 3,
+                "every record it was handed is counted, in order or not"
+            );
+            assert_eq!(
+                visited.first,
+                Some(EventSeq::new(2)),
+                "the first record it was handed is the one it remembers as first"
+            );
+            assert_eq!(
+                visited.out_of_order, 2,
+                "the backwards record and the repeat are both counted, which is what makes the \
+                 `0` elsewhere mean a stream that never went backwards and never repeated: \
+                 {visited:?}"
+            );
+        }
+
+        #[test]
+        fn ten_thousand_events_stream_to_a_callback_that_counts_rather_than_stores() {
+            let parent = scratch();
+            let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+            append_n(&mut journal, TEN_THOUSAND);
+
+            let mut visited = Visited::default();
+            journal
+                .for_each_event(EventSeq::new(0), &mut |event| {
+                    visited.visit(&event);
+                    Ok(())
+                })
+                .expect("ten thousand records are readable one at a time");
+
+            assert_eq!(
+                visited.seen, TEN_THOUSAND,
+                "the callback was handed every record the journal holds, and it holds no \
+                 collection that could have grown to {} — the number is what the read delivered",
+                visited.seen
+            );
+            assert_eq!(
+                visited.first,
+                Some(EventSeq::new(1)),
+                "the stream opened on the first record the journal ever issued, not somewhere \
+                 into it"
+            );
+            assert_eq!(
+                visited.last,
+                Some(EventSeq::new(TEN_THOUSAND)),
+                "and closed on the newest record, so a caller that streamed from the front saw \
+                 the whole journal rather than a prefix of it"
+            );
+            assert_eq!(
+                visited.out_of_order, 0,
+                "no record arrived at or before the one before it, so {} counts running from \
+                 sequence 1 to sequence {TEN_THOUSAND} are those same {TEN_THOUSAND} records \
+                 delivered once each — a repeat would have cost a count and a gap would have \
+                 widened the range",
+                visited.seen
+            );
+        }
+
+        #[test]
+        fn the_stream_starts_strictly_after_its_cursor_and_ends_at_the_newest_record() {
+            let parent = scratch();
+            let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+            append_n(&mut journal, 4);
+
+            for cursor in 0..=4u64 {
+                let mut visited = Visited::default();
+                journal
+                    .for_each_event(EventSeq::new(cursor), &mut |event| {
+                        visited.visit(&event);
+                        Ok(())
+                    })
+                    .expect("a cursor anywhere in the journal is answerable");
+
+                assert_eq!(
+                    visited.seen,
+                    4 - cursor,
+                    "a reader holding sequence {cursor} has seen that record already, so the \
+                     stream ahead of it holds {} records and not the {} ahead of it it was \
+                     handed: {visited:?}",
+                    4 - cursor,
+                    4 - cursor,
+                );
+                assert_eq!(
+                    visited.first,
+                    (cursor < 4).then(|| EventSeq::new(cursor + 1)),
+                    "the record a cursor names is the newest one its reader has seen, so the \
+                     one after it opens the stream — or nothing does, past the newest record"
+                );
+            }
+        }
+
+        #[test]
+        fn a_fresh_journal_streams_nothing_and_refuses_nothing() {
+            let parent = scratch();
+            let journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+
+            let mut visited = Visited::default();
+            journal
+                .for_each_event(EventSeq::new(0), &mut |event| {
+                    visited.visit(&event);
+                    Ok(())
+                })
+                .expect("a journal that holds nothing is readable rather than an error");
+
+            assert_eq!(
+                visited.seen, 0,
+                "nothing was appended, so nothing arrived — an empty stream, not a refusal to \
+                 answer"
+            );
+            assert_eq!(
+                visited.first, None,
+                "and there is no first record for a caller to be told about"
+            );
+        }
+
+        #[test]
+        fn a_cursor_wider_than_the_column_can_hold_streams_nothing() {
+            let parent = scratch();
+            let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+            append_n(&mut journal, 3);
+
+            for widest in [
+                u64::try_from(i64::MAX).expect("the widest `INTEGER` is a sequence number"),
+                u64::MAX,
+            ] {
+                let mut visited = Visited::default();
+                journal
+                    .for_each_event(EventSeq::new(widest), &mut |event| {
+                        visited.visit(&event);
+                        Ok(())
+                    })
+                    .expect("a cursor no record can be ahead of is answerable, not a refusal");
+
+                assert_eq!(
+                    visited.seen, 0,
+                    "no sequence the `seq` column can store is ahead of {widest}, so the honest \
+                     answer is the empty stream rather than a conversion failure"
+                );
+            }
+        }
+
+        #[test]
+        fn the_stream_arrives_in_the_order_the_journal_numbered_its_records() {
+            let parent = scratch();
+            let journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+            // Four rows whose instants run backwards to their sequences: the newest
+            // record carries the oldest clock reading, which is what a journal holds
+            // whenever a clock moves (ADR-0016). An order taken from `ts` would hand
+            // these back the other way round.
+            for sequence in 1..=4i64 {
+                stage_row(
+                    &journal.conn,
+                    sequence,
+                    &format!("2026-09-1{}T12:00:00+00:00", 6 - sequence),
+                    Some(1),
+                    "PreflightStarted",
+                    r#"{"kind":"PreflightStarted"}"#,
+                );
+            }
+
+            let mut arrived = 1u64;
+            journal
+                .for_each_event(EventSeq::new(0), &mut |event| {
+                    assert_eq!(
+                        event.seq,
+                        EventSeq::new(arrived),
+                        "the {arrived}th record to arrive carries sequence {}, which is not the \
+                         {arrived}th the journal issued",
+                        event.seq,
+                    );
+                    arrived += 1;
+                    Ok(())
+                })
+                .expect("four staged rows stream");
+
+            assert_eq!(
+                arrived, 5,
+                "every staged row arrived, in sequence order, before the read returned"
+            );
+        }
+
+        #[test]
+        fn every_record_arrives_whole_with_its_task_and_its_catalog_entry() {
+            let parent = scratch();
+            let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+            let stamped = [
+                (
+                    Some(TaskId::new(1)),
+                    EventKind::TaskQueued {
+                        title: "one".to_owned(),
+                    },
+                ),
+                (None, EventKind::PreflightStarted),
+                (
+                    Some(TaskId::new(2)),
+                    EventKind::TaskDone {
+                        commit: SHA.to_owned(),
+                    },
+                ),
+            ];
+            let before = OffsetDateTime::from(SystemTime::now());
+            for (task, kind) in &stamped {
+                journal.append(*task, kind).expect("an event appends");
+            }
+            let after = OffsetDateTime::from(SystemTime::now());
+
+            let mut arrived = 0u64;
+            journal
+                .for_each_event(EventSeq::new(0), &mut |event| {
+                    let position =
+                        usize::try_from(arrived).expect("three records fit inside a machine index");
+                    let (task, kind) = &stamped[position];
+                    assert_eq!(
+                        event.seq,
+                        EventSeq::new(arrived + 1),
+                        "the {}th record to arrive carries the sequence the journal issued it",
+                        arrived + 1
+                    );
+                    assert_eq!(
+                        event.task_id, *task,
+                        "record {} arrives with the task it was appended against, so a \
+                         task-level record is not silently rewritten into a queue-level one",
+                        event.seq
+                    );
+                    assert_eq!(
+                        &event.kind, kind,
+                        "record {} arrives as the catalog entry that was appended, every field \
+                         of it, and not as half a row",
+                        event.seq
+                    );
+                    assert!(
+                        event.ts >= before && event.ts <= after,
+                        "record {} carries the instant the append stamped: {} not in \
+                         {before} .. {after}",
+                        event.seq,
+                        event.ts
+                    );
+                    assert_eq!(
+                        event.ts.offset(),
+                        UtcOffset::UTC,
+                        "record {} arrives at the UTC offset the `ts` column documents",
+                        event.seq
+                    );
+                    arrived += 1;
+                    Ok(())
+                })
+                .expect("three events stream");
+
+            assert_eq!(
+                arrived, 3,
+                "all three records arrived, and the queue-level one with them"
+            );
+        }
+
+        #[test]
+        fn a_callback_that_refuses_stops_the_stream_at_the_record_it_refused() {
+            let parent = scratch();
+            let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+            append_n(&mut journal, TEN_THOUSAND);
+            let rows = stored_events(&journal.conn).len();
+            let spent = counter(&journal.conn);
+            let stop_at = 25u64;
+
+            let mut visited = Visited::default();
+            let error = journal
+                .for_each_event(EventSeq::new(0), &mut |event| {
+                    visited.visit(&event);
+                    if visited.seen == stop_at {
+                        return Err(reader_refused());
+                    }
+                    Ok(())
+                })
+                .expect_err("a reader that refuses the record it was handed stops the read");
+
+            assert!(
+                matches!(error, Error::Policy { .. }),
+                "the caller's own refusal comes back as it was raised, not wrapped in a \
+                 database failure that sends someone to look at the file: {error}"
+            );
+            assert!(
+                error.to_string().contains("the reader stopped"),
+                "and it is still the caller's message: {error}"
+            );
+            assert_eq!(
+                visited.seen, stop_at,
+                "the read stopped where its reader stopped, after {stop_at} records out of the \
+                 {TEN_THOUSAND} in the journal — which is what a read that hands records over as \
+                 it goes can do and one that reads everything first cannot"
+            );
+            assert_eq!(
+                stored_events(&journal.conn).len(),
+                rows,
+                "a walk a reader abandoned left no row behind"
+            );
+            assert_eq!(
+                counter(&journal.conn),
+                spent,
+                "and spent no sequence number, which a read has never been allowed to do"
+            );
+            let next = journal
+                .append(Some(TaskId::new(1)), &EventKind::Resumed)
+                .expect("the journal still appends after a read walked out of it");
+            assert_eq!(
+                next.get(),
+                TEN_THOUSAND + 1,
+                "which the next record's number is the proof of"
+            );
+        }
+
+        #[test]
+        fn a_record_that_cannot_be_decoded_stops_the_stream_naming_its_sequence() {
+            let parent = scratch();
+            let journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+            for sequence in 1..=6i64 {
+                if sequence == 4 {
+                    stage_row(
+                        &journal.conn,
+                        sequence,
+                        AN_INSTANT,
+                        Some(1),
+                        "PreflightStarted",
+                        "{ kind: }",
+                    );
+                } else {
+                    stage_row(
+                        &journal.conn,
+                        sequence,
+                        AN_INSTANT,
+                        Some(1),
+                        "PreflightStarted",
+                        r#"{"kind":"PreflightStarted"}"#,
+                    );
+                }
+            }
+
+            let mut visited = Visited::default();
+            let error = journal
+                .for_each_event(EventSeq::new(0), &mut |event| {
+                    visited.visit(&event);
+                    Ok(())
+                })
+                .expect_err("a row whose payload is not a catalog entry is not skipped past");
+
+            assert!(
+                matches!(error, Error::Corrupt { seq: Some(4), .. }),
+                "the read refuses with the sequence it got far enough to name: {error}"
+            );
+            assert_eq!(
+                visited.seen, 3,
+                "the stream handed over the three records before the damaged one and then \
+                 stopped, rather than skipping past it to the two sound rows behind it — a \
+                 caller replaying this stream would otherwise replay a run with a hole in it"
+            );
+        }
+
+        #[test]
+        fn streaming_the_journal_writes_nothing_and_spends_no_sequence() {
+            let parent = scratch();
+            let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+            append_n(&mut journal, 2);
+
+            for cursor in [0, 1, 2] {
+                let mut visited = Visited::default();
+                journal
+                    .for_each_event(EventSeq::new(cursor), &mut |event| {
+                        visited.visit(&event);
+                        Ok(())
+                    })
+                    .expect("the same journal streams three times over");
+                assert_eq!(
+                    visited.seen,
+                    2 - cursor,
+                    "cursor {cursor} streams what is ahead of it, each of the three times"
+                );
+            }
+
+            assert_eq!(
+                stored_events(&journal.conn).len(),
+                2,
+                "three reads added no row to the table they were reading"
+            );
+            assert_eq!(
+                counter(&journal.conn),
+                2,
+                "and left the sequence counter where the appends left it"
+            );
+            let next = journal
+                .append(
+                    Some(TaskId::new(1)),
+                    &EventKind::Interrupted {
+                        phase: Phase::Verify,
+                    },
+                )
+                .expect("the journal still appends after being streamed");
+            assert_eq!(
+                next.get(),
+                3,
+                "which is what the next record's number proves"
+            );
+        }
     }
 }
