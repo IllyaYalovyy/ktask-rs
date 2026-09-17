@@ -46,6 +46,16 @@ gate_typos()  { require typos && typos; }
 # scripts/review-tests.sh answers that question.
 gate_coverage() {
   require cargo-llvm-cov || return 1
+  # cargo-llvm-cov looks for these next to a rustup toolchain. A distro-installed
+  # Rust ships no llvm-tools component, so fall back to the distro llvm tools
+  # when they are on PATH; a version mismatch fails the report loudly rather
+  # than silently. Discovery only: the threshold and the command are unchanged.
+  if [[ -z "${LLVM_COV:-}" ]] && command -v llvm-cov >/dev/null 2>&1; then
+    export LLVM_COV="$(command -v llvm-cov)"
+  fi
+  if [[ -z "${LLVM_PROFDATA:-}" ]] && command -v llvm-profdata >/dev/null 2>&1; then
+    export LLVM_PROFDATA="$(command -v llvm-profdata)"
+  fi
   cargo llvm-cov --workspace --summary-only \
     --ignore-filename-regex 'main\.rs$' \
     --fail-under-lines "${KTASK_MIN_COVERAGE:-80}"
