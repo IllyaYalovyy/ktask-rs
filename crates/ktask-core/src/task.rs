@@ -77,6 +77,10 @@ pub struct Task {
     /// A gate is marked by this section rather than by [`TaskStatus::HumanGate`]
     /// because status is what the supervisor has concluded, and a task that has
     /// just been imported has not been run, paused or concluded on yet.
+    ///
+    /// It is a section of the body and nothing else, so the queue's row holds no
+    /// gate column, and a task read back out of the database has it read out of its
+    /// body by `task::gate_of`.
     pub gate: Option<String>,
 }
 
@@ -208,8 +212,32 @@ pub fn validate(task: &Task) -> Result<()> {
     })
 }
 
+/// The `**Gate:**` section a task body carries, if it carries one.
+///
+/// A gate is marked by this section of the body and by nothing else — not by a
+/// status, and not by a column, because `docs/DESIGN.md` Database schema gives
+/// the queue's `tasks` table no gate to hold. The body is therefore the one
+/// home the fact has, and a task read back out of the database recovers it here
+/// rather than storing a second copy that could disagree with the text it came
+/// from (ADR-0019).
+///
+/// The body is read by the same scanner [`parse_plan`] reads a document by, so
+/// the two rules a block and a row must never disagree about hold on both
+/// paths: a `**Gate:**` inside a fenced code block marks nothing, and a label
+/// written twice keeps the text written under it first.
+pub(crate) fn gate_of(body: &str) -> Option<String> {
+    labelled_sections(&scan_lines(body))
+        .get(GATE_SECTION)
+        .cloned()
+}
+
 /// The id of the task at `index` in document order, counted from one.
-fn task_id(index: usize) -> Result<TaskId> {
+///
+/// The rule is shared with the queue: [`crate::Journal::put_tasks`] numbers the
+/// rows it writes by this same count, so the position a block holds in a plan
+/// and the id its row holds in the database are one fact and not two that
+/// happen to agree (ADR-0019).
+pub(crate) fn task_id(index: usize) -> Result<TaskId> {
     let position = index.saturating_add(1);
     let Ok(number) = u32::try_from(position) else {
         return Err(Error::Corrupt {

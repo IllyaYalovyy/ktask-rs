@@ -757,6 +757,734 @@ fn stored_entry(payload: &str, column: &str, seq: EventSeq) -> Result<EventKind>
     })
 }
 
+/// The queue: the `tasks` rows a plan document becomes, and the tasks they hold.
+///
+/// A plan file is an *input format* (`docs/DESIGN.md` Database schema), so the
+/// database is the only place the queue itself lives. That is what makes "no
+/// task is rewritten in place" true of a queue as well as of a journal:
+/// [`Journal::put_tasks`] writes a plan's rows once, into a queue that holds
+/// nothing, and [`Journal::tasks`] reads them back by id. There is no statement
+/// in this crate that updates a row of `tasks`, and none that writes a status.
+///
+/// # What a row holds, and what it refuses to hold
+///
+/// A row holds what was *asked*: the four required sections in the columns
+/// `docs/DESIGN.md` gives them, the block as authored, and the instant the
+/// import ran. Three facts about a task are deliberately not in it.
+///
+/// - **Status** is the `TaskState` the journal implies, materialized in
+///   `task_state` as a projection of it. A status column would be a second home
+///   for one fact, so [`Journal::put_tasks`] does not store the status a caller
+///   hands it, and [`Journal::tasks`] reports [`crate::TaskStatus::Pending`] — the
+///   status a task has while nothing has been concluded about it. When the
+///   projection lands, it replaces that constant here and nowhere else.
+/// - **Title** is written, because a queue listing should not have to parse a
+///   body to name its rows, and is never read back: [`crate::Task::title`] is a
+///   projection of the body (ADR-0006), and a stored copy of it that disagreed
+///   with its body would be two facts where the design has one.
+/// - **Gate** is read out of the body on the way back (`task::gate_of`), because
+///   a gate is marked by a section of the body rather than by a column or a
+///   status, and the schema gives a row no gate to hold (ADR-0019).
+///
+/// # Why a module, and why this one
+///
+/// The row codec shares a connection and a schema with the event half of this
+/// file and nothing else. The `impl` below is on [`Journal`] all the same, so
+/// the queue is reached through the journal that owns the file rather than
+/// through a second door a caller could hold open beside it.
+mod tasks {
+    use rusqlite::{Connection, Row, params};
+
+    use super::{clock_nanos, stamp_text};
+    use crate::task::{gate_of, task_id, validate};
+    use crate::{Error, Journal, Result, Task, TaskId, TaskStatus};
+
+    /// One queue row, in the order [`Journal::tasks`] spells its columns.
+    ///
+    /// `title`, `protocol` and `added_at` are absent on purpose: the first is a
+    /// projection of `body` that no read should trust a second copy of, the
+    /// second is NULL for every row this build writes, and the third dates a row
+    /// for whoever asks when it arrived. None of the three is a field of [`Task`].
+    struct TaskRow {
+        id: i64,
+        outcome: String,
+        done_when: String,
+        verify: String,
+        refs: String,
+        body: String,
+    }
+
+    impl Journal {
+        /// Write a parsed plan as the queue, in document order.
+        ///
+        /// The queue is the plan, once. Each task keeps its position in the
+        /// document as its id, so "task 3" means "the third block of the plan"
+        /// in this file for as long as the queue stands — which is why a task
+        /// handed over under some other id is refused rather than renumbered:
+        /// the position is the fact, and a row free to choose its own number is
+        /// a queue that cannot be quoted.
+        ///
+        /// Importing into a queue that already holds a task is refused, whatever
+        /// the second plan contains. It is not merged, and nothing already there
+        /// is edited in place: two plans claiming the same queue differ in order
+        /// and in count, and deciding which one wins is an operator's call, not
+        /// a supervisor's (VISION.md section 3, invariant 8). The refusal names how many tasks are
+        /// in the way, because that is the fact the reader has to act on.
+        ///
+        /// One call is one transaction and one instant. Every row is stamped
+        /// with the clock read inside the call — a value no caller hands in and
+        /// no caller can move, for the same reason [`Journal::append`] stamps its
+        /// own — so the rows of a plan are provably one import. A refusal at any
+        /// task takes back the tasks before it, because half a plan is not a
+        /// queue: its ids would be the positions of a document whose earlier
+        /// half is missing.
+        ///
+        /// Each task is asked [`validate`] before its row is written, so the
+        /// door to the queue and `plan lint` hold a task to one standard and a
+        /// malformed task never enters (docs/CONTRACT.md).
+        ///
+        /// # Errors
+        ///
+        /// [`Error::Policy`] when the queue already holds a task (the refusal
+        /// names how many), when a task is not the id its position gives it, or
+        /// when a task lacks a required section; [`Error::Corrupt`] when the plan
+        /// is longer than a queue position can number; [`Error::Database`] when a
+        /// row cannot be written; [`Error::Serde`] when the clock reads an instant
+        /// with no RFC 3339 spelling. In every case the queue holds exactly what
+        /// it held before the call.
+        pub fn put_tasks(&mut self, tasks: &[Task]) -> Result<()> {
+            let added_at = stamp_text(clock_nanos())?;
+            let transaction = self.conn.transaction()?;
+            let existing = queue_length(&transaction)?;
+            if existing > 0 {
+                return Err(Error::Policy {
+                    detail: format!(
+                        "a plan is imported once, into an empty queue, and is never merged \
+                         into one or edited in place; this queue is not empty (it holds \
+                         {existing}) and its rows are left exactly as they are",
+                    ),
+                    paths: Vec::new(),
+                });
+            }
+            for (index, task) in tasks.iter().enumerate() {
+                let position = task_id(index)?;
+                if task.id != position {
+                    return Err(Error::Policy {
+                        detail: format!(
+                            "the task at plan position {position} was handed over as task {}; \
+                             a queue's ids are its positions, numbered from one in document \
+                             order",
+                            task.id,
+                        ),
+                        paths: Vec::new(),
+                    });
+                }
+                validate(task)?;
+                transaction.execute(
+                    "INSERT INTO tasks (id, title, outcome, done_when, verify, refs, protocol, \
+                     body, added_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8)",
+                    params![
+                        i64::from(position.get()),
+                        task.title(),
+                        task.outcome,
+                        task.done_when,
+                        task.verify,
+                        task.refs,
+                        task.body,
+                        added_at
+                    ],
+                )?;
+            }
+            transaction.commit()?;
+            Ok(())
+        }
+
+        /// The queue, read back by id.
+        ///
+        /// Ordered by id, which *is* queue order: the order the plan was
+        /// written, not the order the rows happened to arrive and not the titles
+        /// a reader sees. The order is the SQL's, as it is for every read in
+        /// this file, so no caller has to remember to sort what it was handed.
+        ///
+        /// Status is reported as [`TaskStatus::Pending`] because there is no
+        /// stored status to report: status is the `TaskState` the journal
+        /// implies, and this is not that projection. A queue that holds nothing
+        /// is an empty `Vec` rather than [`Error::NotFound`] — every project
+        /// starts with one, and reading it is the first thing a run does.
+        ///
+        /// # Errors
+        ///
+        /// [`Error::Database`] when `tasks` cannot be read or a column is not the
+        /// text or number its own schema declares; [`Error::Corrupt`] when a row
+        /// is numbered outside the range a queue position can name, which is a
+        /// row this build cannot say a word about.
+        pub fn tasks(&self) -> Result<Vec<Task>> {
+            let mut statement = self.conn.prepare(
+                "SELECT id, outcome, done_when, verify, refs, body FROM tasks ORDER BY id",
+            )?;
+            statement
+                .query_map([], task_row)?
+                .map(|row| stored_task(row?))
+                .collect()
+        }
+    }
+
+    /// How many tasks the queue holds, which is the whole of the import rule.
+    ///
+    /// Asked inside the import's own transaction, so the count and the rows it
+    /// protects are one snapshot rather than two facts with a gap between them.
+    /// Measured on this toolchain: a second writer that commits after this read
+    /// leaves the import's first `INSERT` failing with `SQLITE_BUSY_SNAPSHOT`
+    /// (extended code 517), which surfaces as [`Error::Database`] and whose
+    /// rollback this crate already relies on. A queue is therefore never merged
+    /// into from two directions at once — either this import found the queue
+    /// empty and owns it, or it fails loudly having written nothing.
+    fn queue_length(conn: &Connection) -> Result<i64> {
+        conn.query_row("SELECT count(*) FROM tasks", [], |row| row.get(0))
+            .map_err(Into::into)
+    }
+
+    /// Map one result row onto [`TaskRow`], in the order the read spells them.
+    ///
+    /// Only the widths are decided here — an `INTEGER` is read as the `i64`
+    /// SQLite hands back. What they mean is [`stored_task`], which is where a
+    /// row that has stopped agreeing with its own schema gets reported.
+    fn task_row(row: &Row<'_>) -> rusqlite::Result<TaskRow> {
+        Ok(TaskRow {
+            id: row.get(0)?,
+            outcome: row.get(1)?,
+            done_when: row.get(2)?,
+            verify: row.get(3)?,
+            refs: row.get(4)?,
+            body: row.get(5)?,
+        })
+    }
+
+    /// The [`Task`] a queue row holds.
+    ///
+    /// Two of its fields are supplied rather than read, because a row holds
+    /// neither: `status`, which is the journal's to report, and `gate`, which
+    /// only the body carries. Reading a stored copy of either would hand back a
+    /// fact the text and the journal are free to disagree with.
+    fn stored_task(record: TaskRow) -> Result<Task> {
+        let id = stored_position(record.id)?;
+        let gate = gate_of(&record.body);
+        Ok(Task {
+            id,
+            status: TaskStatus::Pending,
+            body: record.body,
+            outcome: record.outcome,
+            done_when: record.done_when,
+            verify: record.verify,
+            refs: record.refs,
+            gate,
+        })
+    }
+
+    /// The queue position a row's id names, or the damage report for a number
+    /// that names none.
+    ///
+    /// A row like this is beyond what [`Journal::put_tasks`] writes, and a queue
+    /// that answered with a truncated number would be quoting a task that does
+    /// not exist.
+    fn stored_position(stored: i64) -> Result<TaskId> {
+        u32::try_from(stored)
+            .map(TaskId::new)
+            .map_err(|_| Error::Corrupt {
+                detail: format!(
+                    "a queue row is numbered {stored}, which is no task's position: ids run from \
+                 one to {}",
+                    u32::MAX,
+                ),
+                seq: None,
+            })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use crate::journal::{Journal, journal_path};
+        use crate::{Error, Task, TaskId, TaskStatus, parse_plan};
+        use rusqlite::{Connection, params};
+        use std::path::Path;
+        use std::time::SystemTime;
+        use tempfile::{TempDir, tempdir};
+        use time::OffsetDateTime;
+        use time::format_description::well_known::Rfc3339;
+
+        /// A plan document an operator might actually have written, chosen for
+        /// what a row has to survive: a fenced block whose markup stays inert,
+        /// a human gate, trailing whitespace kept in the body, and a heading
+        /// long enough for the display cut to fall inside it.
+        const PLAN: &str = "\
+## Store the queue in the database
+
+**Outcome:** the queue lives in SQLite, so nothing is rewritten in place.
+**Done-when:** a plan round-trips through the queue unchanged.
+**Verify:** `cargo nextest run -p ktask-core`
+**Refs:** docs/DESIGN.md Database schema   
+
+```markdown
+## A heading inside a fence opens no task
+**Gate:** a label inside a fence marks no gate either
+```
+
+## Approve the retention window
+
+**Outcome:** an operator decides how long a journal is kept.
+**Done-when:** the decision is recorded where a reader will find it.
+**Verify:** `scripts/quality.sh doc`
+**Refs:** VISION.md §11
+**Gate:** a person approves the window, not the supervisor.
+
+## T019 Store the queue in the database so that nothing about a task is rewritten ✓ in place
+
+**Outcome:** a queue that lives in a file is a queue that can be edited by hand.
+**Done-when:** the file is gone and the rows are the queue.
+**Verify:** `cargo nextest run -p ktask-core`
+**Refs:** docs/DESIGN.md Database schema
+";
+
+        /// The instant a staged row is dated at; which one is nobody's business.
+        const AN_INSTANT: &str = "2026-09-17T12:00:00+00:00";
+
+        /// A scratch parent for a journal: `docs/DESIGN.md` Conventions forbids
+        /// a test from writing inside the repository.
+        fn scratch() -> TempDir {
+            tempdir().expect("a scratch directory below the system temp directory")
+        }
+
+        /// An opened journal in a scratch state directory, which is what a
+        /// caller that has just registered finds on its first run.
+        fn open_journal(state_dir: &Path) -> Journal {
+            Journal::open(&journal_path(state_dir))
+                .expect("a journal opens where its state directory is")
+        }
+
+        /// The scratch plan, parsed. Every round-trip assertion is against this.
+        fn plan() -> Vec<Task> {
+            parse_plan(PLAN).expect("the scratch plan is a plan the parser accepts")
+        }
+
+        /// One queue row, in the types the schema declares its columns with.
+        #[derive(Debug, PartialEq)]
+        struct Stored {
+            id: i64,
+            title: String,
+            outcome: String,
+            done_when: String,
+            verify: String,
+            refs: String,
+            protocol: Option<String>,
+            body: String,
+            added_at: String,
+        }
+
+        /// Every queue row, in id order. The whole row, because the columns the
+        /// read does not hand back can only be asserted against the table.
+        fn stored_rows(conn: &Connection) -> Vec<Stored> {
+            let mut statement = conn
+                .prepare(
+                    "SELECT id, title, outcome, done_when, verify, refs, protocol, body, \
+                     added_at FROM tasks ORDER BY id",
+                )
+                .expect("tasks is always readable");
+            statement
+                .query_map([], |row| {
+                    Ok(Stored {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        outcome: row.get(2)?,
+                        done_when: row.get(3)?,
+                        verify: row.get(4)?,
+                        refs: row.get(5)?,
+                        protocol: row.get(6)?,
+                        body: row.get(7)?,
+                        added_at: row.get(8)?,
+                    })
+                })
+                .expect("tasks is readable")
+                .collect::<rusqlite::Result<Vec<Stored>>>()
+                .expect("every column reads as the type the schema declares it")
+        }
+
+        /// Write one queue row directly.
+        ///
+        /// The only way to reach a queue whose rows were not written in id
+        /// order, or whose id is not a queue position at all — states an import
+        /// cannot produce and a read still has to answer.
+        fn stage_row(conn: &Connection, id: i64, title: &str, body: &str, added_at: &str) {
+            conn.execute(
+                "INSERT INTO tasks (id, title, outcome, done_when, verify, refs, protocol, \
+                 body, added_at) VALUES (?1, ?2, 'an outcome', 'a done-when', 'a verify', \
+                 'a ref', NULL, ?3, ?4)",
+                params![id, title, body, added_at],
+            )
+            .expect("a staged row is a valid row");
+        }
+
+        #[test]
+        fn a_plan_round_trips_through_the_queue_unchanged_and_in_document_order() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let parsed = plan();
+
+            journal
+                .put_tasks(&parsed)
+                .expect("an empty queue takes a plan the parser accepted");
+
+            assert_eq!(
+                journal.tasks().expect("the queue is readable"),
+                parsed,
+                "every field of every task comes back as it was parsed — body byte for byte, \
+                 gate and all — in the order the document wrote it"
+            );
+            assert_eq!(
+                journal
+                    .tasks()
+                    .expect("the queue is readable")
+                    .iter()
+                    .map(|task| task.id.get())
+                    .collect::<Vec<u32>>(),
+                [1, 2, 3],
+                "a queue's ids are its positions, so the third block of the document is task \
+                 3 and not the row that happened to be written third"
+            );
+        }
+
+        #[test]
+        fn an_import_stamps_its_own_instant_projects_the_title_and_leaves_protocol_null() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let parsed = plan();
+
+            let before = OffsetDateTime::from(SystemTime::now());
+            journal
+                .put_tasks(&parsed)
+                .expect("an empty queue takes a plan the parser accepted");
+            let after = OffsetDateTime::from(SystemTime::now());
+
+            let rows = stored_rows(&journal.conn);
+            let stamped = OffsetDateTime::parse(&rows[0].added_at, &Rfc3339).expect(
+                "`added_at` holds RFC 3339 text, which is what the column's comment promises",
+            );
+            assert!(
+                stamped >= before && stamped <= after,
+                "the stamp is the clock read inside the call, not a constant and not a \
+                 caller's guess: {stamped} falls outside {before}..={after}"
+            );
+            assert!(
+                rows.iter().all(|row| row.added_at == rows[0].added_at),
+                "one import is one instant: a queue whose rows arrived at three different \
+                 times was not imported once: {rows:?}"
+            );
+            assert!(
+                rows.iter().all(|row| row.protocol.is_none()),
+                "`protocol` stays NULL for a task that names none, which is how the \
+                 configured default stays the answer: {rows:?}"
+            );
+            assert_eq!(
+                rows.iter()
+                    .map(|row| (row.id, row.outcome.as_str(), row.verify.as_str()))
+                    .collect::<Vec<_>>(),
+                parsed
+                    .iter()
+                    .map(|task| (
+                        i64::from(task.id.get()),
+                        task.outcome.as_str(),
+                        task.verify.as_str()
+                    ))
+                    .collect::<Vec<_>>(),
+                "the four required sections are stored in the columns the design gives them, \
+                 not stacked into one"
+            );
+            assert_eq!(
+                rows.iter()
+                    .map(|row| row.title.clone())
+                    .collect::<Vec<String>>(),
+                parsed
+                    .iter()
+                    .map(|task| task.title().to_owned())
+                    .collect::<Vec<String>>(),
+                "`title` is the body's projection, written for a reader who lists the queue \
+                 without parsing a body — the third one cut at 80 characters like every other \
+                 title in the queue"
+            );
+        }
+
+        #[test]
+        fn the_queue_holds_no_status_so_a_read_reports_the_task_unrun() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let mut task = plan().remove(0);
+            task.status = TaskStatus::Failed;
+
+            journal
+                .put_tasks(std::slice::from_ref(&task))
+                .expect("a complete task is queued whatever its caller claims about its status");
+
+            assert_eq!(
+                journal.tasks().expect("the queue is readable")[0].status,
+                TaskStatus::Pending,
+                "status has exactly one home — the `TaskState` the journal implies — so a \
+                 status handed to the queue is neither stored nor handed back"
+            );
+        }
+
+        #[test]
+        fn importing_into_a_queue_that_holds_one_task_is_refused_naming_that_count() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            journal
+                .put_tasks(&plan()[..1])
+                .expect("an empty queue takes a plan");
+
+            let error = journal
+                .put_tasks(&plan()[1..])
+                .expect_err("a plan is imported once, and this queue is already spoken for");
+            let reported = error.to_string();
+
+            assert!(
+                matches!(error, Error::Policy { .. }),
+                "a rule of the queue was broken, which is what `Policy` is for: {error}"
+            );
+            assert!(
+                reported.contains("holds 1"),
+                "the refusal names how many tasks are already in the way, rather than only \
+                 that something is: {reported}"
+            );
+        }
+
+        #[test]
+        fn a_refused_import_leaves_the_rows_it_held_and_writes_nothing() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let held: Vec<Task> = plan().into_iter().take(2).collect();
+            journal
+                .put_tasks(&held)
+                .expect("an empty queue takes a plan");
+
+            let refused = journal
+                .put_tasks(&plan()[2..])
+                .expect_err("two tasks queued is not an empty queue");
+
+            assert!(
+                matches!(refused, Error::Policy { .. }),
+                "the refusal is the queue's rule, not a database complaint: {refused}"
+            );
+            assert_eq!(
+                journal.tasks().expect("the queue is readable"),
+                held,
+                "a refused import neither merges into the queue nor edits it in place: the \
+                 queue still holds exactly what it held"
+            );
+            assert_eq!(
+                stored_rows(&journal.conn).len(),
+                2,
+                "and the refusal wrote no row on its way to saying no"
+            );
+        }
+
+        #[test]
+        fn a_task_missing_a_required_section_stops_the_import_before_any_row_is_written() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let mut tasks = plan();
+            tasks[1].verify = String::new();
+
+            let error = journal
+                .put_tasks(&tasks)
+                .expect_err("a task with no Verify: command proves nothing, so it is not queued");
+
+            assert!(
+                matches!(error, Error::Policy { .. }),
+                "the import asks the predicate `plan lint` asks, and reports it the same way: \
+                 {error}"
+            );
+            assert!(
+                error.to_string().contains("`Verify:`"),
+                "the refusal names the section that is missing: {error}"
+            );
+            assert!(
+                journal.tasks().expect("the queue is readable").is_empty(),
+                "the plan was refused part way through, and its first task was not left \
+                 behind: a queue is imported whole or not at all"
+            );
+        }
+
+        #[test]
+        fn a_task_handed_over_out_of_its_queue_position_is_refused_and_writes_nothing() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let mut tasks = plan();
+            tasks[1].id = TaskId::new(9);
+
+            let error = journal
+                .put_tasks(&tasks)
+                .expect_err("a plan whose second task calls itself task 9 is not a queue");
+
+            assert!(
+                matches!(error, Error::Policy { .. }),
+                "a queue's ids being its positions is a rule, and rules refuse with \
+                 `Policy`: {error}"
+            );
+            assert!(
+                error.to_string().contains("task 9"),
+                "the refusal names the id it refused to write: {error}"
+            );
+            assert!(
+                journal.tasks().expect("the queue is readable").is_empty(),
+                "the task before it was already inserted, and the refusal took that back"
+            );
+        }
+
+        #[test]
+        fn a_plan_holding_no_tasks_imports_nothing_and_leaves_the_queue_importable() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+
+            journal.put_tasks(&[]).expect(
+                "a document with no tasks in it imports nothing, which is nothing to write",
+            );
+
+            assert!(
+                journal.tasks().expect("the queue is readable").is_empty(),
+                "an empty plan leaves no row behind"
+            );
+            journal
+                .put_tasks(&plan())
+                .expect("an empty import did not fill the queue, so a real plan still fits");
+            assert_eq!(
+                journal.tasks().expect("the queue is readable").len(),
+                3,
+                "the queue counts tasks, not import attempts"
+            );
+        }
+
+        #[test]
+        fn the_queue_is_read_by_id_and_not_in_the_order_the_rows_were_written() {
+            let parent = scratch();
+            let journal = open_journal(parent.path());
+            // Written 3, 1, 2, with titles and instants that both run the other
+            // way to their ids, so only an ordering by id explains the answer.
+            stage_row(
+                &journal.conn,
+                3,
+                "Alpha",
+                "third body",
+                "2026-01-01T00:00:00+00:00",
+            );
+            stage_row(
+                &journal.conn,
+                1,
+                "Zulu",
+                "first body",
+                "2026-01-03T00:00:00+00:00",
+            );
+            stage_row(
+                &journal.conn,
+                2,
+                "Sierra",
+                "second body",
+                "2026-01-02T00:00:00+00:00",
+            );
+
+            let tasks = journal.tasks().expect("the queue is readable");
+
+            assert_eq!(
+                tasks
+                    .iter()
+                    .map(|task| (task.id.get(), task.body.as_str()))
+                    .collect::<Vec<_>>(),
+                [(1, "first body"), (2, "second body"), (3, "third body")],
+                "the queue is ordered by its ids — not by the titles a reader sees, not by \
+                 the instants rows were stamped, and not by the order they were written"
+            );
+            assert_eq!(
+                tasks[0].title(),
+                "first body",
+                "the `title` column is never read back: a title is the body's projection, and \
+                 a stored copy of it that disagreed with the body would be two facts"
+            );
+        }
+
+        #[test]
+        fn the_queue_survives_the_journal_being_closed_and_reopened() {
+            let parent = scratch();
+            let path = journal_path(parent.path());
+            let parsed = plan();
+            let mut journal = Journal::open(&path).expect("a journal opens where its directory is");
+            journal
+                .put_tasks(&parsed)
+                .expect("an empty queue takes a plan the parser accepted");
+            drop(journal);
+
+            let reopened = Journal::open(&path).expect("the same file opens a second time");
+
+            assert_eq!(
+                reopened.tasks().expect("the reopened queue is readable"),
+                parsed,
+                "the queue lives in the file, so closing and reopening it changes nothing \
+                 about what the queue holds"
+            );
+        }
+
+        #[test]
+        fn a_row_numbered_below_the_first_queue_position_is_read_as_damage() {
+            let parent = scratch();
+            let journal = open_journal(parent.path());
+            stage_row(
+                &journal.conn,
+                -1,
+                "A row outside the queue",
+                "body",
+                AN_INSTANT,
+            );
+
+            let error = journal
+                .tasks()
+                .expect_err("a row numbered -1 is not at a queue position");
+
+            assert!(
+                matches!(error, Error::Corrupt { .. }),
+                "the row is in the file and cannot be trusted, which is what `Corrupt` is for: \
+                 {error}"
+            );
+            assert!(
+                error.to_string().contains("-1"),
+                "the refusal quotes the number it refused: {error}"
+            );
+        }
+
+        #[test]
+        fn a_row_numbered_past_the_largest_queue_position_is_read_as_damage() {
+            let parent = scratch();
+            let journal = open_journal(parent.path());
+            let widest = i64::from(u32::MAX) + 1;
+            stage_row(
+                &journal.conn,
+                widest,
+                "A row past the queue",
+                "body",
+                AN_INSTANT,
+            );
+
+            let error = journal
+                .tasks()
+                .expect_err("a queue position no task id can name is not a queue position");
+
+            assert!(
+                matches!(error, Error::Corrupt { .. }),
+                "the number is out of a queue's range, which is damage and not an empty \
+                 answer: {error}"
+            );
+            assert!(
+                error.to_string().contains(&widest.to_string()),
+                "the refusal quotes the number it refused: {error}"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
