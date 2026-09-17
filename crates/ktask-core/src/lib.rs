@@ -3,6 +3,10 @@
 //! Everything that decides *what happened* lives here and stays free of I/O:
 //! the crate is the reason the invariants in VISION.md can be tested at all.
 
+mod error;
+
+pub use error::{Error, Result};
+
 /// Placeholder proving the workspace builds and tests at the seed commit.
 /// The first task replaces it.
 #[must_use]

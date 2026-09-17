@@ -10,6 +10,34 @@ license = "GPL-3.0-only"
 description = "A supervisor for unattended AI coding work"
 repository = "https://github.com/IllyaYalovyy/ktask-rs"
 
+# The dependency set fixed by docs/DESIGN.md. Versions and features are written
+# there and are not to be varied per crate: a crate asks for one of these with
+# `workspace = true`, and adding or substituting a crate takes an ADR. Entries
+# no member has adopted yet are costless — they resolve only once used.
+[workspace.dependencies]
+rusqlite    = { version = "0.40", features = ["bundled"] }
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+toml        = "1"
+clap        = { version = "4", features = ["derive", "env"] }
+ratatui     = "0.30"
+crossterm   = "0.29"
+thiserror   = "2"
+time        = { version = "0.3", features = ["formatting", "parsing", "macros", "serde"] }
+sha2        = "0.10"
+unicode-width = "0.2"
+unicode-segmentation = "1.13"
+regex       = "1.13"
+nix         = { version = "0.31", features = ["signal", "fs", "process"] }
+signal-hook = "0.4"
+
+# The dev-only half of the same fixed set. A crate adopts these under its own
+# `[dev-dependencies]` with `workspace = true`, in the task that first needs
+# them.
+proptest    = "1"
+insta       = "1"
+tempfile    = "3"
+
 # Every lint below is enforced: scripts/quality.sh runs clippy with
 # `-D warnings`, so a warning here fails the build like an error.
 [workspace.lints.rust]
