@@ -1116,3 +1116,754 @@ cargo test
         );
     }
 }
+
+#[cfg(test)]
+/// Property tests: [`parse_plan`] is total, and it loses nothing.
+///
+/// The unit tests above assert the shapes a person has been seen to write.
+/// These assert them over generated documents: arbitrary task counts, bodies in
+/// any script, fenced code blocks, and lines that begin with `#` or `---`
+/// (VISION.md §15). Three claims, in the order a reader should check them:
+///
+/// - **total** — any text at all produces tasks or an error, never a panic,
+///   and whatever the answer is, it obeys the rules the queue is built on;
+/// - **lossless** — for a document this test assembled out of parts it knows,
+///   every task comes back with exactly the text written into it, and its body
+///   is its block byte for byte;
+/// - **durable** — what the queue keeps of a task is enough to read the task
+///   back unchanged, text in any script included.
+///
+/// The database is a later task, so the third claim stores what the schema in
+/// docs/DESIGN.md stores — the columns of the `tasks` table, as the bytes a
+/// `TEXT` column holds — and nothing more.
+mod properties {
+    use proptest::collection::vec;
+    use proptest::option;
+    use proptest::prelude::*;
+    use proptest::sample::select;
+    use proptest::test_runner::TestCaseResult;
+    use proptest::{prop_assert, prop_assert_eq, prop_oneof};
+
+    use super::{
+        Error, MAX_HEADING_INDENT, TITLE_MAX_CHARS, Task, TaskStatus, parse_plan, validate,
+    };
+    use crate::ids::TaskId;
+
+    /// Every property in this module runs at least this many cases. Proptest's
+    /// own default is the same number; writing it down is what turns "at least
+    /// 256 cases" from a question about someone's configuration into one this
+    /// file answers.
+    const CASES: u32 = 256;
+
+    /// The section labels the queue keeps a field for, and the only labels a
+    /// generated line may never begin with.
+    const KEPT_LABELS: &[&str] = &["Outcome", "Done-when", "Verify", "Refs", "Gate"];
+
+    /// The characters a fence may be made of.
+    const MARKERS: &[char] = &['`', '~'];
+
+    /// The language tag that may follow a fence's opening run.
+    const INFO_TAGS: &[&str] = &["", "rust", "sh", "markdown"];
+
+    /// What comes before the first task: read, then kept out of the queue. It
+    /// holds a rule, a heading, a fence with a heading and a label inside it,
+    /// and a label of its own, so a preamble cannot be mistaken for a task.
+    const PREAMBLE: &str = "\
+# The plan
+
+---
+
+```
+## not a task: a heading inside a fence
+**Outcome:** a preamble is not a task
+```
+
+**Outcome:** what this document is for, which no task inherits.
+
+";
+
+    /// Whole phrases, in no script in particular: Latin, Cyrillic, Han, Kana,
+    /// Hangul, Hebrew, Greek, emoji, a flag sequence, a no-break space, a
+    /// combining accent, a zero-width joiner and a tab inside a line. A parser
+    /// that is only correct for ASCII is the bug this module exists to fail on,
+    /// and text that has to survive a byte-for-byte comparison is only worth
+    /// generating if some of it is multi-byte.
+    ///
+    /// None of them begins or ends with whitespace, holds a line break, or
+    /// holds a backtick, tilde or asterisk — so a line written out of these
+    /// says exactly what the round-trip property then expects of it, and two of
+    /// them plus a heading marker still fit inside the title limit.
+    const FRAGMENTS: &[&str] = &[
+        "the queue holds a task",
+        "черновик задачи",
+        "タイトルを保持する",
+        "한국어 작업 항목",
+        "עברית של משימה",
+        "Ελληνικά κείμενα",
+        "😀👩‍👩‍👧‍👦 emoji",
+        "🇯🇵 a flag sequence",
+        "e\u{301} combining accent",
+        "zero\u{200d}width joiner",
+        "a\u{a0}no-break space",
+        "tab\tinside a line",
+        "#1 приоритет",
+        "crates/ktask-core/src/task.rs",
+        "cargo nextest run -p core",
+        "Привет, мир",
+        "Ünïcödé",
+        "—",
+    ];
+
+    /// Lines a plan holds besides its sections, and the ones a parser that
+    /// reserves a line prefix misreads: a rule, a heading of the document, a
+    /// subheading inside the task above it, a level-two heading indented too
+    /// deep to be one, `##` with no space after it, a label the queue does not
+    /// keep, and prose in another script.
+    ///
+    /// None opens a task, opens a fence, or opens a kept section, so a block
+    /// that they follow is still one block with the same sections.
+    /// [`the_generated_pieces_stay_clear_of_the_markup`] is what keeps them so.
+    const DOCUMENT_LINES: &[&str] = &[
+        "",
+        "---",
+        "- - -",
+        "___",
+        "# The plan, as a person wrote it",
+        "### A step inside the task",
+        "##NoSpace is prose, not a heading",
+        "    ## four spaces deep is a code block",
+        "**Files:** crates/ktask-core/src/task.rs",
+        "См. VISION.md §15",
+        "1. first, prove it fails",
+        "日本語の注釈",
+    ];
+
+    /// What a backtick fence may hide without ending itself: a level-two
+    /// heading, every label the queue keeps, rules, and delimiter runs of the
+    /// other marker or shorter runs of its own. A fence closes only on a line
+    /// that is its own run and nothing else, so everything that would close a
+    /// three-deep backtick fence is in the tilde list instead, and the reverse.
+    const BACKTICK_FENCE_LINES: &[&str] = &[
+        "## a heading inside a fence opens no task",
+        "**Outcome:** a label inside a fence fills no section",
+        "**Done-when:** nothing",
+        "**Verify:** nothing",
+        "**Refs:** nothing",
+        "**Gate:** nobody is asked to decide",
+        "---",
+        "#",
+        "``",
+        "~~~",
+        "~~~~",
+        "text with ``` and ~~~ inside it",
+        "コードブロック内のテキスト 🤖",
+        "\tindented, and still content",
+    ];
+
+    /// The same, for a fence opened with tildes.
+    const TILDE_FENCE_LINES: &[&str] = &[
+        "## a heading inside a fence opens no task",
+        "**Outcome:** a label inside a fence fills no section",
+        "**Gate:** nobody is asked to decide",
+        "---",
+        "#",
+        "~~",
+        "```",
+        "````",
+        "text with ``` and ~~~ inside it",
+        "コードブロック内のテキスト 🤖",
+    ];
+
+    /// Every line shape the totality properties throw at the parser, including
+    /// the delimiters and headings that move a block when they are read where
+    /// they should not be.
+    const SOUP_LINES: &[&str] = &[
+        "",
+        "#",
+        "##",
+        "## a task",
+        "### deeper",
+        "#### deeper still",
+        "\t## a tab-indented heading",
+        "   ## three spaces is still a heading",
+        "    ## four spaces is not",
+        "---",
+        "- - -",
+        "***",
+        "```",
+        "```rust",
+        "````",
+        "~~~",
+        "~~",
+        "`",
+        "**Outcome:** filled",
+        "**Outcome:**",
+        "**Gate:**",
+        "**Done-when:** filled",
+        "**Refs:** filled",
+        "**Verify:** cargo nextest run",
+        "the queue holds a task",
+        "**Outcome:** the queue holds a task",
+        "**Refs:** VISION.md §15",
+        "См. VISION.md §15",
+        "😀😀😀",
+        "e\u{301}e\u{301}",
+        "\u{a0}\u{200d}",
+        "\u{0} a control character",
+        "\r",
+        "a very long line that goes on and on and on past any width a screen has",
+        "## a heading far past the eighty character limit a title keeps, which is \
+         the shape a queue list has to cut to fit its pane\n**Outcome:** a title is \
+         cut, the body is not\n**Done-when:** a test asserts the cut\n**Verify:** \
+         cargo nextest run\n**Refs:** docs/adr/0006",
+    ];
+
+    /// How the lines of a generated document are joined. A file with no final
+    /// break and a file written on Windows are both ordinary; a parser that
+    /// counts by byte offset finds out here which one it is.
+    const LINE_JOINS: &[&str] = &["\n", "\r\n", "\n\n", "\n\r"];
+
+    /// Text for one line: one to four fragments, which is never empty, never
+    /// only whitespace, and never needs trimming to come back as written.
+    fn line_text() -> impl Strategy<Value = String> {
+        vec(select(FRAGMENTS), 1..4).prop_map(|parts| parts.join(" "))
+    }
+
+    /// The lines between a heading and the first section of its block.
+    fn document_noise() -> impl Strategy<Value = Vec<&'static str>> {
+        vec(select(DOCUMENT_LINES), 0..5)
+    }
+
+    /// The lines a fence may hide, chosen for the marker that opened it.
+    fn hidden_lines(marker: char) -> &'static [&'static str] {
+        if marker == '`' {
+            BACKTICK_FENCE_LINES
+        } else {
+            TILDE_FENCE_LINES
+        }
+    }
+
+    /// A fenced code block: its delimiter character, how deep the run is, the
+    /// tag after it, and the lines it hides.
+    #[derive(Clone, Debug)]
+    struct Fence {
+        marker: char,
+        run: usize,
+        info: &'static str,
+        hidden: Vec<&'static str>,
+    }
+
+    impl Fence {
+        /// The fence as it is written, both delimiters included.
+        fn render(&self) -> String {
+            let delimiter = self.marker.to_string().repeat(self.run);
+            let mut text = format!("{delimiter}{}\n", self.info);
+            for line in &self.hidden {
+                text.push_str(line);
+                text.push('\n');
+            }
+            text.push_str(&delimiter);
+            text.push('\n');
+            text
+        }
+    }
+
+    /// A fence, with a body that cannot close it.
+    fn fence() -> impl Strategy<Value = Fence> {
+        (select(MARKERS), 3..6usize, select(INFO_TAGS))
+            .prop_flat_map(|(marker, run, info)| {
+                (
+                    Just(marker),
+                    Just(run),
+                    Just(info),
+                    vec(select(hidden_lines(marker)), 1..5),
+                )
+            })
+            .prop_map(|(marker, run, info, hidden)| Fence {
+                marker,
+                run,
+                info,
+                hidden,
+            })
+    }
+
+    /// The text a `**Gate:**` section may hold: no section at all, an empty
+    /// one, or one that says what a person is being asked to decide.
+    fn gate_text() -> impl Strategy<Value = Option<String>> {
+        prop_oneof![
+            Just(None),
+            Just(Some(String::new())),
+            line_text().prop_map(Some),
+        ]
+    }
+
+    /// One task block as this test writes it: the four required sections and
+    /// the optional gate, plus the parts whose only job is to be in the way.
+    #[derive(Clone, Debug)]
+    struct Spec {
+        heading: String,
+        noise: Vec<&'static str>,
+        fence: Option<Fence>,
+        outcome: String,
+        done_when: String,
+        verify: String,
+        refs: String,
+        gate: Option<String>,
+        blanks: usize,
+    }
+
+    impl Spec {
+        /// The block exactly as it will be written, which is what the parsed
+        /// task's body has to come back as.
+        fn render(&self) -> String {
+            let mut text = format!("## {}\n", self.heading);
+            for line in &self.noise {
+                text.push_str(line);
+                text.push('\n');
+            }
+            text.push('\n');
+            if let Some(fence) = &self.fence {
+                text.push_str(&fence.render());
+                text.push('\n');
+            }
+            write_a_section(&mut text, "Outcome", &self.outcome);
+            write_a_section(&mut text, "Done-when", &self.done_when);
+            write_a_section(&mut text, "Verify", &self.verify);
+            write_a_section(&mut text, "Refs", &self.refs);
+            if let Some(gate) = &self.gate {
+                // A `**Gate:**` with nothing under it is written that way: the
+                // section is the fact, its text is a courtesy.
+                if gate.is_empty() {
+                    text.push_str("**Gate:**\n");
+                } else {
+                    write_a_section(&mut text, "Gate", gate);
+                }
+            }
+            for _ in 0..self.blanks {
+                text.push('\n');
+            }
+            text
+        }
+
+        /// The title the parsed task should report: the heading line, which is
+        /// never long enough here to reach the limit that cuts a title.
+        fn title(&self) -> String {
+            format!("## {}", self.heading)
+        }
+    }
+
+    /// One section as a person writes it: the label, a space, the text, the
+    /// break. Pushed in pieces rather than formatted, because the point of the
+    /// round trip is that nothing between them is rewritten.
+    fn write_a_section(text: &mut String, label: &str, value: &str) {
+        text.push_str("**");
+        text.push_str(label);
+        text.push_str(":** ");
+        text.push_str(value);
+        text.push('\n');
+    }
+
+    /// One task spec: a heading of one or two fragments, noise, maybe a fence,
+    /// the four sections, maybe a gate, and the blank lines that trail it.
+    fn spec() -> impl Strategy<Value = Spec> {
+        (
+            vec(select(FRAGMENTS), 1..3),
+            document_noise(),
+            option::of(fence()),
+            line_text(),
+            line_text(),
+            line_text(),
+            line_text(),
+            gate_text(),
+            0..3usize,
+        )
+            .prop_map(
+                |(heading, noise, fence, outcome, done_when, verify, refs, gate, blanks)| Spec {
+                    heading: heading.join(" "),
+                    noise,
+                    fence,
+                    outcome,
+                    done_when,
+                    verify,
+                    refs,
+                    gate,
+                    blanks,
+                },
+            )
+    }
+
+    /// A whole plan document and the specs it was built from: the preamble a
+    /// person reads, then the task blocks back to back, so the task count is
+    /// whatever the generator chose, zero included.
+    fn document_and_specs() -> impl Strategy<Value = (String, Vec<Spec>)> {
+        vec(spec(), 0..7).prop_map(|specs| {
+            let blocks: String = specs.iter().map(Spec::render).collect();
+            (format!("{PREAMBLE}{blocks}"), specs)
+        })
+    }
+
+    /// A document assembled out of the shapes that confuse a
+    /// format-reserving parser, joined every way a file gets joined.
+    fn plan_soup() -> impl Strategy<Value = String> {
+        (
+            vec(select(SOUP_LINES), 0..40),
+            select(LINE_JOINS),
+            any::<bool>(),
+        )
+            .prop_map(|(lines, join, final_break)| {
+                let mut text = lines.join(join);
+                if final_break {
+                    text.push_str(join);
+                }
+                text
+            })
+    }
+
+    /// What every answer of [`parse_plan`] must satisfy, whatever it was given.
+    ///
+    /// Reaching the end of this function is the assertion that parsing did not
+    /// panic: a panic is a failed case, and proptest shrinks the text that
+    /// provokes it down to the smallest text that still panics.
+    fn check_total(text: &str, parsed: Result<Vec<Task>, Error>) -> TestCaseResult {
+        let tasks = match parsed {
+            Ok(tasks) => tasks,
+            Err(error) => {
+                let message = error.to_string();
+                prop_assert!(
+                    matches!(error, Error::NotFound { .. }),
+                    "a plan is refused only for a section it lacks, got: {message}"
+                );
+                prop_assert!(
+                    !message.is_empty(),
+                    "a refusal that names nothing helps nobody"
+                );
+                return Ok(());
+            }
+        };
+        for (index, task) in tasks.iter().enumerate() {
+            let position = u32::try_from(index + 1)
+                .expect("a generated document cannot hold more tasks than an id names");
+            prop_assert_eq!(
+                task.id,
+                TaskId::new(position),
+                "ids count from one in the order the tasks are written"
+            );
+            prop_assert_eq!(
+                task.status,
+                TaskStatus::Pending,
+                "an import concludes nothing, so no task can be Done yet"
+            );
+            prop_assert!(
+                validate(task).is_ok(),
+                "a task that imported is a task that validates: {task:?}"
+            );
+            prop_assert!(
+                !task.body.is_empty(),
+                "a task that exists has a block: {:?}",
+                task.id
+            );
+            prop_assert!(
+                task.body.starts_with(task.title()) && !task.title().is_empty(),
+                "a title is a non-empty prefix of the body it is read out of: {:?}",
+                task.title()
+            );
+            prop_assert!(
+                task.title().chars().count() <= TITLE_MAX_CHARS,
+                "a title is cut to the limit, got {:?}",
+                task.title()
+            );
+            prop_assert!(
+                task.title()
+                    .trim_start_matches([' ', '\t'])
+                    .starts_with("##"),
+                "only a level-two heading opens a task: {:?}",
+                task.title()
+            );
+            prop_assert!(
+                task.gate.is_none() || task.body.contains("**Gate:"),
+                "a gate is read out of a `**Gate:**` section and nowhere else: {task:?}"
+            );
+        }
+        assert_blocks_are_the_document(text, &tasks)
+    }
+
+    /// Reading the blocks back is reading the document.
+    ///
+    /// A block is its lines and nothing else, so the blocks of a document,
+    /// concatenated, are that document from its first heading onward — every
+    /// byte of it, fence delimiters, line breaks and rules included — and
+    /// parsing that again gives the same tasks in the same order. A parser that
+    /// stripped a line, rewrote a break, or merged two blocks fails here.
+    fn assert_blocks_are_the_document(text: &str, tasks: &[Task]) -> TestCaseResult {
+        let mut kept = String::new();
+        for task in tasks {
+            kept.push_str(&task.body);
+        }
+        prop_assert!(
+            text.ends_with(&kept),
+            "the tasks are the document from its first heading on with nothing \
+             stripped: the kept blocks are {} bytes and the document is {} bytes, \
+             and the kept text is not the end of it",
+            kept.len(),
+            text.len()
+        );
+        prop_assert_eq!(
+            parse_plan(&kept).ok(),
+            Some(tasks.to_vec()),
+            "reading the kept blocks again gives the same tasks"
+        );
+        Ok(())
+    }
+
+    /// The bytes a column holds, read back as text. What the database hands
+    /// back is UTF-8, and text that did not survive the trip would fail here
+    /// rather than print mojibake on the Task detail screen.
+    fn column_text(bytes: &[u8]) -> String {
+        String::from_utf8(bytes.to_vec()).expect("a TEXT column holds UTF-8")
+    }
+
+    /// What the `tasks` table of docs/DESIGN.md keeps of a task: its columns,
+    /// as the bytes a `TEXT` column holds.
+    ///
+    /// There is deliberately no `gate` column, because the schema has none —
+    /// ADR-0007 leaves it to the task that stores the queue to add one or to
+    /// re-derive the section from the body. So the columns are read back
+    /// without a gate, and the stored body is read back with everything, which
+    /// is the claim that holds either way: the body the queue keeps is enough
+    /// to reproduce the task.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct StoredTask {
+        id: u32,
+        title: Vec<u8>,
+        outcome: Vec<u8>,
+        done_when: Vec<u8>,
+        verify: Vec<u8>,
+        refs: Vec<u8>,
+        body: Vec<u8>,
+    }
+
+    impl StoredTask {
+        /// The row an import writes.
+        fn store(task: &Task) -> Self {
+            Self {
+                id: task.id.get(),
+                title: task.title().as_bytes().to_vec(),
+                outcome: task.outcome.as_bytes().to_vec(),
+                done_when: task.done_when.as_bytes().to_vec(),
+                verify: task.verify.as_bytes().to_vec(),
+                refs: task.refs.as_bytes().to_vec(),
+                body: task.body.as_bytes().to_vec(),
+            }
+        }
+
+        /// The task those columns describe, in the state an import leaves it.
+        fn read_back(&self) -> Task {
+            Task {
+                id: TaskId::new(self.id),
+                status: TaskStatus::Pending,
+                body: column_text(&self.body),
+                outcome: column_text(&self.outcome),
+                done_when: column_text(&self.done_when),
+                verify: column_text(&self.verify),
+                refs: column_text(&self.refs),
+                gate: None,
+            }
+        }
+
+        /// The task re-read by parsing the stored body, which is where a gate
+        /// comes from when there is no column to hold it.
+        fn read_back_from_body(&self) -> Task {
+            let body = column_text(&self.body);
+            let mut reread = parse_plan(&body).unwrap_or_else(|error| {
+                panic!("a block read back from the store is still a plan: {error}")
+            });
+            assert_eq!(reread.len(), 1, "one block on its own is one task");
+            reread.remove(0)
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(CASES))]
+
+        /// Any text at all, in any script, arranged however it likes: the
+        /// parser answers or refuses, and never panics doing it.
+        #[test]
+        fn any_text_at_all_becomes_tasks_or_an_error_but_never_a_panic(text in any::<String>()) {
+            check_total(&text, parse_plan(&text))?;
+        }
+
+        /// The same claim over the text a plan document is actually made of,
+        /// where a line is as likely to begin with `---`, `#`, a fence run or a
+        /// bold label as with words.
+        #[test]
+        fn the_lines_a_plan_is_made_of_become_tasks_or_an_error(text in plan_soup()) {
+            check_total(&text, parse_plan(&text))?;
+        }
+
+        /// A document this test wrote, part for known part: every task comes
+        /// back with the sections that were written into it, its body is its
+        /// block byte for byte, and what the queue keeps of it is enough to
+        /// read the task back unchanged.
+        #[test]
+        fn a_generated_document_returns_the_tasks_that_were_written_into_it(
+            (document, specs) in document_and_specs(),
+        ) {
+            let tasks = parse_plan(&document)
+                .unwrap_or_else(|error| panic!("a generated plan is well formed: {error}"));
+            prop_assert_eq!(
+                tasks.len(),
+                specs.len(),
+                "every block is one task, and a heading or a label inside a \
+                 fence, a rule or a `#` line opens nothing"
+            );
+            let mut rows = Vec::with_capacity(tasks.len());
+            for (index, (task, spec)) in tasks.iter().zip(&specs).enumerate() {
+                let position = u32::try_from(index + 1)
+                    .expect("a generated document cannot hold more tasks than an id names");
+                prop_assert_eq!(
+                    task.id,
+                    TaskId::new(position),
+                    "ids count from one in the order the tasks are written"
+                );
+                prop_assert_eq!(&task.body, &spec.render(), "the block is kept verbatim");
+                prop_assert_eq!(&task.outcome, &spec.outcome);
+                prop_assert_eq!(&task.done_when, &spec.done_when);
+                prop_assert_eq!(&task.verify, &spec.verify);
+                prop_assert_eq!(&task.refs, &spec.refs);
+                prop_assert_eq!(
+                    &task.gate,
+                    &spec.gate,
+                    "a gate is a `**Gate:**` section, kept with what it asks"
+                );
+                prop_assert_eq!(task.status, TaskStatus::Pending);
+                prop_assert_eq!(task.title(), spec.title(), "the title is the heading line");
+                prop_assert!(validate(task).is_ok(), "a task that imported validates");
+                rows.push(StoredTask::store(task));
+            }
+            for (task, row) in tasks.iter().zip(&rows) {
+                let columns = row.read_back();
+                prop_assert_eq!(
+                    &columns,
+                    &Task { gate: None, ..task.clone() },
+                    "the columns hold the task, text in any script included"
+                );
+                prop_assert_eq!(
+                    column_text(&row.title),
+                    columns.title().to_owned(),
+                    "the stored title is still the projection of the stored body"
+                );
+                let reread = row.read_back_from_body();
+                prop_assert_eq!(
+                    Task { id: task.id, ..reread },
+                    task.clone(),
+                    "the stored body reproduces the whole task, gate included"
+                );
+            }
+            assert_blocks_are_the_document(&document, &tasks)?;
+        }
+    }
+
+    #[test]
+    fn the_generated_pieces_stay_clear_of_the_markup_that_would_move_a_block() {
+        // The exactness the round-trip property claims rests on what these
+        // pools are allowed to hold. Asserted rather than assumed: a fragment
+        // that gained a line break, a fence run, or a space at either end
+        // tomorrow would make the property's expectations wrong, and a wrong
+        // expectation fails on some generated document instead of here.
+        for fragment in FRAGMENTS {
+            assert!(!fragment.is_empty(), "a fragment has to say something");
+            assert!(
+                !fragment.chars().any(|ch| ch == '\n' || ch == '\r'),
+                "a fragment is one line: {fragment:?}"
+            );
+            assert!(
+                !fragment.contains(['`', '~', '*']),
+                "a fragment opens no fence and no label: {fragment:?}"
+            );
+            assert!(
+                fragment.chars().count() * 2 + 4 <= TITLE_MAX_CHARS,
+                "two fragments, a space and a heading marker still fit a title: {fragment:?}"
+            );
+            assert!(
+                fragment
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| !ch.is_whitespace())
+                    && fragment
+                        .chars()
+                        .last()
+                        .is_some_and(|ch| !ch.is_whitespace()),
+                "a fragment that needed trimming would not come back as written: {fragment:?}"
+            );
+        }
+        for line in DOCUMENT_LINES {
+            assert!(
+                !line.contains(['`', '~']),
+                "a document line opens no fence: {line:?}"
+            );
+            let text = line.trim_start_matches([' ', '\t']);
+            let indented_past_a_heading = line.len() - text.len() > MAX_HEADING_INDENT;
+            let level_two = text.starts_with("## ") || text == "##";
+            assert!(
+                !level_two || indented_past_a_heading,
+                "a level-two heading outside a fence would open a second task: {line:?}"
+            );
+            assert!(
+                !opens_a_kept_label(text),
+                "a kept label ahead of the sections would fill one: {line:?}"
+            );
+        }
+        for (marker, lines) in [('`', BACKTICK_FENCE_LINES), ('~', TILDE_FENCE_LINES)] {
+            for line in lines {
+                assert!(
+                    !line.contains(['\n', '\r']),
+                    "a fence holds one line at a time: {line:?}"
+                );
+                let run = line.chars().take_while(|ch| *ch == marker).count();
+                let only_the_marker = !line.is_empty() && line.chars().all(|ch| ch == marker);
+                assert!(
+                    run < 3 || !only_the_marker,
+                    "{line:?} would close a {marker} fence three deep, so what \
+                     came after it would stop being hidden"
+                );
+            }
+        }
+        for label in KEPT_LABELS {
+            assert!(
+                !FRAGMENTS.iter().any(|fragment| fragment.contains(label)),
+                "a fragment holding {label} would be a label in disguise"
+            );
+        }
+    }
+
+    /// Whether a line opens one of the sections the queue keeps a field for.
+    fn opens_a_kept_label(line: &str) -> bool {
+        KEPT_LABELS
+            .iter()
+            .any(|label| line.starts_with(format!("**{label}:**").as_str()))
+    }
+
+    #[test]
+    fn a_preamble_holds_a_rule_a_heading_and_a_label_and_becomes_no_task() {
+        // Every generated document opens with this preamble, so the claim that
+        // a preamble is read and then kept out of the queue is stated once, in
+        // prose, rather than resting only on a property that happens to pass.
+        let document = format!(
+            "{PREAMBLE}## a task\n\n**Outcome:** one.\n**Done-when:** asserted.\n\
+             **Verify:** `cargo nextest run`\n**Refs:** VISION.md §15\n"
+        );
+        let mut tasks = parse_plan(&document).expect("the block after the preamble is a task");
+        assert_eq!(
+            tasks.len(),
+            1,
+            "the preamble's rule, fence and label queued nothing"
+        );
+        let task = tasks.remove(0);
+        assert_eq!(task.outcome, "one.");
+        assert_eq!(task.refs, "VISION.md §15");
+        assert!(
+            !task.body.contains("# The plan"),
+            "the preamble stays in the preamble"
+        );
+    }
+}
