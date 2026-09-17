@@ -124,12 +124,6 @@ Answers a `waiting_input` question. The answer is recorded as an ADR in
 Passes a human gate. Marks the gate satisfied and leaves the queue paused;
 `resume` continues. Exits 2 if no gate is pending.
 
-### `ktask-rs stats [--task <id>]`
-
-Tokens, cost, durations and success rates per task and per queue, from recorded
-attempt evidence. `--json` emits the same data unrounded. Where a provider
-reports no usage, the field is `null` and the source is marked, never guessed.
-
 ### `ktask-rs pause` / `ktask-rs interrupt` / `ktask-rs cancel`
 
 Control of a run in progress, from any terminal. `pause` stops the queue after

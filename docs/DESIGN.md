@@ -217,7 +217,7 @@ may be added without extending `state::apply` in the same task.
 | `AttemptFinished` | `attempt: AttemptId, exit_code: i32, usage: Option<Usage>, session_id: Option<String>, model_reported: Option<String>` |
 | `GateStarted` | `kind: GateKind` |
 | `GateFinished` | `result: GateResult` |
-| `VerifyPassed` | `attempt: AttemptId, tree_hash: String` |
+| `VerifyPassed` | `attempt: AttemptId` |
 | `VerifyFailed` | `attempt: AttemptId, class: FailureClass, detail: String` |
 | `PublishStarted` | `attempt: AttemptId, candidate_sha: String` |
 | `PublishVerified` | `commit: String, remote_sha: String` |
