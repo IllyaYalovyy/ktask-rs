@@ -6,20 +6,3 @@
 mod error;
 
 pub use error::{Error, Result};
-
-/// Placeholder proving the workspace builds and tests at the seed commit.
-/// The first task replaces it.
-#[must_use]
-pub fn seed_marker() -> &'static str {
-    "ktask-core"
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn seed_marker_identifies_the_crate() {
-        assert_eq!(seed_marker(), "ktask-core");
-    }
-}

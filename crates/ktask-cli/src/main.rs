@@ -7,5 +7,5 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 fn main() {
-    println!("{} (seed)", ktask_core::seed_marker());
+    println!("ktask-rs: no commands yet");
 }
