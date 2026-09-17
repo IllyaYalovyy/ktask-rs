@@ -18,6 +18,18 @@
 //! keep honest, which is why a test compares it against the tag on every
 //! variant rather than on one.
 //!
+//! # The envelope
+//!
+//! [`Event`] is the record around a catalog entry: sequence, instant, task and
+//! payload — the four columns `docs/DESIGN.md` gives the `events` table. A
+//! catalog entry on its own says *what* happened to no one at no time, so a
+//! journal of them could not be replayed in order, timed, or attributed to a
+//! task; the envelope is what makes one readable as a record of a run.
+//!
+//! Its timestamp is written as RFC 3339 in UTC by [`rfc3339_utc`], the
+//! "Time is `OffsetDateTime` in UTC, serialized as RFC 3339" convention of
+//! `docs/DESIGN.md` made mechanical rather than intended.
+//!
 //! # Catalog entries that are not here yet
 //!
 //! `docs/DESIGN.md` lists 28 entries; 19 are defined below. The other 9 are
@@ -43,7 +55,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::classify::FailureClass;
-use crate::ids::AttemptId;
+use crate::ids::{AttemptId, EventSeq, TaskId};
 use crate::state::{PauseReason, Phase, Recovery, Stream};
 
 /// Something that happened — to the queue, to a task, or to one run of a task.
@@ -212,14 +224,97 @@ impl EventKind {
     }
 }
 
+/// One journal record: what happened, and the three facts that place it in a
+/// run.
+///
+/// The four fields are the four columns `docs/DESIGN.md` gives the `events`
+/// table. [`EventKind`] alone says what happened to no one at no time: with no
+/// `seq` a replay has no order to fold the events in, with no `ts` the History
+/// screen is a list without dates, and with no `task_id` a queue-level event
+/// and a task's own event are indistinguishable. Read back in `seq` order, a
+/// sequence of these *is* the run — which is why the journal, the event bus and
+/// `--json` all hand round exactly this type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Event {
+    /// Where this record sits in the journal's sequence. Assigned by the
+    /// journal as it appends, never guessed by whoever produced the event: a
+    /// sequence a caller chose is a sequence two callers can choose.
+    pub seq: EventSeq,
+    /// When it happened, written as RFC 3339 in UTC: one instant, one
+    /// spelling, whatever offset it was stamped at.
+    #[serde(with = "rfc3339_utc")]
+    pub ts: OffsetDateTime,
+    /// The task this event is about, or `None` for an event about the queue
+    /// itself — the `NULL` of the `events` table's `task_id` column.
+    pub task_id: Option<TaskId>,
+    /// What happened, with everything known about it.
+    ///
+    /// Encoded as the internally-tagged object [`EventKind`] derives, so the
+    /// object inside an envelope and the object the `payload` column holds are
+    /// the same bytes: a stored event and a streamed one read identically.
+    pub kind: EventKind,
+}
+
+/// Serde glue that writes an instant as RFC 3339 text and reads it back in UTC.
+///
+/// [`Event`]'s field asks for this module rather than for `time`'s own
+/// `serde`-feature encoding, because that encoding — with the `time` features
+/// `docs/DESIGN.md` fixes, which do not include `serde-human-readable` — is a
+/// numeric tuple no operator can read, and widening the dependency set is not
+/// this module's call to make. Formatting and parsing are still `time`'s
+/// (`time::serde::rfc3339`); what is added here is the direction. An instant
+/// authored at `+02:00` and one authored at `Z` are the same instant, and the
+/// `ts` column documents one spelling of it, so the offset is resolved before
+/// the text is written: whatever offset an event was stamped at, the journal
+/// holds one spelling of it.
+///
+/// Writing needs the conversion; reading does not. Measured here rather than
+/// assumed: `time`'s RFC 3339 parser hands back the instant it read at the UTC
+/// offset whatever offset the text carried, so the read side forwards and a
+/// test holds that promise — `time`'s writer, by contrast, keeps the offset the
+/// instant arrived with, which is why the write side converts.
+///
+/// Writing is total. `time`'s own conversion (`to_offset`) panics once the
+/// result leaves the supported date range, and a supervisor that panics loses
+/// the run it was supervising, so the checked form is used and its refusal
+/// becomes a serialization failure: an instant an hour past the last representable
+/// date has no UTC spelling to write. `time`'s formatter supplies the other
+/// half, refusing a year RFC 3339 has no digits for.
+mod rfc3339_utc {
+    use serde::ser::Error as _;
+    use serde::{Deserializer, Serializer};
+    use time::{OffsetDateTime, UtcOffset};
+
+    /// Write `stamp` as RFC 3339 text, in UTC.
+    pub(crate) fn serialize<S>(stamp: &OffsetDateTime, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let utc = stamp
+            .checked_to_offset(UtcOffset::UTC)
+            .ok_or_else(|| S::Error::custom("instant has no UTC calendar date to write"))?;
+        time::serde::rfc3339::serialize(&utc, serializer)
+    }
+
+    /// Read RFC 3339 text and return the instant it names, which `time`
+    /// returns at the UTC offset.
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<OffsetDateTime, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        time::serde::rfc3339::deserialize(deserializer)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::EventKind;
+    use super::{Event, EventKind};
     use crate::classify::FailureClass;
-    use crate::ids::AttemptId;
+    use crate::ids::{AttemptId, EventSeq, TaskId};
     use crate::state::{PauseReason, Phase, Recovery, Stream};
     use serde_json::Value;
     use time::macros::datetime;
+    use time::{OffsetDateTime, UtcOffset};
 
     /// A commit sha every entry below is built from, so a field that fails to
     /// encode is visible rather than mistaken for a placeholder.
@@ -537,5 +632,273 @@ mod tests {
             datetime!(2026-09-17 12:34:56 UTC).unix_timestamp(),
             "an acknowledgement is only auditable if the instant survives the journal",
         );
+    }
+
+    /// The four columns `docs/DESIGN.md` gives the `events` table, with `seq`
+    /// taken as given and `kind` left to the caller.
+    fn envelope(seq: u64, ts: OffsetDateTime, task_id: Option<TaskId>, kind: EventKind) -> Event {
+        Event {
+            seq: EventSeq::new(seq),
+            ts,
+            task_id,
+            kind,
+        }
+    }
+
+    #[test]
+    fn envelope_writes_the_instant_as_rfc_3339_in_utc() {
+        let event = envelope(
+            7,
+            datetime!(2026-09-17 12:34:56 UTC),
+            Some(TaskId::new(3)),
+            EventKind::TaskDone {
+                commit: SHA.to_string(),
+            },
+        );
+        assert_eq!(
+            serde_json::to_string(&event).expect("an envelope encodes"),
+            concat!(
+                r#"{"seq":7,"ts":"2026-09-17T12:34:56Z","#,
+                r#""task_id":3,"kind":{"kind":"TaskDone","commit":"0b78d3f1c2a4"}}"#,
+            ),
+            "the envelope's text is the durable format: the four columns the events \
+             table has, and the instant in the Z form its column comment promises",
+        );
+    }
+
+    #[test]
+    fn envelope_writes_one_instant_as_one_text_whatever_offset_it_arrived_with() {
+        for (authored, expected) in [
+            (datetime!(2026-09-17 12:34:56 UTC), "2026-09-17T12:34:56Z"),
+            (
+                datetime!(2026-09-17 14:34:56 +02:00),
+                "2026-09-17T12:34:56Z",
+            ),
+            (
+                datetime!(2026-09-17 05:34:56 -07:00),
+                "2026-09-17T12:34:56Z",
+            ),
+        ] {
+            let event = envelope(1, authored, None, EventKind::Resumed);
+            let encoded = serde_json::to_value(&event).expect("an envelope encodes as JSON");
+            assert_eq!(
+                encoded.get("ts").and_then(Value::as_str),
+                Some(expected),
+                "{authored} is the same instant as {expected}; the ts column holds one \
+                 spelling of an instant, not the spelling whoever stamped it happened to use",
+            );
+        }
+    }
+
+    #[test]
+    fn envelope_reads_the_instant_back_as_the_same_instant() {
+        let event = envelope(
+            9,
+            datetime!(2026-09-17 12:34:56.123456789 UTC),
+            Some(TaskId::new(4)),
+            EventKind::TaskQueued {
+                title: "Define the event envelope".to_string(),
+            },
+        );
+        let text = serde_json::to_string(&event).expect("an envelope encodes as a string");
+        assert!(
+            text.contains(r#""ts":"2026-09-17T12:34:56.123456789Z""#),
+            "two events stamped inside one second are only ordered by their fraction of \
+             it, and the text written was {text}",
+        );
+
+        let decoded: Event =
+            serde_json::from_str(&text).expect("what the envelope writes is read back");
+        assert_eq!(
+            decoded.ts, event.ts,
+            "parsing the text must yield the instant it was written from"
+        );
+        assert_eq!(
+            decoded.ts.offset(),
+            UtcOffset::UTC,
+            "a read-back instant must carry the offset it was written with, or the next \
+             write of it differs from the last"
+        );
+        assert_eq!(decoded, event, "the whole record, not only its timestamp");
+        assert_eq!(
+            serde_json::to_string(&decoded).expect("a read-back envelope re-encodes"),
+            text,
+            "a replay that re-writes a record must write the bytes it read, or the journal \
+             is rewritten by being read"
+        );
+    }
+
+    #[test]
+    fn envelope_canonicalizes_the_spellings_rfc_3339_allows_by_agreement() {
+        // An offset in place of `Z`, and a space in place of the `T`, are both
+        // RFC 3339 by mutual agreement. Both name a real instant, so both are
+        // readable; both leave with one spelling, so a re-write is not free to
+        // keep the spelling its author happened to use.
+        for text in [
+            concat!(
+                r#"{"seq":1,"ts":"2026-09-17T14:34:56+02:00","#,
+                r#""task_id":null,"kind":{"kind":"Resumed"}}"#,
+            ),
+            concat!(
+                r#"{"seq":1,"ts":"2026-09-17 12:34:56Z","#,
+                r#""task_id":null,"kind":{"kind":"Resumed"}}"#,
+            ),
+        ] {
+            let decoded: Event = serde_json::from_str(text)
+                .expect("RFC 3339 text that names an instant is readable");
+            assert_eq!(
+                decoded.ts,
+                datetime!(2026-09-17 12:34:56 UTC),
+                "{text}: the separator and the offset belong to the text, not to the \
+                 instant it names"
+            );
+            assert_eq!(
+                serde_json::to_string(&decoded).expect("a read-back envelope re-encodes"),
+                concat!(
+                    r#"{"seq":1,"ts":"2026-09-17T12:34:56Z","#,
+                    r#""task_id":null,"kind":{"kind":"Resumed"}}"#,
+                ),
+                "reading a record must canonicalize it, or every re-write keeps the odd \
+                 spelling its author used",
+            );
+        }
+    }
+
+    #[test]
+    fn envelope_refuses_a_timestamp_that_is_not_rfc_3339_text() {
+        for ts in [
+            // What the `serde` derive on `time`'s own type writes with the
+            // features docs/DESIGN.md fixes: lossless, and unreadable by
+            // anything that is not `time`.
+            r"[2026,260,12,34,56,0,0,0,0]",
+            r#""2026-09-17T12:34:56""#,
+            r#""2026-09-17T12:34:56+02""#,
+            r#""1789212896""#,
+            "1789212896",
+            r#""""#,
+        ] {
+            let text =
+                format!(r#"{{"seq":1,"ts":{ts},"task_id":null,"kind":{{"kind":"Resumed"}}}}"#);
+            assert!(
+                serde_json::from_str::<Event>(&text).is_err(),
+                "{text} names no instant in the one format the ts column documents, so \
+                 reading it must fail rather than invent a time",
+            );
+        }
+    }
+
+    #[test]
+    fn envelope_refuses_an_instant_whose_year_rfc_3339_has_no_digits_for() {
+        let event = envelope(
+            1,
+            datetime!(0000-01-01 00:30 +02:00),
+            None,
+            EventKind::Resumed,
+        );
+        assert!(
+            serde_json::to_string(&event).is_err(),
+            "in UTC that instant is a year before the calendar RFC 3339 writes, so the \
+             only answer that is not a panic is a refusal"
+        );
+    }
+
+    #[test]
+    fn envelope_refuses_an_instant_with_no_utc_date_to_write() {
+        let event = envelope(
+            1,
+            datetime!(9999-12-31 23:30 -01:00),
+            None,
+            EventKind::Resumed,
+        );
+        let text = serde_json::to_string(&event);
+        assert!(
+            text.is_err(),
+            "one hour into UTC is a date past the last one there is; `time`'s unchecked \
+             conversion panics here, and writing a record must fail instead of taking the \
+             run down with it"
+        );
+    }
+
+    #[test]
+    fn queue_level_envelope_writes_its_absent_task_as_null() {
+        let event = envelope(
+            1,
+            datetime!(2026-09-17 12:34:56 UTC),
+            None,
+            EventKind::PreflightStarted,
+        );
+        let text = serde_json::to_string(&event).expect("an envelope encodes as a string");
+        assert_eq!(
+            text,
+            concat!(
+                r#"{"seq":1,"ts":"2026-09-17T12:34:56Z","#,
+                r#""task_id":null,"kind":{"kind":"PreflightStarted"}}"#,
+            ),
+            "a queue-level event is the events table's NULL task_id, and the key stays \
+             present so every envelope the CLI prints has the same four keys",
+        );
+
+        let decoded: Event =
+            serde_json::from_str(&text).expect("what the envelope writes is read back");
+        assert_eq!(
+            decoded, event,
+            "no task stays no task through the round trip"
+        );
+
+        let spelled = concat!(
+            r#"{"seq":1,"ts":"2026-09-17T12:34:56Z","#,
+            r#""kind":{"kind":"PreflightStarted"}}"#,
+        );
+        let omitted: Event =
+            serde_json::from_str(spelled).expect("a record with no task_id key at all is readable");
+        assert_eq!(
+            omitted, event,
+            "an absent task_id and a null one are the same fact — the event is about the \
+             queue — so the read side does not need the key the write side always spells"
+        );
+    }
+
+    #[test]
+    fn envelope_refuses_a_record_with_no_sequence_no_instant_or_no_kind() {
+        for text in [
+            r#"{"ts":"2026-09-17T12:34:56Z","task_id":null,"kind":{"kind":"Resumed"}}"#,
+            r#"{"seq":1,"task_id":null,"kind":{"kind":"Resumed"}}"#,
+            r#"{"seq":1,"ts":"2026-09-17T12:34:56Z","task_id":null}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Event>(text).is_err(),
+                "{text} leaves out a column that has no absent spelling, so a record that \
+                 decoded anyway would be an event nobody recorded when, in what order, or \
+                 what happened",
+            );
+        }
+    }
+
+    #[test]
+    fn envelope_holds_the_payload_whose_kind_the_journal_indexes_on() {
+        for kind in one_event_per_documented_entry() {
+            let name = kind.discriminant();
+            let event = envelope(1, datetime!(2026-09-17 12:34:56 UTC), None, kind.clone());
+            let encoded = serde_json::to_value(&event).expect("an envelope encodes as JSON");
+            let payload = encoded
+                .get("kind")
+                .expect("the envelope carries the payload beside its columns");
+            assert_eq!(
+                payload,
+                &serde_json::to_value(&event.kind).expect("a catalog entry encodes as JSON"),
+                "{name}: the payload inside the envelope and the payload the payload column \
+                 holds must be one object, or a stored event differs from a streamed one",
+            );
+            assert_eq!(
+                payload.get("kind").and_then(Value::as_str),
+                Some(name),
+                "{name}: the tag inside the envelope is the string the kind column stores",
+            );
+
+            let text = serde_json::to_string(&event).expect("an envelope encodes as a string");
+            let decoded: Event =
+                serde_json::from_str(&text).expect("what the envelope writes is read back");
+            assert_eq!(decoded, event, "{name} survives the envelope round trip");
+        }
     }
 }
