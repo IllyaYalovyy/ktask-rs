@@ -67,7 +67,11 @@ pub fn config_file() -> Result<PathBuf> {
 
 /// [`state_root`] with the environment supplied by the caller, which is how a
 /// test injects variables without touching process state.
-fn state_root_with(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
+///
+/// Crate-visible rather than private to this module because `crate::project`
+/// resolves the same state root through the same accessor: one recipe for
+/// where state goes, one way to inject an environment while looking for it.
+pub(crate) fn state_root_with(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
     Ok(base(env, "XDG_STATE_HOME", Path::new(".local/state"))?.join(APP_DIR))
 }
 
@@ -79,7 +83,7 @@ fn config_file_with(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
 }
 
 /// The process environment as an accessor, for the public entry points.
-fn process_env(key: &str) -> Option<String> {
+pub(crate) fn process_env(key: &str) -> Option<String> {
     std::env::var(key).ok()
 }
 

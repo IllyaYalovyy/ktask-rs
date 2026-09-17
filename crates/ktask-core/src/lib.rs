@@ -9,6 +9,7 @@ mod error;
 mod event;
 mod ids;
 mod paths;
+mod project;
 mod state;
 mod task;
 
@@ -18,5 +19,6 @@ pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use paths::{config_file, project_id, state_root};
+pub use project::{Project, discover, register};
 pub use state::{PauseReason, Phase, Recovery, Stream};
 pub use task::{Task, TaskStatus, parse_plan, validate};
