@@ -13,10 +13,34 @@
 //! An unknown key is an error rather than something to ignore: a setting that
 //! is misspelled, or left over from another version, would otherwise be
 //! silently unwritten while the operator believed it was in effect.
+//!
+//! ## Where a value comes from
+//!
+//! [`load`] merges four layers in a fixed order: the defaults this module
+//! holds, the global document, the project document, the environment. A layer
+//! overrides only the keys it sets, so a project that pins one setting keeps
+//! everything else the machine was configured with. Every key then reports the
+//! layer that won it ([`Config::provenance`]), because an operator reading a
+//! value needs to know why it is that value: a setting edited in the wrong file
+//! is otherwise indistinguishable from one that never took effect.
+//!
+//! A configuration file that is not there is not a layer. A repository that
+//! never wrote one, or a home directory with no global settings, is the
+//! ordinary case and loads the layers below it. A file that is there and cannot
+//! be read, or that is not valid TOML, is refused by name — settings an
+//! operator wrote are about to be ignored, and silence would let them believe
+//! those settings applied.
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::fmt;
+use std::fs;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+
+use crate::{Error, Result};
 
 /// The effective configuration: every setting, with the documented default.
 ///
@@ -98,11 +122,24 @@ pub struct Config {
     /// start: 2 GiB, because a journal that fills the disk mid-run loses the
     /// evidence the run exists to produce.
     pub min_free_disk_bytes: u64,
+    /// Which layer supplied each key's value, as recorded by [`load`].
+    ///
+    /// Kept out of a written document (`#[serde(skip)]`): provenance is a fact
+    /// about how a value arrived in this process, and a file cannot set it — a
+    /// reader would meet it as an undocumented key. A `Config` built some other
+    /// way records nothing, and a key with nothing recorded reports
+    /// [`Source::Default`], which is the honest answer for a value nobody
+    /// traced back to a layer.
+    #[serde(skip)]
+    sources: BTreeMap<String, Source>,
 }
 
 impl Default for Config {
     /// The defaults `docs/DESIGN.md` documents, which are also the values an
     /// empty configuration document deserializes to.
+    ///
+    /// Provenance is recorded as empty: the defaults are the layer every other
+    /// layer overrides, so there is nothing below them to have come from.
     fn default() -> Self {
         Self {
             provider: "dummy".to_owned(),
@@ -131,15 +168,479 @@ impl Default for Config {
             flake_runs: 5,
             retention_days: 90,
             min_free_disk_bytes: 2_147_483_648,
+            sources: BTreeMap::new(),
         }
+    }
+}
+
+impl Config {
+    /// Where every documented key's value came from, in the order
+    /// `docs/DESIGN.md` lists the keys.
+    ///
+    /// There is one entry per documented key, always, so the Configuration
+    /// screen can render a row per setting without holding a list of its own.
+    /// A key that no layer recorded reports [`Source::Default`], which is what
+    /// every key of a [`Config`] that was deserialized rather than [`load`]ed
+    /// reports: nothing wrote those values from a layer, so the default is all
+    /// that is known about them.
+    #[must_use]
+    pub fn provenance(&self) -> Vec<(String, Source)> {
+        KEYS.iter()
+            .map(|key| (key.name.to_owned(), self.source_of(key.name)))
+            .collect()
+    }
+
+    /// The layer recorded for one key, or [`Source::Default`] when none was.
+    fn source_of(&self, key: &str) -> Source {
+        self.sources.get(key).copied().unwrap_or(Source::Default)
+    }
+
+    /// Records the layer a key's value was written from.
+    fn set_source(&mut self, key: &str, source: Source) {
+        self.sources.insert(key.to_owned(), source);
+    }
+}
+
+/// The layer a configuration value came from.
+///
+/// The variants are declared in ascending order of precedence, which is the
+/// order [`load`] applies the layers in: a later one overrides an earlier one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// Nobody set the key, so it holds the value `docs/DESIGN.md` documents.
+    Default,
+    /// The user-wide document, which is whoever configured the machine saying
+    /// what they want.
+    GlobalFile,
+    /// The repository's own document, which may disagree with the machine it
+    /// happens to sit on because the work is the repository's.
+    ProjectFile,
+    /// A `KTASK_*` environment variable: one run overridden without editing a
+    /// file.
+    Env,
+    /// A command-line flag, which beats every file and the environment. The one
+    /// layer [`load`] never reports, because only an argument parser knows a
+    /// flag was passed: recording it is the CLI's to do.
+    Flag,
+}
+
+impl fmt::Display for Source {
+    /// The layer as the Configuration screen names it.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Default => "default",
+            Self::GlobalFile => "global file",
+            Self::ProjectFile => "project file",
+            Self::Env => "environment",
+            Self::Flag => "flag",
+        };
+        f.write_str(label)
+    }
+}
+
+/// A value and the layer that supplied it.
+///
+/// This is what the loader carries between reading one layer and writing it
+/// into a [`Config`], so a value never travels beyond the place that read it
+/// without saying where it came from.
+#[derive(Debug, Clone)]
+pub struct Resolved<T> {
+    /// The value that won.
+    pub value: T,
+    /// The layer that supplied it.
+    pub source: Source,
+}
+
+/// The configuration the documented layers add up to, every key tagged with the
+/// layer that set it.
+///
+/// The layers are applied lowest precedence first: [`Source::Default`] (the
+/// values [`Config::default`] holds), then the `global` document, then the
+/// `project` document, then the environment. A layer overrides only the keys it
+/// actually sets, so a project that pins one setting keeps what the global
+/// document said about all the others. [`Config::provenance`] then reports who
+/// won each key.
+///
+/// `env` is handed in rather than read from the process because a test has to
+/// hold a set of variables without touching process state, which
+/// `docs/DESIGN.md` Conventions requires; a caller that wants the real
+/// environment passes an accessor over `std::env::var`. A variable whose value
+/// is empty or all whitespace carries no setting — an empty value means unset,
+/// exactly as it does for the XDG directories.
+///
+/// # Errors
+///
+/// [`Error::Config`] when a document is not valid TOML (naming the file), when
+/// a document or a variable sets a key that is not documented (naming the key
+/// and where it was set), or when a value cannot be read as the setting that
+/// bears its name (naming the setting and its origin). [`Error::Io`] when a
+/// document is there but cannot be read. A path that is simply not there is
+/// none of these: it is a layer that does not exist.
+pub fn load(
+    global: Option<&Path>,
+    project: Option<&Path>,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<Config> {
+    let mut config = Config::default();
+    for (path, layer) in [(global, Source::GlobalFile), (project, Source::ProjectFile)] {
+        let Some(path) = path else {
+            continue;
+        };
+        if let Some(document) = read_document(path)? {
+            apply_document(&mut config, path, layer, &document)?;
+        }
+    }
+    apply_environment(&mut config, env)?;
+    Ok(config)
+}
+
+/// A configuration document as read from a file: keys in the order the reader
+/// keeps them, values still untyped.
+///
+/// A document is read as a map rather than straight into [`Config`] because the
+/// loader has to know which layer each value arrived from, and deserializing a
+/// whole struct at once loses the keys it did not contain.
+type Document = BTreeMap<String, toml::Value>;
+
+/// The document at `path`, or `None` when nothing is there.
+///
+/// Absence is the ordinary case and costs the configuration one layer. A file
+/// that is present and cannot be read for any other reason is reported, because
+/// it means settings somebody wrote are about to be ignored.
+///
+/// # Errors
+///
+/// [`Error::Io`] for a read that failed for a reason other than absence,
+/// [`Error::Config`] for a file whose contents are not a TOML document.
+fn read_document(path: &Path) -> Result<Option<Document>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    match toml::from_str::<Document>(&text) {
+        Ok(document) => Ok(Some(document)),
+        Err(error) => Err(Error::Config {
+            key: path.display().to_string(),
+            detail: format!("not a valid TOML document: {error}"),
+        }),
+    }
+}
+
+/// Writes every key one document holds into `config`, each tagged with `layer`.
+///
+/// # Errors
+///
+/// [`Error::Config`] for a key that is not documented, or for a value the
+/// setting it names cannot hold.
+fn apply_document(
+    config: &mut Config,
+    path: &Path,
+    layer: Source,
+    document: &Document,
+) -> Result<()> {
+    let origin = Origin::File(path);
+    for (name, value) in document {
+        let key = documented(name).ok_or_else(|| Error::Config {
+            key: name.clone(),
+            detail: format!("{origin} sets a key that is not documented"),
+        })?;
+        (key.write)(config, key, Raw::Document(value, origin), layer)?;
+    }
+    Ok(())
+}
+
+/// Writes every key the environment sets into `config`, above both documents.
+///
+/// # Errors
+///
+/// [`Error::Config`] for a variable whose text its setting cannot be read from.
+fn apply_environment(config: &mut Config, env: &dyn Fn(&str) -> Option<String>) -> Result<()> {
+    for key in KEYS {
+        let Some(text) = variable(env, key.variable) else {
+            continue;
+        };
+        (key.write)(
+            config,
+            key,
+            Raw::Text(&text, Origin::Variable(key.variable)),
+            Source::Env,
+        )?;
+    }
+    Ok(())
+}
+
+/// The text one `KTASK_*` variable carries, or `None` when it carries nothing.
+///
+/// The value is trimmed, because text typed into a shell profile or a service
+/// unit picks up whitespace at the ends, and what is left empty counts as
+/// absent rather than as the empty string: `KTASK_MODEL=` sets no model, which
+/// is what an operator means by writing it.
+fn variable(env: &dyn Fn(&str) -> Option<String>, name: &str) -> Option<String> {
+    env(name)
+        .map(|held| held.trim().to_owned())
+        .filter(|held| !held.is_empty())
+}
+
+/// One documented setting: the key as it is spelled in a file, the variable that
+/// carries the same setting, and how to write a value of it into a [`Config`].
+#[derive(Debug, Clone, Copy)]
+struct Key {
+    /// The key in a document, which is also the name of the field it writes.
+    name: &'static str,
+    /// The environment variable that overrides the same setting.
+    variable: &'static str,
+    /// Reads a value into the field this entry is named for.
+    write: fn(&mut Config, &Key, Raw<'_>, Source) -> Result<()>,
+}
+
+/// The table entry for one documented setting, whose field of the same name
+/// gives the value the type it has to be read as.
+macro_rules! setting {
+    ($name:literal, $variable:literal, $field:ident) => {{
+        fn write(config: &mut Config, key: &Key, raw: Raw<'_>, source: Source) -> Result<()> {
+            let resolved: Resolved<_> = resolve(key, raw, source)?;
+            config.$field = resolved.value;
+            config.set_source(key.name, resolved.source);
+            Ok(())
+        }
+        Key {
+            name: $name,
+            variable: $variable,
+            write,
+        }
+    }};
+}
+
+/// Every documented setting, in the order `docs/DESIGN.md` lists them, which is
+/// also the order the Configuration screen renders them in. A key outside this
+/// table is refused rather than skipped, so the list of settings is one list
+/// rather than one per layer.
+const KEYS: &[Key] = &[
+    setting!("provider", "KTASK_PROVIDER", provider),
+    setting!("model", "KTASK_MODEL", model),
+    setting!(
+        "attempt_timeout_secs",
+        "KTASK_ATTEMPT_TIMEOUT_SECS",
+        attempt_timeout_secs
+    ),
+    setting!(
+        "gate_timeout_secs",
+        "KTASK_GATE_TIMEOUT_SECS",
+        gate_timeout_secs
+    ),
+    setting!(
+        "idle_timeout_secs",
+        "KTASK_IDLE_TIMEOUT_SECS",
+        idle_timeout_secs
+    ),
+    setting!("max_attempts", "KTASK_MAX_ATTEMPTS", max_attempts),
+    setting!(
+        "max_remediation_attempts",
+        "KTASK_MAX_REMEDIATION_ATTEMPTS",
+        max_remediation_attempts
+    ),
+    setting!(
+        "circuit_breaker_threshold",
+        "KTASK_CIRCUIT_BREAKER_THRESHOLD",
+        circuit_breaker_threshold
+    ),
+    setting!("mainline_remote", "KTASK_MAINLINE_REMOTE", mainline_remote),
+    setting!("mainline_branch", "KTASK_MAINLINE_BRANCH", mainline_branch),
+    setting!(
+        "context_budget_bytes",
+        "KTASK_CONTEXT_BUDGET_BYTES",
+        context_budget_bytes
+    ),
+    setting!(
+        "failure_bundle_bytes",
+        "KTASK_FAILURE_BUNDLE_BYTES",
+        failure_bundle_bytes
+    ),
+    setting!(
+        "output_ring_lines",
+        "KTASK_OUTPUT_RING_LINES",
+        output_ring_lines
+    ),
+    setting!(
+        "limit_wait_margin_secs",
+        "KTASK_LIMIT_WAIT_MARGIN_SECS",
+        limit_wait_margin_secs
+    ),
+    setting!(
+        "limit_max_wait_secs",
+        "KTASK_LIMIT_MAX_WAIT_SECS",
+        limit_max_wait_secs
+    ),
+    setting!(
+        "default_protocol",
+        "KTASK_DEFAULT_PROTOCOL",
+        default_protocol
+    ),
+    setting!(
+        "dummy_scenario_path",
+        "KTASK_DUMMY_SCENARIO_PATH",
+        dummy_scenario_path
+    ),
+    setting!("test_globs", "KTASK_TEST_GLOBS", test_globs),
+    setting!("secret_patterns", "KTASK_SECRET_PATTERNS", secret_patterns),
+    setting!("flake_runs", "KTASK_FLAKE_RUNS", flake_runs),
+    setting!("retention_days", "KTASK_RETENTION_DAYS", retention_days),
+    setting!(
+        "min_free_disk_bytes",
+        "KTASK_MIN_FREE_DISK_BYTES",
+        min_free_disk_bytes
+    ),
+];
+
+/// The entry for a documented key, or `None` when a document holds a key nobody
+/// defined.
+fn documented(name: &str) -> Option<&'static Key> {
+    KEYS.iter().find(|key| key.name == name)
+}
+
+/// Reads a raw value as the type of the setting that names it, and pairs it with
+/// the layer it arrived from.
+///
+/// # Errors
+///
+/// [`Error::Config`] naming the setting and where the value came from, when a
+/// document holds the key as a type the field cannot be, or when environment
+/// text cannot be read as that type.
+fn resolve<T>(key: &Key, raw: Raw<'_>, source: Source) -> Result<Resolved<T>>
+where
+    T: DeserializeOwned + FromEnvText,
+{
+    let value = match raw {
+        Raw::Document(value, origin) => {
+            value
+                .clone()
+                .try_into()
+                .map_err(|error: toml::de::Error| Error::Config {
+                    key: key.name.to_owned(),
+                    detail: format!("{origin} holds a value this setting cannot hold: {error}"),
+                })?
+        }
+        Raw::Text(text, origin) => T::from_text(text).ok_or_else(|| Error::Config {
+            key: key.name.to_owned(),
+            detail: format!("{origin} is not a `{}`", T::TEXT_TYPE),
+        })?,
+    };
+    Ok(Resolved { value, source })
+}
+
+/// Where a raw value was read from, so a refusal can name it instead of
+/// paraphrasing around it.
+#[derive(Debug, Clone, Copy)]
+enum Origin<'src> {
+    /// A configuration document on disk.
+    File(&'src Path),
+    /// An environment variable.
+    Variable(&'src str),
+}
+
+impl fmt::Display for Origin<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::File(path) => write!(f, "file `{}`", path.display()),
+            Self::Variable(name) => write!(f, "environment variable `{name}`"),
+        }
+    }
+}
+
+/// A setting's value as one layer holds it, before it has been read into a type.
+#[derive(Debug, Clone, Copy)]
+enum Raw<'src> {
+    /// A value a TOML document already typed.
+    Document(&'src toml::Value, Origin<'src>),
+    /// Text an environment variable carries.
+    Text(&'src str, Origin<'src>),
+}
+
+/// How a setting's type is spelled as text, which only the environment needs: a
+/// document arrives with its types already there.
+trait FromEnvText: Sized {
+    /// What this type is called in a message saying that some text was not it.
+    const TEXT_TYPE: &'static str;
+
+    /// The value the text describes, or `None` when it describes none.
+    fn from_text(text: &str) -> Option<Self>;
+}
+
+impl FromEnvText for String {
+    const TEXT_TYPE: &'static str = "name";
+
+    fn from_text(text: &str) -> Option<Self> {
+        Some(text.to_owned())
+    }
+}
+
+impl FromEnvText for Option<String> {
+    const TEXT_TYPE: &'static str = "name";
+
+    /// A variable that reached this point was set, so the answer is `Some` of
+    /// the text; the outer `None` means the text named no setting at all.
+    fn from_text(text: &str) -> Option<Self> {
+        Some(Some(text.to_owned()))
+    }
+}
+
+impl FromEnvText for Option<PathBuf> {
+    const TEXT_TYPE: &'static str = "path";
+
+    fn from_text(text: &str) -> Option<Self> {
+        Some(Some(PathBuf::from(text)))
+    }
+}
+
+impl FromEnvText for u64 {
+    const TEXT_TYPE: &'static str = "u64";
+
+    fn from_text(text: &str) -> Option<Self> {
+        text.parse().ok()
+    }
+}
+
+impl FromEnvText for u32 {
+    const TEXT_TYPE: &'static str = "u32";
+
+    fn from_text(text: &str) -> Option<Self> {
+        text.parse().ok()
+    }
+}
+
+impl FromEnvText for usize {
+    const TEXT_TYPE: &'static str = "usize";
+
+    fn from_text(text: &str) -> Option<Self> {
+        text.parse().ok()
+    }
+}
+
+impl FromEnvText for Vec<String> {
+    const TEXT_TYPE: &'static str = "comma-separated list";
+
+    /// Split on commas with each entry trimmed and empty entries dropped, so a
+    /// trailing comma is one entry and `KTASK_TEST_GLOBS=,` is an empty list an
+    /// operator wrote on purpose rather than an absent setting.
+    fn from_text(text: &str) -> Option<Self> {
+        Some(
+            text.split(',')
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
-    use std::collections::BTreeSet;
+    use super::{Config, Error, Source, load};
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::fs;
     use std::path::{Path, PathBuf};
+    use tempfile::tempdir;
 
     /// Reads a TOML document as `ktask-rs` would read a configuration file.
     fn parse(document: &str) -> Config {
@@ -216,6 +717,7 @@ mod tests {
             flake_runs: 20,
             retention_days: 7,
             min_free_disk_bytes: 1_073_741_824,
+            sources: BTreeMap::new(),
         }
     }
 
@@ -302,41 +804,486 @@ mod tests {
 
     #[test]
     fn the_toml_keys_are_exactly_the_documented_settings() {
-        let document =
-            toml::to_string(&every_field_set()).expect("a configuration is writable as TOML");
-        let value: toml::Value = toml::from_str(&document).expect("the document is a TOML table");
-        let keys: BTreeSet<&str> = value
+        assert_eq!(written_keys(&every_field_set()), documented_keys());
+    }
+
+    /// The 22 documented keys, in the order `docs/DESIGN.md` lists them, which
+    /// is also the order the Configuration screen renders them in.
+    const DOCUMENTED_KEYS: [&str; 22] = [
+        "provider",
+        "model",
+        "attempt_timeout_secs",
+        "gate_timeout_secs",
+        "idle_timeout_secs",
+        "max_attempts",
+        "max_remediation_attempts",
+        "circuit_breaker_threshold",
+        "mainline_remote",
+        "mainline_branch",
+        "context_budget_bytes",
+        "failure_bundle_bytes",
+        "output_ring_lines",
+        "limit_wait_margin_secs",
+        "limit_max_wait_secs",
+        "default_protocol",
+        "dummy_scenario_path",
+        "test_globs",
+        "secret_patterns",
+        "flake_runs",
+        "retention_days",
+        "min_free_disk_bytes",
+    ];
+
+    /// A document that sets every documented key to something other than its
+    /// default, so a key read into the wrong field shows up as a wrong value.
+    const EVERY_KEY_DOCUMENT: &str = r#"
+provider = "codex"
+model = "gpt-5.6-sol"
+attempt_timeout_secs = 900
+gate_timeout_secs = 600
+idle_timeout_secs = 300
+max_attempts = 5
+max_remediation_attempts = 3
+circuit_breaker_threshold = 9
+mainline_remote = "upstream"
+mainline_branch = "trunk"
+context_budget_bytes = 4096
+failure_bundle_bytes = 2048
+output_ring_lines = 64
+limit_wait_margin_secs = 15
+limit_max_wait_secs = 7200
+default_protocol = "tdd"
+dummy_scenario_path = "/state/dummy.json"
+test_globs = ["tests/**", "crates/**/tests.rs"]
+secret_patterns = ["ghp_[A-Za-z0-9]{36}"]
+flake_runs = 11
+retention_days = 30
+min_free_disk_bytes = 1073741824
+"#;
+
+    /// Every documented key set through the environment instead, as the text an
+    /// operator would write, to the same value `EVERY_KEY_DOCUMENT` gives it.
+    const EVERY_KEY_VARIABLES: [(&str, &str); 22] = [
+        ("KTASK_PROVIDER", "codex"),
+        ("KTASK_MODEL", "gpt-5.6-sol"),
+        ("KTASK_ATTEMPT_TIMEOUT_SECS", "900"),
+        ("KTASK_GATE_TIMEOUT_SECS", "600"),
+        ("KTASK_IDLE_TIMEOUT_SECS", "300"),
+        ("KTASK_MAX_ATTEMPTS", "5"),
+        ("KTASK_MAX_REMEDIATION_ATTEMPTS", "3"),
+        ("KTASK_CIRCUIT_BREAKER_THRESHOLD", "9"),
+        ("KTASK_MAINLINE_REMOTE", "upstream"),
+        ("KTASK_MAINLINE_BRANCH", "trunk"),
+        ("KTASK_CONTEXT_BUDGET_BYTES", "4096"),
+        ("KTASK_FAILURE_BUNDLE_BYTES", "2048"),
+        ("KTASK_OUTPUT_RING_LINES", "64"),
+        ("KTASK_LIMIT_WAIT_MARGIN_SECS", "15"),
+        ("KTASK_LIMIT_MAX_WAIT_SECS", "7200"),
+        ("KTASK_DEFAULT_PROTOCOL", "tdd"),
+        ("KTASK_DUMMY_SCENARIO_PATH", "/state/dummy.json"),
+        ("KTASK_TEST_GLOBS", "tests/**,crates/**/tests.rs"),
+        ("KTASK_SECRET_PATTERNS", "ghp_[A-Za-z0-9]{36}"),
+        ("KTASK_FLAKE_RUNS", "11"),
+        ("KTASK_RETENTION_DAYS", "30"),
+        ("KTASK_MIN_FREE_DISK_BYTES", "1073741824"),
+    ];
+
+    /// An environment with nothing set, which is how every test that is not
+    /// about the environment reads it.
+    fn no_variables(_: &str) -> Option<String> {
+        None
+    }
+
+    /// An environment accessor over a fixed table of variables, so no test has
+    /// to touch the process environment.
+    fn variables(values: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let table: BTreeMap<String, String> = values
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect();
+        move |name| table.get(name).cloned()
+    }
+
+    /// Writes a configuration document and returns the path it lives at.
+    fn write_document(directory: &Path, name: &str, document: &str) -> PathBuf {
+        let path = directory.join(name);
+        fs::write(&path, document)
+            .unwrap_or_else(|error| panic!("`{}` is writable: {error}", path.display()));
+        path
+    }
+
+    /// A configuration's provenance as a lookup, for the tests that name a
+    /// handful of keys rather than the whole list.
+    fn sources_of(config: &Config) -> BTreeMap<String, Source> {
+        config.provenance().into_iter().collect()
+    }
+
+    /// Which layer a configuration says one key's value came from.
+    fn source_of(config: &Config, key: &str) -> Source {
+        *sources_of(config)
+            .get(key)
+            .unwrap_or_else(|| panic!("`{key}` reports no provenance"))
+    }
+
+    /// The provenance every documented key reports when one layer set all of
+    /// them, in the order `docs/DESIGN.md` lists them.
+    fn every_key_from(layer: Source) -> Vec<(String, Source)> {
+        DOCUMENTED_KEYS
+            .iter()
+            .map(|key| ((*key).to_owned(), layer))
+            .collect()
+    }
+
+    /// The provenance a configuration should report when `overrides` names the
+    /// keys a layer set and every other key was left at the default.
+    fn keys_from(overrides: &[(&str, Source)]) -> BTreeMap<String, Source> {
+        DOCUMENTED_KEYS
+            .iter()
+            .map(|key| ((*key).to_owned(), Source::Default))
+            .chain(
+                overrides
+                    .iter()
+                    .map(|(key, layer)| ((*key).to_owned(), *layer)),
+            )
+            .collect()
+    }
+
+    /// The keys a configuration holds when it is written out as TOML.
+    fn written_keys(config: &Config) -> BTreeSet<String> {
+        let document = toml::to_string(config).expect("a configuration is writable as TOML");
+        let value: toml::Value = toml::from_str(&document)
+            .unwrap_or_else(|error| panic!("`{document}` was written by this crate: {error}"));
+        value
             .as_table()
             .expect("a configuration is a table")
             .keys()
-            .map(String::as_str)
-            .collect();
-        let documented: BTreeSet<&str> = [
-            "provider",
-            "model",
-            "attempt_timeout_secs",
-            "gate_timeout_secs",
-            "idle_timeout_secs",
-            "max_attempts",
-            "max_remediation_attempts",
-            "circuit_breaker_threshold",
-            "mainline_remote",
-            "mainline_branch",
-            "context_budget_bytes",
-            "failure_bundle_bytes",
-            "output_ring_lines",
-            "limit_wait_margin_secs",
-            "limit_max_wait_secs",
-            "default_protocol",
-            "dummy_scenario_path",
-            "test_globs",
-            "secret_patterns",
-            "flake_runs",
-            "retention_days",
-            "min_free_disk_bytes",
-        ]
-        .into_iter()
-        .collect();
-        assert_eq!(keys, documented);
+            .cloned()
+            .collect()
+    }
+
+    /// The documented keys as a set.
+    fn documented_keys() -> BTreeSet<String> {
+        DOCUMENTED_KEYS
+            .iter()
+            .map(|key| (*key).to_owned())
+            .collect()
+    }
+
+    /// Asserts every setting took the value the two fixtures above give it,
+    /// setting by setting so a failure names the setting rather than a struct.
+    fn assert_every_setting_is_set(config: &Config) {
+        assert_eq!(config.provider, "codex");
+        assert_eq!(config.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(config.attempt_timeout_secs, 900);
+        assert_eq!(config.gate_timeout_secs, 600);
+        assert_eq!(config.idle_timeout_secs, 300);
+        assert_eq!(config.max_attempts, 5);
+        assert_eq!(config.max_remediation_attempts, 3);
+        assert_eq!(config.circuit_breaker_threshold, 9);
+        assert_eq!(config.mainline_remote, "upstream");
+        assert_eq!(config.mainline_branch, "trunk");
+        assert_eq!(config.context_budget_bytes, 4_096);
+        assert_eq!(config.failure_bundle_bytes, 2_048);
+        assert_eq!(config.output_ring_lines, 64);
+        assert_eq!(config.limit_wait_margin_secs, 15);
+        assert_eq!(config.limit_max_wait_secs, 7_200);
+        assert_eq!(config.default_protocol, "tdd");
+        assert_eq!(
+            config.dummy_scenario_path.as_deref(),
+            Some(Path::new("/state/dummy.json"))
+        );
+        assert_eq!(config.test_globs, ["tests/**", "crates/**/tests.rs"]);
+        assert_eq!(config.secret_patterns, ["ghp_[A-Za-z0-9]{36}"]);
+        assert_eq!(config.flake_runs, 11);
+        assert_eq!(config.retention_days, 30);
+        assert_eq!(config.min_free_disk_bytes, 1_073_741_824);
+    }
+
+    #[test]
+    fn a_configuration_nobody_configured_reports_the_default_for_every_key() {
+        let config = load(None, None, &no_variables).expect("the defaults are always loadable");
+        assert_documented_defaults(&config);
+        assert_eq!(config.provenance(), every_key_from(Source::Default));
+    }
+
+    #[test]
+    fn a_global_document_sets_every_documented_key_and_reports_itself_as_the_source() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let global = write_document(scratch.path(), "global.toml", EVERY_KEY_DOCUMENT);
+        let config = load(Some(&global), None, &no_variables)
+            .expect("a document that sets every key is a configuration");
+        assert_every_setting_is_set(&config);
+        assert_eq!(config.provenance(), every_key_from(Source::GlobalFile));
+    }
+
+    #[test]
+    fn a_project_document_sets_every_documented_key_and_reports_itself_as_the_source() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let project = write_document(scratch.path(), "project.toml", EVERY_KEY_DOCUMENT);
+        let config = load(None, Some(&project), &no_variables)
+            .expect("a project document is a configuration");
+        assert_every_setting_is_set(&config);
+        assert_eq!(config.provenance(), every_key_from(Source::ProjectFile));
+    }
+
+    #[test]
+    fn an_environment_variable_sets_every_documented_key_and_reports_itself_as_the_source() {
+        let env = variables(&EVERY_KEY_VARIABLES);
+        let config = load(None, None, &env).expect("the environment alone is a configuration");
+        assert_every_setting_is_set(&config);
+        assert_eq!(config.provenance(), every_key_from(Source::Env));
+    }
+
+    #[test]
+    fn a_name_resolves_to_the_highest_layer_that_sets_it() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let global = write_document(scratch.path(), "global.toml", "provider = \"claude\"\n");
+        let project = write_document(scratch.path(), "project.toml", "provider = \"codex\"\n");
+        let env = variables(&[("KTASK_PROVIDER", "from-environment")]);
+
+        let nobody = load(None, None, &no_variables).expect("the defaults are loadable");
+        assert_eq!(nobody.provider, "dummy");
+        assert_eq!(source_of(&nobody, "provider"), Source::Default);
+
+        let global_only =
+            load(Some(&global), None, &no_variables).expect("a global document is a configuration");
+        assert_eq!(global_only.provider, "claude");
+        assert_eq!(source_of(&global_only, "provider"), Source::GlobalFile);
+
+        let with_project =
+            load(Some(&global), Some(&project), &no_variables).expect("both documents load");
+        assert_eq!(with_project.provider, "codex");
+        assert_eq!(source_of(&with_project, "provider"), Source::ProjectFile);
+
+        let with_env =
+            load(Some(&global), Some(&project), &env).expect("the environment loads too");
+        assert_eq!(with_env.provider, "from-environment");
+        assert_eq!(source_of(&with_env, "provider"), Source::Env);
+    }
+
+    #[test]
+    fn a_count_resolves_to_the_highest_layer_that_sets_it() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let global = write_document(scratch.path(), "global.toml", "max_attempts = 3\n");
+        let project = write_document(scratch.path(), "project.toml", "max_attempts = 5\n");
+        let env = variables(&[("KTASK_MAX_ATTEMPTS", "7")]);
+
+        let nobody = load(None, None, &no_variables).expect("the defaults are loadable");
+        assert_eq!(nobody.max_attempts, 2);
+        assert_eq!(source_of(&nobody, "max_attempts"), Source::Default);
+
+        let global_only =
+            load(Some(&global), None, &no_variables).expect("a global document is a configuration");
+        assert_eq!(global_only.max_attempts, 3);
+        assert_eq!(source_of(&global_only, "max_attempts"), Source::GlobalFile);
+
+        let with_project =
+            load(Some(&global), Some(&project), &no_variables).expect("both documents load");
+        assert_eq!(with_project.max_attempts, 5);
+        assert_eq!(
+            source_of(&with_project, "max_attempts"),
+            Source::ProjectFile
+        );
+
+        let with_env =
+            load(Some(&global), Some(&project), &env).expect("the environment loads too");
+        assert_eq!(with_env.max_attempts, 7);
+        assert_eq!(source_of(&with_env, "max_attempts"), Source::Env);
+    }
+
+    #[test]
+    fn a_layer_overrides_only_the_keys_it_sets_and_leaves_the_rest_to_their_layers() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let global = write_document(
+            scratch.path(),
+            "global.toml",
+            "provider = \"claude\"\nattempt_timeout_secs = 600\nmax_attempts = 3\n",
+        );
+        let project = write_document(scratch.path(), "project.toml", "provider = \"codex\"\n");
+        let env = variables(&[("KTASK_MAINLINE_BRANCH", "trunk")]);
+        let config = load(Some(&global), Some(&project), &env).expect("three layers load");
+
+        assert_eq!(config.provider, "codex");
+        assert_eq!(config.attempt_timeout_secs, 600);
+        assert_eq!(config.max_attempts, 3);
+        assert_eq!(config.mainline_branch, "trunk");
+        assert_eq!(config.model, None);
+        assert_eq!(
+            sources_of(&config),
+            keys_from(&[
+                ("provider", Source::ProjectFile),
+                ("attempt_timeout_secs", Source::GlobalFile),
+                ("max_attempts", Source::GlobalFile),
+                ("mainline_branch", Source::Env),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_configuration_file_that_is_not_there_is_not_a_layer() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let global = scratch.path().join("global.toml");
+        let project = scratch.path().join("project.toml");
+        let config = load(Some(&global), Some(&project), &no_variables)
+            .expect("a project that never wrote a configuration is normal");
+        assert_documented_defaults(&config);
+        assert_eq!(config.provenance(), every_key_from(Source::Default));
+    }
+
+    #[test]
+    fn a_configuration_path_that_holds_no_document_is_refused_rather_than_skipped() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let directory = scratch.path().join("config.toml");
+        fs::create_dir(&directory)
+            .unwrap_or_else(|error| panic!("`{}` is creatable: {error}", directory.display()));
+        let error = load(Some(&directory), None, &no_variables)
+            .expect_err("a directory is not a configuration document");
+        assert!(
+            matches!(error, Error::Io(_)),
+            "a document that is there and cannot be read is reported, not skipped: {error}"
+        );
+    }
+
+    #[test]
+    fn a_document_that_is_not_valid_toml_is_refused_naming_the_file_that_holds_it() {
+        for written_as_global in [true, false] {
+            let scratch = tempdir().expect("a scratch directory outside the repository");
+            let name = if written_as_global {
+                "global.toml"
+            } else {
+                "project.toml"
+            };
+            let path = write_document(scratch.path(), name, "provider = \n");
+            let (global, project) = if written_as_global {
+                (Some(path.as_path()), None)
+            } else {
+                (None, Some(path.as_path()))
+            };
+            let error = load(global, project, &no_variables)
+                .expect_err("a truncated document is not a configuration");
+            let message = error.to_string();
+            assert!(message.contains(&path.display().to_string()), "{message}");
+            assert!(message.contains("not a valid TOML document"), "{message}");
+        }
+    }
+
+    #[test]
+    fn a_key_nobody_documents_is_refused_naming_the_key_and_the_file_that_set_it() {
+        for written_as_global in [true, false] {
+            let scratch = tempdir().expect("a scratch directory outside the repository");
+            let name = if written_as_global {
+                "global.toml"
+            } else {
+                "project.toml"
+            };
+            let path = write_document(scratch.path(), name, "not_a_documented_setting = 1\n");
+            let (global, project) = if written_as_global {
+                (Some(path.as_path()), None)
+            } else {
+                (None, Some(path.as_path()))
+            };
+            let error = load(global, project, &no_variables)
+                .expect_err("an undocumented key must not be ignored in silence");
+            let message = error.to_string();
+            assert!(message.contains("not_a_documented_setting"), "{message}");
+            assert!(message.contains(&path.display().to_string()), "{message}");
+            assert!(message.contains("not documented"), "{message}");
+        }
+    }
+
+    #[test]
+    fn a_document_value_the_setting_cannot_hold_is_refused_naming_the_key_and_the_file() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let global = write_document(scratch.path(), "global.toml", "max_attempts = \"lots\"\n");
+        let error = load(Some(&global), None, &no_variables).expect_err("`lots` is not a count");
+        let message = error.to_string();
+        assert!(message.contains("max_attempts"), "{message}");
+        assert!(message.contains(&global.display().to_string()), "{message}");
+        assert!(message.contains("u32"), "{message}");
+    }
+
+    #[test]
+    fn an_environment_value_the_setting_cannot_hold_is_refused_naming_the_variable() {
+        let env = variables(&[("KTASK_MAX_ATTEMPTS", "lots")]);
+        let error = load(None, None, &env).expect_err("`lots` is not a count");
+        let message = error.to_string();
+        assert!(message.contains("max_attempts"), "{message}");
+        assert!(message.contains("KTASK_MAX_ATTEMPTS"), "{message}");
+        assert!(message.contains("`u32`"), "{message}");
+    }
+
+    #[test]
+    fn an_environment_value_that_is_empty_or_blank_carries_no_setting() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let global = write_document(
+            scratch.path(),
+            "global.toml",
+            "provider = \"claude\"\nmax_attempts = 3\ntest_globs = [\"tests/**\"]\n",
+        );
+        let env = variables(&[
+            ("KTASK_PROVIDER", "   "),
+            ("KTASK_MAX_ATTEMPTS", ""),
+            ("KTASK_TEST_GLOBS", ""),
+        ]);
+        let config = load(Some(&global), None, &env)
+            .expect("an environment value with nothing in it is not a layer");
+
+        assert_eq!(config.provider, "claude");
+        assert_eq!(config.max_attempts, 3);
+        assert_eq!(config.test_globs, ["tests/**"]);
+        assert_eq!(
+            sources_of(&config),
+            keys_from(&[
+                ("provider", Source::GlobalFile),
+                ("max_attempts", Source::GlobalFile),
+                ("test_globs", Source::GlobalFile),
+            ])
+        );
+    }
+
+    #[test]
+    fn an_environment_list_is_split_on_commas_and_emptied_by_separators_alone() {
+        let env = variables(&[
+            ("KTASK_TEST_GLOBS", " tests/** , crates/**/tests.rs ,, "),
+            ("KTASK_SECRET_PATTERNS", ","),
+        ]);
+        let config = load(None, None, &env).expect("a list written in the environment is a value");
+
+        assert_eq!(config.test_globs, ["tests/**", "crates/**/tests.rs"]);
+        assert!(
+            config.secret_patterns.is_empty(),
+            "{:?}",
+            config.secret_patterns
+        );
+        assert_eq!(source_of(&config, "test_globs"), Source::Env);
+        assert_eq!(source_of(&config, "secret_patterns"), Source::Env);
+    }
+
+    #[test]
+    fn a_configuration_deserialized_without_layers_reports_the_default_layer() {
+        let config = parse("provider = \"codex\"");
+        assert_eq!(config.provider, "codex");
+        assert_eq!(source_of(&config, "provider"), Source::Default);
+    }
+
+    #[test]
+    fn recorded_provenance_is_never_written_into_a_configuration_document() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let global = write_document(scratch.path(), "global.toml", EVERY_KEY_DOCUMENT);
+        let config = load(Some(&global), None, &no_variables).expect("a loaded configuration");
+        assert_eq!(written_keys(&config), documented_keys());
+    }
+
+    #[test]
+    fn a_source_is_named_the_way_the_configuration_screen_shows_it() {
+        for (source, label) in [
+            (Source::Default, "default"),
+            (Source::GlobalFile, "global file"),
+            (Source::ProjectFile, "project file"),
+            (Source::Env, "environment"),
+            (Source::Flag, "flag"),
+        ] {
+            assert_eq!(source.to_string(), label);
+        }
     }
 }
