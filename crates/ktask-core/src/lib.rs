@@ -7,10 +7,12 @@ pub mod config;
 mod error;
 mod ids;
 mod paths;
+mod state;
 mod task;
 
 pub use config::Config;
 pub use error::{Error, Result};
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use paths::{config_file, project_id, state_root};
+pub use state::{PauseReason, Phase, Recovery, Stream};
 pub use task::{Task, TaskStatus, parse_plan, validate};
