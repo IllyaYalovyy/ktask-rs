@@ -781,6 +781,49 @@ That is the whole of the outcome's second paragraph.
     }
 
     #[test]
+    fn a_fence_closes_only_on_a_run_as_long_that_carries_nothing_else() {
+        // A four-backtick fence quoting a three-backtick one, with a blank
+        // line, a bold label and a run of backticks carrying text inside it.
+        // This is the ordinary way to write about a fence, and the shape a
+        // parser gets wrong when it closes a fence on any run of backticks, on
+        // a shorter one, or on a blank line: the label inside the fence must
+        // fill nothing, and the label after it must be the section.
+        let document = "\
+## T024 A task that quotes a fence
+
+**Outcome:** a fence closes on its own delimiter and on nothing else.
+
+**Done-when:** a test asserts that nothing inside the fence closed it.
+
+**Verify:** `cargo nextest run -p ktask-core`
+
+**Do:** every line of the fence below is content:
+
+````markdown
+```sh
+cargo test
+```
+
+**Refs:** a label inside a fence fills nothing
+```` tail carries text, so it is not a delimiter
+````
+
+**Refs:** VISION.md section 4
+";
+        let tasks = parse_plan(document).expect("a nested fence is one fence");
+        assert_eq!(tasks.len(), 1, "a shorter run inside a fence opens nothing");
+        let task = tasks.first().expect("one task was parsed");
+        assert_eq!(
+            task.body, document,
+            "every backtick was kept where it was written"
+        );
+        assert_eq!(
+            task.refs, "VISION.md section 4",
+            "the label inside the fence is content, the one after it is the section"
+        );
+    }
+
+    #[test]
     fn only_a_level_two_heading_opens_a_task() {
         let document = format!(
             "{}\n### A step inside the task\n\n# not a task\n\n\
