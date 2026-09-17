@@ -299,8 +299,11 @@ fn labelled_sections<'a>(lines: &[Line<'a>]) -> BTreeMap<&'a str, String> {
                 label = Some(name);
                 text.push_str(rest);
             }
-            None if label.is_some() => text.push_str(written),
-            None => {}
+            // A line outside a section is read and then dropped: `store`
+            // empties the buffer before the text of the next label begins, so
+            // whatever a line before any label put there never reaches a
+            // section.
+            None => text.push_str(written),
         }
         text.push('\n');
     }
