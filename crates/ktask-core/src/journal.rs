@@ -55,6 +55,23 @@
 //! is in the file with a sequence of its own, or the journal holds precisely what
 //! it held before the call, with no sequence number spent.
 //!
+//! # Reading
+//!
+//! [`Journal::events`], [`Journal::events_for`] and [`Journal::events_since`] hand
+//! back [`Event`] records, and all three order them by `seq`: the order the journal
+//! means when it says what happened. The instant is stored because a run has to be
+//! datable, and two events can share one — so it dates a record and never orders
+//! one. A read ordered by `ts` could hand a phase back before the attempt that
+//! entered it, which is the journal contradicting itself in the one way a replay
+//! would not notice (ADR-0018).
+//!
+//! Each filter is the SQL's rather than a loop over the rows it picked, so the
+//! per-task read walks `idx_events_task` and a cursor read walks the primary key:
+//! a reader that polls on a tick never reads what it has already seen twice. A row
+//! that cannot be decoded stops the read rather than being skipped — a journal with
+//! a hole silently cut out of it is worse to replay than one that says it could not
+//! be read.
+//!
 //! # Append-only, enforced by the file
 //!
 //! Two triggers sit on `events` and refuse an `UPDATE` and a `DELETE` with
@@ -70,12 +87,12 @@ use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use rusqlite::{Connection, OptionalExtension as _, params};
+use rusqlite::{Connection, OptionalExtension as _, Row, ToSql, params};
 use serde::ser::Error as _;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::{Error, EventKind, EventSeq, Project, Result, TaskId};
+use crate::{Error, Event, EventKind, EventSeq, Project, Result, TaskId};
 
 /// The database a project's durable data lives in, below its state directory.
 const JOURNAL_DATABASE: &str = "journal.db";
@@ -328,6 +345,92 @@ impl Journal {
         Ok(seq)
     }
 
+    /// Every event the journal holds, oldest first.
+    ///
+    /// The whole journal, in the order it numbered its records — not the order of
+    /// the instants, which two events stamped in the same nanosecond cannot be
+    /// told apart by, and not the order the rows were written, which is a fact
+    /// about whoever wrote them rather than about the run.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Database`] when `events` cannot be read; [`Error::Corrupt`] when a
+    /// row describes no event: a number that cannot be a sequence, text that is not
+    /// an instant, a task number no queue holds, or a payload that is not the entry
+    /// its own column names. A read that refuses stops at the row it could not
+    /// decode rather than handing back a journal with a hole in it, because a caller
+    /// reading in order to replay would replay less of the run than it was given.
+    pub fn events(&self) -> Result<Vec<Event>> {
+        self.read_events(
+            "SELECT seq, ts, task_id, kind, payload FROM events ORDER BY seq",
+            params![],
+        )
+    }
+
+    /// One task's events, oldest first.
+    ///
+    /// The records whose `task_id` names `task`, and nothing else. A queue-level
+    /// event belongs to no task, so it is in [`Journal::events`] and in no per-task
+    /// read; a caller that wants both reads both. The filter is the SQL's, which is
+    /// what lets the read use `idx_events_task` — the index over `(task_id, seq)`
+    /// `docs/DESIGN.md` asks for — instead of taking the whole journal to pick one
+    /// task out of it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Journal::events`]. A task holding no events is an empty `Vec` and not
+    /// [`Error::NotFound`]: the queue numbers 4,294,967,295 positions and nearly all
+    /// of them are empty at any moment, so asking about one is a question the journal
+    /// answers with nothing.
+    pub fn events_for(&self, task: TaskId) -> Result<Vec<Event>> {
+        self.read_events(
+            "SELECT seq, ts, task_id, kind, payload FROM events WHERE task_id = ?1 \
+             ORDER BY seq",
+            params![i64::from(task.get())],
+        )
+    }
+
+    /// Every event ahead of a cursor, oldest first.
+    ///
+    /// `seq` is the newest sequence the caller already holds, so the answer is
+    /// strictly after it and the record the cursor names is not handed back again.
+    /// That is what makes this a cursor rather than a filter: a reader that polls it
+    /// — the TUI does, so a run started in another process becomes visible — would
+    /// otherwise be shown every event once per poll.
+    ///
+    /// The cursor need not name a record the journal still holds. A sequence spent by
+    /// an interrupted commit is still a number a reader can be ahead of, and only the
+    /// number is asked about.
+    ///
+    /// # Errors
+    ///
+    /// As [`Journal::events`]. A cursor beyond every sequence the column can hold is
+    /// an empty read, because nothing can be ahead of it.
+    pub fn events_since(&self, seq: EventSeq) -> Result<Vec<Event>> {
+        // `seq` is a signed `INTEGER`, so a cursor wider than that is beyond every
+        // row the table can hold: the widest number the column can compare against
+        // gives the same empty answer, without a conversion this build would have to
+        // explain away.
+        let cursor = i64::try_from(seq.get()).unwrap_or(i64::MAX);
+        self.read_events(
+            "SELECT seq, ts, task_id, kind, payload FROM events WHERE seq > ?1 ORDER BY seq",
+            params![cursor],
+        )
+    }
+
+    /// Run one of the three read statements and decode every row it returns.
+    ///
+    /// The statement comes from the caller because the three reads differ only in
+    /// their `WHERE` clause; the decoding is one rule over one row shape, and a third
+    /// copy of it would be a rule that could drift from the other two.
+    fn read_events(&self, sql: &str, query: &[&dyn ToSql]) -> Result<Vec<Event>> {
+        let mut statement = self.conn.prepare(sql)?;
+        statement
+            .query_map(query, event_row)?
+            .map(|row| decode_event(row?))
+            .collect()
+    }
+
     /// The schema version the file is recorded at, read back from `meta` rather
     /// than remembered from the call that opened it.
     ///
@@ -525,15 +628,144 @@ fn event_sequence(written: i64) -> Result<EventSeq> {
         })
 }
 
+/// One `events` row, in the types the schema declares its columns with.
+///
+/// The row is kept apart from the [`Event`] it describes because the five columns
+/// are the durable thing and the envelope is what this build makes of them. The step
+/// from one to the other is where a file that has stopped agreeing with its own
+/// schema gets reported, and it can only do that while the two are distinguishable.
+struct EventRow {
+    seq: i64,
+    ts: String,
+    task_id: Option<i64>,
+    kind: String,
+    payload: String,
+}
+
+/// Map one result row onto [`EventRow`], in the order the read statements spell
+/// their columns.
+///
+/// Only the widths are decided here: an `INTEGER` is read as the `i64` SQLite gives
+/// it. What those numbers *mean* is [`decode_event`]'s decision, which keeps the
+/// damage report away from the place that cannot say what went wrong with a column
+/// rather than with a row.
+fn event_row(row: &Row<'_>) -> rusqlite::Result<EventRow> {
+    Ok(EventRow {
+        seq: row.get(0)?,
+        ts: row.get(1)?,
+        task_id: row.get(2)?,
+        kind: row.get(3)?,
+        payload: row.get(4)?,
+    })
+}
+
+/// The [`Event`] a stored row describes, or the damage report for a row that
+/// describes none.
+///
+/// Four columns, four questions, and a row has to answer every one of them to be
+/// read: is the number a sequence ([`event_sequence`]), is the text an instant
+/// ([`stored_instant`]), is the number a queue position ([`stored_task`]), is the
+/// payload the entry its own column names ([`stored_entry`])? A record this build
+/// cannot read is a record it would otherwise invent, so every refusal is
+/// [`Error::Corrupt`] carrying the sequence the reader got far enough to know.
+fn decode_event(record: EventRow) -> Result<Event> {
+    let EventRow {
+        seq: written,
+        ts,
+        task_id,
+        kind,
+        payload,
+    } = record;
+    let seq = event_sequence(written)?;
+    Ok(Event {
+        seq,
+        ts: stored_instant(&ts, seq)?,
+        task_id: stored_task(task_id, seq)?,
+        kind: stored_entry(&payload, &kind, seq)?,
+    })
+}
+
+/// The instant the `ts` column documents, or the damage report for text that is not
+/// it.
+///
+/// [`stamp_text`] writes that column as RFC 3339 in UTC and nothing else, and
+/// `docs/DESIGN.md` Conventions fixes that as its one spelling. Text which is not it
+/// did not come from this build — a hand-edited journal, or bytes that moved — and
+/// guessing at a second format would be a read inventing an instant for the one
+/// field whose whole purpose is to carry a real one.
+fn stored_instant(text: &str, seq: EventSeq) -> Result<OffsetDateTime> {
+    OffsetDateTime::parse(text, &Rfc3339).map_err(|unparsable| Error::Corrupt {
+        detail: format!(
+            "the record at seq {seq} holds `{text}` in `ts`, which is not the RFC 3339 UTC instant \
+             the column documents: {unparsable}",
+        ),
+        seq: Some(seq.get()),
+    })
+}
+
+/// The queue position the `task_id` column names, or the damage report for a number
+/// that is not one.
+///
+/// `None` is the schema's own answer — a queue-level event, the `NULL`
+/// `docs/DESIGN.md` documents — and it is the only absence that is not damage. A
+/// number outside a [`TaskId`] is: the column is a wider `INTEGER` than the
+/// identifier because it has to hold that `NULL` as well, not because a queue can
+/// hold more positions than this build can name.
+fn stored_task(stored: Option<i64>, seq: EventSeq) -> Result<Option<TaskId>> {
+    let Some(number) = stored else {
+        return Ok(None);
+    };
+    u32::try_from(number)
+        .map(|position| Some(TaskId::new(position)))
+        .map_err(|out_of_range| Error::Corrupt {
+            detail: format!(
+                "the record at seq {seq} names {number} as its task, which is not a queue \
+                 position: {out_of_range}",
+            ),
+            seq: Some(seq.get()),
+        })
+}
+
+/// The catalog entry the payload holds, checked against the `kind` column meant to
+/// name it, or the damage report for a row whose halves disagree.
+///
+/// Two columns carrying one string is the risk [`EventKind::discriminant`] exists to
+/// keep honest: the append writes the same word to both, and a row naming one entry
+/// in its column and another inside its payload cannot be answered with either — a
+/// `WHERE kind = …` and a decoded enum would disagree about one record, which is the
+/// exact failure the two-column layout buys the right to have. So a disagreement is
+/// refused rather than settled in favour of one half.
+fn stored_entry(payload: &str, column: &str, seq: EventSeq) -> Result<EventKind> {
+    let decoded: EventKind =
+        serde_json::from_str(payload).map_err(|undecodable| Error::Corrupt {
+            detail: format!(
+                "the record at seq {seq} holds a payload that is not a catalog entry: \
+                 {undecodable}",
+            ),
+            seq: Some(seq.get()),
+        })?;
+    let named = decoded.discriminant();
+    if named == column {
+        return Ok(decoded);
+    }
+    Err(Error::Corrupt {
+        detail: format!(
+            "the record at seq {seq} names `{column}` in its `kind` column and `{named}` inside \
+             its payload, so the row disagrees with itself about what happened",
+        ),
+        seq: Some(seq.get()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        CREATE_META_TABLE, EventSeq, Journal, NANOSECONDS_PER_SECOND, SCHEMA_VERSION,
-        SCHEMA_VERSION_KEY, event_sequence, journal_path, reading_nanos, stamp_text,
+        CREATE_META_TABLE, EventRow, EventSeq, Journal, NANOSECONDS_PER_SECOND, SCHEMA_VERSION,
+        SCHEMA_VERSION_KEY, decode_event, event_sequence, journal_path, reading_nanos, stamp_text,
     };
     use crate::{
-        AttemptId, Error, EventKind, FailureClass, PauseReason, Phase, Project, Recovery, Result,
-        Stream, TaskId,
+        AttemptId, Error, Event, EventKind, FailureClass, PauseReason, Phase, Project, Recovery,
+        Result, Stream, TaskId,
     };
     use rusqlite::{Connection, OptionalExtension as _, ffi::ErrorCode, params};
     use std::collections::BTreeMap;
@@ -541,9 +773,9 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
     use tempfile::{TempDir, tempdir};
-    use time::OffsetDateTime;
     use time::format_description::well_known::Rfc3339;
     use time::macros::datetime;
+    use time::{OffsetDateTime, UtcOffset};
 
     /// Every object a journal owns, as `sqlite_master` describes it, ordered by
     /// object name the way the test query orders them. The two triggers are the
@@ -1826,6 +2058,666 @@ mod tests {
             refused.to_string().contains("RFC 3339"),
             "the message names the format that refused, so the reader knows which rule the \
              clock broke: {refused}"
+        );
+    }
+
+    /// Write one `events` row exactly as the caller spells it, `seq` included.
+    ///
+    /// The append pipeline derives its own sequence, instant and payload, which
+    /// is exactly what its tests hold it to — so a read test that needs a row
+    /// whose sequence and instant disagree about the order, or a column holding
+    /// something no append could have written, stages the row itself. Naming
+    /// `seq` is how a row lands out of write order: it is the rowid.
+    fn stage_row(
+        conn: &Connection,
+        seq: i64,
+        ts: &str,
+        task_id: Option<i64>,
+        kind: &str,
+        payload: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO events (seq, ts, task_id, kind, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![seq, ts, task_id, kind, payload],
+        )
+        .expect("a row the test spells out can be staged");
+    }
+
+    /// The sequence numbers a read handed back, in the order it handed them back.
+    /// The order is half of what the three reads promise, so almost every read
+    /// assertion below is against this rather than against a set.
+    fn read_sequences(events: &[Event]) -> Vec<u64> {
+        events.iter().map(|event| event.seq.get()).collect()
+    }
+
+    /// The `events` counter, which is what a lost record leaves spent.
+    fn counter(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT seq FROM sqlite_sequence WHERE name = 'events'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("the counter table is readable")
+        .unwrap_or(0)
+    }
+
+    /// A row an append could have written, which a test then breaks in exactly
+    /// one column, so every refusal below has one cause and not three.
+    fn a_sound_row() -> EventRow {
+        EventRow {
+            seq: 1,
+            ts: "2026-09-17T12:00:00Z".to_owned(),
+            task_id: Some(7),
+            kind: "TaskQueued".to_owned(),
+            payload: r#"{"kind":"TaskQueued","title":"Read events back"}"#.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_fresh_journal_reads_back_no_events() {
+        let parent = scratch();
+        let journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+
+        assert!(
+            journal
+                .events()
+                .expect("an empty journal is readable rather than an error")
+                .is_empty(),
+            "nothing was appended, so the whole journal is nothing — an empty answer, not a \
+             refusal to answer"
+        );
+        assert!(
+            journal
+                .events_for(TaskId::new(1))
+                .expect("a task with no events is readable")
+                .is_empty(),
+            "a task the queue has not reached yet has no events, which the journal knows rather \
+             than guesses"
+        );
+        assert!(
+            journal
+                .events_since(EventSeq::new(0))
+                .expect("a cursor before the first event is readable")
+                .is_empty(),
+            "sequence 0 is the cursor a reader that has seen nothing carries, and a fresh \
+             journal still has nothing to hand it"
+        );
+    }
+
+    #[test]
+    fn one_appended_event_reads_back_with_the_four_facts_the_journal_stamped() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        let appended = EventKind::TaskQueued {
+            title: "Read events back".to_owned(),
+        };
+
+        let before = OffsetDateTime::from(SystemTime::now());
+        let seq = journal
+            .append(Some(TaskId::new(7)), &appended)
+            .expect("one event appends");
+        let read = journal.events().expect("the journal reads back");
+        let after = OffsetDateTime::from(SystemTime::now());
+
+        assert_eq!(read.len(), 1, "one append, one event read back");
+        let event = read.first().expect("the one appended event");
+        assert_eq!(
+            event.seq, seq,
+            "the record carries the sequence `append` returned, so a reader can quote it back"
+        );
+        assert_eq!(
+            event.task_id,
+            Some(TaskId::new(7)),
+            "the record carries the task it was appended against"
+        );
+        assert_eq!(
+            event.kind, appended,
+            "the payload decodes into the catalog entry that was appended, every field of it"
+        );
+        assert!(
+            event.ts >= before && event.ts <= after,
+            "the instant read back is the one the append stamped, bounded between the two clock \
+            reads around the call: {} not in {before} .. {after}",
+            event.ts
+        );
+        assert_eq!(
+            event.ts.offset(),
+            UtcOffset::UTC,
+            "the column's one spelling is read back at the UTC offset"
+        );
+
+        assert_eq!(
+            journal
+                .events_for(TaskId::new(7))
+                .expect("the task's own read works"),
+            read,
+            "one task's events are the whole journal when the journal holds one task's event"
+        );
+        assert!(
+            journal
+                .events_for(TaskId::new(8))
+                .expect("a task nothing appended to is readable")
+                .is_empty(),
+            "an empty task is an empty answer, not a NotFound: the queue numbers four billion \
+             positions and nearly all of them are empty at any moment"
+        );
+        assert_eq!(
+            journal
+                .events_since(EventSeq::new(0))
+                .expect("a cursor before the first event works"),
+            read,
+            "a reader holding sequence 0 has seen nothing, so the one event is ahead of it"
+        );
+        assert!(
+            journal
+                .events_since(seq)
+                .expect("a cursor at the newest event works")
+                .is_empty(),
+            "a cursor at the newest event has seen everything the journal holds"
+        );
+    }
+
+    #[test]
+    fn many_events_read_back_in_the_order_the_journal_numbered_them() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        let written = [
+            (
+                Some(TaskId::new(1)),
+                EventKind::TaskQueued {
+                    title: "one".to_owned(),
+                },
+            ),
+            (None, EventKind::PreflightStarted),
+            (
+                Some(TaskId::new(2)),
+                EventKind::TaskQueued {
+                    title: "two".to_owned(),
+                },
+            ),
+            (
+                Some(TaskId::new(1)),
+                EventKind::TaskDone {
+                    commit: SHA.to_owned(),
+                },
+            ),
+        ];
+        for (task, kind) in &written {
+            journal.append(*task, kind).expect("every entry appends");
+        }
+
+        let read = journal.events().expect("the four events read back");
+        assert_eq!(
+            read_sequences(&read),
+            vec![1, 2, 3, 4],
+            "the whole journal comes back numbered from one, once each"
+        );
+        let observed: Vec<(u64, Option<TaskId>, EventKind)> = read
+            .iter()
+            .map(|event| (event.seq.get(), event.task_id, event.kind.clone()))
+            .collect();
+        assert_eq!(
+            observed,
+            vec![
+                (
+                    1,
+                    Some(TaskId::new(1)),
+                    EventKind::TaskQueued {
+                        title: "one".to_owned(),
+                    },
+                ),
+                (2, None, EventKind::PreflightStarted),
+                (
+                    3,
+                    Some(TaskId::new(2)),
+                    EventKind::TaskQueued {
+                        title: "two".to_owned(),
+                    },
+                ),
+                (
+                    4,
+                    Some(TaskId::new(1)),
+                    EventKind::TaskDone {
+                        commit: SHA.to_owned(),
+                    },
+                ),
+            ],
+            "each record carries its own task and its own entry — a read that paired a sequence \
+             with the wrong row would still hand back four events and four numbers"
+        );
+
+        drop(journal);
+        let reopened =
+            Journal::open(&journal_file(parent.path())).expect("the journal opens a second time");
+        assert_eq!(
+            read_sequences(&reopened.events().expect("the reopened journal reads back")),
+            vec![1, 2, 3, 4],
+            "reopening reads the same records in the same order: the counter keeps a sequence \
+             from coming back and the rows keep their numbers"
+        );
+    }
+
+    #[test]
+    fn events_are_read_in_sequence_order_and_not_in_the_order_they_were_stamped() {
+        let parent = scratch();
+        let journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        stage_row(
+            &journal.conn,
+            4,
+            "2026-09-17T00:00:00Z",
+            Some(1),
+            "PreflightStarted",
+            r#"{"kind":"PreflightStarted"}"#,
+        );
+        stage_row(
+            &journal.conn,
+            2,
+            "2026-09-17T12:00:00Z",
+            Some(1),
+            "Resumed",
+            r#"{"kind":"Resumed"}"#,
+        );
+        stage_row(
+            &journal.conn,
+            9,
+            "2026-09-17T06:00:00Z",
+            None,
+            "PreflightPassed",
+            r#"{"kind":"PreflightPassed","base_sha":"0b78d3f1c2a4"}"#,
+        );
+
+        let read = journal.events().expect("the staged rows read back");
+        let observed: Vec<(u64, OffsetDateTime)> = read
+            .iter()
+            .map(|event| (event.seq.get(), event.ts))
+            .collect();
+        assert_eq!(
+            observed,
+            vec![
+                (2, datetime!(2026-09-17 12:00:00 UTC)),
+                (4, datetime!(2026-09-17 00:00:00 UTC)),
+                (9, datetime!(2026-09-17 06:00:00 UTC)),
+            ],
+            "the answer is ordered by `seq` — 2, 4, 9 — while the instants on those same rows \
+             run noon, midnight, six. Ordered by `ts` it would be 4, 9, 2; the order the rows \
+             were staged in is 4, 2, 9, so only the sequence explains the answer"
+        );
+    }
+
+    #[test]
+    fn events_for_reads_one_tasks_events_and_neither_another_tasks_nor_the_queues() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        let queued = journal
+            .append(
+                Some(TaskId::new(1)),
+                &EventKind::TaskQueued {
+                    title: "one".to_owned(),
+                },
+            )
+            .expect("the first event appends");
+        let queue_level = journal
+            .append(None, &EventKind::PreflightStarted)
+            .expect("a queue-level event appends");
+        let phase = journal
+            .append(
+                Some(TaskId::new(1)),
+                &EventKind::PhaseEntered {
+                    attempt: AttemptId::new(1),
+                    phase: Phase::Implement,
+                },
+            )
+            .expect("the third event appends");
+        let other = journal
+            .append(
+                Some(TaskId::new(2)),
+                &EventKind::TaskQueued {
+                    title: "two".to_owned(),
+                },
+            )
+            .expect("the fourth event appends");
+        let done = journal
+            .append(
+                Some(TaskId::new(1)),
+                &EventKind::TaskDone {
+                    commit: SHA.to_owned(),
+                },
+            )
+            .expect("the fifth event appends");
+
+        let one = journal
+            .events_for(TaskId::new(1))
+            .expect("task 1 has events to read");
+        assert_eq!(
+            read_sequences(&one),
+            vec![queued.get(), phase.get(), done.get()],
+            "one task's records come back in sequence order, gaps and all: its own 1, 3 and 5, \
+             with the other task's 4 and the queue's 2 left out"
+        );
+        assert_eq!(
+            read_sequences(
+                &journal
+                    .events_for(TaskId::new(2))
+                    .expect("task 2 has one event")
+            ),
+            vec![other.get()],
+            "the other task's single record is its own, and only its own"
+        );
+        assert!(
+            journal
+                .events_for(TaskId::new(3))
+                .expect("task 3 was never queued")
+                .is_empty(),
+            "a task with no records is an empty read"
+        );
+        assert!(
+            !read_sequences(&one).contains(&queue_level.get()),
+            "the queue-level record belongs to no task, so it is in `events` and in no per-task \
+             read: sequence {queue_level} is nowhere in {one:?}"
+        );
+        assert!(
+            read_sequences(&journal.events().expect("all five read back"))
+                .contains(&queue_level.get()),
+            "and that is a decision about the per-task read, not a row the journal never held"
+        );
+    }
+
+    #[test]
+    fn events_since_hands_back_only_what_its_cursor_has_not_seen() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        for task in [Some(TaskId::new(1)), None, Some(TaskId::new(2)), None] {
+            journal
+                .append(task, &EventKind::PreflightStarted)
+                .expect("an event appends");
+        }
+
+        assert_eq!(
+            read_sequences(
+                &journal
+                    .events_since(EventSeq::new(0))
+                    .expect("a cursor before the first event works")
+            ),
+            vec![1, 2, 3, 4],
+            "sequence 0 names no record, so a reader holding it has seen nothing"
+        );
+        assert_eq!(
+            read_sequences(
+                &journal
+                    .events_since(EventSeq::new(2))
+                    .expect("a cursor in the middle works")
+            ),
+            vec![3, 4],
+            "the cursor is the newest sequence the reader already holds, so its own record is \
+             not handed back a second time — a poll that re-reads what it answered with shows \
+             every screen the same event twice"
+        );
+        assert!(
+            journal
+                .events_since(EventSeq::new(4))
+                .expect("a cursor at the newest event works")
+                .is_empty(),
+            "nothing is ahead of the newest event"
+        );
+    }
+
+    #[test]
+    fn a_cursor_that_names_a_lost_record_still_reports_what_came_after_it() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        journal
+            .append(None, &EventKind::PreflightStarted)
+            .expect("the first event appends");
+        spend_the_next_sequence(&journal.conn);
+        journal
+            .append(
+                Some(TaskId::new(1)),
+                &EventKind::TaskDone {
+                    commit: SHA.to_owned(),
+                },
+            )
+            .expect("the event after the lost one appends");
+
+        assert_eq!(
+            read_sequences(
+                &journal
+                    .events()
+                    .expect("the two surviving events read back")
+            ),
+            vec![1, 3],
+            "the lost record left its sequence spent and its row absent, which a read reports \
+             as the gap it is rather than filling in"
+        );
+        assert_eq!(
+            read_sequences(
+                &journal
+                    .events_since(EventSeq::new(2))
+                    .expect("a cursor naming a lost record works")
+            ),
+            vec![3],
+            "a cursor does not have to name a record the journal still holds: the reader that \
+             lost sequence 2 to an interrupted commit is still ahead of it, and 3 is what it \
+             has not seen"
+        );
+    }
+
+    #[test]
+    fn a_cursor_wider_than_the_column_can_hold_reads_as_nothing_ahead_of_it() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        journal
+            .append(None, &EventKind::PreflightStarted)
+            .expect("an event appends");
+        let widest = u64::try_from(i64::MAX).expect("the widest `INTEGER` is a sequence number");
+
+        assert!(
+            journal
+                .events_since(EventSeq::new(widest))
+                .expect("a cursor at the widest number the column holds is answerable")
+                .is_empty(),
+            "nothing above the widest number the column can hold is in it"
+        );
+        assert!(
+            journal
+                .events_since(EventSeq::new(u64::MAX))
+                .expect("a cursor wider than the column is answerable too, not a refusal")
+                .is_empty(),
+            "no sequence the column can store is ahead of `u64::MAX`, so the honest answer is \
+             the empty read rather than a conversion failure or a panic on the width"
+        );
+    }
+
+    #[test]
+    fn reading_events_back_writes_nothing_and_spends_no_sequence() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        journal
+            .append(Some(TaskId::new(1)), &EventKind::Resumed)
+            .expect("one event appends");
+
+        for _ in 0..3 {
+            journal.events().expect("the whole read works");
+            journal
+                .events_for(TaskId::new(1))
+                .expect("the per-task read works");
+            journal
+                .events_since(EventSeq::new(0))
+                .expect("the cursor read works");
+        }
+
+        assert_eq!(
+            stored_events(&journal.conn).len(),
+            1,
+            "nine reads added no row to the table they were reading"
+        );
+        assert_eq!(
+            counter(&journal.conn),
+            1,
+            "and left the sequence counter where the append left it: a read cannot spend a \
+             number, because a spent number is an event a later reader waits for"
+        );
+        let next = journal
+            .append(
+                Some(TaskId::new(1)),
+                &EventKind::Interrupted {
+                    phase: Phase::Verify,
+                },
+            )
+            .expect("the journal still appends after being read");
+        assert_eq!(
+            next.get(),
+            2,
+            "which is what the next event's number proves"
+        );
+    }
+
+    #[test]
+    fn a_row_numbered_below_the_first_event_is_read_as_damage() {
+        let parent = scratch();
+        let journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        stage_row(
+            &journal.conn,
+            -1,
+            AN_INSTANT,
+            None,
+            "Resumed",
+            r#"{"kind":"Resumed"}"#,
+        );
+
+        let error = journal
+            .events()
+            .expect_err("a row whose sequence cannot be a count of events is not an event");
+
+        assert!(
+            matches!(error, Error::Corrupt { seq: None, .. }),
+            "the number is the record's location and it is the number that is wrong, so there \
+             is no sequence left to name: {error}"
+        );
+        assert!(
+            error.to_string().contains("-1"),
+            "the report quotes the number it refused: {error}"
+        );
+    }
+
+    #[test]
+    fn a_row_whose_two_halves_name_different_entries_is_refused_as_damage() {
+        let parent = scratch();
+        let journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        stage_row(
+            &journal.conn,
+            1,
+            AN_INSTANT,
+            Some(3),
+            "TaskQueued",
+            r#"{"kind":"Resumed"}"#,
+        );
+
+        let error = journal.events_for(TaskId::new(3)).expect_err(
+            "a row naming one entry in its column and another in its payload is neither of them",
+        );
+        let reported = error.to_string();
+
+        assert!(
+            matches!(error, Error::Corrupt { seq: Some(1), .. }),
+            "the read got far enough to know which record it could not trust: {error}"
+        );
+        assert!(
+            reported.contains("TaskQueued") && reported.contains("Resumed"),
+            "the report quotes both halves, because saying which one to believe is not this \
+             read's to decide: {reported}"
+        );
+    }
+
+    #[test]
+    fn a_sound_row_decodes_into_the_envelope_the_four_columns_describe() {
+        let event = decode_event(a_sound_row()).expect("a row an append wrote decodes");
+
+        assert_eq!(
+            event,
+            Event {
+                seq: EventSeq::new(1),
+                ts: datetime!(2026-09-17 12:00:00 UTC),
+                task_id: Some(TaskId::new(7)),
+                kind: EventKind::TaskQueued {
+                    title: "Read events back".to_owned(),
+                },
+            },
+            "each column becomes its own field: a row whose number became its task, or whose \
+             text became its sequence, would not be the record that was written"
+        );
+    }
+
+    #[test]
+    fn an_instant_that_is_not_the_columns_one_spelling_is_damage_naming_the_row() {
+        let mut row = a_sound_row();
+        row.ts = "yesterday".to_owned();
+
+        let error = decode_event(row)
+            .expect_err("an instant the column cannot have come from is not an instant");
+
+        assert!(
+            matches!(error, Error::Corrupt { seq: Some(1), .. }),
+            "the rest of the row read, so its sequence is known and worth naming: {error}"
+        );
+        assert!(
+            error.to_string().contains("yesterday") && error.to_string().contains("RFC 3339"),
+            "the report quotes the text and the spelling it broke: {error}"
+        );
+    }
+
+    #[test]
+    fn a_queue_position_wider_than_the_identifier_is_damage_naming_the_number() {
+        let mut row = a_sound_row();
+        row.task_id = Some(i64::from(u32::MAX) + 1);
+
+        let error = decode_event(row)
+            .expect_err("a task number no queue position can be is not a task number");
+
+        assert!(
+            matches!(error, Error::Corrupt { seq: Some(1), .. }),
+            "the record is located even though its task is not: {error}"
+        );
+        assert!(
+            error.to_string().contains("4294967296"),
+            "the report quotes the number it refused: {error}"
+        );
+    }
+
+    #[test]
+    fn a_payload_that_is_not_one_json_object_is_damage_that_keeps_its_sequence() {
+        let mut row = a_sound_row();
+        row.payload = "{ kind: }".to_owned();
+
+        let error =
+            decode_event(row).expect_err("a payload that is not JSON is not a catalog entry");
+
+        assert!(
+            matches!(error, Error::Corrupt { seq: Some(1), .. }),
+            "an unreadable payload does not make the row's location unknown: {error}"
+        );
+        assert!(
+            error.to_string().contains("catalog entry"),
+            "the report says what it could not read rather than only that it failed: {error}"
+        );
+    }
+
+    #[test]
+    fn a_payload_naming_an_entry_the_catalog_does_not_hold_is_damage() {
+        let mut row = a_sound_row();
+        row.kind = "GateFinished".to_owned();
+        row.payload = r#"{"kind":"GateFinished","result":"Passed"}"#.to_owned();
+
+        let error = decode_event(row)
+            .expect_err("an entry the catalog does not define has no fields this build can read");
+
+        assert!(
+            matches!(error, Error::Corrupt { seq: Some(1), .. }),
+            "the refusal is a value carrying the record's location: {error}"
+        );
+        assert!(
+            error.to_string().contains("GateFinished"),
+            "the report names the entry nobody defined: {error}"
         );
     }
 }
