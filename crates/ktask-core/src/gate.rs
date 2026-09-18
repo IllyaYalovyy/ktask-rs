@@ -559,6 +559,17 @@ timeout_secs = 1800
     }
 
     #[test]
+    fn a_gate_writes_no_placeholder_for_a_field_it_does_not_set() {
+        // TOML skips an absent `Option` on its own, so only an encoding that
+        // writes the key can tell this attribute from having none at all.
+        let json = serde_json::to_string(&verify()).expect("a gate is writable as JSON");
+        assert!(
+            !json.contains("working_dir") && !json.contains("env"),
+            "a field nobody set must not arrive as a null or an empty map, which reads              back as a decision that was made: {json}"
+        );
+    }
+
+    #[test]
     fn a_command_the_gate_was_given_survives_as_the_words_it_was_given() {
         let document = gate_document(GateKind::Build, "cargo build --workspace --locked")
             + &profile_document([(GateKind::Verify, "true")]);
