@@ -448,6 +448,51 @@ impl Journal {
         )
     }
 
+    /// The one record the journal holds at `seq`, or `None` when it holds none.
+    ///
+    /// A record is only worth showing to a human if it *is* the record the file
+    /// wrote. `seq` comes from the database's counter and `ts` from the clock read
+    /// inside the append (ADR-0016), so a caller that rebuilt an envelope from what
+    /// it meant to write would display an instant the durable record contradicts.
+    /// This is how a caller gets the row back unchanged.
+    ///
+    /// Unlike the two cursor reads, the sequence is *matched* rather than compared:
+    /// the read asks for one row and reads one row. A journal with a million records
+    /// after this one costs the same as a journal with none, and damage in a record
+    /// nobody asked about cannot refuse this read — which is what
+    /// [`Journal::events_since`] would have done with the same question, because it
+    /// decodes every row from its cursor to the end.
+    ///
+    /// A sequence that names no row is `Ok(None)` and not [`Error::NotFound`]: a
+    /// number spent by an interrupted commit is a real thing to ask about
+    /// (ADR-0016), and the honest answer is that the record is not in the file.
+    ///
+    /// # Errors
+    ///
+    /// As [`Journal::events`]: [`Error::Database`] when `events` cannot be read and
+    /// [`Error::Corrupt`] when the row at that sequence describes no event. Damage in
+    /// some *other* row cannot reach this read: there is one row in its result set.
+    pub fn event(&self, seq: EventSeq) -> Result<Option<Event>> {
+        // A sequence wider than the signed `INTEGER` the column holds names no row the
+        // table can store. The cursor reads clamp for their `>` comparison, where the
+        // clamp and the true value give the same empty answer; an equality read may not
+        // clamp, because `seq = i64::MAX` would answer with the row sitting at the clamp
+        // and call it the one that was asked for.
+        let Ok(wanted) = i64::try_from(seq.get()) else {
+            return Ok(None);
+        };
+        let mut found = None;
+        self.for_each_read(
+            "SELECT seq, ts, task_id, kind, payload FROM events WHERE seq = ?1",
+            params![wanted],
+            &mut |event| {
+                found = Some(event);
+                Ok(())
+            },
+        )?;
+        Ok(found)
+    }
+
     /// Every event ahead of a cursor, handed to a callback one record at a time.
     ///
     /// The same read as [`Journal::events_since`] — the same cursor, the same
@@ -4818,6 +4863,166 @@ mod tests {
                 .is_empty(),
             "no sequence the column can store is ahead of `u64::MAX`, so the honest answer is \
              the empty read rather than a conversion failure or a panic on the width"
+        );
+    }
+
+    #[test]
+    fn one_record_reads_back_by_its_sequence_exactly_as_the_append_wrote_it() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        journal
+            .append(None, &EventKind::PreflightStarted)
+            .expect("an event about the queue appends");
+        let wanted = journal
+            .append(
+                Some(TaskId::new(3)),
+                &EventKind::TaskQueued {
+                    title: "the record asked for".to_owned(),
+                },
+            )
+            .expect("the event a caller will go on to publish appends");
+        journal
+            .append(Some(TaskId::new(4)), &EventKind::Resumed)
+            .expect("a later event appends");
+
+        let read = journal
+            .event(wanted)
+            .expect("a sequence the journal wrote is answerable")
+            .expect("the record at that sequence is in the file");
+        let whole = journal.events().expect("the whole journal reads back");
+
+        assert_eq!(
+            read, whole[1],
+            "the envelope the one-row read hands back is the envelope the whole-journal read \
+             reaches at the same sequence, so a caller that publishes what this returns \
+             publishes what the file holds rather than what it meant to write"
+        );
+        assert_eq!(
+            read.seq, wanted,
+            "the sequence the append reported is the sequence read back"
+        );
+        assert_eq!(read.task_id, Some(TaskId::new(3)));
+        assert_eq!(
+            read.kind,
+            EventKind::TaskQueued {
+                title: "the record asked for".to_owned()
+            },
+            "the payload survives the round trip, so a frontend is shown the fact and not only \
+             the name of the entry it belongs to"
+        );
+    }
+
+    #[test]
+    fn a_sequence_with_no_record_in_the_file_reads_as_none() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+
+        assert!(
+            journal
+                .event(EventSeq::new(0))
+                .expect("a sequence no append has issued is answerable")
+                .is_none(),
+            "sequence 0 is not a record, and the read says so rather than refusing the question"
+        );
+
+        let first = journal
+            .append(None, &EventKind::PreflightStarted)
+            .expect("an event appends");
+        assert!(
+            journal
+                .event(EventSeq::new(first.get() + 1))
+                .expect("a sequence ahead of every record is answerable")
+                .is_none(),
+            "nothing has been written there yet, so the answer is that no record is there"
+        );
+
+        spend_the_next_sequence(&journal.conn);
+        let third = journal
+            .append(None, &EventKind::Resumed)
+            .expect("the sequence a lost record spent does not block the next append");
+        assert_eq!(
+            third.get(),
+            first.get() + 2,
+            "the spent number stays spent rather than being handed to the next record"
+        );
+        assert!(
+            journal
+                .event(EventSeq::new(first.get() + 1))
+                .expect("a spent sequence is answerable")
+                .is_none(),
+            "a number an interrupted commit spent without leaving a record has no event to hand \
+             back: the caller is told the record is absent rather than being handed its \
+             neighbour, which is the record a replay would apply twice"
+        );
+    }
+
+    #[test]
+    fn damage_in_a_later_record_does_not_refuse_the_one_record_that_was_asked_for() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        let wanted = journal
+            .append(Some(TaskId::new(3)), &EventKind::Resumed)
+            .expect("the event a caller will go on to publish appends");
+        stage_row(
+            &journal.conn,
+            2,
+            AN_INSTANT,
+            Some(3),
+            "TaskQueued",
+            r#"{"kind":"Resumed"}"#,
+        );
+
+        let read = journal
+            .event(wanted)
+            .expect("a one-row read is not held hostage by a row it never reads")
+            .expect("the record that was asked for is in the file");
+        assert_eq!(
+            read.seq, wanted,
+            "the damaged row is two records later and the read still answers about this one, \
+             which is what a cursor read over the same cursor could not promise"
+        );
+
+        let whole = journal.events().expect_err(
+            "the same file refuses the read that decodes every row, so the refusal below is \
+             about the damaged row and not about this task's read",
+        );
+        assert!(
+            matches!(whole, Error::Corrupt { seq: Some(2), .. }),
+            "the damage is where it was staged and the whole-journal read still finds it: {whole}"
+        );
+    }
+
+    #[test]
+    fn a_sequence_wider_than_the_column_can_hold_reads_as_none_not_as_the_row_at_the_clamp() {
+        let parent = scratch();
+        let journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        let widest = u64::try_from(i64::MAX).expect("the widest `INTEGER` is a sequence number");
+        stage_row(
+            &journal.conn,
+            i64::MAX,
+            AN_INSTANT,
+            None,
+            "PreflightStarted",
+            r#"{"kind":"PreflightStarted"}"#,
+        );
+
+        assert!(
+            journal
+                .event(EventSeq::new(widest))
+                .expect("the widest sequence the column holds is answerable")
+                .is_some(),
+            "the record at the widest number the column can hold is a record like any other, so \
+             the refusal below cannot be blamed on there being nothing there"
+        );
+        assert!(
+            journal
+                .event(EventSeq::new(u64::MAX))
+                .expect("a sequence wider than the column is answerable, not a refusal")
+                .is_none(),
+            "`u64::MAX` names no row the column can store. Clamping it to the widest number the \
+             column holds — which is what the cursor reads do, where a `>` comparison against \
+             the clamp and against the true value give the same empty answer — would hand back \
+             the record sitting at that clamp and call it the one that was asked for"
         );
     }
 
