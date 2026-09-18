@@ -3038,4 +3038,38 @@ error: test run failed
             thing here, and inventing a failure would send the wrong tests to be fixed",
         );
     }
+
+    #[test]
+    fn a_list_of_failing_names_ends_at_the_first_line_that_is_not_indented() {
+        let interrupted = CARGO_RED_ONE_BINARY.replace(
+            "    tests::prints_what_it_saw\n\ntest result: FAILED.",
+            "    tests::prints_what_it_saw\nerror: test failed, to rerun pass `--lib`\n\
+             test result: FAILED.",
+        );
+        assert_ne!(
+            interrupted, CARGO_RED_ONE_BINARY,
+            "the fixture has to hold the list this edit closes with cargo's own prose"
+        );
+        assert_eq!(
+            cargo_summary(&interrupted),
+            cargo_summary(CARGO_RED_ONE_BINARY),
+            "cargo's own words stand at column zero, and a caller that merges the two pipes can \
+             hand one over in the middle of the list with no blank line to close it: the names \
+             are the indented lines and nothing else, because reading that prose as a fourth name \
+             would break the count beside the list and send a thing that is not a test to be fixed"
+        );
+    }
+
+    #[test]
+    fn a_running_line_without_a_count_opens_no_test_binary() {
+        let strayed = format!("running  tests\n{CARGO_GREEN_TWO_BINARIES}");
+        assert_eq!(
+            cargo_summary(&strayed),
+            cargo_summary(CARGO_GREEN_TWO_BINARIES),
+            "cargo always writes a number in that line, so the number is what makes it a binary \
+             opening; a line that says the words without one is somebody else's chatter, and \
+             chatter must not be able to refuse a run that answered in full, which is the same \
+             reason a quoted result line is read as nothing rather than as a count"
+        );
+    }
 }
