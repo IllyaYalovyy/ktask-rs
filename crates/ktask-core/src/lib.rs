@@ -9,6 +9,7 @@ mod error;
 mod event;
 mod events;
 mod gate;
+pub mod git;
 mod ids;
 pub mod journal;
 mod paths;
