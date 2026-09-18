@@ -26,8 +26,10 @@ use crate::{Error, Result};
 /// The directory ktask-rs owns inside every XDG base directory.
 const APP_DIR: &str = "ktask-rs";
 
-/// The file layered configuration is read from, below [`APP_DIR`].
-const CONFIG_NAME: &str = "config.toml";
+/// The filename of a layered configuration document, which both documents use:
+/// the machine's own below [`APP_DIR`] (see [`config_file`]), and a project's
+/// own below its state directory (see `crate::project_config_path`).
+pub(crate) const CONFIG_NAME: &str = "config.toml";
 
 /// How many hexadecimal characters each half of a project id carries — the
 /// first 16 of the 64 a SHA-256 digest prints as.
@@ -76,7 +78,12 @@ pub(crate) fn state_root_with(env: &dyn Fn(&str) -> Option<String>) -> Result<Pa
 }
 
 /// [`config_file`] with the environment supplied by the caller.
-fn config_file_with(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
+///
+/// Crate-visible rather than private to this module for the reason
+/// [`state_root_with`] is: `crate::config::load_for` resolves the machine's
+/// document for a project, and does it through the same injected accessor
+/// rather than a second recipe for the same file.
+pub(crate) fn config_file_with(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
     Ok(base(env, "XDG_CONFIG_HOME", Path::new(".config"))?
         .join(APP_DIR)
         .join(CONFIG_NAME))

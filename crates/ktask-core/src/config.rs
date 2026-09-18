@@ -24,6 +24,11 @@
 //! value needs to know why it is that value: a setting edited in the wrong file
 //! is otherwise indistinguishable from one that never took effect.
 //!
+//! [`load`] is handed its paths, which is what makes every layer testable
+//! without a home directory to write into; [`load_for`] is the entry point that
+//! knows them — the machine's document where `crate::paths` puts it, the
+//! project's own below its state directory, and the process environment.
+//!
 //! A configuration file that is not there is not a layer. A repository that
 //! never wrote one, or a home directory with no global settings, is the
 //! ordinary case and loads the layers below it. A file that is there and cannot
@@ -40,6 +45,8 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::paths::{config_file_with, process_env};
+use crate::project::{Project, project_config_path};
 use crate::{Error, Result};
 
 /// The effective configuration: every setting, with the documented default.
@@ -292,6 +299,40 @@ pub fn load(
     }
     apply_environment(&mut config, env)?;
     Ok(config)
+}
+
+/// The configuration one registered project runs on, read from where its files
+/// actually are.
+///
+/// [`load`] takes its paths as arguments, which is what makes it testable; this
+/// is the entry point that knows where those files are. It resolves the three
+/// layers above the defaults — the machine's document at
+/// [`crate::paths::config_file`], the project's own at
+/// [`crate::project_config_path`], and the process environment — and everything
+/// [`load`] then decides stands: a key keeps the value the layer below gave it
+/// unless a layer above it wrote the key, and [`Config::provenance`] says who
+/// won each one afterwards.
+///
+/// Neither document has to exist. A repository that never wrote one and a home
+/// directory with no global settings are the ordinary case, and the answer is
+/// [`Config::default()`] with nothing overridden — not a failure to report.
+///
+/// # Errors
+///
+/// [`Error::Config`] when the global path cannot be resolved because neither
+/// `XDG_CONFIG_HOME` nor `HOME` names a base directory, or when a document or a
+/// variable holds a value its setting cannot be; [`Error::Io`] when a document
+/// is there and cannot be read.
+pub fn load_for(project: &Project) -> Result<Config> {
+    load_for_with(&process_env, project)
+}
+
+/// [`load_for`] with the environment supplied by the caller, which is how a test
+/// holds the variables that name both documents without touching process state
+/// (`docs/DESIGN.md` Conventions).
+fn load_for_with(env: &dyn Fn(&str) -> Option<String>, project: &Project) -> Result<Config> {
+    let global = config_file_with(env)?;
+    load(Some(&global), Some(&project_config_path(project)), env)
 }
 
 /// A configuration document as read from a file: keys in the order the reader
@@ -636,7 +677,8 @@ impl FromEnvText for Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, Error, Source, load};
+    use super::{Config, Error, Source, load, load_for, load_for_with};
+    use crate::project::Project;
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1284,6 +1326,234 @@ min_free_disk_bytes = 1073741824
             (Source::Flag, "flag"),
         ] {
             assert_eq!(source.to_string(), label);
+        }
+    }
+
+    /// The environment of the machine a test means: `XDG_CONFIG_HOME` at
+    /// `config_home`, `set` on top of it, and nothing else.
+    ///
+    /// `HOME` is deliberately absent, so a test cannot read the settings of
+    /// whoever runs it through the fallback `crate::paths` documents.
+    fn machine(config_home: &Path, set: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let held = config_home.display().to_string();
+        let table: BTreeMap<String, String> = set
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect();
+        move |name| match name {
+            "XDG_CONFIG_HOME" => Some(held.clone()),
+            other => table.get(other).cloned(),
+        }
+    }
+
+    /// A registered project whose state directory is below `scratch`, with its
+    /// repository nowhere near it.
+    ///
+    /// A loader asks a project for its state directory and nothing else, so the
+    /// fixture holds that one path honestly; the identity and the working copy
+    /// only keep the shape of a real registration.
+    fn scratch_project(scratch: &Path) -> Project {
+        let id = "0123456789abcdef-0123456789abcdef".to_owned();
+        Project {
+            root: scratch.join("repository"),
+            state_dir: scratch.join("state").join("ktask-rs").join(&id),
+            id,
+        }
+    }
+
+    /// The project's own document, written below its state directory.
+    ///
+    /// The filename is spelled out here rather than asked of
+    /// `crate::project::project_config_path`, so a loader reading some other
+    /// file fails this test rather than agreeing with itself.
+    fn write_project_document(project: &Project, document: &str) -> PathBuf {
+        let state_dir = &project.state_dir;
+        fs::create_dir_all(state_dir)
+            .unwrap_or_else(|error| panic!("`{}` is creatable: {error}", state_dir.display()));
+        write_document(state_dir, "config.toml", document)
+    }
+
+    /// The global document, written where `docs/DESIGN.md` Paths puts it below
+    /// `config_home` — again spelled out, for the same reason.
+    fn write_global_document(config_home: &Path, document: &str) -> PathBuf {
+        let directory = config_home.join("ktask-rs");
+        fs::create_dir_all(&directory)
+            .unwrap_or_else(|error| panic!("`{}` is creatable: {error}", directory.display()));
+        write_document(&directory, "config.toml", document)
+    }
+
+    #[test]
+    fn a_project_with_no_configuration_documents_loads_the_documented_defaults() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let project = scratch_project(scratch.path());
+
+        let config = load_for_with(&machine(scratch.path(), &[]), &project)
+            .expect("a project nobody has configured is loadable");
+
+        assert_documented_defaults(&config);
+        assert_eq!(
+            config.provenance(),
+            every_key_from(Source::Default),
+            "with no file and no variable, every key reports the layer that set it"
+        );
+    }
+
+    #[test]
+    fn a_project_load_reads_the_global_document_where_paths_puts_it() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let config_home = scratch.path().join("config-home");
+        write_global_document(&config_home, "provider = \"claude\"\nflake_runs = 9\n");
+        let project = scratch_project(scratch.path());
+
+        let config = load_for_with(&machine(&config_home, &[]), &project)
+            .expect("the machine's own settings are a layer");
+
+        assert_eq!(config.provider, "claude");
+        assert_eq!(config.flake_runs, 9);
+        assert_eq!(
+            config.max_attempts, 2,
+            "a key the global document does not set stays at its default"
+        );
+        assert_eq!(
+            sources_of(&config),
+            keys_from(&[
+                ("provider", Source::GlobalFile),
+                ("flake_runs", Source::GlobalFile),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_project_document_overrides_the_global_document_key_by_key() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let config_home = scratch.path().join("config-home");
+        write_global_document(
+            &config_home,
+            "provider = \"claude\"\nmax_attempts = 4\nflake_runs = 9\n",
+        );
+        let project = scratch_project(scratch.path());
+        write_project_document(
+            &project,
+            "provider = \"codex\"\nmainline_branch = \"trunk\"\n",
+        );
+
+        let config = load_for_with(&machine(&config_home, &[]), &project)
+            .expect("a repository may disagree with the machine it sits on");
+
+        assert_eq!(config.provider, "codex", "the project's file wins");
+        assert_eq!(config.mainline_branch, "trunk");
+        assert_eq!(
+            config.max_attempts, 4,
+            "a key only the global document sets keeps its value"
+        );
+        assert_eq!(config.flake_runs, 9);
+        assert_eq!(
+            config.default_protocol, "direct",
+            "a key neither document sets stays at its default"
+        );
+        assert_eq!(
+            sources_of(&config),
+            keys_from(&[
+                ("provider", Source::ProjectFile),
+                ("mainline_branch", Source::ProjectFile),
+                ("max_attempts", Source::GlobalFile),
+                ("flake_runs", Source::GlobalFile),
+            ]),
+            "the effective source of every value is retrievable"
+        );
+    }
+
+    #[test]
+    fn the_environment_overrides_both_documents_for_the_keys_it_sets() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let config_home = scratch.path().join("config-home");
+        write_global_document(&config_home, "provider = \"claude\"\nretention_days = 7\n");
+        let project = scratch_project(scratch.path());
+        write_project_document(&project, "provider = \"codex\"\nflake_runs = 11\n");
+        let env = machine(
+            &config_home,
+            &[("KTASK_PROVIDER", "zed"), ("KTASK_RETENTION_DAYS", "30")],
+        );
+
+        let config = load_for_with(&env, &project).expect("one run may override both files");
+
+        assert_eq!(config.provider, "zed");
+        assert_eq!(config.retention_days, 30);
+        assert_eq!(
+            config.flake_runs, 11,
+            "a document the environment says nothing about still applies"
+        );
+        assert_eq!(
+            sources_of(&config),
+            keys_from(&[
+                ("provider", Source::Env),
+                ("retention_days", Source::Env),
+                ("flake_runs", Source::ProjectFile),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_project_document_that_is_not_valid_toml_is_refused_naming_its_own_path() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+        let project = scratch_project(scratch.path());
+        let written = write_project_document(&project, "provider = \n");
+
+        let error = load_for_with(&machine(scratch.path(), &[]), &project)
+            .expect_err("a half-written document is not a configuration");
+        let message = error.to_string();
+        assert!(
+            message.contains(&written.display().to_string()),
+            "{message}"
+        );
+        assert!(message.contains("not a valid TOML document"), "{message}");
+    }
+
+    #[test]
+    fn a_project_whose_configuration_home_cannot_be_resolved_is_refused_naming_home() {
+        let scratch = tempdir().expect("a scratch directory outside the repository");
+
+        let error = load_for_with(&no_variables, &scratch_project(scratch.path()))
+            .expect_err("the global path has to be resolvable before anything is read");
+        let message = error.to_string();
+        assert!(message.contains("XDG_CONFIG_HOME"), "{message}");
+        assert!(message.contains("HOME"), "{message}");
+    }
+
+    /// A variable read straight from the process, an empty one treated as
+    /// absent, as `crate::paths` reads it.
+    fn process(key: &str) -> Option<String> {
+        std::env::var(key).ok().filter(|found| !found.is_empty())
+    }
+
+    #[test]
+    fn load_for_reads_the_environment_the_process_actually_has() {
+        // The public entry point reads the ambient environment, so exercising
+        // it means a project that wrote nothing: its state directory is a
+        // scratch path no configuration of this machine can own, and loading
+        // reads and never writes wherever the ambient paths resolve to.
+        let scratch = tempdir().expect("a scratch directory outside any project");
+        let project = scratch_project(scratch.path());
+
+        match (process("XDG_CONFIG_HOME"), process("HOME")) {
+            (Some(_), _) | (None, Some(_)) => {
+                let config = load_for(&project)
+                    .expect("a project that wrote nothing loads whatever the machine holds");
+                for (key, source) in config.provenance() {
+                    assert_ne!(
+                        source,
+                        Source::ProjectFile,
+                        "`{key}` reports a project document that was never written"
+                    );
+                }
+            }
+            (None, None) => {
+                let error = load_for(&project).expect_err("nothing names a configuration file");
+                assert!(
+                    matches!(&error, Error::Config { key, .. } if key == "HOME"),
+                    "{error}"
+                );
+            }
         }
     }
 }

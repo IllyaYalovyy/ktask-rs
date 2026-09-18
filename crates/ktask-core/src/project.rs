@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OpenFlags, OptionalExtension as _, params};
 
 use crate::journal::{CREATE_META_TABLE, journal_path};
-use crate::paths::{process_env, state_root_with};
+use crate::paths::{CONFIG_NAME, process_env, state_root_with};
 use crate::{Error, Result, project_id};
 
 /// The mode bits of every directory a registration creates: owner-only.
@@ -127,6 +127,23 @@ fn discover_with(env: &dyn Fn(&str) -> Option<String>, start: &Path) -> Result<P
             walked.display()
         ),
     })
+}
+
+/// Where a project's own configuration document belongs: `<state_dir>/config.toml`.
+///
+/// Below the state directory and not in the working copy: VISION.md §11 forbids
+/// the supervisor an operational file inside the repository it supervises, and
+/// this is the one directory registration made for the project, keeps at mode
+/// `0700`, and already holds its journal. The filename is the machine's
+/// document's filename, so an operator writes the same keys whichever of the two
+/// files they open.
+///
+/// Resolves a location and touches nothing. A project that never wrote a
+/// document has no file here, and [`crate::config::load`] counts that absence
+/// as a missing layer rather than a failure.
+#[must_use]
+pub fn project_config_path(project: &Project) -> PathBuf {
+    project.state_dir.join(CONFIG_NAME)
 }
 
 /// The project one working copy names: the identity [`crate::project_id`]
@@ -302,10 +319,13 @@ fn registered_at(state_root: &Path, candidate: &Path) -> Result<Option<Project>>
 
 #[cfg(test)]
 mod tests {
-    use super::{REPOSITORY_KEY, discover, discover_with, register, register_with};
+    use super::{
+        REPOSITORY_KEY, discover, discover_with, project_config_path, register, register_with,
+    };
     use crate::journal::{CREATE_META_TABLE, journal_path};
     use crate::{Error, project_id};
     use rusqlite::{Connection, OptionalExtension as _, params};
+    use std::ffi::OsStr;
     use std::fs::{self, Permissions};
     use std::io::ErrorKind;
     use std::os::unix::fs::{PermissionsExt as _, symlink};
@@ -883,6 +903,32 @@ mod tests {
         assert_eq!(
             discover_with(&env, &link.join("deep")).expect("the symlink resolves"),
             registered
+        );
+    }
+
+    #[test]
+    fn project_config_path_is_the_configuration_document_below_the_state_directory() {
+        let state_home = tempdir().expect("a scratch state home");
+        let (_scratch, root) = scratch_dir("configured");
+        let project = register_with(&state_home_env(state_home.path()), &root)
+            .expect("a scratch working copy registers");
+
+        let path = project_config_path(&project);
+        let named = path.display().to_string();
+
+        assert_eq!(path, project.state_dir.join("config.toml"));
+        assert_eq!(
+            path.file_name().and_then(OsStr::to_str),
+            Some("config.toml"),
+            "one filename spelled the same way in both places, so an operator writes the same keys"
+        );
+        assert!(
+            !path.starts_with(&project.root),
+            "{named} is the supervisor's own file and may not live in the repository it supervises"
+        );
+        assert!(
+            !path.exists(),
+            "naming where a document belongs creates nothing: {named}"
         );
     }
 }
