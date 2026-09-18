@@ -545,12 +545,13 @@ fn run_gate_streaming(
     // Nothing left to read, and the process is still the run's to wait for. The
     // budget still governs that wait: a gate that closed its own pipes and kept
     // working is no less subject to its timeout than one that never wrote.
-    while watch.status.is_none() && !watch.grace_elapsed() {
+    loop {
         watch.poll()?;
         watch.enforce_budget(gate.timeout_secs)?;
-        if watch.status.is_none() && !watch.grace_elapsed() {
-            thread::sleep(CHUNK_POLL);
+        if watch.status.is_some() || watch.grace_elapsed() {
+            break;
         }
+        thread::sleep(CHUNK_POLL);
     }
     // A reader still copying bytes nobody asked it to stop holding a pipe for
     // has nowhere left to copy them to, so it ends with the pipe rather than
@@ -574,11 +575,14 @@ fn run_gate_streaming(
     })
 }
 
-/// The directory a gate's command runs in: the one it names itself, absolute or
-/// below `root`, and `root` when it names none.
+/// The directory a gate's command runs in: the one it names itself, and `root`
+/// when it names none.
+///
+/// Joining is the whole rule, because [`Path::join`] replaces its base when what
+/// it is given is absolute: a directory written as `/srv/build` arrives used
+/// exactly as written, and one written as `nested` arrives resolved below `root`.
 fn working_directory(gate: &Gate, root: &Path) -> PathBuf {
     match &gate.working_dir {
-        Some(directory) if directory.is_absolute() => directory.clone(),
         Some(directory) => root.join(directory),
         None => root.to_path_buf(),
     }
@@ -1688,9 +1692,42 @@ timeout_secs = 1800
     }
 
     #[test]
+    fn a_gate_that_closes_its_pipes_and_keeps_working_runs_out_its_budget() {
+        let gate = gate_within_budget("exec sleep 30 >&- 2>&-", 1);
+        let started = Instant::now();
+        let result = run_gate(&gate, Path::new("/"), None)
+            .expect("a gate that stopped writing is still a gate that has to stop");
+        let waited = started.elapsed();
+
+        assert!(
+            result.stdout.is_empty() && result.stderr.is_empty(),
+            "both pipes were closed before a byte was written: {result:?}"
+        );
+        assert!(
+            result.timed_out,
+            "closing the pipes is not finishing, and the budget still governs the wait: \
+             waited {waited:?}"
+        );
+        assert!(
+            !result.passed,
+            "a command killed at its budget satisfied nothing"
+        );
+        assert_eq!(result.exit_code, None);
+        assert_eq!(
+            result.signal,
+            Some(9),
+            "the run ended because the budget killed it"
+        );
+        assert!(
+            result.duration_ms >= 900 && waited < Duration::from_secs(10),
+            "the run was not left waiting for a command that had nothing left to write: \
+             {waited:?} for a budget of 1s"
+        );
+    }
+
+    #[test]
     fn a_gate_hands_its_output_over_while_it_is_still_running() {
         let (result, arrived) = gate_capturing("echo first; sleep 3; echo second");
-
         assert_eq!(
             chunks_from(&arrived, Stream::Stdout),
             ["first\n", "second\n"]
