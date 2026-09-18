@@ -1551,6 +1551,10 @@ mod tests {
     const TITLE: &str = "The transition function";
     /// The commit a publication is proved by: the fetched remote holds it.
     const CANDIDATE: &str = "b7d1f3a";
+    /// A commit nothing ever proved the remote holds. A test needs a commit
+    /// real enough to name in an event and unproved enough that no state may
+    /// carry it, to ask what happens when the two disagree.
+    const UNPROVED: &str = "0000000";
     /// The commit preflight found, which every later commit is checked against.
     const BASE: &str = "0a1b2c3";
 
@@ -2174,23 +2178,61 @@ mod tests {
         );
     }
 
+    /// VISION.md §3 invariants 4 and 7, in the one place the machine decides them.
+    ///
+    /// `Done` is reached from exactly one state, by exactly one event, and only
+    /// when that event names the commit the state itself proved the remote
+    /// holds. The two refusals the invariant is named for come first: the state
+    /// that has the gates but no publication, and the publication whose commit
+    /// the closing misnames.
+    ///
+    /// Then both commits vary. An arm that compared the payload against
+    /// whichever commit the suite happens to test with, rather than against the
+    /// one the state carries, answers every pair a single-commit test tries;
+    /// sweeping the state's commit against the event's is what shows which of
+    /// the two the arm actually reads.
+    ///
+    /// A pause parked over a proved publication is asked about by name because
+    /// it is the one state a closing is tempting to forward — the pause holds
+    /// that publication as where to resume, so forwarding looks like doing the
+    /// work a resume would do. It is refused: a paused run is waiting, and
+    /// `Resumed` is the event that ends the waiting (ADR-0026).
     #[test]
     fn nothing_is_done_except_of_the_commit_the_remote_holds() {
+        refuses(&verifying(1), &task_done(CANDIDATE));
+        refuses(&published(CANDIDATE), &task_done(UNPROVED));
         moves(
             &published(CANDIDATE),
             &task_done(CANDIDATE),
             &TaskState::Done,
         );
-        refuses(&published(CANDIDATE), &task_done("0000000"));
+
+        for proved in [CANDIDATE, UNPROVED] {
+            for closed in [CANDIDATE, UNPROVED] {
+                let state = published(proved);
+                let event = task_done(closed);
+                if proved == closed {
+                    moves(&state, &event, &TaskState::Done);
+                } else {
+                    refuses(&state, &event);
+                }
+            }
+        }
+
         for state in [
             TaskState::Queued,
             TaskState::Preflight,
             working(1, Phase::Green),
+            remediating(2, Phase::Red),
             verifying(1),
             publishing(1),
             parked(verifying(1), PauseReason::Interrupted),
+            parked(published(CANDIDATE), PauseReason::Interrupted),
+            parked(published(UNPROVED), PauseReason::HumanGate),
         ] {
-            refuses(&state, &task_done(CANDIDATE));
+            for commit in [CANDIDATE, UNPROVED] {
+                refuses(&state, &task_done(commit));
+            }
         }
     }
 
