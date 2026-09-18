@@ -1023,11 +1023,84 @@ pub fn check_one_active(states: &BTreeMap<TaskId, TaskState>) -> Result<()> {
     Ok(())
 }
 
+/// Whether a task in `state` is work the queue may proceed past.
+///
+/// Three of the twelve states: [`TaskState::PublishedVerified`], whose commit
+/// the remote was read back holding, [`TaskState::Done`], which closes over it,
+/// and [`TaskState::Cancelled`], which a human dropped. The match is exhaustive
+/// rather than a `matches!` for the reason ADR-0022 applies to [`apply`]: a
+/// thirteenth state has to be placed on one side of the line by the compiler
+/// instead of defaulted onto the safe-looking side.
+fn clears_the_way(state: &TaskState) -> bool {
+    match state {
+        TaskState::PublishedVerified { .. } | TaskState::Done | TaskState::Cancelled => true,
+        TaskState::Queued
+        | TaskState::Preflight
+        | TaskState::Running { .. }
+        | TaskState::Remediating { .. }
+        | TaskState::Verifying { .. }
+        | TaskState::Publishing { .. }
+        | TaskState::Acknowledged { .. }
+        | TaskState::Paused { .. }
+        | TaskState::Failed { .. } => false,
+    }
+}
+
+/// VISION.md §3 invariant 2 made checkable: a successor cannot start before its
+/// predecessor is verified published.
+///
+/// `states` is the projection of every task the queue holds and `next` is the id
+/// about to be started, so the question is the same one [`check_one_active`] is
+/// asked of: pure, no clock, no journal, no lock, answering identically before a
+/// task starts, after a transition has been journaled, and over a replay that
+/// recovered a crash. Order is the queue's own — the ids are its 1-based
+/// positions — so "predecessor" means every id strictly lower than `next`, and
+/// nothing else: `next`'s own row and the rows after it are not its
+/// predecessors, which is what lets a freshly imported plan of nothing but
+/// [`TaskState::Queued`] rows have a head at all.
+///
+/// A predecessor clears the way in exactly the three states `clears_the_way`
+/// names — published, closed, or cancelled — so work still in
+/// flight, work that failed, and work standing still in a [`TaskState::Paused`]
+/// all hold the successor where it is. `next` does not have to be a row of
+/// `states`: the answer is about what lies below the id, which is what lets a
+/// candidate id be asked about before its row exists.
+///
+/// # Errors
+///
+/// [`Error::Policy`] when a lower id has not been published, naming every one of
+/// them — `task 2 (Failed), task 6 (Paused)` — in id order rather than only
+/// the first: with three unpublished predecessors the one named is the one whose
+/// publication the next step is waiting on, and a reader should not have to run
+/// the check again to find the others. The refusal opens with `next`, because the
+/// task being refused to start is the fact a human or a screen acts on. No path
+/// is listed, because a row of the queue broke the rule rather than a file.
+pub fn check_predecessor(states: &BTreeMap<TaskId, TaskState>, next: TaskId) -> Result<()> {
+    let unpublished = states
+        .iter()
+        .filter(|(id, _)| **id < next)
+        .filter(|(_, state)| !clears_the_way(state))
+        .map(|(id, state)| format!("task {} ({})", id, state.name()))
+        .collect::<Vec<_>>();
+    if !unpublished.is_empty() {
+        return Err(Error::Policy {
+            detail: format!(
+                "task {next} cannot start: its predecessors ({}) are neither Done, \
+                 Cancelled nor PublishedVerified, and a successor may not start until \
+                 every lower id is",
+                unpublished.join(", ")
+            ),
+            paths: Vec::new(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         PauseReason, Phase, PhaseEntry, Recovery, Stream, TaskState, apply, check_one_active,
-        phase_entry,
+        check_predecessor, phase_entry,
     };
     use crate::{AttemptId, Error, EventKind, FailureClass, TaskId};
     use serde::de::DeserializeOwned;
@@ -2766,6 +2839,175 @@ mod tests {
             stopped.is_ok(),
             "a queue stopped at a pause has nothing running; naming the paused task \
              as the one that is would blame the only task that is not: {stopped:?}"
+        );
+    }
+
+    /// Which of the twelve clear the way for a later task, in the same order as
+    /// [`one_state_per_variant`]: work the remote was proved to hold, work that
+    /// closed, and work a human dropped. ADR-0028 records why `Acknowledged` is
+    /// not on that list yet.
+    const CLEARED: [bool; 12] = [
+        false, false, false, false, false, false, true, true, false, false, false, true,
+    ];
+
+    #[test]
+    fn a_queued_predecessor_blocks_its_successor_and_is_named() {
+        let states = queue(&[(3, TaskState::Queued), (4, TaskState::Queued)]);
+        let refused = check_predecessor(&states, TaskId::new(4));
+        let Err(Error::Policy { detail, paths }) = &refused else {
+            panic!("task 4 was allowed to start while task 3 was still queued: {refused:?}");
+        };
+        assert!(
+            detail.starts_with("task 4 cannot start"),
+            "the refusal opens by naming the task it refused to start: {detail}"
+        );
+        assert!(
+            detail.contains("task 3 (Queued)"),
+            "the refusal must name the predecessor that blocks, with the state it is \
+             stuck in: {detail}"
+        );
+        assert!(
+            paths.is_empty(),
+            "a row of the queue broke this rule, not a file: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn only_published_or_closed_work_clears_the_way_for_a_successor() {
+        // Each variant is asked as task 1, against a task 2 that is itself still
+        // queued: a predecessor's answer must come from the predecessor's own
+        // state, and a check that read the successor's row would refuse every
+        // task in a freshly imported plan.
+        for ((state, name), cleared) in one_state_per_variant()
+            .iter()
+            .zip(TASK_STATE_NAMES)
+            .zip(CLEARED)
+        {
+            let outcome = check_predecessor(
+                &queue(&[(1, state.clone()), (2, TaskState::Queued)]),
+                TaskId::new(2),
+            );
+            assert_eq!(
+                outcome.is_err(),
+                !cleared,
+                "a predecessor in {name} must {}block task 2: {outcome:?}",
+                if cleared { "not " } else { "" }
+            );
+            if !cleared {
+                assert!(
+                    matches!(outcome, Err(Error::Policy { .. })),
+                    "{name} was refused by something other than the queue's own \
+                     rule: {outcome:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn published_closed_or_cancelled_work_lets_the_successor_start() {
+        for predecessor in [TaskState::Done, TaskState::Cancelled, published("b7d1f3a")] {
+            let states = queue(&[(1, predecessor.clone()), (2, TaskState::Queued)]);
+            let allowed = check_predecessor(&states, TaskId::new(2));
+            assert!(
+                allowed.is_ok(),
+                "a predecessor in {} is work the queue may proceed past: {allowed:?}",
+                predecessor.name()
+            );
+        }
+    }
+
+    #[test]
+    fn the_check_looks_only_at_the_tasks_below_the_successor() {
+        let states = queue(&[
+            (1, TaskState::Done),
+            (2, published("b7d1f3a")),
+            (3, TaskState::Cancelled),
+            (4, TaskState::Queued),
+            (5, working(1, Phase::Implement)),
+            (6, TaskState::Queued),
+        ]);
+        let allowed = check_predecessor(&states, TaskId::new(4));
+        assert!(
+            allowed.is_ok(),
+            "task 4's own row and the tasks after it are not its predecessors; \
+             refusing on them would leave nothing in the queue startable: {allowed:?}"
+        );
+    }
+
+    #[test]
+    fn the_first_task_in_the_queue_has_nothing_to_wait_for() {
+        let states = queue(&[
+            (1, TaskState::Queued),
+            (2, working(1, Phase::Green)),
+            (3, published("b7d1f3a")),
+        ]);
+        let allowed = check_predecessor(&states, TaskId::new(1));
+        assert!(
+            allowed.is_ok(),
+            "the head of the queue has no predecessor, so whatever follows it \
+             cannot hold it back: {allowed:?}"
+        );
+        let empty = check_predecessor(&BTreeMap::new(), TaskId::new(5));
+        assert!(
+            empty.is_ok(),
+            "a queue with nothing in it has no unpublished work below task 5: {empty:?}"
+        );
+    }
+
+    #[test]
+    fn the_refusal_names_every_unpublished_predecessor_in_id_order() {
+        let waiting = [
+            (4, TaskState::Preflight),
+            (1, verifying(1)),
+            (6, parked(TaskState::Queued, PauseReason::Blocked)),
+        ];
+        let mut states = queue(&waiting);
+        states.insert(TaskId::new(3), TaskState::Cancelled);
+        let refused = check_predecessor(&states, TaskId::new(7));
+        let Err(Error::Policy { detail, .. }) = &refused else {
+            panic!("three unpublished predecessors were not refused: {refused:?}");
+        };
+        assert!(
+            !detail.contains("task 3"),
+            "a cancelled predecessor is cleared work and must not be blamed for \
+             holding the successor back: {detail}"
+        );
+        let mut named = waiting
+            .iter()
+            .map(|(id, state)| {
+                detail
+                    .find(&format!("task {id} ({})", state.name()))
+                    .unwrap_or_else(|| panic!("the refusal omitted task {id}: {detail}"))
+            })
+            .collect::<Vec<_>>();
+        named.sort_unstable();
+        assert_eq!(
+            named.iter().collect::<Vec<_>>(),
+            vec![&named[0], &named[1], &named[2]],
+            "the refusal must name them in id order, so the same blocked queue \
+             always reads the same way: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_successor_the_queue_does_not_hold_is_answered_from_what_lies_below_it() {
+        let cleared = check_predecessor(
+            &queue(&[(1, TaskState::Done), (2, TaskState::Cancelled)]),
+            TaskId::new(9),
+        );
+        assert!(
+            cleared.is_ok(),
+            "task 9 need not be a row of the projection for the question to be \
+             answered: {cleared:?}"
+        );
+        let refused = check_predecessor(
+            &queue(&[(1, TaskState::Done), (5, publishing(1))]),
+            TaskId::new(9),
+        );
+        assert!(
+            matches!(refused, Err(Error::Policy { .. })),
+            "an unpublished predecessor below an id the queue does not hold is still \
+             a refusal: {refused:?}"
         );
     }
 }
