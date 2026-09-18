@@ -581,4 +581,21 @@ timeout_secs = 1800
             "a command is the words it was written with, not a string split by whoever runs it"
         );
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_profile_holding_a_path_that_is_not_text_is_refused_rather_than_written() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let mut gate = verify();
+        gate.working_dir = Some(PathBuf::from(OsString::from_vec(vec![0xff])));
+        let error = assembled(vec![gate])
+            .to_toml()
+            .expect_err("a path that is not text has no TOML spelling");
+        assert!(
+            matches!(error, Error::Config { ref key, ref detail }
+                if key == "profile" && detail.contains("TOML")),
+            "an unwritable profile must come back as a configuration refusal, not a panic: {error}"
+        );
+    }
 }
