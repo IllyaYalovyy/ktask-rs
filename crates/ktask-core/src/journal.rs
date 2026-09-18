@@ -117,6 +117,7 @@ use serde::ser::Error as _;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use crate::redact::redact_json;
 use crate::{Error, Event, EventKind, EventSeq, Project, Result, TaskId};
 
 /// The database a project's durable data lives in, below its state directory.
@@ -227,9 +228,16 @@ const SCHEMA: &[&str] = &[
 /// append-only, replayable, one writer — are kept by the operations this module
 /// offers, not by a caller that could run any statement it liked over a raw
 /// handle.
+///
+/// `secret_patterns` is the configured half of the redaction table, and it is
+/// empty until a caller hands patterns over with [`Journal::with_secret_patterns`].
+/// It lives here rather than being passed to each append because a journal is
+/// the one place that decides what reaches the file, and a pattern applied to
+/// some writes and not others is a secret that reaches disk anyway.
 #[derive(Debug)]
 pub struct Journal {
     conn: Connection,
+    secret_patterns: Vec<String>,
 }
 
 /// The path of the journal database inside one project's state directory.
@@ -280,7 +288,10 @@ impl Journal {
             conn.execute_batch(statement)?;
         }
         stamp_version(&conn)?;
-        Ok(Journal { conn })
+        Ok(Journal {
+            conn,
+            secret_patterns: Vec::new(),
+        })
     }
 
     /// Open the journal of one registered project.
@@ -300,6 +311,33 @@ impl Journal {
         Self::open(&journal_path(&project.state_dir))
     }
 
+    /// Add the configured secret patterns to the half of the redaction table an
+    /// operator owns, and return the journal that will honour them.
+    ///
+    /// `patterns` is `secret_patterns` from the configuration: the shapes a
+    /// built-in rule cannot see, because an organisation's keys carry a prefix
+    /// no open-source table knows. They apply to every payload this journal
+    /// appends from here on, which is why they are attached to the journal
+    /// rather than handed to each [`Journal::append`] — the two calls that write
+    /// a row would otherwise disagree about what reaches the file.
+    ///
+    /// A pattern set is checked here, at the door, rather than at the append
+    /// that would have used it: [`crate::redact::redact`] has no error channel,
+    /// so a pattern that does not compile would otherwise be skipped in silence,
+    /// and a leak that looks like coverage is the one outcome worse than a
+    /// refusal.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] naming `secret_patterns` for the first pattern that is
+    /// empty or is not a regular expression. Nothing is attached in that case,
+    /// and the journal the caller handed over is dropped with the refusal.
+    pub fn with_secret_patterns(mut self, patterns: &[String]) -> Result<Journal> {
+        crate::redact::check_patterns(patterns)?;
+        self.secret_patterns = patterns.to_vec();
+        Ok(self)
+    }
+
     /// Append one event to the journal and return the sequence it was written
     /// at.
     ///
@@ -317,14 +355,23 @@ impl Journal {
     /// a test over every catalog entry keeps the two halves honest against each
     /// other, rather than a comment promising they are.
     ///
+    /// The payload is redacted on its way into that column, because the payload
+    /// is where an agent's own words land (VISION.md section 11): every string
+    /// literal of the encoded object passes through [`crate::redact`], so a
+    /// failure detail carrying a credential is stored as `[redacted]` and the
+    /// rest of the record is stored exactly as it was encoded. A replay reads
+    /// back what the file holds, and the file holds the mask.
+    ///
     /// # Errors
     ///
-    /// [`Error::Serde`] when the payload has no JSON encoding, or when the clock
-    /// reads an instant with no RFC 3339 spelling; [`Error::Database`] when
-    /// SQLite refuses the insert. Either way the journal holds exactly what it
-    /// held before the call and no sequence number has been spent, because the
-    /// encoding happens before a transaction opens and a refused insert is
-    /// rolled back rather than left for a replay to trip over.
+    /// [`Error::Serde`] when the payload has no JSON encoding, when redaction
+    /// cannot decode one of its literals or leaves one that is no longer a
+    /// record, or when the clock reads an instant with no RFC 3339 spelling;
+    /// [`Error::Database`] when SQLite refuses the insert. Either way the journal
+    /// holds exactly what it held before the call and no sequence number has
+    /// been spent, because the encoding and the redaction both happen before a
+    /// transaction opens and a refused insert is rolled back rather than left for
+    /// a replay to trip over.
     pub fn append(&mut self, task_id: Option<TaskId>, kind: &EventKind) -> Result<EventSeq> {
         self.append_encoded(task_id, kind.discriminant(), || {
             serde_json::to_string(kind).map_err(Into::into)
@@ -334,21 +381,23 @@ impl Journal {
     /// The append pipeline with its payload step handed in by the caller.
     ///
     /// [`Journal::append`] supplies `serde_json`; a test supplies a serializer
-    /// that refuses, which is the only way to watch the first guarantee below
-    /// hold — no field of [`EventKind`] is one `serde_json` refuses today, and
-    /// everything else the two calls do is the same code, so the test measures
-    /// the pipeline rather than a copy of it.
+    /// that refuses, and another supplies text that is not a JSON record, which
+    /// is the only way to watch the first guarantee below hold — no field of
+    /// [`EventKind`] is one `serde_json` refuses today, and everything else the
+    /// two calls do is the same code, so the tests measure the pipeline rather
+    /// than a copy of it.
     ///
     /// The order of the steps *is* the atomicity the invariant asks for:
     ///
-    /// 1. encode the payload, then stamp the instant;
+    /// 1. encode the payload and redact it, then stamp the instant;
     /// 2. open a transaction;
     /// 3. insert, reading back the sequence the row was given;
     /// 4. accept that sequence, or roll back;
     /// 5. commit.
     ///
-    /// A refusal at step 1 never reaches the database, so nothing is written and
-    /// no sequence number is spent. A refusal at any later step drops the
+    /// A refusal at step 1 — an encoder that fails, or a redaction that cannot
+    /// answer with a record — never reaches the database, so nothing is written
+    /// and no sequence number is spent. A refusal at any later step drops the
     /// transaction without committing it, which `rusqlite` rolls back.
     fn append_encoded(
         &mut self,
@@ -356,7 +405,7 @@ impl Journal {
         kind: &str,
         encode: impl FnOnce() -> Result<String>,
     ) -> Result<EventSeq> {
-        let payload = encode()?;
+        let payload = redact_json(&encode()?, &self.secret_patterns)?;
         let ts = stamp_text(clock_nanos())?;
         let transaction = self.conn.transaction()?;
         let written: i64 = transaction.query_row(
@@ -3101,6 +3150,8 @@ mod tests {
         CREATE_META_TABLE, EventRow, EventSeq, Journal, NANOSECONDS_PER_SECOND, SCHEMA_VERSION,
         SCHEMA_VERSION_KEY, decode_event, event_sequence, journal_path, reading_nanos, stamp_text,
     };
+    use crate::redact::MASK;
+    use crate::redact::fixtures::github_token;
     use crate::{
         AttemptId, Error, Event, EventKind, FailureClass, PauseReason, Phase, Project, Recovery,
         Result, Stream, TaskId,
@@ -4222,6 +4273,256 @@ mod tests {
             next.get(),
             1,
             "the refused event spent no sequence number, so the first event of this journal is \
+             still its first"
+        );
+    }
+
+    /// A credential with the length and alphabet of a real one, planted by the
+    /// tests below. A placeholder the built-in table only half-recognises would
+    /// let every one of them pass while a real token still reached the file.
+    ///
+    /// It is the crate's shared fixture rather than a literal here for the
+    /// reason the `fixtures` module gives: a planted credential is a credential
+    /// to anything that scans the commit, and this file is not where one
+    /// belongs.
+    fn planted() -> String {
+        github_token()
+    }
+
+    /// Every byte a state directory holds: the database, its write-ahead log and
+    /// its shared-memory file.
+    ///
+    /// The `-wal` file is the reason this is a list of three. A committed row
+    /// lives there until the last connection closes and SQLite checkpoints it, so
+    /// a test that read only `journal.db` would report "no secret" about a file
+    /// that does not hold the row yet — while the row sits in the file that does.
+    fn state_dir_bytes(state_dir: &Path) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for name in ["journal.db", "journal.db-wal", "journal.db-shm"] {
+            if let Ok(one) = fs::read(state_dir.join(name)) {
+                bytes.extend_from_slice(&one);
+            }
+        }
+        bytes
+    }
+
+    /// Whether `needle` appears anywhere in `haystack`, byte for byte.
+    ///
+    /// Bytes rather than a string because what is scanned is a SQLite database: it
+    /// holds bytes no UTF-8 decoder accepts, and a scan that had to decode the
+    /// file would fail on the very thing it was looking inside.
+    fn carries(haystack: &[u8], needle: &str) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle.as_bytes())
+    }
+
+    /// VISION.md section 11: a token that appears in what an agent said must not
+    /// reach disk. The payload column is where an agent's own words land, so this
+    /// is the requirement's main case — asserted three ways, because each one
+    /// alone has a way of passing falsely: the column says what the row holds, the
+    /// file says what reached disk, and the read-back says what a replay will see.
+    #[test]
+    fn a_credential_in_an_appended_detail_is_stored_redacted_and_never_reaches_the_file() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        let planted = planted();
+
+        let seq = journal
+            .append(
+                Some(TaskId::new(35)),
+                &EventKind::PreflightFailed {
+                    class: FailureClass::EnvironmentFailure,
+                    detail: format!(
+                        "the provider refused the push: Authorization: Bearer {planted} for \
+                         https://github.com/IllyaYalovyy/ktask-rs.git"
+                    ),
+                },
+            )
+            .expect("a detail carrying a credential appends");
+
+        let stored = stored_at(&journal.conn, seq);
+        assert!(
+            !stored.payload.contains(&planted),
+            "the payload column still holds the credential: {}",
+            stored.payload
+        );
+        assert!(
+            stored.payload.contains(MASK),
+            "the stored payload holds no mask either, so nothing was redacted rather than \
+             something being redacted: {}",
+            stored.payload
+        );
+
+        let bytes = state_dir_bytes(parent.path());
+        assert!(
+            !carries(&bytes, &planted),
+            "the credential reached the bytes of the state directory"
+        );
+        assert!(
+            carries(&bytes, MASK),
+            "the scan found no mask in the state directory either, which means it searched \
+             the wrong file rather than finding the journal clean"
+        );
+
+        let read_back = journal.events().expect("the journal reads back");
+        assert_eq!(read_back.len(), 1, "one event was appended");
+        let EventKind::PreflightFailed { detail, .. } = &read_back[0].kind else {
+            panic!(
+                "the event that read back is not the one appended: {:?}",
+                read_back[0].kind
+            );
+        };
+        assert!(
+            !detail.contains(&planted) && detail.contains(MASK),
+            "a replay reads what the file holds, so what the file holds is the mask: {detail}"
+        );
+        assert!(
+            detail.contains("https://github.com/IllyaYalovyy/ktask-rs.git"),
+            "which remote refused is the fact an operator needs, and redaction is meant to \
+             cost it nothing: {detail}"
+        );
+    }
+
+    /// The scan above has to be able to fail, so here it fails: a row staged the
+    /// way the append pipeline stages one, with the credential left in the payload
+    /// by hand, is what says `state_dir_bytes` is looking inside the file that
+    /// holds the row. Without it, "no secret found" is the same answer for a
+    /// journal that redacts and for a test that searched the wrong path.
+    #[test]
+    fn the_same_scan_finds_a_credential_in_a_row_staged_without_redaction() {
+        let parent = scratch();
+        let journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        let planted = planted();
+        stage_row(
+            &journal.conn,
+            1,
+            AN_INSTANT,
+            Some(35),
+            "PreflightFailed",
+            &format!(r#"{{"kind":"PreflightFailed","detail":"{planted}"}}"#),
+        );
+
+        let bytes = state_dir_bytes(parent.path());
+        assert!(
+            carries(&bytes, &planted),
+            "the planted credential never reached the bytes this test scans, so those bytes \
+             could not have proved anything about the journal that redacts"
+        );
+    }
+
+    /// The built-in table cannot know an organisation's own key prefix, which is
+    /// what `secret_patterns` is for. A configured pattern that reached the log
+    /// but not the journal would be a leak with a configuration entry in it, so
+    /// the pattern is applied here as well — and the mask has to be in the file to
+    /// say the pattern matched something rather than nothing.
+    #[test]
+    fn an_appended_payload_is_redacted_with_the_configured_pattern_too() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path()))
+            .expect("a new journal")
+            .with_secret_patterns(&["acme-corp-[a-z0-9]{12}".to_owned()])
+            .expect("a sound pattern set is accepted");
+
+        journal
+            .append(
+                Some(TaskId::new(35)),
+                &EventKind::AgentOutput {
+                    attempt: AttemptId::new(1),
+                    stream: Stream::Stdout,
+                    text: "the tenant key acme-corp-kx7lmpqr8n2t was rotated".to_owned(),
+                },
+            )
+            .expect("agent output appends");
+
+        let bytes = state_dir_bytes(parent.path());
+        assert!(
+            !carries(&bytes, "acme-corp-kx7lmpqr8n2t"),
+            "the configured pattern did not reach the payload this journal wrote"
+        );
+        assert!(
+            carries(&bytes, MASK),
+            "no mask reached the file either, so the configured pattern matched nothing at \
+             all rather than matching the tenant key"
+        );
+    }
+
+    /// A pattern that cannot compile cannot be honoured, and `redact` has no
+    /// error channel to report it with — so the refusal belongs where the patterns
+    /// are handed over, and it belongs before a row exists. Skipping it instead
+    /// would be a leak that looks like coverage.
+    #[test]
+    fn a_redaction_pattern_that_cannot_be_compiled_is_refused_before_any_row_is_written() {
+        let parent = scratch();
+        let path = journal_file(parent.path());
+        let refused = Journal::open(&path)
+            .expect("a new journal")
+            .with_secret_patterns(&["acme-corp-[a-z0-9]{12}".to_owned(), "(unclosed".to_owned()])
+            .expect_err("a pattern that is not a regular expression is refused, not skipped");
+
+        let Error::Config { key, detail } = refused else {
+            panic!("the refusal names the configuration key the operator has to edit: {refused}");
+        };
+        assert_eq!(
+            key, "secret_patterns",
+            "the refusal names the key it came from"
+        );
+        assert!(
+            detail.contains("(unclosed"),
+            "the refusal quotes the pattern that has to be fixed: {detail}"
+        );
+
+        let reopened = Journal::open(&path).expect("a refusal leaves the file usable");
+        assert!(
+            stored_events(&reopened.conn).is_empty(),
+            "patterns are checked as they are attached, so a refusal wrote no row"
+        );
+        assert_eq!(
+            counter(&reopened.conn),
+            0,
+            "a refusal spent no sequence number"
+        );
+    }
+
+    /// Redaction sits between the encoder and the insert, which makes it the step
+    /// that could turn a record into something that is not one — a pattern that
+    /// swallowed a closing quote would do it, and a configured pattern is the
+    /// operator's own. The refusal has to happen before the transaction, exactly
+    /// as the encoder's does: a payload a replay cannot read is worse than an
+    /// event that was never written.
+    #[test]
+    fn a_payload_that_redaction_cannot_leave_as_a_record_writes_no_row_and_spends_no_sequence() {
+        let parent = scratch();
+        let mut journal = Journal::open(&journal_file(parent.path())).expect("a new journal");
+        let kind = EventKind::TaskQueued {
+            title: "one".to_owned(),
+        };
+
+        let refused = journal
+            .append_encoded(
+                Some(TaskId::new(1)),
+                kind.discriminant(),
+                || -> Result<String> { Ok("not a json record".to_owned()) },
+            )
+            .expect_err("a payload that is not a record cannot be appended");
+        assert!(
+            matches!(refused, Error::Serde(_)),
+            "the refusal is the redactor's own parse failure and is reported as it came: \
+             {refused}"
+        );
+        assert!(
+            stored_events(&journal.conn).is_empty(),
+            "redaction is finished before a transaction opens, so a refusal leaves a journal \
+             that was never touched"
+        );
+
+        let next = journal
+            .append(None, &EventKind::Resumed)
+            .expect("a refusal leaves the journal usable");
+        assert_eq!(
+            next.get(),
+            1,
+            "the refused event spent no sequence number, so the journal's own first event is \
              still its first"
         );
     }
