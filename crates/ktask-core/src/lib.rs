@@ -13,6 +13,7 @@ pub mod journal;
 mod paths;
 mod project;
 mod queue;
+pub mod redact;
 mod state;
 mod task;
 
