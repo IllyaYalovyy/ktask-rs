@@ -35,13 +35,57 @@
 //! (ADR-0031) and a state that is not awaiting a start, so the selector moves on
 //! to the work the gate was holding. No gate is ever the answer for that reason:
 //! acknowledging a gate closes it rather than making it runnable.
+//!
+//! [`load`] is this module's other half and the only part of it that touches a
+//! file: it opens the project's journal and asks that for the rows. The two
+//! halves stay apart on purpose. A selector that could read a journal for
+//! itself would be free to answer differently the second time it was asked, and
+//! what [`next_runnable`] is for is answering from the two inputs it was
+//! handed.
 
 use std::collections::BTreeMap;
 
 use crate::error::Result;
 use crate::ids::TaskId;
+use crate::journal::Journal;
+use crate::project::Project;
 use crate::state::{TaskState, check_one_active, check_predecessor};
 use crate::task::Task;
+
+/// The queue of one registered project, read from the database that holds it.
+///
+/// There is no queue file to read and nothing to write back. A plan document is
+/// an *input format*: [`crate::Journal::put_tasks`] wrote its rows once, into a
+/// queue that held nothing, and from that moment the only place the queue lives
+/// is the `tasks` table of the project's journal (`docs/DESIGN.md` Database
+/// schema, VISION.md section 4). Nor is a task's status in those rows: it is the
+/// [`crate::TaskState`] the events imply, held in the projection, so reading the
+/// queue reports no status, marks nothing in progress, and leaves nothing
+/// behind that has to be reconciled afterwards.
+///
+/// That is what makes the call cheap enough to make as often as a screen
+/// redraws — one open and one read of one table, ordered by id, which *is*
+/// document order — and what makes it correct at every moment a caller needs
+/// it: before a task starts, after its transition has been journaled, and in
+/// the replay that recovered a crash. It records no fact for recovery to have
+/// to reason about, so it cannot be the half of a run that was interrupted.
+///
+/// A queue that holds nothing is an empty `Vec` rather than an error: that is
+/// what every project starts with, what a drained one ends with, and the first
+/// thing a run reads either way.
+///
+/// # Errors
+///
+/// Whatever [`crate::Journal::open_for`] and [`crate::Journal::tasks`] report.
+/// In short: [`crate::Error::Database`] when the project's state directory or
+/// its journal cannot be opened — a directory that was never registered is
+/// refused rather than made, because one made here would look exactly like a
+/// registration (VISION.md section 11); [`crate::Error::Config`] on a journal
+/// written by a later schema version; [`crate::Error::Corrupt`] on a row, or a
+/// version row, that this build cannot say a word about.
+pub fn load(project: &Project) -> Result<Vec<Task>> {
+    Journal::open_for(project)?.tasks()
+}
 
 /// The next task the queue may start, or `None` when nothing may start.
 ///
@@ -835,6 +879,290 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Reading the queue out of the database that holds it.
+    ///
+    /// [`load`](super::load) is the half of this module that knows a queue is a
+    /// file somewhere — the rest of the file is pure — so this is the half with
+    /// a scratch directory in it. Every fixture is below the system temp
+    /// directory, and the [`Project`] handed to `load` is assembled by hand
+    /// rather than registered: a loader asks a project for its state directory
+    /// and nothing else, so the fixture holds that one path honestly while the
+    /// identity and the working copy only keep the shape of a real registration.
+    mod loading {
+        use std::fs;
+        use std::path::Path;
+
+        use tempfile::{TempDir, tempdir};
+
+        use super::plan;
+        use crate::queue::load;
+        use crate::{Error, EventKind, Journal, Project, Task, TaskId, TaskStatus};
+
+        /// The id a scratch registration carries: sixteen hex characters, a dash,
+        /// and sixteen more, which is the shape [`crate::project_id`] prints.
+        const AN_ID: &str = "0123456789abcdef-0123456789abcdef";
+
+        /// A scratch directory below the system temp directory: `docs/DESIGN.md`
+        /// Conventions forbids a test from writing inside the repository.
+        fn scratch() -> TempDir {
+            tempdir().expect("a scratch directory below the system temp directory")
+        }
+
+        /// The project a first run finds: a state directory registration made,
+        /// holding the journal registration opened.
+        ///
+        /// The journal is made by [`Journal::open_for`] rather than by a
+        /// hand-written schema, because what `load` is answerable to is the file
+        /// a registration actually leaves behind.
+        fn registered(scratch: &Path) -> Project {
+            let project = unregistered(scratch);
+            fs::create_dir_all(&project.state_dir).expect("a scratch state directory is creatable");
+            let journal = Journal::open_for(&project).expect("a state directory takes a journal");
+            drop(journal);
+            project
+        }
+
+        /// The same project with its state directory *not* there — a directory
+        /// name that has never been registered.
+        fn unregistered(scratch: &Path) -> Project {
+            Project {
+                root: scratch.join("repository"),
+                state_dir: scratch.join("state").join("ktask-rs").join(AN_ID),
+                id: AN_ID.to_owned(),
+            }
+        }
+
+        /// Write `tasks` as the project's queue through a connection that is
+        /// closed before this returns: these tests are about what the file holds,
+        /// so the rows have to be in the file rather than in a handle.
+        fn import(project: &Project, tasks: &[Task]) {
+            let mut journal =
+                Journal::open_for(project).expect("the project's journal is there to write to");
+            journal
+                .put_tasks(tasks)
+                .expect("an empty queue takes a plan the parser accepted");
+            drop(journal);
+        }
+
+        /// Every file one state directory holds, with its bytes, in name order.
+        ///
+        /// Taken only with no journal connection open, which is when SQLite has
+        /// checkpointed and deleted its `-wal`/`-shm` pair: what the directory
+        /// holds then *is* the durable record, so a row or a file a loader wrote
+        /// shows up here instead of hiding in a write-ahead log.
+        fn state_dir_files(state_dir: &Path) -> Vec<(String, Vec<u8>)> {
+            let mut files = fs::read_dir(state_dir)
+                .expect("the state directory is readable")
+                .map(|entry| {
+                    let path = entry.expect("a state directory entry names a path").path();
+                    let name = path
+                        .file_name()
+                        .expect("a state directory entry has a name")
+                        .to_string_lossy()
+                        .into_owned();
+                    (
+                        name,
+                        fs::read(&path).expect("a state directory entry is a readable file"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            files.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+            files
+        }
+
+        /// What a call did to one state directory: the files it made, removed or
+        /// rewrote between two [`state_dir_files`] snapshots.
+        ///
+        /// Names rather than the two listings, so a failure says which file
+        /// changed instead of printing two databases into the test output.
+        fn differences(before: &[(String, Vec<u8>)], after: &[(String, Vec<u8>)]) -> Vec<String> {
+            let mut changed = Vec::new();
+            for (name, bytes) in after {
+                match before.iter().find(|(held, _)| held == name) {
+                    None => changed.push(format!("`{name}` was made")),
+                    Some((_, held)) if held != bytes => {
+                        changed.push(format!("`{name}` was rewritten"));
+                    }
+                    Some(_) => {}
+                }
+            }
+            for (name, _) in before {
+                if !after.iter().any(|(held, _)| held == name) {
+                    changed.push(format!("`{name}` was removed"));
+                }
+            }
+            changed
+        }
+
+        #[test]
+        fn a_project_with_nothing_imported_loads_an_empty_queue() {
+            let scratch = scratch();
+            let project = registered(scratch.path());
+
+            let loaded = load(&project).expect("a queue nobody has filled is empty, not missing");
+
+            assert!(
+                loaded.is_empty(),
+                "an untouched queue answers with no rows rather than with an error: every \
+                 project starts with one, and reading it is the first thing a run does \
+                 (VISION.md section 4)"
+            );
+        }
+
+        #[test]
+        fn the_queue_comes_back_in_the_order_the_plan_was_written() {
+            let scratch = scratch();
+            let project = registered(scratch.path());
+            let authored = plan(4, &[2]);
+            import(&project, &authored);
+
+            let loaded = load(&project).expect("a queue of four rows is loadable");
+
+            assert_eq!(
+                loaded, authored,
+                "the rows come back exactly as the parser made them, gate and all: a loader \
+                 that rewrote a row on the way out would leave the plan and the queue \
+                 disagreeing about the same task"
+            );
+            assert_eq!(
+                loaded
+                    .iter()
+                    .map(|task| task.id.get())
+                    .collect::<Vec<u32>>(),
+                [1, 2, 3, 4],
+                "queue order is document order — the position a task had in the plan is its \
+                 id, and no row is skipped or duplicated on the way out"
+            );
+            assert_eq!(
+                loaded
+                    .iter()
+                    .map(|task| task.outcome.as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    "what task 1 changes.",
+                    "what task 2 changes.",
+                    "what task 3 changes.",
+                    "what task 4 changes.",
+                ],
+                "each row carries the text of its own position, so the order is proved about \
+                 the rows and not only about the numbers beside them"
+            );
+            assert!(
+                loaded[1].gate.is_some(),
+                "a gate is a section of the body and no column, so it survives the trip \
+                 through the database and is still a gate on the way out"
+            );
+        }
+
+        #[test]
+        fn loading_the_queue_changes_nothing_in_the_state_directory() {
+            let scratch = scratch();
+            let project = registered(scratch.path());
+            import(&project, &plan(3, &[]));
+
+            let before = state_dir_files(&project.state_dir);
+            let loaded = load(&project).expect("a queue of three rows is loadable");
+            let after = state_dir_files(&project.state_dir);
+
+            assert_eq!(
+                loaded.len(),
+                3,
+                "the queue the file holds is the queue handed back"
+            );
+            assert_eq!(
+                differences(&before, &after),
+                Vec::<String>::new(),
+                "reading the queue writes nothing back: no status row, no queue file, no \
+                 journal record. A task's status is its `TaskState`, recorded as an event like \
+                 every other change, and the queue itself was written once by the import \
+                 (VISION.md section 4, docs/DESIGN.md Database schema)"
+            );
+        }
+
+        #[test]
+        fn a_load_reads_what_the_file_holds_now_rather_than_what_the_last_load_saw() {
+            let scratch = scratch();
+            let project = registered(scratch.path());
+
+            assert!(
+                load(&project)
+                    .expect("an empty queue is loadable")
+                    .is_empty(),
+                "the queue is empty before the import"
+            );
+
+            let authored = plan(3, &[]);
+            import(&project, &authored);
+
+            assert_eq!(
+                load(&project).expect("an import is visible to the next read"),
+                authored,
+                "the queue lives in the file, so a loader that kept what it read last time \
+                 would run a project whose queue had moved on since"
+            );
+            assert_eq!(
+                load(&project).expect("the queue is loadable twice over"),
+                authored,
+                "two reads of an unchanged queue agree, in the same order"
+            );
+        }
+
+        #[test]
+        fn a_row_comes_back_without_a_status_however_the_journal_behind_it_has_moved() {
+            let scratch = scratch();
+            let project = registered(scratch.path());
+            import(&project, &plan(3, &[]));
+            let mut journal =
+                Journal::open_for(&project).expect("the journal is there to record to");
+            journal
+                .append(Some(TaskId::new(1)), &EventKind::PreflightStarted)
+                .expect("a record the catalog holds is appended");
+
+            let loaded = load(&project).expect("a queue whose head has started is still loadable");
+            let records = journal
+                .events_for(TaskId::new(1))
+                .expect("the record just appended is readable");
+            drop(journal);
+
+            assert!(
+                matches!(records[0].kind, EventKind::PreflightStarted),
+                "the journal really has moved the head on: its row 1 record is {:?}",
+                records[0].kind
+            );
+            assert_eq!(
+                loaded
+                    .iter()
+                    .map(|task| task.status)
+                    .collect::<Vec<TaskStatus>>(),
+                [TaskStatus::Pending; 3],
+                "a queue row holds what was asked and no status (ADR-0019): status is the \
+                 `TaskState` the journal implies, so a loader neither folds it into the rows \
+                 nor writes it back into them"
+            );
+        }
+
+        #[test]
+        fn a_project_with_no_state_directory_is_refused_and_left_without_one() {
+            let scratch = scratch();
+            let project = unregistered(scratch.path());
+
+            let error = load(&project)
+                .expect_err("a project that was never registered has no queue to read");
+
+            assert!(
+                matches!(error, Error::Database(_)),
+                "the filesystem refused to open a journal that is not there, and says so: \
+                 {error}"
+            );
+            assert!(
+                !project.state_dir.exists(),
+                "loading makes nothing: a state directory made here would be group-readable \
+                 and would look exactly like a registration, which is `register`'s job alone \
+                 (VISION.md section 11)"
+            );
         }
     }
 }
