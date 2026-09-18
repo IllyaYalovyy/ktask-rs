@@ -19,8 +19,8 @@
 //!   because `run` stops at the first terminal failure and never walks past one
 //!   (docs/CONTRACT.md).
 //! - [`check_predecessor`] is asked of the id that is next in line. The states
-//!   that clear its way are ADR-0028's list, and where that list and the
-//!   invariant's `is_terminal` states differ, the ADR says so.
+//!   that clear its way are ADR-0028's list as ADR-0031 amended it, and where that
+//!   list and the invariant's `is_terminal` states differ, the two ADRs say so.
 //!
 //! A gate is a queue entry that asks a human for something before the work after
 //! it may proceed (VISION.md §6). It is never handed to an agent, so it is never
@@ -29,6 +29,12 @@
 //! section, not [`crate::TaskStatus::HumanGate`]: `task.rs` is explicit that
 //! status is what a supervisor has concluded, and a conclusion is not what an
 //! entry is.
+//!
+//! A gate stops holding the queue the moment a human passes it, because its row
+//! then sits in `Acknowledged` — a terminal success the ordering check clears
+//! (ADR-0031) and a state that is not awaiting a start, so the selector moves on
+//! to the work the gate was holding. No gate is ever the answer for that reason:
+//! acknowledging a gate closes it rather than making it runnable.
 
 use std::collections::BTreeMap;
 
@@ -168,6 +174,7 @@ mod tests {
     use crate::state::{PauseReason, check_predecessor};
     use crate::task::{Task, TaskStatus, parse_plan};
     use crate::{AttemptId, Error, FailureClass, Phase, TaskId, TaskState};
+    use crate::{EventKind, apply};
     use std::collections::BTreeMap;
     use std::fmt::Write;
     use time::OffsetDateTime;
@@ -237,6 +244,24 @@ mod tests {
         TaskState::Failed {
             class: FailureClass::EnvironmentFailure,
             detail: "the baseline command is not on PATH".to_owned(),
+        }
+    }
+
+    /// The event a run journals when it reaches a gate: the queue stops and asks
+    /// a person, which is the only pause `ack` can close.
+    fn gate_paused() -> EventKind {
+        EventKind::Paused {
+            reason: PauseReason::HumanGate,
+        }
+    }
+
+    /// The event `ktask-rs ack` journals. `by` and `at` are the pair VISION.md §3
+    /// invariant 7 says a gate is recorded with, and the state helper above
+    /// carries the same pair so the two can be compared.
+    fn gate_acknowledged() -> EventKind {
+        EventKind::GateAcknowledged {
+            by: "operator".to_owned(),
+            at: OffsetDateTime::UNIX_EPOCH,
         }
     }
 
@@ -417,18 +442,108 @@ mod tests {
     }
 
     #[test]
-    fn an_acknowledged_gate_still_holds_its_successors() {
-        // ADR-0028 records this as an open question it deliberately leaves to a
-        // human: `Acknowledged` is a gate's ending and is not one of the three
-        // states that clear the way, so a passed gate still blocks what is below
-        // it. Pinned here so that superseding that ADR is a deliberate edit to
-        // this assertion rather than a surprise.
+    fn an_acknowledged_gate_lets_its_successors_start() {
+        // The assertion ADR-0029 pointed at, and ADR-0031's answer to the question
+        // ADR-0028 refused to answer alone: a gate produces no commit, so
+        // `Acknowledged` is the only terminal success it can ever reach, and a
+        // queue that would not proceed past it had one gate deadlock the rest of
+        // itself (VISION.md §6).
         let tasks = plan(2, &[1]);
         let projection = states(&[(1, acknowledged()), (2, TaskState::Queued)]);
         assert_eq!(
             answer(&tasks, &projection),
+            Answer::Start(2),
+            "a gate a human has passed is work the queue proceeds past"
+        );
+        assert!(
+            check_predecessor(&projection, TaskId::new(2)).is_ok(),
+            "and it clears the ordering check, not only the selector"
+        );
+    }
+
+    #[test]
+    fn a_gate_a_run_stopped_at_still_holds_its_successors() {
+        // The other side of the same line: an unpassed gate is not cleared work,
+        // whether the run has not reached it, has stopped at it, or stopped beside
+        // it for some other reason entirely.
+        for gate in [
+            TaskState::Queued,
+            parked(PauseReason::HumanGate),
+            parked(PauseReason::Input),
+        ] {
+            let projection = states(&[(1, gate.clone()), (2, TaskState::Queued)]);
+            assert!(
+                check_predecessor(&projection, TaskId::new(2)).is_err(),
+                "a gate in {} has not been passed by anyone: it must hold task 2",
+                gate.name()
+            );
+        }
+    }
+
+    #[test]
+    fn a_gate_is_never_the_task_the_selector_names() {
+        // VISION.md §6: a gate is never handed to an agent, so it never gets an
+        // attempt. Asked of every state a queue row can be in, because the answer
+        // must not depend on how far the run got before it reached the gate.
+        let tasks = plan(3, &[2]);
+        for gate in every_state() {
+            let projection = states(&[
+                (1, TaskState::Done),
+                (2, gate.clone()),
+                (3, TaskState::Queued),
+            ]);
+            if let Answer::Start(id) = answer(&tasks, &projection) {
+                assert_ne!(
+                    id,
+                    2,
+                    "a gate in {} was offered as work for an agent to attempt",
+                    gate.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_gate_in_the_middle_runs_what_is_before_it_and_stops() {
+        // The drain this task exists for, told once through the two functions that
+        // own it: the tasks above the gate run, the gate stops the run, `ack`
+        // closes the gate, and the tasks below it run. Every state here is one
+        // `apply` after the last, so the story is the machine's own.
+        let tasks = plan(3, &[2]);
+        assert_eq!(
+            answer(&tasks, &states(&[])),
+            Answer::Start(1),
+            "the queue starts the work above the gate"
+        );
+
+        let closed = states(&[(1, TaskState::Done)]);
+        assert_eq!(
+            answer(&tasks, &closed),
             Answer::Nothing,
-            "ADR-0028: a gate in `Acknowledged` clears nothing until gates are decided"
+            "with the gate next in line the run stops: nothing behind it may start"
+        );
+
+        let at_the_gate = apply(&TaskState::Queued, &gate_paused())
+            .expect("a run stops at a gate by parking it for a human");
+        let stopped = states(&[(1, TaskState::Done), (2, at_the_gate.clone())]);
+        assert_eq!(
+            answer(&tasks, &stopped),
+            Answer::Nothing,
+            "standing at the gate is standing still, not drained"
+        );
+
+        let passed = apply(&at_the_gate, &gate_acknowledged())
+            .expect("the acknowledgement closes the pause that stopped at a gate");
+        assert_eq!(
+            passed,
+            acknowledged(),
+            "the gate is closed by who acknowledged it and when, and by nothing else"
+        );
+        let after = states(&[(1, TaskState::Done), (2, passed)]);
+        assert_eq!(
+            answer(&tasks, &after),
+            Answer::Start(3),
+            "and the queue moves past the gate to the work it was holding"
         );
     }
 
@@ -620,11 +735,12 @@ mod tests {
         false, true, true, true, true, true, true, false, false, false, false, false,
     ];
 
-    /// The states that clear the way for a successor, by ADR-0028: published,
-    /// closed, or dropped by a human. `Acknowledged` is absent, and
-    /// `an_acknowledged_gate_still_holds_its_successors` pins what that costs.
+    /// The states that clear the way for a successor: published, closed,
+    /// acknowledged by a human, or dropped by a human. ADR-0028 held
+    /// `Acknowledged` back; ADR-0031 added it, and
+    /// `an_acknowledged_gate_lets_its_successors_start` is the row that decides.
     const CLEARED: [bool; 12] = [
-        false, false, false, false, false, false, true, true, false, false, false, true,
+        false, false, false, false, false, false, true, true, true, false, false, true,
     ];
 
     /// The states that stop the run wherever they sit: the pause and the failure.
@@ -677,8 +793,9 @@ mod tests {
         );
         assert_eq!(
             CLEARED.iter().filter(|cleared| **cleared).count(),
-            3,
-            "ADR-0028 fixes the states that clear the way at three"
+            4,
+            "the queue proceeds past four states: published, closed, acknowledged, \
+             cancelled"
         );
         assert_eq!(
             STOPPED.iter().filter(|stopped| **stopped).count(),

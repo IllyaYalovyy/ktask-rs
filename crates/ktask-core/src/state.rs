@@ -1025,22 +1025,28 @@ pub fn check_one_active(states: &BTreeMap<TaskId, TaskState>) -> Result<()> {
 
 /// Whether a task in `state` is work the queue may proceed past.
 ///
-/// Three of the twelve states: [`TaskState::PublishedVerified`], whose commit
+/// Four of the twelve states: [`TaskState::PublishedVerified`], whose commit
 /// the remote was read back holding, [`TaskState::Done`], which closes over it,
-/// and [`TaskState::Cancelled`], which a human dropped. The match is exhaustive
+/// [`TaskState::Acknowledged`], which closes a gate that could never publish
+/// anything, and [`TaskState::Cancelled`], which a human dropped. The match is exhaustive
 /// rather than a `matches!` for the reason ADR-0022 applies to [`apply`]: a
 /// thirteenth state has to be placed on one side of the line by the compiler
-/// instead of defaulted onto the safe-looking side.
+/// instead of defaulted onto the safe-looking side. A gate produces no commit, so
+/// `Acknowledged` is the only state a gate can finish in — leaving it out would
+/// hold everything below one gate waiting for a publication that can never
+/// happen (VISION.md §6, ADR-0031).
 fn clears_the_way(state: &TaskState) -> bool {
     match state {
-        TaskState::PublishedVerified { .. } | TaskState::Done | TaskState::Cancelled => true,
+        TaskState::PublishedVerified { .. }
+        | TaskState::Done
+        | TaskState::Acknowledged { .. }
+        | TaskState::Cancelled => true,
         TaskState::Queued
         | TaskState::Preflight
         | TaskState::Running { .. }
         | TaskState::Remediating { .. }
         | TaskState::Verifying { .. }
         | TaskState::Publishing { .. }
-        | TaskState::Acknowledged { .. }
         | TaskState::Paused { .. }
         | TaskState::Failed { .. } => false,
     }
@@ -1059,10 +1065,13 @@ fn clears_the_way(state: &TaskState) -> bool {
 /// predecessors, which is what lets a freshly imported plan of nothing but
 /// [`TaskState::Queued`] rows have a head at all.
 ///
-/// A predecessor clears the way in exactly the three states `clears_the_way`
-/// names — published, closed, or cancelled — so work still in
-/// flight, work that failed, and work standing still in a [`TaskState::Paused`]
-/// all hold the successor where it is. `next` does not have to be a row of
+/// A predecessor clears the way in exactly the four states `clears_the_way`
+/// names — published, closed, acknowledged by a human, or cancelled — so work
+/// still in flight, work that failed, and work standing still in a
+/// [`TaskState::Paused`] all hold the successor where it is. A gate clears the way
+/// on the acknowledgement alone and never on a commit: it is not an executable
+/// task, so an unpassed gate holds what is below it and a passed one lets it go
+/// (VISION.md §3 invariant 2). `next` does not have to be a row of
 /// `states`: the answer is about what lies below the id, which is what lets a
 /// candidate id be asked about before its row exists.
 ///
@@ -1086,8 +1095,8 @@ pub fn check_predecessor(states: &BTreeMap<TaskId, TaskState>, next: TaskId) -> 
         return Err(Error::Policy {
             detail: format!(
                 "task {next} cannot start: its predecessors ({}) are neither Done, \
-                 Cancelled nor PublishedVerified, and a successor may not start until \
-                 every lower id is",
+                 Acknowledged, Cancelled nor PublishedVerified, and a successor may \
+                 not start until every lower id is",
                 unpublished.join(", ")
             ),
             paths: Vec::new(),
@@ -1273,7 +1282,7 @@ mod tests {
                 at: time::macros::datetime!(2026-09-17 12:34:56 UTC),
             },
             TaskState::Paused {
-                reason: PauseReason::Input,
+                reason: PauseReason::HumanGate,
                 resume_to: Box::new(TaskState::Running {
                     attempt: AttemptId::new(1),
                     phase: Phase::Green,
@@ -2501,7 +2510,7 @@ mod tests {
     /// pair has left it. `("Paused", "Paused", "Paused")` was a nested pause,
     /// which T028 decided is a mistake rather than a second wait — the refusal
     /// is asserted in `a_pause_above_a_pause_is_refused`, and ADR-0026 is why.
-    const LEGAL: [(&str, &str, &str); 48] = [
+    const LEGAL: [(&str, &str, &str); 49] = [
         ("Queued", "TaskQueued", "Queued"),
         ("Queued", "PreflightStarted", "Preflight"),
         ("Queued", "Paused", "Paused"),
@@ -2549,6 +2558,7 @@ mod tests {
         ("PublishedVerified", "RecoveryDecision", "PublishedVerified"),
         ("Paused", "Resumed", "Running"),
         ("Paused", "TaskCancelled", "Cancelled"),
+        ("Paused", "GateAcknowledged", "Acknowledged"),
         ("Paused", "RecoveryDecision", "Running"),
     ];
 
@@ -2886,10 +2896,12 @@ mod tests {
 
     /// Which of the twelve clear the way for a later task, in the same order as
     /// [`one_state_per_variant`]: work the remote was proved to hold, work that
-    /// closed, and work a human dropped. ADR-0028 records why `Acknowledged` is
-    /// not on that list yet.
+    /// closed, work a human acknowledged, and work a human dropped. ADR-0028 held
+    /// `Acknowledged` back as a question it would not answer alone; ADR-0031
+    /// answers it, and VISION.md §3 invariant 2 names `acknowledged` as exactly
+    /// what a gate's predecessor has to reach.
     const CLEARED: [bool; 12] = [
-        false, false, false, false, false, false, true, true, false, false, false, true,
+        false, false, false, false, false, false, true, true, true, false, false, true,
     ];
 
     #[test]
@@ -2915,7 +2927,7 @@ mod tests {
     }
 
     #[test]
-    fn only_published_or_closed_work_clears_the_way_for_a_successor() {
+    fn only_the_four_cleared_states_let_a_successor_start() {
         // Each variant is asked as task 1, against a task 2 that is itself still
         // queued: a predecessor's answer must come from the predecessor's own
         // state, and a check that read the successor's row would refuse every
@@ -2946,8 +2958,13 @@ mod tests {
     }
 
     #[test]
-    fn published_closed_or_cancelled_work_lets_the_successor_start() {
-        for predecessor in [TaskState::Done, TaskState::Cancelled, published("b7d1f3a")] {
+    fn published_closed_acknowledged_or_cancelled_work_lets_the_successor_start() {
+        for predecessor in [
+            TaskState::Done,
+            acknowledged_state(),
+            TaskState::Cancelled,
+            published("b7d1f3a"),
+        ] {
             let states = queue(&[(1, predecessor.clone()), (2, TaskState::Queued)]);
             let allowed = check_predecessor(&states, TaskId::new(2));
             assert!(
@@ -2956,6 +2973,42 @@ mod tests {
                 predecessor.name()
             );
         }
+    }
+
+    #[test]
+    fn a_gate_clears_the_way_only_once_a_human_has_acknowledged_it() {
+        // The same queue entry either side of `ack`: the pause a run stops at is
+        // not yet work the queue may proceed past, and the acknowledgement is.
+        // A gate produces no commit, so this is the only state in which the work
+        // behind it can ever be released (VISION.md §6, ADR-0031).
+        let at_the_gate = parked(TaskState::Queued, PauseReason::HumanGate);
+        let held = check_predecessor(
+            &queue(&[(1, at_the_gate.clone()), (2, TaskState::Queued)]),
+            TaskId::new(2),
+        );
+        assert!(
+            matches!(held, Err(Error::Policy { .. })),
+            "a gate the run stopped at, which no human has passed yet, must hold its \
+             successor: {held:?}"
+        );
+
+        let passed = apply(&at_the_gate, &acknowledged())
+            .expect("a pause that stopped at a gate is closed by an acknowledgement");
+        assert_eq!(
+            passed,
+            acknowledged_state(),
+            "the acknowledgement records who passed the gate and when, which is what \
+             invariant 7 says a gate is closed by"
+        );
+        let released = check_predecessor(
+            &queue(&[(1, passed), (2, TaskState::Queued)]),
+            TaskId::new(2),
+        );
+        assert!(
+            released.is_ok(),
+            "the same entry, acknowledged, is the terminal success a successor waits \
+             on: {released:?}"
+        );
     }
 
     #[test]
