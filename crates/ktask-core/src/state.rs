@@ -15,6 +15,7 @@
 //! tests below pin the count and the encoding of each.
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -23,6 +24,7 @@ use crate::classify::FailureClass;
 use crate::error::{Error, Result};
 use crate::event::EventKind;
 use crate::ids::AttemptId;
+use crate::ids::TaskId;
 
 /// Where a task stands in its lifecycle, and everything the last journal
 /// record proved about it.
@@ -940,11 +942,96 @@ fn from_paused(
     }
 }
 
+/// The states a run is busy with: started, and neither stopped nor finished.
+///
+/// Six of the twelve — everything past [`TaskState::Queued`] that ADR-0021 does
+/// not call terminal and ADR-0026 does not call paused. Each of the six has
+/// work in flight on one machine: `Preflight` is running the checks that gate
+/// the tree, [`TaskState::Running`] and [`TaskState::Remediating`] have an agent
+/// in front of them, [`TaskState::Verifying`] is spending the gates on one
+/// attempt's output, [`TaskState::Publishing`] has a push in the air, and
+/// [`TaskState::PublishedVerified`] is a commit the remote holds that the queue
+/// has not closed. Two tasks in any two of them contend for the same tree and
+/// the same remote, which is what VISION.md §3 invariant 1 forbids.
+///
+/// [`TaskState::Paused`] is off the list on purpose: a pause is how a run gives
+/// the machine back, and whether a paused task also blocks its successor is
+/// `next_runnable`'s rule to state (T032), not this predicate's. The match is
+/// exhaustive rather than a `matches!` so a thirteenth state is placed on one
+/// side of the line by the compiler instead of defaulted onto it — the reasoning
+/// ADR-0022 applies to [`apply`].
+fn is_active(state: &TaskState) -> bool {
+    match state {
+        TaskState::Preflight
+        | TaskState::Running { .. }
+        | TaskState::Remediating { .. }
+        | TaskState::Verifying { .. }
+        | TaskState::Publishing { .. }
+        | TaskState::PublishedVerified { .. } => true,
+        TaskState::Queued
+        | TaskState::Done
+        | TaskState::Acknowledged { .. }
+        | TaskState::Paused { .. }
+        | TaskState::Failed { .. }
+        | TaskState::Cancelled => false,
+    }
+}
+
+/// VISION.md §3 invariant 1 made checkable: the queue cannot have two tasks
+/// running.
+///
+/// `states` is the projection of every task the queue holds — the same map a
+/// rebuild folds and a screen prints — so the question is asked of the whole
+/// queue and not only of the tasks that could still be started. One active task
+/// is legal, and so is none: a freshly imported plan is rows of
+/// [`TaskState::Queued`] with nothing running, and a queue stopped at a pause or
+/// a failure holds tasks that have stopped rather than tasks that are running.
+///
+/// The check reads and decides nothing else — no clock, no journal, no lock —
+/// which is what lets the same call answer before a task is started, after a
+/// transition has been journaled, and over a replay that recovered a crash.
+///
+/// # Errors
+///
+/// [`Error::Policy`] when more than one task is active, naming every one of them
+/// — `task 2 (Running), task 7 (Verifying)` — in id order rather than only the
+/// first two: with three active tasks the third is the one whose worktree the
+/// next step opens, and a reader should not have to run the check again to find
+/// out it exists. No path is listed, because a row of the queue broke the rule
+/// rather than a file.
+pub fn check_one_active(states: &BTreeMap<TaskId, TaskState>) -> Result<()> {
+    let active = states
+        .iter()
+        .filter(|(_, state)| is_active(state))
+        .collect::<Vec<_>>();
+    if active.len() > 1 {
+        return Err(Error::Policy {
+            detail: format!(
+                "{} tasks are active at once ({}); exactly one is allowed, and no \
+                 further task may start until the rest have finished, paused, or \
+                 been cancelled",
+                active.len(),
+                active
+                    .iter()
+                    .map(|(id, state)| format!("task {} ({})", id, state.name()))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            paths: Vec::new(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PauseReason, Phase, PhaseEntry, Recovery, Stream, TaskState, apply, phase_entry};
-    use crate::{AttemptId, Error, EventKind, FailureClass};
+    use super::{
+        PauseReason, Phase, PhaseEntry, Recovery, Stream, TaskState, apply, check_one_active,
+        phase_entry,
+    };
+    use crate::{AttemptId, Error, EventKind, FailureClass, TaskId};
     use serde::de::DeserializeOwned;
+    use std::collections::BTreeMap;
     use std::fmt::Debug;
 
     /// Every `Phase`, in the order `docs/DESIGN.md` declares them.
@@ -2468,5 +2555,217 @@ mod tests {
             let expected = state.clone();
             moves(&state, &event, &expected);
         }
+    }
+
+    /// Which of the twelve a run is busy with, in the same order as
+    /// [`one_state_per_variant`]: the six between starting and finishing
+    /// (ADR-0027). [`active_states`] spells the same six out a second time from
+    /// the variants themselves, so neither statement can pass by agreeing with
+    /// the other.
+    const ACTIVE: [bool; 12] = [
+        false, true, true, true, true, true, true, false, false, false, false, false,
+    ];
+
+    /// The six active states, written from the variants rather than read out of
+    /// [`ACTIVE`].
+    fn active_states() -> Vec<TaskState> {
+        vec![
+            TaskState::Preflight,
+            working(1, Phase::Implement),
+            TaskState::Remediating {
+                attempt: AttemptId::new(2),
+                phase: Phase::Red,
+            },
+            TaskState::Verifying {
+                attempt: AttemptId::new(1),
+            },
+            TaskState::Publishing {
+                attempt: AttemptId::new(1),
+            },
+            TaskState::PublishedVerified {
+                commit: "b7d1f3a".to_owned(),
+            },
+        ]
+    }
+
+    /// A queue holding each `(position, state)` pair, for asking the invariant
+    /// about a set of tasks rather than about one state.
+    fn queue(tasks: &[(u32, TaskState)]) -> BTreeMap<TaskId, TaskState> {
+        tasks
+            .iter()
+            .map(|(position, state)| (TaskId::new(*position), state.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn only_the_six_states_between_starting_and_finishing_take_the_active_slot() {
+        // Asking a state whether it is active needs a second task to ask it
+        // against: one task of any kind is a legal queue, so the answer only
+        // shows up as a refusal. `Preflight` is the standing occupant.
+        let at_work = TaskState::Preflight;
+        for ((state, name), active) in one_state_per_variant()
+            .iter()
+            .zip(TASK_STATE_NAMES)
+            .zip(ACTIVE)
+        {
+            let outcome = check_one_active(&queue(&[(1, state.clone()), (2, at_work.clone())]));
+            assert_eq!(
+                outcome.is_err(),
+                active,
+                "{name} paired with a task at work must {}be refused: {outcome:?}",
+                if active { "" } else { "not " }
+            );
+            if active {
+                assert!(
+                    matches!(outcome, Err(Error::Policy { .. })),
+                    "{name} was refused by something other than the queue's own \
+                     rule: {outcome:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn two_active_tasks_are_refused_and_the_error_names_both() {
+        let active = active_states();
+        assert_eq!(
+            active.len(),
+            6,
+            "ADR-0027 fixes the number of active states at six"
+        );
+        for (position, first) in active.iter().enumerate() {
+            for second in active.iter().skip(position + 1) {
+                let refused = check_one_active(&queue(&[(2, first.clone()), (7, second.clone())]));
+                let Err(Error::Policy { detail, paths }) = &refused else {
+                    panic!(
+                        "{} and {} active at once was not refused: {refused:?}",
+                        first.name(),
+                        second.name()
+                    );
+                };
+                assert!(
+                    paths.is_empty(),
+                    "a row of the queue broke this rule, not a file: {paths:?}"
+                );
+                for (id, state) in [(2, first), (7, second)] {
+                    assert!(
+                        detail.contains(&format!("task {id} ({})", state.name())),
+                        "the refusal must name task {id} in its own state: {detail}"
+                    );
+                }
+                assert!(
+                    detail.find("task 2") < detail.find("task 7"),
+                    "the refusal must name the earlier task first: {detail}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_refusal_names_every_active_task_and_not_only_the_first_two() {
+        let waiting = [
+            (4, TaskState::Preflight),
+            (
+                1,
+                TaskState::Verifying {
+                    attempt: AttemptId::new(1),
+                },
+            ),
+            (
+                9,
+                TaskState::PublishedVerified {
+                    commit: "b7d1f3a".to_owned(),
+                },
+            ),
+        ];
+        let refused = check_one_active(&queue(&waiting));
+        let Err(Error::Policy { detail, .. }) = &refused else {
+            panic!("three tasks active at once was not refused: {refused:?}");
+        };
+        assert!(
+            detail.starts_with("3 tasks are active at once"),
+            "the refusal opens with how many broke the rule: {detail}"
+        );
+        let mut named = waiting
+            .iter()
+            .map(|(id, state)| {
+                detail
+                    .find(&format!("task {id} ({})", state.name()))
+                    .unwrap_or_else(|| panic!("the refusal omitted task {id}: {detail}"))
+            })
+            .collect::<Vec<_>>();
+        named.sort_unstable();
+        assert_eq!(
+            named.iter().collect::<Vec<_>>(),
+            vec![&named[0], &named[1], &named[2]],
+            "the refusal must name them in id order, so the same broken queue \
+             always reads the same way: {detail}"
+        );
+    }
+
+    #[test]
+    fn one_active_task_and_a_queue_of_waiting_or_stopped_ones_is_allowed() {
+        let states = [
+            (1, TaskState::Queued),
+            (2, TaskState::Queued),
+            (
+                3,
+                TaskState::Paused {
+                    reason: PauseReason::Limit { until: None },
+                    resume_to: Box::new(TaskState::Preflight),
+                },
+            ),
+            (
+                4,
+                TaskState::Paused {
+                    reason: PauseReason::HumanGate,
+                    resume_to: Box::new(working(1, Phase::Green)),
+                },
+            ),
+            (
+                5,
+                TaskState::Paused {
+                    reason: PauseReason::Interrupted,
+                    resume_to: Box::new(TaskState::PublishedVerified {
+                        commit: "b7d1f3a".to_owned(),
+                    }),
+                },
+            ),
+            (
+                6,
+                TaskState::Failed {
+                    class: FailureClass::ProviderLimit,
+                    detail: "429 from the provider".to_owned(),
+                },
+            ),
+            (7, TaskState::Cancelled),
+            (8, TaskState::Done),
+            (9, working(3, Phase::Green)),
+        ];
+        let worked = check_one_active(&queue(&states));
+        assert!(
+            worked.is_ok(),
+            "one task working among waiting, paused and finished ones is the queue \
+             every run spends most of its time in: {worked:?}"
+        );
+        let empty = check_one_active(&BTreeMap::new());
+        assert!(
+            empty.is_ok(),
+            "a queue with nothing in it has nothing running: {empty:?}"
+        );
+    }
+
+    #[test]
+    fn a_pause_is_not_active_whatever_it_would_resume_into() {
+        let stopped_at_a_gate = TaskState::Paused {
+            reason: PauseReason::HumanGate,
+            resume_to: Box::new(working(2, Phase::Implement)),
+        };
+        let stopped = check_one_active(&queue(&[(1, stopped_at_a_gate), (2, TaskState::Queued)]));
+        assert!(
+            stopped.is_ok(),
+            "a queue stopped at a pause has nothing running; naming the paused task \
+             as the one that is would blame the only task that is not: {stopped:?}"
+        );
     }
 }
