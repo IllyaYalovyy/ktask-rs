@@ -41,6 +41,17 @@
 //! ref file or handed over by another tool. Trimming once here is what keeps
 //! every caller from doing it — or from forgetting to.
 //!
+//! # The environment belongs to the call
+//!
+//! [`git`] starts its child with this process's environment and adds nothing to
+//! it. One test-only door, `git_env`, adds variables to a single call, because
+//! the alternative is `std::env::set_var`, which is both `unsafe` in edition
+//! 2024 and wrong: an instant or an identity set process-wide dates and signs
+//! every later test in the same binary, and `docs/TESTING.md` forbids a test
+//! from setting one. Nothing in a run reaches it: a git call inside a run is an
+//! ordinary [`git`], and `git_env` exists so a fixture can pin what a commit
+//! records without touching anything outside the one process it started.
+//!
 //! # Every failure is `Error::Git`
 //!
 //! A non-zero exit becomes [`Error::Git`] holding the argument vector as it was
@@ -98,25 +109,49 @@ const GIT: &str = "git";
 /// started at all (the reason is carried in the same place). Both carry the
 /// argument vector, so the failure names the call that made it.
 pub fn git(root: &Path, args: &[&str]) -> Result<String> {
+    run(root, args, &[])
+}
+
+/// [`git`] with `env` added to the child's environment.
+///
+/// The variables belong to the child process alone: nothing here touches
+/// `std::env`, so a caller that pins an instant or a locale cannot change what
+/// any other call in this process sees. `env` pairs are applied in order, so a
+/// later pair for the same name wins, which is `Command::env`'s own rule.
+///
+/// This is a door for tests only, and it is gated as one: a run has no use for
+/// it, and a git call inside a run should be an ordinary [`git`] whose behavior
+/// is the one this module documents.
+#[cfg(any(test, feature = "testing"))]
+pub(crate) fn git_env(root: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
+    run(root, args, env)
+}
+
+/// The one place a `git` process is started: [`git`] and the test-only `git_env`
+/// differ only in what they hand to `env`.
+fn run(root: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
     let invoked = || {
         args.iter()
             .map(|word| (*word).to_owned())
             .collect::<Vec<String>>()
     };
-    let output = Command::new(GIT)
+    let mut command = Command::new(GIT);
+    command
         .args(args)
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|reason| Error::Git {
-            args: invoked(),
-            stderr: format!(
-                "`{GIT}` could not be started in `{}`: {reason}",
-                root.display()
-            ),
-        })?;
+        .stderr(Stdio::piped());
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let output = command.output().map_err(|reason| Error::Git {
+        args: invoked(),
+        stderr: format!(
+            "`{GIT}` could not be started in `{}`: {reason}",
+            root.display()
+        ),
+    })?;
     if !output.status.success() {
         return Err(Error::Git {
             args: invoked(),
@@ -291,7 +326,9 @@ mod tests {
 
     use tempfile::{TempDir, tempdir};
 
-    use super::{current_branch, fetch, git, head_sha, is_clean, remote_url, status_porcelain};
+    use super::{
+        current_branch, fetch, git, git_env, head_sha, is_clean, remote_url, status_porcelain,
+    };
     use crate::{Error, Result};
 
     /// Commit coordinates passed on the command line, so a test that commits
@@ -546,6 +583,51 @@ mod tests {
             "git writes its usage to stdout, and a non-zero exit keeps stdout for the error's \
             argument vector rather than laundering command output into the field that holds \
             stderr: the failure is thin here by design, not invented"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn an_instant_handed_to_one_call_dates_its_commit_and_no_other_call() {
+        let (scratch, root) = repository();
+        fs::write(root.join("pinned.txt"), "dated by its caller\n").expect("a file to commit");
+        let mut stage: Vec<&str> = IDENTITY.to_vec();
+        stage.extend(["add", "--", "pinned.txt"]);
+        git(&root, &stage).expect("staging the file");
+        let mut commit: Vec<&str> = IDENTITY.to_vec();
+        commit.extend(["commit", "-m", "a commit with an instant handed to it"]);
+        let instants = [
+            ("GIT_AUTHOR_DATE", "2000-01-01T00:00:00+00:00"),
+            ("GIT_COMMITTER_DATE", "2000-01-01T00:00:00+00:00"),
+        ];
+        git_env(&root, &commit, &instants).expect("a commit made with the instant it was handed");
+        let mut ask: Vec<&str> = IDENTITY.to_vec();
+        ask.extend(["log", "-1", "--format=%aI|%cI"]);
+        let dated = git(&root, &ask).expect("the one commit this repository now holds");
+        assert_eq!(
+            dated, "2000-01-01T00:00:00Z|2000-01-01T00:00:00Z",
+            "both instants the commit object holds are the ones the call was handed, which is \
+             what makes a fixture's commit hashes reproducible: a commit records an author \
+             instant and a committer instant, so an unpinned clock makes the hash different on \
+             every run"
+        );
+
+        fs::write(root.join("later.txt"), "dated by the clock\n").expect("a second file");
+        let mut stage: Vec<&str> = IDENTITY.to_vec();
+        stage.extend(["add", "--", "later.txt"]);
+        git(&root, &stage).expect("staging the second file");
+        let mut commit: Vec<&str> = IDENTITY.to_vec();
+        commit.extend(["commit", "-m", "a commit handed no instant"]);
+        git(&root, &commit).expect("a plain `git` call still works after one that carried env");
+        let mut ask: Vec<&str> = IDENTITY.to_vec();
+        ask.extend(["log", "-1", "--format=%aI"]);
+        let later = git(&root, &ask).expect("the second commit");
+        assert!(
+            !later.starts_with("2000-01-01"),
+            "the instant belongs to the call that was handed it and to no other: `git` run \
+             afterwards dates itself by the clock, which is why this hands the variables to the \
+             child process rather than to `std::env` — a test that dated the whole process would \
+             date every later test in the same binary, and `docs/TESTING.md` forbids one: {later}"
         );
         drop(scratch);
     }

@@ -15,10 +15,20 @@ thiserror.workspace = true
 time.workspace = true
 regex.workspace = true
 nix.workspace = true
+# Adopted as a dev-dependency below and by `docs/DESIGN.md`; it is optional here
+# because the only thing that uses it is the `testing` feature's fixtures, and a
+# run must not pay for a scratch-directory crate it never calls (ADR-0042).
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
 proptest.workspace = true
+
+# Disposable repository fixtures (`ktask_core::testing`), for the test suites of
+# this workspace's own crates. Enabling it activates `tempfile`, which a plain
+# build of this crate does not compile.
+[features]
+testing = ["dep:tempfile"]
 
 [lints]
 workspace = true
