@@ -19,6 +19,12 @@ pub mod redact;
 mod state;
 mod task;
 
+// Disposable git repositories, for this workspace's own test suites: absent
+// from a build that is neither a test of this crate nor built with `testing`,
+// so a run never carries a scratch-directory crate it does not use.
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+
 pub use classify::{FailureClass, TddException};
 pub use config::Config;
 pub use error::{Error, Result};
