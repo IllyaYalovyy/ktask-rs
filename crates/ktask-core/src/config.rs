@@ -119,6 +119,36 @@ pub struct Config {
     /// Extra patterns whose matches are redacted out of stored output. Added to
     /// the built-in set, never replacing it.
     pub secret_patterns: Vec<String>,
+    /// The command that proves the project was green before the task started,
+    /// or `None` to run no baseline gate.
+    ///
+    /// A command is the words to execute, kept split, because quoting and
+    /// splitting a command line is a decision the configuration has to have made
+    /// already — see [`crate::Gate`]. Every gate command in this struct is
+    /// spelled the same way, and `Config` is the only place a gate command is
+    /// written down: the profile the runner executes is built from these fields
+    /// by `profile_from`.
+    pub baseline_command: Option<Vec<String>>,
+    /// The fast check of an edit loop — the tests the change touches, run while
+    /// the agent is still working — or `None` to run no targeted gate.
+    pub targeted_test_command: Option<Vec<String>>,
+    /// The complete local suite, and the one gate command that is not optional:
+    /// `profile_from` refuses a configuration that leaves this unset,
+    /// because a task is never called done on an agent's say-so (VISION.md §8).
+    pub verify_command: Option<Vec<String>>,
+    /// The lints, run by the runner rather than trusted from a report, or `None`
+    /// to run no lint gate.
+    pub lint_command: Option<Vec<String>>,
+    /// The formatting check, or `None` to run no format gate.
+    pub format_command: Option<Vec<String>>,
+    /// The build, including every target, or `None` to run no build gate.
+    pub build_command: Option<Vec<String>>,
+    /// The privacy scan of staged files, tracked files and the outgoing commit
+    /// range, or `None` to run no privacy gate.
+    pub privacy_command: Option<Vec<String>>,
+    /// The affected tests run repeatedly, or `None` to run no flake gate.
+    /// `flake_runs` says how many times it runs when it is configured.
+    pub flake_command: Option<Vec<String>>,
     /// How many times the affected tests run in the flake gate. Zero would
     /// disable it, so the default is five.
     pub flake_runs: u32,
@@ -172,6 +202,14 @@ impl Default for Config {
                 "src/**/tests.rs".to_owned(),
             ],
             secret_patterns: Vec::new(),
+            baseline_command: None,
+            targeted_test_command: None,
+            verify_command: None,
+            lint_command: None,
+            format_command: None,
+            build_command: None,
+            privacy_command: None,
+            flake_command: None,
             flake_runs: 5,
             retention_days: 90,
             min_free_disk_bytes: 2_147_483_648,
@@ -525,6 +563,22 @@ const KEYS: &[Key] = &[
     ),
     setting!("test_globs", "KTASK_TEST_GLOBS", test_globs),
     setting!("secret_patterns", "KTASK_SECRET_PATTERNS", secret_patterns),
+    setting!(
+        "baseline_command",
+        "KTASK_BASELINE_COMMAND",
+        baseline_command
+    ),
+    setting!(
+        "targeted_test_command",
+        "KTASK_TARGETED_TEST_COMMAND",
+        targeted_test_command
+    ),
+    setting!("verify_command", "KTASK_VERIFY_COMMAND", verify_command),
+    setting!("lint_command", "KTASK_LINT_COMMAND", lint_command),
+    setting!("format_command", "KTASK_FORMAT_COMMAND", format_command),
+    setting!("build_command", "KTASK_BUILD_COMMAND", build_command),
+    setting!("privacy_command", "KTASK_PRIVACY_COMMAND", privacy_command),
+    setting!("flake_command", "KTASK_FLAKE_COMMAND", flake_command),
     setting!("flake_runs", "KTASK_FLAKE_RUNS", flake_runs),
     setting!("retention_days", "KTASK_RETENTION_DAYS", retention_days),
     setting!(
@@ -634,6 +688,20 @@ impl FromEnvText for Option<PathBuf> {
     }
 }
 
+impl FromEnvText for Option<Vec<String>> {
+    const TEXT_TYPE: &'static str = "comma-separated list";
+
+    /// One word per comma-separated entry, so `KTASK_BUILD_COMMAND=cargo,build`
+    /// is the two-word command `build_command = ["cargo", "build"]` writes in a
+    /// document. A gate command is a list like any other here, and a variable
+    /// that reached this point was set: `KTASK_LINT_COMMAND=,` is an operator
+    /// having configured a gate with no words in it, which
+    /// `profile_from` refuses rather than reading as no gate at all.
+    fn from_text(text: &str) -> Option<Self> {
+        <Vec<String>>::from_text(text).map(Some)
+    }
+}
+
 impl FromEnvText for u64 {
     const TEXT_TYPE: &'static str = "u64";
 
@@ -732,6 +800,21 @@ mod tests {
         assert_eq!(config.flake_runs, 5);
         assert_eq!(config.retention_days, 90);
         assert_eq!(config.min_free_disk_bytes, 2_147_483_648);
+        assert_eq!(
+            config.baseline_command, None,
+            "a project that named no baseline gate runs none"
+        );
+        assert_eq!(config.targeted_test_command, None);
+        assert_eq!(
+            config.verify_command, None,
+            "no suite is configured until a project writes one, which is why building a \
+             profile from it is a refusal rather than a profile that verifies nothing"
+        );
+        assert_eq!(config.lint_command, None);
+        assert_eq!(config.format_command, None);
+        assert_eq!(config.build_command, None);
+        assert_eq!(config.privacy_command, None);
+        assert_eq!(config.flake_command, None);
     }
 
     /// A configuration with a value in every field, none of them a default.
@@ -756,6 +839,14 @@ mod tests {
             dummy_scenario_path: Some(PathBuf::from("/state/scenario.json")),
             test_globs: vec!["tests/**".to_owned()],
             secret_patterns: vec!["secret_[a-z0-9]+".to_owned()],
+            baseline_command: Some(vec!["cargo".to_owned(), "check".to_owned()]),
+            targeted_test_command: Some(vec!["cargo".to_owned(), "nextest".to_owned()]),
+            verify_command: Some(vec!["./scripts/quality.sh".to_owned()]),
+            lint_command: Some(vec!["cargo".to_owned(), "clippy".to_owned()]),
+            format_command: Some(vec!["cargo".to_owned(), "fmt".to_owned()]),
+            build_command: Some(vec!["cargo".to_owned(), "build".to_owned()]),
+            privacy_command: Some(vec!["ktask-rs".to_owned(), "privacy".to_owned()]),
+            flake_command: Some(vec!["cargo".to_owned(), "test".to_owned()]),
             flake_runs: 20,
             retention_days: 7,
             min_free_disk_bytes: 1_073_741_824,
@@ -849,9 +940,9 @@ mod tests {
         assert_eq!(written_keys(&every_field_set()), documented_keys());
     }
 
-    /// The 22 documented keys, in the order `docs/DESIGN.md` lists them, which
+    /// The 30 documented keys, in the order `docs/DESIGN.md` lists them, which
     /// is also the order the Configuration screen renders them in.
-    const DOCUMENTED_KEYS: [&str; 22] = [
+    const DOCUMENTED_KEYS: [&str; 30] = [
         "provider",
         "model",
         "attempt_timeout_secs",
@@ -871,6 +962,14 @@ mod tests {
         "dummy_scenario_path",
         "test_globs",
         "secret_patterns",
+        "baseline_command",
+        "targeted_test_command",
+        "verify_command",
+        "lint_command",
+        "format_command",
+        "build_command",
+        "privacy_command",
+        "flake_command",
         "flake_runs",
         "retention_days",
         "min_free_disk_bytes",
@@ -898,14 +997,23 @@ default_protocol = "tdd"
 dummy_scenario_path = "/state/dummy.json"
 test_globs = ["tests/**", "crates/**/tests.rs"]
 secret_patterns = ["ghp_[A-Za-z0-9]{36}"]
+baseline_command = ["cargo", "check"]
+targeted_test_command = ["cargo", "nextest", "run"]
+verify_command = ["./scripts/quality.sh"]
+lint_command = ["cargo", "clippy"]
+format_command = ["cargo", "fmt", "--all"]
+build_command = ["cargo", "build", "--locked"]
+privacy_command = ["ktask-rs", "privacy", "audit"]
+flake_command = ["cargo", "test", "--repeat"]
 flake_runs = 11
 retention_days = 30
 min_free_disk_bytes = 1073741824
 "#;
 
-    /// Every documented key set through the environment instead, as the text an
-    /// operator would write, to the same value `EVERY_KEY_DOCUMENT` gives it.
-    const EVERY_KEY_VARIABLES: [(&str, &str); 22] = [
+    /// Every documented key set through the environment instead, as the text
+    /// an operator would write, to the same value `EVERY_KEY_DOCUMENT` gives
+    /// it — a gate command as one word per comma-separated entry.
+    const EVERY_KEY_VARIABLES: [(&str, &str); 30] = [
         ("KTASK_PROVIDER", "codex"),
         ("KTASK_MODEL", "gpt-5.6-sol"),
         ("KTASK_ATTEMPT_TIMEOUT_SECS", "900"),
@@ -925,6 +1033,14 @@ min_free_disk_bytes = 1073741824
         ("KTASK_DUMMY_SCENARIO_PATH", "/state/dummy.json"),
         ("KTASK_TEST_GLOBS", "tests/**,crates/**/tests.rs"),
         ("KTASK_SECRET_PATTERNS", "ghp_[A-Za-z0-9]{36}"),
+        ("KTASK_BASELINE_COMMAND", "cargo,check"),
+        ("KTASK_TARGETED_TEST_COMMAND", "cargo,nextest,run"),
+        ("KTASK_VERIFY_COMMAND", "./scripts/quality.sh"),
+        ("KTASK_LINT_COMMAND", "cargo,clippy"),
+        ("KTASK_FORMAT_COMMAND", "cargo,fmt,--all"),
+        ("KTASK_BUILD_COMMAND", "cargo,build,--locked"),
+        ("KTASK_PRIVACY_COMMAND", "ktask-rs,privacy,audit"),
+        ("KTASK_FLAKE_COMMAND", "cargo,test,--repeat"),
         ("KTASK_FLAKE_RUNS", "11"),
         ("KTASK_RETENTION_DAYS", "30"),
         ("KTASK_MIN_FREE_DISK_BYTES", "1073741824"),
@@ -1011,6 +1127,12 @@ min_free_disk_bytes = 1073741824
             .collect()
     }
 
+    /// The words of a gate command, as the setting that holds one holds them, so
+    /// a test can name the words rather than rebuild the type each time.
+    fn words(entries: &[&str]) -> Vec<String> {
+        entries.iter().map(|word| (*word).to_owned()).collect()
+    }
+
     /// Asserts every setting took the value the two fixtures above give it,
     /// setting by setting so a failure names the setting rather than a struct.
     fn assert_every_setting_is_set(config: &Config) {
@@ -1036,6 +1158,32 @@ min_free_disk_bytes = 1073741824
         );
         assert_eq!(config.test_globs, ["tests/**", "crates/**/tests.rs"]);
         assert_eq!(config.secret_patterns, ["ghp_[A-Za-z0-9]{36}"]);
+        assert_eq!(config.baseline_command, Some(words(&["cargo", "check"])));
+        assert_eq!(
+            config.targeted_test_command,
+            Some(words(&["cargo", "nextest", "run"]))
+        );
+        assert_eq!(
+            config.verify_command,
+            Some(words(&["./scripts/quality.sh"]))
+        );
+        assert_eq!(config.lint_command, Some(words(&["cargo", "clippy"])));
+        assert_eq!(
+            config.format_command,
+            Some(words(&["cargo", "fmt", "--all"]))
+        );
+        assert_eq!(
+            config.build_command,
+            Some(words(&["cargo", "build", "--locked"]))
+        );
+        assert_eq!(
+            config.privacy_command,
+            Some(words(&["ktask-rs", "privacy", "audit"]))
+        );
+        assert_eq!(
+            config.flake_command,
+            Some(words(&["cargo", "test", "--repeat"]))
+        );
         assert_eq!(config.flake_runs, 11);
         assert_eq!(config.retention_days, 30);
         assert_eq!(config.min_free_disk_bytes, 1_073_741_824);

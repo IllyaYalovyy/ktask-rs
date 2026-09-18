@@ -195,6 +195,14 @@ default_protocol:         "direct"
 dummy_scenario_path:      None
 test_globs:               ["**/tests/**", "**/*_test.rs", "src/**/tests.rs"]
 secret_patterns:          []
+baseline_command:         None   // the gate that proves the project was green first
+targeted_test_command:    None   // the fast edit-loop check
+verify_command:           None   // mandatory: a profile cannot be built without it
+lint_command:             None
+format_command:           None
+build_command:            None
+privacy_command:          None   // staged, tracked and outgoing commits
+flake_command:            None   // runs flake_runs times when configured
 flake_runs:               5
 retention_days:           90
 min_free_disk_bytes:      2147483648   // 2 GiB
