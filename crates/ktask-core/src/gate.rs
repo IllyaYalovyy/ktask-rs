@@ -17,6 +17,13 @@
 //! [`crate::Config`]. [`Profile::get`] is the only way to reach a gate, and a
 //! kind answers with at most one — the identity of a gate is its kind.
 //!
+//! Running one is [`run_gate`]: the gate's own words spawned as a process, both
+//! of its output pipes read as the bytes arrive, and its
+//! [`Gate::timeout_secs`] enforced as a budget rather than advice. What that run
+//! leaves behind is a [`GateResult`], and nothing about it is inferred from
+//! another component's report — the status, the signal, the elapsed time and the
+//! retained output are all measured here.
+//!
 //! Reading and writing go through TOML, the format every configuration document
 //! in this project uses. A profile is read from text rather than from a path
 //! because the document that carries it is a project's configuration document,
@@ -34,12 +41,16 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader, Read};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::Config;
-use crate::{Error, Result};
+use crate::{Bus, Config, Error, Result, Stream};
 
 /// Which mechanical check a gate performs.
 ///
@@ -411,12 +422,344 @@ pub fn profile_from(config: &Config) -> Result<Profile> {
     Ok(Profile { gates })
 }
 
+/// How long the collector waits for the next chunk before it looks at the clock.
+///
+/// The budget is enforced between chunks rather than by a third thread, so this
+/// is what a gate's timeout is enforced to: twenty milliseconds against a budget
+/// `docs/DESIGN.md` sets at 1800 seconds, four orders of magnitude inside it.
+const CHUNK_POLL: Duration = Duration::from_millis(20);
+
+/// How long a killed gate's pipes are still listened to.
+///
+/// Once the signal lands the gate itself is gone, so the only thing that can
+/// still hold a pipe open is a descendant that outlived it. Until the group kill
+/// arrives to take that stranger down too, the wait is bounded rather than
+/// endless: a supervisor blocked on a process it does not own has stopped
+/// supervising, and output that did arrive is worth more than output a stranger
+/// may never write.
+const POST_KILL_GRACE: Duration = Duration::from_secs(2);
+
+/// Run one gate and return the record of having run it.
+///
+/// The command is spawned as its own words, never through a shell, in `root` or
+/// in the gate's own [`Gate::working_dir`] when it names one, with [`Gate::env`]
+/// laid over the environment this process was given. Its stdin is closed: a
+/// runner-executed command has nobody to ask, and a gate left reading a terminal
+/// it was never handed holds the queue with it. Both pipes are read on their own
+/// threads, so a gate that fills one cannot stall because nobody was emptying
+/// the other, and each chunk is handed on as it arrives rather than when the
+/// command finishes.
+///
+/// [`Gate::timeout_secs`] is a budget, not a hint. When it runs out the command
+/// is killed and the run is reported with [`GateResult::timed_out`] set and
+/// whatever output had been read by then — which is why the result keeps an exit
+/// code, a signal and a timeout flag as three separate facts (ADR-0036).
+///
+/// `bus` is where a gate's output belongs as it arrives, for the output pane
+/// `docs/CONTRACT.md` calls the primary thing an operator watches. It is
+/// accepted and not written to, and the gap is deliberate rather than
+/// oversight: the catalog in `docs/DESIGN.md` has no entry that can carry a
+/// chunk of command output, [`crate::Recorder`] is the one door into [`Bus`]
+/// (ADR-0030), and an event whose sequence its emitter chose rather than the
+/// journal stamped is what ADR-0016 forbids. The chunks themselves are produced
+/// and delivered all the same — `run_gate_streaming` below is what this
+/// function calls, and a caller that publishes has one callback to change.
+/// Giving gate output a catalog entry, or the bus a second door, is a decision
+/// about durable data that this task does not own: ADR-0037 records the options
+/// and what each costs. Until that decision is made, passing a bus changes
+/// nothing an observer can see.
+///
+/// # Errors
+///
+/// [`Error::Gate`] naming the gate and what could not be done: a gate with no
+/// command words to execute, or a program or working directory that could not be
+/// started. A command that runs and refuses is not an error — it is a
+/// [`GateResult`] with [`GateResult::passed`] false, because a refused gate is
+/// still an answer.
+pub fn run_gate(gate: &Gate, root: &Path, bus: Option<&Bus>) -> Result<GateResult> {
+    // Accepted, not written to: the catalog entry that would carry a chunk does not exist yet.
+    _ = bus;
+    run_gate_streaming(gate, root, &mut |_stream, _chunk| {})
+}
+
+/// Run one gate, handing every output chunk to `on_chunk` as it arrives.
+///
+/// [`run_gate`] is written in terms of this. The callback runs on the calling
+/// thread: each reader thread copies chunks into one channel and the collector
+/// here is the only thing that drains it, so chunks from both pipes arrive in
+/// the order they were observed and whatever is listening needs no lock of its
+/// own.
+fn run_gate_streaming(
+    gate: &Gate,
+    root: &Path,
+    on_chunk: &mut dyn FnMut(Stream, &str),
+) -> Result<GateResult> {
+    let (program, arguments) = gate.command.split_first().ok_or_else(|| Error::Gate {
+        kind: gate.kind.to_string(),
+        detail: "the gate holds no command words, so there is nothing to execute".to_owned(),
+    })?;
+    let directory = working_directory(gate, root);
+    let mut child = Command::new(program)
+        .args(arguments)
+        .current_dir(&directory)
+        .envs(&gate.env)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|failure| Error::Gate {
+            kind: gate.kind.to_string(),
+            detail: format!(
+                "could not start `{program}` in `{}`: {failure}",
+                directory.display()
+            ),
+        })?;
+    let started = Instant::now();
+
+    let (sender, chunks) = mpsc::channel();
+    let stdout = own_pipe(child.stdout.take(), gate, "stdout")?;
+    let stderr = own_pipe(child.stderr.take(), gate, "stderr")?;
+    read_one_pipe(stdout, Stream::Stdout, sender.clone())?;
+    read_one_pipe(stderr, Stream::Stderr, sender)?;
+
+    let mut watch = Watch::new(child, started);
+    let mut kept = Output::default();
+    loop {
+        match chunks.recv_timeout(CHUNK_POLL) {
+            Ok(chunk) => {
+                on_chunk(chunk.stream, &chunk.text);
+                kept.push(&chunk);
+            }
+            // Both readers reached the end of their pipe, so every byte the gate
+            // wrote has been handed over and kept.
+            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+        watch.poll()?;
+        watch.enforce_budget(gate.timeout_secs)?;
+        if watch.grace_elapsed() {
+            break;
+        }
+    }
+
+    // Nothing left to read, and the process is still the run's to wait for. The
+    // budget still governs that wait: a gate that closed its own pipes and kept
+    // working is no less subject to its timeout than one that never wrote.
+    while watch.status.is_none() && !watch.grace_elapsed() {
+        watch.poll()?;
+        watch.enforce_budget(gate.timeout_secs)?;
+        if watch.status.is_none() && !watch.grace_elapsed() {
+            thread::sleep(CHUNK_POLL);
+        }
+    }
+    // A reader still copying bytes nobody asked it to stop holding a pipe for
+    // has nowhere left to copy them to, so it ends with the pipe rather than
+    // with this run.
+    drop(chunks);
+
+    let status = watch.status;
+    let (exit_code, signal) = match status {
+        Some(status) => (status.code(), terminating_signal(status)),
+        None => (None, None),
+    };
+    Ok(GateResult {
+        kind: gate.kind,
+        passed: status.as_ref().is_some_and(ExitStatus::success) && !watch.timed_out,
+        exit_code,
+        signal,
+        duration_ms: elapsed_millis(started.elapsed()),
+        stdout: kept.stdout,
+        stderr: kept.stderr,
+        timed_out: watch.timed_out,
+    })
+}
+
+/// The directory a gate's command runs in: the one it names itself, absolute or
+/// below `root`, and `root` when it names none.
+fn working_directory(gate: &Gate, root: &Path) -> PathBuf {
+    match &gate.working_dir {
+        Some(directory) if directory.is_absolute() => directory.clone(),
+        Some(directory) => root.join(directory),
+        None => root.to_path_buf(),
+    }
+}
+
+/// Take a pipe this function asked the standard library to create.
+///
+/// Asking for both above makes absence impossible. The refusal is here so the one
+/// place it could ever fire answers with an error rather than a panic.
+fn own_pipe<T>(piped: Option<T>, gate: &Gate, which: &str) -> Result<T> {
+    piped.ok_or_else(|| Error::Gate {
+        kind: gate.kind.to_string(),
+        detail: format!("the `{}` gate's {which} was never piped", gate.kind),
+    })
+}
+
+/// Copy one pipe into the collector a line at a time, until it closes.
+///
+/// A line is the chunk because it is the unit every tool that writes a
+/// diagnostic means, and because a chunk that stopped in the middle of a
+/// multi-byte character would put a broken character on a screen. Splitting an
+/// over-long line and stripping the control characters a pane must never
+/// interpret belong to the renderer, per `docs/CONTRACT.md`.
+fn read_one_pipe(
+    pipe: impl Read + Send + 'static,
+    stream: Stream,
+    chunks: Sender<Chunk>,
+) -> Result<()> {
+    let name = match stream {
+        Stream::Stdout => "ktask-gate-stdout",
+        Stream::Stderr => "ktask-gate-stderr",
+    };
+    let reader = thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || {
+            let mut buffered = BufReader::new(pipe);
+            let mut line: Vec<u8> = Vec::new();
+            loop {
+                line.clear();
+                // Zero bytes read is the far end closing. A failed read is a
+                // pipe that broke, and either way everything already sent has
+                // been sent: what a gate wrote is never thrown away here.
+                let Ok(read) = buffered.read_until(b'\n', &mut line) else {
+                    break;
+                };
+                if read == 0 {
+                    break;
+                }
+                // Bytes that are not UTF-8 become the replacement character
+                // rather than a panic or a dropped line (VISION.md §13).
+                let text = String::from_utf8_lossy(&line).into_owned();
+                // A closed collector means the run is over and stopped listening.
+                if chunks.send(Chunk { stream, text }).is_err() {
+                    break;
+                }
+            }
+        })?;
+    drop(reader);
+    Ok(())
+}
+
+/// The child process, and the two things worth watching about it while it runs.
+struct Watch {
+    /// The gate's own process.
+    child: Child,
+    /// When it was spawned, which is what both the budget and the duration
+    /// measure from.
+    started: Instant,
+    /// What it exited with, once it has said so.
+    status: Option<ExitStatus>,
+    /// Whether its budget ran out.
+    timed_out: bool,
+    /// When to stop listening to a killed gate's pipes, or `None` while the gate
+    /// still holds them itself.
+    grace: Option<Instant>,
+}
+
+impl Watch {
+    /// Watch `child`, timing everything from `started`.
+    fn new(child: Child, started: Instant) -> Self {
+        Self {
+            child,
+            started,
+            status: None,
+            timed_out: false,
+            grace: None,
+        }
+    }
+
+    /// Take the status if the process has reported one.
+    fn poll(&mut self) -> Result<()> {
+        if self.status.is_none()
+            && let Some(status) = self.child.try_wait()?
+        {
+            self.status = Some(status);
+        }
+        Ok(())
+    }
+
+    /// Spend the budget: record that it is spent, and signal the command if it
+    /// is still running.
+    ///
+    /// The flag is set whether or not the command was still there to be
+    /// signalled. A gate that returned inside the instant between the deadline
+    /// and the signal still ran past its budget, and `timed_out` is the fact a
+    /// response is chosen from.
+    fn enforce_budget(&mut self, budget_secs: u64) -> Result<()> {
+        if self.timed_out || self.started.elapsed() < Duration::from_secs(budget_secs) {
+            return Ok(());
+        }
+        self.timed_out = true;
+        if self.status.is_none() {
+            self.child.kill()?;
+            self.grace = Some(Instant::now() + POST_KILL_GRACE);
+        }
+        Ok(())
+    }
+
+    /// Whether a killed gate has been listened to for as long as it is allowed.
+    fn grace_elapsed(&self) -> bool {
+        self.grace.is_some_and(|until| Instant::now() >= until)
+    }
+}
+
+/// One piece of a gate's output, as it arrived.
+struct Chunk {
+    /// Which of the two pipes it came from. The distinction is unrecoverable
+    /// once both are appended to one string, which is why it travels with the
+    /// text.
+    stream: Stream,
+    /// The line it arrived as, with anything that was not UTF-8 replaced.
+    text: String,
+}
+
+/// What a gate wrote, retained whole.
+#[derive(Default)]
+struct Output {
+    /// Everything that arrived on stdout.
+    stdout: String,
+    /// Everything that arrived on stderr.
+    stderr: String,
+}
+
+impl Output {
+    /// Add one chunk to the stream it arrived on.
+    fn push(&mut self, chunk: &Chunk) {
+        match chunk.stream {
+            Stream::Stdout => self.stdout.push_str(&chunk.text),
+            Stream::Stderr => self.stderr.push_str(&chunk.text),
+        }
+    }
+}
+
+/// The signal that ended a process, when a signal ended it.
+///
+/// `None` for a process that ran to its own end, which is a different answer
+/// from the exit code above and is held separately for that reason.
+#[cfg(unix)]
+fn terminating_signal(status: ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt as _;
+    status.signal()
+}
+
+/// The signal that ended a process, on a platform that reports none.
+#[cfg(not(unix))]
+fn terminating_signal(_status: ExitStatus) -> Option<i32> {
+    None
+}
+
+/// How long a run took, as the millisecond count the result holds.
+fn elapsed_millis(elapsed: Duration) -> u64 {
+    u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Gate, GateKind, GateResult, Profile, profile_from};
-    use crate::{Config, Error};
+    use super::{Gate, GateKind, GateResult, Profile, profile_from, run_gate, run_gate_streaming};
+    use crate::{Bus, Config, Error, Stream};
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant};
 
     /// One gate, spelled the way a TOML document spells it.
     fn gate_document(kind: GateKind, command: &str) -> String {
@@ -1188,5 +1531,351 @@ timeout_secs = 1800
                 "{payload} must be refused rather than decoded: {why}"
             );
         }
+    }
+    // Running a gate: the subprocess, its two streams, its budget, and what a
+    // run leaves behind.
+
+    /// The shell the fixture gates run under, absolute so that no test inherits
+    /// whatever `PATH` the harness happened to start with.
+    const SHELL: &str = "/bin/sh";
+
+    /// A gate built around a shell script, for the tests that run one rather
+    /// than read one off a document.
+    fn gate_running(script: &str) -> Gate {
+        Gate {
+            kind: GateKind::Verify,
+            command: vec![SHELL.to_owned(), "-c".to_owned(), script.to_owned()],
+            timeout_secs: 30,
+            working_dir: None,
+            env: BTreeMap::new(),
+        }
+    }
+
+    /// The same gate with its budget cut to `budget_secs` seconds.
+    fn gate_within_budget(script: &str, budget_secs: u64) -> Gate {
+        Gate {
+            timeout_secs: budget_secs,
+            ..gate_running(script)
+        }
+    }
+
+    /// One chunk a running gate handed over, and how old the run was when it
+    /// arrived.
+    type Chunk = (Duration, Stream, String);
+
+    /// Run `script` handing every chunk to a collector, so that a test sees
+    /// output arrive while the gate is running rather than only what a finished
+    /// run kept.
+    fn gate_capturing(script: &str) -> (GateResult, Vec<Chunk>) {
+        let started = Instant::now();
+        let mut arrived: Vec<Chunk> = Vec::new();
+        let result = run_gate_streaming(
+            &gate_running(script),
+            Path::new("/"),
+            &mut |stream, text| {
+                arrived.push((started.elapsed(), stream, text.to_owned()));
+            },
+        )
+        .expect("a gate whose program exists runs, or the fixture is wrong");
+        (result, arrived)
+    }
+
+    /// The chunks that came from one of the two streams, in arrival order.
+    fn chunks_from(arrived: &[Chunk], stream: Stream) -> Vec<&str> {
+        arrived
+            .iter()
+            .filter(|(_, source, _)| *source == stream)
+            .map(|(_, _, text)| text.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_gate_that_finishes_reports_the_status_it_exited_with() {
+        let result = run_gate(
+            &gate_running("echo out; echo err >&2"),
+            Path::new("/"),
+            None,
+        )
+        .expect("a gate whose program exists runs rather than errors");
+
+        assert_eq!(
+            result.kind,
+            GateKind::Verify,
+            "a result names the gate that ran"
+        );
+        assert!(result.passed, "a command that exited 0 satisfied its gate");
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(
+            result.signal, None,
+            "a command that ran to completion was killed by nobody"
+        );
+        assert!(!result.timed_out, "finishing is not running out of time");
+        assert_eq!(result.stdout, "out\n");
+        assert_eq!(result.stderr, "err\n");
+        assert!(
+            result.duration_ms > 0 && result.duration_ms < 30_000,
+            "the result records how long the command ran, not how long it was allowed to: {}ms",
+            result.duration_ms
+        );
+    }
+
+    #[test]
+    fn a_gate_that_refuses_reports_the_status_it_refused_with() {
+        let result = run_gate(&gate_running("echo no; exit 3"), Path::new("/"), None)
+            .expect("a command that refuses is an answer, not a failure to ask");
+
+        assert!(
+            !result.passed,
+            "a non-zero status is a gate that is not satisfied"
+        );
+        assert_eq!(result.exit_code, Some(3));
+        assert_eq!(result.signal, None);
+        assert!(
+            !result.timed_out,
+            "a command that refused on its own did not run out of time"
+        );
+        assert_eq!(
+            result.stdout, "no\n",
+            "the words a refusal came with are retained"
+        );
+    }
+
+    #[test]
+    fn a_gate_that_runs_out_of_its_budget_is_killed_and_its_earlier_output_is_captured() {
+        let gate = gate_within_budget("echo early; echo late >&2; exec sleep 30", 1);
+        let started = Instant::now();
+        let result = run_gate(&gate, Path::new("/"), None)
+            .expect("a gate that outlives its budget is reported");
+        let waited = started.elapsed();
+
+        assert!(
+            result.timed_out,
+            "the budget was spent, and that is the fact a response is chosen from"
+        );
+        assert!(!result.passed, "a gate that ran out of time never passes");
+        assert_eq!(
+            result.stdout, "early\n",
+            "output written before the kill is captured rather than lost with the process"
+        );
+        assert_eq!(result.stderr, "late\n");
+        assert_eq!(
+            result.exit_code, None,
+            "a killed command never reported a status of its own"
+        );
+        assert_eq!(
+            result.signal,
+            Some(9),
+            "the signal that ended it is what the wait reported"
+        );
+        assert!(
+            result.duration_ms >= 900 && waited < Duration::from_secs(10),
+            "the timeout is enforced, not merely recorded: waited {waited:?} for a budget of 1s"
+        );
+    }
+
+    #[test]
+    fn a_surviving_descendant_cannot_hold_a_timed_out_gate_open() {
+        let gate = gate_within_budget("echo early; (sleep 6; echo late) & exec sleep 30", 1);
+        let result = run_gate(&gate, Path::new("/"), None)
+            .expect("a descendant the supervisor does not own cannot break the run");
+
+        assert!(result.timed_out);
+        assert_eq!(
+            result.stdout, "early\n",
+            "the run stops waiting for a pipe a stranger is holding and reports what did arrive: \
+             the group kill that takes the stranger down too is the next task"
+        );
+    }
+
+    #[test]
+    fn a_gate_hands_its_output_over_while_it_is_still_running() {
+        let (result, arrived) = gate_capturing("echo first; sleep 3; echo second");
+
+        assert_eq!(
+            chunks_from(&arrived, Stream::Stdout),
+            ["first\n", "second\n"]
+        );
+        let ages: Vec<Duration> = arrived.iter().map(|(age, _, _)| *age).collect();
+        assert!(
+            ages[0] < Duration::from_secs(2),
+            "the first line reached the reader while the gate was still running: {ages:?}"
+        );
+        assert!(
+            ages[1] >= Duration::from_secs(1),
+            "the second line arrived behind the pause it was waiting on, not in one flush at \
+             the end: {ages:?}"
+        );
+        assert_eq!(result.stdout, "first\nsecond\n");
+    }
+
+    #[test]
+    fn a_chunk_arrives_on_the_stream_it_was_written_to() {
+        let (result, arrived) = gate_capturing("echo a; echo b >&2; echo c; echo d >&2");
+
+        assert_eq!(
+            chunks_from(&arrived, Stream::Stdout),
+            ["a\n", "c\n"],
+            "stdout keeps its own order and carries none of stderr's"
+        );
+        assert_eq!(chunks_from(&arrived, Stream::Stderr), ["b\n", "d\n"]);
+        assert_eq!(result.stdout, "a\nc\n");
+        assert_eq!(result.stderr, "b\nd\n");
+    }
+
+    #[test]
+    fn a_last_line_that_never_got_its_newline_is_still_captured() {
+        let (result, arrived) = gate_capturing("printf 'complete\ntrailing'");
+
+        assert_eq!(
+            chunks_from(&arrived, Stream::Stdout),
+            ["complete\n", "trailing"],
+            "a final line with no terminator is still output, and is still handed over"
+        );
+        assert_eq!(result.stdout, "complete\ntrailing");
+    }
+
+    #[test]
+    fn bytes_that_are_not_text_arrive_replaced_rather_than_dropped() {
+        let (result, arrived) = gate_capturing("printf 'a\\377b\\n'");
+
+        assert_eq!(
+            result.stdout, "a\u{FFFD}b\n",
+            "invalid UTF-8 is replaced, never dropped"
+        );
+        assert_eq!(chunks_from(&arrived, Stream::Stdout), ["a\u{FFFD}b\n"]);
+    }
+
+    #[test]
+    fn a_gate_runs_in_the_directory_it_names_or_the_one_it_was_given() {
+        let parent = tempfile::tempdir().expect("a scratch directory below the system temp one");
+        let nested = parent.path().join("nested");
+        std::fs::create_dir(&nested).expect("a directory inside the scratch one");
+
+        let at_root = run_gate(&gate_running("touch at-root"), parent.path(), None)
+            .expect("a gate runs in the root it was handed");
+        assert!(
+            parent.path().join("at-root").is_file(),
+            "with no directory of its own a gate runs where the run said: {}",
+            at_root.stderr
+        );
+
+        let mut named = gate_running("touch in-nested");
+        named.working_dir = Some(PathBuf::from("nested"));
+        let in_nested = run_gate(&named, parent.path(), None)
+            .expect("a relative directory is resolved against the root");
+        assert!(
+            nested.join("in-nested").is_file() && !parent.path().join("in-nested").is_file(),
+            "a gate names its own directory relative to the root it was given: {}",
+            in_nested.stderr
+        );
+
+        let mut absolute = gate_running("touch absolute");
+        absolute.working_dir = Some(nested.clone());
+        let by_path = run_gate(&absolute, Path::new("/"), None)
+            .expect("an absolute directory is used exactly as it was written");
+        assert!(
+            nested.join("absolute").is_file(),
+            "an absolute directory is not joined onto anything: {}",
+            by_path.stderr
+        );
+    }
+
+    #[test]
+    fn the_environment_a_gate_configures_arrives_with_the_command() {
+        let mut gate =
+            gate_running("echo \"$KTASK_GATE_MARKER\"; test -n \"$PATH\" && echo path-travels");
+        gate.env
+            .insert("KTASK_GATE_MARKER".to_owned(), "from-the-gate".to_owned());
+        let result =
+            run_gate(&gate, Path::new("/"), None).expect("a gate runs with its own environment");
+
+        assert!(result.passed, "{}", result.stderr);
+        assert_eq!(
+            result.stdout, "from-the-gate\npath-travels\n",
+            "a gate's own variables go on top of the environment the supervisor passes down, \
+             they do not replace it"
+        );
+    }
+
+    #[test]
+    fn a_gate_that_reads_its_stdin_finds_it_closed_rather_than_waiting() {
+        let result = run_gate(&gate_within_budget("cat", 5), Path::new("/"), None)
+            .expect("a gate that reads is a gate somebody has to answer");
+
+        assert!(
+            result.passed && result.stdout.is_empty() && !result.timed_out,
+            "stdin is closed rather than inherited, so a gate is never left reading the terminal \
+             the supervisor was started on ({result:?})"
+        );
+    }
+
+    #[test]
+    fn a_command_that_is_not_there_is_an_error_naming_the_gate_and_the_program() {
+        let missing = Gate {
+            command: vec!["ktask-no-such-gate-program".to_owned()],
+            ..gate_running("true")
+        };
+        let error = run_gate(&missing, Path::new("/"), None)
+            .expect_err("a program that does not exist is a clear error, never a panic");
+        assert_eq!(
+            error.to_string(),
+            "gate `verify` failed: could not start `ktask-no-such-gate-program` in `/`: No such \
+             file or directory (os error 2)"
+        );
+    }
+
+    #[test]
+    fn a_directory_that_is_not_there_is_refused_naming_the_directory() {
+        let mut nowhere = gate_running("true");
+        nowhere.working_dir = Some(PathBuf::from("no-such-directory"));
+        let error = run_gate(&nowhere, Path::new("/"), None)
+            .expect_err("a directory that does not exist is as clear as a missing program");
+        assert_eq!(
+            error.to_string(),
+            "gate `verify` failed: could not start `/bin/sh` in `/no-such-directory`: No such \
+             file or directory (os error 2)"
+        );
+    }
+
+    #[test]
+    fn a_gate_holding_no_command_words_is_refused_before_anything_is_spawned() {
+        let empty = Gate {
+            command: Vec::new(),
+            ..gate_running("true")
+        };
+        let error = run_gate(&empty, Path::new("/"), None)
+            .expect_err("a gate with no words has nothing to run");
+        assert_eq!(
+            error.to_string(),
+            "gate `verify` failed: the gate holds no command words, so there is nothing to execute"
+        );
+    }
+
+    #[test]
+    fn a_listening_bus_changes_nothing_about_what_a_gate_reports() {
+        let bus = Bus::new();
+        let mut watcher = bus.subscribe();
+
+        let alone =
+            run_gate(&gate_running("echo same"), Path::new("/"), None).expect("a gate runs alone");
+        let mut attached = run_gate(&gate_running("echo same"), Path::new("/"), Some(&bus))
+            .expect("the same gate runs the same way with a live view attached");
+
+        // How long each run took is a measurement of two different runs, not a
+        // fact a viewer can influence. Every other field is compared as it stands.
+        let (attached_ms, alone_ms) = (attached.duration_ms, alone.duration_ms);
+        attached.duration_ms = alone_ms;
+        assert_eq!(
+            attached, alone,
+            "attaching a viewer changes nothing about what ran, and both runs were still timed: \
+             {attached_ms}ms watched against {alone_ms}ms alone"
+        );
+        let (events, dropped) = watcher.drain();
+        assert!(
+            events.is_empty() && dropped == 0,
+            "nothing is published yet: the event catalog has no entry that can carry a gate's \
+             output, so its chunks have nowhere honest to go ({} events, {dropped} dropped)",
+            events.len()
+        );
     }
 }
