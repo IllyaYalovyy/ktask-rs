@@ -127,13 +127,13 @@ pub struct Config {
     /// already — see [`crate::Gate`]. Every gate command in this struct is
     /// spelled the same way, and `Config` is the only place a gate command is
     /// written down: the profile the runner executes is built from these fields
-    /// by `profile_from`.
+    /// by [`crate::profile_from`]
     pub baseline_command: Option<Vec<String>>,
     /// The fast check of an edit loop — the tests the change touches, run while
     /// the agent is still working — or `None` to run no targeted gate.
     pub targeted_test_command: Option<Vec<String>>,
     /// The complete local suite, and the one gate command that is not optional:
-    /// `profile_from` refuses a configuration that leaves this unset,
+    /// [`crate::profile_from`] refuses a configuration that leaves this unset,
     /// because a task is never called done on an agent's say-so (VISION.md §8).
     pub verify_command: Option<Vec<String>>,
     /// The lints, run by the runner rather than trusted from a report, or `None`
@@ -696,7 +696,7 @@ impl FromEnvText for Option<Vec<String>> {
     /// document. A gate command is a list like any other here, and a variable
     /// that reached this point was set: `KTASK_LINT_COMMAND=,` is an operator
     /// having configured a gate with no words in it, which
-    /// `profile_from` refuses rather than reading as no gate at all.
+    /// [`crate::profile_from`] refuses rather than reading as no gate at all.
     fn from_text(text: &str) -> Option<Self> {
         <Vec<String>>::from_text(text).map(Some)
     }
@@ -1447,6 +1447,17 @@ min_free_disk_bytes = 1073741824
         );
         assert_eq!(source_of(&config, "test_globs"), Source::Env);
         assert_eq!(source_of(&config, "secret_patterns"), Source::Env);
+    }
+
+    #[test]
+    fn a_gate_command_of_separators_alone_is_an_empty_command_the_environment_set() {
+        // Not "unset": an operator wrote this key, and reading it as no gate at
+        // all would turn a typo into a project that verifies nothing. Building a
+        // profile from an empty command is the refusal that answers it.
+        let env = variables(&[("KTASK_LINT_COMMAND", ",")]);
+        let config = load(None, None, &env).expect("a variable that was set is a layer");
+        assert_eq!(config.lint_command, Some(Vec::new()));
+        assert_eq!(source_of(&config, "lint_command"), Source::Env);
     }
 
     #[test]

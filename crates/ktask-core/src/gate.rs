@@ -11,9 +11,11 @@
 //! A [`Profile`] is the gates one project runs, and it is loaded rather than
 //! assembled by whoever happens to need a gate: a profile missing the mandatory
 //! `Verify` gate is refused at load time, so "verification was configured out"
-//! is not a state the runner can ever reach. [`Profile::get`] is the only way to
-//! reach a gate, and a kind answers with at most one — the identity of a gate is
-//! its kind.
+//! is not a state the runner can ever reach. There are two doors and no third:
+//! [`Profile::from_toml`] reads the document an operator wrote, and
+//! [`profile_from`] builds the gates out of the commands in
+//! [`crate::Config`]. [`Profile::get`] is the only way to reach a gate, and a
+//! kind answers with at most one — the identity of a gate is its kind.
 //!
 //! Reading and writing go through TOML, the format every configuration document
 //! in this project uses. A profile is read from text rather than from a path
@@ -26,6 +28,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::Config;
 use crate::{Error, Result};
 
 /// Which mechanical check a gate performs.
@@ -233,10 +236,109 @@ impl Profile {
     }
 }
 
+/// The gates a configuration configures, in the order a run executes them.
+///
+/// This is where a [`Profile`] comes from, which is what makes the gates a task
+/// is proved against somebody's settings rather than this function's opinion: a
+/// gate with no command in the configuration is not in the profile, and a gate
+/// in the profile carries the command words and the timeout the configuration
+/// gave it. The keys and their order are VISION.md §8's, and one kind answers to
+/// exactly one key — so [`Profile::validate`]'s two rules cannot arise from a
+/// configuration, one because a kind appears once here by construction and the
+/// other because the missing mandatory gate is refused below, where the refusal
+/// can name the key an operator has to write.
+///
+/// A gate built from configuration sets no working directory and no environment.
+/// Configuration decides *what* runs; the run decides where it runs and what it
+/// sees, which is the difference between a project's settings and one attempt's
+/// circumstances.
+///
+/// # Errors
+///
+/// [`Error::Config`] naming the configuration key at fault: no `verify_command`,
+/// which VISION.md §8 makes mandatory, or a gate configured with no command
+/// words, which is a gate the runner has nothing to execute.
+pub fn profile_from(config: &Config) -> Result<Profile> {
+    let configured: [(Option<&[String]>, GateKind, &str); 8] = [
+        (
+            config.baseline_command.as_deref(),
+            GateKind::Baseline,
+            "baseline_command",
+        ),
+        (
+            config.targeted_test_command.as_deref(),
+            GateKind::Targeted,
+            "targeted_test_command",
+        ),
+        (
+            config.verify_command.as_deref(),
+            GateKind::Verify,
+            "verify_command",
+        ),
+        (
+            config.lint_command.as_deref(),
+            GateKind::Lint,
+            "lint_command",
+        ),
+        (
+            config.format_command.as_deref(),
+            GateKind::Format,
+            "format_command",
+        ),
+        (
+            config.build_command.as_deref(),
+            GateKind::Build,
+            "build_command",
+        ),
+        (
+            config.privacy_command.as_deref(),
+            GateKind::Privacy,
+            "privacy_command",
+        ),
+        (
+            config.flake_command.as_deref(),
+            GateKind::Flake,
+            "flake_command",
+        ),
+    ];
+    let mut gates = Vec::new();
+    for (command, kind, key) in configured {
+        let Some(words) = command else {
+            if kind == GateKind::Verify {
+                return Err(Error::Config {
+                    key: key.to_owned(),
+                    detail: format!(
+                        "no `{key}` is configured; the complete local suite is mandatory \
+                         and cannot be configured out"
+                    ),
+                });
+            }
+            continue;
+        };
+        if words.is_empty() {
+            return Err(Error::Config {
+                key: key.to_owned(),
+                detail: format!(
+                    "`{key}` configures the `{kind}` gate with no command words, so the \
+                     runner has nothing to execute"
+                ),
+            });
+        }
+        gates.push(Gate {
+            kind,
+            command: words.to_vec(),
+            timeout_secs: config.gate_timeout_secs,
+            working_dir: None,
+            env: BTreeMap::new(),
+        });
+    }
+    Ok(Profile { gates })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Gate, GateKind, Profile};
-    use crate::Error;
+    use super::{Gate, GateKind, Profile, profile_from};
+    use crate::{Config, Error};
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
@@ -597,5 +699,188 @@ timeout_secs = 1800
                 if key == "profile" && detail.contains("TOML")),
             "an unwritable profile must come back as a configuration refusal, not a panic: {error}"
         );
+    }
+
+    /// Writes one gate's command into a configuration, by kind — the same
+    /// mapping `profile_from` reads back, spelled out here so a test that
+    /// configures a gate says which key it believes it wrote.
+    fn set_command(config: &mut Config, kind: GateKind, words: &[&str]) {
+        let command: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
+        match kind {
+            GateKind::Baseline => config.baseline_command = Some(command),
+            GateKind::Targeted => config.targeted_test_command = Some(command),
+            GateKind::Verify => config.verify_command = Some(command),
+            GateKind::Lint => config.lint_command = Some(command),
+            GateKind::Format => config.format_command = Some(command),
+            GateKind::Build => config.build_command = Some(command),
+            GateKind::Privacy => config.privacy_command = Some(command),
+            GateKind::Flake => config.flake_command = Some(command),
+        }
+    }
+
+    /// A configuration whose only settings are the one-word gate commands listed.
+    fn configured(gates: &[(GateKind, &str)]) -> Config {
+        let mut config = Config::default();
+        for (kind, command) in gates {
+            set_command(&mut config, *kind, &[*command]);
+        }
+        config
+    }
+
+    #[test]
+    fn the_profile_holds_exactly_the_gates_the_configuration_configures() {
+        let mut config = configured(&[
+            (GateKind::Verify, "./scripts/quality.sh"),
+            (GateKind::Lint, "cargo"),
+        ]);
+        set_command(
+            &mut config,
+            GateKind::Build,
+            &["cargo", "build", "--locked"],
+        );
+
+        let profile = profile_from(&config)
+            .expect("a configuration that names the mandatory gate builds a profile");
+
+        let kinds: Vec<GateKind> = profile.gates.iter().map(|gate| gate.kind).collect();
+        assert_eq!(kinds, [GateKind::Verify, GateKind::Lint, GateKind::Build]);
+        for kind in [
+            GateKind::Baseline,
+            GateKind::Targeted,
+            GateKind::Format,
+            GateKind::Privacy,
+            GateKind::Flake,
+        ] {
+            assert!(
+                profile.get(kind).is_none(),
+                "`{kind}` was not configured, so the profile must not invent it"
+            );
+        }
+        let build = profile
+            .get(GateKind::Build)
+            .expect("the build gate was configured");
+        assert_eq!(
+            build.command,
+            ["cargo", "build", "--locked"],
+            "a gate runs the words the configuration wrote, not a command rebuilt from them"
+        );
+        for gate in &profile.gates {
+            assert!(
+                gate.working_dir.is_none() && gate.env.is_empty(),
+                "a configuration sets a gate's command, not the directory or the \
+                 environment it runs in: {:?}",
+                gate.kind
+            );
+        }
+    }
+
+    #[test]
+    fn a_configured_gate_orders_the_profile_the_way_the_vision_lists_them() {
+        let config = configured(&[
+            (GateKind::Flake, "flake"),
+            (GateKind::Privacy, "privacy"),
+            (GateKind::Build, "build"),
+            (GateKind::Format, "format"),
+            (GateKind::Lint, "lint"),
+            (GateKind::Verify, "verify"),
+            (GateKind::Targeted, "targeted"),
+            (GateKind::Baseline, "baseline"),
+        ]);
+
+        let profile =
+            profile_from(&config).expect("a configuration of every gate builds a profile");
+
+        let kinds: Vec<GateKind> = profile.gates.iter().map(|gate| gate.kind).collect();
+        assert_eq!(
+            kinds,
+            GateKind::ALL,
+            "the order the runner executes the gates in is the order VISION.md §8 lists \
+             them, whatever order they were configured in"
+        );
+        for kind in GateKind::ALL {
+            let gate = profile.get(kind).expect("every gate was configured");
+            assert_eq!(
+                gate.command,
+                [kind.as_str()],
+                "the `{kind}` gate must run the command its own key was configured with, \
+                 not another gate's"
+            );
+        }
+    }
+
+    #[test]
+    fn a_configuration_without_a_verify_command_is_refused_naming_the_key_it_needs() {
+        let config = configured(&[(GateKind::Lint, "cargo"), (GateKind::Build, "cargo")]);
+        let error = profile_from(&config)
+            .expect_err("verification cannot be configured out, so this is no profile");
+        assert!(
+            matches!(error, Error::Config { ref key, ref detail }
+                if key == "verify_command" && detail.contains("mandatory")
+                    && detail.contains("cannot be configured out")),
+            "a missing verify command must name the key an operator has to write: {error}"
+        );
+        assert!(
+            matches!(profile_from(&Config::default()), Err(Error::Config { ref key, .. })
+                if key == "verify_command"),
+            "an unconfigured project has no verification suite, which is a refusal rather \
+             than a profile that verifies nothing"
+        );
+    }
+
+    #[test]
+    fn every_gate_of_a_configured_profile_carries_the_configured_gate_timeout() {
+        let mut config = configured(&[(GateKind::Verify, "true"), (GateKind::Flake, "true")]);
+        config.gate_timeout_secs = 600;
+
+        let profile = profile_from(&config)
+            .expect("a configuration naming the mandatory gate builds a profile");
+
+        for gate in &profile.gates {
+            assert_eq!(
+                gate.timeout_secs, 600,
+                "`{}` must be given the budget the configuration holds for gates, not a \
+                 budget this function chose",
+                gate.kind
+            );
+        }
+    }
+
+    #[test]
+    fn a_gate_configured_with_no_command_words_is_refused_naming_that_gate() {
+        let mut config = configured(&[(GateKind::Verify, "true")]);
+        set_command(&mut config, GateKind::Lint, &[]);
+
+        let error = profile_from(&config)
+            .expect_err("a gate with no words in it has nothing for the runner to execute");
+        assert!(
+            matches!(error, Error::Config { ref key, ref detail }
+                if key == "lint_command" && detail.contains("no command")),
+            "the refusal must name the gate an operator has to fix: {error}"
+        );
+    }
+
+    #[test]
+    fn each_gate_key_is_the_one_named_when_that_gate_has_no_command_words() {
+        let fields: [(GateKind, &str); 8] = [
+            (GateKind::Baseline, "baseline_command"),
+            (GateKind::Targeted, "targeted_test_command"),
+            (GateKind::Verify, "verify_command"),
+            (GateKind::Lint, "lint_command"),
+            (GateKind::Format, "format_command"),
+            (GateKind::Build, "build_command"),
+            (GateKind::Privacy, "privacy_command"),
+            (GateKind::Flake, "flake_command"),
+        ];
+        for (kind, field) in fields {
+            let mut config = configured(&[(GateKind::Verify, "verify")]);
+            set_command(&mut config, kind, &[]);
+            let error =
+                profile_from(&config).expect_err("a configured gate with no words cannot run");
+            assert!(
+                matches!(error, Error::Config { ref key, .. } if key == field),
+                "refusing the `{kind}` gate must name `{field}`, the key an operator has to \
+                 correct; said `{error}`"
+            );
+        }
     }
 }
