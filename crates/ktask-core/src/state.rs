@@ -2253,6 +2253,113 @@ mod tests {
         }
     }
 
+    /// Every legal move `apply` can make, written out by hand: the state that
+    /// is asked, the event it is asked with, and the state it answers with.
+    ///
+    /// This is the whole of what a task may do, and the sweep below compares
+    /// `apply` against it entry for entry. A transition exists only when it
+    /// appears here and in a `from_*` helper: an arm added without an entry, an
+    /// entry without its arm, or a move that starts landing somewhere else all
+    /// fail `every_move_is_a_declared_one_or_a_refusal`, so a new legal
+    /// transition has to be declared deliberately rather than fall out of a
+    /// match arm someone widened. Which side of the comparison reports the pair
+    /// says which of the two drifted.
+    ///
+    /// Four terminal states appear nowhere in the list because they accept
+    /// nothing, which is also what `no_terminal_state_accepts_any_event` says.
+    ///
+    /// The payloads are the ones `one_state_per_variant` and `every_event`
+    /// carry, so an entry states what a pair of *variants* does with those
+    /// payloads. Legality that turns on an attempt number, a commit or a phase
+    /// rather than on the variant pair is a separate claim with its own tests —
+    /// see `evidence_names_the_attempt_it_belongs_to_or_is_refused` and
+    /// `nothing_is_published_until_the_remote_is_read_back_holding_the_commit`.
+    const LEGAL: [(&str, &str, &str); 49] = [
+        ("Queued", "TaskQueued", "Queued"),
+        ("Queued", "PreflightStarted", "Preflight"),
+        ("Queued", "Paused", "Paused"),
+        ("Queued", "TaskCancelled", "Cancelled"),
+        ("Queued", "RecoveryDecision", "Queued"),
+        ("Preflight", "PreflightStarted", "Preflight"),
+        ("Preflight", "PreflightPassed", "Preflight"),
+        ("Preflight", "PreflightFailed", "Failed"),
+        ("Preflight", "AttemptStarted", "Preflight"),
+        ("Preflight", "PhaseEntered", "Running"),
+        ("Preflight", "Paused", "Paused"),
+        ("Preflight", "TaskCancelled", "Cancelled"),
+        ("Preflight", "RecoveryDecision", "Preflight"),
+        ("Running", "PhaseEntered", "Running"),
+        ("Running", "AgentOutput", "Running"),
+        ("Running", "VerifyPassed", "Publishing"),
+        ("Running", "VerifyFailed", "Running"),
+        ("Running", "TaskFailed", "Failed"),
+        ("Running", "TaskCancelled", "Cancelled"),
+        ("Running", "Paused", "Paused"),
+        ("Running", "Interrupted", "Paused"),
+        ("Running", "RecoveryDecision", "Running"),
+        ("Remediating", "TaskFailed", "Failed"),
+        ("Remediating", "TaskCancelled", "Cancelled"),
+        ("Remediating", "Paused", "Paused"),
+        ("Remediating", "RecoveryDecision", "Remediating"),
+        ("Verifying", "VerifyPassed", "Publishing"),
+        ("Verifying", "VerifyFailed", "Verifying"),
+        ("Verifying", "TaskFailed", "Failed"),
+        ("Verifying", "TaskCancelled", "Cancelled"),
+        ("Verifying", "Paused", "Paused"),
+        ("Verifying", "Interrupted", "Paused"),
+        ("Verifying", "RecoveryDecision", "Verifying"),
+        ("Publishing", "VerifyPassed", "Publishing"),
+        ("Publishing", "PublishStarted", "Publishing"),
+        ("Publishing", "PublishVerified", "PublishedVerified"),
+        ("Publishing", "TaskFailed", "Failed"),
+        ("Publishing", "TaskCancelled", "Cancelled"),
+        ("Publishing", "Paused", "Paused"),
+        ("Publishing", "Interrupted", "Paused"),
+        ("Publishing", "RecoveryDecision", "Publishing"),
+        ("PublishedVerified", "PublishVerified", "PublishedVerified"),
+        ("PublishedVerified", "TaskDone", "Done"),
+        ("PublishedVerified", "Paused", "Paused"),
+        ("PublishedVerified", "RecoveryDecision", "PublishedVerified"),
+        ("Paused", "Paused", "Paused"),
+        ("Paused", "Resumed", "Running"),
+        ("Paused", "TaskCancelled", "Cancelled"),
+        ("Paused", "RecoveryDecision", "Running"),
+    ];
+
+    /// Runs every state against every event and insists the answer is one the
+    /// table above gave in advance.
+    ///
+    /// Every pair the cross product holds is decided twice: an accepted pair
+    /// contributes the move it made to the list that is compared with [`LEGAL`],
+    /// and a refused pair is refused through `Error::InvalidTransition` naming
+    /// both of them. So the sweep fails on a legal move nobody declared, on a
+    /// declared move that was withdrawn or retargeted, and on a refusal that
+    /// stopped naming what it refused — and passes for the 228 pairs on nothing
+    /// but the table.
+    #[test]
+    fn every_move_is_a_declared_one_or_a_refusal() {
+        let mut made = Vec::new();
+        for state in one_state_per_variant() {
+            for event in every_event() {
+                match apply(&state, &event) {
+                    Ok(moved) => made.push((state.name(), event.discriminant(), moved.name())),
+                    Err(_) => refuses(&state, &event),
+                }
+            }
+        }
+        let mut declared = LEGAL.to_vec();
+        made.sort_unstable();
+        declared.sort_unstable();
+        assert_eq!(
+            made,
+            declared,
+            "{} moves were made against {} declared: the difference is a transition \
+             that changed without both sides being written down",
+            made.len(),
+            declared.len()
+        );
+    }
+
     #[test]
     fn done_is_reached_only_by_the_event_that_closes_a_published_task() {
         for state in one_state_per_variant() {
