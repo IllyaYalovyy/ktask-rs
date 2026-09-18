@@ -329,7 +329,14 @@ mod tests {
     use super::{
         current_branch, fetch, git, git_env, head_sha, is_clean, remote_url, status_porcelain,
     };
-    use crate::{Error, Result};
+    use crate::Error;
+    // The repository-with-an-origin fixture is the crate-wide one, so that a
+    // commit made here and a commit made by the publication tests to come are
+    // the same object: `crate::testing` pins the author, the committer and both
+    // instants, and deletes everything when it is dropped. What stays below is
+    // only the state these tests need and nothing else does — a repository that
+    // has never committed, and a plain directory with no repository in it.
+    use crate::testing::scratch_repo;
 
     /// Commit coordinates passed on the command line, so a test that commits
     /// does not depend on the machine's global git identity.
@@ -632,72 +639,10 @@ mod tests {
         drop(scratch);
     }
 
-    /// `git` run with the commit identity pinned on its own command line.
-    ///
-    /// Anything that commits or pushes needs an author, and the machine running
-    /// the suite may not be part of the answer: its global configuration is
-    /// whatever whoever set this machine up happened to choose.
-    fn git_as(root: &Path, args: &[&str]) -> Result<String> {
-        let mut words: Vec<&str> = IDENTITY.to_vec();
-        words.extend(args);
-        git(root, &words)
-    }
-
-    /// Write `file` holding `message`, and commit it on the current branch.
-    fn seed_commit(root: &Path, file: &str, message: &str) {
-        fs::write(root.join(file), format!("{message}\n"))
-            .expect("a file for the repository to hold");
-        git_as(root, &["add", "--", file]).expect("staging the file just written");
-        git_as(root, &["commit", "-q", "-m", message])
-            .expect("a commit made with the identity pinned on the command line");
-    }
-
-    /// A scratch tree holding a bare `origin` and a working repository with one
-    /// commit on `main` that it has pushed there.
-    ///
-    /// The origin is a real repository in the same scratch directory, because
-    /// every question these wrappers answer is a question about a repository:
-    /// a fixture assembled by hand out of ref files would test the fixture.
-    /// Nothing here reaches the network, and nothing is written inside this
-    /// repository — `docs/TESTING.md` allows disposable local bare repositories
-    /// and nothing else.
-    fn repository_with_origin() -> (TempDir, PathBuf, PathBuf) {
-        let scratch = tempdir().expect("a scratch directory outside this repository");
-        let origin = scratch.path().join("origin.git");
-        fs::create_dir(&origin).expect("a directory for the bare origin");
-        git(&origin, &["init", "-q", "--bare", "."]).expect("a bare repository to publish into");
-        let work = scratch.path().join("work");
-        fs::create_dir(&work).expect("a directory for the working repository");
-        git(&work, &["init", "-q", "-b", "main", "."])
-            .expect("a repository on a branch this fixture named, not the machine's default");
-        git(
-            &work,
-            &["remote", "add", "origin", &origin.display().to_string()],
-        )
-        .expect("the working repository is told where its origin is");
-        seed_commit(&work, "seed.txt", "the first commit");
-        git_as(&work, &["push", "-q", "origin", "main"])
-            .expect("the seed commit is on the origin before any test runs");
-        (scratch, work, origin)
-    }
-
-    /// A second repository that points at the same `origin` and has never
-    /// spoken to it: it holds neither the objects nor the remote-tracking refs.
-    fn unfetched_repository(scratch: &TempDir, origin: &Path) -> PathBuf {
-        let other = scratch.path().join("other");
-        fs::create_dir(&other).expect("a directory for the second repository");
-        git(&other, &["init", "-q", "-b", "main", "."]).expect("the second repository");
-        git(
-            &other,
-            &["remote", "add", "origin", &origin.display().to_string()],
-        )
-        .expect("it is told about the same origin");
-        other
-    }
-
     #[test]
     fn head_sha_is_the_full_object_id_of_the_commit_head_points_at() {
-        let (scratch, work, _origin) = repository_with_origin();
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
         let sha = head_sha(&work).expect("a repository with one commit has a head to read");
         let by_name = git(&work, &["rev-parse", "refs/heads/main"])
             .expect("the same commit, reached by branch name instead of through HEAD");
@@ -721,14 +666,16 @@ mod tests {
             "lowercase hex, which is what every reader of this value — a journal line, a worktree \
              base, a fetched comparison — expects: {sha}"
         );
-        drop(scratch);
     }
 
     #[test]
     fn head_sha_moves_when_the_repository_does_and_is_refused_before_it_ever_committed() {
-        let (scratch, work, _origin) = repository_with_origin();
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
         let first = head_sha(&work).expect("the seed commit");
-        seed_commit(&work, "second.txt", "the second commit");
+        fixture
+            .commit("second.txt", "the second commit")
+            .expect("a second commit, made through the fixture");
         let second = head_sha(&work).expect("a repository holding two commits");
         assert_ne!(
             first, second,
@@ -736,7 +683,6 @@ mod tests {
              fixed: the supervisor commits the candidate and then has to be able to see its own \
              new SHA come back"
         );
-        drop(scratch);
 
         let (empty, root) = repository();
         let error = head_sha(&root).expect_err("an unborn HEAD is not a commit");
@@ -755,26 +701,29 @@ mod tests {
 
     #[test]
     fn current_branch_names_the_branch_that_is_actually_checked_out() {
-        let (scratch, work, _origin) = repository_with_origin();
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
         assert_eq!(
             current_branch(&work).expect("a repository with a commit and a branch"),
             Some("main".to_owned()),
             "the branch the fixture created and pushed"
         );
-        git_as(&work, &["checkout", "-q", "-b", "side"]).expect("a second branch, staying on it");
+        fixture
+            .branch("side")
+            .expect("a second branch, staying on it");
         assert_eq!(
             current_branch(&work).expect("still attached, to a different branch"),
             Some("side".to_owned()),
             "the answer follows the checkout: publication pushes what the operator is standing \
              on, so an answer read from anywhere but HEAD would push the wrong branch"
         );
-        drop(scratch);
     }
 
     #[test]
     fn a_detached_head_has_no_branch_and_says_so_as_none_not_as_the_word_head() {
-        let (scratch, work, _origin) = repository_with_origin();
-        git_as(&work, &["checkout", "-q", "--detach"]).expect("detach from the branch");
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        git(&work, &["checkout", "-q", "--detach"]).expect("detach from the branch");
         let literal = git(&work, &["rev-parse", "--abbrev-ref", "HEAD"])
             .expect("git's own answer to the question, which is the four letters HEAD");
         assert_eq!(
@@ -790,7 +739,6 @@ mod tests {
              created from a fetched SHA (VISION.md §10) and so has no branch at all. A caller \
              handed the string HEAD would try to push a branch by that name"
         );
-        drop(scratch);
     }
 
     #[test]
@@ -815,7 +763,9 @@ mod tests {
 
     #[test]
     fn remote_url_reads_the_url_of_the_remote_the_caller_named() {
-        let (scratch, work, origin) = repository_with_origin();
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let origin = fixture.origin().to_path_buf();
         let seed_url = origin.display().to_string();
         assert_eq!(
             remote_url(&work, "origin").expect("the fixture configured origin"),
@@ -823,7 +773,7 @@ mod tests {
             "the URL the remote was added with, as git stored it: publication has to name where \
              it pushed to, and this is the only place the supervisor learns it"
         );
-        let backup = scratch.path().join("backup.git");
+        let backup = fixture.path().join("backup.git");
         fs::create_dir(&backup).expect("a directory for a second remote");
         git(&backup, &["init", "-q", "--bare", "."]).expect("a second bare repository");
         let backup_url = backup.display().to_string();
@@ -840,12 +790,12 @@ mod tests {
             seed_url,
             "and asking about one remote does not borrow another remote's answer"
         );
-        drop(scratch);
     }
 
     #[test]
     fn a_remote_that_was_never_added_refuses_and_names_the_name_that_was_asked_for() {
-        let (scratch, work, _origin) = repository_with_origin();
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
         let error = remote_url(&work, "nope").expect_err("no remote here is named nope");
         let (args, stderr) = refused(&error);
         assert_eq!(
@@ -859,12 +809,12 @@ mod tests {
             "git's own words, which is why this asks `remote get-url` rather than reading the \
              config key: the config route fails with exit 1 and prints nothing at all: {stderr}"
         );
-        drop(scratch);
     }
 
     #[test]
     fn status_porcelain_returns_one_record_per_changed_path_with_both_status_columns() {
-        let (scratch, work, _origin) = repository_with_origin();
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
         fs::write(work.join("staged.txt"), "added, and staged\n")
             .expect("a new file that is going to be committed");
         fs::write(
@@ -872,7 +822,7 @@ mod tests {
             "the first commit\nedited in the tree\n",
         )
         .expect("an edit to the seeded file that was never staged");
-        git_as(&work, &["add", "--", "staged.txt"]).expect("stage one file, leave the other");
+        git(&work, &["add", "--", "staged.txt"]).expect("stage one file, leave the other");
         assert_eq!(
             status_porcelain(&work).expect("a repository with two changes to report"),
             vec![" M seed.txt".to_owned(), "A  staged.txt".to_owned()],
@@ -883,12 +833,12 @@ mod tests {
              `status --porcelain` would hand back the first record as `M seed.txt` — the staged \
              case — which is exactly the misreading this wrapper exists to prevent"
         );
-        drop(scratch);
     }
 
     #[test]
     fn a_repository_with_nothing_to_report_answers_with_no_records_at_all() {
-        let (scratch, work, _origin) = repository_with_origin();
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
         assert_eq!(
             status_porcelain(&work).expect("a clean repository still answers the question"),
             Vec::<String>::new(),
@@ -896,12 +846,12 @@ mod tests {
              is asked to print: a caller that counted records, or asked whether there were any, \
              would call a clean tree dirty every single time"
         );
-        drop(scratch);
     }
 
     #[test]
     fn an_untracked_file_makes_a_repository_dirty() {
-        let (scratch, work, _origin) = repository_with_origin();
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
         assert!(
             is_clean(&work).expect("a repository with a commit and nothing else"),
             "the fixture's own commit is committed, so this is the state publication starts from"
@@ -920,16 +870,15 @@ mod tests {
             "the predicate and the records are one answer, so whoever is told about the dirty \
              tree can be told the path"
         );
-        drop(scratch);
     }
 
     #[test]
     fn an_ignored_file_leaves_a_repository_clean() {
-        let (scratch, work, _origin) = repository_with_origin();
-        fs::write(work.join(".gitignore"), "target/\n").expect("an ignore rule for build output");
-        git_as(&work, &["add", "--", ".gitignore"]).expect("the rule itself is tracked");
-        git_as(&work, &["commit", "-q", "-m", "ignore the build output"])
-            .expect("committing the rule");
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fixture
+            .commit(".gitignore", "target/")
+            .expect("the rule is committed, because an uncommitted ignore rule ignores nothing");
         fs::create_dir(work.join("target")).expect("a build output directory");
         fs::write(work.join("target").join("artifact.bin"), "not source\n")
             .expect("a file inside it");
@@ -945,7 +894,6 @@ mod tests {
             "ignored paths are not listed either, so the records show a caller exactly what the \
              predicate saw rather than a list it has to filter itself"
         );
-        drop(scratch);
     }
 
     #[test]
@@ -988,8 +936,11 @@ mod tests {
 
     #[test]
     fn fetch_bring_the_commits_the_remote_holds_into_the_local_tracking_ref() {
-        let (scratch, work, origin) = repository_with_origin();
-        let other = unfetched_repository(&scratch, &origin);
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let other = fixture
+            .unfetched_repo()
+            .expect("a second repository that has never spoken to the same origin");
         let published = head_sha(&work).expect("the commit the origin already holds");
         assert!(
             git(
@@ -1009,12 +960,10 @@ mod tests {
              publication with, and the SHA it builds from is read out of what it moved"
         );
 
-        seed_commit(
-            &work,
-            "later.txt",
-            "a commit the second repository has never seen",
-        );
-        git_as(&work, &["push", "-q", "origin", "main"]).expect("publish it to the origin");
+        fixture
+            .commit("later.txt", "a commit the second repository has never seen")
+            .expect("a commit the second repository cannot have fetched");
+        fixture.push("main").expect("publish it to the origin");
         let moved = head_sha(&work).expect("the origin moved, so the first repository is ahead");
         fetch(&other, "origin").expect("fetch the same remote a second time");
         assert_eq!(
@@ -1025,12 +974,12 @@ mod tests {
              publication ends by fetching and comparing, and an answer cached from the earlier \
              call is the failure that turns an unpublished commit into a claim that it shipped"
         );
-        drop(scratch);
     }
 
     #[test]
     fn fetching_a_name_that_is_neither_a_remote_nor_a_url_fails_naming_what_was_asked_for() {
-        let (scratch, work, _origin) = repository_with_origin();
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
         let error = fetch(&work, "nope").expect_err("there is no remote, and no path, named nope");
         let (args, stderr) = refused(&error);
         assert_eq!(
@@ -1043,6 +992,5 @@ mod tests {
             "git's refusal names the thing it could not reach, and a fetch that could not start \
              is a git failure rather than a run that quietly continued without a fetch: {stderr}"
         );
-        drop(scratch);
     }
 }
