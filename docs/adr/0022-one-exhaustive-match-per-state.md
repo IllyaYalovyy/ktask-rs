@@ -75,10 +75,11 @@ long to review as a table:
 - **Only `TaskDone` of the proved commit reaches `Done`.** Any other commit is
   a claim about work that was never published.
 - **A pause is a wait, never a failure.** `TaskFailed` is refused from
-  `Paused`; a second `Paused` nests rather than replacing, so a run resumes
-  once per reason; and `GateAcknowledged` closes only a pause that stopped at a
-  `PauseReason::HumanGate`, which is how VISION.md §6 says a gate reaches
-  `acknowledged`.
+  `Paused`; a second `Paused` first nested and is now refused — that half of
+  the rule was withdrawn by ADR-0026, which T028 asked for and which settled
+  what a pause's one return address is worth; and `GateAcknowledged` closes
+  only a pause that stopped at a `PauseReason::HumanGate`, which is how
+  VISION.md §6 says a gate reaches `acknowledged`.
 
 ## Alternatives considered
 
@@ -127,3 +128,7 @@ long to review as a table:
   `PublishStarted.candidate_sha` against the commit being pushed; that check
   belongs to `git::publish` and to recovery. Widening the variant is a change to
   durable data and to `docs/DESIGN.md`, not a detail to fix in passing.
+- One rule stated here no longer holds: the nested second `Paused`. ADR-0026
+  refused it on T028's completion check, so `from_paused` answers a second
+  `Paused` with `InvalidTransition` and `a_pause_above_a_pause_is_refused`
+  asserts that instead. Everything else in this record still stands.
