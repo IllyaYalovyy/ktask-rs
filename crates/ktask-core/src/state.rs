@@ -883,8 +883,12 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
 /// answered by something other than the transition table: `Resumed` and
 /// recovery's `Resume` both hand back exactly what was put in, unchanged, which
 /// is what makes a pause durable across the crash of a supervisor rather than a
-/// guess. A second pause nests rather than replaces — the run then needs one
-/// resume per reason, which is the honest reading of two separate waits.
+/// guess. A second `Paused` is refused rather than nested: the state already
+/// holds where the run resumes, so a second wait would either overwrite that
+/// answer or ask the run to resume twice for one stop — ADR-0026. The reason a
+/// pause is asked to hold does not narrow the refusal: a limit, a signal and a
+/// blocked predecessor are all refused the same way, and the reason already
+/// recorded is the one recovery acts on.
 ///
 /// `reason` is consulted once, for the one event that depends on it: a gate is
 /// acknowledged by a person, so only a pause that stopped *at* a gate may be
@@ -902,7 +906,6 @@ fn from_paused(
         resume_to: Box::new(resume_to.clone()),
     };
     match event {
-        EventKind::Paused { reason: again } => Ok(parked(waiting, again.clone())),
         EventKind::Resumed => Ok(TaskState::clone(resume_to)),
         EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
         EventKind::GateAcknowledged { by, at } => refuse_unless(
@@ -932,6 +935,7 @@ fn from_paused(
         | EventKind::PublishVerified { .. }
         | EventKind::TaskDone { .. }
         | EventKind::TaskFailed { .. }
+        | EventKind::Paused { .. }
         | EventKind::Interrupted { .. } => Err(refused(FROM, event)),
     }
 }
@@ -1274,6 +1278,9 @@ mod tests {
         );
     }
 
+    /// The codec's claim, not the machine's: `apply` refuses to build a pause
+    /// above a pause (ADR-0026), but the encoding is durable data, so a journal
+    /// that already holds one has to read back rather than fail to open.
     #[test]
     fn a_pause_nested_in_a_pause_keeps_its_own_resume_state_and_instant() {
         let until = time::macros::datetime!(2026-09-17 12:34:56 UTC);
@@ -2088,15 +2095,27 @@ mod tests {
     }
 
     #[test]
-    fn a_second_pause_keeps_where_the_first_one_was_waiting() {
-        let once = parked(working(1, Phase::Green), PauseReason::Interrupted);
-        let twice = parked(once.clone(), PauseReason::Limit { until: None });
-        moves(
-            &once,
-            &pause(PauseReason::Limit { until: None }),
-            &twice.clone(),
+    fn a_pause_above_a_pause_is_refused() {
+        for state in resumable_states() {
+            let waiting = parked(state, PauseReason::Interrupted);
+            for reason in PAUSE_REASONS {
+                refuses(&waiting, &pause(reason));
+            }
+        }
+        // The refusal reads whether the state *is* a pause, not what it boxes,
+        // so the two shapes `apply` can no longer build are refused the same
+        // way: a pause above a pause, and a pause above a finished state.
+        refuses(
+            &parked(
+                parked(working(1, Phase::Green), PauseReason::Input),
+                PauseReason::Limit { until: None },
+            ),
+            &pause(PauseReason::Blocked),
         );
-        moves(&twice, &EventKind::Resumed, &once);
+        refuses(
+            &parked(TaskState::Done, PauseReason::Interrupted),
+            &pause(PauseReason::Input),
+        );
     }
 
     #[test]
@@ -2274,7 +2293,13 @@ mod tests {
     /// rather than on the variant pair is a separate claim with its own tests —
     /// see `evidence_names_the_attempt_it_belongs_to_or_is_refused` and
     /// `nothing_is_published_until_the_remote_is_read_back_holding_the_commit`.
-    const LEGAL: [(&str, &str, &str); 49] = [
+    ///
+    /// The length is part of the declaration: a pair leaves this table only on
+    /// a written decision that the machine no longer makes the move, and one
+    /// pair has left it. `("Paused", "Paused", "Paused")` was a nested pause,
+    /// which T028 decided is a mistake rather than a second wait — the refusal
+    /// is asserted in `a_pause_above_a_pause_is_refused`, and ADR-0026 is why.
+    const LEGAL: [(&str, &str, &str); 48] = [
         ("Queued", "TaskQueued", "Queued"),
         ("Queued", "PreflightStarted", "Preflight"),
         ("Queued", "Paused", "Paused"),
@@ -2320,7 +2345,6 @@ mod tests {
         ("PublishedVerified", "TaskDone", "Done"),
         ("PublishedVerified", "Paused", "Paused"),
         ("PublishedVerified", "RecoveryDecision", "PublishedVerified"),
-        ("Paused", "Paused", "Paused"),
         ("Paused", "Resumed", "Running"),
         ("Paused", "TaskCancelled", "Cancelled"),
         ("Paused", "RecoveryDecision", "Running"),
@@ -2416,10 +2440,11 @@ mod tests {
 
     #[test]
     fn a_run_can_always_be_stopped() {
-        for state in one_state_per_variant() {
-            if state.is_terminal() {
-                continue;
-            }
+        // Every state a run can still be moving through. Already standing
+        // still is the one exception, and `a_pause_above_a_pause_is_refused`
+        // says why stopping such a state again is refused rather than a second
+        // wait it would then owe a resume for.
+        for state in resumable_states() {
             assert!(
                 apply(&state, &pause(PauseReason::Input)).is_ok(),
                 "{} must accept a pause: a run that cannot be stopped cannot be \
