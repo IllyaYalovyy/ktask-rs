@@ -1,4 +1,4 @@
-//! The gates a task is proved against, as typed configuration.
+//! The gates a task is proved against, and what running one leaves behind.
 //!
 //! A gate is a runner-executed command with a timeout, a directory to run in and
 //! an environment to run with (VISION.md §8) — never a loose string another
@@ -21,6 +21,16 @@
 //! in this project uses. A profile is read from text rather than from a path
 //! because the document that carries it is a project's configuration document,
 //! whose location [`crate::config`] owns.
+//!
+//! A [`GateResult`] is the record of one gate run: the verdict, the exit status,
+//! and the retained output. It is written as the one object `docs/DESIGN.md`
+//! gives the `GateFinished` entry under its `result` key, which keeps a gate's
+//! own `kind` out of the object the payload tag already owns (ADR-0011 measured
+//! that collision), and a run that ran out of its budget carries its own flag
+//! rather than a borrowed exit code (ADR-0036). The catalog entry itself is not
+//! this module's to add: `docs/DESIGN.md` admits an entry only alongside the
+//! `state::apply` arms that answer it, and those belong to the task that emits
+//! the event.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -137,6 +147,72 @@ pub struct Gate {
     /// to the one it was read from.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+}
+
+/// What one run of one gate produced.
+///
+/// This is durable data rather than an intermediate: `docs/DESIGN.md` gives the
+/// `GateFinished` catalog entry the payload `result: GateResult`, so somebody
+/// reading a journal written long after this binary is gone has to be able to
+/// tell, from these fields alone, whether the gate refused, crashed, or never
+/// finished. Three decisions follow from that, recorded in ADR-0036.
+///
+/// - A run that ran out of its budget says so through `timed_out` rather than
+///   through a borrowed exit code. The runner killed the process group, so the
+///   status it collected reads "killed by a signal" — which is also what an
+///   out-of-memory kill reads, and something else again from the `exit_code` of
+///   a command that ran to completion and refused. VISION.md §8 gives each gate
+///   its own timeout, and [`Gate::timeout_secs`] promises the gate is then
+///   reported as timed out rather than as failed; this field is where that
+///   promise can be kept.
+/// - An absent half of the exit status is written as `null`, never left out, so
+///   every row this tool writes carries both keys; on the read side a key that
+///   is not there at all means the same nothing, which is how the event
+///   envelope treats its own absent task. [`Gate`] skips its absent halves
+///   instead, because those live in a document an operator edits by hand.
+/// - A payload holding a field this type does not have is refused rather than
+///   decoded without it, the way [`Config`], [`Gate`] and [`Profile`] refuse an
+///   unknown key.
+///
+/// `passed` is stored rather than derived, because it is the runner's verdict
+/// and not always the exit status: a [`GateKind::Flake`] gate decides over five
+/// runs and a [`GateKind::Privacy`] gate reads its own report. Deriving it
+/// belongs to the code that runs a gate, which is the only place that holds the
+/// facts it is derived from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GateResult {
+    /// Which gate ran. The gate names itself from the inside, so a journal
+    /// holding several results says which is which without a key per entry.
+    pub kind: GateKind,
+    /// Whether the gate is satisfied — the runner's verdict, recorded rather
+    /// than recomputed here.
+    pub passed: bool,
+    /// The status the command exited with, or `None` when it never produced
+    /// one: a process killed by a signal has no exit code, and a killed process
+    /// is the only way a gate stops without one.
+    pub exit_code: Option<i32>,
+    /// The signal that ended the process, when a signal ended it. Held as a
+    /// number rather than a name because the number is what `wait` reported;
+    /// naming it is a rendering decision, and the journal is not where a
+    /// rendering is made.
+    pub signal: Option<i32>,
+    /// How long the command ran, in milliseconds, measured by the runner rather
+    /// than reported by the command.
+    pub duration_ms: u64,
+    /// Everything the command wrote to stdout, retained whole rather than
+    /// summarised: VISION.md §8 keeps raw output alongside the parsed form,
+    /// and a gate failure that cannot show its own output cannot be acted on.
+    pub stdout: String,
+    /// Everything the command wrote to stderr, retained whole for the same
+    /// reason as stdout, and kept separate because the two streams mean
+    /// different things to every tool that writes them.
+    pub stderr: String,
+    /// Whether the gate ran out of its budget and was killed. Its own fact
+    /// rather than an inference from the two optional fields above, so that a
+    /// timeout, an outside kill and a non-zero exit stay three different answers
+    /// in the record.
+    pub timed_out: bool,
 }
 
 /// The gates one project runs, in the order they run.
@@ -337,7 +413,7 @@ pub fn profile_from(config: &Config) -> Result<Profile> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Gate, GateKind, Profile, profile_from};
+    use super::{Gate, GateKind, GateResult, Profile, profile_from};
     use crate::{Config, Error};
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
@@ -880,6 +956,236 @@ timeout_secs = 1800
                 matches!(error, Error::Config { ref key, .. } if key == field),
                 "refusing the `{kind}` gate must name `{field}`, the key an operator has to \
                  correct; said `{error}`"
+            );
+        }
+    }
+
+    /// A gate that ran, exited 0 and is satisfied — what a runner records when a
+    /// command finishes inside its budget.
+    fn passed_verify() -> GateResult {
+        GateResult {
+            kind: GateKind::Verify,
+            passed: true,
+            exit_code: Some(0),
+            signal: None,
+            duration_ms: 1_845_003,
+            stdout: "test result: ok. 441 passed\n".to_owned(),
+            stderr: String::new(),
+            timed_out: false,
+        }
+    }
+
+    /// A gate that ran out of its budget: the runner killed the process group, so
+    /// the command never reported a status of its own.
+    fn timed_out_verify() -> GateResult {
+        GateResult {
+            kind: GateKind::Verify,
+            passed: false,
+            exit_code: None,
+            signal: Some(9),
+            duration_ms: 1_800_000,
+            stdout: "test result: ok. 440 passed\n".to_owned(),
+            stderr: String::new(),
+            timed_out: true,
+        }
+    }
+
+    /// A gate the command itself refused: a status arrived, and it was not 0.
+    fn failed_lint() -> GateResult {
+        GateResult {
+            kind: GateKind::Lint,
+            passed: false,
+            exit_code: Some(1),
+            signal: None,
+            duration_ms: 8_112,
+            stdout: String::new(),
+            stderr: "error: unexpected cfg condition\n".to_owned(),
+            timed_out: false,
+        }
+    }
+
+    /// Every shape a run can end in, for the tests that hold for all of them.
+    fn every_outcome() -> [GateResult; 3] {
+        [passed_verify(), timed_out_verify(), failed_lint()]
+    }
+
+    #[test]
+    fn a_gate_result_writes_the_field_names_the_event_catalog_documents() {
+        let written = serde_json::to_value(passed_verify())
+            .expect("a gate result is writable as the JSON the journal stores");
+        assert_eq!(
+            written,
+            serde_json::json!({
+                "kind": "Verify",
+                "passed": true,
+                "exit_code": 0,
+                "signal": null,
+                "duration_ms": 1_845_003,
+                "stdout": "test result: ok. 441 passed\n",
+                "stderr": "",
+                "timed_out": false,
+            }),
+            "`docs/DESIGN.md` gives `GateFinished` the payload `result: GateResult`, so every \
+             field name written here is durable data the journal outlives this binary with"
+        );
+    }
+
+    #[test]
+    fn a_gate_result_survives_the_encoding_the_journal_uses() {
+        for result in every_outcome() {
+            let text = serde_json::to_string(&result)
+                .expect("a gate result is writable as the JSON the journal stores");
+            let read_back: GateResult = serde_json::from_str(&text)
+                .expect("a written gate result reads back as the result it was written from");
+            assert_eq!(
+                read_back, result,
+                "a result must read back with every field it was written with; wrote {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_gate_that_ran_out_of_time_is_told_apart_from_a_kill_and_from_a_refusal() {
+        let timeout = timed_out_verify();
+        let mut killed_by_strangers = timeout.clone();
+        killed_by_strangers.timed_out = false;
+
+        let timeout_written = serde_json::to_value(&timeout)
+            .expect("a timed-out result is writable as the JSON the journal stores");
+        let killed_written = serde_json::to_value(&killed_by_strangers)
+            .expect("a killed result is writable as the JSON the journal stores");
+        assert_ne!(
+            timeout_written, killed_written,
+            "a gate killed by the runner's own budget and a gate killed by something else \
+             look identical in the wait status, so the payload has to carry the difference"
+        );
+        assert_eq!(
+            timeout_written.get("timed_out"),
+            Some(&serde_json::Value::Bool(true)),
+            "a budget running out is recorded as its own fact, not inferred from an exit code"
+        );
+        assert_eq!(
+            killed_written.get("timed_out"),
+            Some(&serde_json::Value::Bool(false))
+        );
+
+        let refused = serde_json::to_value(failed_lint())
+            .expect("a refused gate is writable as the JSON the journal stores");
+        assert_eq!(
+            refused.get("timed_out"),
+            Some(&serde_json::Value::Bool(false))
+        );
+        assert_eq!(refused.get("exit_code"), Some(&serde_json::Value::from(1)));
+        assert_ne!(
+            timeout_written, refused,
+            "a gate that never finished and a gate that finished and refused are different \
+             failures and must not share a payload"
+        );
+    }
+
+    #[test]
+    fn an_absent_half_of_the_exit_status_is_written_as_null_rather_than_left_out() {
+        let timeout = serde_json::to_value(timed_out_verify())
+            .expect("a timed-out result is writable as the JSON the journal stores");
+        let fields = timeout
+            .as_object()
+            .expect("a gate result is written as an object");
+        assert!(
+            fields.contains_key("exit_code"),
+            "a killed process has no exit code, which is written as null the way the event \
+             envelope writes its absent task; leaving the key out would make the two mean \
+             the same thing to a reader"
+        );
+        assert_eq!(fields.get("exit_code"), Some(&serde_json::Value::Null));
+
+        let refused = serde_json::to_value(failed_lint())
+            .expect("a refused gate is writable as the JSON the journal stores");
+        let fields = refused
+            .as_object()
+            .expect("a gate result is written as an object");
+        assert!(
+            fields.contains_key("signal"),
+            "a command that ran to completion was killed by no signal, and that is a written \
+             null, not an absent key"
+        );
+        assert_eq!(fields.get("signal"), Some(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn an_exit_status_key_that_is_not_there_at_all_reads_back_as_the_same_nothing() {
+        let written = serde_json::to_string(&timed_out_verify())
+            .expect("a timed-out result is writable as the JSON the journal stores");
+        let thinned = written.replace("\"exit_code\":null,", "");
+        assert_ne!(
+            written, thinned,
+            "the two documents have to differ in their keys, or the read below proves nothing"
+        );
+
+        let read_back: GateResult = serde_json::from_str(&thinned).expect(
+            "a row missing a half the run never had is readable, the way a record that omits \
+             the envelope's task_id is",
+        );
+        assert_eq!(
+            read_back,
+            timed_out_verify(),
+            "an absent `exit_code` and a null one are the same fact — the killed command \
+             reported no status — so the read side does not need the key the write side \
+             always spells"
+        );
+    }
+
+    #[test]
+    fn a_gate_result_nests_under_the_result_key_the_catalog_documents() {
+        let result = passed_verify();
+        let written = serde_json::to_value(&result)
+            .expect("a gate result is writable as the JSON the journal stores");
+        let payload = serde_json::json!({"kind": "GateFinished", "result": written});
+
+        assert_eq!(
+            payload.get("kind"),
+            Some(&serde_json::Value::from("GateFinished")),
+            "the tag is the catalog's answer to what happened"
+        );
+        assert_eq!(
+            payload.pointer("/result/kind"),
+            Some(&serde_json::Value::from("Verify")),
+            "the gate's own `kind` belongs inside the nested object: `#[serde(tag = \"kind\")]` \
+             already owns the outer key, and two keys of one name in one object is the \
+             collision ADR-0011 measured"
+        );
+        let nested = payload.get("result").expect("the payload carries a result");
+        let read_back: GateResult = serde_json::from_value(nested.clone())
+            .expect("the object inside a `GateFinished` payload reads back as the result");
+        assert_eq!(read_back, result);
+    }
+
+    #[test]
+    fn a_payload_that_is_not_a_gate_result_is_refused() {
+        let complete = r#"{"kind":"Lint","passed":false,"exit_code":1,"signal":null,"duration_ms":8112,"stdout":"","stderr":"","timed_out":false}"#;
+        serde_json::from_str::<GateResult>(complete)
+            .expect("the shape above is a gate result, so the refusals below need a witness");
+        let wrong: [(String, &str); 4] = [
+            (
+                complete.replace("\"duration_ms\":8112", "\"duration_ms\":\"8112\""),
+                "a duration written as text is not a duration",
+            ),
+            (
+                complete.replace("\"timed_out\":false", "\"timed_out\":false,\"cached\":true"),
+                "a field this type does not have is data from another version, not a result",
+            ),
+            (
+                complete.replace("\"duration_ms\":8112,", ""),
+                "a run whose duration nobody measured is a run that was not timed",
+            ),
+            (
+                complete.replace("\"kind\":\"Lint\"", "\"kind\":\"linting\""),
+                "a gate kind nobody defined is refused, not held as text",
+            ),
+        ];
+        for (payload, why) in wrong {
+            assert!(
+                serde_json::from_str::<GateResult>(&payload).is_err(),
+                "{payload} must be refused rather than decoded: {why}"
             );
         }
     }
