@@ -16,8 +16,17 @@ stop and report that — it is a finding, not something to work around.
    with messages saying what changed and why.
 3. The branch is pushed, and the local tip matches the fetched remote tip.
 4. Your report is written to the path named in the orchestrator context, and
-   its first line is exactly one of:
-   `KTASK_RESULT: DONE`, `KTASK_RESULT: FAILED`, `KTASK_RESULT: NEEDS_INPUT`.
+   **its first line is the result line** — the literal first line, nothing
+   above it, no `#`, `>`, `*` or backtick in front of it, nothing else on it:
+
+       KTASK_RESULT: DONE
+
+   Rejected, because a heading marker is not a result line:
+
+       ## KTASK_RESULT: DONE
+
+   The permitted values are `DONE`, `FAILED` and `NEEDS_INPUT`. A rejected
+   report fails the task even when the work is complete and pushed.
 
 If the task cannot be completed, stop and report `FAILED` with the evidence.
 That is an acceptable outcome. Weakening a check, reporting an unsupported

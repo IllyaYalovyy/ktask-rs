@@ -45,13 +45,26 @@ working unattended: no one will answer a question mid-task.
 
 ## Reporting
 
-End your run with a report whose first line is exactly one of:
+Write your report to the path named in the orchestrator context. **The first
+line of that file is the result line.** It is the literal first line: nothing
+above it, no blank line before it, no `#`, `>`, `*`, `_` or backtick in front
+of it, and nothing else on the line.
 
 ```
 KTASK_RESULT: DONE
-KTASK_RESULT: FAILED
-KTASK_RESULT: NEEDS_INPUT
 ```
+
+Rejected — the same content with a heading marker, which is not a result line:
+
+```
+## KTASK_RESULT: DONE
+```
+
+The three permitted values are `DONE`, `FAILED` and `NEEDS_INPUT`. Everything
+else you want to say goes on the lines below.
+
+A rejected report fails the task even when the code is written, the gates are
+green and the work is pushed. The formatting is load-bearing, not cosmetic.
 
 Then state what you did, what you verified, and anything you deliberately left
 undone. `NEEDS_INPUT` is for genuine ambiguity a decision-maker must resolve —
