@@ -60,6 +60,18 @@
 //! command printed. And redaction belongs to the door that makes bytes durable
 //! (ADR-0032) rather than to whoever produced them, which is why
 //! [`crate::run_gate`] does not redact either.
+//!
+//! # What sits on top of it
+//!
+//! The repository facts a run needs are each one call to [`git`] plus a read of
+//! what that command printed: [`head_sha`], [`current_branch`], [`remote_url`],
+//! [`status_porcelain`], [`is_clean`] and [`fetch`]. They are thin on purpose —
+//! one git command each, no caching, no inferred defaults — so that a claim
+//! about the state of a repository is always traceable to the command that
+//! formed it. ADR-0041 records the three choices they all share: a detached
+//! `HEAD` is `None` rather than a branch named `HEAD`, a remote is named by the
+//! caller and never defaulted, and status is asked for with its branch header
+//! for a reason that is easy to mistake for decoration.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -123,6 +135,155 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).trim().to_owned()
 }
 
+/// The commit `HEAD` points at, as git's full hex object id.
+///
+/// `git rev-parse HEAD` is what a human runs to ask this. The full id, not an
+/// abbreviation, is what the design needs: publication ends by requiring the
+/// candidate SHA to equal the SHA fetched back from the remote (VISION.md §10),
+/// and two spellings of the same commit only compare equal when both are full.
+/// A journal line that holds this value can be checked years later; one holding
+/// an abbreviation cannot.
+///
+/// # Errors
+///
+/// [`Error::Git`] when there is no commit to resolve. A freshly initialized
+/// repository is the ordinary case: its `HEAD` names a branch that has never
+/// been written.
+pub fn head_sha(root: &Path) -> Result<String> {
+    git(root, &["rev-parse", "HEAD"])
+}
+
+/// The branch `HEAD` is attached to, or `None` when it is detached.
+///
+/// `git rev-parse --abbrev-ref HEAD` prints the branch name — and prints the
+/// literal `HEAD` when there is no branch, which is a successful answer rather
+/// than a failure. Detached is a normal state here, not an edge case: a task
+/// worktree is created from a fetched SHA (VISION.md §10) and therefore has no
+/// branch at all. The [`Option`] is what carries that difference; a caller
+/// handed the string `HEAD` would hold a branch name that cannot exist — no
+/// branch can be named `HEAD`, which is what makes the literal unambiguous —
+/// and would go on to push a branch nobody chose.
+///
+/// # Errors
+///
+/// [`Error::Git`] when `HEAD` resolves to nothing at all. An uninitialized
+/// repository is *not* `None`: "nothing has been committed yet" and "there are
+/// commits, and `HEAD` is detached" are different states, and a human told the
+/// second one about the first would go looking for a worktree that is not the
+/// problem.
+pub fn current_branch(root: &Path) -> Result<Option<String>> {
+    let name = git(root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    Ok((name != "HEAD").then_some(name))
+}
+
+/// The URL `remote` was configured with.
+///
+/// Which remote a project publishes to is the operator's answer, not this
+/// module's: VISION.md §10 speaks of "remote mainline" and never of `origin`,
+/// so the name is the caller's to pass and nothing here defaults it. A wrapper
+/// that guessed would publish somewhere the operator never named, and the
+/// evidence trail would still read as success.
+///
+/// It asks `git remote get-url` rather than reading the `remote.<name>.url`
+/// config key, because that is the command git provides for the question: it
+/// answers with the URL git itself would use — after any `insteadOf` rewrite,
+/// which is the difference between "what the file says" and "where a push
+/// would go" — and it refuses in its own words. The config route exits 1 and
+/// prints nothing, so a missing remote would arrive as a failure with no
+/// explanation.
+///
+/// # Errors
+///
+/// [`Error::Git`] when no remote by that name is configured, or in a directory
+/// that holds no repository.
+pub fn remote_url(root: &Path, remote: &str) -> Result<String> {
+    git(root, &["remote", "get-url", remote])
+}
+
+/// Every path git considers changed, as the porcelain records that say so.
+///
+/// The command is `git status --porcelain --branch`. The branch header is not
+/// decoration and is not returned: it is what keeps the records intact. [`git`]
+/// trims the whole of a command's standard output, and a porcelain record for a
+/// working-tree-only change begins with a space — the first column is the staged
+/// status. Asked without the header, a repository whose only change is an
+/// unstaged edit answers `M seed.txt`, and a caller reading column one would
+/// conclude the change is staged. With the header in front, the trim lands on
+/// the `##` line, every record keeps both columns, and the first line is
+/// dropped here so a caller never sees it.
+///
+/// Two of git's defaults are load-bearing and are left exactly as git chose
+/// them: ignored paths are not listed, untracked ones are (both are what
+/// [`is_clean`] needs), and a wholly untracked directory is collapsed into one
+/// record naming the directory rather than one per file inside it.
+///
+/// The records are git's own lines, `XY <path>`, with a rename printed as
+/// `R  from -> to`. Paths are shown as git chose to print them, which includes
+/// its C-quoting of names it considers unusual — a `"` or a non-ASCII byte
+/// certainly, and this project's git quotes a name holding a space too. A
+/// record is therefore a report about a path, not a path to hand back to
+/// [`std::fs`]; a caller that needs the filename asks git a narrower question.
+///
+/// # Errors
+///
+/// [`Error::Git`] when git refuses, most often because `root` holds no
+/// repository — which is a refusal, never an empty list.
+pub fn status_porcelain(root: &Path) -> Result<Vec<String>> {
+    let printed = git(root, &["status", "--porcelain", "--branch"])?;
+    let records = printed.split_once('\n').map_or("", |(_branch, rest)| rest);
+    Ok(records.lines().map(str::to_owned).collect())
+}
+
+/// Whether the repository has nothing uncommitted in it.
+///
+/// Clean means [`status_porcelain`] listed nothing, and git's defaults are the
+/// rule rather than something this function negotiates. An ignored path is not
+/// dirty: build output left in the tree is what the repository said it never
+/// wants, and a predicate that counted it would call every task in a project
+/// that builds into its own tree a policy failure. An untracked path *is*
+/// dirty: a file an agent wrote and never staged is uncommitted work, and
+/// VISION.md §10 makes a dirty tree at verification time a `policy_failure`
+/// rather than a detail. A staged-but-uncommitted change is dirty too — this
+/// asks whether anything is left to commit, which is what a supervisor about to
+/// publish a commit has to know.
+///
+/// This reports the fact and stops there. Naming the offending paths and
+/// refusing with [`Error::Policy`] is the dirty-tree check that sits on top.
+///
+/// # Errors
+///
+/// [`Error::Git`] when git refused, which is propagated rather than answered as
+/// "dirty": a directory with no repository in it is not a clean repository, and
+/// a supervisor that heard otherwise would publish a commit it never made.
+pub fn is_clean(root: &Path) -> Result<bool> {
+    Ok(status_porcelain(root)?.is_empty())
+}
+
+/// Ask `remote` what it holds, and update the local remote-tracking refs.
+///
+/// VISION.md §10 brackets a publication with a fetch — once to build from the
+/// fetched SHA, once to prove the pushed candidate is what the remote now
+/// holds. This is that fetch, and nothing more: no prune, no tag policy, no
+/// refspec, because a flag that changes what a fetch brings in belongs at the
+/// place that decided to need it, where it is visible. `remote` is whatever git
+/// accepts in that position — a configured remote's name, or a URL.
+///
+/// Nothing git printed comes back. What a fetch is *for* is the state it leaves
+/// behind, and that state is read back honestly from the ref it moved
+/// (`refs/remotes/<remote>/<branch>`, with [`git`]) rather than by parsing
+/// progress text off standard output. A refusal still carries git's own words
+/// inside [`Error::Git`].
+///
+/// # Errors
+///
+/// [`Error::Git`] when the remote could not be reached or refused — including
+/// the credential prompt a fetch with no way to answer it stalls on, which
+/// ADR-0040 names as this transport's one unbudgeted gap.
+pub fn fetch(root: &Path, remote: &str) -> Result<()> {
+    git(root, &["fetch", remote])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -130,8 +291,8 @@ mod tests {
 
     use tempfile::{TempDir, tempdir};
 
-    use super::git;
-    use crate::Error;
+    use super::{current_branch, fetch, git, head_sha, is_clean, remote_url, status_porcelain};
+    use crate::{Error, Result};
 
     /// Commit coordinates passed on the command line, so a test that commits
     /// does not depend on the machine's global git identity.
@@ -383,8 +544,422 @@ mod tests {
         assert!(
             !stderr.contains("usage"),
             "git writes its usage to stdout, and a non-zero exit keeps stdout for the error's \
-             argument vector rather than laundering command output into the field that holds \
-             stderr: the failure is thin here by design, not invented"
+            argument vector rather than laundering command output into the field that holds \
+            stderr: the failure is thin here by design, not invented"
+        );
+        drop(scratch);
+    }
+
+    /// `git` run with the commit identity pinned on its own command line.
+    ///
+    /// Anything that commits or pushes needs an author, and the machine running
+    /// the suite may not be part of the answer: its global configuration is
+    /// whatever whoever set this machine up happened to choose.
+    fn git_as(root: &Path, args: &[&str]) -> Result<String> {
+        let mut words: Vec<&str> = IDENTITY.to_vec();
+        words.extend(args);
+        git(root, &words)
+    }
+
+    /// Write `file` holding `message`, and commit it on the current branch.
+    fn seed_commit(root: &Path, file: &str, message: &str) {
+        fs::write(root.join(file), format!("{message}\n"))
+            .expect("a file for the repository to hold");
+        git_as(root, &["add", "--", file]).expect("staging the file just written");
+        git_as(root, &["commit", "-q", "-m", message])
+            .expect("a commit made with the identity pinned on the command line");
+    }
+
+    /// A scratch tree holding a bare `origin` and a working repository with one
+    /// commit on `main` that it has pushed there.
+    ///
+    /// The origin is a real repository in the same scratch directory, because
+    /// every question these wrappers answer is a question about a repository:
+    /// a fixture assembled by hand out of ref files would test the fixture.
+    /// Nothing here reaches the network, and nothing is written inside this
+    /// repository — `docs/TESTING.md` allows disposable local bare repositories
+    /// and nothing else.
+    fn repository_with_origin() -> (TempDir, PathBuf, PathBuf) {
+        let scratch = tempdir().expect("a scratch directory outside this repository");
+        let origin = scratch.path().join("origin.git");
+        fs::create_dir(&origin).expect("a directory for the bare origin");
+        git(&origin, &["init", "-q", "--bare", "."]).expect("a bare repository to publish into");
+        let work = scratch.path().join("work");
+        fs::create_dir(&work).expect("a directory for the working repository");
+        git(&work, &["init", "-q", "-b", "main", "."])
+            .expect("a repository on a branch this fixture named, not the machine's default");
+        git(
+            &work,
+            &["remote", "add", "origin", &origin.display().to_string()],
+        )
+        .expect("the working repository is told where its origin is");
+        seed_commit(&work, "seed.txt", "the first commit");
+        git_as(&work, &["push", "-q", "origin", "main"])
+            .expect("the seed commit is on the origin before any test runs");
+        (scratch, work, origin)
+    }
+
+    /// A second repository that points at the same `origin` and has never
+    /// spoken to it: it holds neither the objects nor the remote-tracking refs.
+    fn unfetched_repository(scratch: &TempDir, origin: &Path) -> PathBuf {
+        let other = scratch.path().join("other");
+        fs::create_dir(&other).expect("a directory for the second repository");
+        git(&other, &["init", "-q", "-b", "main", "."]).expect("the second repository");
+        git(
+            &other,
+            &["remote", "add", "origin", &origin.display().to_string()],
+        )
+        .expect("it is told about the same origin");
+        other
+    }
+
+    #[test]
+    fn head_sha_is_the_full_object_id_of_the_commit_head_points_at() {
+        let (scratch, work, _origin) = repository_with_origin();
+        let sha = head_sha(&work).expect("a repository with one commit has a head to read");
+        let by_name = git(&work, &["rev-parse", "refs/heads/main"])
+            .expect("the same commit, reached by branch name instead of through HEAD");
+        assert_eq!(
+            sha, by_name,
+            "HEAD and the branch it is attached to name one commit, so the two routes have to \
+             agree. Asking by name is what makes this a check rather than a tautology: an \
+             implementation that echoed back a name instead of resolving it could not produce \
+             this answer"
+        );
+        assert_eq!(
+            sha.len(),
+            40,
+            "a full object id, never an abbreviation: VISION.md §10 finishes publication by \
+             comparing this value with a SHA read back from another machine's repository, and a \
+             shortened id compares unequal to the same commit spelled in full: {sha}"
+        );
+        assert!(
+            sha.chars()
+                .all(|c| c.is_ascii_digit() | matches!(c, 'a'..='f')),
+            "lowercase hex, which is what every reader of this value — a journal line, a worktree \
+             base, a fetched comparison — expects: {sha}"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn head_sha_moves_when_the_repository_does_and_is_refused_before_it_ever_committed() {
+        let (scratch, work, _origin) = repository_with_origin();
+        let first = head_sha(&work).expect("the seed commit");
+        seed_commit(&work, "second.txt", "the second commit");
+        let second = head_sha(&work).expect("a repository holding two commits");
+        assert_ne!(
+            first, second,
+            "this reads HEAD, which is the moving thing, and not a value taken from anywhere \
+             fixed: the supervisor commits the candidate and then has to be able to see its own \
+             new SHA come back"
+        );
+        drop(scratch);
+
+        let (empty, root) = repository();
+        let error = head_sha(&root).expect_err("an unborn HEAD is not a commit");
+        let (args, stderr) = refused(&error);
+        assert_eq!(
+            args,
+            vec!["rev-parse".to_owned(), "HEAD".to_owned()],
+            "the refusal names the command that could not answer, as every git failure here does"
+        );
+        assert!(
+            stderr.contains("unknown revision"),
+            "git's own words for HEAD-does-not-exist-yet, unedited: {stderr}"
+        );
+        drop(empty);
+    }
+
+    #[test]
+    fn current_branch_names_the_branch_that_is_actually_checked_out() {
+        let (scratch, work, _origin) = repository_with_origin();
+        assert_eq!(
+            current_branch(&work).expect("a repository with a commit and a branch"),
+            Some("main".to_owned()),
+            "the branch the fixture created and pushed"
+        );
+        git_as(&work, &["checkout", "-q", "-b", "side"]).expect("a second branch, staying on it");
+        assert_eq!(
+            current_branch(&work).expect("still attached, to a different branch"),
+            Some("side".to_owned()),
+            "the answer follows the checkout: publication pushes what the operator is standing \
+             on, so an answer read from anywhere but HEAD would push the wrong branch"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn a_detached_head_has_no_branch_and_says_so_as_none_not_as_the_word_head() {
+        let (scratch, work, _origin) = repository_with_origin();
+        git_as(&work, &["checkout", "-q", "--detach"]).expect("detach from the branch");
+        let literal = git(&work, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .expect("git's own answer to the question, which is the four letters HEAD");
+        assert_eq!(
+            literal, "HEAD",
+            "this is the trap the Option exists for: git answers a detached HEAD with the name \
+             of the thing that is not a branch, and a wrapper returning the string hands the \
+             caller a branch named HEAD that cannot exist"
+        );
+        assert_eq!(
+            current_branch(&work).expect("a detached HEAD is a state, not a failure"),
+            None,
+            "detached is the ordinary case in this design, not an edge: a task worktree is \
+             created from a fetched SHA (VISION.md §10) and so has no branch at all. A caller \
+             handed the string HEAD would try to push a branch by that name"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn a_repository_that_has_never_committed_has_no_branch_to_name_and_refuses() {
+        let (scratch, root) = repository();
+        let error = current_branch(&root).expect_err("no commit has ever been made, so no branch");
+        let (args, _) = refused(&error);
+        assert_eq!(
+            args,
+            vec![
+                "rev-parse".to_owned(),
+                "--abbrev-ref".to_owned(),
+                "HEAD".to_owned()
+            ],
+            "an unborn repository arrives as a git failure rather than as None: 'nothing has \
+             been committed yet' and 'there are commits but HEAD is detached' are different \
+             states, and collapsing them would send a human to look for a detached worktree \
+             that is not the problem"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn remote_url_reads_the_url_of_the_remote_the_caller_named() {
+        let (scratch, work, origin) = repository_with_origin();
+        let seed_url = origin.display().to_string();
+        assert_eq!(
+            remote_url(&work, "origin").expect("the fixture configured origin"),
+            seed_url,
+            "the URL the remote was added with, as git stored it: publication has to name where \
+             it pushed to, and this is the only place the supervisor learns it"
+        );
+        let backup = scratch.path().join("backup.git");
+        fs::create_dir(&backup).expect("a directory for a second remote");
+        git(&backup, &["init", "-q", "--bare", "."]).expect("a second bare repository");
+        let backup_url = backup.display().to_string();
+        git(&work, &["remote", "add", "backup", &backup_url]).expect("a second remote, elsewhere");
+        assert_eq!(
+            remote_url(&work, "backup").expect("the second remote is configured"),
+            backup_url,
+            "the name the caller gave is the remote that gets read — a wrapper that always asked \
+             about origin would answer this question with the wrong URL, silently, and no other \
+             test here would notice"
+        );
+        assert_eq!(
+            remote_url(&work, "origin").expect("origin is still configured"),
+            seed_url,
+            "and asking about one remote does not borrow another remote's answer"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn a_remote_that_was_never_added_refuses_and_names_the_name_that_was_asked_for() {
+        let (scratch, work, _origin) = repository_with_origin();
+        let error = remote_url(&work, "nope").expect_err("no remote here is named nope");
+        let (args, stderr) = refused(&error);
+        assert_eq!(
+            args,
+            vec!["remote".to_owned(), "get-url".to_owned(), "nope".to_owned()],
+            "the question that was asked, so an operator can tell a missing remote from a \
+             misspelled one"
+        );
+        assert!(
+            stderr.contains("No such remote"),
+            "git's own words, which is why this asks `remote get-url` rather than reading the \
+             config key: the config route fails with exit 1 and prints nothing at all: {stderr}"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn status_porcelain_returns_one_record_per_changed_path_with_both_status_columns() {
+        let (scratch, work, _origin) = repository_with_origin();
+        fs::write(work.join("staged.txt"), "added, and staged\n")
+            .expect("a new file that is going to be committed");
+        fs::write(
+            work.join("seed.txt"),
+            "the first commit\nedited in the tree\n",
+        )
+        .expect("an edit to the seeded file that was never staged");
+        git_as(&work, &["add", "--", "staged.txt"]).expect("stage one file, leave the other");
+        assert_eq!(
+            status_porcelain(&work).expect("a repository with two changes to report"),
+            vec![" M seed.txt".to_owned(), "A  staged.txt".to_owned()],
+            "git's records, in git's order, with the leading space kept: that space is the \
+             staged column, and ` M` (worktree only) versus `A ` (staged) is the whole reason a \
+             caller can tell 'commit everything' from 'commit nothing' without asking git a \
+             second question. The transport trims a command's whole stdout, so plain \
+             `status --porcelain` would hand back the first record as `M seed.txt` — the staged \
+             case — which is exactly the misreading this wrapper exists to prevent"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn a_repository_with_nothing_to_report_answers_with_no_records_at_all() {
+        let (scratch, work, _origin) = repository_with_origin();
+        assert_eq!(
+            status_porcelain(&work).expect("a clean repository still answers the question"),
+            Vec::<String>::new(),
+            "nothing changed is an empty list, not a list holding the branch header the command \
+             is asked to print: a caller that counted records, or asked whether there were any, \
+             would call a clean tree dirty every single time"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn an_untracked_file_makes_a_repository_dirty() {
+        let (scratch, work, _origin) = repository_with_origin();
+        assert!(
+            is_clean(&work).expect("a repository with a commit and nothing else"),
+            "the fixture's own commit is committed, so this is the state publication starts from"
+        );
+        fs::write(work.join("notes.md"), "written by an agent, never staged\n")
+            .expect("an untracked file");
+        assert!(
+            !is_clean(&work).expect("a repository that can answer the question"),
+            "an untracked file is uncommitted work: VISION.md §10 calls a dirty tree at \
+             verification time a policy failure, so `clean` has to mean 'nothing of the task is \
+             left outside a commit', not 'nothing git would complain about out loud'"
+        );
+        assert_eq!(
+            status_porcelain(&work).expect("and the records say which file"),
+            vec!["?? notes.md".to_owned()],
+            "the predicate and the records are one answer, so whoever is told about the dirty \
+             tree can be told the path"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn an_ignored_file_leaves_a_repository_clean() {
+        let (scratch, work, _origin) = repository_with_origin();
+        fs::write(work.join(".gitignore"), "target/\n").expect("an ignore rule for build output");
+        git_as(&work, &["add", "--", ".gitignore"]).expect("the rule itself is tracked");
+        git_as(&work, &["commit", "-q", "-m", "ignore the build output"])
+            .expect("committing the rule");
+        fs::create_dir(work.join("target")).expect("a build output directory");
+        fs::write(work.join("target").join("artifact.bin"), "not source\n")
+            .expect("a file inside it");
+        assert!(
+            is_clean(&work).expect("a repository holding ignored build output"),
+            "an ignored path is not work an agent forgot to commit: it is what the repository \
+             said it never wants. A predicate that counted it would fail every task in a \
+             project that builds into its own tree"
+        );
+        assert_eq!(
+            status_porcelain(&work).expect("the same answer, as records"),
+            Vec::<String>::new(),
+            "ignored paths are not listed either, so the records show a caller exactly what the \
+             predicate saw rather than a list it has to filter itself"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn a_repository_with_no_commit_and_no_file_is_clean_and_refuses_nothing() {
+        let (scratch, root) = repository();
+        assert!(
+            is_clean(&root).expect("an empty repository answers the question"),
+            "nothing committed and nothing written is nothing uncommitted. This is also the \
+             unborn case, where git's header line reads 'No commits yet' — one more record a \
+             caller would have to be told to ignore if the header were left in"
+        );
+        fs::write(root.join("first.txt"), "the first file, untracked\n").expect("a file");
+        assert!(
+            !is_clean(&root).expect("the same repository, one file later"),
+            "and a file makes even a repository with no history dirty"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn a_directory_that_is_not_a_repository_is_refused_rather_than_reported_clean() {
+        let scratch = tempdir().expect("a scratch directory to make a plain directory in");
+        let outside = scratch.path().join("not-a-repository");
+        fs::create_dir(&outside).expect("a plain directory, no repository in it");
+        let error = is_clean(&outside).expect_err("a directory with no repository is not clean");
+        let (args, stderr) = refused(&error);
+        assert_eq!(
+            args.first().map(String::as_str),
+            Some("status"),
+            "the refusal is git's own, from the command that asked: {args:?}"
+        );
+        assert!(
+            stderr.contains("not a git repository"),
+            "'no repository here' and 'nothing to commit' are different answers, and a \
+             supervisor that heard the second one would publish a commit it never made: \
+             {stderr}"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn fetch_bring_the_commits_the_remote_holds_into_the_local_tracking_ref() {
+        let (scratch, work, origin) = repository_with_origin();
+        let other = unfetched_repository(&scratch, &origin);
+        let published = head_sha(&work).expect("the commit the origin already holds");
+        assert!(
+            git(
+                &other,
+                &["rev-parse", "--verify", "refs/remotes/origin/main"]
+            )
+            .is_err(),
+            "this repository has never spoken to its origin, so it holds no remote-tracking ref \
+             — which is what makes the fetch below observable rather than assumed"
+        );
+        fetch(&other, "origin").expect("ask the origin what it has");
+        let tracked = git(&other, &["rev-parse", "refs/remotes/origin/main"])
+            .expect("the fetch left a remote-tracking ref behind");
+        assert_eq!(
+            tracked, published,
+            "the objects and the ref arrived: this is the fetch VISION.md §10 starts a \
+             publication with, and the SHA it builds from is read out of what it moved"
+        );
+
+        seed_commit(
+            &work,
+            "later.txt",
+            "a commit the second repository has never seen",
+        );
+        git_as(&work, &["push", "-q", "origin", "main"]).expect("publish it to the origin");
+        let moved = head_sha(&work).expect("the origin moved, so the first repository is ahead");
+        fetch(&other, "origin").expect("fetch the same remote a second time");
+        assert_eq!(
+            git(&other, &["rev-parse", "refs/remotes/origin/main"])
+                .expect("the ref the second fetch moved"),
+            moved,
+            "a second fetch reports what the remote holds now, not what it held the first time: \
+             publication ends by fetching and comparing, and an answer cached from the earlier \
+             call is the failure that turns an unpublished commit into a claim that it shipped"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn fetching_a_name_that_is_neither_a_remote_nor_a_url_fails_naming_what_was_asked_for() {
+        let (scratch, work, _origin) = repository_with_origin();
+        let error = fetch(&work, "nope").expect_err("there is no remote, and no path, named nope");
+        let (args, stderr) = refused(&error);
+        assert_eq!(
+            args,
+            vec!["fetch".to_owned(), "nope".to_owned()],
+            "nothing else was asked for, and nothing else is reported"
+        );
+        assert!(
+            stderr.contains("nope"),
+            "git's refusal names the thing it could not reach, and a fetch that could not start \
+             is a git failure rather than a run that quietly continued without a fetch: {stderr}"
         );
         drop(scratch);
     }
