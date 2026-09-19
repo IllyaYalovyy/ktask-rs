@@ -47,11 +47,20 @@
 //! it arrives — [`Invocation::model`] holds what was asked for and
 //! [`Outcome::model_reported`] holds what the session said — while
 //! [`check_model`] is the one place allowed to read them against each other.
+//!
+//! Below the trait sits [`build`], where a word in a configuration stops being
+//! text and becomes the adapter a run holds. It is the one place in the
+//! workspace allowed to name a concrete adapter, and it lives here rather than
+//! wherever a CLI is reached because the paragraphs above are the reason:
+//! interchangeability is what the trait buys, an adapter's identity answers
+//! nothing above this module, and naming one is therefore the single decision of
+//! its kind, to be made once from data an operator wrote.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::Duration;
 
-use crate::{Bus, Error, Result};
+use crate::{Bus, Config, Error, Result};
 
 pub mod claude;
 pub mod codex;
@@ -386,6 +395,105 @@ pub fn check_model(configured: Option<&str>, reported: Option<&str>) -> Result<(
         // an equal pair confirms what was configured, a missing report is marked
         // rather than refused, and an unconfigured run cannot be contradicted.
         _ => Ok(()),
+    }
+}
+
+/// The word an operator writes for the scripted adapter, and the command its
+/// sessions start.
+const DUMMY_NAME: &str = "dummy";
+/// The word an operator writes for the Claude CLI, and the command its sessions
+/// start.
+const CLAUDE_NAME: &str = "claude";
+/// The word an operator writes for the Codex CLI, and the command its sessions
+/// start.
+const CODEX_NAME: &str = "codex";
+
+/// Every provider word a configuration may name, in the order VISION.md §12
+/// lists the launch set.
+///
+/// One list, read twice by [`build`]: as the words its arms match, and as the
+/// names a refusal offers the human it stopped for. A refusal assembled out of a
+/// second list would be a refusal that could be wrong, and a pause is only worth
+/// what it costs if the answer it carries is the whole answer.
+const PROVIDER_NAMES: [&str; 3] = [DUMMY_NAME, CLAUDE_NAME, CODEX_NAME];
+
+/// The adapter a configuration names, built from nothing but that configuration.
+///
+/// VISION.md §12 makes which CLI runs a task a value — the word in
+/// [`Config::provider`] — and this is where the word becomes the `Box<dyn
+/// Provider>` a runner, a `doctor` check and a TUI screen all read the same way.
+/// The trait above is what makes them able to; this function is what makes them
+/// able to without knowing which one they hold. Adding one of §12's backlog CLIs
+/// is the "additive" case, and it is one arm here and one name in the list of
+/// valid names below, which is the whole of the change an adapter is allowed to
+/// ask of the layer above it.
+///
+/// Three decisions the arms had to make, none of which an adapter can make for
+/// itself.
+///
+/// * **`dummy` is its scenario file**, and the path is the whole of what it is
+///   given. ADR-0051 put a scenario in a document precisely so that no script
+///   could live in code, so a `dummy` whose setting names no file is refused
+///   rather than handed a behavior invented here. What a named file gets wrong
+///   comes back as the adapter's own refusal, unwritten.
+/// * **The two real adapters get a command word and the two clocks.** `Config`
+///   has no per-provider command key, so the word is the adapter's own name —
+///   the CLI an operator means when they write `claude`, searched along `PATH`
+///   by the adapter when a session starts (ADR-0054). Nothing is searched *for*
+///   here: a missing CLI is refused as the configuration problem ADR-0054 says it
+///   is, and a build that probed first could not tell an unconfigured machine
+///   what it had been configured with. `idle_timeout_secs` and
+///   `attempt_timeout_secs` (ADR-0053) arrive as constructor arguments rather
+///   than as lookups, for the reason ADR-0054 gives: a session has to be
+///   reproducible from the arguments its adapter was built with.
+/// * **The match is exact.** No trim, no case fold, no prefix. A near miss
+///   resolved into a real adapter runs the attempt on a provider nobody chose and
+///   files its evidence under the wrong CLI, which is the mistake VISION.md §12
+///   refuses a mismatched model id over rather than tolerating.
+///
+/// Two things this pointedly does not do. It does not weigh [`Config::model`]
+/// against the chosen adapter's [`Capabilities::model_selection`]: ADR-0050 left
+/// whether that is a refusal or a re-detection to a decision-maker, so it is
+/// reported as an open question rather than answered here, and [`check_model`]
+/// stays the one model rule this core holds. It also does not pick a provider per
+/// task type (VISION.md §12's implement/review pair): that is a decision about a
+/// task, and the caller holding the queue is the one allowed to make it.
+///
+/// # Errors
+///
+/// [`Error::Config`] keyed `provider` — naming the word it refused and every
+/// valid name — when no adapter answers to the configured word; keyed
+/// `dummy_scenario_path` when `dummy` is chosen with no scenario named. A named
+/// scenario that will not load comes back unchanged: [`Error::Io`] for a path
+/// holding nothing, [`Error::Config`] keyed by the file or the step for a
+/// document that cannot replay as written. The reason an operator can act on is
+/// the one the file gave, and this function owns none of it.
+pub fn build(config: &Config) -> Result<Box<dyn Provider>> {
+    let idle = Duration::from_secs(config.idle_timeout_secs);
+    let attempt = Duration::from_secs(config.attempt_timeout_secs);
+    match config.provider.as_str() {
+        DUMMY_NAME => match config.dummy_scenario_path.as_deref() {
+            Some(path) => Ok(Box::new(dummy::Dummy::load(path)?)),
+            None => Err(Error::Config {
+                key: "dummy_scenario_path".to_owned(),
+                detail: format!(
+                    "the `{DUMMY_NAME}` provider replays a scenario file and this \
+                     configuration names none: set `dummy_scenario_path` to a TOML \
+                     document of steps, or name another provider; no script is \
+                     invented in its place"
+                ),
+            }),
+        },
+        CLAUDE_NAME => Ok(Box::new(claude::Claude::new(CLAUDE_NAME, idle, attempt))),
+        CODEX_NAME => Ok(Box::new(codex::Codex::new(CODEX_NAME, idle, attempt))),
+        unknown => Err(Error::Config {
+            key: "provider".to_owned(),
+            detail: format!(
+                "`{unknown}` is not a provider this build has an adapter for; the valid \
+                 names are {}",
+                PROVIDER_NAMES.map(|name| format!("`{name}`")).join(", ")
+            ),
+        }),
     }
 }
 
@@ -1093,6 +1201,217 @@ mod model_check {
             assert!(
                 detail.contains(asked) && detail.contains(reported),
                 "the refusal names both ids it compared: {detail}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod build_tests {
+    // Which adapter a run gets, and the one way it is chosen: a word in a
+    // configuration. Named for the function it holds, the way `usage_tests` and
+    // `trait_tests` are named for what they hold, so the factory answers to
+    // `test(/provider::build/)` on its own.
+    //
+    // Every case goes through `build` and then through `Provider`, and no case
+    // names an adapter type. That is the point rather than a constraint: a test
+    // that built a `Dummy` to check that `build` returns a `Dummy` would still
+    // pass while the factory handed back something else, and a factory returning
+    // the wrong adapter is the failure this function has — it runs a real CLI
+    // where an operator asked for a scripted one, and reports every attempt to
+    // the wrong provider while it does.
+    use super::build;
+    use crate::{Config, Error, Invocation};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    /// The providers VISION.md §12 puts at launch, in the order §12 lists them.
+    const LAUNCH_NAMES: [&str; 3] = ["dummy", "claude", "codex"];
+
+    /// A configuration that names `provider` and leaves every other setting at
+    /// the `docs/DESIGN.md` default.
+    fn configured(provider: &str) -> Config {
+        // Assigned rather than built with `..Config::default()`: a `Config`
+        // carries its key provenance in a private field, and the defaults are
+        // the layer every other layer overrides, so there is nothing below them
+        // for a test to claim.
+        let mut config = Config::default();
+        config.provider = provider.to_owned();
+        config
+    }
+
+    /// Writes a one-step scenario into `dir` and returns the path it wrote.
+    ///
+    /// A document rather than an assembled [`Scenario`], because the setting
+    /// under test holds a *path*: the file has to be the thing the adapter was
+    /// built from, or the test would pass on a script `build` invented.
+    fn scenario(dir: &Path, stdout: &str) -> PathBuf {
+        let path = dir.join("scenario.toml");
+        fs::write(
+            &path,
+            format!("steps = [{{ on_task = 1, outcome = \"success\", stdout = {stdout:?} }}]\n"),
+        )
+        .expect("the scratch directory accepts the scenario");
+        path
+    }
+
+    /// The call a factory-built adapter is handed: a prompt, no model
+    /// preference, and a directory of its own.
+    fn session(worktree: &Path) -> Invocation {
+        Invocation {
+            prompt: "run the session the factory-built provider was handed".to_owned(),
+            model: None,
+            working_dir: worktree.to_path_buf(),
+        }
+    }
+
+    /// The refusal `build` answers `config` with.
+    ///
+    /// A helper rather than `Result::expect_err`, which a `Box<dyn Provider>`
+    /// cannot answer to: the trait has no `Debug` deliberately — an adapter is
+    /// not a record — so the failure text has to come out of the adapter's own
+    /// name rather than out of a debug format.
+    fn refusal(config: &Config) -> Error {
+        match build(config) {
+            Ok(provider) => panic!(
+                "`{}` was built as `{}` rather than refused",
+                config.provider,
+                provider.name()
+            ),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn every_launch_name_reaches_an_adapter_that_answers_to_it() {
+        // The ledger §12's launch set is measured against. A name that reaches
+        // no adapter is a configuration that cannot be run; a name that reaches
+        // the wrong one is worse, because it runs.
+        let scratch = tempfile::tempdir().expect("a place to write a scenario");
+        let mut config = configured("dummy");
+        config.dummy_scenario_path = Some(scenario(
+            scratch.path(),
+            "one step is enough to be reachable\n",
+        ));
+
+        for name in LAUNCH_NAMES {
+            config.provider = name.to_owned();
+            let provider = build(&config).unwrap_or_else(|error| {
+                panic!("`{name}` is a launch provider and was refused: {error}")
+            });
+            assert_eq!(
+                provider.name(),
+                name,
+                "`{name}` reaches the adapter that answers to `{name}` — and note the \
+                 scenario path is still set, so a `claude` or `codex` built here would \
+                 have had to read a `dummy` file to be the wrong thing twice over"
+            );
+        }
+    }
+
+    #[test]
+    fn the_dummy_variant_replays_the_scenario_its_configuration_names() {
+        let scratch = tempfile::tempdir().expect("a place to write a scenario");
+        let worktree = tempfile::tempdir().expect("a directory to replay into");
+        let mut config = configured("dummy");
+        config.dummy_scenario_path = Some(scenario(
+            scratch.path(),
+            "the file the setting pointed at\n",
+        ));
+
+        let provider = build(&config).expect("`dummy` with a scenario path is buildable");
+        let outcome = provider
+            .invoke(&session(worktree.path()), None)
+            .expect("and the session its file scripts runs");
+
+        assert_eq!(
+            outcome.stdout, "the file the setting pointed at\n",
+            "the session answered out of the file `dummy_scenario_path` named, so the \
+             factory read the setting rather than replaying a script it wrote itself \
+             — which is what ADR-0051 put the responses in a file to prevent"
+        );
+    }
+
+    #[test]
+    fn a_dummy_pointed_at_a_path_holding_nothing_reports_the_reason_the_file_gave() {
+        let scratch = tempfile::tempdir().expect("a directory with nothing in it");
+        let mut config = configured("dummy");
+        config.dummy_scenario_path = Some(scratch.path().join("nowhere.toml"));
+
+        let error = refusal(&config);
+        assert!(
+            matches!(error, Error::Io(..)),
+            "the OS's own reason is the answer an operator can act on, and the factory \
+             adds nothing to it, got {error}"
+        );
+    }
+
+    #[test]
+    fn a_dummy_with_no_scenario_named_is_refused_naming_the_setting() {
+        // The documented default state: `provider = "dummy"`, no scenario. The
+        // honest answer is a refusal naming the key to set, not a script
+        // invented here — ADR-0051 keeps a scenario a file precisely so nothing
+        // can be replayed that an operator never wrote down.
+        let error = refusal(&Config::default());
+        let Error::Config { key, detail } = &error else {
+            panic!("a setting that cannot be honoured is a configuration refusal, got {error}");
+        };
+        assert_eq!(
+            key, "dummy_scenario_path",
+            "the refusal is keyed to the key that has to be set, which is how a human \
+             reaches the right line of the right file"
+        );
+        assert!(
+            detail.contains("dummy") && detail.contains("scenario"),
+            "and it says both which provider needs the setting and what is missing: {detail}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_name_is_refused_naming_it_and_listing_every_valid_one() {
+        let error = refusal(&configured("kiro"));
+        let Error::Config { key, detail } = &error else {
+            panic!("a provider word nothing can honour is a configuration refusal, got {error}");
+        };
+        assert_eq!(
+            key, "provider",
+            "the refusal is keyed to the word it refused"
+        );
+        assert!(
+            detail.contains("`kiro`"),
+            "the refusal quotes the word as it was written, since that is what the \
+             operator has to compare against: {detail}"
+        );
+        for name in LAUNCH_NAMES {
+            assert!(
+                detail.contains(name),
+                "and it lists `{name}` among the valid names: a pause that stops for a \
+                 human has to carry the whole answer, and the list is in this function \
+                 alone: {detail}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_is_matched_exactly_and_a_near_miss_is_a_finding_not_a_choice() {
+        // Every near-miss below is one a lenient comparison — trim, case fold,
+        // prefix — would resolve into a real adapter. Choosing an adapter then
+        // is running the attempt on a provider nobody configured, which is the
+        // same class of mistake §12 refuses a mismatched model id over, and it
+        // is unrecoverable because the attempt's evidence names the wrong CLI.
+        for near in ["Dummy", "DUMMY", " dummy", "dummy ", "claude2", " ", ""] {
+            let error = refusal(&configured(near));
+            let Error::Config { key, detail } = &error else {
+                panic!("`{near}` is not a provider, which is a configuration refusal, got {error}");
+            };
+            assert_eq!(
+                key, "provider",
+                "`{near}` is refused as the key that holds it"
+            );
+            assert!(
+                detail.contains(&format!("`{near}`")),
+                "the refusal quotes what was written, case and whitespace included, so \
+                 the near miss is visible rather than repaired in silence: {detail}"
             );
         }
     }
