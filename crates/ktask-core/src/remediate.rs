@@ -2,6 +2,7 @@
 
 use crate::{AttemptRecord, FailureClass, GateResult, Task};
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// Represents the state of a circuit breaker after recording a signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,6 +11,74 @@ pub enum BreakerState {
     Open,
     /// Threshold reached; circuit is now tripped.
     Tripped,
+}
+
+/// Decision to continue or stop remediation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decision {
+    /// Continue with remediation.
+    Continue,
+    /// Stop remediation with a reason.
+    Stop {
+        /// The reason why remediation should stop.
+        reason: String,
+    },
+}
+
+/// Bounds for remediation attempts.
+#[derive(Debug, Clone)]
+pub struct Bounds {
+    /// Maximum number of attempts.
+    pub max_attempts: u32,
+    /// Maximum elapsed time.
+    pub max_elapsed: Duration,
+    /// Maximum tokens allowed, or None for unlimited.
+    pub max_tokens: Option<u64>,
+}
+
+impl Bounds {
+    /// Check if remediation should continue given the current state.
+    ///
+    /// Returns `Continue` if all bounds are satisfied, or `Stop` with the reason
+    /// for the first bound that was exceeded.
+    #[must_use]
+    pub fn should_continue(
+        &self,
+        attempts: u32,
+        elapsed: Duration,
+        tokens: u64,
+    ) -> Decision {
+        // Check attempts bound first
+        if attempts >= self.max_attempts {
+            return Decision::Stop {
+                reason: format!(
+                    "max attempts exceeded: {} >= {}",
+                    attempts, self.max_attempts
+                ),
+            };
+        }
+
+        // Check elapsed time bound
+        if elapsed >= self.max_elapsed {
+            return Decision::Stop {
+                reason: format!(
+                    "max elapsed time exceeded: {:?} >= {:?}",
+                    elapsed, self.max_elapsed
+                ),
+            };
+        }
+
+        // Check token budget
+        if let Some(max_tokens) = self.max_tokens {
+            if tokens >= max_tokens {
+                return Decision::Stop {
+                    reason: format!("token budget exceeded: {} >= {}", tokens, max_tokens),
+                };
+            }
+        }
+
+        Decision::Continue
+    }
 }
 
 /// A circuit breaker that trips on repeated identical failures.
@@ -787,5 +856,129 @@ mod tests {
         assert!(!result.contains("Gate Output:") || result.trim().ends_with("Gate Output:"));
         assert!(!result.contains("Diff Summary:") || result.trim().ends_with("Diff Summary:"));
         assert!(!result.contains("Prior Attempts:") || result.trim().ends_with("Prior Attempts:"));
+    }
+
+    #[test]
+    fn bounds_continue_when_all_limits_satisfied() {
+        let bounds = Bounds {
+            max_attempts: 5,
+            max_elapsed: Duration::from_secs(300),
+            max_tokens: Some(100_000),
+        };
+
+        let decision = bounds.should_continue(3, Duration::from_secs(100), 50_000);
+        assert_eq!(decision, Decision::Continue);
+    }
+
+    #[test]
+    fn bounds_stop_on_max_attempts() {
+        let bounds = Bounds {
+            max_attempts: 5,
+            max_elapsed: Duration::from_secs(300),
+            max_tokens: Some(100_000),
+        };
+
+        let decision = bounds.should_continue(5, Duration::from_secs(100), 50_000);
+        assert!(matches!(decision, Decision::Stop { reason } if reason.contains("max attempts")));
+    }
+
+    #[test]
+    fn bounds_stop_on_max_attempts_exceeded() {
+        let bounds = Bounds {
+            max_attempts: 5,
+            max_elapsed: Duration::from_secs(300),
+            max_tokens: Some(100_000),
+        };
+
+        let decision = bounds.should_continue(10, Duration::from_secs(100), 50_000);
+        assert!(matches!(decision, Decision::Stop { reason } if reason.contains("max attempts")));
+    }
+
+    #[test]
+    fn bounds_stop_on_max_elapsed() {
+        let bounds = Bounds {
+            max_attempts: 5,
+            max_elapsed: Duration::from_secs(300),
+            max_tokens: Some(100_000),
+        };
+
+        let decision = bounds.should_continue(3, Duration::from_secs(300), 50_000);
+        assert!(matches!(decision, Decision::Stop { reason } if reason.contains("max elapsed time")));
+    }
+
+    #[test]
+    fn bounds_stop_on_max_elapsed_exceeded() {
+        let bounds = Bounds {
+            max_attempts: 5,
+            max_elapsed: Duration::from_secs(300),
+            max_tokens: Some(100_000),
+        };
+
+        let decision = bounds.should_continue(3, Duration::from_secs(400), 50_000);
+        assert!(matches!(decision, Decision::Stop { reason } if reason.contains("max elapsed time")));
+    }
+
+    #[test]
+    fn bounds_stop_on_max_tokens() {
+        let bounds = Bounds {
+            max_attempts: 5,
+            max_elapsed: Duration::from_secs(300),
+            max_tokens: Some(100_000),
+        };
+
+        let decision = bounds.should_continue(3, Duration::from_secs(100), 100_000);
+        assert!(matches!(decision, Decision::Stop { reason } if reason.contains("token budget")));
+    }
+
+    #[test]
+    fn bounds_stop_on_max_tokens_exceeded() {
+        let bounds = Bounds {
+            max_attempts: 5,
+            max_elapsed: Duration::from_secs(300),
+            max_tokens: Some(100_000),
+        };
+
+        let decision = bounds.should_continue(3, Duration::from_secs(100), 150_000);
+        assert!(matches!(decision, Decision::Stop { reason } if reason.contains("token budget")));
+    }
+
+    #[test]
+    fn bounds_continue_with_unlimited_tokens() {
+        let bounds = Bounds {
+            max_attempts: 5,
+            max_elapsed: Duration::from_secs(300),
+            max_tokens: None,
+        };
+
+        let decision = bounds.should_continue(3, Duration::from_secs(100), 1_000_000);
+        assert_eq!(decision, Decision::Continue);
+    }
+
+    #[test]
+    fn bounds_reason_names_bound() {
+        let bounds = Bounds {
+            max_attempts: 5,
+            max_elapsed: Duration::from_secs(300),
+            max_tokens: Some(100_000),
+        };
+
+        // Test each bound names itself in the reason
+        let attempts_decision = bounds.should_continue(5, Duration::from_secs(100), 50_000);
+        match attempts_decision {
+            Decision::Stop { reason } => assert!(reason.contains("attempts")),
+            _ => panic!("Expected Stop decision"),
+        }
+
+        let elapsed_decision = bounds.should_continue(3, Duration::from_secs(300), 50_000);
+        match elapsed_decision {
+            Decision::Stop { reason } => assert!(reason.contains("elapsed")),
+            _ => panic!("Expected Stop decision"),
+        }
+
+        let tokens_decision = bounds.should_continue(3, Duration::from_secs(100), 100_000);
+        match tokens_decision {
+            Decision::Stop { reason } => assert!(reason.contains("token")),
+            _ => panic!("Expected Stop decision"),
+        }
     }
 }
