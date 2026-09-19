@@ -78,7 +78,7 @@ pub fn bundle(
     let mut lines = Vec::new();
 
     // 1. Classification header
-    lines.push(format!("Classification: {:?}", class));
+    lines.push(format!("Classification: {class:?}"));
     lines.push(String::new());
 
     // 2. Task summary
@@ -92,10 +92,10 @@ pub fn bundle(
         for gate in failed_gates {
             lines.push(format!("[{:?}]", gate.kind));
             // Get tail of output (last 10 lines)
-            let output = if !gate.stderr.is_empty() {
-                gate.stderr.as_str()
-            } else {
+            let output = if gate.stderr.is_empty() {
                 gate.stdout.as_str()
+            } else {
+                gate.stderr.as_str()
             };
             let tail_lines: Vec<_> = output.lines().rev().take(10).collect();
             for line in tail_lines.into_iter().rev() {
