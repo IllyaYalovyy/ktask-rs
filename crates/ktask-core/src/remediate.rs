@@ -1,6 +1,6 @@
 //! Failure signature and circuit breaker for repeated failures.
 
-use crate::{AttemptRecord, FailureClass, GateResult, Task, Error, Result};
+use crate::{AttemptRecord, Error, FailureClass, GateResult, Result, Task};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -128,7 +128,11 @@ impl Breaker {
 ///
 /// # Returns
 ///
-/// `Ok(())` if no protected paths are touched, or a Policy error naming the violations.
+/// `Ok(())` if no protected paths are touched.
+///
+/// # Errors
+///
+/// Returns a Policy error if any protected paths are modified.
 pub fn check_no_policy_edit(diff_paths: &[PathBuf]) -> Result<()> {
     let mut violations = Vec::new();
 
@@ -1055,7 +1059,11 @@ mod tests {
 
         let result = check_no_policy_edit(&paths);
         assert!(result.is_err());
-        if let Err(crate::Error::Policy { detail, paths: violation_paths }) = result {
+        if let Err(Error::Policy {
+            detail,
+            paths: violation_paths,
+        }) = result
+        {
             assert!(detail.contains("policy gates"));
             assert_eq!(violation_paths.len(), 1);
         } else {
@@ -1069,7 +1077,11 @@ mod tests {
 
         let result = check_no_policy_edit(&paths);
         assert!(result.is_err());
-        if let Err(crate::Error::Policy { paths: violation_paths, .. }) = result {
+        if let Err(Error::Policy {
+            paths: violation_paths,
+            ..
+        }) = result
+        {
             assert_eq!(violation_paths.len(), 1);
         } else {
             panic!("Expected Policy error");
@@ -1082,7 +1094,11 @@ mod tests {
 
         let result = check_no_policy_edit(&paths);
         assert!(result.is_err());
-        if let Err(crate::Error::Policy { paths: violation_paths, .. }) = result {
+        if let Err(Error::Policy {
+            paths: violation_paths,
+            ..
+        }) = result
+        {
             assert_eq!(violation_paths.len(), 1);
         } else {
             panic!("Expected Policy error");
@@ -1098,7 +1114,11 @@ mod tests {
 
         let result = check_no_policy_edit(&paths);
         assert!(result.is_err());
-        if let Err(crate::Error::Policy { paths: violation_paths, .. }) = result {
+        if let Err(Error::Policy {
+            paths: violation_paths,
+            ..
+        }) = result
+        {
             assert_eq!(violation_paths.len(), 2);
         } else {
             panic!("Expected Policy error");
@@ -1114,7 +1134,11 @@ mod tests {
 
         let result = check_no_policy_edit(&paths);
         assert!(result.is_err());
-        if let Err(crate::Error::Policy { paths: violation_paths, .. }) = result {
+        if let Err(Error::Policy {
+            paths: violation_paths,
+            ..
+        }) = result
+        {
             assert_eq!(violation_paths.len(), 2);
         } else {
             panic!("Expected Policy error");
@@ -1132,7 +1156,11 @@ mod tests {
 
         let result = check_no_policy_edit(&paths);
         assert!(result.is_err());
-        if let Err(crate::Error::Policy { paths: violation_paths, .. }) = result {
+        if let Err(Error::Policy {
+            paths: violation_paths,
+            ..
+        }) = result
+        {
             assert_eq!(violation_paths.len(), 2);
             let violation_strs: Vec<_> = violation_paths
                 .iter()
@@ -1170,7 +1198,11 @@ mod tests {
 
         let result = check_no_policy_edit(&paths);
         assert!(result.is_err());
-        if let Err(crate::Error::Policy { paths: violation_paths, .. }) = result {
+        if let Err(Error::Policy {
+            paths: violation_paths,
+            ..
+        }) = result
+        {
             assert_eq!(violation_paths.len(), 2);
         } else {
             panic!("Expected Policy error");
@@ -1186,7 +1218,11 @@ mod tests {
 
         let result = check_no_policy_edit(&paths);
         assert!(result.is_err());
-        if let Err(crate::Error::Policy { paths: violation_paths, .. }) = result {
+        if let Err(Error::Policy {
+            paths: violation_paths,
+            ..
+        }) = result
+        {
             assert_eq!(violation_paths.len(), 2);
         } else {
             panic!("Expected Policy error");
