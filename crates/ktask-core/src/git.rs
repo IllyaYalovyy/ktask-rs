@@ -198,6 +198,58 @@ pub fn list_worktrees(root: &Path) -> Result<Vec<String>> {
     Ok(worktrees)
 }
 
+/// Commit all tracked changes with a given message.
+///
+/// Stages all tracked changes (modifications and deletions) and commits them with
+/// the provided message. Returns the SHA of the new commit.
+///
+/// # Arguments
+///
+/// * `worktree` - The working directory for the git repository
+/// * `message` - The commit message
+///
+/// # Errors
+///
+/// Returns `Error::Policy` if there are no tracked changes to commit.
+///
+/// # Returns
+///
+/// The SHA-1 hash of the new commit on success.
+pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {
+    // Check if there are any modifications to tracked files
+    let status = status_porcelain(worktree)?;
+    let has_tracked_changes = status.lines().any(|line| {
+        if line.len() < 3 {
+            return false;
+        }
+        let x = line.chars().next().unwrap_or(' ');
+        let y = line.chars().nth(1).unwrap_or(' ');
+        // Look for modified tracked files (not untracked)
+        // Modified tracked: ' ' + 'M'|'D'|'T'
+        // Staged: first char is 'M'|'A'|'D'|'R'|'C'|'T'
+        matches!(
+            (x, y),
+            (' ', 'M' | 'D' | 'T') | ('M' | 'A' | 'D' | 'R' | 'C' | 'T', _)
+        )
+    });
+
+    if !has_tracked_changes {
+        return Err(Error::Policy {
+            detail: "nothing staged to commit".to_string(),
+            paths: vec![],
+        });
+    }
+
+    // Stage all tracked changes (modifications and deletions)
+    git(worktree, &["add", "-u"])?;
+
+    // Commit the changes
+    git(worktree, &["commit", "-m", message])?;
+
+    // Return the new SHA
+    head_sha(worktree)
+}
+
 /// Require the worktree to be clean (no uncommitted changes).
 ///
 /// Returns `Error::Policy` if there are any modified, staged, or untracked files.
@@ -1306,6 +1358,110 @@ mod tests {
             assert!(detail.contains("modified:"));
             assert!(detail.contains("staged:"));
             assert!(detail.contains("untracked:"));
+        } else {
+            panic!("Expected Error::Policy variant");
+        }
+    }
+
+    #[test]
+    fn commit_all_stages_and_commits_changes() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create and commit initial file
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "initial content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let initial_sha = head_sha(&repo).unwrap();
+
+        // Modify the file
+        fs::write(&file_path, "modified content").ok();
+
+        // Commit the changes
+        let result = commit_all(&repo, "update file");
+        assert!(result.is_ok());
+        let new_sha = result.unwrap();
+
+        // Verify SHA is different from initial
+        assert_ne!(new_sha, initial_sha);
+
+        // Verify SHA matches current HEAD
+        let head = head_sha(&repo).unwrap();
+        assert_eq!(new_sha, head);
+
+        // Verify the SHA is 40 hex characters
+        assert_eq!(new_sha.len(), 40);
+        assert!(new_sha.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn commit_all_fails_with_nothing_staged() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create and commit a file
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        // Try to commit with nothing staged
+        let result = commit_all(&repo, "empty commit");
+        assert!(result.is_err());
+        if let Err(Error::Policy { detail, .. }) = result {
+            assert!(detail.contains("nothing") || detail.contains("staged"));
+        } else {
+            panic!("Expected Error::Policy variant");
+        }
+    }
+
+    #[test]
+    fn commit_all_refuses_empty_commit() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create and commit initial file
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "initial content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        // Modify and commit
+        fs::write(&file_path, "modified content").ok();
+        let first_commit = commit_all(&repo, "first change");
+        assert!(first_commit.is_ok());
+
+        // Try to commit again with nothing changed
+        let second_commit = commit_all(&repo, "second change");
+        assert!(second_commit.is_err(), "Should not allow empty commit");
+        if let Err(Error::Policy { detail, .. }) = second_commit {
+            assert!(detail.contains("nothing") || detail.contains("staged"));
         } else {
             panic!("Expected Error::Policy variant");
         }
