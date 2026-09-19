@@ -195,7 +195,7 @@ fn is_environment_failure(stderr: &str) -> bool {
 }
 
 /// Classification of how a task failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FailureClass {
     /// Agent execution failed.
     AgentFailure,

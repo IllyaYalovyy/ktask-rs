@@ -18,6 +18,7 @@ pub mod project;
 pub mod provider;
 pub mod queue;
 pub mod redact;
+pub mod remediate;
 pub mod state;
 pub mod task;
 
@@ -40,5 +41,6 @@ pub use provider::{
     Capabilities, Claude, Codex, Dummy, Invocation, Outcome, Provider, Usage, UsageSource,
 };
 pub use queue::next_runnable;
+pub use remediate::{Breaker, BreakerState, signature};
 pub use state::{PauseReason, Phase, TaskState};
 pub use task::{Task, TaskStatus};
