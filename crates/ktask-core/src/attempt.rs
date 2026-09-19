@@ -340,7 +340,7 @@ mod tests {
             signal: None,
             duration_ms: 5000,
             stdout: "test passed".to_string(),
-            stderr: "".to_string(),
+            stderr: String::new(),
             timed_out: false,
         };
 
@@ -436,13 +436,13 @@ mod tests {
         write_evidence(&project, &record2, "Context 2").expect("write evidence 2");
 
         // Read all attempts
-        let records = read_evidence(&project, TaskId::new(5)).expect("read evidence");
+        let retrieved_records = read_evidence(&project, TaskId::new(5)).expect("read evidence");
 
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0].id, AttemptId::new(1));
-        assert_eq!(records[1].id, AttemptId::new(2));
-        assert_eq!(records[0].exit_reason, "failed");
-        assert_eq!(records[1].exit_reason, "success");
+        assert_eq!(retrieved_records.len(), 2);
+        assert_eq!(retrieved_records[0].id, AttemptId::new(1));
+        assert_eq!(retrieved_records[1].id, AttemptId::new(2));
+        assert_eq!(retrieved_records[0].exit_reason, "failed");
+        assert_eq!(retrieved_records[1].exit_reason, "success");
     }
 
     #[test]
