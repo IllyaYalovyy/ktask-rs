@@ -12,6 +12,10 @@ pub mod dummy;
 /// Process execution with streaming output and timeout management.
 pub mod process;
 
+/// Claude CLI provider adapter.
+pub mod claude;
+
+pub use claude::Claude;
 pub use dummy::{Dummy, Scenario, Step, StepOutcome};
 pub use process::run_streaming;
 pub use usage::{Usage, UsageSource};

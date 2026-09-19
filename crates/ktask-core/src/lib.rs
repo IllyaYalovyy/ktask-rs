@@ -36,7 +36,9 @@ pub use journal::Journal;
 pub use lock::RepoLock;
 pub use paths::{config_file, state_root};
 pub use project::{Project, discover, register};
-pub use provider::{Capabilities, Invocation, Outcome, Provider, Usage, UsageSource};
+pub use provider::{
+    Capabilities, Claude, Dummy, Invocation, Outcome, Provider, Usage, UsageSource,
+};
 pub use queue::next_runnable;
 pub use state::{PauseReason, Phase, TaskState};
 pub use task::{Task, TaskStatus};
