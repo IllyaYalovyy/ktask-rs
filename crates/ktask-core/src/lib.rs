@@ -7,8 +7,10 @@ pub mod config;
 pub mod error;
 pub mod ids;
 pub mod paths;
+pub mod task;
 
 pub use config::Config;
 pub use error::{Error, Result};
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use paths::{config_file, state_root};
+pub use task::{Task, TaskStatus};
