@@ -2205,4 +2205,329 @@ mod tests {
 
         drop(journal);
     }
+
+    // Property tests for journal replay invariant
+    mod property_tests {
+        use super::*;
+        use crate::{AttemptId, FailureClass, PauseReason, Phase, Stream, state};
+        use proptest::prelude::*;
+
+        fn happy_path_sequence() -> Vec<EventKind> {
+            let attempt_id = AttemptId::new(1);
+            vec![
+                EventKind::TaskQueued {
+                    title: "Test".to_string(),
+                },
+                EventKind::PreflightStarted,
+                EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+                EventKind::AttemptStarted {
+                    attempt: attempt_id,
+                    protocol: "direct".to_string(),
+                    pid: 1234,
+                    base_sha: "abc123".to_string(),
+                },
+                EventKind::PhaseEntered {
+                    attempt: attempt_id,
+                    phase: Phase::Implement,
+                },
+                EventKind::AgentOutput {
+                    attempt: attempt_id,
+                    stream: Stream::Stdout,
+                    text: "Working...".to_string(),
+                },
+                EventKind::VerifyPassed {
+                    attempt: attempt_id,
+                },
+                EventKind::PublishStarted {
+                    attempt: attempt_id,
+                    candidate_sha: "def456".to_string(),
+                },
+                EventKind::PublishVerified {
+                    commit: "def456".to_string(),
+                    remote_sha: "def456".to_string(),
+                },
+                EventKind::TaskDone {
+                    commit: "def456".to_string(),
+                },
+            ]
+        }
+
+        fn preflight_failure_sequence() -> Vec<EventKind> {
+            vec![
+                EventKind::TaskQueued {
+                    title: "Test".to_string(),
+                },
+                EventKind::PreflightStarted,
+                EventKind::PreflightFailed {
+                    class: FailureClass::EnvironmentFailure,
+                    detail: "Missing SDK".to_string(),
+                },
+            ]
+        }
+
+        fn remediation_sequence() -> Vec<EventKind> {
+            let attempt_id = AttemptId::new(1);
+            let attempt_id_2 = AttemptId::new(2);
+            vec![
+                EventKind::TaskQueued {
+                    title: "Test".to_string(),
+                },
+                EventKind::PreflightStarted,
+                EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+                EventKind::AttemptStarted {
+                    attempt: attempt_id,
+                    protocol: "direct".to_string(),
+                    pid: 1234,
+                    base_sha: "abc123".to_string(),
+                },
+                EventKind::PhaseEntered {
+                    attempt: attempt_id,
+                    phase: Phase::Implement,
+                },
+                EventKind::VerifyFailed {
+                    attempt: attempt_id,
+                    class: FailureClass::VerificationFailure,
+                    detail: "Tests failed".to_string(),
+                },
+                EventKind::AttemptStarted {
+                    attempt: attempt_id_2,
+                    protocol: "direct".to_string(),
+                    pid: 1235,
+                    base_sha: "abc123".to_string(),
+                },
+                EventKind::PhaseEntered {
+                    attempt: attempt_id_2,
+                    phase: Phase::Implement,
+                },
+                EventKind::VerifyPassed {
+                    attempt: attempt_id_2,
+                },
+                EventKind::PublishStarted {
+                    attempt: attempt_id_2,
+                    candidate_sha: "def456".to_string(),
+                },
+                EventKind::PublishVerified {
+                    commit: "def456".to_string(),
+                    remote_sha: "def456".to_string(),
+                },
+                EventKind::TaskDone {
+                    commit: "def456".to_string(),
+                },
+            ]
+        }
+
+        fn pause_sequence() -> Vec<EventKind> {
+            vec![
+                EventKind::TaskQueued {
+                    title: "Test".to_string(),
+                },
+                EventKind::PreflightStarted,
+                EventKind::Paused {
+                    reason: PauseReason::Input,
+                },
+            ]
+        }
+
+        fn cancellation_sequence() -> Vec<EventKind> {
+            vec![
+                EventKind::TaskQueued {
+                    title: "Test".to_string(),
+                },
+                EventKind::TaskCancelled {
+                    reason: "User cancelled".to_string(),
+                },
+            ]
+        }
+
+        fn tdd_sequence() -> Vec<EventKind> {
+            let attempt_id = AttemptId::new(1);
+            vec![
+                EventKind::TaskQueued {
+                    title: "Test".to_string(),
+                },
+                EventKind::PreflightStarted,
+                EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+                EventKind::AttemptStarted {
+                    attempt: attempt_id,
+                    protocol: "tdd".to_string(),
+                    pid: 1234,
+                    base_sha: "abc123".to_string(),
+                },
+                EventKind::PhaseEntered {
+                    attempt: attempt_id,
+                    phase: Phase::Red,
+                },
+                EventKind::PhaseEntered {
+                    attempt: attempt_id,
+                    phase: Phase::Green,
+                },
+                EventKind::PhaseEntered {
+                    attempt: attempt_id,
+                    phase: Phase::Refactor,
+                },
+                EventKind::VerifyPassed {
+                    attempt: attempt_id,
+                },
+                EventKind::PublishStarted {
+                    attempt: attempt_id,
+                    candidate_sha: "def456".to_string(),
+                },
+                EventKind::PublishVerified {
+                    commit: "def456".to_string(),
+                    remote_sha: "def456".to_string(),
+                },
+                EventKind::TaskDone {
+                    commit: "def456".to_string(),
+                },
+            ]
+        }
+
+        /// Strategy for generating valid event sequences per `TaskQueued`.
+        fn valid_event_sequence_strategy() -> impl Strategy<Value = Vec<EventKind>> {
+            prop_oneof![
+                Just(happy_path_sequence()),
+                Just(preflight_failure_sequence()),
+                Just(remediation_sequence()),
+                Just(pause_sequence()),
+                Just(cancellation_sequence()),
+                Just(tdd_sequence()),
+            ]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+            #[test]
+            fn prop_journal_replay_equals_projection(events in valid_event_sequence_strategy()) {
+                let temp = TempDir::new().unwrap();
+                let journal_path = temp.path().join("journal.db");
+
+                let task_id = TaskId::new(1);
+
+                // Session 1: Append events incrementally and track final state
+                let incremental_final_state = {
+                    let mut journal = Journal::open(&journal_path).unwrap();
+
+                    // Append all events and keep track of final state by applying incrementally
+                    let mut current_state = TaskState::Queued;
+                    for event_kind in &events {
+                        journal.append(Some(task_id), event_kind).unwrap();
+                        // Apply the event to track what state we should end up in
+                        current_state = state::apply(&current_state, event_kind).unwrap();
+                    }
+
+                    // Store the state we computed
+                    journal.put_state(task_id, &current_state).unwrap();
+
+                    current_state
+                };
+
+                // Session 2: Rebuild state from events and compare
+                let rebuilt_state = {
+                    let mut journal = Journal::open(&journal_path).unwrap();
+
+                    // Rebuild from events
+                    journal.rebuild_state().unwrap();
+
+                    // Get the rebuilt state
+                    journal.get_state(task_id).unwrap().unwrap()
+                };
+
+                // The invariant: incremental application must equal replay
+                prop_assert_eq!(incremental_final_state, rebuilt_state,
+                    "Incremental state and rebuilt state must be equal");
+            }
+        }
+
+        #[test]
+        fn illegal_sequences_are_rejected() {
+            let temp = TempDir::new().unwrap();
+            let journal_path = temp.path().join("journal.db");
+
+            let task_id = TaskId::new(1);
+
+            // Test 1: Invalid transition from Queued to Verifying
+            {
+                let mut journal = Journal::open(&journal_path).unwrap();
+
+                journal
+                    .append(
+                        Some(task_id),
+                        &EventKind::TaskQueued {
+                            title: "Test".to_string(),
+                        },
+                    )
+                    .unwrap();
+
+                // Try to append an invalid event
+                journal
+                    .append(
+                        Some(task_id),
+                        &EventKind::VerifyPassed {
+                            attempt: AttemptId::new(1),
+                        },
+                    )
+                    .unwrap();
+
+                // Rebuild should fail with Corrupt error
+                let result = journal.rebuild_state();
+                assert!(
+                    result.is_err(),
+                    "rebuild_state should fail on invalid transition"
+                );
+
+                if let Err(Error::Corrupt { seq, .. }) = result {
+                    assert!(
+                        seq.is_some(),
+                        "Corrupt error should include sequence number"
+                    );
+                }
+
+                drop(journal);
+            }
+
+            // Clean up for next test
+            std::fs::remove_file(&journal_path).ok();
+
+            // Test 2: Invalid transition from Preflight to PublishVerified
+            {
+                let mut journal = Journal::open(&journal_path).unwrap();
+
+                journal
+                    .append(
+                        Some(task_id),
+                        &EventKind::TaskQueued {
+                            title: "Test".to_string(),
+                        },
+                    )
+                    .unwrap();
+
+                journal
+                    .append(Some(task_id), &EventKind::PreflightStarted)
+                    .unwrap();
+
+                // Try to skip to publishing
+                journal
+                    .append(
+                        Some(task_id),
+                        &EventKind::PublishVerified {
+                            commit: "abc123".to_string(),
+                            remote_sha: "abc123".to_string(),
+                        },
+                    )
+                    .unwrap();
+
+                // Rebuild should fail
+                let result = journal.rebuild_state();
+                assert!(result.is_err(), "Invalid sequence should fail rebuild");
+
+                drop(journal);
+            }
+        }
+    }
 }
