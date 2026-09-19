@@ -9,7 +9,7 @@ pub mod usage;
 /// Dummy provider for deterministic testing with scenario-driven outcomes.
 pub mod dummy;
 
-pub use dummy::{Scenario, Step, StepOutcome};
+pub use dummy::{Dummy, Scenario, Step, StepOutcome};
 pub use usage::{Usage, UsageSource};
 
 /// Capabilities of a provider.

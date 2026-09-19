@@ -4,8 +4,11 @@
 //! hang, limit, needs_input) loaded from TOML scenario files. It powers the scenario
 //! suite, CI, and offline development without consuming real API tokens.
 
+use crate::provider::{Capabilities, Invocation, Outcome, Provider};
+use crate::{Bus, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 /// A scenario: a list of predetermined steps with outcomes.
 ///
@@ -73,6 +76,99 @@ pub enum StepOutcome {
     Limit,
     /// The provider needs additional input (`waiting_input` state).
     NeedsInput,
+}
+
+/// A dummy provider that replays scenarios.
+///
+/// Consumes steps from a scenario in order, writing files, emitting output,
+/// and returning predetermined outcomes. Maintains state to track which step
+/// to execute next.
+#[derive(Debug)]
+pub struct Dummy {
+    scenario: Scenario,
+    next_step_index: Mutex<usize>,
+}
+
+impl Dummy {
+    /// Create a new dummy provider with the given scenario.
+    pub fn new(scenario: Scenario) -> Self {
+        Dummy {
+            scenario,
+            next_step_index: Mutex::new(0),
+        }
+    }
+}
+
+impl Provider for Dummy {
+    fn name(&self) -> &str {
+        "dummy"
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            structured_output: false,
+            model_selection: false,
+            usage_telemetry: false,
+        }
+    }
+
+    fn invoke(&self, inv: &Invocation, _bus: Option<&Bus>) -> Result<Outcome> {
+        let mut next_idx = self.next_step_index.lock().unwrap();
+
+        if *next_idx >= self.scenario.steps.len() {
+            return Err(Error::Provider {
+                provider: "dummy".to_string(),
+                detail: "ran out of steps".to_string(),
+            });
+        }
+
+        let step = &self.scenario.steps[*next_idx];
+        *next_idx += 1;
+
+        // Handle delay if specified
+        if let Some(delay_ms) = step.delay_ms {
+            if step.outcome == StepOutcome::Hang {
+                // For hang, sleep indefinitely (or until interrupted)
+                std::thread::sleep(std::time::Duration::from_secs(u64::MAX));
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            }
+        } else if step.outcome == StepOutcome::Hang {
+            // Hang with no explicit delay
+            std::thread::sleep(std::time::Duration::from_secs(u64::MAX));
+        }
+
+        // Write files if specified
+        if let Some(files) = &step.files {
+            for (path, content) in files {
+                let file_path = inv.working_dir.join(path);
+                if let Some(parent) = file_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(file_path, content)?;
+            }
+        }
+
+        // Determine exit code based on outcome
+        let exit_code = step.exit_code.unwrap_or_else(|| match step.outcome {
+            StepOutcome::Success => 0,
+            StepOutcome::Failure => 1,
+            StepOutcome::Hang => 0,
+            StepOutcome::Limit => 0,
+            StepOutcome::NeedsInput => 0,
+        });
+
+        let stdout = step.stdout.clone().unwrap_or_default();
+        let stderr = String::new();
+
+        Ok(Outcome {
+            exit_code,
+            stdout,
+            stderr,
+            usage: None,
+            session_id: None,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -199,7 +295,7 @@ mod tests {
 on_task = 1
 outcome = "unknown_outcome"
 "#;
-        let result: Result<Scenario, _> = toml::from_str(toml_str);
+        let result: std::result::Result<Scenario, _> = toml::from_str(toml_str);
         assert!(
             result.is_err(),
             "unknown outcome should fail to deserialize"
@@ -315,7 +411,7 @@ outcome = "unknown_outcome"
         for (outcome, expected_name) in &outcomes {
             // Build a full TOML document with the outcome as part of a step
             let toml_str = format!("[[steps]]\non_task = 1\noutcome = \"{expected_name}\"");
-            let parsed: Result<Scenario, _> = toml::from_str(&toml_str);
+            let parsed: std::result::Result<Scenario, _> = toml::from_str(&toml_str);
             assert!(parsed.is_ok(), "should parse outcome '{expected_name}'");
             assert_eq!(&parsed.unwrap().steps[0].outcome, outcome);
         }
@@ -361,5 +457,210 @@ outcome = "unknown_outcome"
         assert_eq!(restored.steps[0].on_attempt, None);
         assert_eq!(restored.steps[1].on_task, None);
         assert_eq!(restored.steps[1].on_attempt, Some(1));
+    }
+
+    #[test]
+    fn dummy_provider_executes_first_step() {
+        use crate::provider::Provider;
+
+        let scenario = Scenario {
+            steps: vec![Step {
+                on_task: Some(1),
+                on_attempt: None,
+                outcome: StepOutcome::Success,
+                stdout: Some("Success output".to_string()),
+                exit_code: None,
+                delay_ms: None,
+                files: None,
+            }],
+        };
+
+        let dummy = Dummy::new(scenario);
+        let inv = Invocation {
+            prompt: "test".to_string(),
+            model: None,
+            working_dir: std::path::PathBuf::from("/tmp"),
+        };
+
+        let outcome = dummy.invoke(&inv, None).expect("invoke succeeded");
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(outcome.stdout, "Success output");
+    }
+
+    #[test]
+    fn dummy_provider_runs_out_of_steps() {
+        use crate::provider::Provider;
+
+        let scenario = Scenario {
+            steps: vec![Step {
+                on_task: Some(1),
+                on_attempt: None,
+                outcome: StepOutcome::Success,
+                stdout: None,
+                exit_code: None,
+                delay_ms: None,
+                files: None,
+            }],
+        };
+
+        let dummy = Dummy::new(scenario);
+        let inv = Invocation {
+            prompt: "test".to_string(),
+            model: None,
+            working_dir: std::path::PathBuf::from("/tmp"),
+        };
+
+        // First call should succeed
+        let _ = dummy.invoke(&inv, None).expect("first invoke succeeded");
+
+        // Second call should fail
+        let err = dummy.invoke(&inv, None).expect_err("second invoke failed");
+        assert!(err.to_string().contains("ran out of steps"));
+    }
+
+    #[test]
+    fn dummy_provider_writes_files() {
+        use crate::provider::Provider;
+        use tempfile::TempDir;
+
+        let mut files = BTreeMap::new();
+        files.insert("test.txt".to_string(), "Hello".to_string());
+
+        let scenario = Scenario {
+            steps: vec![Step {
+                on_task: Some(1),
+                on_attempt: None,
+                outcome: StepOutcome::Success,
+                stdout: None,
+                exit_code: None,
+                delay_ms: None,
+                files: Some(files),
+            }],
+        };
+
+        let dummy = Dummy::new(scenario);
+        let temp_dir = TempDir::new().expect("temp dir created");
+        let inv = Invocation {
+            prompt: "test".to_string(),
+            model: None,
+            working_dir: temp_dir.path().to_path_buf(),
+        };
+
+        let _ = dummy.invoke(&inv, None).expect("invoke succeeded");
+
+        let file_path = temp_dir.path().join("test.txt");
+        assert!(file_path.exists(), "file was written");
+        let content = std::fs::read_to_string(&file_path).expect("read file");
+        assert_eq!(content, "Hello");
+    }
+
+    #[test]
+    fn dummy_provider_failure_exit_code() {
+        use crate::provider::Provider;
+
+        let scenario = Scenario {
+            steps: vec![Step {
+                on_task: Some(1),
+                on_attempt: None,
+                outcome: StepOutcome::Failure,
+                stdout: None,
+                exit_code: None,
+                delay_ms: None,
+                files: None,
+            }],
+        };
+
+        let dummy = Dummy::new(scenario);
+        let inv = Invocation {
+            prompt: "test".to_string(),
+            model: None,
+            working_dir: std::path::PathBuf::from("/tmp"),
+        };
+
+        let outcome = dummy.invoke(&inv, None).expect("invoke succeeded");
+        assert_eq!(outcome.exit_code, 1);
+    }
+
+    #[test]
+    fn dummy_provider_custom_exit_code() {
+        use crate::provider::Provider;
+
+        let scenario = Scenario {
+            steps: vec![Step {
+                on_task: Some(1),
+                on_attempt: None,
+                outcome: StepOutcome::Failure,
+                stdout: None,
+                exit_code: Some(42),
+                delay_ms: None,
+                files: None,
+            }],
+        };
+
+        let dummy = Dummy::new(scenario);
+        let inv = Invocation {
+            prompt: "test".to_string(),
+            model: None,
+            working_dir: std::path::PathBuf::from("/tmp"),
+        };
+
+        let outcome = dummy.invoke(&inv, None).expect("invoke succeeded");
+        assert_eq!(outcome.exit_code, 42);
+    }
+
+    #[test]
+    fn dummy_provider_consumes_steps_in_order() {
+        use crate::provider::Provider;
+
+        let scenario = Scenario {
+            steps: vec![
+                Step {
+                    on_task: Some(1),
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: Some("First".to_string()),
+                    exit_code: None,
+                    delay_ms: None,
+                    files: None,
+                },
+                Step {
+                    on_task: Some(2),
+                    on_attempt: None,
+                    outcome: StepOutcome::Failure,
+                    stdout: Some("Second".to_string()),
+                    exit_code: None,
+                    delay_ms: None,
+                    files: None,
+                },
+                Step {
+                    on_task: Some(3),
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: Some("Third".to_string()),
+                    exit_code: None,
+                    delay_ms: None,
+                    files: None,
+                },
+            ],
+        };
+
+        let dummy = Dummy::new(scenario);
+        let inv = Invocation {
+            prompt: "test".to_string(),
+            model: None,
+            working_dir: std::path::PathBuf::from("/tmp"),
+        };
+
+        let o1 = dummy.invoke(&inv, None).expect("first invoke succeeded");
+        assert_eq!(o1.stdout, "First");
+        assert_eq!(o1.exit_code, 0);
+
+        let o2 = dummy.invoke(&inv, None).expect("second invoke succeeded");
+        assert_eq!(o2.stdout, "Second");
+        assert_eq!(o2.exit_code, 1);
+
+        let o3 = dummy.invoke(&inv, None).expect("third invoke succeeded");
+        assert_eq!(o3.stdout, "Third");
+        assert_eq!(o3.exit_code, 0);
     }
 }
