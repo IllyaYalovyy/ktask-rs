@@ -2,6 +2,7 @@
 
 use crate::{
     AttemptId, AttemptRecord, EventSeq, FailureClass, PauseReason, Phase, Recovery, Stream, TaskId,
+    TddException,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -132,6 +133,13 @@ pub enum EventKind {
         /// The attempt record.
         record: Box<AttemptRecord>,
     },
+    /// TDD exception was used to skip the red phase.
+    TddExceptionUsed {
+        /// The exception type.
+        exception: TddException,
+        /// Reason for using the exception.
+        reason: String,
+    },
 }
 
 impl EventKind {
@@ -159,6 +167,7 @@ impl EventKind {
             EventKind::RecoveryDecision { .. } => "RecoveryDecision",
             EventKind::GateAcknowledged { .. } => "GateAcknowledged",
             EventKind::AttemptRecorded { .. } => "AttemptRecorded",
+            EventKind::TddExceptionUsed { .. } => "TddExceptionUsed",
         }
     }
 }

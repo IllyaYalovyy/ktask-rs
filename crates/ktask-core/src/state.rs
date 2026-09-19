@@ -224,7 +224,8 @@ fn from_queued(event: &crate::event::EventKind) -> Result<TaskState> {
         | EventKind::Interrupted { .. }
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
-        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::TddExceptionUsed { .. } => Err(Error::InvalidTransition {
             from: "Queued".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -262,7 +263,8 @@ fn from_preflight(event: &crate::event::EventKind) -> Result<TaskState> {
         | EventKind::Interrupted { .. }
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
-        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::TddExceptionUsed { .. } => Err(Error::InvalidTransition {
             from: "Preflight".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -306,6 +308,7 @@ fn from_running(
                 })
             }
         }
+        EventKind::TddExceptionUsed { .. } => Ok(TaskState::Running { attempt, phase }),
         EventKind::VerifyPassed {
             attempt: verify_attempt,
         } => {
@@ -408,6 +411,7 @@ fn from_remediating(
                 })
             }
         }
+        EventKind::TddExceptionUsed { .. } => Ok(TaskState::Remediating { attempt, phase }),
         EventKind::AttemptStarted {
             attempt: new_attempt,
             ..
@@ -553,7 +557,8 @@ fn from_verifying(attempt: AttemptId, event: &crate::event::EventKind) -> Result
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
-        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::TddExceptionUsed { .. } => Err(Error::InvalidTransition {
             from: format!("Verifying({attempt})"),
             event: event.discriminant().to_string(),
         }),
@@ -609,7 +614,8 @@ fn from_publishing(attempt: AttemptId, event: &crate::event::EventKind) -> Resul
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
-        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::TddExceptionUsed { .. } => Err(Error::InvalidTransition {
             from: format!("Publishing({attempt})"),
             event: event.discriminant().to_string(),
         }),
@@ -662,7 +668,8 @@ fn from_published_verified(commit: &str, event: &crate::event::EventKind) -> Res
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
-        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::TddExceptionUsed { .. } => Err(Error::InvalidTransition {
             from: "PublishedVerified".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -708,7 +715,8 @@ fn from_paused(
         | EventKind::TaskFailed { .. }
         | EventKind::Interrupted { .. }
         | EventKind::RecoveryDecision { .. }
-        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::TddExceptionUsed { .. } => Err(Error::InvalidTransition {
             from: "Paused".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -2333,5 +2341,99 @@ mod tests {
         let err_msg = err.to_string();
         assert!(err_msg.contains("task 2"));
         assert!(err_msg.contains("task 1"));
+    }
+
+    #[test]
+    fn tdd_exception_used_allowed_while_running() {
+        use crate::{TddException, event::EventKind};
+
+        let state = TaskState::Running {
+            attempt: AttemptId::new(1),
+            phase: Phase::Red,
+        };
+        let event = EventKind::TddExceptionUsed {
+            exception: TddException::Documentation,
+            reason: "This is documentation only".to_string(),
+        };
+
+        let result = apply(&state, &event);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            TaskState::Running {
+                attempt: AttemptId::new(1),
+                phase: Phase::Red,
+            }
+        );
+    }
+
+    #[test]
+    fn tdd_exception_used_allowed_while_remediating() {
+        use crate::{TddException, event::EventKind};
+
+        let state = TaskState::Remediating {
+            attempt: AttemptId::new(1),
+            phase: Phase::Red,
+        };
+        let event = EventKind::TddExceptionUsed {
+            exception: TddException::PureRefactor,
+            reason: "Pure refactoring cleanup".to_string(),
+        };
+
+        let result = apply(&state, &event);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            TaskState::Remediating {
+                attempt: AttemptId::new(1),
+                phase: Phase::Red,
+            }
+        );
+    }
+
+    #[test]
+    fn tdd_exception_used_rejected_while_queued() {
+        use crate::{TddException, event::EventKind};
+
+        let state = TaskState::Queued;
+        let event = EventKind::TddExceptionUsed {
+            exception: TddException::BuildConfig,
+            reason: "Build configuration change".to_string(),
+        };
+
+        let result = apply(&state, &event);
+        assert!(
+            result.is_err(),
+            "TddExceptionUsed should be rejected in Queued state"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Queued") && err_msg.contains("TddExceptionUsed"),
+            "Error should mention both Queued and TddExceptionUsed, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn tdd_exception_used_rejected_while_verifying() {
+        use crate::{TddException, event::EventKind};
+
+        let state = TaskState::Verifying {
+            attempt: AttemptId::new(1),
+        };
+        let event = EventKind::TddExceptionUsed {
+            exception: TddException::ExistingFailingTest,
+            reason: "Test was already failing".to_string(),
+        };
+
+        let result = apply(&state, &event);
+        assert!(
+            result.is_err(),
+            "TddExceptionUsed should be rejected in Verifying state"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Verifying") && err_msg.contains("TddExceptionUsed"),
+            "Error should mention both Verifying and TddExceptionUsed, got: {err_msg}"
+        );
     }
 }

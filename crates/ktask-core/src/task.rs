@@ -114,6 +114,31 @@ impl Task {
         }
         None
     }
+
+    /// Extract the TDD exception from the task body, if specified.
+    ///
+    /// Returns `None` if no exception is specified in the task.
+    /// A task using an exception must declare it in a `TddException:` line.
+    #[must_use]
+    pub fn tdd_exception(&self) -> Option<crate::TddException> {
+        for line in self.body.lines() {
+            let trimmed = line.trim();
+            let lower = trimmed.to_lowercase();
+            if lower.starts_with("tddexception:")
+                && let Some(colon_pos) = trimmed.find(':')
+            {
+                let value = trimmed[colon_pos + 1..].trim().to_lowercase();
+                match value.as_str() {
+                    "documentation" => return Some(crate::TddException::Documentation),
+                    "purerefactor" => return Some(crate::TddException::PureRefactor),
+                    "buildconfig" => return Some(crate::TddException::BuildConfig),
+                    "existingfailingtest" => return Some(crate::TddException::ExistingFailingTest),
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
 }
 
 /// Parse a plan document into tasks.
@@ -1032,6 +1057,116 @@ Protocol: direct
         let tasks = parse_plan(plan).expect("parse");
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].protocol_name(), Some("direct".to_string()));
+    }
+
+    #[test]
+    fn task_tdd_exception_documentation() {
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Test task\n\nTddException: Documentation".to_string(),
+            outcome: "outcome".to_string(),
+            done_when: "done".to_string(),
+            verify: "verify".to_string(),
+            refs: "refs".to_string(),
+        };
+        assert_eq!(
+            task.tdd_exception(),
+            Some(crate::TddException::Documentation)
+        );
+    }
+
+    #[test]
+    fn task_tdd_exception_pure_refactor() {
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Test task\n\nTddException: PureRefactor".to_string(),
+            outcome: "outcome".to_string(),
+            done_when: "done".to_string(),
+            verify: "verify".to_string(),
+            refs: "refs".to_string(),
+        };
+        assert_eq!(
+            task.tdd_exception(),
+            Some(crate::TddException::PureRefactor)
+        );
+    }
+
+    #[test]
+    fn task_tdd_exception_build_config() {
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Test task\n\nTddException: BuildConfig".to_string(),
+            outcome: "outcome".to_string(),
+            done_when: "done".to_string(),
+            verify: "verify".to_string(),
+            refs: "refs".to_string(),
+        };
+        assert_eq!(task.tdd_exception(), Some(crate::TddException::BuildConfig));
+    }
+
+    #[test]
+    fn task_tdd_exception_existing_failing_test() {
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Test task\n\nTddException: ExistingFailingTest".to_string(),
+            outcome: "outcome".to_string(),
+            done_when: "done".to_string(),
+            verify: "verify".to_string(),
+            refs: "refs".to_string(),
+        };
+        assert_eq!(
+            task.tdd_exception(),
+            Some(crate::TddException::ExistingFailingTest)
+        );
+    }
+
+    #[test]
+    fn task_tdd_exception_case_insensitive() {
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Test task\n\nTddException: DOCUMENTATION".to_string(),
+            outcome: "outcome".to_string(),
+            done_when: "done".to_string(),
+            verify: "verify".to_string(),
+            refs: "refs".to_string(),
+        };
+        assert_eq!(
+            task.tdd_exception(),
+            Some(crate::TddException::Documentation)
+        );
+    }
+
+    #[test]
+    fn task_tdd_exception_not_specified() {
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Test task without exception".to_string(),
+            outcome: "outcome".to_string(),
+            done_when: "done".to_string(),
+            verify: "verify".to_string(),
+            refs: "refs".to_string(),
+        };
+        assert_eq!(task.tdd_exception(), None);
+    }
+
+    #[test]
+    fn task_tdd_exception_invalid_value() {
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Test task\n\nTddException: InvalidValue".to_string(),
+            outcome: "outcome".to_string(),
+            done_when: "done".to_string(),
+            verify: "verify".to_string(),
+            refs: "refs".to_string(),
+        };
+        assert_eq!(task.tdd_exception(), None);
     }
 }
 
