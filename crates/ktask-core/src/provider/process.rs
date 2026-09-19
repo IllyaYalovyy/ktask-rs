@@ -1539,6 +1539,12 @@ ps -o pgid= -p $$ | tr -d ' ' | sed 's/^/own_group=/'
              after {waited:?}"
         );
         assert!(
+            waited < TERM_GRACE + POST_KILL_GRACE,
+            "the kill is aimed at the group once its own grace is spent, and the answer \
+             is not held back for the second grace that exists to let a killed session's \
+             words arrive: {waited:?} for a group whose own grace ended at {TERM_GRACE:?}"
+        );
+        assert!(
             waited < ROOMY_HARD,
             "the escalation is bounded, so a session that ignores being asked cannot hold \
              the run open: {waited:?}"
@@ -1624,6 +1630,13 @@ ps -o pgid= -p $$ | tr -d ' ' | sed 's/^/own_group=/'
         let detail = refusal(&error);
 
         assert!(
+            detail.contains("past the 4194304 bytes"),
+            "the bound is named as the four megabytes this file documents it to be, \
+             not as some number echoed back from wherever the check came from: a \
+             reader comparing an answer with a CLI's own argument limit needs the \
+             bound itself on the page: {detail}"
+        );
+        assert!(
             detail.contains(&MAX_PROMPT_BYTES.to_string())
                 && detail.contains(&(MAX_PROMPT_BYTES + 1).to_string()),
             "both numbers are named, so the reader can see how far over the bound it was: \
@@ -1707,6 +1720,182 @@ ps -o pgid= -p $$ | tr -d ' ' | sed 's/^/own_group=/'
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "the refusal is immediate: nothing was spawned, so nothing is waited for"
+        );
+    }
+
+    #[test]
+    fn a_prompt_exactly_at_the_bound_is_handed_over_rather_than_refused() {
+        let outcome = run(&mut session("wc -c"), Some(&"x".repeat(MAX_PROMPT_BYTES))).expect(
+            "a prompt of exactly the bound is inside it, and a session that drains \
+                     its stdin can be handed all of it",
+        );
+
+        assert_eq!(
+            outcome.stdout.trim(),
+            MAX_PROMPT_BYTES.to_string(),
+            "every byte arrived, so the bound was written to and not merely compared with"
+        );
+    }
+
+    #[test]
+    fn a_session_that_read_its_prompt_is_not_answered_as_though_it_refused_it() {
+        let error = run_streaming(
+            &mut session("read -r line; printf 'got %s\\n' \"$line\"; exec sleep 60"),
+            Some("a prompt it took in\n"),
+            Duration::from_millis(300),
+            ROOMY_HARD,
+            None,
+        )
+        .expect_err("it read its prompt and then went silent, which is the idle clock's business");
+        let detail = refusal(&error);
+
+        assert_eq!(
+            detail.matches("prompt").count(),
+            0,
+            "a session that stopped after \
+             taking its prompt is reported for the silence it fell into and for nothing \
+             else; a run that claims a prompt refusal it never observed teaches a reader \
+             to distrust the claim: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_session_handed_a_prompt_it_never_read_says_so_in_the_answer_that_stops_it() {
+        // 256 KiB cannot fit a pipe's buffer, so the writer is still blocked in its
+        // write when the session closes the read end: the refusal is certain rather
+        // than a race between a small write and the child's first instruction.
+        let prompt = "x".repeat(256 * 1024);
+        let error = run_streaming(
+            &mut session("exec 0<&-; exec sleep 60"),
+            Some(&prompt),
+            Duration::from_millis(300),
+            ROOMY_HARD,
+            None,
+        )
+        .expect_err("it shut its prompt unread and then said nothing at all");
+        let detail = refusal(&error);
+
+        assert!(
+            detail.contains("the prompt it was given was refused"),
+            "a CLI that takes its prompt as an argument is the common reason a session \
+             looks silent, and an answer about that silence that omits it sends the reader \
+             looking for a hang that is not there: {detail}"
+        );
+    }
+
+    #[test]
+    fn the_capture_bound_is_per_stream_so_one_flood_cannot_starve_the_other() {
+        let error = run_streaming(
+            // `head` takes the flood out of the pipe it is given and writes it to
+            // the session's stderr, so the flood has an end: 200000 lines of eleven
+            // bytes each is 2.2 MB, twice the bound, and the session is silent from
+            // then on. An endless flood would hold the idle clock open forever and
+            // the ceiling would be the thing that answered.
+            &mut session("yes 0123456789 | head -n 200000 1>&2; exec sleep 60"),
+            None,
+            Duration::from_secs(2),
+            ROOMY_HARD,
+            None,
+        )
+        .expect_err("a session that flooded its stderr and then went silent is a hang");
+        let detail = refusal(&error);
+
+        assert!(
+            detail.contains("read 0 bytes of stdout and 1048575 bytes of stderr"),
+            "the bound belongs to one stream at a time: stdout was never written to while \
+             stderr filled a megabyte of its own, and what fell off is counted across both \
+             of them: {detail}"
+        );
+        assert!(
+            detail.contains("were dropped"),
+            "and the answer still refuses to call the capture whole: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_stranger_that_left_the_group_cannot_hold_a_timed_out_session_open() {
+        // `setsid` puts the sleep in a session of its own, which is how a daemon
+        // detaches. It is out of reach of a group signal and it keeps the stdout pipe
+        // it inherited open for twelve seconds, so the only thing that can end this
+        // run is what the group itself reports. The bound below is well inside those
+        // twelve seconds and well outside the grace a group of its own is given.
+        let started = Instant::now();
+        let error = run_streaming(
+            &mut session("setsid sleep 12 & printf 'early\\n'; exec sleep 60"),
+            None,
+            Duration::from_millis(300),
+            ROOMY_HARD,
+            None,
+        )
+        .expect_err("the session printed once and then slept past its idle budget");
+        let detail = refusal(&error);
+        let waited = started.elapsed();
+
+        assert!(
+            detail.contains("read 6 bytes of stdout"),
+            "what the session printed before it was stopped is reported even though a \
+             stranger is still holding the pipe open. A piece of output only becomes a \
+             chunk at its newline, so this one is six bytes with it: {detail}"
+        );
+        assert!(
+            waited < Duration::from_secs(5),
+            "the run stopped listening the moment its own group was empty, rather than \
+             waiting on a pipe held by a process it does not own: waited {waited:?} for a \
+             session stopped 300ms in"
+        );
+    }
+
+    #[test]
+    fn a_session_that_exited_and_left_a_helper_deaf_to_sigterm_is_still_swept() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the pid files");
+        let own_file = scratch.path().join("own");
+        let helper_file = scratch.path().join("helper");
+        let helper_script = scratch.path().join("helper.sh");
+        std::fs::write(
+            &helper_script,
+            format!(
+                "trap '' TERM\necho $$ > '{}'\nexec sleep 90\n",
+                helper_file.display()
+            ),
+        )
+        .expect("the helper script is writable");
+        // The hard case for the last sweep, and the easy one to get wrong: the helper
+        // keeps the group alive after the session's own process is gone, it deafens
+        // itself to SIGTERM, and it holds none of the pipes — so both readers reach
+        // their end at once, nothing is left to wait for but the leader, and the
+        // leader reports its status long before a terminate grace would be spent.
+        let script = format!(
+            "echo $$ > '{own}'; sh '{helper}' </dev/null >/dev/null 2>&1 & exec sleep 90 >/dev/null 2>&1",
+            own = own_file.display(),
+            helper = helper_script.display(),
+        );
+
+        let error = run_streaming(
+            &mut session(&script),
+            None,
+            ROOMY_IDLE,
+            Duration::from_millis(400),
+            None,
+        )
+        .expect_err("the session's own process outlived its ceiling");
+        let detail = refusal(&error);
+        assert!(
+            detail.contains("hard timeout") && detail.contains("killed with SIGKILL"),
+            "the ceiling stopped it, and the sweep was the thing that stopped the group: \
+             {detail}"
+        );
+
+        let group = pid_written_to(&own_file);
+        let helper = pid_written_to(&helper_file);
+        assert!(
+            wait_until_group_is_empty(group, Duration::from_secs(5)).is_empty(),
+            "the helper outlived the answer about the session that started it, and {group} \
+             is still the group it holds open"
+        );
+        assert!(
+            !is_running(helper),
+            "pid {helper} ignored SIGTERM, its parent was already gone, and nothing swept \
+             it: whatever file or port it holds is held against the next session"
         );
     }
 }
