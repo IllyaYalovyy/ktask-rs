@@ -42,6 +42,27 @@ pub struct Gate {
     pub env: BTreeMap<String, String>,
 }
 
+/// The result of executing a gate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GateResult {
+    /// The gate kind that was executed.
+    pub kind: GateKind,
+    /// Whether the gate passed (exit code 0 and not timed out).
+    pub passed: bool,
+    /// Exit code from the command, if available.
+    pub exit_code: Option<i32>,
+    /// Signal number that terminated the process, if applicable.
+    pub signal: Option<i32>,
+    /// Duration of execution in milliseconds.
+    pub duration_ms: u64,
+    /// Standard output from the gate execution.
+    pub stdout: String,
+    /// Standard error from the gate execution.
+    pub stderr: String,
+    /// Whether the gate execution timed out.
+    pub timed_out: bool,
+}
+
 /// A verification profile containing gates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Profile {
@@ -370,5 +391,120 @@ env = {}
         config.verify_command = Some(vec!["cargo".to_string(), "test".to_string()]);
         let profile = profile_from(&config).expect("profile_from should succeed");
         assert!(profile.validate().is_ok());
+    }
+
+    #[test]
+    fn gate_result_passed_roundtrips_through_json() {
+        let result = GateResult {
+            kind: GateKind::Verify,
+            passed: true,
+            exit_code: Some(0),
+            signal: None,
+            duration_ms: 5000,
+            stdout: "test output".to_string(),
+            stderr: String::new(),
+            timed_out: false,
+        };
+
+        let json = serde_json::to_string(&result).expect("serialize");
+        let deserialized: GateResult = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(result, deserialized);
+    }
+
+    #[test]
+    fn gate_result_failed_with_exit_code_roundtrips_through_json() {
+        let result = GateResult {
+            kind: GateKind::Verify,
+            passed: false,
+            exit_code: Some(1),
+            signal: None,
+            duration_ms: 3000,
+            stdout: "some output".to_string(),
+            stderr: "error output".to_string(),
+            timed_out: false,
+        };
+
+        let json = serde_json::to_string(&result).expect("serialize");
+        let deserialized: GateResult = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(result, deserialized);
+    }
+
+    #[test]
+    fn gate_result_timed_out_is_distinguishable_from_exit_code() {
+        let timed_out = GateResult {
+            kind: GateKind::Verify,
+            passed: false,
+            exit_code: None,
+            signal: None,
+            duration_ms: 60000,
+            stdout: "partial output".to_string(),
+            stderr: String::new(),
+            timed_out: true,
+        };
+
+        let exit_code_failure = GateResult {
+            kind: GateKind::Verify,
+            passed: false,
+            exit_code: Some(1),
+            signal: None,
+            duration_ms: 1000,
+            stdout: "output".to_string(),
+            stderr: String::new(),
+            timed_out: false,
+        };
+
+        assert_ne!(timed_out, exit_code_failure);
+        assert!(timed_out.timed_out);
+        assert!(!exit_code_failure.timed_out);
+    }
+
+    #[test]
+    fn gate_result_with_signal_roundtrips_through_json() {
+        let result = GateResult {
+            kind: GateKind::Lint,
+            passed: false,
+            exit_code: None,
+            signal: Some(9),
+            duration_ms: 2500,
+            stdout: String::new(),
+            stderr: "killed".to_string(),
+            timed_out: false,
+        };
+
+        let json = serde_json::to_string(&result).expect("serialize");
+        let deserialized: GateResult = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(result, deserialized);
+    }
+
+    #[test]
+    fn gate_result_with_all_gate_kinds() {
+        let kinds = [
+            GateKind::Baseline,
+            GateKind::Targeted,
+            GateKind::Verify,
+            GateKind::Lint,
+            GateKind::Format,
+            GateKind::Build,
+            GateKind::Privacy,
+            GateKind::Flake,
+        ];
+
+        for kind in &kinds {
+            let result = GateResult {
+                kind: *kind,
+                passed: true,
+                exit_code: Some(0),
+                signal: None,
+                duration_ms: 1000,
+                stdout: "output".to_string(),
+                stderr: String::new(),
+                timed_out: false,
+            };
+
+            let json = serde_json::to_string(&result).expect("serialize");
+            let deserialized: GateResult = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(result, deserialized);
+            assert_eq!(deserialized.kind, *kind);
+        }
     }
 }
