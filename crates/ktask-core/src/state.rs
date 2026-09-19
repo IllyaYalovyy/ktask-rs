@@ -2,8 +2,9 @@
 
 use crate::classify::FailureClass;
 use crate::error::{Error, Result};
-use crate::ids::AttemptId;
+use crate::ids::{AttemptId, TaskId};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use time::OffsetDateTime;
 
 /// Lifecycle state of a task.
@@ -134,6 +135,30 @@ pub fn apply(state: &TaskState, event: &crate::event::EventKind) -> Result<TaskS
             from: state.name().to_string(),
             event: crate::event::EventKind::discriminant(event).to_string(),
         }),
+    }
+}
+
+/// Check that at most one task is in a non-paused active state.
+///
+/// A non-paused active state is any state that is neither terminal nor paused.
+///
+/// # Errors
+///
+/// Returns `Error::Policy` if more than one task is in a non-paused active state.
+pub fn check_one_active(states: &BTreeMap<TaskId, TaskState>) -> Result<()> {
+    let active_tasks: Vec<TaskId> = states
+        .iter()
+        .filter(|(_, state)| !state.is_terminal() && !state.is_paused())
+        .map(|(id, _)| *id)
+        .collect();
+
+    if let [first, second, ..] = active_tasks.as_slice() {
+        Err(Error::Policy {
+            detail: format!("multiple tasks are active: task {first} and task {second}"),
+            paths: vec![],
+        })
+    } else {
+        Ok(())
     }
 }
 
@@ -1960,5 +1985,66 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn check_one_active_rejects_two_active_tasks() {
+        let mut states = BTreeMap::new();
+        states.insert(TaskId::new(1), TaskState::Queued);
+        states.insert(TaskId::new(2), TaskState::Preflight);
+
+        let result = check_one_active(&states);
+        assert!(result.is_err(), "should reject two active tasks");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("multiple tasks are active")
+        );
+    }
+
+    #[test]
+    fn check_one_active_allows_one_active_and_several_paused() {
+        let mut states = BTreeMap::new();
+        states.insert(
+            TaskId::new(1),
+            TaskState::Running {
+                attempt: AttemptId::new(1),
+                phase: Phase::Implement,
+            },
+        );
+        states.insert(
+            TaskId::new(2),
+            TaskState::Paused {
+                reason: PauseReason::Input,
+                resume_to: Box::new(TaskState::Queued),
+            },
+        );
+        states.insert(
+            TaskId::new(3),
+            TaskState::Paused {
+                reason: PauseReason::HumanGate,
+                resume_to: Box::new(TaskState::Preflight),
+            },
+        );
+
+        let result = check_one_active(&states);
+        assert!(result.is_ok(), "should allow one active and several paused");
+    }
+
+    #[test]
+    fn check_one_active_allows_zero_active_tasks() {
+        let mut states = BTreeMap::new();
+        states.insert(TaskId::new(1), TaskState::Done);
+        states.insert(
+            TaskId::new(2),
+            TaskState::Paused {
+                reason: PauseReason::Input,
+                resume_to: Box::new(TaskState::Queued),
+            },
+        );
+
+        let result = check_one_active(&states);
+        assert!(result.is_ok(), "should allow zero active tasks");
     }
 }
