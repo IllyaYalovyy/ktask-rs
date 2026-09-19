@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 ///
 /// Spawns the command in its own process group, optionally writing stdin,
 /// and reads stdout/stderr on separate threads. Implements two timeouts:
-/// - hard_timeout: absolute time limit from spawn
-/// - idle_timeout: resets on every output chunk arrival
+/// - `hard_timeout`: absolute time limit from spawn
+/// - `idle_timeout`: resets on every output chunk arrival
 ///
 /// Kills the entire process group on timeout and returns the collected output.
 ///
@@ -66,10 +66,8 @@ pub fn run_streaming(
     })?;
 
     // Write stdin if provided
-    if let Some(data) = stdin_data {
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(data.as_bytes());
-        }
+    if let Some(input) = stdin_data && let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(input.as_bytes());
     }
 
     // Extract stdout and stderr pipes
@@ -83,66 +81,22 @@ pub fn run_streaming(
         detail: "Could not open stderr pipe".to_string(),
     })?;
 
-    // Shared buffers for output
+    // Shared buffers and timeout tracking
     let stdout_buf = Arc::new(Mutex::new(String::new()));
     let stderr_buf = Arc::new(Mutex::new(String::new()));
-
-    // Track last output time for idle timeout
     let last_output = Arc::new(Mutex::new(Instant::now()));
 
-    // Reader thread for stdout
-    let stdout_buf_clone = Arc::clone(&stdout_buf);
-    let last_output_clone = Arc::clone(&last_output);
-    let stdout_handle = thread::spawn(move || {
-        use std::io::Read;
-        let mut reader = stdout_pipe;
-        let mut buf = [0; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if let Some(slice) = buf.get(..n) {
-                        if let Ok(s) = std::str::from_utf8(slice) {
-                            if let Ok(mut output) = stdout_buf_clone.lock() {
-                                output.push_str(s);
-                            }
-                            // Reset idle timeout on output
-                            if let Ok(mut last) = last_output_clone.lock() {
-                                *last = Instant::now();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    });
-
-    // Reader thread for stderr
-    let stderr_buf_clone = Arc::clone(&stderr_buf);
-    let last_output_clone = Arc::clone(&last_output);
-    let stderr_handle = thread::spawn(move || {
-        use std::io::Read;
-        let mut reader = stderr_pipe;
-        let mut buf = [0; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if let Some(slice) = buf.get(..n) {
-                        if let Ok(s) = std::str::from_utf8(slice) {
-                            if let Ok(mut output) = stderr_buf_clone.lock() {
-                                output.push_str(s);
-                            }
-                            // Reset idle timeout on output
-                            if let Ok(mut last) = last_output_clone.lock() {
-                                *last = Instant::now();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    });
+    // Spawn reader threads
+    let stdout_handle = spawn_reader_thread(
+        Box::new(stdout_pipe),
+        Arc::clone(&stdout_buf),
+        Arc::clone(&last_output),
+    );
+    let stderr_handle = spawn_reader_thread(
+        Box::new(stderr_pipe),
+        Arc::clone(&stderr_buf),
+        Arc::clone(&last_output),
+    );
 
     // Store child PID for process group killing
     let child_pid = child.id();
@@ -158,11 +112,11 @@ pub fn run_streaming(
                 break;
             }
 
-            if let Ok(last) = last_output_clone.lock() {
-                if last.elapsed() >= idle_timeout {
-                    let _ = tx_timeout.send(());
-                    break;
-                }
+            if let Ok(last) = last_output_clone.lock()
+                && last.elapsed() >= idle_timeout
+            {
+                let _ = tx_timeout.send(());
+                break;
             }
 
             thread::sleep(Duration::from_millis(100));
@@ -227,9 +181,36 @@ pub fn run_streaming(
     })
 }
 
+/// Spawn a reader thread for a pipe, updating shared buffers and timeout on output.
+fn spawn_reader_thread(
+    pipe: Box<dyn std::io::Read + Send>,
+    buf: Arc<Mutex<String>>,
+    last_output: Arc<Mutex<Instant>>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        use std::io::Read;
+        let mut reader = pipe;
+        let mut raw_buf = [0; 4096];
+        loop {
+            match reader.read(&mut raw_buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if let Some(slice) = raw_buf.get(..n) && let Ok(s) = std::str::from_utf8(slice)
+                    {
+                        if let Ok(mut output) = buf.lock() {
+                            output.push_str(s);
+                        }
+                        if let Ok(mut last) = last_output.lock() {
+                            *last = Instant::now();
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
 /// Kill an entire process group.
-///
-/// Sends SIGTERM followed by SIGKILL to ensure the process group is terminated.
 fn kill_process_group(child_pid: u32) {
     let pgid = Pid::from_raw(i32::try_from(child_pid).unwrap_or(1));
     let _ = kill(pgid, Signal::SIGTERM);
