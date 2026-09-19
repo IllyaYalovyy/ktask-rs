@@ -610,6 +610,26 @@ outcome = "explode"
     }
 
     #[test]
+    fn a_refusal_names_the_attempt_a_step_was_answered_by() {
+        let error = Scenario::from_toml(r#"steps = [{ on_attempt = 3, outcome = "explode" }]"#)
+            .expect_err("an attempt-cued step is refused as firmly as a task-cued one");
+        let Error::Config { key, detail } = &error else {
+            panic!("a scenario that cannot be read is a config error, not {error}");
+        };
+        assert_eq!(key, "steps[0].outcome", "{detail}");
+        assert!(
+            detail.contains("attempt 3"),
+            "the refusal says which attempt it refused, so an operator reads the \
+             number they wrote rather than counting array elements: {detail}"
+        );
+        assert!(
+            !detail.contains("task "),
+            "a step answered by an attempt is not reported as one answered by a \
+             task, which would point at a session that never existed: {detail}"
+        );
+    }
+
+    #[test]
     fn a_step_that_declares_no_cue_is_refused_naming_its_position() {
         let document = r#"steps = [{ outcome = "success" }]"#;
         let error = Scenario::from_toml(document)
