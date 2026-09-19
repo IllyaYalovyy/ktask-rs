@@ -155,7 +155,7 @@ pub enum EventKind {
         /// Reason for using the exception.
         reason: String,
     },
-    /// Decision request raised from a NEEDS_INPUT report.
+    /// Decision request raised from a `NEEDS_INPUT` report.
     DecisionRaised {
         /// The parsed decision request.
         request: DecisionRequest,

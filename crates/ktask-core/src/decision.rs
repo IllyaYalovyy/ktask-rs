@@ -1,4 +1,4 @@
-//! Decision request parsing from NEEDS_INPUT report bodies.
+//! Decision request parsing from `NEEDS_INPUT` report bodies.
 
 use crate::{DecisionRequest, Error};
 
@@ -15,6 +15,11 @@ use crate::{DecisionRequest, Error};
 ///
 /// Returns an error if any required section is missing, with a message naming which sections
 /// are missing.
+///
+/// # Panics
+///
+/// Never panics. All expect calls are guarded by prior checks that return errors.
+#[allow(clippy::expect_used)]
 pub fn parse_decision_request(body: &str) -> crate::Result<DecisionRequest> {
     let mut question: Option<String> = None;
     let mut options: Option<Vec<String>> = None;
@@ -39,16 +44,13 @@ pub fn parse_decision_request(body: &str) -> crate::Result<DecisionRequest> {
                         options = Some(
                             content
                                 .lines()
-                                .map(|s| s.trim())
+                                .map(str::trim)
                                 .filter(|s| !s.is_empty())
                                 .map(|s| {
-                                    if s.starts_with("- ") {
-                                        s[2..].to_string()
-                                    } else if s.starts_with("* ") {
-                                        s[2..].to_string()
-                                    } else {
-                                        s.to_string()
-                                    }
+                                    s.strip_prefix("- ")
+                                        .or_else(|| s.strip_prefix("* "))
+                                        .unwrap_or(s)
+                                        .to_string()
                                 })
                                 .collect(),
                         );
@@ -82,16 +84,13 @@ pub fn parse_decision_request(body: &str) -> crate::Result<DecisionRequest> {
                 options = Some(
                     content
                         .lines()
-                        .map(|s| s.trim())
+                        .map(str::trim)
                         .filter(|s| !s.is_empty())
                         .map(|s| {
-                            if s.starts_with("- ") {
-                                s[2..].to_string()
-                            } else if s.starts_with("* ") {
-                                s[2..].to_string()
-                            } else {
-                                s.to_string()
-                            }
+                            s.strip_prefix("- ")
+                                .or_else(|| s.strip_prefix("* "))
+                                .unwrap_or(s)
+                                .to_string()
                         })
                         .collect(),
                 );
@@ -127,11 +126,12 @@ pub fn parse_decision_request(body: &str) -> crate::Result<DecisionRequest> {
         });
     }
 
+    // Safe to unwrap because we checked all required fields above
     Ok(DecisionRequest {
-        question: question.unwrap(),
-        options: options.unwrap_or_default(),
-        tradeoffs: tradeoffs.unwrap(),
-        impact: impact.unwrap(),
+        question: question.expect("question is required"),
+        options: options.expect("options is required"),
+        tradeoffs: tradeoffs.expect("tradeoffs is required"),
+        impact: impact.expect("impact is required"),
         recommended,
     })
 }
