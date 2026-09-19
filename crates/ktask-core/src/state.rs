@@ -225,7 +225,8 @@ fn from_queued(event: &crate::event::EventKind) -> Result<TaskState> {
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
-        | EventKind::TddExceptionUsed { .. } => Err(Error::InvalidTransition {
+        | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. } => Err(Error::InvalidTransition {
             from: "Queued".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -264,7 +265,8 @@ fn from_preflight(event: &crate::event::EventKind) -> Result<TaskState> {
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
-        | EventKind::TddExceptionUsed { .. } => Err(Error::InvalidTransition {
+        | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. } => Err(Error::InvalidTransition {
             from: "Preflight".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -346,6 +348,10 @@ fn from_running(
         } => Ok(TaskState::Failed {
             class: *fail_class,
             detail: fail_detail.clone(),
+        }),
+        EventKind::DecisionRaised { .. } => Ok(TaskState::Paused {
+            reason: PauseReason::Input,
+            resume_to: Box::new(TaskState::Running { attempt, phase }),
         }),
         EventKind::Paused { reason } => Ok(TaskState::Paused {
             reason: reason.clone(),
@@ -466,6 +472,10 @@ fn from_remediating(
             class: *fail_class,
             detail: fail_detail.clone(),
         }),
+        EventKind::DecisionRaised { .. } => Ok(TaskState::Paused {
+            reason: PauseReason::Input,
+            resume_to: Box::new(TaskState::Remediating { attempt, phase }),
+        }),
         EventKind::Paused { reason } => Ok(TaskState::Paused {
             reason: reason.clone(),
             resume_to: Box::new(TaskState::Remediating { attempt, phase }),
@@ -535,6 +545,10 @@ fn from_verifying(attempt: AttemptId, event: &crate::event::EventKind) -> Result
             class: *fail_class,
             detail: fail_detail.clone(),
         }),
+        EventKind::DecisionRaised { .. } => Ok(TaskState::Paused {
+            reason: PauseReason::Input,
+            resume_to: Box::new(TaskState::Verifying { attempt }),
+        }),
         EventKind::Paused { reason } => Ok(TaskState::Paused {
             reason: reason.clone(),
             resume_to: Box::new(TaskState::Verifying { attempt }),
@@ -591,6 +605,10 @@ fn from_publishing(attempt: AttemptId, event: &crate::event::EventKind) -> Resul
         } => Ok(TaskState::Failed {
             class: *fail_class,
             detail: fail_detail.clone(),
+        }),
+        EventKind::DecisionRaised { .. } => Ok(TaskState::Paused {
+            reason: PauseReason::Input,
+            resume_to: Box::new(TaskState::Publishing { attempt }),
         }),
         EventKind::Paused { reason } => Ok(TaskState::Paused {
             reason: reason.clone(),
@@ -669,7 +687,8 @@ fn from_published_verified(commit: &str, event: &crate::event::EventKind) -> Res
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
-        | EventKind::TddExceptionUsed { .. } => Err(Error::InvalidTransition {
+        | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. } => Err(Error::InvalidTransition {
             from: "PublishedVerified".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -716,7 +735,8 @@ fn from_paused(
         | EventKind::Interrupted { .. }
         | EventKind::RecoveryDecision { .. }
         | EventKind::AttemptRecorded { .. }
-        | EventKind::TddExceptionUsed { .. } => Err(Error::InvalidTransition {
+        | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. } => Err(Error::InvalidTransition {
             from: "Paused".to_string(),
             event: event.discriminant().to_string(),
         }),
