@@ -428,11 +428,7 @@ pub fn run_completion_set(
     _base_sha: &str,
     _bus: Option<&Bus>,
 ) -> Result<Vec<GateResult>> {
-    let mandatory_gates = [
-        GateKind::Format,
-        GateKind::Lint,
-        GateKind::Build,
-    ];
+    let mandatory_gates = [GateKind::Format, GateKind::Lint, GateKind::Build];
     let verify_gate = GateKind::Verify;
     let optional_gates = [GateKind::Privacy];
 
@@ -1229,7 +1225,11 @@ test result: ok. 306 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fi
     fn run_completion_set_stops_at_first_failure_before_verify() {
         let mut config = Config::default();
         config.format_command = Some(vec!["echo".to_string(), "format".to_string()]);
-        config.lint_command = Some(vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()]);
+        config.lint_command = Some(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "exit 1".to_string(),
+        ]);
         config.build_command = Some(vec!["echo".to_string(), "build".to_string()]);
         config.verify_command = Some(vec!["echo".to_string(), "verify".to_string()]);
         config.privacy_command = Some(vec!["echo".to_string(), "privacy".to_string()]);
@@ -1250,7 +1250,11 @@ test result: ok. 306 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fi
     #[test]
     fn run_completion_set_runs_verify_even_if_earlier_gates_fail() {
         let mut config = Config::default();
-        config.format_command = Some(vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()]);
+        config.format_command = Some(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "exit 1".to_string(),
+        ]);
         config.lint_command = Some(vec!["echo".to_string(), "lint".to_string()]);
         config.build_command = Some(vec!["echo".to_string(), "build".to_string()]);
         config.verify_command = Some(vec!["echo".to_string(), "verify".to_string()]);
