@@ -2,6 +2,7 @@
 
 use crate::gate::GateKind;
 use crate::state::Phase;
+use crate::{Config, Error, Result, Task};
 use serde::{Deserialize, Serialize};
 
 /// Write scope for a phase, determining what the agent can modify.
@@ -137,6 +138,35 @@ impl Protocol {
                 second_last.phase == Phase::Verify && last.phase == Phase::Publish
             }
             _ => false,
+        }
+    }
+
+    /// Select a protocol for a task based on task-specified, configured, or default protocol.
+    ///
+    /// The protocol is chosen in this order:
+    /// 1. If the task specifies a `**Protocol:**` section, use that (must be "direct" or "tdd")
+    /// 2. If config has a `default_protocol`, use that (must be "direct" or "tdd")
+    /// 3. Otherwise default to "direct"
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the resolved protocol name is not "direct" or "tdd".
+    pub fn for_task(task: &Task, config: &Config) -> Result<Protocol> {
+        let protocol_name = task
+            .protocol_name()
+            .unwrap_or_else(|| config.default_protocol.clone());
+
+        match protocol_name.to_lowercase().as_str() {
+            "direct" => Ok(Protocol::direct()),
+            "tdd" => Ok(Protocol::tdd()),
+            _ => Err(Error::Policy {
+                detail: format!(
+                    "Task '{}' cannot be assigned protocol '{}'; must be 'direct' or 'tdd'",
+                    task.title(),
+                    protocol_name
+                ),
+                paths: vec![],
+            }),
         }
     }
 }
@@ -283,5 +313,112 @@ mod tests {
         assert_eq!(p.phases[0].write_scope, WriteScope::All);
         assert_eq!(p.phases[1].write_scope, WriteScope::None);
         assert_eq!(p.phases[2].write_scope, WriteScope::None);
+    }
+
+    #[test]
+    fn protocol_for_task_uses_task_protocol_when_specified() {
+        use crate::{Config, Task, TaskId, TaskStatus};
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Task title\n\nProtocol: tdd".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "When done".to_string(),
+            verify: "cargo test".to_string(),
+            refs: "Ref".to_string(),
+        };
+        let config = Config::default();
+        let protocol = Protocol::for_task(&task, &config).expect("should select protocol");
+        assert_eq!(protocol.name, "tdd");
+    }
+
+    #[test]
+    fn protocol_for_task_uses_config_default_when_not_in_task() {
+        use crate::{Config, Task, TaskId, TaskStatus};
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Task title without protocol".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "When done".to_string(),
+            verify: "cargo test".to_string(),
+            refs: "Ref".to_string(),
+        };
+        let mut config = Config::default();
+        config.default_protocol = "tdd".to_string();
+        let protocol = Protocol::for_task(&task, &config).expect("should select protocol");
+        assert_eq!(protocol.name, "tdd");
+    }
+
+    #[test]
+    fn protocol_for_task_defaults_to_direct() {
+        use crate::{Config, Task, TaskId, TaskStatus};
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Task title without protocol".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "When done".to_string(),
+            verify: "cargo test".to_string(),
+            refs: "Ref".to_string(),
+        };
+        let config = Config::default();
+        let protocol = Protocol::for_task(&task, &config).expect("should select protocol");
+        assert_eq!(protocol.name, "direct");
+    }
+
+    #[test]
+    fn protocol_for_task_prefers_task_over_config() {
+        use crate::{Config, Task, TaskId, TaskStatus};
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Task title\n\nProtocol: direct".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "When done".to_string(),
+            verify: "cargo test".to_string(),
+            refs: "Ref".to_string(),
+        };
+        let mut config = Config::default();
+        config.default_protocol = "tdd".to_string();
+        let protocol = Protocol::for_task(&task, &config).expect("should select protocol");
+        assert_eq!(protocol.name, "direct");
+    }
+
+    #[test]
+    fn protocol_for_task_rejects_invalid_protocol() {
+        use crate::{Config, Task, TaskId, TaskStatus};
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Task title\n\nProtocol: invalid".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "When done".to_string(),
+            verify: "cargo test".to_string(),
+            refs: "Ref".to_string(),
+        };
+        let config = Config::default();
+        let result = Protocol::for_task(&task, &config);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("invalid"));
+        assert!(err_msg.contains("must be 'direct' or 'tdd'"));
+    }
+
+    #[test]
+    fn protocol_for_task_case_insensitive() {
+        use crate::{Config, Task, TaskId, TaskStatus};
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Task title\n\nProtocol: TDD".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "When done".to_string(),
+            verify: "cargo test".to_string(),
+            refs: "Ref".to_string(),
+        };
+        let config = Config::default();
+        let protocol = Protocol::for_task(&task, &config).expect("should select protocol");
+        assert_eq!(protocol.name, "tdd");
     }
 }

@@ -92,6 +92,27 @@ impl Task {
 
         Ok(())
     }
+
+    /// Extract the protocol name from the task body, if specified.
+    ///
+    /// Returns `None` if no protocol is specified in the task.
+    /// The protocol name is validated when the task is parsed, not here.
+    #[must_use]
+    pub fn protocol_name(&self) -> Option<String> {
+        for line in self.body.lines() {
+            let trimmed = line.trim();
+            let lower = trimmed.to_lowercase();
+            if lower.starts_with("protocol:") {
+                if let Some(colon_pos) = trimmed.find(':') {
+                    let value = trimmed[colon_pos + 1..].trim();
+                    if !value.is_empty() {
+                        return Some(value.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 /// Parse a plan document into tasks.
@@ -99,13 +120,14 @@ impl Task {
 /// A task is a level-two heading (`## <title>`) and everything until the next heading,
 /// containing four required sections as bold labels: **Outcome:**, **Done-when:**,
 /// **Verify:**, and **Refs:**. An optional **Gate:** section marks a human gate.
+/// An optional **Protocol:** section specifies the work protocol (`direct` or `tdd`).
 ///
 /// Task ids are assigned from 1 in document order. Nothing is stripped or modified;
 /// the document is parsed as-is to preserve Markdown formatting.
 ///
 /// # Errors
 ///
-/// Returns an error if a task is missing any required section.
+/// Returns an error if a task is missing any required section or has an invalid protocol.
 pub fn parse_plan(text: &str) -> Result<Vec<Task>> {
     let mut tasks = Vec::new();
     let mut task_id = 1u32;
@@ -135,7 +157,20 @@ pub fn parse_plan(text: &str) -> Result<Vec<Task>> {
                 let body_text = body_lines.join("\n");
 
                 // Parse sections from the body
-                let (outcome, done_when, verify, refs, is_gate) = parse_sections(&body_text);
+                let (outcome, done_when, verify, refs, is_gate, protocol_name) = parse_sections(&body_text);
+
+                // Validate protocol name if provided
+                if let Some(ref proto) = protocol_name {
+                    if proto != "direct" && proto != "tdd" {
+                        return Err(Error::Policy {
+                            detail: format!(
+                                "Task '{}' has invalid protocol '{}'; must be 'direct' or 'tdd'",
+                                title, proto
+                            ),
+                            paths: vec![],
+                        });
+                    }
+                }
 
                 let status = if is_gate {
                     TaskStatus::HumanGate
@@ -169,12 +204,13 @@ pub fn parse_plan(text: &str) -> Result<Vec<Task>> {
     Ok(tasks)
 }
 
-fn parse_sections(text: &str) -> (String, String, String, String, bool) {
+fn parse_sections(text: &str) -> (String, String, String, String, bool, Option<String>) {
     let mut outcome = String::new();
     let mut done_when = String::new();
     let mut verify = String::new();
     let mut refs = String::new();
     let mut is_gate = false;
+    let mut protocol = None;
 
     let lines: Vec<&str> = text.lines().collect();
     let mut i = 0;
@@ -199,6 +235,24 @@ fn parse_sections(text: &str) -> (String, String, String, String, bool) {
                 verify = extract_section(&lines, &mut i);
             } else if lower.starts_with("**refs:") {
                 refs = extract_section(&lines, &mut i);
+            } else if lower.starts_with("protocol:") {
+                // Extract protocol value from "Protocol:" format
+                if let Some(colon_pos) = trimmed.find(':') {
+                    let proto_str = trimmed[colon_pos + 1..].trim();
+                    if !proto_str.is_empty() {
+                        protocol = Some(proto_str.to_string());
+                    }
+                }
+                i += 1;
+            } else if lower.starts_with("**protocol:") {
+                // Extract protocol value from "**Protocol:**" format (with asterisks)
+                if let Some(colon_pos) = trimmed.find(':') {
+                    let proto_str = trimmed[colon_pos + 1..].trim();
+                    if !proto_str.is_empty() {
+                        protocol = Some(proto_str.to_string());
+                    }
+                }
+                i += 1;
             } else if lower.starts_with("**gate:") {
                 is_gate = true;
                 extract_section(&lines, &mut i);
@@ -210,7 +264,7 @@ fn parse_sections(text: &str) -> (String, String, String, String, bool) {
         }
     }
 
-    (outcome, done_when, verify, refs, is_gate)
+    (outcome, done_when, verify, refs, is_gate, protocol)
 }
 
 fn extract_section(lines: &[&str], i: &mut usize) -> String {
@@ -242,6 +296,8 @@ fn extract_section(lines: &[&str], i: &mut usize) -> String {
                 || (lower.starts_with("**done") && lower.contains(':'))
                 || lower.starts_with("**verify:")
                 || lower.starts_with("**refs:")
+                || lower.starts_with("protocol:")
+                || lower.starts_with("**protocol:")
                 || lower.starts_with("**gate:")
             {
                 break;
@@ -860,6 +916,120 @@ and a custom section below.
         assert_eq!(tasks.len(), 1);
         assert!(tasks[0].body.contains("Extra content"));
         assert!(tasks[0].body.contains("custom section"));
+    }
+
+    #[test]
+    fn parse_plan_with_protocol_direct() {
+        let plan = r"## Task with protocol
+
+**Outcome:** The outcome
+
+**Done-when:** When done
+
+**Verify:** cargo test
+
+**Refs:** Documentation
+
+Protocol: direct
+";
+        let tasks = parse_plan(plan).expect("parse");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].protocol_name(), Some("direct".to_string()));
+    }
+
+    #[test]
+    fn parse_plan_with_protocol_tdd() {
+        let plan = r"## Task with tdd
+
+**Outcome:** The outcome
+
+**Done-when:** When done
+
+**Verify:** cargo test
+
+**Refs:** Documentation
+
+Protocol: tdd
+";
+        let tasks = parse_plan(plan).expect("parse");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].protocol_name(), Some("tdd".to_string()));
+    }
+
+    #[test]
+    fn parse_plan_without_protocol_returns_none() {
+        let plan = r"## Task without protocol
+
+**Outcome:** The outcome
+
+**Done-when:** When done
+
+**Verify:** cargo test
+
+**Refs:** Documentation
+";
+        let tasks = parse_plan(plan).expect("parse");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].protocol_name(), None);
+    }
+
+    #[test]
+    fn parse_plan_rejects_invalid_protocol() {
+        let plan = r"## Task with invalid protocol
+
+**Outcome:** The outcome
+
+**Done-when:** When done
+
+**Verify:** cargo test
+
+**Refs:** Documentation
+
+**Protocol:** invalid_protocol
+";
+        let result = parse_plan(plan);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("invalid_protocol"));
+        assert!(err_msg.contains("must be 'direct' or 'tdd'"));
+    }
+
+    #[test]
+    fn parse_plan_protocol_section_before_outcome() {
+        let plan = r"## Task with protocol first
+
+Protocol: tdd
+
+**Outcome:** The outcome
+
+**Done-when:** When done
+
+**Verify:** cargo test
+
+**Refs:** Documentation
+";
+        let tasks = parse_plan(plan).expect("parse");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].protocol_name(), Some("tdd".to_string()));
+    }
+
+    #[test]
+    fn parse_plan_protocol_in_middle() {
+        let plan = r"## Task with protocol in middle
+
+**Outcome:** The outcome
+
+Protocol: direct
+
+**Done-when:** When done
+
+**Verify:** cargo test
+
+**Refs:** Documentation
+";
+        let tasks = parse_plan(plan).expect("parse");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].protocol_name(), Some("direct".to_string()));
     }
 }
 
