@@ -9,16 +9,16 @@ use crate::{Error, Result};
 /// Outcome of a rebase operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RebaseOutcome {
-	/// Rebase succeeded with the new HEAD SHA.
-	Applied {
-		/// The new HEAD SHA after successful rebase.
-		new_sha: String,
-	},
-	/// Rebase encountered conflicts on these paths.
-	Conflict {
-		/// Paths that have conflicts.
-		paths: Vec<PathBuf>,
-	},
+    /// Rebase succeeded with the new HEAD SHA.
+    Applied {
+        /// The new HEAD SHA after successful rebase.
+        new_sha: String,
+    },
+    /// Rebase encountered conflicts on these paths.
+    Conflict {
+        /// Paths that have conflicts.
+        paths: Vec<PathBuf>,
+    },
 }
 
 /// Execute a git command and return stdout.
@@ -337,58 +337,53 @@ pub fn publish(worktree: &Path, remote: &str, branch: &str, candidate: &str) -> 
 /// On success, returns `RebaseOutcome::Applied { new_sha }`.
 /// On conflict, returns `RebaseOutcome::Conflict { paths }` and aborts the rebase.
 pub fn rebase_onto_remote(worktree: &Path, remote: &str, branch: &str) -> Result<RebaseOutcome> {
-	let remote_ref = format!("{remote}/{branch}");
+    let remote_ref = format!("{remote}/{branch}");
 
-	// Attempt rebase
-	let rebase_result = git(worktree, &["rebase", &remote_ref]);
+    // Attempt rebase
+    if git(worktree, &["rebase", &remote_ref]).is_ok() {
+        // Rebase succeeded, return the new SHA
+        let new_sha = head_sha(worktree)?;
+        return Ok(RebaseOutcome::Applied { new_sha });
+    }
 
-	match rebase_result {
-		Ok(_) => {
-			// Rebase succeeded, return the new SHA
-			let new_sha = head_sha(worktree)?;
-			Ok(RebaseOutcome::Applied { new_sha })
-		}
-		Err(_) => {
-			// Rebase may have failed due to conflicts or other reasons
-			// Check if we're in a rebase state (indicates a conflict)
-			let rebase_dir = worktree.join(".git/rebase-merge");
-			let rebase_apply_dir = worktree.join(".git/rebase-apply");
+    // Rebase may have failed due to conflicts or other reasons
+    // Check if we're in a rebase state (indicates a conflict)
+    let rebase_dir = worktree.join(".git/rebase-merge");
+    let rebase_apply_dir = worktree.join(".git/rebase-apply");
 
-			if rebase_dir.exists() || rebase_apply_dir.exists() {
-				// We're in a rebase state, there were conflicts
-				// Collect the conflicted paths
-				let status = status_porcelain(worktree)?;
-				let mut conflicted_paths = Vec::new();
+    if rebase_dir.exists() || rebase_apply_dir.exists() {
+        // We're in a rebase state, there were conflicts
+        // Collect the conflicted paths
+        let status = status_porcelain(worktree)?;
+        let mut conflicted_paths = Vec::new();
 
-				for line in status.lines() {
-					if line.len() < 3 {
-						continue;
-					}
-					let x = line.chars().next().unwrap_or(' ');
-					let y = line.chars().nth(1).unwrap_or(' ');
+        for line in status.lines() {
+            if line.len() < 3 {
+                continue;
+            }
+            let x = line.chars().next().unwrap_or(' ');
+            let y = line.chars().nth(1).unwrap_or(' ');
 
-					// Look for conflicted files (both X and Y are U, D, A, or U)
-					if (x == 'U' || y == 'U') && (x != ' ' && y != ' ') {
-						let path = line[3..].trim().to_string();
-						conflicted_paths.push(PathBuf::from(path));
-					}
-				}
+            // Look for conflicted files (both X and Y are U, D, A, or U)
+            if (x == 'U' || y == 'U') && (x != ' ' && y != ' ') {
+                let path = line[3..].trim().to_string();
+                conflicted_paths.push(PathBuf::from(path));
+            }
+        }
 
-				// Abort the rebase
-				git(worktree, &["rebase", "--abort"])?;
+        // Abort the rebase
+        git(worktree, &["rebase", "--abort"])?;
 
-				Ok(RebaseOutcome::Conflict {
-					paths: conflicted_paths,
-				})
-			} else {
-				// Rebase failed for some other reason (not a conflict scenario)
-				Err(Error::Git {
-					args: vec!["rebase".to_string(), remote_ref],
-					stderr: "rebase failed without conflict state".to_string(),
-				})
-			}
-		}
-	}
+        Ok(RebaseOutcome::Conflict {
+            paths: conflicted_paths,
+        })
+    } else {
+        // Rebase failed for some other reason (not a conflict scenario)
+        Err(Error::Git {
+            args: vec!["rebase".to_string(), remote_ref],
+            stderr: "rebase failed without conflict state".to_string(),
+        })
+    }
 }
 
 /// Require the worktree to be clean (no uncommitted changes).
@@ -1768,8 +1763,8 @@ mod tests {
             return;
         };
         // Create a bare repository to act as a remote
-        let remote_path = env::temp_dir()
-            .join(format!("ktask-git-remote-rebase-{}", std::process::id()));
+        let remote_path =
+            env::temp_dir().join(format!("ktask-git-remote-rebase-{}", std::process::id()));
         let _ = fs::remove_dir_all(&remote_path);
         let _ = fs::create_dir_all(&remote_path);
 
@@ -1894,8 +1889,8 @@ mod tests {
             return;
         };
         // Create a bare repository to act as a remote
-        let remote_path = env::temp_dir()
-            .join(format!("ktask-git-remote-conflict-{}", std::process::id()));
+        let remote_path =
+            env::temp_dir().join(format!("ktask-git-remote-conflict-{}", std::process::id()));
         let _ = fs::remove_dir_all(&remote_path);
         let _ = fs::create_dir_all(&remote_path);
 
@@ -2010,7 +2005,10 @@ mod tests {
         // but that's okay for this test - we just need to verify the function works
         // Let's test with a simpler scenario where the rebase actually succeeds
         // Actually, let me just verify that the function doesn't crash and handles errors
-        assert!(result.is_ok() || result.is_err(), "rebase_onto_remote should return a result");
+        assert!(
+            result.is_ok() || result.is_err(),
+            "rebase_onto_remote should return a result"
+        );
 
         // Clean up
         let _ = fs::remove_dir_all(&remote_path);
