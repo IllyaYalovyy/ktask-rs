@@ -91,6 +91,22 @@ pub struct Config {
     pub retention_days: u32,
     /// Minimum free disk space in bytes. Default: 2147483648 (2 GiB)
     pub min_free_disk_bytes: u64,
+    /// Baseline gate command. Default: None
+    pub baseline_command: Option<Vec<String>>,
+    /// Targeted test gate command. Default: None
+    pub targeted_test_command: Option<Vec<String>>,
+    /// Verify gate command. Default: None (required for profiles)
+    pub verify_command: Option<Vec<String>>,
+    /// Lint gate command. Default: None
+    pub lint_command: Option<Vec<String>>,
+    /// Format gate command. Default: None
+    pub format_command: Option<Vec<String>>,
+    /// Build gate command. Default: None
+    pub build_command: Option<Vec<String>>,
+    /// Privacy gate command. Default: None
+    pub privacy_command: Option<Vec<String>>,
+    /// Flake gate command. Default: None
+    pub flake_command: Option<Vec<String>>,
     /// Source of each configuration value
     #[serde(skip)]
     sources: HashMap<String, Source>,
@@ -168,7 +184,7 @@ impl Config {
                 toml::from_str(&content).map_err(|e| crate::error::Error::Deserialize {
                     detail: e.to_string(),
                 })?;
-            cfg.merge_with_source(global_cfg, Source::GlobalFile);
+            cfg.merge_with_source(&global_cfg, Source::GlobalFile);
         }
 
         if let Some(project_path) = project {
@@ -180,7 +196,7 @@ impl Config {
                 toml::from_str(&content).map_err(|e| crate::error::Error::Deserialize {
                     detail: e.to_string(),
                 })?;
-            cfg.merge_with_source(project_cfg, Source::ProjectFile);
+            cfg.merge_with_source(&project_cfg, Source::ProjectFile);
         }
 
         cfg.merge_from_env(env);
@@ -196,13 +212,13 @@ impl Config {
         result
     }
 
-    fn merge_with_source(&mut self, other: Config, source: Source) {
+    fn merge_with_source(&mut self, other: &Config, source: Source) {
         if other.provider != "dummy" {
-            self.provider = other.provider;
+            self.provider.clone_from(&other.provider);
             self.sources.insert("provider".to_string(), source);
         }
         if other.model.is_some() {
-            self.model = other.model;
+            self.model.clone_from(&other.model);
             self.sources.insert("model".to_string(), source);
         }
         if other.attempt_timeout_secs != 14400 {
@@ -233,11 +249,11 @@ impl Config {
                 .insert("circuit_breaker_threshold".to_string(), source);
         }
         if other.mainline_remote != "origin" {
-            self.mainline_remote = other.mainline_remote;
+            self.mainline_remote.clone_from(&other.mainline_remote);
             self.sources.insert("mainline_remote".to_string(), source);
         }
         if other.mainline_branch != "main" {
-            self.mainline_branch = other.mainline_branch;
+            self.mainline_branch.clone_from(&other.mainline_branch);
             self.sources.insert("mainline_branch".to_string(), source);
         }
         if other.context_budget_bytes != 65536 {
@@ -265,20 +281,21 @@ impl Config {
                 .insert("limit_max_wait_secs".to_string(), source);
         }
         if other.default_protocol != "direct" {
-            self.default_protocol = other.default_protocol;
+            self.default_protocol.clone_from(&other.default_protocol);
             self.sources.insert("default_protocol".to_string(), source);
         }
         if other.dummy_scenario_path.is_some() {
-            self.dummy_scenario_path = other.dummy_scenario_path;
+            self.dummy_scenario_path
+                .clone_from(&other.dummy_scenario_path);
             self.sources
                 .insert("dummy_scenario_path".to_string(), source);
         }
         if other.test_globs != vec!["**/tests/**", "**/*_test.rs", "src/**/tests.rs"] {
-            self.test_globs = other.test_globs;
+            self.test_globs.clone_from(&other.test_globs);
             self.sources.insert("test_globs".to_string(), source);
         }
         if !other.secret_patterns.is_empty() {
-            self.secret_patterns = other.secret_patterns;
+            self.secret_patterns.clone_from(&other.secret_patterns);
             self.sources.insert("secret_patterns".to_string(), source);
         }
         if other.flake_runs != 5 {
@@ -293,6 +310,44 @@ impl Config {
             self.min_free_disk_bytes = other.min_free_disk_bytes;
             self.sources
                 .insert("min_free_disk_bytes".to_string(), source);
+        }
+        self.merge_gate_commands(other, source);
+    }
+
+    fn merge_gate_commands(&mut self, other: &Config, source: Source) {
+        if other.baseline_command.is_some() {
+            self.baseline_command.clone_from(&other.baseline_command);
+            self.sources.insert("baseline_command".to_string(), source);
+        }
+        if other.targeted_test_command.is_some() {
+            self.targeted_test_command
+                .clone_from(&other.targeted_test_command);
+            self.sources
+                .insert("targeted_test_command".to_string(), source);
+        }
+        if other.verify_command.is_some() {
+            self.verify_command.clone_from(&other.verify_command);
+            self.sources.insert("verify_command".to_string(), source);
+        }
+        if other.lint_command.is_some() {
+            self.lint_command.clone_from(&other.lint_command);
+            self.sources.insert("lint_command".to_string(), source);
+        }
+        if other.format_command.is_some() {
+            self.format_command.clone_from(&other.format_command);
+            self.sources.insert("format_command".to_string(), source);
+        }
+        if other.build_command.is_some() {
+            self.build_command.clone_from(&other.build_command);
+            self.sources.insert("build_command".to_string(), source);
+        }
+        if other.privacy_command.is_some() {
+            self.privacy_command.clone_from(&other.privacy_command);
+            self.sources.insert("privacy_command".to_string(), source);
+        }
+        if other.flake_command.is_some() {
+            self.flake_command.clone_from(&other.flake_command);
+            self.sources.insert("flake_command".to_string(), source);
         }
     }
 
@@ -412,6 +467,14 @@ impl Default for Config {
             flake_runs: 5,
             retention_days: 90,
             min_free_disk_bytes: 2_147_483_648,
+            baseline_command: None,
+            targeted_test_command: None,
+            verify_command: None,
+            lint_command: None,
+            format_command: None,
+            build_command: None,
+            privacy_command: None,
+            flake_command: None,
             sources,
         }
     }
