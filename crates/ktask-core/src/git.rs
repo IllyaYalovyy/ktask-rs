@@ -125,6 +125,22 @@
 //! refused with git's own reason, because that work is the evidence a later
 //! attempt reads; the leftovers this is for are the ones that hold nothing — a
 //! registration whose directory an interrupted run left behind.
+//!
+//! # Publishing the candidate
+//!
+//! VISION.md §10's sixth step is the comparison a task's success waits behind,
+//! and [`publish`] is it: push the candidate, [`fetch`], then compare the tip
+//! that fetch brought back against the SHA handed in. ADR-0046 records why the
+//! comparison is the proof and the push is not — measured while writing this, a
+//! push records its own success into this repository's remote-tracking ref, so a
+//! check that skipped the fetch passes on a remote that took nothing.
+//!
+//! The two ways publication fails stay separable without a third error type:
+//! each carries the argument vector of the command that refused it, so a
+//! `push`-shaped failure is a conflict a run may remediate and a
+//! `rev-parse`-shaped one is this module's own sentence naming both SHAs. The
+//! repository lock §10 places above publication belongs to whoever owns
+//! integration, not here: a lock makes a mismatch unlikely, this makes one seen.
 
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -689,6 +705,119 @@ pub fn fetch(root: &Path, remote: &str) -> Result<()> {
     Ok(())
 }
 
+/// Publish `candidate` as `branch` on `remote`, and prove the remote took it.
+///
+/// This is VISION.md §10's sixth step — "Push mainline, fetch again, and require
+/// local candidate SHA to equal remote mainline SHA" — and its seventh step makes
+/// the comparison here the gate a task's success waits behind. Three commands,
+/// each the one a human would run:
+///
+/// ```text
+/// git push <remote> -- <candidate>:refs/heads/<branch>   # offer this commit, and only it
+/// git fetch <remote>                                     # ask the remote what it holds now
+/// git rev-parse --verify refs/remotes/<remote>/<branch>  # read the tip that fetch brought back
+/// ```
+///
+/// # What is pushed is the commit, not the checkout
+///
+/// The refspec names `candidate`. `git push <remote> <branch>` would push the
+/// branch the caller is standing on, and in a run the candidate is not that: the
+/// work was done in a task worktree whose `HEAD` is detached ([`create_worktree`])
+/// while the checkout it was built from never moved. A branch pushed here could
+/// reach mainline a commit no gate ever ran against while this call reported the
+/// candidate's SHA to the journal, so the candidate is what goes out — and the
+/// SHA compared afterwards is therefore the same value that was offered.
+///
+/// The `--` ahead of the refspec keeps that word an argument. Measured while
+/// writing this, a `candidate` of `-f` handed to `git push <remote>` in the
+/// refspec position with no separator was taken as `--force` and git pushed the
+/// branch its own configuration names, not the commit the caller handed; behind
+/// `--` the same string is refused as `src refspec -f does not match any`. A
+/// candidate is data — it arrives from a journal line or a caller's variable,
+/// never from a decision this function makes — and no argument in this module is
+/// allowed to reach git wearing an option's clothes.
+///
+/// # The tip is fetched, not remembered
+///
+/// The comparison reads `refs/remotes/<remote>/<branch>` *after* [`fetch`], and
+/// both halves of that carry weight. The ref on its own is a cache: it says what
+/// the remote held the last time somebody fetched, which is the claim §10 refuses
+/// to accept as proof. A run interrupted between push and compare, a fetch that
+/// failed quietly, or a peer that pushed since then all leave a ref that reads
+/// exactly like a publication. The fetch is not decoration either — it is also
+/// what brings the remote's objects into the local repository — which is why the
+/// alternative that asks the remote directly, `git ls-remote <remote>
+/// refs/heads/<branch>`, lost even though it is fresher still: a comparison that
+/// cannot notice a missing fetch cannot notice a stale one either, and §10's
+/// fetch would have become a call whose absence changes nothing.
+///
+/// The ref is asked for fully qualified, through `--verify`. Measured while
+/// writing this, `git rev-parse main` in a repository standing on `main` answers
+/// with the *local* branch even when `refs/remotes/origin/main` holds something
+/// else, so the shorter spelling would grade the candidate against the commit the
+/// run started from and report success for a push no remote ever took. The
+/// qualified name has a second benefit: it always begins `refs/remotes/`, so no
+/// `remote` or `branch` a caller hands can turn this argument into an option
+/// either.
+///
+/// # A refusal says which failure it is
+///
+/// A push git refused and a tip that disagrees after a push that worked are
+/// different facts and they arrive differently. A refused push never reaches the
+/// fetch: it comes back as [`Error::Git`] carrying the `push` argument vector and
+/// git's own reason, which is what a run classifies as a conflict it can
+/// remediate (VISION.md §7's `git_conflict`). A disagreement after a successful
+/// push carries the *read-back* vector instead, and this module's own sentence
+/// naming both SHAs — the candidate and the tip — because the pair is the fact
+/// worth journaling and neither half of it is something git printed. A run
+/// reading either failure can tell "the remote will not take this" from "the
+/// remote took something else", and only the first is worth retrying.
+///
+/// A third way the read-back can fail is arriving with no tip at all: a `remote`
+/// configured with a fetch refspec that does not cover `branch` leaves the
+/// comparison with nothing to read, and git's own refusal of `--verify` says so.
+/// It is not dressed up as a mismatch — a mismatch names two SHAs, and here there
+/// is only one SHA in the story.
+///
+/// The repository lock VISION.md §10 places above publication, serializing every
+/// integration on the repository, belongs to the runner and is not this
+/// function's: a lock makes a mismatch unlikely, and this makes one seen. Nothing
+/// here retries, and nothing here forces — `git push` runs with no `--force`, so a
+/// branch the remote will not fast-forward stays refused instead of being
+/// overwritten.
+///
+/// `worktree` is the checkout the push is made from, and git runs inside it: the
+/// commit is read from that repository's objects and the remote's URL from its
+/// configuration. `remote` is named rather than defaulted, the rule ADR-0041 sets
+/// for every call here that could ask a repository which remote it means.
+///
+/// # Errors
+///
+/// [`Error::Git`] for each of the three commands: the push refused (a peer moved
+/// the branch, a `candidate` git cannot resolve, a remote that cannot be
+/// reached), the fetch refused, and the fetched tip not equal to `candidate`.
+/// The last names both SHAs. Whatever was refused, the repository is left as
+/// the call found it: nothing here moves a ref to make its own claim true.
+pub fn publish(worktree: &Path, remote: &str, branch: &str, candidate: &str) -> Result<()> {
+    let refspec = format!("{candidate}:refs/heads/{branch}");
+    git(worktree, &["push", remote, "--", &refspec])?;
+    fetch(worktree, remote)?;
+
+    let tip = format!("refs/remotes/{remote}/{branch}");
+    let fetched = git(worktree, &["rev-parse", "--verify", &tip])?;
+    if fetched != candidate {
+        return Err(Error::Git {
+            args: vec!["rev-parse".to_owned(), "--verify".to_owned(), tip],
+            stderr: format!(
+                "after `git fetch {remote}` the tip of `{remote}/{branch}` is {fetched}, which \
+                 is not the candidate {candidate}: the remote does not hold the commit this \
+                 was asked to publish"
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// The suffix on the directory one repository's task worktrees live in.
 ///
 /// It is appended to the repository's own top level rather than joined inside
@@ -930,7 +1059,7 @@ mod tests {
 
     use super::{
         Kind, Worktree, commit_all, create_worktree, current_branch, dirt_of, fetch, git, git_env,
-        head_sha, is_clean, list_worktrees, remote_url, remove_worktree, require_clean,
+        head_sha, is_clean, list_worktrees, publish, remote_url, remove_worktree, require_clean,
         status_porcelain,
     };
     use crate::Error;
@@ -2329,6 +2458,344 @@ mod tests {
             stderr.contains("nope"),
             "git's refusal names the thing it could not reach, and a fetch that could not start \
              is a git failure rather than a run that quietly continued without a fetch: {stderr}"
+        );
+    }
+
+    /// What the bare repository at `remote` holds for `branch`, read out of the
+    /// remote itself.
+    ///
+    /// Asked of the remote and never of the working repository, because the claim
+    /// under test is what the *remote* holds: graded against a ref this module
+    /// wrote itself, a wrong publication could mark its own homework.
+    fn held_by(remote: &Path, branch: &str) -> String {
+        let asked = format!("refs/heads/{branch}");
+        git(remote, &["rev-parse", &asked]).unwrap_or_else(|_| {
+            panic!(
+                "`{branch}` was expected to be held by `{}`",
+                remote.display()
+            )
+        })
+    }
+
+    /// A second bare repository in the fixture's scratch directory, deleted with it.
+    ///
+    /// It is the half of a remote a push goes to when that is somewhere other than
+    /// where a fetch reads from — the state in which a push succeeds while the
+    /// fetched tip still disagrees, which is precisely what the comparison exists
+    /// to catch and which no local sequence of pushes to one repository can make.
+    fn bare_beside(fixture: &ScratchRepo, name: &str) -> PathBuf {
+        let dir = fixture.path().join(name);
+        fs::create_dir(&dir).expect("a directory for a second bare repository");
+        git(&dir, &["init", "--bare", "-b", "main", "."])
+            .expect("a second bare repository to receive a push");
+        dir
+    }
+
+    /// The candidate a task hands to publication: one tracked edit in `worktree`,
+    /// committed through [`commit_all`] the way a run commits it.
+    fn candidate_in(worktree: &Path) -> String {
+        fs::write(worktree.join("seed.txt"), "the work an agent did\n")
+            .expect("an edit to a tracked path");
+        commit_all(worktree, "the task's subject").expect("one tracked edit is committable")
+    }
+
+    /// Point the push half of the fixture's remote at `mirror`, leaving the fetch
+    /// half reading the original.
+    ///
+    /// Measured while writing this, a `git push` that reaches a remote records the
+    /// commit it pushed in this repository's own
+    /// `refs/remotes/<remote>/<branch>` — even one answering
+    /// `Everything up-to-date`, and even one whose `pushurl` is elsewhere. So when
+    /// a push and a fetch point at the same repository the two commands print the
+    /// same answer, and a test cannot tell which of them the comparison read.
+    /// Pointing them apart makes `the push said yes, the remote says no` — the one
+    /// state the comparison exists to catch — a state a local test can actually
+    /// build, without a hook, a race, or a network.
+    fn push_lands_elsewhere(fixture: &ScratchRepo, mirror: &Path) {
+        git(
+            fixture.work(),
+            &[
+                "config",
+                "--local",
+                "remote.origin.pushurl",
+                &mirror.display().to_string(),
+            ],
+        )
+        .expect("a remote whose push lands somewhere else than its fetch reads from");
+    }
+
+    /// The tip the working repository holds for `branch` as its remote's, which is
+    /// what [`publish`] compares.
+    fn fetched_tip(worktree: &Path, branch: &str) -> String {
+        let asked = format!("refs/remotes/origin/{branch}");
+        git(worktree, &["rev-parse", "--verify", &asked])
+            .unwrap_or_else(|_| panic!("`{asked}` was expected to be held after the fetch"))
+    }
+
+    #[test]
+    fn a_candidate_is_published_and_a_fetched_tip_is_what_proves_it() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        let candidate = candidate_in(&work);
+
+        publish(&work, "origin", "main", &candidate)
+            .expect("a remote that took the candidate has been published to");
+
+        assert_eq!(
+            held_by(fixture.origin(), "main"),
+            candidate,
+            "the origin's own `refs/heads/main` names the candidate, read out of the bare \
+             repository: a push nobody verified is the claim VISION.md §10 refuses"
+        );
+        assert_eq!(
+            fetched_tip(&work, "main"),
+            candidate,
+            "and the remote-tracking ref this module compared names the same commit the remote \
+             itself holds"
+        );
+        require_clean(&work).expect("publication wrote nothing into the tree it ran in");
+    }
+
+    #[test]
+    fn the_commit_published_is_the_candidate_handed_in_not_the_commit_the_checkout_stands_on() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        let candidate = candidate_in(&work);
+        publish(&work, "origin", "main", &candidate).expect("the candidate is published");
+        let later = fixture
+            .commit("later.txt", "a commit no task was published for")
+            .expect("the checkout moves on after its own publication");
+
+        publish(&work, "origin", "main", &candidate)
+            .expect("the same candidate offered a second time is still the candidate");
+
+        assert_eq!(
+            held_by(fixture.origin(), "main"),
+            candidate,
+            "mainline holds the candidate and not the commit HEAD reached since: pushing the \
+             branch the caller stands on rather than the commit handed in would have moved \
+             mainline to {later}, which no gate ever ran against"
+        );
+    }
+
+    #[test]
+    fn a_candidate_the_remote_already_holds_is_published_rather_than_refused() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        let candidate = candidate_in(&work);
+        fixture.push("main").expect(
+            "the remote already holds this commit, as it does when an interrupted run's \
+                     push landed and the run never came back to check it",
+        );
+        push_lands_elsewhere(&fixture, &bare_beside(&fixture, "mirror.git"));
+
+        publish(&work, "origin", "main", &candidate)
+            .expect("a remote that holds the candidate has been published to, whoever moved it");
+
+        assert_eq!(
+            held_by(fixture.origin(), "main"),
+            candidate,
+            "publication is a claim about the remote's state, not about whether this call's own \
+             push changed anything — and here the push went nowhere near this remote, so only the \
+             fetched answer could have been enough"
+        );
+        assert_eq!(
+            git(&work, &["rev-list", "--count", "main"]).expect("how many commits main holds"),
+            "2",
+            "the seed and the candidate, and nothing else: a publication that committed on the \
+             way would publish a second candidate for one task's work"
+        );
+        require_clean(&work).expect("a second publication over the same commit dirties nothing");
+    }
+
+    #[test]
+    fn a_fetched_tip_that_is_not_the_candidate_is_refused_naming_both_shas() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        let mirror = bare_beside(&fixture, "mirror.git");
+        let candidate = candidate_in(&work);
+        push_lands_elsewhere(&fixture, &mirror);
+
+        let error = publish(&work, "origin", "main", &candidate)
+            .expect_err("the fetched remote still holds its old tip, so nothing was published");
+        let (args, stderr) = refused(&error);
+
+        assert_eq!(
+            args,
+            vec![
+                "rev-parse".to_owned(),
+                "--verify".to_owned(),
+                "refs/remotes/origin/main".to_owned(),
+            ],
+            "the failure names the read-back that disagreed, not the push that succeeded: a \
+             push the remote refused and a tip that disagrees afterwards are different failures \
+             to a run deciding whether it may retry — and this is the fetch doing the work, \
+             because the push here never touched this remote-tracking ref"
+        );
+        assert!(
+            stderr.contains(&candidate),
+            "the refusal names the candidate it could not confirm: {stderr}"
+        );
+        assert!(
+            stderr.contains(fixture.seed_sha()),
+            "and the tip the fetch brought back, because the fact is two SHAs: {stderr}"
+        );
+        assert_eq!(
+            held_by(&mirror, "main"),
+            candidate,
+            "the push itself succeeded, so this refusal is about the remote that was fetched \
+             and not about a push that failed"
+        );
+        assert_eq!(
+            held_by(fixture.origin(), "main"),
+            fixture.seed_sha(),
+            "and nothing was done to the fetched remote's branch to make the claim true"
+        );
+    }
+
+    #[test]
+    fn a_push_the_remote_refuses_arrives_as_gits_refusal_and_not_as_a_disagreement() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        let candidate = candidate_in(&work);
+        let moved = fixture
+            .diverge("main")
+            .expect("the origin moved onto a commit the task never saw");
+
+        let error = publish(&work, "origin", "main", &candidate)
+            .expect_err("the candidate does not build on what the remote holds now");
+        let (args, stderr) = refused(&error);
+
+        assert_eq!(
+            args,
+            vec![
+                "push".to_owned(),
+                "origin".to_owned(),
+                "--".to_owned(),
+                format!("{candidate}:refs/heads/main"),
+            ],
+            "the failure names the push that was refused — nothing else ran, and nothing else \
+             is reported"
+        );
+        assert!(
+            stderr.contains("[rejected]") && stderr.contains("Updates were rejected"),
+            "git's own words for the refusal travel with it, which is what a run classifies: it \
+             carries the candidate it refused and the reason the remote would not take it, in \
+             git's phrasing rather than a paraphrase: {stderr}"
+        );
+        assert!(
+            !stderr.contains(&moved.remote),
+            "and no second SHA is offered as the remote's tip, because nothing was fetched \
+             after a push git refused: {stderr}"
+        );
+        assert_eq!(
+            held_by(fixture.origin(), "main"),
+            moved.remote,
+            "the origin kept the commit it already held: a refusal publishes nothing"
+        );
+    }
+
+    #[test]
+    fn a_candidate_that_reads_like_a_git_option_is_refused_as_a_refspec_and_not_run_as_one() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+
+        let error = publish(&work, "origin", "main", "-f")
+            .expect_err("`-f` is not a commit, and nothing here is going to publish one");
+        let (_args, stderr) = refused(&error);
+
+        assert!(
+            stderr.contains("src refspec -f does not match any"),
+            "git was handed `-f` where the commit to push belongs and said so; without the \
+            separator it is taken as `--force`, which measured publishes whatever branch the \
+             checkout stands on instead of the commit the caller named: {stderr}"
+        );
+        assert_eq!(
+            held_by(fixture.origin(), "main"),
+            fixture.seed_sha(),
+            "and mainline is where it was"
+        );
+    }
+
+    #[test]
+    fn a_candidate_git_cannot_resolve_is_refused_as_a_push_failure_that_names_it() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+
+        let error = publish(&work, "origin", "main", "not-a-commit")
+            .expect_err("a name git cannot resolve is not a commit to publish");
+        let (args, stderr) = refused(&error);
+
+        assert_eq!(
+            args[0],
+            "push",
+            "the refusal came from the call that cannot resolve a commit nobody holds: {}",
+            args.join(" ")
+        );
+        assert!(
+            stderr.contains("not-a-commit"),
+            "and it names the candidate that could not be resolved: {stderr}"
+        );
+        assert_eq!(
+            held_by(fixture.origin(), "main"),
+            fixture.seed_sha(),
+            "a candidate that does not exist moves the remote by nothing at all"
+        );
+    }
+
+    #[test]
+    fn a_branch_the_origin_has_never_held_is_created_and_read_back_by_the_same_call() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        let candidate = candidate_in(&work);
+
+        publish(&work, "origin", "release", &candidate)
+            .expect("a branch nobody has ever pushed can be published to");
+
+        assert_eq!(
+            held_by(fixture.origin(), "release"),
+            candidate,
+            "the branch was created on the remote at the candidate"
+        );
+        assert_eq!(
+            fetched_tip(&work, "release"),
+            candidate,
+            "and the tip compared came from that fetch, not from a ref only an earlier push \
+             could have left"
+        );
+        assert_eq!(
+            head_sha(&work).expect("the checkout it ran in still answers"),
+            candidate,
+            "publishing a branch the remote had never held did not move the one the tree \
+             stands on"
+        );
+    }
+
+    #[test]
+    fn publication_runs_in_the_worktree_it_was_handed_and_moves_nothing_in_the_checkout() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        let task = create_worktree(&work, "task-50", fixture.seed_sha())
+            .expect("a task checkout built from the fetched seed");
+        let candidate = candidate_in(&task);
+
+        publish(&task, "origin", "main", &candidate)
+            .expect("a task checkout publishes the commit it holds");
+
+        assert_eq!(
+            held_by(fixture.origin(), "main"),
+            candidate,
+            "the remote holds the commit made inside the task checkout"
+        );
+        assert_eq!(
+            head_sha(&work).expect("the checkout it was built from still answers"),
+            fixture.seed_sha(),
+            "VISION.md §10: the user's normal checkout is never touched by a publication"
+        );
+        assert_eq!(
+            current_branch(&work).expect("and it is still standing on a branch"),
+            Some("main".to_owned()),
+            "publishing checked nothing out either"
         );
     }
 
