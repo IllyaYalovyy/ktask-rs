@@ -426,7 +426,7 @@ pub fn run_completion_set(
     profile: &Profile,
     root: &Path,
     _base_sha: &str,
-    _bus: Option<&Bus>,
+    bus: Option<&Bus>,
 ) -> Result<Vec<GateResult>> {
     let mandatory_gates = [GateKind::Format, GateKind::Lint, GateKind::Build];
     let verify_gate = GateKind::Verify;
@@ -435,13 +435,13 @@ pub fn run_completion_set(
     let mut results = Vec::new();
     let mut should_continue = true;
 
-    for gate_kind in mandatory_gates.iter() {
+    for gate_kind in &mandatory_gates {
         if let Some(gate) = profile.get(*gate_kind) {
             if !should_continue {
                 break;
             }
 
-            let result = run_gate(gate, root, _bus)?;
+            let result = run_gate(gate, root, bus)?;
             if !result.passed {
                 should_continue = false;
             }
@@ -450,14 +450,14 @@ pub fn run_completion_set(
     }
 
     if let Some(gate) = profile.get(verify_gate) {
-        let result = run_gate(gate, root, _bus)?;
+        let result = run_gate(gate, root, bus)?;
         results.push(result);
     }
 
     if should_continue {
-        for gate_kind in optional_gates.iter() {
+        for gate_kind in &optional_gates {
             if let Some(gate) = profile.get(*gate_kind) {
-                let result = run_gate(gate, root, _bus)?;
+                let result = run_gate(gate, root, bus)?;
                 results.push(result);
             }
         }
