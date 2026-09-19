@@ -62,6 +62,7 @@
 //! anything.
 //!
 //! [`Dummy`]: super::dummy::Dummy
+use std::cell::RefCell;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -215,6 +216,31 @@ enum Reply {
     Refused(&'static str),
 }
 
+/// One session as the adapter saw it: what it was asked, and whether the
+/// directory it was told to work in was there when it was told.
+///
+/// The directory has to be recorded rather than looked at afterwards. The suite
+/// removes the scratch directory when it returns, so by the time a test reads
+/// back what the adapter was handed the path is gone — and a claim about what
+/// the suite handed an adapter can only be evidenced from the moment it handed
+/// it over.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Handoff {
+    invocation: Invocation,
+    working_dir_existed: bool,
+}
+
+impl Handoff {
+    /// Records `inv` and the state of its working directory, at the instant the
+    /// adapter is asked to run the session.
+    fn of(inv: &Invocation) -> Self {
+        Self {
+            invocation: inv.clone(),
+            working_dir_existed: inv.working_dir.is_dir(),
+        }
+    }
+}
+
 /// An adapter scripted to break exactly one rule of [`conformance_suite`].
 ///
 /// Both of its answers come from a list and a cursor, because the rule under
@@ -227,6 +253,10 @@ struct Scripted {
     replies: Vec<Reply>,
     detection_calls: AtomicUsize,
     sessions: AtomicUsize,
+    /// Every session as this adapter was handed it, oldest first. What a suite
+    /// promises about the calls it makes is only testable from the adapter's
+    /// side of the boundary, so the adapter keeps what it was given.
+    handed: RefCell<Vec<Handoff>>,
 }
 
 impl Scripted {
@@ -242,7 +272,13 @@ impl Scripted {
             replies,
             detection_calls: AtomicUsize::new(0),
             sessions: AtomicUsize::new(0),
+            handed: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Every session this adapter was handed, oldest first.
+    fn handed(&self) -> Vec<Handoff> {
+        self.handed.borrow().clone()
     }
 
     /// The two answers the suite expects, so a test deviates from one of them
@@ -270,7 +306,8 @@ impl Provider for Scripted {
         Self::next(call, &self.detections)
     }
 
-    fn invoke(&self, _inv: &Invocation, _bus: Option<&crate::Bus>) -> crate::Result<Outcome> {
+    fn invoke(&self, inv: &Invocation, _bus: Option<&crate::Bus>) -> crate::Result<Outcome> {
+        self.handed.borrow_mut().push(Handoff::of(inv));
         let session = self.sessions.fetch_add(1, Ordering::Relaxed);
         match Self::next(session, &self.replies) {
             Reply::Ran(outcome) => Ok(outcome),
@@ -362,13 +399,50 @@ stdout = "the gate refused the change\n"
     }
 
     #[test]
-    fn the_two_sessions_are_asked_with_two_prompts() {
-        // The suite's fourth rule is about the *second* session, and holds only
-        // while an adapter cannot answer both from one reply.
+    fn the_two_sessions_arrive_as_two_invocations_over_one_directory_that_exists() {
+        // The suite's second and fourth rules are about the *second* session, and
+        // they hold only while the second session really is a second one: an
+        // adapter that answers out of a cache keyed on the prompt passes on its
+        // first answer, and an adapter never told where to work fails for a
+        // reason that is not its own. Both are read back from the adapter's side
+        // of the boundary, because a suite cannot evidence its own calls.
+        let recorder = Scripted::new(
+            "recorder",
+            vec![NOTHING_DETECTED],
+            Scripted::conforming_sessions(),
+        );
+
+        conformance_suite(&recorder);
+
+        let handed = recorder.handed();
+        assert_eq!(
+            handed.len(),
+            2,
+            "the suite asks an adapter for two sessions and this one was asked for {}; \
+             a suite that runs one session has tested one session",
+            handed.len()
+        );
         assert_ne!(
-            super::WORK_PROMPT,
-            super::FAILURE_PROMPT,
-            "one prompt for both sessions lets an adapter pass on its first answer"
+            handed[0].invocation.prompt, handed[1].invocation.prompt,
+            "one prompt for both sessions lets an adapter answer twice out of one reply"
+        );
+        assert_eq!(
+            handed[0].invocation.working_dir, handed[1].invocation.working_dir,
+            "the two sessions of one conformance run are one adapter's work, in one directory"
+        );
+        for handoff in &handed {
+            assert!(
+                handoff.working_dir_existed,
+                "a session refused by its working directory fails this suite for a reason \
+                 that is not the adapter's: `{}` was no directory to work in when it was \
+                 handed over",
+                handoff.invocation.working_dir.display()
+            );
+        }
+        assert_eq!(
+            handed[0].invocation.model, None,
+            "the suite asks no adapter for a model, because a caller may only ask for what \
+             detection said yes to, and the reference adapter answered no to that"
         );
     }
 
