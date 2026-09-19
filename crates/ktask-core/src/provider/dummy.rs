@@ -316,10 +316,7 @@ outcome = "unknown_outcome"
             // Build a full TOML document with the outcome as part of a step
             let toml_str = format!("[[steps]]\non_task = 1\noutcome = \"{expected_name}\"");
             let parsed: Result<Scenario, _> = toml::from_str(&toml_str);
-            assert!(
-                parsed.is_ok(),
-                "should parse outcome '{expected_name}'"
-            );
+            assert!(parsed.is_ok(), "should parse outcome '{expected_name}'");
             assert_eq!(&parsed.unwrap().steps[0].outcome, outcome);
         }
     }
