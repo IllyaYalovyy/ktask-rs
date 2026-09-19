@@ -46,6 +46,14 @@ gate_typos()  { require typos && typos; }
 # scripts/review-tests.sh answers that question.
 gate_coverage() {
   require cargo-llvm-cov || return 1
+  # Without rustup there is no llvm-tools-preview component, so point
+  # cargo-llvm-cov at the distro's LLVM tools when they are on PATH.
+  if [[ -z "${LLVM_COV:-}" ]] && command -v llvm-cov >/dev/null 2>&1; then
+    export LLVM_COV="$(command -v llvm-cov)"
+  fi
+  if [[ -z "${LLVM_PROFDATA:-}" ]] && command -v llvm-profdata >/dev/null 2>&1; then
+    export LLVM_PROFDATA="$(command -v llvm-profdata)"
+  fi
   cargo llvm-cov --workspace --summary-only \
     --ignore-filename-regex 'main\.rs$' \
     --fail-under-lines "${KTASK_MIN_COVERAGE:-80}"
