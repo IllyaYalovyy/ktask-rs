@@ -57,11 +57,11 @@ impl ScratchRepo {
         git_with_config(work.path(), &["init"], &[])?;
 
         // Add origin remote
-        git_with_config(
-            work.path(),
-            &["remote", "add", "origin", origin.to_str().unwrap()],
-            &[],
-        )?;
+        let origin_str = origin.to_str().ok_or_else(|| Error::Gate {
+            kind: "InvalidPath".to_string(),
+            detail: "Origin path contains invalid UTF-8".to_string(),
+        })?;
+        git_with_config(work.path(), &["remote", "add", "origin", origin_str], &[])?;
 
         // Create seed commit
         let test_file = work.path().join("seed.txt");
@@ -84,11 +84,13 @@ impl ScratchRepo {
     }
 
     /// Get the path to the working directory.
+    #[must_use]
     pub fn path(&self) -> &Path {
         self.work.path()
     }
 
     /// Get the path to the origin remote.
+    #[must_use]
     pub fn origin_path(&self) -> &Path {
         &self.origin
     }
@@ -102,13 +104,19 @@ impl ScratchRepo {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let test_file = self.path().join(format!("file_{}.txt", timestamp));
+        let test_file = self.path().join(format!("file_{timestamp}.txt"));
         std::fs::write(&test_file, "content").map_err(|e| Error::Gate {
             kind: "FileWrite".to_string(),
             detail: format!("Failed to write test file: {e}"),
         })?;
 
-        let filename = test_file.file_name().unwrap().to_str().unwrap();
+        let filename = test_file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| Error::Gate {
+                kind: "InvalidPath".to_string(),
+                detail: "Test file name contains invalid UTF-8".to_string(),
+            })?;
         git_with_config(self.path(), &["add", filename], &[])?;
 
         let env = vec![
@@ -183,9 +191,9 @@ fn git_with_config(root: &Path, args: &[&str], _extra_config: &[(&str, &str)]) -
         "user.email=test@example.com".to_string(),
     ];
 
-    config_args.extend(args.iter().map(|s| s.to_string()));
+    config_args.extend(args.iter().copied().map(ToString::to_string));
 
-    let config_strs: Vec<&str> = config_args.iter().map(|s| s.as_str()).collect();
+    let config_strs: Vec<&str> = config_args.iter().map(String::as_str).collect();
 
     let mut cmd = Command::new("git");
     cmd.args(&config_strs).current_dir(root);
@@ -225,10 +233,10 @@ fn git_with_env(
 
     for (key, value) in extra_config {
         config_args.push("-c".to_string());
-        config_args.push(format!("{}={}", key, value));
+        config_args.push(format!("{key}={value}"));
     }
 
-    config_args.extend(args.iter().map(|s| s.to_string()));
+    config_args.extend(args.iter().copied().map(ToString::to_string));
 
     let mut cmd = Command::new("git");
     cmd.args(&config_args).current_dir(root);
