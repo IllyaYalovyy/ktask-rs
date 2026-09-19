@@ -91,6 +91,7 @@ pub struct Dummy {
 
 impl Dummy {
     /// Create a new dummy provider with the given scenario.
+    #[must_use]
     pub fn new(scenario: Scenario) -> Self {
         Dummy {
             scenario,
@@ -100,7 +101,7 @@ impl Dummy {
 }
 
 impl Provider for Dummy {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "dummy"
     }
 
@@ -113,7 +114,10 @@ impl Provider for Dummy {
     }
 
     fn invoke(&self, inv: &Invocation, _bus: Option<&Bus>) -> Result<Outcome> {
-        let mut next_idx = self.next_step_index.lock().unwrap();
+        let mut next_idx = self.next_step_index.lock().map_err(|_| Error::Provider {
+            provider: "dummy".to_string(),
+            detail: "mutex poisoned".to_string(),
+        })?;
 
         if *next_idx >= self.scenario.steps.len() {
             return Err(Error::Provider {
@@ -122,7 +126,14 @@ impl Provider for Dummy {
             });
         }
 
-        let step = &self.scenario.steps[*next_idx];
+        let step = self
+            .scenario
+            .steps
+            .get(*next_idx)
+            .ok_or_else(|| Error::Provider {
+                provider: "dummy".to_string(),
+                detail: "ran out of steps".to_string(),
+            })?;
         *next_idx += 1;
 
         // Handle delay if specified
@@ -150,13 +161,14 @@ impl Provider for Dummy {
         }
 
         // Determine exit code based on outcome
-        let exit_code = step.exit_code.unwrap_or_else(|| match step.outcome {
-            StepOutcome::Success => 0,
+        let default_exit_code = match step.outcome {
             StepOutcome::Failure => 1,
-            StepOutcome::Hang => 0,
-            StepOutcome::Limit => 0,
-            StepOutcome::NeedsInput => 0,
-        });
+            StepOutcome::Success
+            | StepOutcome::Hang
+            | StepOutcome::Limit
+            | StepOutcome::NeedsInput => 0,
+        };
+        let exit_code = step.exit_code.unwrap_or(default_exit_code);
 
         let stdout = step.stdout.clone().unwrap_or_default();
         let stderr = String::new();
@@ -702,15 +714,23 @@ outcome = "unknown_outcome"
         let dummy2 = Dummy::new(scenario.clone());
 
         // Run both in sequence and verify they produce identical outputs
-        let o1a = dummy1.invoke(&inv, None).expect("dummy1 first invoke succeeded");
-        let o2a = dummy2.invoke(&inv, None).expect("dummy2 first invoke succeeded");
+        let o1a = dummy1
+            .invoke(&inv, None)
+            .expect("dummy1 first invoke succeeded");
+        let o2a = dummy2
+            .invoke(&inv, None)
+            .expect("dummy2 first invoke succeeded");
 
         assert_eq!(o1a.exit_code, o2a.exit_code);
         assert_eq!(o1a.stdout, o2a.stdout);
         assert_eq!(o1a.stderr, o2a.stderr);
 
-        let o1b = dummy1.invoke(&inv, None).expect("dummy1 second invoke succeeded");
-        let o2b = dummy2.invoke(&inv, None).expect("dummy2 second invoke succeeded");
+        let o1b = dummy1
+            .invoke(&inv, None)
+            .expect("dummy1 second invoke succeeded");
+        let o2b = dummy2
+            .invoke(&inv, None)
+            .expect("dummy2 second invoke succeeded");
 
         assert_eq!(o1b.exit_code, o2b.exit_code);
         assert_eq!(o1b.stdout, o2b.stdout);
