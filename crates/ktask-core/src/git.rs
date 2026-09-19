@@ -1596,8 +1596,7 @@ mod tests {
         let result = publish(&repo, "nonexistent-remote", "main", &candidate);
         assert!(
             result.is_err(),
-            "publish should fail when remote doesn't exist, but got: {:?}",
-            result
+            "publish should fail when remote doesn't exist, but got: {result:?}"
         );
 
         if let Err(Error::Git { args, stderr }) = result {
