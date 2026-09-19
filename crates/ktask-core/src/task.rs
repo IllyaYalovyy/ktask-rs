@@ -19,7 +19,7 @@ pub enum TaskStatus {
 }
 
 /// A task in the queue with its metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     /// Unique task identifier.
     pub id: TaskId,
