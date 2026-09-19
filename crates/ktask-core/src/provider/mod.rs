@@ -9,8 +9,12 @@ pub mod usage;
 /// Dummy provider for deterministic testing with scenario-driven outcomes.
 pub mod dummy;
 
+/// Process execution with streaming output and timeout management.
+pub mod process;
+
 pub use dummy::{Dummy, Scenario, Step, StepOutcome};
 pub use usage::{Usage, UsageSource};
+pub use process::run_streaming;
 
 /// Capabilities of a provider.
 ///
