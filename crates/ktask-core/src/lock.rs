@@ -155,7 +155,10 @@ pub fn lock_path(dir: &Path) -> PathBuf {
 /// A lock left by a holder that has provably gone is taken over at once and
 /// reported by [`RepoLock::reclaimed`]; a lock that cannot be proved abandoned
 /// is waited behind until `timeout` passes. A `timeout` of [`Duration::ZERO`]
-/// looks once and reports, without sleeping.
+/// looks once and reports, without sleeping. A `timeout` too large for an
+/// `Instant` to carry has no deadline to reach, and a caller with no deadline
+/// waits until the lock is its own — which is what "as long as it takes" asks
+/// for, and the reason an absurd timeout is a long wait rather than a panic.
 ///
 /// # Errors
 ///
