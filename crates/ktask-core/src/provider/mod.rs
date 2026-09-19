@@ -98,6 +98,61 @@ pub trait Provider: Send + Sync {
     fn invoke(&self, inv: &Invocation, bus: Option<&Bus>) -> Result<Outcome>;
 }
 
+/// Checks that configured and reported model IDs are consistent.
+///
+/// When both are present, they must match; a mismatch is rejected.
+/// When one or both are missing, it is allowed and marked.
+///
+/// # Errors
+///
+/// Returns an error if both configured and reported models are present but differ.
+pub fn check_model(configured: Option<&str>, reported: Option<&str>) -> Result<()> {
+    match (configured, reported) {
+        (Some(conf), Some(rep)) if conf != rep => Err(crate::Error::Provider {
+            provider: "provider".to_string(),
+            detail: format!("model mismatch: configured '{conf}' vs reported '{rep}'"),
+        }),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+/// Tests for model ID checking.
+pub mod model_check {
+    use super::*;
+
+    #[test]
+    fn both_none_is_ok() {
+        assert!(check_model(None, None).is_ok());
+    }
+
+    #[test]
+    fn configured_present_reported_none_is_ok() {
+        assert!(check_model(Some("claude-opus"), None).is_ok());
+    }
+
+    #[test]
+    fn configured_none_reported_present_is_ok() {
+        assert!(check_model(None, Some("claude-opus")).is_ok());
+    }
+
+    #[test]
+    fn both_present_and_equal_is_ok() {
+        assert!(check_model(Some("claude-opus"), Some("claude-opus")).is_ok());
+    }
+
+    #[test]
+    fn both_present_and_differ_is_err() {
+        let result = check_model(Some("claude-opus"), Some("claude-sonnet"));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("model mismatch"));
+        assert!(msg.contains("claude-opus"));
+        assert!(msg.contains("claude-sonnet"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
