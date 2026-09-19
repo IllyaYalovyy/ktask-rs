@@ -320,6 +320,46 @@ pub fn check_scope(scope: WriteScope, changed: &[PathBuf], test_globs: &[String]
     }
 }
 
+/// Verify that a TDD red phase produced genuinely new failing tests.
+///
+/// Compares test summaries from before and after the red phase to confirm that
+/// at least one test is now failing that was not failing before.
+///
+/// # Arguments
+///
+/// - `before` - Test summary before the red phase
+/// - `after` - Test summary after the red phase
+///
+/// # Returns
+///
+/// `Ok(Vec<String>)` containing the names of tests that are failing after but not before,
+/// or an error if no new tests are failing.
+///
+/// # Errors
+///
+/// Returns an error if the set of failing tests is unchanged (empty or identical to before).
+pub fn verify_red(
+    before: &crate::gate::TestSummary,
+    after: &crate::gate::TestSummary,
+) -> Result<Vec<String>> {
+    let before_failures: std::collections::HashSet<_> = before.failures.iter().cloned().collect();
+    let after_failures: std::collections::HashSet<_> = after.failures.iter().cloned().collect();
+
+    let newly_failing: Vec<String> = after_failures
+        .difference(&before_failures)
+        .cloned()
+        .collect();
+
+    if newly_failing.is_empty() {
+        Err(Error::Gate {
+            kind: "red".to_string(),
+            detail: "red phase must produce at least one new failing test".to_string(),
+        })
+    } else {
+        Ok(newly_failing)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -719,5 +759,120 @@ mod tests {
             &default_globs
         ));
         assert!(!path_matches_glob(&PathBuf::from("lib.rs"), &default_globs));
+    }
+
+    #[test]
+    fn verify_red_returns_newly_failing_tests() {
+        use crate::gate::TestSummary;
+
+        let before = TestSummary {
+            passed: 5,
+            failed: 0,
+            ignored: 0,
+            failures: vec![],
+        };
+        let after = TestSummary {
+            passed: 4,
+            failed: 1,
+            ignored: 0,
+            failures: vec!["test_new_failure".to_string()],
+        };
+
+        let result = verify_red(&before, &after);
+        assert!(result.is_ok());
+        let newly_failing = result.unwrap();
+        assert_eq!(newly_failing.len(), 1);
+        assert_eq!(newly_failing[0], "test_new_failure");
+    }
+
+    #[test]
+    fn verify_red_returns_error_when_no_new_failures() {
+        use crate::gate::TestSummary;
+
+        let before = TestSummary {
+            passed: 5,
+            failed: 0,
+            ignored: 0,
+            failures: vec![],
+        };
+        let after = TestSummary {
+            passed: 5,
+            failed: 0,
+            ignored: 0,
+            failures: vec![],
+        };
+
+        let result = verify_red(&before, &after);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_red_returns_error_when_same_failures() {
+        use crate::gate::TestSummary;
+
+        let before = TestSummary {
+            passed: 4,
+            failed: 1,
+            ignored: 0,
+            failures: vec!["test_failure".to_string()],
+        };
+        let after = TestSummary {
+            passed: 4,
+            failed: 1,
+            ignored: 0,
+            failures: vec!["test_failure".to_string()],
+        };
+
+        let result = verify_red(&before, &after);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_red_returns_multiple_new_failures() {
+        use crate::gate::TestSummary;
+
+        let before = TestSummary {
+            passed: 5,
+            failed: 0,
+            ignored: 0,
+            failures: vec![],
+        };
+        let after = TestSummary {
+            passed: 3,
+            failed: 2,
+            ignored: 0,
+            failures: vec!["test_first".to_string(), "test_second".to_string()],
+        };
+
+        let result = verify_red(&before, &after);
+        assert!(result.is_ok());
+        let newly_failing = result.unwrap();
+        assert_eq!(newly_failing.len(), 2);
+        assert!(newly_failing.contains(&"test_first".to_string()));
+        assert!(newly_failing.contains(&"test_second".to_string()));
+    }
+
+    #[test]
+    fn verify_red_ignores_preexisting_failures() {
+        use crate::gate::TestSummary;
+
+        let before = TestSummary {
+            passed: 4,
+            failed: 1,
+            ignored: 0,
+            failures: vec!["old_failure".to_string()],
+        };
+        let after = TestSummary {
+            passed: 3,
+            failed: 2,
+            ignored: 0,
+            failures: vec!["old_failure".to_string(), "new_failure".to_string()],
+        };
+
+        let result = verify_red(&before, &after);
+        assert!(result.is_ok());
+        let newly_failing = result.unwrap();
+        assert_eq!(newly_failing.len(), 1);
+        assert_eq!(newly_failing[0], "new_failure");
     }
 }
