@@ -72,6 +72,19 @@ pub struct GateResult {
     pub timed_out: bool,
 }
 
+/// Summary of test results parsed from cargo output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TestSummary {
+    /// Number of passed tests.
+    pub passed: u32,
+    /// Number of failed tests.
+    pub failed: u32,
+    /// Number of ignored tests.
+    pub ignored: u32,
+    /// List of test names that failed.
+    pub failures: Vec<String>,
+}
+
 /// A verification profile containing gates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Profile {
@@ -285,6 +298,105 @@ pub fn run_gate(gate: &Gate, root: &Path, bus: Option<&Bus>) -> Result<GateResul
     };
 
     Ok(result)
+}
+
+/// Parse cargo test output to extract test results summary.
+///
+/// Reads the `test result:` line from cargo output and extracts the counts.
+/// Also parses the failures block to collect failed test names.
+///
+/// # Arguments
+///
+/// * `output` - The complete stdout from a cargo test run
+///
+/// # Returns
+///
+/// Returns `Some(TestSummary)` if the output contains a valid `test result:` line,
+/// or `None` if the output format is unrecognized or parsing fails.
+#[must_use]
+pub fn parse_cargo(output: &str) -> Option<TestSummary> {
+    let mut passed = 0u32;
+    let mut failed = 0u32;
+    let mut ignored = 0u32;
+    let mut failures = Vec::new();
+
+    // Find the test result line and extract counts
+    for line in output.lines() {
+        if let Some(result_part) = line.split("test result:").nth(1) {
+            // Parse: "test result: ok. 306 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.55s"
+            // or: "test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s"
+            for segment in result_part.split(';') {
+                let segment = segment.trim();
+                if segment.contains("passed") {
+                    // Extract the last number in the segment before "passed"
+                    passed = segment
+                        .split_whitespace()
+                        .rev()
+                        .nth(1)
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(0);
+                } else if segment.contains("failed") {
+                    // Extract the last number in the segment before "failed"
+                    failed = segment
+                        .split_whitespace()
+                        .rev()
+                        .nth(1)
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(0);
+                } else if segment.contains("ignored") {
+                    // Extract the last number in the segment before "ignored"
+                    ignored = segment
+                        .split_whitespace()
+                        .rev()
+                        .nth(1)
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(0);
+                }
+            }
+            break;
+        }
+    }
+
+    // Parse failures section if present
+    let mut in_failures = false;
+    for line in output.lines() {
+        if line.trim() == "failures:" {
+            in_failures = true;
+            continue;
+        }
+
+        if in_failures {
+            // Failure block starts with "---- test_name stdout ----"
+            if line.starts_with("----") && line.ends_with("----") {
+                // Extract test name from "---- module::test_name stdout ----"
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    // parts[0] = "----", parts[1..n-1] = test name, parts[n-1] = "----"
+                    if let Some(test_names) = parts.get(1..parts.len().saturating_sub(1)) {
+                        let test_name = test_names.join(" ");
+                        failures.push(test_name);
+                    }
+                }
+            }
+
+            // Stop parsing failures when we hit the summary at the end
+            if line.contains("test result:") && line != "test result:" {
+                break;
+            }
+        }
+    }
+
+    // Return None if we didn't find a test result line
+    if !output.contains("test result:") {
+        return None;
+    }
+
+    Some(TestSummary {
+        passed,
+        failed,
+        ignored,
+        failures,
+    })
 }
 
 /// Build a verification profile from configuration.
@@ -860,5 +972,164 @@ env = {}
         let result = run_gate(&gate, Path::new("."), None).expect("run_gate should succeed");
 
         assert!(result.duration_ms > 0);
+    }
+
+    #[test]
+    fn parse_cargo_with_all_passing_tests() {
+        let output = r"
+running 306 tests
+
+test result: ok. 306 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.55s
+";
+        let summary = parse_cargo(output);
+        assert!(summary.is_some());
+        let summary = summary.unwrap();
+        assert_eq!(summary.passed, 306);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(summary.ignored, 0);
+        assert!(summary.failures.is_empty());
+    }
+
+    #[test]
+    fn parse_cargo_with_some_failures() {
+        let output = r"
+running 10 tests
+
+test result: FAILED. 8 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s
+
+failures:
+
+---- module::test_one stdout ----
+thread 'module::test_one' panicked at 'assertion failed'
+
+---- module::test_two stdout ----
+thread 'module::test_two' panicked at 'expected value'
+
+";
+        let summary = parse_cargo(output);
+        assert!(summary.is_some());
+        let summary = summary.unwrap();
+        assert_eq!(summary.passed, 8);
+        assert_eq!(summary.failed, 2);
+        assert_eq!(summary.ignored, 0);
+        assert_eq!(summary.failures.len(), 2);
+        assert!(
+            summary
+                .failures
+                .contains(&"module::test_one stdout".to_string())
+        );
+        assert!(
+            summary
+                .failures
+                .contains(&"module::test_two stdout".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_cargo_with_ignored_tests() {
+        let output = r"
+running 50 tests
+
+test result: ok. 45 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 5.00s
+";
+        let summary = parse_cargo(output);
+        assert!(summary.is_some());
+        let summary = summary.unwrap();
+        assert_eq!(summary.passed, 45);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(summary.ignored, 5);
+        assert!(summary.failures.is_empty());
+    }
+
+    #[test]
+    fn parse_cargo_with_empty_output() {
+        let output = "";
+        let summary = parse_cargo(output);
+        assert!(summary.is_none());
+    }
+
+    #[test]
+    fn parse_cargo_with_unrecognized_output() {
+        let output = "some random output without test result line";
+        let summary = parse_cargo(output);
+        assert!(summary.is_none());
+    }
+
+    #[test]
+    fn parse_cargo_with_zero_tests() {
+        let output = r"
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+";
+        let summary = parse_cargo(output);
+        assert!(summary.is_some());
+        let summary = summary.unwrap();
+        assert_eq!(summary.passed, 0);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(summary.ignored, 0);
+        assert!(summary.failures.is_empty());
+    }
+
+    #[test]
+    fn parse_cargo_extracts_all_failure_names() {
+        let output = r"
+running 5 tests
+
+test result: FAILED. 2 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+failures:
+
+---- tests::alpha stdout ----
+panic message
+
+---- tests::beta stdout ----
+panic message
+
+---- tests::gamma stdout ----
+panic message
+
+";
+        let summary = parse_cargo(output);
+        assert!(summary.is_some());
+        let summary = summary.unwrap();
+        assert_eq!(summary.failed, 3);
+        assert_eq!(summary.failures.len(), 3);
+        assert!(
+            summary
+                .failures
+                .contains(&"tests::alpha stdout".to_string())
+        );
+        assert!(summary.failures.contains(&"tests::beta stdout".to_string()));
+        assert!(
+            summary
+                .failures
+                .contains(&"tests::gamma stdout".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_cargo_with_real_nextest_output() {
+        let output = r"
+     Running unittests src/lib.rs (target/debug/deps/ktask_core-abc123)
+
+running 306 tests
+
+test result: ok. 306 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.55s
+";
+        let summary = parse_cargo(output);
+        assert!(summary.is_some());
+        let summary = summary.unwrap();
+        assert_eq!(summary.passed, 306);
+        assert_eq!(summary.failed, 0);
+    }
+
+    #[test]
+    fn parse_cargo_handles_whitespace_variations() {
+        let output = r"test result: ok.   100 passed;   0  failed;   2 ignored; 0 measured; 0 filtered out; finished in 1.00s";
+        let summary = parse_cargo(output);
+        assert!(summary.is_some());
+        let summary = summary.unwrap();
+        assert_eq!(summary.passed, 100);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(summary.ignored, 2);
     }
 }
