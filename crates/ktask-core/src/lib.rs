@@ -22,5 +22,5 @@ pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::Journal;
 pub use paths::{config_file, state_root};
 pub use project::{Project, discover, register};
-pub use state::{PauseReason, Phase};
+pub use state::{PauseReason, Phase, TaskState};
 pub use task::{Task, TaskStatus};
