@@ -3,8 +3,27 @@
 use std::collections::BTreeMap;
 
 use crate::ids::TaskId;
+use crate::journal::Journal;
 use crate::state::{TaskState, check_one_active, check_predecessor};
-use crate::{Result, Task};
+use crate::{Project, Result, Task};
+
+/// Load the queue from the project's journal.
+///
+/// Opens the project's journal and retrieves all tasks stored in it,
+/// returning them in document order (by task ID). An empty queue yields
+/// an empty vector, not an error.
+///
+/// No state directory modifications occur during loading — it is a
+/// read-only operation.
+///
+/// # Errors
+///
+/// Returns an error if the journal cannot be opened or if tasks cannot
+/// be deserialized.
+pub fn load(project: &Project) -> Result<Vec<Task>> {
+    let journal = Journal::open_for(project)?;
+    journal.tasks()
+}
 
 /// Select the next runnable task from the queue.
 ///
@@ -62,7 +81,9 @@ mod tests {
     use super::*;
     use crate::classify::FailureClass;
     use crate::ids::AttemptId;
+    use crate::project;
     use crate::state::Phase;
+    use tempfile::TempDir;
 
     fn task(id: u32) -> Task {
         Task {
@@ -212,5 +233,104 @@ mod tests {
         let result = next_runnable(&tasks, &states);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Some(TaskId::new(3)));
+    }
+
+    #[test]
+    fn load_empty_queue_returns_empty_vector() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(repo_path)
+            .output()
+            .expect("git init failed");
+
+        let proj = project::register(repo_path).unwrap();
+        let result = load(&proj);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![]);
+    }
+
+    #[test]
+    fn load_returns_tasks_in_document_order() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(repo_path)
+            .output()
+            .expect("git init failed");
+
+        let proj = project::register(repo_path).unwrap();
+        let mut journal = Journal::open_for(&proj).unwrap();
+
+        let tasks = vec![task(3), task(1), task(2)];
+        journal.put_tasks(&tasks).unwrap();
+
+        let loaded = load(&proj).unwrap();
+        assert_eq!(loaded.len(), 3);
+        assert_eq!(loaded[0].id, TaskId::new(1));
+        assert_eq!(loaded[1].id, TaskId::new(2));
+        assert_eq!(loaded[2].id, TaskId::new(3));
+    }
+
+    #[test]
+    fn load_preserves_task_fields() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(repo_path)
+            .output()
+            .expect("git init failed");
+
+        let proj = project::register(repo_path).unwrap();
+        let mut journal = Journal::open_for(&proj).unwrap();
+
+        let tasks = vec![task(1)];
+        journal.put_tasks(&tasks).unwrap();
+
+        let loaded = load(&proj).unwrap();
+        assert_eq!(loaded.len(), 1);
+        let loaded_task = &loaded[0];
+        assert_eq!(loaded_task.outcome, "Outcome 1");
+        assert_eq!(loaded_task.done_when, "Done when 1");
+        assert_eq!(loaded_task.verify, "Verify 1");
+        assert_eq!(loaded_task.refs, "Refs 1");
+        assert_eq!(loaded_task.body, "Task 1");
+    }
+
+    #[test]
+    #[allow(clippy::redundant_closure_for_method_calls)]
+    fn load_does_not_modify_state_directory() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(repo_path)
+            .output()
+            .expect("git init failed");
+
+        let proj = project::register(repo_path).unwrap();
+        let mut journal = Journal::open_for(&proj).unwrap();
+
+        let tasks = vec![task(1), task(2)];
+        journal.put_tasks(&tasks).unwrap();
+
+        let initial_files: std::collections::HashSet<_> = std::fs::read_dir(&proj.state_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .collect();
+
+        let _ = load(&proj).unwrap();
+
+        let final_files: std::collections::HashSet<_> = std::fs::read_dir(&proj.state_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .collect();
+
+        assert_eq!(initial_files, final_files);
     }
 }
