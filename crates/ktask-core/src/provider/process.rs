@@ -3,15 +3,15 @@
 //! Provides the `run_streaming` function for executing commands in isolated process groups
 //! with support for idle and hard timeouts, stdin writing, and streamed output capture.
 
-use crate::{Bus, Error, Result, Outcome};
+use crate::{Bus, Error, Outcome, Result};
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
-use nix::sys::signal::{Signal, kill};
-use nix::unistd::Pid;
 
 /// Execute a command with streaming output, stdin support, and dual timeouts.
 ///

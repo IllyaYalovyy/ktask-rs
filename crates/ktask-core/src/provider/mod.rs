@@ -13,8 +13,8 @@ pub mod dummy;
 pub mod process;
 
 pub use dummy::{Dummy, Scenario, Step, StepOutcome};
-pub use usage::{Usage, UsageSource};
 pub use process::run_streaming;
+pub use usage::{Usage, UsageSource};
 
 /// Capabilities of a provider.
 ///
