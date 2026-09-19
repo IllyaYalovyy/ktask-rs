@@ -102,6 +102,7 @@ impl Task {
         for line in self.body.lines() {
             let trimmed = line.trim();
             let lower = trimmed.to_lowercase();
+            #[allow(clippy::collapsible_if)]
             if lower.starts_with("protocol:") {
                 if let Some(colon_pos) = trimmed.find(':') {
                     let value = trimmed[colon_pos + 1..].trim();
@@ -157,15 +158,16 @@ pub fn parse_plan(text: &str) -> Result<Vec<Task>> {
                 let body_text = body_lines.join("\n");
 
                 // Parse sections from the body
-                let (outcome, done_when, verify, refs, is_gate, protocol_name) = parse_sections(&body_text);
+                let (outcome, done_when, verify, refs, is_gate, protocol_name) =
+                    parse_sections(&body_text);
 
                 // Validate protocol name if provided
-                if let Some(ref proto) = protocol_name {
+                #[allow(clippy::collapsible_if)]
+                if let Some(proto) = &protocol_name {
                     if proto != "direct" && proto != "tdd" {
                         return Err(Error::Policy {
                             detail: format!(
-                                "Task '{}' has invalid protocol '{}'; must be 'direct' or 'tdd'",
-                                title, proto
+                                "Task '{title}' has invalid protocol '{proto}'; must be 'direct' or 'tdd'"
                             ),
                             paths: vec![],
                         });
