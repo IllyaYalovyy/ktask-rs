@@ -399,6 +399,77 @@ pub fn parse_cargo(output: &str) -> Option<TestSummary> {
     })
 }
 
+/// Run the completion set of gates in deterministic order.
+///
+/// Executes format, lint, build, verify, and privacy gates in that order.
+/// Stops at the first failure (except verify which always runs).
+/// Returns all results that were actually executed.
+///
+/// # Arguments
+///
+/// * `profile` - The verification profile containing gates to run
+/// * `root` - The working directory for gate execution
+/// * `base_sha` - The base commit SHA (used for logging/journaling)
+/// * `bus` - Optional event bus for publishing gate events
+///
+/// # Returns
+///
+/// A vector of gate results in execution order.
+/// Includes results only for gates that were actually run.
+///
+/// # Errors
+///
+/// Returns an error if a gate cannot be spawned (e.g., command not found).
+/// A timeout, nonzero exit code, or signal do not produce an error; they are
+/// captured in the [`GateResult`].
+pub fn run_completion_set(
+    profile: &Profile,
+    root: &Path,
+    _base_sha: &str,
+    _bus: Option<&Bus>,
+) -> Result<Vec<GateResult>> {
+    let mandatory_gates = [
+        GateKind::Format,
+        GateKind::Lint,
+        GateKind::Build,
+    ];
+    let verify_gate = GateKind::Verify;
+    let optional_gates = [GateKind::Privacy];
+
+    let mut results = Vec::new();
+    let mut should_continue = true;
+
+    for gate_kind in mandatory_gates.iter() {
+        if let Some(gate) = profile.get(*gate_kind) {
+            if !should_continue {
+                break;
+            }
+
+            let result = run_gate(gate, root, _bus)?;
+            if !result.passed {
+                should_continue = false;
+            }
+            results.push(result);
+        }
+    }
+
+    if let Some(gate) = profile.get(verify_gate) {
+        let result = run_gate(gate, root, _bus)?;
+        results.push(result);
+    }
+
+    if should_continue {
+        for gate_kind in optional_gates.iter() {
+            if let Some(gate) = profile.get(*gate_kind) {
+                let result = run_gate(gate, root, _bus)?;
+                results.push(result);
+            }
+        }
+    }
+
+    Ok(results)
+}
+
 /// Build a verification profile from configuration.
 ///
 /// Creates a Profile with gates for each configured gate command in the Config.
@@ -1131,5 +1202,83 @@ test result: ok. 306 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fi
         assert_eq!(summary.passed, 100);
         assert_eq!(summary.failed, 0);
         assert_eq!(summary.ignored, 2);
+    }
+
+    #[test]
+    fn run_completion_set_runs_gates_in_order() {
+        let mut config = Config::default();
+        config.format_command = Some(vec!["echo".to_string(), "format".to_string()]);
+        config.lint_command = Some(vec!["echo".to_string(), "lint".to_string()]);
+        config.build_command = Some(vec!["echo".to_string(), "build".to_string()]);
+        config.verify_command = Some(vec!["echo".to_string(), "verify".to_string()]);
+        config.privacy_command = Some(vec!["echo".to_string(), "privacy".to_string()]);
+
+        let profile = profile_from(&config).expect("profile_from should succeed");
+        let results =
+            run_completion_set(&profile, Path::new("."), "abc123", None).expect("should succeed");
+
+        assert_eq!(results.len(), 5);
+        assert_eq!(results[0].kind, GateKind::Format);
+        assert_eq!(results[1].kind, GateKind::Lint);
+        assert_eq!(results[2].kind, GateKind::Build);
+        assert_eq!(results[3].kind, GateKind::Verify);
+        assert_eq!(results[4].kind, GateKind::Privacy);
+    }
+
+    #[test]
+    fn run_completion_set_stops_at_first_failure_before_verify() {
+        let mut config = Config::default();
+        config.format_command = Some(vec!["echo".to_string(), "format".to_string()]);
+        config.lint_command = Some(vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()]);
+        config.build_command = Some(vec!["echo".to_string(), "build".to_string()]);
+        config.verify_command = Some(vec!["echo".to_string(), "verify".to_string()]);
+        config.privacy_command = Some(vec!["echo".to_string(), "privacy".to_string()]);
+
+        let profile = profile_from(&config).expect("profile_from should succeed");
+        let results =
+            run_completion_set(&profile, Path::new("."), "abc123", None).expect("should succeed");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].kind, GateKind::Format);
+        assert!(results[0].passed);
+        assert_eq!(results[1].kind, GateKind::Lint);
+        assert!(!results[1].passed);
+        assert_eq!(results[2].kind, GateKind::Verify);
+        assert!(results[2].passed);
+    }
+
+    #[test]
+    fn run_completion_set_runs_verify_even_if_earlier_gates_fail() {
+        let mut config = Config::default();
+        config.format_command = Some(vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()]);
+        config.lint_command = Some(vec!["echo".to_string(), "lint".to_string()]);
+        config.build_command = Some(vec!["echo".to_string(), "build".to_string()]);
+        config.verify_command = Some(vec!["echo".to_string(), "verify".to_string()]);
+        config.privacy_command = Some(vec!["echo".to_string(), "privacy".to_string()]);
+
+        let profile = profile_from(&config).expect("profile_from should succeed");
+        let results =
+            run_completion_set(&profile, Path::new("."), "abc123", None).expect("should succeed");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].kind, GateKind::Format);
+        assert!(!results[0].passed);
+        assert_eq!(results[1].kind, GateKind::Verify);
+        assert!(results[1].passed);
+    }
+
+    #[test]
+    fn run_completion_set_skips_missing_gates() {
+        let mut config = Config::default();
+        config.format_command = Some(vec!["echo".to_string(), "format".to_string()]);
+        config.verify_command = Some(vec!["echo".to_string(), "verify".to_string()]);
+
+        let profile = profile_from(&config).expect("profile_from should succeed");
+        let results =
+            run_completion_set(&profile, Path::new("."), "abc123", None).expect("should succeed");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].kind, GateKind::Format);
+        assert_eq!(results[1].kind, GateKind::Verify);
     }
 }
