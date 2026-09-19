@@ -190,7 +190,7 @@ mod tests {
 
         // Create a stale lock file with an impossible PID (2^31 - 1)
         let marker = LockMarker {
-            pid: 2147483647,
+            pid: 2_147_483_647,
             start_time: 0,
         };
         let json = serde_json::to_string(&marker).unwrap();
