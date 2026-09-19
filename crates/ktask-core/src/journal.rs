@@ -223,6 +223,71 @@ impl Journal {
         Ok(result)
     }
 
+    /// Stream events since a specific sequence number without collecting into memory.
+    ///
+    /// Calls the provided callback function for each event with sequence number
+    /// greater than the given sequence, in ascending order. Uses a prepared statement
+    /// and row iteration to avoid loading all events into memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails, events cannot be deserialized,
+    /// or if the callback returns an error.
+    pub fn for_each_event<F>(&self, from: EventSeq, f: &mut F) -> Result<()>
+    where
+        F: FnMut(Event) -> Result<()>,
+    {
+        let from_val = from.get().cast_signed();
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, ts, task_id, payload FROM events WHERE seq > ?1 ORDER BY seq ASC",
+        )?;
+
+        let events = stmt.query_map([from_val], |row| {
+            let seq_val: i64 = row.get(0)?;
+            let ts_str: String = row.get(1)?;
+            let task_id_val: Option<i64> = row.get(2)?;
+            let payload_str: String = row.get(3)?;
+
+            Ok((seq_val.cast_unsigned(), ts_str, task_id_val, payload_str))
+        })?;
+
+        for event_result in events {
+            let (seq_val, ts_str, task_id_val, payload_str) = event_result?;
+
+            // Parse timestamp
+            let ts = OffsetDateTime::parse(&ts_str, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| Error::Corrupt {
+                    detail: format!("Failed to parse timestamp: {ts_str}"),
+                    seq: Some(seq_val),
+                })?;
+
+            // Deserialize kind from payload
+            let kind: EventKind =
+                serde_json::from_str(&payload_str).map_err(|_| Error::Corrupt {
+                    detail: format!("Failed to deserialize payload for seq {seq_val}"),
+                    seq: Some(seq_val),
+                })?;
+
+            // Convert task_id (stored as i64 in SQLite, originally u32)
+            let task_id = task_id_val.map(|id| {
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let task_id_u32 = id as u32;
+                TaskId::new(task_id_u32)
+            });
+
+            let event = Event {
+                seq: EventSeq::new(seq_val),
+                ts,
+                task_id,
+                kind,
+            };
+
+            f(event)?;
+        }
+
+        Ok(())
+    }
+
     /// Read events since a specific sequence number in sequence order.
     ///
     /// Returns all events with sequence number greater than the given
@@ -1402,6 +1467,38 @@ mod tests {
             }
             _ => panic!("expected Policy error"),
         }
+        drop(journal);
+    }
+
+    #[test]
+    fn for_each_event_streams_without_collecting() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+
+        // Append 10,000 events
+        for i in 1..=10_000 {
+            let kind = EventKind::TaskQueued {
+                title: format!("Task {i}"),
+            };
+            journal.append(None, &kind).unwrap();
+        }
+
+        drop(journal);
+
+        // Reopen and use for_each_event to count them without collecting
+        let journal = Journal::open(&journal_path).unwrap();
+        let mut count = 0usize;
+
+        journal
+            .for_each_event(EventSeq::new(0), &mut |_event| {
+                count += 1;
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(count, 10_000);
         drop(journal);
     }
 }
