@@ -15,7 +15,11 @@ pub mod process;
 /// Claude CLI provider adapter.
 pub mod claude;
 
+/// Codex CLI provider adapter.
+pub mod codex;
+
 pub use claude::Claude;
+pub use codex::Codex;
 pub use dummy::{Dummy, Scenario, Step, StepOutcome};
 pub use process::run_streaming;
 pub use usage::{Usage, UsageSource};
