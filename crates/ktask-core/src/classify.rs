@@ -5,6 +5,8 @@ use crate::gate::GateResult;
 use crate::provider::Outcome;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+use time::OffsetDateTime;
 
 /// Detects if a message indicates a provider rate/usage limit.
 ///
@@ -246,6 +248,171 @@ pub enum TddException {
     BuildConfig,
     /// Existing test was already failing.
     ExistingFailingTest,
+}
+
+/// Strategy for waiting after a provider limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitPlan {
+    /// Wait until a specific deadline.
+    Deadline(OffsetDateTime),
+    /// Use bounded backoff.
+    Backoff(Duration),
+}
+
+/// Parse a reset time from text, handling absolute times and relative durations.
+///
+/// Supports formats like:
+/// - Absolute times: "15:30", "15:30:00", "2026-09-20T15:30:00+00:00", RFC3339 format
+/// - Relative durations: "1h", "30m", "1 hour", "30 minutes"
+///
+/// Returns None if the text cannot be parsed as either format.
+#[must_use]
+pub fn parse_reset(text: &str, now: OffsetDateTime) -> Option<OffsetDateTime> {
+    let trimmed = text.trim();
+
+    // Try RFC3339 ISO format first
+    if let Ok(parsed) =
+        OffsetDateTime::parse(trimmed, &time::format_description::well_known::Rfc3339)
+    {
+        return Some(parsed);
+    }
+
+    // Try parsing as time-of-day with format descriptors
+    let time_part_hms =
+        time::format_description::parse_borrowed::<1>("[hour]:[minute]:[second]").ok();
+    if let Some(fmt) = time_part_hms
+        && let Ok(parsed) = time::Time::parse(trimmed, &fmt)
+    {
+        let mut next_reset = now.replace_time(parsed);
+        // If the time has already passed today, schedule for tomorrow
+        if next_reset < now {
+            next_reset += Duration::from_secs(86_400);
+        }
+        return Some(next_reset);
+    }
+
+    // Try HH:MM format
+    let time_part_hm = time::format_description::parse_borrowed::<1>("[hour]:[minute]").ok();
+    if let Some(fmt) = time_part_hm && let Ok(parsed) = time::Time::parse(trimmed, &fmt) {
+        let mut next_reset = now.replace_time(parsed);
+        // If the time has already passed today, schedule for tomorrow
+        if next_reset < now {
+            next_reset += Duration::from_secs(86_400);
+        }
+        return Some(next_reset);
+    }
+
+    // Try parsing as relative duration
+    parse_duration(trimmed).map(|dur| now + dur)
+}
+
+/// Parse a duration string into a Duration.
+///
+/// Supports formats like:
+/// - "1h", "2h30m", "30m", "45s"
+/// - "1 hour", "2 hours", "30 minutes", "45 seconds"
+fn parse_duration(text: &str) -> Option<Duration> {
+    let trimmed = text.trim().to_lowercase();
+
+    // Handle full word formats like "1 hour", "30 minutes"
+    if let Some((num_str, unit)) = parse_duration_with_words(&trimmed)
+        && let Ok(num) = num_str.trim().parse::<u64>()
+    {
+        return Some(match unit.as_str() {
+            "hour" | "hours" => Duration::from_secs(num * 3_600),
+            "minute" | "minutes" => Duration::from_secs(num * 60),
+            "second" | "seconds" => Duration::from_secs(num),
+            "day" | "days" => Duration::from_secs(num * 86_400),
+            _ => return None,
+        });
+    }
+
+    // Handle shorthand formats like "1h", "30m", "45s"
+    let mut total = Duration::ZERO;
+    let mut current_num = String::new();
+    let mut chars = trimmed.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch.is_ascii_digit() {
+            current_num.push(ch);
+        } else if ch.is_alphabetic() {
+            if current_num.is_empty() {
+                return None;
+            }
+            let num: u64 = current_num.parse().ok()?;
+            let mut unit = String::from(ch);
+            // Collect multi-character units like "ms"
+            while let Some(&next_ch) = chars.peek() {
+                if next_ch.is_alphabetic() {
+                    if let Some(c) = chars.next() {
+                        unit.push(c);
+                    }
+                } else {
+                    break;
+                }
+            }
+            total += match unit.as_str() {
+                "h" => Duration::from_secs(num * 3_600),
+                "m" => Duration::from_secs(num * 60),
+                "s" => Duration::from_secs(num),
+                "ms" => Duration::from_millis(num),
+                "d" => Duration::from_secs(num * 86_400),
+                _ => return None,
+            };
+            current_num.clear();
+        } else if ch.is_whitespace() {
+            // Skip whitespace
+        } else {
+            return None;
+        }
+    }
+
+    if total == Duration::ZERO {
+        return None;
+    }
+    Some(total)
+}
+
+/// Helper to parse duration with full words like "1 hour" or "30 minutes".
+fn parse_duration_with_words(text: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    if parts.len() == 2
+        && let (Some(&num_part), Some(&unit_part)) = (parts.first(), parts.get(1))
+        && num_part.parse::<u64>().is_ok()
+    {
+        let num_str = num_part.to_string();
+        let unit = unit_part.to_string();
+        return Some((num_str, unit));
+    }
+    None
+}
+
+/// Determine a wait strategy based on reset time and constraints.
+///
+/// If a reset time is known, returns a Deadline with the margin subtracted.
+/// If reset is unknown, returns a Backoff bounded by the max duration.
+#[must_use]
+pub fn wait_plan(
+    reset: Option<OffsetDateTime>,
+    now: OffsetDateTime,
+    margin: Duration,
+    max: Duration,
+) -> WaitPlan {
+    match reset {
+        Some(deadline) => {
+            // Subtract margin from deadline for a more conservative wait time
+            let adjusted_deadline = if deadline > now + margin {
+                deadline - margin
+            } else {
+                now
+            };
+            WaitPlan::Deadline(adjusted_deadline)
+        }
+        None => {
+            // Use bounded backoff for unknown reset times
+            WaitPlan::Backoff(max)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -701,6 +868,379 @@ mod tests {
             let deserialized: TddException =
                 serde_json::from_str(&json).expect("deserialize exception");
             assert_eq!(exception, deserialized);
+        }
+    }
+
+    // Parse reset time tests
+    #[test]
+    fn parse_reset_absolute_time_hhmm_format() {
+        use time::macros::offset;
+        // Create a test time: 2026-09-19 10:00:00 UTC
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+
+        // Test parsing HH:MM format for later today
+        let result = parse_reset("15:30", now);
+        assert!(result.is_some());
+        let reset = result.unwrap();
+        // Should be today at 15:30
+        assert_eq!(reset.hour(), 15);
+        assert_eq!(reset.minute(), 30);
+        assert_eq!(reset.date(), now.date());
+    }
+
+    #[test]
+    fn parse_reset_absolute_time_hhmmss_format() {
+        use time::macros::offset;
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+
+        let result = parse_reset("14:25:30", now);
+        assert!(result.is_some());
+        let reset = result.unwrap();
+        assert_eq!(reset.hour(), 14);
+        assert_eq!(reset.minute(), 25);
+        assert_eq!(reset.second(), 30);
+    }
+
+    #[test]
+    fn parse_reset_past_time_schedules_tomorrow() {
+        use time::macros::offset;
+        // Create a test time: 2026-09-19 10:00:00 UTC
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+
+        // Parse a time that has already passed today (09:00 < 10:00)
+        let result = parse_reset("09:00", now);
+        assert!(result.is_some());
+        let reset = result.unwrap();
+        // Should be tomorrow at 09:00
+        assert_eq!(reset.hour(), 9);
+        assert_eq!(reset.minute(), 0);
+        // Check it's the next day
+        let expected_date = now.date() + Duration::from_secs(86_400);
+        assert_eq!(reset.date(), expected_date);
+    }
+
+    #[test]
+    fn parse_reset_across_midnight_boundary() {
+        use time::macros::offset;
+        // Create a test time: 2026-09-19 23:30:00 UTC (11:30 PM)
+        let now = OffsetDateTime::from_unix_timestamp(1_726_838_400 + 84600)
+            .unwrap()
+            .to_offset(offset!(UTC));
+
+        // Parse 01:00 (1 AM) - should be tomorrow
+        let result = parse_reset("01:00", now);
+        assert!(result.is_some());
+        let reset = result.unwrap();
+        assert_eq!(reset.hour(), 1);
+        assert_eq!(reset.minute(), 0);
+        // Should be tomorrow
+        let expected_date = now.date() + Duration::from_secs(86_400);
+        assert_eq!(reset.date(), expected_date);
+    }
+
+    #[test]
+    fn parse_reset_at_day_boundary() {
+        use time::macros::offset;
+        // Create a test time at exactly midnight: 2026-09-20 00:00:00 UTC
+        let now = OffsetDateTime::from_unix_timestamp(1_726_838_400)
+            .unwrap()
+            .to_offset(offset!(UTC));
+
+        // Parse 00:00 (midnight) - should be tomorrow since it's not in the future
+        let result = parse_reset("00:00", now);
+        assert!(result.is_some());
+        let reset = result.unwrap();
+        assert_eq!(reset.hour(), 0);
+        assert_eq!(reset.minute(), 0);
+    }
+
+    #[test]
+    fn parse_reset_relative_duration_hours() {
+        use time::macros::offset;
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+
+        let result = parse_reset("2h", now);
+        assert!(result.is_some());
+        let reset = result.unwrap();
+        // Should be 2 hours from now
+        let expected = now + Duration::from_secs(7200);
+        assert_eq!(reset, expected);
+    }
+
+    #[test]
+    fn parse_reset_relative_duration_minutes() {
+        use time::macros::offset;
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+
+        let result = parse_reset("30m", now);
+        assert!(result.is_some());
+        let reset = result.unwrap();
+        // Should be 30 minutes from now
+        let expected = now + Duration::from_secs(1_800);
+        assert_eq!(reset, expected);
+    }
+
+    #[test]
+    fn parse_reset_relative_duration_mixed() {
+        use time::macros::offset;
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+
+        let result = parse_reset("1h30m", now);
+        assert!(result.is_some());
+        let reset = result.unwrap();
+        // Should be 1 hour 30 minutes from now
+        let expected = now + Duration::from_secs(5_400);
+        assert_eq!(reset, expected);
+    }
+
+    #[test]
+    fn parse_reset_relative_duration_words() {
+        use time::macros::offset;
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+
+        let result = parse_reset("1 hour", now);
+        assert!(result.is_some());
+        let reset = result.unwrap();
+        let expected = now + Duration::from_secs(3600);
+        assert_eq!(reset, expected);
+    }
+
+    #[test]
+    fn parse_reset_relative_duration_plural_words() {
+        use time::macros::offset;
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+
+        let result = parse_reset("30 minutes", now);
+        assert!(result.is_some());
+        let reset = result.unwrap();
+        let expected = now + Duration::from_secs(1_800);
+        assert_eq!(reset, expected);
+    }
+
+    #[test]
+    fn parse_reset_unparseable_returns_none() {
+        use time::macros::offset;
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+
+        assert!(parse_reset("invalid", now).is_none());
+        assert!(parse_reset("not a time", now).is_none());
+        assert!(parse_reset("25:00", now).is_none());
+        assert!(parse_reset("xyz", now).is_none());
+    }
+
+    #[test]
+    fn parse_reset_whitespace_handling() {
+        use time::macros::offset;
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+
+        // With leading/trailing whitespace
+        let result = parse_reset("  1h  ", now);
+        assert!(result.is_some());
+        let reset = result.unwrap();
+        let expected = now + Duration::from_secs(3600);
+        assert_eq!(reset, expected);
+    }
+
+    #[test]
+    fn wait_plan_with_known_deadline() {
+        use time::macros::offset;
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+        let deadline = now + Duration::from_secs(3600); // 1 hour from now
+        let margin = Duration::from_secs(300); // 5 minutes
+        let max = Duration::from_secs(10000);
+
+        let plan = wait_plan(Some(deadline), now, margin, max);
+
+        match plan {
+            WaitPlan::Deadline(adjusted) => {
+                // Deadline minus margin should be 55 minutes from now
+                let expected = deadline - margin;
+                assert_eq!(adjusted, expected);
+            }
+            WaitPlan::Backoff(_) => panic!("Expected Deadline, got Backoff"),
+        }
+    }
+
+    #[test]
+    fn wait_plan_with_deadline_less_than_margin() {
+        use time::macros::offset;
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+        let deadline = now + Duration::from_secs(100); // 100 seconds from now
+        let margin = Duration::from_secs(300); // 5 minutes (larger than deadline gap)
+        let max = Duration::from_secs(10000);
+
+        let plan = wait_plan(Some(deadline), now, margin, max);
+
+        match plan {
+            WaitPlan::Deadline(adjusted) => {
+                // Should not go before now
+                assert!(adjusted >= now);
+            }
+            WaitPlan::Backoff(_) => panic!("Expected Deadline, got Backoff"),
+        }
+    }
+
+    #[test]
+    fn wait_plan_with_unknown_deadline() {
+        use time::macros::offset;
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+        let margin = Duration::from_secs(300);
+        let max = Duration::from_secs(10000);
+
+        let plan = wait_plan(None, now, margin, max);
+
+        match plan {
+            WaitPlan::Backoff(duration) => {
+                // Should use max duration
+                assert_eq!(duration, max);
+            }
+            WaitPlan::Deadline(_) => panic!("Expected Backoff, got Deadline"),
+        }
+    }
+
+    #[test]
+    fn wait_plan_backoff_bounded_by_max() {
+        use time::macros::offset;
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+        let margin = Duration::from_secs(100);
+        let max = Duration::from_secs(300);
+
+        let plan = wait_plan(None, now, margin, max);
+
+        match plan {
+            WaitPlan::Backoff(duration) => {
+                assert_eq!(duration, max);
+            }
+            WaitPlan::Deadline(_) => panic!("Expected Backoff, got Deadline"),
+        }
+    }
+
+    #[test]
+    fn parse_duration_hours() {
+        let result = parse_duration("2h");
+        assert_eq!(result, Some(Duration::from_secs(7200)));
+    }
+
+    #[test]
+    fn parse_duration_minutes() {
+        let result = parse_duration("30m");
+        assert_eq!(result, Some(Duration::from_secs(1_800)));
+    }
+
+    #[test]
+    fn parse_duration_seconds() {
+        let result = parse_duration("45s");
+        assert_eq!(result, Some(Duration::from_secs(45)));
+    }
+
+    #[test]
+    fn parse_duration_mixed() {
+        let result = parse_duration("1h30m");
+        assert_eq!(result, Some(Duration::from_secs(5_400)));
+    }
+
+    #[test]
+    fn parse_duration_full_words() {
+        let result = parse_duration("1 hour");
+        assert_eq!(result, Some(Duration::from_secs(3600)));
+
+        let result = parse_duration("30 minutes");
+        assert_eq!(result, Some(Duration::from_secs(1_800)));
+
+        let result = parse_duration("45 seconds");
+        assert_eq!(result, Some(Duration::from_secs(45)));
+    }
+
+    #[test]
+    fn parse_duration_plural_forms() {
+        let result = parse_duration("2 hours");
+        assert_eq!(result, Some(Duration::from_secs(7200)));
+
+        let result = parse_duration("5 minutes");
+        assert_eq!(result, Some(Duration::from_secs(300)));
+
+        let result = parse_duration("10 seconds");
+        assert_eq!(result, Some(Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn parse_duration_days() {
+        let result = parse_duration("1d");
+        assert_eq!(result, Some(Duration::from_secs(86_400)));
+
+        let result = parse_duration("2 days");
+        assert_eq!(result, Some(Duration::from_secs(172_800)));
+    }
+
+    #[test]
+    fn parse_duration_invalid_returns_none() {
+        assert!(parse_duration("invalid").is_none());
+        assert!(parse_duration("abc").is_none());
+        assert!(parse_duration("").is_none());
+        assert!(parse_duration("10x").is_none());
+    }
+
+    #[test]
+    fn parse_duration_case_insensitive() {
+        let result = parse_duration("1H");
+        assert_eq!(result, Some(Duration::from_secs(3600)));
+
+        let result = parse_duration("30M");
+        assert_eq!(result, Some(Duration::from_secs(1_800)));
+    }
+
+    #[test]
+    fn parse_duration_with_spaces() {
+        let result = parse_duration("1h 30m");
+        // This should work - spaces between units
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn wait_plan_never_returns_unbounded_wait() {
+        use time::macros::offset;
+        let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
+            .unwrap()
+            .to_offset(offset!(UTC));
+        let margin = Duration::from_secs(300);
+        let max = Duration::from_secs(300);
+
+        // Test with unknown deadline
+        let plan = wait_plan(None, now, margin, max);
+        match plan {
+            WaitPlan::Deadline(_) => panic!("Should not have infinite deadline"),
+            WaitPlan::Backoff(d) => {
+                // Must be bounded
+                assert!(d <= max);
+            }
         }
     }
 }
