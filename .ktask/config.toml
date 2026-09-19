@@ -8,6 +8,9 @@
 #   model    = "<provider model id>"
 #
 # Changing anything else changes the experiment. Do not edit per run.
+executor = "codex"
+model = "LUNA_MODEL_ID"
+mainline_branch = "ktask-rs-luna"
 
 project_dir = "."
 
