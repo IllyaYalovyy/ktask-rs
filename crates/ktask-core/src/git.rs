@@ -270,20 +270,24 @@ pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {
 /// fails.
 pub fn publish(worktree: &Path, remote: &str, branch: &str, candidate: &str) -> Result<()> {
     // Push the candidate to the remote branch using full refspec
-    let push_refspec = format!("{}:refs/heads/{}", candidate, branch);
+    let push_refspec = format!("{candidate}:refs/heads/{branch}");
     git(worktree, &["push", remote, &push_refspec])?;
 
     // Fetch to ensure we have the latest remote state (fresh fetch, not cached)
     git(worktree, &["fetch", remote])?;
 
     // Get the remote tip
-    let remote_ref = format!("refs/remotes/{}/{}", remote, branch);
+    let remote_ref = format!("refs/remotes/{remote}/{branch}");
     let remote_sha = git(worktree, &["rev-parse", &remote_ref])?;
 
     // Verify the remote tip matches the candidate
     if remote_sha != candidate {
         return Err(Error::Git {
-            args: vec!["push".to_string(), "fetch".to_string(), "verify".to_string()],
+            args: vec![
+                "push".to_string(),
+                "fetch".to_string(),
+                "verify".to_string(),
+            ],
             stderr: format!(
                 "pushed candidate {} but remote tip is {} after verification",
                 &candidate[..8.min(candidate.len())],
@@ -1518,10 +1522,8 @@ mod tests {
             return;
         };
         // Create a bare repository to act as a remote
-        let remote_path = env::temp_dir().join(format!(
-            "ktask-git-remote-publish-{}",
-            std::process::id()
-        ));
+        let remote_path =
+            env::temp_dir().join(format!("ktask-git-remote-publish-{}", std::process::id()));
         let _ = fs::remove_dir_all(&remote_path);
         let _ = fs::create_dir_all(&remote_path);
 
@@ -1600,7 +1602,10 @@ mod tests {
 
         if let Err(Error::Git { args, stderr }) = result {
             // Error should be from the push command
-            assert!(args.contains(&"push".to_string()), "Error should be from push");
+            assert!(
+                args.contains(&"push".to_string()),
+                "Error should be from push"
+            );
             assert!(!stderr.is_empty(), "Error should have stderr");
         } else {
             panic!("Expected Error::Git variant");
@@ -1613,10 +1618,8 @@ mod tests {
             return;
         };
         // Create a bare repository to act as a remote
-        let remote_path = env::temp_dir().join(format!(
-            "ktask-git-remote-ref-{}",
-            std::process::id()
-        ));
+        let remote_path =
+            env::temp_dir().join(format!("ktask-git-remote-ref-{}", std::process::id()));
         let _ = fs::remove_dir_all(&remote_path);
         let _ = fs::create_dir_all(&remote_path);
 
