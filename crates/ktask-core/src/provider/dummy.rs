@@ -663,4 +663,140 @@ outcome = "unknown_outcome"
         assert_eq!(o3.stdout, "Third");
         assert_eq!(o3.exit_code, 0);
     }
+
+    #[test]
+    fn dummy_provider_deterministic_across_invocations() {
+        use crate::provider::Provider;
+
+        let scenario = Scenario {
+            steps: vec![
+                Step {
+                    on_task: Some(1),
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: Some("Output A".to_string()),
+                    exit_code: Some(42),
+                    delay_ms: None,
+                    files: None,
+                },
+                Step {
+                    on_task: Some(2),
+                    on_attempt: None,
+                    outcome: StepOutcome::Failure,
+                    stdout: Some("Output B".to_string()),
+                    exit_code: None,
+                    delay_ms: None,
+                    files: None,
+                },
+            ],
+        };
+
+        let inv = Invocation {
+            prompt: "test".to_string(),
+            model: None,
+            working_dir: std::path::PathBuf::from("/tmp"),
+        };
+
+        // Create two Dummy providers with the same scenario
+        let dummy1 = Dummy::new(scenario.clone());
+        let dummy2 = Dummy::new(scenario.clone());
+
+        // Run both in sequence and verify they produce identical outputs
+        let o1a = dummy1.invoke(&inv, None).expect("dummy1 first invoke succeeded");
+        let o2a = dummy2.invoke(&inv, None).expect("dummy2 first invoke succeeded");
+
+        assert_eq!(o1a.exit_code, o2a.exit_code);
+        assert_eq!(o1a.stdout, o2a.stdout);
+        assert_eq!(o1a.stderr, o2a.stderr);
+
+        let o1b = dummy1.invoke(&inv, None).expect("dummy1 second invoke succeeded");
+        let o2b = dummy2.invoke(&inv, None).expect("dummy2 second invoke succeeded");
+
+        assert_eq!(o1b.exit_code, o2b.exit_code);
+        assert_eq!(o1b.stdout, o2b.stdout);
+        assert_eq!(o1b.stderr, o2b.stderr);
+    }
+
+    #[test]
+    fn dummy_provider_all_step_outcomes() {
+        use crate::provider::Provider;
+
+        let scenario = Scenario {
+            steps: vec![
+                Step {
+                    on_task: Some(1),
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: None,
+                    exit_code: None,
+                    delay_ms: None,
+                    files: None,
+                },
+                Step {
+                    on_task: Some(2),
+                    on_attempt: None,
+                    outcome: StepOutcome::Failure,
+                    stdout: None,
+                    exit_code: None,
+                    delay_ms: None,
+                    files: None,
+                },
+                Step {
+                    on_task: Some(3),
+                    on_attempt: None,
+                    outcome: StepOutcome::Limit,
+                    stdout: None,
+                    exit_code: None,
+                    delay_ms: None,
+                    files: None,
+                },
+                Step {
+                    on_task: Some(4),
+                    on_attempt: None,
+                    outcome: StepOutcome::NeedsInput,
+                    stdout: None,
+                    exit_code: None,
+                    delay_ms: None,
+                    files: None,
+                },
+            ],
+        };
+
+        let dummy = Dummy::new(scenario);
+        let inv = Invocation {
+            prompt: "test".to_string(),
+            model: None,
+            working_dir: std::path::PathBuf::from("/tmp"),
+        };
+
+        // Success outcome
+        let o1 = dummy.invoke(&inv, None).expect("invoke 1 succeeded");
+        assert_eq!(o1.exit_code, 0);
+
+        // Failure outcome
+        let o2 = dummy.invoke(&inv, None).expect("invoke 2 succeeded");
+        assert_eq!(o2.exit_code, 1);
+
+        // Limit outcome (defaults to 0)
+        let o3 = dummy.invoke(&inv, None).expect("invoke 3 succeeded");
+        assert_eq!(o3.exit_code, 0);
+
+        // NeedsInput outcome (defaults to 0)
+        let o4 = dummy.invoke(&inv, None).expect("invoke 4 succeeded");
+        assert_eq!(o4.exit_code, 0);
+    }
+
+    #[test]
+    fn dummy_provider_name_and_capabilities() {
+        use crate::provider::Provider;
+
+        let scenario = Scenario { steps: vec![] };
+        let dummy = Dummy::new(scenario);
+
+        assert_eq!(dummy.name(), "dummy");
+        let caps = dummy.capabilities();
+        assert!(!caps.structured_output);
+        assert!(!caps.model_selection);
+        assert!(!caps.usage_telemetry);
+    }
 }
