@@ -949,6 +949,12 @@ printf '\nanswered\n'
              ADR-0049 keeps an unreported figure unknown rather than zero"
         );
         assert_eq!(outcome.session_id, None, "and no session id was disclosed");
+        assert_eq!(
+            outcome.model_reported, None,
+            "and no model was reported either: this CLI is started with plain text, so \
+             an id here would be a guess about which model ran the session, and \
+             section 12 compares recorded ids rather than invented ones"
+        );
     }
 
     #[test]

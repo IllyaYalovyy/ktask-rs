@@ -1073,6 +1073,11 @@ mod sessions {
             outcome.session_id, None,
             "and nothing asked what it was called"
         );
+        assert_eq!(
+            outcome.model_reported, None,
+            "and nothing asked which model it ran on, so an id recorded here could \
+             only have been guessed — the exact substitution section 12 exists to catch"
+        );
     }
 
     #[test]

@@ -1627,6 +1627,11 @@ mod replay_tests {
             "a scenario names no session, and no correctness path may depend on one"
         );
         assert_eq!(
+            outcome.model_reported, None,
+            "and a scripted session runs on no model at all, so a report here would \
+             claim the scenario had proved one — the mark section 12 wants is the gap"
+        );
+        assert_eq!(
             outcome.stderr, "",
             "the format declares one stream and a step's text is on it, so there is \
              nothing to report as a problem"
