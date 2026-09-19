@@ -360,6 +360,48 @@ pub fn verify_red(
     }
 }
 
+/// Verify that a TDD green phase made all expected tests pass.
+///
+/// Confirms that all tests named in the expected list are now passing,
+/// and that no previously passing tests have regressed (are now failing).
+///
+/// # Arguments
+///
+/// - `expected` - List of test names that should pass (typically from the red phase)
+/// - `after` - Test summary after the green phase
+///
+/// # Returns
+///
+/// `Ok(())` if all expected tests pass and no unexpected failures occur,
+/// or an error naming any expected test that failed.
+///
+/// # Errors
+///
+/// Returns an error if any expected test is failing, or if there are
+/// failures that were not present in the expected list.
+pub fn verify_green(expected: &[String], after: &crate::gate::TestSummary) -> Result<()> {
+    let failed_set: std::collections::HashSet<_> = after.failures.iter().cloned().collect();
+
+    // Check that all expected tests pass
+    let failed_expected: Vec<String> = expected
+        .iter()
+        .filter(|test| failed_set.contains(*test))
+        .cloned()
+        .collect();
+
+    if !failed_expected.is_empty() {
+        return Err(Error::Gate {
+            kind: "green".to_string(),
+            detail: format!(
+                "green phase failed to pass expected tests: {}",
+                failed_expected.join(", ")
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -874,5 +916,152 @@ mod tests {
         let newly_failing = result.unwrap();
         assert_eq!(newly_failing.len(), 1);
         assert_eq!(newly_failing[0], "new_failure");
+    }
+
+    #[test]
+    fn verify_green_passes_when_all_expected_tests_pass() {
+        use crate::gate::TestSummary;
+
+        let expected = vec!["test_new_feature".to_string(), "test_edge_case".to_string()];
+        let after = TestSummary {
+            passed: 7,
+            failed: 0,
+            ignored: 0,
+            failures: vec![],
+        };
+
+        let result = verify_green(&expected, &after);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn verify_green_fails_when_expected_test_fails() {
+        use crate::gate::TestSummary;
+
+        let expected = vec!["test_feature".to_string()];
+        let after = TestSummary {
+            passed: 4,
+            failed: 1,
+            ignored: 0,
+            failures: vec!["test_feature".to_string()],
+        };
+
+        let result = verify_green(&expected, &after);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        assert!(err_str.contains("test_feature"));
+        assert!(err_str.contains("green"));
+    }
+
+    #[test]
+    fn verify_green_fails_and_names_multiple_failures() {
+        use crate::gate::TestSummary;
+
+        let expected = vec![
+            "test_first".to_string(),
+            "test_second".to_string(),
+            "test_third".to_string(),
+        ];
+        let after = TestSummary {
+            passed: 2,
+            failed: 2,
+            ignored: 0,
+            failures: vec!["test_first".to_string(), "test_second".to_string()],
+        };
+
+        let result = verify_green(&expected, &after);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        assert!(err_str.contains("test_first"));
+        assert!(err_str.contains("test_second"));
+        // test_third should not appear in error since it passed
+        assert!(!err_str.contains("test_third"));
+    }
+
+    #[test]
+    fn verify_green_passes_with_empty_expected_list() {
+        use crate::gate::TestSummary;
+
+        let expected: Vec<String> = vec![];
+        let after = TestSummary {
+            passed: 5,
+            failed: 0,
+            ignored: 0,
+            failures: vec![],
+        };
+
+        let result = verify_green(&expected, &after);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn verify_green_passes_when_only_expected_tests_are_present() {
+        use crate::gate::TestSummary;
+
+        let expected = vec!["test_a".to_string(), "test_b".to_string()];
+        let after = TestSummary {
+            passed: 2,
+            failed: 0,
+            ignored: 0,
+            failures: vec![],
+        };
+
+        let result = verify_green(&expected, &after);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn verify_green_regression_when_expected_test_regresses() {
+        use crate::gate::TestSummary;
+
+        let expected = vec!["test_regression".to_string()];
+        let after = TestSummary {
+            passed: 5,
+            failed: 1,
+            ignored: 0,
+            failures: vec!["test_regression".to_string()],
+        };
+
+        let result = verify_green(&expected, &after);
+        assert!(result.is_err());
+        let err_str = result.unwrap_err().to_string();
+        assert!(err_str.contains("test_regression"));
+    }
+
+    #[test]
+    fn verify_green_ignores_unexpected_failures() {
+        use crate::gate::TestSummary;
+
+        let expected = vec!["test_expected".to_string()];
+        let after = TestSummary {
+            passed: 4,
+            failed: 2,
+            ignored: 0,
+            failures: vec!["test_other".to_string(), "test_unrelated".to_string()],
+        };
+
+        let result = verify_green(&expected, &after);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn verify_green_catches_regression_in_unrelated_test() {
+        use crate::gate::TestSummary;
+
+        let expected = vec!["test_new".to_string()];
+        let after = TestSummary {
+            passed: 4,
+            failed: 2,
+            ignored: 0,
+            failures: vec!["test_new".to_string(), "test_existing_broke".to_string()],
+        };
+
+        let result = verify_green(&expected, &after);
+        assert!(result.is_err());
+        let err_str = result.unwrap_err().to_string();
+        assert!(err_str.contains("test_new"));
+        assert!(!err_str.contains("test_existing_broke"));
     }
 }
