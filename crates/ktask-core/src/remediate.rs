@@ -1,7 +1,8 @@
 //! Failure signature and circuit breaker for repeated failures.
 
-use crate::{AttemptRecord, FailureClass, GateResult, Task};
+use crate::{AttemptRecord, FailureClass, GateResult, Task, Error, Result};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Represents the state of a circuit breaker after recording a signature.
@@ -105,6 +106,65 @@ impl Breaker {
         } else {
             BreakerState::Open
         }
+    }
+}
+
+/// Check that a diff does not touch protected policy files.
+///
+/// Protected paths are:
+/// - `deny.toml`
+/// - `clippy.toml`
+/// - `rustfmt.toml`
+/// - `scripts/` directory
+/// - `.ktask/` directory
+///
+/// Returns a Policy error if any protected path is found in the diff.
+/// This check enforces the invariant that tasks cannot weaken or modify
+/// the policy gates that evaluate their work.
+///
+/// # Arguments
+///
+/// * `diff_paths` - Paths modified in the diff to check
+///
+/// # Returns
+///
+/// `Ok(())` if no protected paths are touched, or a Policy error naming the violations.
+pub fn check_no_policy_edit(diff_paths: &[PathBuf]) -> Result<()> {
+    let mut violations = Vec::new();
+
+    for path in diff_paths {
+        let path_str = path.to_string_lossy().to_string();
+
+        let is_violation =
+            // Exact matches for config files
+            path_str == "deny.toml" ||
+            path_str == "clippy.toml" ||
+            path_str == "rustfmt.toml" ||
+            // Directory checks - match exact directory names or files within them
+            path_str.starts_with("scripts/") ||
+            path_str == "scripts" ||
+            path_str.starts_with(".ktask/") ||
+            path_str == ".ktask";
+
+        if is_violation {
+            violations.push(path.clone());
+        }
+    }
+
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::Policy {
+            detail: format!(
+                "task cannot edit policy gates: {}",
+                violations
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            paths: violations,
+        })
     }
 }
 
@@ -976,5 +1036,174 @@ mod tests {
             Decision::Stop { reason } => assert!(reason.contains("token")),
             Decision::Continue => panic!("Expected Stop decision"),
         }
+    }
+
+    #[test]
+    fn check_no_policy_edit_accepts_normal_source_changes() {
+        let paths = vec![
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("crates/ktask-core/src/lib.rs"),
+            PathBuf::from("README.md"),
+        ];
+
+        assert!(check_no_policy_edit(&paths).is_ok());
+    }
+
+    #[test]
+    fn check_no_policy_edit_rejects_deny_toml() {
+        let paths = vec![PathBuf::from("deny.toml")];
+
+        let result = check_no_policy_edit(&paths);
+        assert!(result.is_err());
+        if let Err(crate::Error::Policy { detail, paths: violation_paths }) = result {
+            assert!(detail.contains("policy gates"));
+            assert_eq!(violation_paths.len(), 1);
+        } else {
+            panic!("Expected Policy error");
+        }
+    }
+
+    #[test]
+    fn check_no_policy_edit_rejects_clippy_toml() {
+        let paths = vec![PathBuf::from("clippy.toml")];
+
+        let result = check_no_policy_edit(&paths);
+        assert!(result.is_err());
+        if let Err(crate::Error::Policy { paths: violation_paths, .. }) = result {
+            assert_eq!(violation_paths.len(), 1);
+        } else {
+            panic!("Expected Policy error");
+        }
+    }
+
+    #[test]
+    fn check_no_policy_edit_rejects_rustfmt_toml() {
+        let paths = vec![PathBuf::from("rustfmt.toml")];
+
+        let result = check_no_policy_edit(&paths);
+        assert!(result.is_err());
+        if let Err(crate::Error::Policy { paths: violation_paths, .. }) = result {
+            assert_eq!(violation_paths.len(), 1);
+        } else {
+            panic!("Expected Policy error");
+        }
+    }
+
+    #[test]
+    fn check_no_policy_edit_rejects_scripts_directory() {
+        let paths = vec![
+            PathBuf::from("scripts/quality.sh"),
+            PathBuf::from("scripts/test.sh"),
+        ];
+
+        let result = check_no_policy_edit(&paths);
+        assert!(result.is_err());
+        if let Err(crate::Error::Policy { paths: violation_paths, .. }) = result {
+            assert_eq!(violation_paths.len(), 2);
+        } else {
+            panic!("Expected Policy error");
+        }
+    }
+
+    #[test]
+    fn check_no_policy_edit_rejects_ktask_directory() {
+        let paths = vec![
+            PathBuf::from(".ktask/queue/task-1.md"),
+            PathBuf::from(".ktask/config.toml"),
+        ];
+
+        let result = check_no_policy_edit(&paths);
+        assert!(result.is_err());
+        if let Err(crate::Error::Policy { paths: violation_paths, .. }) = result {
+            assert_eq!(violation_paths.len(), 2);
+        } else {
+            panic!("Expected Policy error");
+        }
+    }
+
+    #[test]
+    fn check_no_policy_edit_mixed_violations_and_valid() {
+        let paths = vec![
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("clippy.toml"),
+            PathBuf::from("README.md"),
+            PathBuf::from("scripts/test.sh"),
+        ];
+
+        let result = check_no_policy_edit(&paths);
+        assert!(result.is_err());
+        if let Err(crate::Error::Policy { paths: violation_paths, .. }) = result {
+            assert_eq!(violation_paths.len(), 2);
+            let violation_strs: Vec<_> = violation_paths
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect();
+            assert!(violation_strs.contains(&"clippy.toml".to_string()));
+            assert!(violation_strs.contains(&"scripts/test.sh".to_string()));
+        } else {
+            panic!("Expected Policy error");
+        }
+    }
+
+    #[test]
+    fn check_no_policy_edit_empty_paths() {
+        let paths: Vec<PathBuf> = vec![];
+
+        assert!(check_no_policy_edit(&paths).is_ok());
+    }
+
+    #[test]
+    fn check_no_policy_edit_allows_deny_toml_in_nested_path() {
+        // Deny.toml protection is only at the root level
+        // Nested deny.toml files in subdirectories are allowed
+        let paths = vec![PathBuf::from("some/nested/path/deny.toml")];
+
+        assert!(check_no_policy_edit(&paths).is_ok());
+    }
+
+    #[test]
+    fn check_no_policy_edit_detects_scripts_nested() {
+        let paths = vec![
+            PathBuf::from("scripts/tools/helper.sh"),
+            PathBuf::from("scripts/deeper/nested/file.sh"),
+        ];
+
+        let result = check_no_policy_edit(&paths);
+        assert!(result.is_err());
+        if let Err(crate::Error::Policy { paths: violation_paths, .. }) = result {
+            assert_eq!(violation_paths.len(), 2);
+        } else {
+            panic!("Expected Policy error");
+        }
+    }
+
+    #[test]
+    fn check_no_policy_edit_detects_ktask_nested() {
+        let paths = vec![
+            PathBuf::from(".ktask/logs/attempt-1.log"),
+            PathBuf::from(".ktask/queue/report.md"),
+        ];
+
+        let result = check_no_policy_edit(&paths);
+        assert!(result.is_err());
+        if let Err(crate::Error::Policy { paths: violation_paths, .. }) = result {
+            assert_eq!(violation_paths.len(), 2);
+        } else {
+            panic!("Expected Policy error");
+        }
+    }
+
+    #[test]
+    fn check_no_policy_edit_ignores_similar_names() {
+        // scripts.txt is not scripts/ directory
+        // clippy_options.rs is not clippy.toml
+        let paths = vec![
+            PathBuf::from("src/scripts.txt"),
+            PathBuf::from("src/clippy_options.rs"),
+            PathBuf::from("config/deny_list.toml"),
+            PathBuf::from(".ktask_cache/file.txt"),
+        ];
+
+        assert!(check_no_policy_edit(&paths).is_ok());
     }
 }
