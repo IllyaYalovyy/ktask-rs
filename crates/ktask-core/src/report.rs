@@ -24,9 +24,9 @@ pub enum ReportResult {
 /// # Arguments
 /// * `text` - The full report text.
 ///
-/// # Returns
-/// * `Ok(ReportResult)` if the header is valid.
-/// * `Err` if the header is missing or malformed, with a clear error message.
+/// # Errors
+/// Returns an error if the first non-empty line is not exactly one of the three expected
+/// headers, with a clear message naming the valid options.
 pub fn parse_report(text: &str) -> crate::Result<ReportResult> {
     let first_non_empty_line = text
         .lines()
@@ -41,8 +41,7 @@ pub fn parse_report(text: &str) -> crate::Result<ReportResult> {
         "KTASK_RESULT: NEEDS_INPUT" => Ok(ReportResult::NeedsInput),
         other => Err(Error::Deserialize {
             detail: format!(
-                "Invalid report header: '{}'. Expected first non-empty line to be exactly one of: KTASK_RESULT: DONE, KTASK_RESULT: FAILED, KTASK_RESULT: NEEDS_INPUT",
-                other
+                "Invalid report header: '{other}'. Expected first non-empty line to be exactly one of: KTASK_RESULT: DONE, KTASK_RESULT: FAILED, KTASK_RESULT: NEEDS_INPUT"
             ),
         }),
     }
