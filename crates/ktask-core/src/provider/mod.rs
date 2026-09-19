@@ -39,11 +39,19 @@
 //! fields it wants out of an `Outcome` one at a time — so a serde derive on
 //! them would fix an encoding nothing reads while dragging the prompt, which
 //! is an `Invocation` field, into a journal that never asked for it.
+//!
+//! The module also owns the one rule VISION.md §12 states about models: the
+//! configured id and the id a session reports are both recorded, and an
+//! unexpected mismatch between them is rejected rather than tolerated. A rule
+//! needs both halves to be comparable at all, so this file keeps each one where
+//! it arrives — [`Invocation::model`] holds what was asked for and
+//! [`Outcome::model_reported`] holds what the session said — while
+//! [`check_model`] is the one place allowed to read them against each other.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::{Bus, Result};
+use crate::{Bus, Error, Result};
 
 pub mod claude;
 pub mod codex;
@@ -254,6 +262,22 @@ pub struct Outcome {
     /// correctness path relies on resuming a session, so an adapter that cannot
     /// produce one has lost nothing a task needs.
     pub session_id: Option<String>,
+    /// The model the session said it ran on, or `None` when it said nothing.
+    ///
+    /// VISION.md §12 records this beside [`Invocation::model`] rather than in
+    /// place of it: one is what configuration asked for and the other is what
+    /// the CLI reported, and the two are only comparable while both survive the
+    /// session. `docs/DESIGN.md` names this field under its `AttemptFinished`
+    /// payload and under the `AttemptRecord` the flight recorder stores, so
+    /// this is the half of the evidence of an attempt that outlives the run.
+    ///
+    /// `None` is the mark of a missing report and is never filled in. Writing
+    /// the configured id here whenever a session said nothing would record an
+    /// unmeasured session as one that had proved which model it ran on, which is
+    /// the substitution ADR-0049 refuses for a token count. [`check_model`] is
+    /// what reads the pair, and [`Capabilities::model_selection`] is what says
+    /// whether a report was ever owed.
+    pub model_reported: Option<String>,
 }
 
 /// A coding-agent CLI the runner can hand a task to.
@@ -305,6 +329,64 @@ pub trait Provider {
     /// `Outcome`: a process that never ran has no exit status to report, and
     /// inventing one is the substitution ADR-0049 forbids for a token count.
     fn invoke(&self, inv: &Invocation, bus: Option<&Bus>) -> Result<Outcome>;
+}
+
+/// Refuse an attempt whose session ran on a model the configuration did not
+/// choose.
+///
+/// VISION.md §12 both records the configured and reported ids and rejects an
+/// unexpected mismatch, and this is the rejection. It is a call of its own
+/// rather than a step inside [`Provider::invoke`], because the two halves come
+/// from different directions and only the caller that accepts an attempt holds
+/// both at once: the configured id arrives on [`Invocation::model`], the
+/// reported one arrives on [`Outcome::model_reported`], and an adapter refusing
+/// a session over the report it gave back would present a configuration fault as
+/// a provider failure — the one confusion VISION.md §7 cannot retry out of.
+///
+/// Four cases, of which exactly one is refused:
+///
+/// * both present and equal — accepted, and both are recorded.
+/// * both present and different — refused, before the attempt is accepted.
+/// * configured and unreported — accepted, and the record keeps the gap:
+///   [`Outcome::model_reported`] stays `None` instead of taking the configured
+///   id. That is the mark VISION.md §12 asks a missing report to carry, and
+///   [`Capabilities::model_selection`] is the detection that says a CLI owes no
+///   report at all.
+/// * nothing configured — accepted whatever was reported, because nothing was
+///   contradicted; the answer the session gave is then the only record of what
+///   ran.
+///
+/// Equality is exact. A prefix, a case difference, or a trailing space is a
+/// different id, because the only mistake this rule can make in the lenient
+/// direction is recording an attempt as having run on a model nobody chose — and
+/// a recorded attempt is the evidence a later task is reasoned from.
+///
+/// # Errors
+///
+/// [`crate::Error::Config`] keyed `model` when both ids are present and differ,
+/// naming both. A keyed `Config` error is how this core says a configured
+/// setting cannot be honoured, which is
+/// [`FailureClass::ProviderConfiguration`]: that class names an invalid model,
+/// and VISION.md §7 pauses it for a human rather than spending another attempt.
+/// Reaching the class from this error is the work of the classifier, and
+/// ADR-0057 records that `classify` cannot see an error from a provider call yet.
+///
+/// [`FailureClass::ProviderConfiguration`]: crate::FailureClass::ProviderConfiguration
+pub fn check_model(configured: Option<&str>, reported: Option<&str>) -> Result<()> {
+    match (configured, reported) {
+        (Some(configured), Some(reported)) if configured != reported => Err(Error::Config {
+            key: "model".to_owned(),
+            detail: format!(
+                "the configuration asked for `{configured}` and the session reported \
+                 `{reported}`; an attempt that ran on a model nobody chose is refused \
+                 rather than recorded, and no retry can start the configured one"
+            ),
+        }),
+        // One arm for three cases, because the rule separates only one of them:
+        // an equal pair confirms what was configured, a missing report is marked
+        // rather than refused, and an unconfigured run cannot be contradicted.
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -572,6 +654,7 @@ mod trait_tests {
                 stderr: String::new(),
                 usage: None,
                 session_id: None,
+                model_reported: None,
             })
         }
     }
@@ -586,8 +669,10 @@ mod trait_tests {
         }
     }
 
-    /// The outcome of a session that ran, printed one line, and reported both
-    /// its token counts and the session it ran in.
+    /// The outcome of a session that ran, printed one line, and reported its
+    /// token counts, the session it ran in, and the model it ran on. The id is
+    /// the one `invocation()` asks for, so the pair the fixture hands the
+    /// caller is an accepted one rather than a mismatch.
     fn ran() -> Outcome {
         Outcome {
             exit_code: 0,
@@ -601,6 +686,7 @@ mod trait_tests {
                 source: crate::UsageSource::Provider,
             }),
             session_id: Some("0f0f-1e1e".to_owned()),
+            model_reported: Some("gpt-5.6-sol".to_owned()),
         }
     }
 
@@ -837,5 +923,177 @@ mod trait_tests {
             serde_json::from_str::<Capabilities>(invented).is_err(),
             "a capability nobody detected is refused, not accepted and ignored"
         );
+    }
+}
+
+#[cfg(test)]
+mod model_check {
+    // Which model an attempt ran on, and the one pairing of the two ids that
+    // refuses it. Named for the rule it holds rather than for a type as
+    // `usage_tests` and `trait_tests` are, because the rule is a function and
+    // the selector this task is verified with is `test(/provider::model_check/)`.
+    //
+    // Every case is driven through the two boundary types that carry the halves
+    // — an `Invocation` model and an `Outcome` model — rather than through bare
+    // string literals, because what a later task wires up is the pair as those
+    // types hold it. A test of two literals would still pass if the types had
+    // nowhere to put a reported model, and that is the half of "both are
+    // recorded" this file owes.
+    use super::{Invocation, Outcome, check_model};
+    use crate::{Error, Result};
+    use std::path::PathBuf;
+
+    /// The call of an attempt configured to run `id`, or to express no
+    /// preference at all when `id` is `None`.
+    fn configured(id: Option<&str>) -> Invocation {
+        Invocation {
+            prompt: "implement T062 and run the gates".to_owned(),
+            model: id.map(str::to_owned),
+            working_dir: PathBuf::from("/state/ktask/ktask-rs/worktrees/62"),
+        }
+    }
+
+    /// The outcome of a session that ran, printed one line, and reported `id`
+    /// as the model it ran on — or reported nothing when `id` is `None`.
+    fn session(id: Option<&str>) -> Outcome {
+        Outcome {
+            exit_code: 0,
+            stdout: "read the task, wrote the fix, ran the gates\n".to_owned(),
+            stderr: String::new(),
+            usage: None,
+            session_id: None,
+            model_reported: id.map(str::to_owned),
+        }
+    }
+
+    /// Read the two halves out of the boundary types and check them, the way the
+    /// runner that accepts an attempt will.
+    fn check(inv: &Invocation, outcome: &Outcome) -> Result<()> {
+        check_model(inv.model.as_deref(), outcome.model_reported.as_deref())
+    }
+
+    /// The shape every mismatch in this module must come back as, and the
+    /// detail the assertions below are made against.
+    fn refusal(error: &Error) -> String {
+        let Error::Config { key, detail } = error else {
+            panic!("a model mismatch is a provider-configuration refusal, got {error:?}");
+        };
+        assert_eq!(
+            key, "model",
+            "the refusal is keyed to the setting that cannot be honoured, which \
+             is how a refused configuration is told apart from a session that \
+             could not start"
+        );
+        detail.clone()
+    }
+
+    #[test]
+    fn two_halves_that_agree_are_both_recorded_and_the_attempt_is_accepted() {
+        let inv = configured(Some("gpt-5.6-sol"));
+        let outcome = session(Some("gpt-5.6-sol"));
+
+        check(&inv, &outcome)
+            .expect("a session reporting the model it was asked to run is accepted");
+        assert_eq!(
+            outcome.model_reported, inv.model,
+            "an accepted attempt records one model, so both halves have to \
+             survive the check to be recorded beside each other"
+        );
+    }
+
+    #[test]
+    fn a_reported_model_that_differs_is_refused_before_the_attempt_is_accepted() {
+        let inv = configured(Some("gpt-5.6-sol"));
+        let outcome = session(Some("gpt-5.2-codex"));
+
+        let error = check(&inv, &outcome).expect_err(
+            "VISION.md section 12 rejects an unexpected mismatch rather than tolerating it",
+        );
+        let detail = refusal(&error);
+        assert!(
+            detail.contains("asked for `gpt-5.6-sol`"),
+            "the refusal names the configured id as the configured id: {detail}"
+        );
+        assert!(
+            detail.contains("reported `gpt-5.2-codex`"),
+            "and the session id as the answer the session gave, since swapping \
+             the two would send a human to change the wrong setting: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_session_that_reports_no_model_is_accepted_and_recorded_as_unreported() {
+        let inv = configured(Some("gpt-5.6-sol"));
+        let outcome = session(None);
+
+        check(&inv, &outcome).expect(
+            "a provider that reports nothing is allowed: model reporting is a \
+             detected capability (VISION.md section 12) and not a guarantee, so \
+             refusing every session of one would make it unusable",
+        );
+        assert_eq!(
+            outcome.model_reported, None,
+            "the missing report stays missing instead of being filled in with \
+             the configured id, which is the rule ADR-0049 states about a guess \
+             standing in for a report, applied to a model id"
+        );
+        assert_eq!(
+            inv.model.as_deref(),
+            Some("gpt-5.6-sol"),
+            "and the configured half is still recorded, so the gap sits beside \
+             what was asked for rather than being the whole record"
+        );
+    }
+
+    #[test]
+    fn a_reported_model_with_nothing_configured_is_the_model_that_ran() {
+        // Nothing was asked for, so nothing can be contradicted, and the answer
+        // the session gave is the only record of what ran. Dropping it here
+        // would empty the flight recorder for every default-model run.
+        let inv = configured(None);
+        let outcome = session(Some("provider-default-2026-09"));
+
+        check(&inv, &outcome).expect("nothing was configured, so nothing was contradicted");
+        assert_eq!(
+            outcome.model_reported.as_deref(),
+            Some("provider-default-2026-09"),
+            "the report is what the evidence of an attempt records, configured \
+             `None` or not"
+        );
+    }
+
+    #[test]
+    fn an_attempt_that_learned_nothing_about_either_id_is_accepted() {
+        let inv = configured(None);
+        let outcome = session(None);
+
+        check(&inv, &outcome)
+            .expect("a run that configured no model and reported no model has nothing to mismatch");
+        assert_eq!(
+            outcome.model_reported, inv.model,
+            "both halves are recorded, as the nothing they both are"
+        );
+    }
+
+    #[test]
+    fn a_mismatch_is_refused_however_close_the_two_ids_look() {
+        // The strictness is the point. Every pair below is one a lenient
+        // comparison could wave through — a prefix, a case fold, a trailing
+        // space — and each one waved through records an attempt as having run
+        // on a model the configuration never chose.
+        const CLOSE_CALLS: [(&str, &str); 3] = [
+            ("gpt-5.6-sol", "gpt-5.6-sol-2026-09-01"),
+            ("gpt-5.6-sol", "GPT-5.6-SOL"),
+            ("gpt-5.6-sol", "gpt-5.6-sol "),
+        ];
+        for (asked, reported) in CLOSE_CALLS {
+            let error = check_model(Some(asked), Some(reported))
+                .expect_err("`{asked}` and `{reported}` are two different ids");
+            let detail = refusal(&error);
+            assert!(
+                detail.contains(asked) && detail.contains(reported),
+                "the refusal names both ids it compared: {detail}"
+            );
+        }
     }
 }

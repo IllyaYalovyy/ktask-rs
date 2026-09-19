@@ -395,13 +395,17 @@ fn verdict(
             exit_code,
             stdout: kept.stdout,
             stderr: kept.stderr,
-            // `None`, twice, for one reason: nothing asked this session what it
-            // spent or what it was called, and what its text says about either is
+            // `None`, three times, for one reason: nothing asked this session what
+            // it spent, what it was called, or which model it ran on, and what its
+            // text says about any of them is
             // the adapter's reading of a format only the adapter knows —
-            // VISION.md §12 makes both of them detected capabilities, and
-            // ADR-0049 refuses a guess standing in for a report.
+            // VISION.md §12 makes each of them a detected capability, and ADR-0049
+            // refuses a guess standing in for a report. An adapter that parses a
+            // model id out of a CLI's own structured output fills this in; until
+            // one does, every attempt is recorded as unreported.
             usage: None,
             session_id: None,
+            model_reported: None,
         }),
         // ADR-0050 assigned exactly this state — a session killed by a signal
         // rather than exited — to this task and to the error channel, so it is

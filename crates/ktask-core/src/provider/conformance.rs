@@ -335,6 +335,11 @@ fn succeeded() -> Outcome {
         stderr: String::new(),
         usage: None,
         session_id: None,
+        // The fixture adapters report no model, exactly as they report no usage:
+        // the suite decides what an adapter owes the boundary, and a model report
+        // is a capability rather than a debt. A missing report is the state
+        // `check_model` accepts and records as unreported.
+        model_reported: None,
     }
 }
 
@@ -350,6 +355,7 @@ fn failed_session() -> Outcome {
         stderr: String::new(),
         usage: None,
         session_id: None,
+        model_reported: None,
     }
 }
 

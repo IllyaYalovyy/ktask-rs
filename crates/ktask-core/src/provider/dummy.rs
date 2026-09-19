@@ -570,6 +570,12 @@ impl Provider for Dummy {
             // disclose an id for.
             usage: None,
             session_id: None,
+            // The format declares no model either, and a scripted session runs on
+            // no model at all, so there is nothing here to report. This is the
+            // missing report `check_model` allows and records as unreported —
+            // copying the configured id into it would claim a scripted session
+            // had proved which model it ran on.
+            model_reported: None,
         })
     }
 }
