@@ -147,8 +147,7 @@ fn load_template_with(
     // Try per-project override first
     let project_override = project.state_dir.join("prompts").join("task.md");
     if project_override.exists() {
-        return std::fs::read_to_string(&project_override)
-            .map_err(|e| e.into());
+        return std::fs::read_to_string(&project_override).map_err(Into::into);
     }
 
     // Ensure global defaults exist
@@ -158,8 +157,7 @@ fn load_template_with(
     let prompt_lib = get_prompt_lib()?;
     let global_template = prompt_lib.join("task.md");
 
-    std::fs::read_to_string(&global_template)
-        .map_err(|e| e.into())
+    std::fs::read_to_string(&global_template).map_err(Into::into)
 }
 
 #[cfg(test)]

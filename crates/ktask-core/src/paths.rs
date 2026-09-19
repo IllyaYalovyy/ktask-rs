@@ -221,10 +221,7 @@ mod tests {
             _ => None,
         };
         let result = prompt_library_with_env(&env).unwrap();
-        assert_eq!(
-            result,
-            PathBuf::from("/home/user/.config/ktask-rs/prompts")
-        );
+        assert_eq!(result, PathBuf::from("/home/user/.config/ktask-rs/prompts"));
     }
 
     #[test]
