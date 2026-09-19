@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn parse_decision_request_with_all_sections() {
-        let body = r#"Question:
+        let body = r"Question:
 Should we refactor the auth module?
 
 Options:
@@ -158,7 +158,7 @@ Affects auth system reliability and team velocity.
 
 Recommended:
 Yes, refactor now
-"#;
+";
 
         let result = parse_decision_request(body).expect("should parse");
         assert_eq!(result.question, "Should we refactor the auth module?");
@@ -172,7 +172,7 @@ Yes, refactor now
 
     #[test]
     fn parse_decision_request_without_recommended() {
-        let body = r#"Question:
+        let body = r"Question:
 Should we use Rust?
 
 Options:
@@ -184,7 +184,7 @@ Rust is safer but has a steep learning curve.
 
 Impact:
 Affects codebase quality and team productivity.
-"#;
+";
 
         let result = parse_decision_request(body).expect("should parse");
         assert_eq!(result.question, "Should we use Rust?");
@@ -195,7 +195,7 @@ Affects codebase quality and team productivity.
 
     #[test]
     fn parse_decision_request_missing_question() {
-        let body = r#"Options:
+        let body = r"Options:
 - A
 - B
 
@@ -204,7 +204,7 @@ Some trade-offs.
 
 Impact:
 Some impact.
-"#;
+";
 
         let err = parse_decision_request(body).expect_err("should error");
         let msg = err.to_string();
@@ -214,7 +214,7 @@ Some impact.
 
     #[test]
     fn parse_decision_request_missing_options() {
-        let body = r#"Question:
+        let body = r"Question:
 Should we do X?
 
 Trade-offs:
@@ -222,7 +222,7 @@ Some trade-offs.
 
 Impact:
 Some impact.
-"#;
+";
 
         let err = parse_decision_request(body).expect_err("should error");
         let msg = err.to_string();
@@ -231,7 +231,7 @@ Some impact.
 
     #[test]
     fn parse_decision_request_missing_tradeoffs() {
-        let body = r#"Question:
+        let body = r"Question:
 Should we do X?
 
 Options:
@@ -240,7 +240,7 @@ Options:
 
 Impact:
 Some impact.
-"#;
+";
 
         let err = parse_decision_request(body).expect_err("should error");
         let msg = err.to_string();
@@ -249,7 +249,7 @@ Some impact.
 
     #[test]
     fn parse_decision_request_missing_impact() {
-        let body = r#"Question:
+        let body = r"Question:
 Should we do X?
 
 Options:
@@ -258,7 +258,7 @@ Options:
 
 Trade-offs:
 Some trade-offs.
-"#;
+";
 
         let err = parse_decision_request(body).expect_err("should error");
         let msg = err.to_string();
@@ -267,12 +267,12 @@ Some trade-offs.
 
     #[test]
     fn parse_decision_request_multiple_missing_sections() {
-        let body = r#"Question:
+        let body = r"Question:
 Should we do X?
 
 Trade-offs:
 Some trade-offs.
-"#;
+";
 
         let err = parse_decision_request(body).expect_err("should error");
         let msg = err.to_string();
@@ -282,7 +282,7 @@ Some trade-offs.
 
     #[test]
     fn parse_decision_request_empty_options_filtered() {
-        let body = r#"Question:
+        let body = r"Question:
 Should we do X?
 
 Options:
@@ -295,7 +295,7 @@ Some trade-offs.
 
 Impact:
 Some impact.
-"#;
+";
 
         let result = parse_decision_request(body).expect("should parse");
         assert_eq!(result.options.len(), 2);
@@ -305,7 +305,7 @@ Some impact.
 
     #[test]
     fn parse_decision_request_multiline_content() {
-        let body = r#"Question:
+        let body = r"Question:
 This is a multi-line
 question spanning
 multiple lines.
@@ -324,7 +324,7 @@ Impact:
 First paragraph about impact.
 
 Second paragraph about impact.
-"#;
+";
 
         let result = parse_decision_request(body).expect("should parse");
         assert!(result.question.contains("multi-line"));
