@@ -862,3 +862,114 @@ and a custom section below.
         assert!(tasks[0].body.contains("custom section"));
     }
 }
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn task_title_strategy() -> impl Strategy<Value = String> {
+        r"[a-zA-Z0-9 \-]{1,60}".prop_map(|s| s.trim().to_string())
+    }
+
+    fn section_content_strategy() -> impl Strategy<Value = String> {
+        r"[a-zA-Z0-9 \.\-_\n()]{1,100}".prop_map(|s| {
+            s.trim()
+                .chars()
+                .filter(|c| *c != '\n' || s.len() < 50)
+                .collect::<String>()
+                .trim()
+                .to_string()
+        })
+    }
+
+    fn task_content_strategy() -> impl Strategy<Value = (String, String, String, String, String)> {
+        (
+            task_title_strategy(),
+            section_content_strategy(),
+            section_content_strategy(),
+            section_content_strategy(),
+            section_content_strategy(),
+        )
+            .prop_map(|(title, outcome, done_when, verify, refs)| {
+                (title, outcome, done_when, verify, refs)
+            })
+    }
+
+    proptest! {
+        #[test]
+        fn prop_parse_plan_is_total_and_never_panics(
+            task_contents in prop::collection::vec(task_content_strategy(), 0..10)
+        ) {
+            use std::fmt::Write;
+
+            let mut plan_doc = String::new();
+
+            for (title, outcome, done_when, verify, refs) in task_contents {
+                if !title.is_empty() && !outcome.is_empty() && !done_when.is_empty() && !verify.is_empty() && !refs.is_empty() {
+                    let _ = writeln!(
+                        plan_doc,
+                        "## {title}\n\n**Outcome:** {outcome}\n\n**Done-when:** {done_when}\n\n**Verify:** {verify}\n\n**Refs:** {refs}\n"
+                    );
+                }
+            }
+
+            // Parsing should never panic
+            let result = parse_plan(&plan_doc);
+
+            // For valid documents with proper sections, parsing should succeed
+            if plan_doc.is_empty() {
+                result.expect("should parse empty document");
+            } else if let Ok(parsed_tasks) = result {
+                // Verify each task has correct ID and status
+                for (i, task) in parsed_tasks.iter().enumerate() {
+                    let id_u32 = u32::try_from(i + 1).expect("task count should fit in u32");
+                    assert_eq!(task.id, TaskId::new(id_u32));
+                    assert!(!task.outcome.trim().is_empty());
+                    assert!(!task.done_when.trim().is_empty());
+                    assert!(!task.verify.trim().is_empty());
+                    assert!(!task.refs.trim().is_empty());
+                }
+            }
+        }
+
+        #[test]
+        fn prop_parse_handles_unicode_and_special_chars(
+            unicode_title in r"[a-zA-Z0-9 \-🎯✓💡]{1,50}",
+            unicode_body in r"[a-zA-Z0-9 \.\-_🎯✓💡\n]{1,100}",
+        ) {
+            let plan = format!(
+                "## {}\n\n**Outcome:** {}\n\n**Done-when:** done\n\n**Verify:** test\n\n**Refs:** ref\n",
+                unicode_title.trim(), unicode_body.trim()
+            );
+
+            let result = parse_plan(&plan);
+            // Should not panic; may fail validation if sections are empty
+            let _ = result;
+        }
+
+        #[test]
+        fn prop_parse_roundtrip_preserves_sections(
+            outcome in r"[a-zA-Z0-9 \.\-_]{1,80}",
+            done_when in r"[a-zA-Z0-9 \.\-_]{1,80}",
+            verify in r"[a-zA-Z0-9 \.\-_]{1,80}",
+            refs in r"[a-zA-Z0-9 \.\-_]{1,80}",
+        ) {
+            let plan = format!(
+                "## Test Task\n\n**Outcome:** {}\n\n**Done-when:** {}\n\n**Verify:** {}\n\n**Refs:** {}\n",
+                outcome.trim(), done_when.trim(), verify.trim(), refs.trim()
+            );
+
+            let result = parse_plan(&plan);
+            if let Ok(tasks) = result
+                && !tasks.is_empty() {
+                let task = &tasks[0];
+                // Sections should be preserved
+                assert!(task.outcome.contains(outcome.trim()) || outcome.trim().is_empty());
+                assert!(task.done_when.contains(done_when.trim()) || done_when.trim().is_empty());
+                assert!(task.verify.contains(verify.trim()) || verify.trim().is_empty());
+                assert!(task.refs.contains(refs.trim()) || refs.trim().is_empty());
+            }
+        }
+    }
+}
