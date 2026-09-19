@@ -1,6 +1,6 @@
 //! Provider types for token and cost reporting and a stable capability interface.
 
-use crate::{Bus, Result};
+use crate::{Bus, Config, Result};
 use std::path::PathBuf;
 
 /// Token and cost usage types.
@@ -116,6 +116,63 @@ pub fn check_model(configured: Option<&str>, reported: Option<&str>) -> Result<(
     }
 }
 
+/// Construct a provider from configuration by name.
+///
+/// Matches the `config.provider` string against known provider names and constructs
+/// the appropriate provider instance. The dummy provider loads its scenario from
+/// the path specified in `config.dummy_scenario_path`.
+///
+/// # Arguments
+///
+/// * `config` - The configuration containing the provider name and any provider-specific settings
+///
+/// # Errors
+///
+/// Returns `Error::Config` if:
+/// - The provider name is not recognized
+/// - For the dummy provider, if the scenario path is missing or the scenario file cannot be read
+///
+/// # Examples
+///
+/// ```ignore
+/// let config = Config {
+///     provider: "claude".to_string(),
+///     ..Default::default()
+/// };
+/// let provider = build(&config)?;
+/// assert_eq!(provider.name(), "claude");
+/// ```
+pub fn build(config: &Config) -> Result<Box<dyn Provider>> {
+    match config.provider.as_str() {
+        "dummy" => {
+            let path = config.dummy_scenario_path.as_ref().ok_or_else(|| {
+                crate::Error::Config {
+                    key: "provider".to_string(),
+                    detail: "dummy provider requires dummy_scenario_path to be set".to_string(),
+                }
+            })?;
+            let content = std::fs::read_to_string(path).map_err(|e| crate::Error::Config {
+                key: "provider".to_string(),
+                detail: format!("failed to read scenario file at {}: {}", path.display(), e),
+            })?;
+            let scenario: Scenario = toml::from_str(&content).map_err(|e| crate::Error::Config {
+                key: "provider".to_string(),
+                detail: format!("failed to parse scenario file: {}", e),
+            })?;
+            Ok(Box::new(Dummy::new(scenario)))
+        }
+        "claude" => Ok(Box::new(Claude::new("claude".to_string()))),
+        "codex" => Ok(Box::new(Codex::new("codex".to_string()))),
+        name => Err(crate::Error::Config {
+            key: "provider".to_string(),
+            detail: format!(
+                "unknown provider '{}'; valid options are: dummy, claude, codex",
+                name
+            ),
+        }),
+    }
+}
+
 #[cfg(test)]
 /// Tests for model ID checking.
 pub mod model_check {
@@ -202,5 +259,121 @@ mod tests {
         assert_eq!(outcome.exit_code, 0);
         assert_eq!(outcome.stdout, "output");
         assert_eq!(outcome.session_id, Some("session-123".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod build {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn builds_claude_provider() {
+        let mut config = Config::default();
+        config.provider = "claude".to_string();
+        let provider = build(&config).expect("build claude provider");
+        assert_eq!(provider.name(), "claude");
+    }
+
+    #[test]
+    fn builds_codex_provider() {
+        let mut config = Config::default();
+        config.provider = "codex".to_string();
+        let provider = build(&config).expect("build codex provider");
+        assert_eq!(provider.name(), "codex");
+    }
+
+    #[test]
+    fn builds_dummy_provider_from_scenario_file() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let scenario_path = temp_dir.path().join("scenario.toml");
+
+        let scenario_toml = r#"
+[[steps]]
+on_task = 1
+outcome = "success"
+stdout = "test output"
+"#;
+        fs::write(&scenario_path, scenario_toml).expect("write scenario file");
+
+        let mut config = Config::default();
+        config.provider = "dummy".to_string();
+        config.dummy_scenario_path = Some(scenario_path);
+        let provider = build(&config).expect("build dummy provider");
+        assert_eq!(provider.name(), "dummy");
+    }
+
+    #[test]
+    fn rejects_unknown_provider() {
+        let mut config = Config::default();
+        config.provider = "unknown".to_string();
+        let result = build(&config);
+        assert!(result.is_err());
+        match result {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(msg.contains("unknown provider"));
+                assert!(msg.contains("unknown"));
+                assert!(msg.contains("dummy"));
+                assert!(msg.contains("claude"));
+                assert!(msg.contains("codex"));
+            }
+            Ok(_) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn dummy_provider_requires_scenario_path() {
+        let mut config = Config::default();
+        config.provider = "dummy".to_string();
+        config.dummy_scenario_path = None;
+        let result = build(&config);
+        assert!(result.is_err());
+        match result {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(msg.contains("dummy_scenario_path"));
+            }
+            Ok(_) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn dummy_provider_fails_on_missing_file() {
+        let mut config = Config::default();
+        config.provider = "dummy".to_string();
+        config.dummy_scenario_path = Some(PathBuf::from("/nonexistent/path/scenario.toml"));
+        let result = build(&config);
+        assert!(result.is_err());
+        match result {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(msg.contains("failed to read scenario file"));
+            }
+            Ok(_) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn dummy_provider_fails_on_invalid_toml() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let scenario_path = temp_dir.path().join("scenario.toml");
+
+        let invalid_toml = "this is not valid toml [[[";
+        fs::write(&scenario_path, invalid_toml).expect("write scenario file");
+
+        let mut config = Config::default();
+        config.provider = "dummy".to_string();
+        config.dummy_scenario_path = Some(scenario_path);
+        let result = build(&config);
+        assert!(result.is_err());
+        match result {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(msg.contains("failed to parse scenario file"));
+            }
+            Ok(_) => panic!("expected error"),
+        }
     }
 }
