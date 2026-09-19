@@ -42,12 +42,7 @@ impl Bounds {
     /// Returns `Continue` if all bounds are satisfied, or `Stop` with the reason
     /// for the first bound that was exceeded.
     #[must_use]
-    pub fn should_continue(
-        &self,
-        attempts: u32,
-        elapsed: Duration,
-        tokens: u64,
-    ) -> Decision {
+    pub fn should_continue(&self, attempts: u32, elapsed: Duration, tokens: u64) -> Decision {
         // Check attempts bound first
         if attempts >= self.max_attempts {
             return Decision::Stop {
@@ -903,7 +898,9 @@ mod tests {
         };
 
         let decision = bounds.should_continue(3, Duration::from_secs(300), 50_000);
-        assert!(matches!(decision, Decision::Stop { reason } if reason.contains("max elapsed time")));
+        assert!(
+            matches!(decision, Decision::Stop { reason } if reason.contains("max elapsed time"))
+        );
     }
 
     #[test]
@@ -915,7 +912,9 @@ mod tests {
         };
 
         let decision = bounds.should_continue(3, Duration::from_secs(400), 50_000);
-        assert!(matches!(decision, Decision::Stop { reason } if reason.contains("max elapsed time")));
+        assert!(
+            matches!(decision, Decision::Stop { reason } if reason.contains("max elapsed time"))
+        );
     }
 
     #[test]
