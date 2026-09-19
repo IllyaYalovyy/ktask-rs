@@ -6,6 +6,7 @@
 pub mod attempt;
 pub mod classify;
 pub mod config;
+pub mod context;
 pub mod error;
 pub mod event;
 pub mod events;
@@ -30,6 +31,7 @@ pub mod testing;
 pub use attempt::{AttemptRecord, read_evidence, write_evidence};
 pub use classify::{FailureClass, Recovery, Stream, TddException};
 pub use config::Config;
+pub use context::assemble;
 pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use events::{Bus, Recorder, Subscription};
