@@ -1,7 +1,8 @@
 //! Event journal for storing and retrieving task events.
 
-use crate::{Error, Event, EventKind, EventSeq, Project, Result, TaskId};
+use crate::{Error, Event, EventKind, EventSeq, Project, Result, TaskId, TaskState};
 use rusqlite::Connection;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 
@@ -445,6 +446,96 @@ impl Journal {
             };
 
             result.push(task);
+        }
+
+        Ok(result)
+    }
+
+    /// Store task state in the journal.
+    ///
+    /// Inserts or updates the state for a task, overwriting any existing state.
+    /// State is serialized as JSON and stored with a timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the state cannot be serialized or if the update fails.
+    pub fn put_state(&mut self, task: TaskId, state: &TaskState) -> Result<()> {
+        let state_json = serde_json::to_string(state)?;
+
+        let ts = OffsetDateTime::now_utc();
+        let ts_str = ts
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|_| Error::Corrupt {
+                detail: "Failed to format timestamp".to_string(),
+                seq: None,
+            })?;
+
+        let task_id_val = i64::from(task.get());
+
+        self.conn.execute(
+            "INSERT OR REPLACE INTO task_state (task_id, state_json, updated_at)
+             VALUES (?1, ?2, ?3)",
+            rusqlite::params![task_id_val, state_json, ts_str],
+        )?;
+
+        Ok(())
+    }
+
+    /// Retrieve task state from the journal.
+    ///
+    /// Returns the stored state for a task, or None if no state has been stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails or if the state cannot be deserialized.
+    pub fn get_state(&self, task: TaskId) -> Result<Option<TaskState>> {
+        let task_id_val = i64::from(task.get());
+
+        let result = self.conn.query_row(
+            "SELECT state_json FROM task_state WHERE task_id = ?1",
+            rusqlite::params![task_id_val],
+            |row| row.get::<_, String>(0),
+        );
+
+        match result {
+            Ok(state_json) => {
+                let state: TaskState = serde_json::from_str(&state_json)?;
+                Ok(Some(state))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(Error::Database(e)),
+        }
+    }
+
+    /// Retrieve all task states from the journal.
+    ///
+    /// Returns a map of all stored task states ordered by task ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails or if any state cannot be deserialized.
+    pub fn all_states(&self) -> Result<BTreeMap<TaskId, TaskState>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT task_id, state_json FROM task_state ORDER BY task_id ASC")?;
+
+        let states = stmt.query_map([], |row| {
+            let task_id: i64 = row.get(0)?;
+            let state_json: String = row.get(1)?;
+
+            Ok((task_id, state_json))
+        })?;
+
+        let mut result = BTreeMap::new();
+        for state_result in states {
+            let (task_id_val, state_json) = state_result?;
+
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            let task_id_u32 = task_id_val as u32;
+            let task_id = TaskId::new(task_id_u32);
+
+            let state: TaskState = serde_json::from_str(&state_json)?;
+            result.insert(task_id, state);
         }
 
         Ok(result)
@@ -1500,5 +1591,178 @@ mod tests {
 
         assert_eq!(count, 10_000);
         drop(journal);
+    }
+
+    #[test]
+    fn put_state_stores_and_retrieves_task_state() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(42);
+        let state = TaskState::Queued;
+
+        journal.put_state(task_id, &state).unwrap();
+
+        // Verify it was stored
+        let stored: Option<TaskState> = journal.get_state(task_id).unwrap();
+        assert_eq!(stored, Some(TaskState::Queued));
+
+        drop(journal);
+    }
+
+    #[test]
+    fn put_state_overwrites_existing_state() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(42);
+
+        // Insert first state
+        journal.put_state(task_id, &TaskState::Queued).unwrap();
+        let first_count: i64 = journal
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM task_state WHERE task_id = ?1",
+                rusqlite::params![42i64],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(first_count, 1);
+
+        // Overwrite with second state
+        journal.put_state(task_id, &TaskState::Preflight).unwrap();
+
+        // Verify only one row exists and it has the new state
+        let second_count: i64 = journal
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM task_state WHERE task_id = ?1",
+                rusqlite::params![42i64],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(second_count, 1);
+
+        let stored: Option<TaskState> = journal.get_state(task_id).unwrap();
+        assert_eq!(stored, Some(TaskState::Preflight));
+
+        drop(journal);
+    }
+
+    #[test]
+    fn get_state_returns_none_for_nonexistent_task() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(999);
+
+        let stored: Option<TaskState> = journal.get_state(task_id).unwrap();
+        assert_eq!(stored, None);
+
+        drop(journal);
+    }
+
+    #[test]
+    fn all_states_returns_empty_for_empty_table() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let journal = Journal::open(&journal_path).unwrap();
+        let states = journal.all_states().unwrap();
+
+        assert_eq!(states.len(), 0);
+
+        drop(journal);
+    }
+
+    #[test]
+    fn all_states_returns_tasks_in_id_order() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+
+        // Insert states in non-sequential order
+        journal
+            .put_state(TaskId::new(5), &TaskState::Queued)
+            .unwrap();
+        journal
+            .put_state(TaskId::new(1), &TaskState::Preflight)
+            .unwrap();
+        journal.put_state(TaskId::new(3), &TaskState::Done).unwrap();
+        journal
+            .put_state(TaskId::new(2), &TaskState::Cancelled)
+            .unwrap();
+
+        let states = journal.all_states().unwrap();
+
+        // Verify states are returned in order by task ID
+        let ids: Vec<u32> = states.keys().map(|id| id.get()).collect();
+        assert_eq!(ids, vec![1, 2, 3, 5]);
+
+        // Verify each state matches what we stored
+        assert_eq!(states.get(&TaskId::new(1)), Some(&TaskState::Preflight));
+        assert_eq!(states.get(&TaskId::new(2)), Some(&TaskState::Cancelled));
+        assert_eq!(states.get(&TaskId::new(3)), Some(&TaskState::Done));
+        assert_eq!(states.get(&TaskId::new(5)), Some(&TaskState::Queued));
+
+        drop(journal);
+    }
+
+    #[test]
+    fn put_state_with_complex_state() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(42);
+
+        // Create a complex state with nested data
+        let state = TaskState::Paused {
+            reason: crate::state::PauseReason::HumanGate,
+            resume_to: Box::new(TaskState::Running {
+                attempt: crate::ids::AttemptId::new(2),
+                phase: crate::state::Phase::Implement,
+            }),
+        };
+
+        journal.put_state(task_id, &state).unwrap();
+
+        let stored: Option<TaskState> = journal.get_state(task_id).unwrap();
+        assert_eq!(stored, Some(state));
+
+        drop(journal);
+    }
+
+    #[test]
+    fn all_states_survives_reopen() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        // First session: store some states
+        {
+            let mut journal = Journal::open(&journal_path).unwrap();
+            journal
+                .put_state(TaskId::new(1), &TaskState::Queued)
+                .unwrap();
+            journal
+                .put_state(TaskId::new(2), &TaskState::Preflight)
+                .unwrap();
+            drop(journal);
+        }
+
+        // Second session: verify they're still there
+        {
+            let journal = Journal::open(&journal_path).unwrap();
+            let states = journal.all_states().unwrap();
+
+            assert_eq!(states.len(), 2);
+            assert_eq!(states.get(&TaskId::new(1)), Some(&TaskState::Queued));
+            assert_eq!(states.get(&TaskId::new(2)), Some(&TaskState::Preflight));
+            drop(journal);
+        }
     }
 }
