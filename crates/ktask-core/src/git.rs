@@ -84,12 +84,30 @@
 //! caller and never defaulted, and status is asked for with its branch header
 //! for a reason that is easy to mistake for decoration.
 //!
-//! One of them is a rule rather than a fact, and is the only door here that
-//! answers `Error::Policy`: [`require_clean`] reads the same status records and
-//! refuses a tree holding anything outside a commit, naming every offending path
-//! under the kind it belongs to. VISION.md §10 makes a dirty tree at
+//! Two of them are rules rather than facts, and they are the only doors here
+//! that answer `Error::Policy`. [`require_clean`] reads the same status records
+//! and refuses a tree holding anything outside a commit, naming every offending
+//! path under the kind it belongs to; VISION.md §10 makes a dirty tree at
 //! verification time a `policy_failure`, and this is where that becomes an error
-//! value instead of a clause in a document.
+//! value instead of a clause in a document. [`commit_all`] refuses the other way
+//! — a tree with nothing staged — because the alternative is an empty commit
+//! with a SHA on it.
+//!
+//! # Committing the candidate
+//!
+//! VISION.md §10 has the supervisor, and not the agent, turn a task's work into
+//! a commit, and [`commit_all`] is that step: one `git add --update` over the
+//! tree, one `git commit`, and the new SHA read back through [`head_sha`] so the
+//! value a caller journals is the value the repository holds.
+//!
+//! Two decisions hold it in place, and ADR-0045 records them. It stages
+//! *tracked* changes only: whether a path no commit has ever held belongs to the
+//! task is a decision, and it is not the decision of the process that publishes
+//! the result. And it refuses a tree with nothing staged with `Error::Policy`
+//! rather than letting `git commit` answer — measured while writing this, git
+//! writes "nothing to commit" on standard *output* and exits 1 with an empty
+//! standard error, so a refusal taken from git would arrive nameless, and the
+//! alternative to refusing is an empty commit that verifies green.
 //!
 //! # Task worktrees
 //!
@@ -520,6 +538,132 @@ fn every_path(categories: &[(&str, &[&str])]) -> Vec<PathBuf> {
     named.into_iter().map(PathBuf::from).collect()
 }
 
+/// The pathspec [`commit_all`] stages: git's own name for the top level of the
+/// tree it was run in.
+///
+/// Naming a pathspec is what makes "stage the tracked changes" mean the whole
+/// tree rather than the subtree the call happened to stand in — `git add
+/// --update` with none is git's shorthand for the current directory, and the
+/// difference between the two shows up only as a candidate that holds part of
+/// the work. It is git's magic pathspec, not a path this module built, and in a
+/// task worktree it names that worktree's own top level: a commit meant for the
+/// task's checkout cannot reach the checkout it was created from.
+const TOPLEVEL: &str = ":/";
+
+/// The rule [`commit_all`] refuses with, as the first half of the detail.
+const NOTHING_STAGED: &str = "nothing is staged to commit";
+
+/// Write what the tree holds into one commit, and return the commit's SHA.
+///
+/// This is VISION.md §10's step 3 — "all changes are committed inside the task
+/// worktree" — and it is the only door here that writes a commit. Three calls
+/// make it up, each one the command a human would run:
+///
+/// ```text
+/// git add --update -- :/     # stage this tree's tracked changes
+/// git commit -m <message>    # write them, under the identity the repository carries
+/// git rev-parse HEAD         # read the SHA back, through head_sha
+/// ```
+///
+/// Only tracked changes are staged, which is the whole of what `--update` means
+/// and the reason it is the flag: an edit, a deletion and a mode change of a
+/// path git already knows go in, and a path no commit and no index entry ever
+/// held does not. Whether a file an agent wrote belongs to the task is a
+/// decision, and VISION.md §3 forbids the process that publishes the result from
+/// making it — a supervisor that staged everything would commit the log file,
+/// the build output and the scratch directory along with the work. A path
+/// somebody *did* stage is committed too: this adds to the index and never
+/// resets it, because dropping a deliberate `git add` on the way past would lose
+/// a decision that was already made.
+///
+/// Nothing staged is refused rather than committed. An empty commit is still a
+/// commit: it has a SHA, it passes the gates that read the tree, and it moves
+/// the remote's mainline — so a run that made one would report a candidate
+/// containing no work as delivered.
+///
+/// The SHA comes back from [`head_sha`] rather than from what `git commit`
+/// printed, because the two spellings of the answer have to come from one door:
+/// [`crate::Error`] journals this value and publication compares it against the
+/// SHA fetched back from the remote (VISION.md §10).
+///
+/// `worktree` is the tree the commit is made in and the only tree it reads —
+/// git runs inside it, so a second checkout of the same repository contributes
+/// nothing to this candidate. `message` is git's commit message verbatim; it
+/// reaches git as one `argv` entry, so nothing in it is interpreted.
+///
+/// # Errors
+///
+/// [`Error::Policy`] when the index holds nothing to write after the staging
+/// call, which is the rule this module enforces and not a git refusal: git would
+/// have answered with its status report on standard output. The detail says so
+/// and names the tree; where the tree holds paths no commit has ever held, it
+/// names them too, because that is the fact a reader can act on. The path list
+/// carries the tree that was refused to commit into, as a refused worktree
+/// operation carries the directory it refused to touch — [`require_clean`] is the
+/// door that lists offenders.
+///
+/// [`Error::Git`] when git refused one of the three calls: `worktree` holds no
+/// repository, its index is locked, a hook or a signing key refused the commit,
+/// or `message` is one git will not take. A staged change of an unborn
+/// repository is refused here too, by `git add`, which is the honest order: a
+/// tree with no history is not a tree that held nothing to commit. Nothing is
+/// undone on the way out — a refusal leaves the index staged, because the work
+/// is the evidence a later attempt reads.
+pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {
+    git(worktree, &["add", "--update", "--", TOPLEVEL])?;
+    let records = status_porcelain(worktree)?;
+    if !anything_staged(&records) {
+        return Err(Error::Policy {
+            detail: format!(
+                "{NOTHING_STAGED} at `{}`{}",
+                worktree.display(),
+                left_out(&records)
+            ),
+            paths: vec![worktree.to_path_buf()],
+        });
+    }
+    git(worktree, &["commit", "-m", message])?;
+    head_sha(worktree)
+}
+
+/// Whether any of these records reports a change the index holds and no commit
+/// does.
+///
+/// Asked of the records [`require_clean`] already sorts, through the same
+/// [`dirt_of`], so the two doors cannot disagree about what *staged* means: it
+/// is git's first status column, and ADR-0044's [`Kind::Staged`] reads nothing
+/// else.
+fn anything_staged(records: &[String]) -> bool {
+    records.iter().any(|record| {
+        dirt_of(record)
+            .iter()
+            .any(|(kind, _)| *kind == Kind::Staged)
+    })
+}
+
+/// What the refusal adds when the tree is not empty but holds nothing staged.
+///
+/// A tracked change would have been staged by the call that got this far, so the
+/// only thing a refused tree can hold — as git reports it — is a path no commit
+/// and no index entry ever held. Naming it is the difference between "there was
+/// nothing to commit", which reads as an agent that did no work, and the
+/// untracked file that made it true. An empty tree adds nothing: a kind with
+/// nothing in it is a claim that something was there.
+fn left_out(records: &[String]) -> String {
+    let untracked: Vec<&str> = records
+        .iter()
+        .flat_map(|record| dirt_of(record))
+        .filter(|(kind, _)| *kind == Kind::Untracked)
+        .map(|(_kind, path)| path)
+        .collect();
+    let named = listed_by_kind(&[("untracked", untracked.as_slice())]);
+    if named.is_empty() {
+        String::new()
+    } else {
+        format!(": {named} outside every commit")
+    }
+}
+
 /// Ask `remote` what it holds, and update the local remote-tracking refs.
 ///
 /// VISION.md §10 brackets a publication with a fetch — once to build from the
@@ -785,8 +929,9 @@ mod tests {
     use tempfile::{TempDir, tempdir};
 
     use super::{
-        Kind, Worktree, create_worktree, current_branch, dirt_of, fetch, git, git_env, head_sha,
-        is_clean, list_worktrees, remote_url, remove_worktree, require_clean, status_porcelain,
+        Kind, Worktree, commit_all, create_worktree, current_branch, dirt_of, fetch, git, git_env,
+        head_sha, is_clean, list_worktrees, remote_url, remove_worktree, require_clean,
+        status_porcelain,
     };
     use crate::Error;
     // The repository-with-an-origin fixture is the crate-wide one, so that a
@@ -795,7 +940,7 @@ mod tests {
     // instants, and deletes everything when it is dropped. What stays below is
     // only the state these tests need and nothing else does — a repository that
     // has never committed, and a plain directory with no repository in it.
-    use crate::testing::scratch_repo;
+    use crate::testing::{ScratchRepo, scratch_repo};
 
     /// Commit coordinates passed on the command line, so a test that commits
     /// does not depend on the machine's global git identity.
@@ -827,6 +972,271 @@ mod tests {
             panic!("a git call that did not succeed has to arrive as Error::Git, got: {error}");
         };
         (args.clone(), stderr.clone())
+    }
+
+    /// The crate-wide fixture, plus a committer identity in the repository's own
+    /// configuration.
+    ///
+    /// [`commit_all`] hands `git` this process's environment and nothing else
+    /// (ADR-0040), so the name a commit is written under is the repository's to
+    /// supply. Asking for it locally is what keeps whoever set this machine's
+    /// global `user.name` up out of a test that asserts about a commit — and
+    /// keeps a machine with no identity configured from failing one.
+    fn committable_repo() -> ScratchRepo {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        for (key, who) in [
+            ("user.name", "ktask-test"),
+            ("user.email", "ktask-test@example.invalid"),
+        ] {
+            git(fixture.work(), &["config", "--local", key, who])
+                .expect("a committer identity in the repository's own configuration");
+        }
+        fixture
+    }
+
+    /// What `git` itself records for the commit `sha`, asked with `git show -s`
+    /// and one of git's own pretty-format keys.
+    fn shown(root: &Path, sha: &str, key: &str) -> String {
+        git(root, &["show", "-s", &format!("--format={key}"), sha])
+            .expect("the commit exists, so git can be asked about it")
+    }
+
+    /// What `git` holds at `path` inside the commit `sha`.
+    fn contents_at(root: &Path, sha: &str, path: &str) -> String {
+        git(root, &["show", &format!("{sha}:{path}")]).expect("the path is inside the commit")
+    }
+
+    #[test]
+    fn a_tracked_edit_becomes_a_commit_and_the_sha_written_comes_back() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("seed.txt"), "the work an agent did\n")
+            .expect("an edit to a tracked path");
+
+        let sha = commit_all(&work, "the task's subject").expect("one tracked edit is committable");
+
+        assert_eq!(
+            sha,
+            head_sha(&work).expect("the repository answers for its own head"),
+            "the SHA handed back is the one `head_sha` reports for the same tree: VISION.md \
+             §10 journals this value and then compares it against the SHA fetched back from \
+             the remote, so two answers to 'what did you just commit' is exactly the failure \
+             this function exists to prevent"
+        );
+        assert_eq!(
+            sha.len(),
+            40,
+            "a full object id, never an abbreviation: {sha}"
+        );
+        assert_eq!(
+            shown(&work, &sha, "%s"),
+            "the task's subject",
+            "the message the caller handed is the message the commit carries"
+        );
+        assert_eq!(
+            shown(&work, &sha, "%P"),
+            fixture.seed_sha(),
+            "the commit's parent is the commit the tree was standing on — VISION.md §10's \
+             candidate builds on the fetched SHA and on nothing else"
+        );
+        assert_eq!(
+            contents_at(&work, &sha, "seed.txt"),
+            "the work an agent did",
+            "the edit is inside the commit, not merely staged by the call that made it"
+        );
+        assert_eq!(
+            shown(&work, &sha, "%an <%ae>"),
+            "ktask-test <ktask-test@example.invalid>",
+            "the identity comes from the repository's own configuration: this module invents no \
+             committer, because a commit written under a name no one configured is a false \
+             attribution in the evidence trail"
+        );
+        require_clean(&work).expect("committing the work leaves nothing uncommitted behind");
+    }
+
+    #[test]
+    fn a_deleted_path_and_an_edited_one_are_staged_and_committed_by_the_same_call() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        fixture
+            .commit("doomed.txt", "a file a later task removes")
+            .expect("a tracked path to delete");
+        fs::remove_file(work.join("doomed.txt")).expect("the deletion an agent made");
+        fs::write(work.join("seed.txt"), "and an edit beside it\n")
+            .expect("an edit to a tracked path");
+
+        let sha = commit_all(&work, "removed a file and edited another")
+            .expect("a deletion and an edit are both tracked changes");
+
+        assert_eq!(
+            sha,
+            head_sha(&work).expect("the head this call wrote"),
+            "one call, one commit: two commits would make two candidates for one task"
+        );
+        assert!(
+            git(&work, &["show", &format!("{sha}:doomed.txt")]).is_err(),
+            "the deletion is inside the commit: a call that staged edits but not removals \
+             would leave the file in the candidate, and the next task would find it back"
+        );
+        assert_eq!(
+            contents_at(&work, &sha, "seed.txt"),
+            "and an edit beside it",
+            "the edit rode along in the same commit rather than waiting for a second one"
+        );
+        require_clean(&work).expect("nothing is left uncommitted after the commit");
+    }
+
+    #[test]
+    fn a_clean_tree_is_refused_as_a_rule_this_module_enforced_rather_than_as_a_git_failure() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+
+        let error = commit_all(&work, "a subject for a change that does not exist")
+            .expect_err("nothing is staged in a clean tree, and nothing is staged to commit");
+        let (detail, paths) = refused_as_policy(&error);
+
+        assert!(
+            detail.starts_with("nothing is staged to commit at "),
+            "the refusal says what is missing and where, because this is the sentence a run \
+             journals and a human reads: {detail}"
+        );
+        assert!(
+            detail.contains(&work.display().to_string()),
+            "the tree that was refused is named in the detail: {detail}"
+        );
+        assert_eq!(
+            paths,
+            vec![work.clone()],
+            "and carried as the path it refused to commit into, the way a refused worktree \
+             operation carries the directory it refused to touch"
+        );
+        assert_eq!(
+            head_sha(&work).expect("the head still answers"),
+            fixture.seed_sha(),
+            "a refusal writes no object and moves no ref"
+        );
+        assert_eq!(
+            git(&work, &["rev-list", "--count", "HEAD"]).expect("how many commits there are"),
+            "1",
+            "the seed commit and nothing else: `git commit` answers 'nothing to commit' on \
+             standard output with an empty standard error, so an empty commit is what a \
+             wrapper that asked git instead of checking would have left behind"
+        );
+    }
+
+    #[test]
+    fn committing_a_second_time_with_nothing_new_is_an_error_rather_than_an_empty_commit() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("seed.txt"), "the work, first attempt\n").expect("an edit to commit");
+        let first =
+            commit_all(&work, "the task's subject").expect("there is a change to commit once");
+
+        let error = commit_all(&work, "the task's subject, asked again")
+            .expect_err("nothing has changed since that commit, so there is nothing to write");
+        let (detail, _) = refused_as_policy(&error);
+
+        assert!(
+            detail.starts_with("nothing is staged to commit at "),
+            "the second call is refused for the same reason the first would have been: {detail}"
+        );
+        assert_eq!(
+            head_sha(&work).expect("the head is still the one the first commit wrote"),
+            first,
+            "a refused commit moved nothing: an empty commit is still a commit, and a run that \
+             made one would publish a candidate holding no work and then verify it green"
+        );
+        assert_eq!(
+            git(&work, &["rev-list", "--count", "HEAD"]).expect("how many commits there are"),
+            "2",
+            "the seed commit and the task's commit — no third one holding nothing"
+        );
+    }
+
+    #[test]
+    fn a_path_no_commit_has_ever_holds_is_left_out_of_a_commit_that_stages_tracked_changes() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("new-file.txt"), "written, never tracked\n").expect("a new file");
+        fs::write(work.join("seed.txt"), "an edit to a tracked path\n").expect("an edit");
+
+        let sha = commit_all(&work, "the task's subject").expect("the tracked edit is committable");
+
+        assert!(
+            git(&work, &["show", &format!("{sha}:new-file.txt")]).is_err(),
+            "the untracked path is not in the commit: whether a file an agent wrote belongs to \
+             the task is a decision somebody else makes, and a supervisor that swept every \
+             untracked path in would commit the scratch file, the log and the build output"
+        );
+        assert_eq!(
+            contents_at(&work, &sha, "seed.txt"),
+            "an edit to a tracked path",
+            "the tracked edit still went in: an untracked path next to it is not a reason to \
+             refuse the change that was asked for"
+        );
+
+        let error = commit_all(&work, "the same subject again")
+            .expect_err("what is left is the untracked path, and that is nothing to commit");
+        let (detail, _) = refused_as_policy(&error);
+        assert!(
+            detail.contains("new-file.txt"),
+            "the refusal names the path that was left out, which is the one thing a reader can \
+             act on: {detail}"
+        );
+        assert_eq!(
+            head_sha(&work).expect("the head is the commit already made"),
+            sha,
+            "and the refusal made no commit for it"
+        );
+    }
+
+    #[test]
+    fn a_change_the_agent_staged_itself_is_committed_by_the_same_call() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("agent-chosen.txt"), "this one was decided on\n").expect("a new file");
+        git(&work, &["add", "--", "agent-chosen.txt"]).expect("the agent staged it");
+        fs::write(work.join("seed.txt"), "and an edit nobody staged\n").expect("an edit");
+
+        let sha = commit_all(&work, "the task's subject")
+            .expect("a staged path and an unstaged edit are both committable");
+
+        assert_eq!(
+            contents_at(&work, &sha, "agent-chosen.txt"),
+            "this one was decided on",
+            "staging tracked changes adds to the index and never resets it: a path somebody \
+             already staged is a decision that belongs to the task, and dropping it on the way \
+             past would lose work an agent deliberately chose to keep"
+        );
+        assert_eq!(
+            contents_at(&work, &sha, "seed.txt"),
+            "and an edit nobody staged",
+            "and the unstaged tracked edit rode along with it, in one commit"
+        );
+        require_clean(&work).expect("nothing is left between the index and the commit");
+    }
+
+    #[test]
+    fn a_message_holding_gits_metacharacters_lands_in_the_commit_as_the_bytes_it_was_handed() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("seed.txt"), "work\n").expect("an edit to a tracked path");
+        let subject = "subject; with > redirects and $(a command substitution)";
+
+        let sha = commit_all(&work, subject).expect("a message is one argument, never a command");
+
+        assert_eq!(
+            shown(&work, &sha, "%s"),
+            subject,
+            "the subject is byte for byte what the caller handed. Whose text this is matters: \
+             a task's report becomes a commit subject, and the transport passes argv (ADR-0040) \
+             — this call must not be the place that hands a shell what it was given"
+        );
+        assert!(
+            is_clean(&work).expect("the tree answers the dirty question"),
+            "nothing was created by the redirect inside the message: the only files here are \
+             the ones the fixture made, and the commit consumed the edit"
+        );
     }
 
     #[test]
@@ -1393,13 +1803,17 @@ mod tests {
         drop(scratch);
     }
 
-    /// The refusal [`require_clean`] handed back, or a panic naming the variant
-    /// it actually arrived as.
+    /// The refusal a rule of this module handed back, or a panic naming the
+    /// variant it actually arrived as.
+    ///
+    /// Both doors that refuse a tree rather than failing a git command come
+    /// through here: [`require_clean`] refusing uncommitted work, and
+    /// [`commit_all`] refusing a tree with nothing staged.
     fn refused_as_policy(error: &Error) -> (String, Vec<PathBuf>) {
         let Error::Policy { detail, paths } = error else {
             panic!(
-                "uncommitted work is a rule the tree broke, so it has to arrive as \
-                 Error::Policy carrying the paths; got: {error}"
+                "a rule this module enforced, not a git refusal, so it has to arrive as \
+                 Error::Policy carrying what it refused; got: {error}"
             );
         };
         (detail.clone(), paths.clone())
@@ -2473,6 +2887,150 @@ mod tests {
             ),
             tree,
             "the locked worktree is still the worktree behind the name"
+        );
+    }
+
+    #[test]
+    fn a_commits_work_lands_in_the_task_worktree_and_moves_nothing_in_the_checkout_it_came_from() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        let tree = create_worktree(&work, "task-7", fixture.seed_sha())
+            .expect("a task worktree at the seed commit");
+        fs::write(
+            tree.join("seed.txt"),
+            "work done in the task's own checkout\n",
+        )
+        .expect("an edit inside the worktree");
+
+        let sha =
+            commit_all(&tree, "the task's subject").expect("the worktree's change is committable");
+
+        assert_eq!(
+            head_sha(&tree).expect("the worktree answers for its own head"),
+            sha,
+            "the commit is inside the checkout the work was done in"
+        );
+        assert_eq!(
+            head_sha(&work).expect("the checkout answers for its own"),
+            fixture.seed_sha(),
+            "committing in a task worktree moves nothing in the checkout it was created from: \
+             VISION.md §10's isolation is worth nothing if the candidate lands on the user's \
+             branch, where it would be pushed by a publication nobody verified"
+        );
+        assert_eq!(
+            current_branch(&tree).expect("the worktree answers the branch question too"),
+            None,
+            "a detached task checkout stays detached, so the commit belongs to no branch — \
+             which is what keeps two tasks off one ref and makes the candidate the only name \
+             it has"
+        );
+        require_clean(&work).expect("the checkout is as clean as it was before the commit");
+        require_clean(&tree).expect("the worktree holds nothing uncommitted once committed");
+    }
+
+    #[test]
+    fn the_change_committed_is_anywhere_in_the_tree_not_only_beside_the_directory_the_call_ran_in()
+    {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        let nested = work.join("nested");
+        fs::create_dir(&nested).expect("a subdirectory to hand the call instead of the tree");
+        fs::write(work.join("seed.txt"), "a change at the tree's top level\n")
+            .expect("an edit above the directory the call runs in");
+
+        let sha = commit_all(&nested, "the task's subject")
+            .expect("the whole tree is the candidate, not the subtree the call happened to run in");
+
+        assert_eq!(
+            sha,
+            head_sha(&work).expect("the tree's head is the one that moved"),
+            "the call committed the change that exists, rather than refusing a subtree that \
+             holds none of it: a partial candidate would be verified, published and joined \
+             to the remote as though it were the work"
+        );
+        assert_eq!(
+            contents_at(&work, &sha, "seed.txt"),
+            "a change at the tree's top level",
+            "and the change is inside the commit it made"
+        );
+    }
+
+    #[test]
+    fn an_unborn_repository_is_refused_by_git_rather_than_answered_as_having_nothing_staged() {
+        let (scratch, root) = repository();
+        fs::write(root.join("seed.txt"), "the first file, not yet tracked\n")
+            .expect("a file in a repository that has never committed");
+
+        let error = commit_all(&root, "the first commit")
+            .expect_err("nothing is tracked in a repository that has never committed");
+        let (args, stderr) = refused(&error);
+
+        assert_eq!(
+            args.first().map(String::as_str),
+            Some("add"),
+            "the refusal came from the staging call, which is the first thing this function \
+             asks git: {args:?}"
+        );
+        assert!(
+            stderr.contains("did not match"),
+            "git's own words for a tree holding nothing git knows come back, rather than a \
+             refusal that would tell the caller the agent produced no work when the \
+             repository was never there to produce it in: {stderr}"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn a_directory_that_is_not_a_repository_is_refused_by_git_not_as_having_nothing_staged() {
+        let scratch = tempdir().expect("a scratch directory to make a plain directory in");
+        let outside = scratch.path().join("not-a-repository");
+        fs::create_dir(&outside).expect("a plain directory, no repository in it");
+
+        let error = commit_all(&outside, "a subject").expect_err("a directory is not a tree");
+        let (args, stderr) = refused(&error);
+
+        assert_eq!(
+            args.first().map(String::as_str),
+            Some("add"),
+            "the refusal is git's own, from the first command the call ran: {args:?}"
+        );
+        assert!(
+            stderr.contains("not a git repository"),
+            "'no repository here' and 'nothing is staged' are different answers, and a caller \
+             that heard the second one would report that the agent changed nothing in a tree \
+             that was never a tree at all: {stderr}"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn an_empty_message_is_refused_by_git_and_no_commit_is_made_without_one() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        fs::write(
+            work.join("seed.txt"),
+            "work with no subject to describe it\n",
+        )
+        .expect("an edit to a tracked path");
+
+        let error = commit_all(&work, "")
+            .expect_err("git refuses an empty message and this call invents no subject of its own");
+        let (_args, stderr) = refused(&error);
+
+        assert!(
+            stderr.contains("empty"),
+            "git's reason comes back rather than a paraphrase of it: {stderr}"
+        );
+        assert_eq!(
+            head_sha(&work).expect("the head is the seed commit still"),
+            fixture.seed_sha(),
+            "no commit was made: a subject written by the supervisor would be a message in the \
+             evidence trail that no human or agent ever chose"
+        );
+        assert!(
+            !is_clean(&work).expect("the tree answers the dirty question"),
+            "the change is left staged rather than cleaned up: a refusal that reset the index \
+             would throw the work away because a message was missing"
         );
     }
 }
