@@ -142,6 +142,30 @@
 //! repository lock §10 places above publication belongs to whoever owns
 //! integration, not here: a lock makes a mismatch unlikely, this makes one seen.
 
+//! # Repairing a rejected push
+//!
+//! A remote refuses a candidate that does not build on what it holds now, and
+//! VISION.md §7 files that under `git_conflict`: a class a run may remediate
+//! rather than pause on. [`rebase_onto_remote`] is that remediation — fetch,
+//! replay this checkout's own commits onto the tip the fetch brought back, and
+//! report what came of it. It is attempted mechanically first because branch
+//! drift has a mechanical answer, and §7's self-healing is about launching a
+//! fresh session over the failures that do not.
+//!
+//! There are two outcomes, and what a run does next follows from which one it
+//! got. `Applied { new_sha }` is a candidate that can be offered to the same
+//! remote again — and, per §8, must be verified again from scratch, because the
+//! commit the gates ran against is no longer the head of anything.
+//! `Conflict { paths }` names the files no mechanical answer reaches, which is
+//! §7's `needs_input` ground rather than a retry.
+//!
+//! A conflict is aborted before this returns, and both halves of that are load
+//! bearing: the paths are read while git is stopped on them, because an abort
+//! resolves the index and the conflict is gone with it; and the abort is what
+//! leaves the checkout usable, because a rebase in progress turns every later
+//! git command in that directory into a step inside an unfinished replay. ADR-0048
+//! records the three choices that hold this together.
+
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -818,6 +842,131 @@ pub fn publish(worktree: &Path, remote: &str, branch: &str, candidate: &str) -> 
     Ok(())
 }
 
+/// What a rebase onto the remote's tip ended as.
+///
+/// Two of the three things that can happen, because the third — git refusing to
+/// start at all — is [`Error::Git`] rather than an outcome: nothing was decided,
+/// so there is nothing to report beyond the refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RebaseOutcome {
+    /// The commits this checkout held were replayed onto the remote's tip, and
+    /// `new_sha` is the commit the checkout stands at now.
+    Applied {
+        /// The rebased head, read back through [`head_sha`] rather than taken
+        /// from what git printed: the caller journals this value and publishes
+        /// it, so it has to be the answer the repository gives.
+        new_sha: String,
+    },
+    /// The replay stopped on a conflict, was aborted, and left this checkout as
+    /// it found it.
+    ///
+    /// This is the end of what a supervisor can do without a decision: the
+    /// content on the two sides disagrees, and choosing between it is not
+    /// something §7 lets a repair do on its own.
+    Conflict {
+        /// Every path git left unmerged, relative to `worktree`'s top level and
+        /// in git's own text — the paths a human has to resolve.
+        paths: Vec<PathBuf>,
+    },
+}
+
+/// Replay `worktree`'s own commits onto the tip `remote` holds for `branch`.
+///
+/// VISION.md §7's `git_conflict` is the class this answers. The remote has
+/// refused a candidate that does not build on what it holds now (ADR-0046), and
+/// the drift has a deterministic repair, so it is tried before a session is
+/// spent on it — which is the whole of what this repairs: it moves the task's
+/// work, and never a remote.
+///
+/// # The tip is the one the fetch brought back
+///
+/// [`fetch`] runs first, and it is not a courtesy.
+/// `refs/remotes/<remote>/<branch>` is a cache of the last conversation with the
+/// remote, and ADR-0046 measured that a push writes into it whether or not the
+/// remote took anything; rebasing onto that cached value can therefore land on a
+/// commit that is not the remote's tip and produce a candidate the same remote
+/// refuses again. The qualified name is read for the same reason `publish` reads
+/// it fully qualified: `rev-parse main` answers about the local branch, and this
+/// call must not. Nothing here defaults a remote either (ADR-0041) — `remote` and
+/// `branch` are the ones the caller was told to use.
+///
+/// Nothing is pushed. Whether a repaired candidate is worth offering again is the
+/// caller's decision, and §8's gates decide whether it is worth anything: the
+/// replay rewrote the candidate, so every gate has to run against `new_sha`
+/// before that SHA can be published.
+///
+/// # A conflict is an outcome, not a failure
+///
+/// Both divergence outcomes are answers about the branch, and a caller that has
+/// to unwrap an error to find out which one it got cannot tell a repair that
+/// worked from a repair that stopped — while the two send a run in opposite
+/// directions (retry the publication, or stop and ask). So `Ok(Conflict { .. })`
+/// carries the paths and `Err` is reserved for git refusing to answer at all.
+///
+/// # The worktree is left as it was found
+///
+/// On a conflict the rebase is aborted before this returns. The paths come first
+/// because an abort resolves the index — asking git for unmerged paths afterwards
+/// asks about a tree that no longer holds the conflict — and the abort comes
+/// before returning because a checkout left mid-rebase makes every later git
+/// command in it a step inside an unfinished replay, including the cleanup the
+/// next attempt would try first.
+///
+/// A refusal that never started leaves nothing behind either, by git's own
+/// construction: a rebase that will not begin creates no bookkeeping to abort, so
+/// its refusal is returned unchanged. Measured on git 2.55.0.
+///
+/// `--no-autostash` is what keeps one of those refusals honest. With
+/// `rebase.autoStash` configured — a setting a developer enables once and then
+/// stops thinking about — a plain `git rebase` *succeeds* past unfinished work:
+/// measured, it printed `Created autostash`, replayed the branch, then printed
+/// `Applied autostash` and left the rebase finished. That is a supervisor moving
+/// a task's uncommitted work into a ref no gate reads, no journal names and no
+/// later attempt looks in, on the way to a result that looks repaired. Refusing
+/// is the honest answer, and the one VISION.md §10 already gives a dirty tree at
+/// verification time.
+///
+/// # Errors
+///
+/// [`Error::Git`] when git refused something that is not a conflict: the fetch,
+/// or a rebase that never started — a tree holding uncommitted work, a `branch`
+/// the remote has never held, a `worktree` holding no repository. Git's own
+/// refusal comes back unchanged, carrying the argument vector that ran.
+///
+/// The one conflict-shaped error is an abort that itself fails: the paths are
+/// lost with it, and honestly so, because the fact a caller would have to act on
+/// is a checkout still standing inside a rebase, which no path list describes.
+pub fn rebase_onto_remote(worktree: &Path, remote: &str, branch: &str) -> Result<RebaseOutcome> {
+    fetch(worktree, remote)?;
+    let upstream = format!("refs/remotes/{remote}/{branch}");
+    let Err(refusal) = git(worktree, &["rebase", "--no-autostash", &upstream]) else {
+        let new_sha = head_sha(worktree)?;
+        return Ok(RebaseOutcome::Applied { new_sha });
+    };
+
+    let conflicted = unmerged_paths(worktree)?;
+    if conflicted.is_empty() {
+        return Err(refusal);
+    }
+    git(worktree, &["rebase", "--abort"])?;
+    Ok(RebaseOutcome::Conflict { paths: conflicted })
+}
+
+/// The paths `worktree`'s index holds unmerged, as git prints them.
+///
+/// `--diff-filter=U` asks that question directly instead of listing a status and
+/// filtering it, and the answer arrives in the same text a human reads in
+/// `git status`: relative to the tree's top level, with git's C-quoting left in
+/// (the rule ADR-0041 keeps for every path this module reports). No output means
+/// no unmerged path — and an empty answer is what separates a rebase that
+/// stopped on a conflict from one that never began.
+fn unmerged_paths(worktree: &Path) -> Result<Vec<PathBuf>> {
+    Ok(git(worktree, &["diff", "--name-only", "--diff-filter=U"])?
+        .lines()
+        .map(PathBuf::from)
+        .collect())
+}
+
 /// The suffix on the directory one repository's task worktrees live in.
 ///
 /// It is appended to the repository's own top level rather than joined inside
@@ -1054,15 +1203,16 @@ fn parse_worktrees(printed: &str) -> Vec<Worktree> {
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use tempfile::{TempDir, tempdir};
 
     use super::{
-        Kind, Worktree, commit_all, create_worktree, current_branch, dirt_of, fetch, git, git_env,
-        head_sha, is_clean, list_worktrees, publish, remote_url, remove_worktree, require_clean,
-        status_porcelain,
+        Kind, RebaseOutcome, Worktree, commit_all, create_worktree, current_branch, dirt_of, fetch,
+        git, git_env, head_sha, is_clean, list_worktrees, publish, rebase_onto_remote, remote_url,
+        remove_worktree, require_clean, status_porcelain,
     };
-    use crate::Error;
+    use crate::{Error, Result};
     // The repository-with-an-origin fixture is the crate-wide one, so that a
     // commit made here and a commit made by the publication tests to come are
     // the same object: `crate::testing` pins the author, the committer and both
@@ -3499,5 +3649,384 @@ mod tests {
             "the change is left staged rather than cleaned up: a refusal that reset the index \
              would throw the work away because a message was missing"
         );
+    }
+    /// `git` in `root` with the machine kept out of it: the identity comes on the
+    /// command line, signing is off, and the hook path is a directory that was
+    /// never created.
+    ///
+    /// [`ScratchRepo`]'s own repositories are guarded this way by its
+    /// constructor; a peer built here needs the same guard for the same reasons,
+    /// and needs it on the `clone` call too, because `git clone` runs a
+    /// `post-checkout` hook.
+    fn guarded(root: &Path, args: &[&str]) -> Result<String> {
+        let hooks = format!("core.hooksPath={}", root.join(".no-hooks").display());
+        let mut words: Vec<&str> = IDENTITY.to_vec();
+        words.extend(["-c", "commit.gpgsign=false", "-c", hooks.as_str()]);
+        words.extend_from_slice(args);
+        git(root, &words)
+    }
+
+    /// Move the fixture's origin forward by one commit made in a second
+    /// repository, and return that commit's SHA.
+    ///
+    /// This is the state a rejected push reports: the origin moved because
+    /// somebody else published, not because this repository asked it to.
+    /// [`ScratchRepo::diverge`] also moves it, but always by writing the same
+    /// path both sides, which only builds one of the two outcomes this call
+    /// reports — so the clean divergence comes from here, where the paths the two
+    /// sides touch are the test's to choose.
+    ///
+    /// The commit is made in a `git clone` of the origin, in the fixture's scratch
+    /// directory and deleted with it, because a push needs a repository holding
+    /// the origin's objects, and the fixture's own working repository is the one
+    /// that must be left behind.
+    fn origin_moves(fixture: &ScratchRepo, branch: &str, files: &[(&str, &str)]) -> String {
+        static PEERS: AtomicUsize = AtomicUsize::new(1);
+        let peer = fixture
+            .path()
+            .join(format!("peer-{}", PEERS.fetch_add(1, Ordering::Relaxed)));
+        let url = fixture.origin().display().to_string();
+        let directory = peer.display().to_string();
+        guarded(fixture.path(), &["clone", &url, &directory])
+            .expect("a second repository can clone the origin");
+        for (file, contents) in files {
+            fs::write(peer.join(file), format!("{contents}\n"))
+                .expect("a file for the commit the origin will hold");
+            guarded(&peer, &["add", "--", file]).expect("the peer stages the file it just wrote");
+        }
+        guarded(&peer, &["commit", "-m", "what someone else published"])
+            .expect("the peer commits on the branch the origin holds");
+        guarded(&peer, &["push", "origin", branch]).expect("the origin moves onto that commit");
+        head_sha(&peer).expect("the commit the peer pushed answers for itself")
+    }
+
+    /// Whether `worktree` still has a rebase in progress, asked of git's own
+    /// bookkeeping rather than of what a command printed.
+    ///
+    /// Both spellings are checked because which one git uses is the rebase
+    /// backend's choice, not this module's: `rebase-merge` for the merge backend,
+    /// `rebase-apply` for the one that replays patches. `git rev-parse --git-path`
+    /// answers relative to the directory it ran in, which is the one every
+    /// [`git`] call here runs in.
+    fn left_a_rebase_in_progress(worktree: &Path) -> bool {
+        ["rebase-merge", "rebase-apply"]
+            .into_iter()
+            .any(|bookkeeping| {
+                let printed = git(worktree, &["rev-parse", "--git-path", bookkeeping])
+                    .unwrap_or_else(|error| {
+                        panic!("git answers where its own `{bookkeeping}` lives: {error}")
+                    });
+                worktree.join(printed).exists()
+            })
+    }
+
+    #[test]
+    fn a_clean_divergence_rebases_onto_the_tip_the_fetch_brought_back_and_reports_the_new_sha() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        let local = candidate_in(&work);
+        let moved = origin_moves(
+            &fixture,
+            "main",
+            &[("peer-only.txt", "what someone else published")],
+        );
+
+        assert_eq!(
+            fetched_tip(&work, "main"),
+            fixture.seed_sha(),
+            "the remote-tracking ref still names the commit the last push wrote, so the only \
+             way this call can land on the commit that moved the origin is by asking the \
+             remote what it holds now"
+        );
+
+        let applied = rebase_onto_remote(&work, "origin", "main")
+            .expect("two sides that touched different paths have nothing to conflict about");
+        let RebaseOutcome::Applied { new_sha } = applied else {
+            panic!("nothing here conflicts, so a conflict has to be a mistake: {applied:?}");
+        };
+
+        assert_eq!(
+            new_sha,
+            head_sha(&work).expect("the repository answers for its own head"),
+            "the SHA handed back is the one the checkout now holds: a run journals this value \
+             and then publishes it, so a SHA this call remembered from before its own rebase \
+             would journal a commit that no longer exists"
+        );
+        assert_ne!(
+            new_sha, local,
+            "the task's commit was rewritten on top of the remote's, which is the whole point \
+             of the repair: the old SHA is still an object, but it is not the candidate"
+        );
+        git(&work, &["merge-base", "--is-ancestor", &moved, &new_sha]).expect(
+            "the commit that moved the origin is an ancestor of the new head: anything else \
+             would be refused by the remote again, which is the failure this repairs",
+        );
+        assert_eq!(
+            contents_at(&work, &new_sha, "seed.txt"),
+            "the work an agent did",
+            "the task's own change rode along through the rebase rather than being dropped for \
+             a newer commit's sake"
+        );
+        assert_eq!(
+            contents_at(&work, &new_sha, "peer-only.txt"),
+            "what someone else published",
+            "and the change that was fetched in is in the tree the gates will be run against"
+        );
+        assert_eq!(
+            git(&work, &["rev-list", "--count", &new_sha]).expect("how many commits there are"),
+            "3",
+            "seed, the peer's commit, the task's commit replayed on top of it: three, with no \
+             merge commit, because a merge would produce a candidate the remote would take \
+             while the branch held two parents no gate was described to"
+        );
+        assert_eq!(
+            held_by(fixture.origin(), "main"),
+            moved,
+            "a repair publishes nothing: the push that was refused is not retried from here"
+        );
+        require_clean(&work).expect("the rebased tree holds nothing outside a commit");
+    }
+
+    #[test]
+    fn a_branch_that_only_lags_the_origin_lands_on_its_tip_and_reports_that_tip() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        let moved = origin_moves(
+            &fixture,
+            "main",
+            &[("someone-elses-work.txt", "published while this task ran")],
+        );
+
+        let applied = rebase_onto_remote(&work, "origin", "main")
+            .expect("a branch holding no commit of its own has nothing to conflict with");
+
+        assert_eq!(
+            applied,
+            RebaseOutcome::Applied {
+                new_sha: moved.clone(),
+            },
+            "with nothing local to replay the repair is the drift itself disappearing: the \
+             checkout ends at the commit the remote holds, which is the only commit a retry \
+             can push"
+        );
+        assert_eq!(
+            head_sha(&work).expect("the head answers"),
+            moved,
+            "and that is what the checkout stands at, not merely what was reported"
+        );
+        assert_eq!(
+            held_by(fixture.origin(), "main"),
+            moved,
+            "the origin is untouched by a call that came to read from it"
+        );
+    }
+
+    #[test]
+    fn a_checkout_already_at_the_remote_tip_is_applied_rather_than_refused() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+
+        let applied = rebase_onto_remote(&work, "origin", "main")
+            .expect("a branch level with its remote has nothing to repair, and nothing to fail");
+
+        assert_eq!(
+            applied,
+            RebaseOutcome::Applied {
+                new_sha: fixture.seed_sha().to_owned(),
+            },
+            "the no-op reports the commit it left in place: a run that heard a conflict here \
+             would stop for a human over a branch that was never behind"
+        );
+        assert_eq!(
+            held_by(fixture.origin(), "main"),
+            fixture.seed_sha(),
+            "and a no-op moved nothing"
+        );
+    }
+
+    #[test]
+    fn a_conflicting_divergence_names_every_unmerged_path_and_leaves_the_worktree_as_it_was() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("a.txt"), "the task's own a\n")
+            .expect("the first file both sides write");
+        fs::write(work.join("b.txt"), "the task's own b\n")
+            .expect("the second file both sides write");
+        git(&work, &["add", "--", "a.txt", "b.txt"])
+            .expect("the task staged its own work, as an agent staging its work does");
+        let local = commit_all(&work, "the task's subject").expect("both files are one commit");
+        let moved = origin_moves(
+            &fixture,
+            "main",
+            &[("a.txt", "the origin's a"), ("b.txt", "the origin's b")],
+        );
+
+        let conflicted = rebase_onto_remote(&work, "origin", "main")
+            .expect("a conflict is an outcome a run acts on, not a failure of this call");
+        let RebaseOutcome::Conflict { paths } = conflicted else {
+            panic!(
+                "both sides wrote different bytes to the same two paths, so there is a \
+                 conflict to report: {conflicted:?}"
+            );
+        };
+
+        let unmerged: Vec<PathBuf> = vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")];
+        assert_eq!(
+            paths, unmerged,
+            "every path git could not merge is named, in git's own text relative to the tree: \
+             naming one of two would send a human to the file that was not the problem"
+        );
+        assert_eq!(
+            head_sha(&work).expect("the head answers"),
+            local,
+            "HEAD is the commit the rebase started from: an aborted rebase that left the \
+             branch half-replayed would be indistinguishable from one that finished"
+        );
+        assert_eq!(
+            fs::read_to_string(work.join("a.txt")).expect("the file is where it was"),
+            "the task's own a\n",
+            "no conflict markers were left in the file a later gate would compile"
+        );
+        require_clean(&work).expect("the tree holds nothing the abandoned rebase left behind");
+        assert!(
+            !left_a_rebase_in_progress(&work),
+            "git's own rebase bookkeeping is gone, so the next command in this checkout is an \
+             ordinary git command rather than one inside someone else's unfinished rebase"
+        );
+        assert_eq!(
+            held_by(fixture.origin(), "main"),
+            moved,
+            "and a conflict publishes nothing"
+        );
+    }
+
+    #[test]
+    fn a_detached_task_worktree_rebases_without_being_told_which_branch_to_check_out() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        let candidate = candidate_in(&work);
+        let tree = create_worktree(&work, "task-11", &candidate)
+            .expect("the detached checkout VISION.md §10 runs a task in");
+        let moved = origin_moves(
+            &fixture,
+            "main",
+            &[("peer-only.txt", "what someone else published")],
+        );
+
+        let applied = rebase_onto_remote(&tree, "origin", "main").expect(
+            "a detached head has commits to replay and a remote that moved, like any other",
+        );
+        let RebaseOutcome::Applied { new_sha } = applied else {
+            panic!("different paths on the two sides: {applied:?}");
+        };
+
+        assert_eq!(
+            new_sha,
+            head_sha(&tree).expect("the task's head answers"),
+            "the repair was performed where it was asked to be, in the task's checkout"
+        );
+        git(&tree, &["merge-base", "--is-ancestor", &moved, &new_sha])
+            .expect("the fetched tip is an ancestor of the repaired head");
+        assert!(
+            git(&tree, &["symbolic-ref", "-q", "HEAD"]).is_err(),
+            "HEAD is detached afterwards as it was before: this call repairs the commits a \
+             task holds and does not decide which branch the task is on"
+        );
+        assert_eq!(
+            head_sha(&work).expect("the other checkout answers for itself"),
+            candidate,
+            "the checkout that was handed to the run is where it was: VISION.md §10 keeps the \
+             work inside the task's own checkout"
+        );
+    }
+
+    #[test]
+    fn unfinished_work_in_the_tree_is_refused_rather_than_stashed_away() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        let local = candidate_in(&work);
+        origin_moves(
+            &fixture,
+            "main",
+            &[("peer-only.txt", "what someone else published")],
+        );
+        git(&work, &["config", "--local", "rebase.autoStash", "true"])
+            .expect("a repository whose rebase would move unfinished work aside on its own");
+        fs::write(work.join("seed.txt"), "an edit no commit holds\n").expect("an unstaged edit");
+
+        let error = rebase_onto_remote(&work, "origin", "main")
+            .expect_err("work this call did not write is not this call's to move out of the way");
+        let (args, stderr) = refused(&error);
+
+        assert_eq!(
+            args,
+            vec![
+                "rebase".to_owned(),
+                "--no-autostash".to_owned(),
+                "refs/remotes/origin/main".to_owned(),
+            ],
+            "the refusal names the call that refused, and that call asked for no stash: {args:?}"
+        );
+        assert!(
+            stderr.contains("cannot rebase") && stderr.contains("unstaged"),
+            "git's own reason travels with the refusal rather than a paraphrase of it: {stderr}"
+        );
+        assert_eq!(
+            head_sha(&work).expect("the head answers"),
+            local,
+            "the branch stayed at the candidate: a repair that half-happened would be \
+             indistinguishable from one that did"
+        );
+        assert_eq!(
+            fs::read_to_string(work.join("seed.txt")).expect("the edit is where it was"),
+            "an edit no commit holds\n",
+            "the uncommitted change is still in the tree, where the task that wrote it can find \
+             it, and not inside a stash no gate reads"
+        );
+        assert_eq!(
+            git(&work, &["stash", "list"]).expect("git answers what it stashed"),
+            "",
+            "nothing was stashed: a stash entry is work hidden in a ref outside every commit, \
+             which VISION.md §10 puts outside what a run can see"
+        );
+        assert!(
+            !left_a_rebase_in_progress(&work),
+            "and no rebase was started"
+        );
+    }
+
+    #[test]
+    fn a_branch_the_origin_does_not_hold_is_refused_naming_the_upstream_it_could_not_find() {
+        let fixture = committable_repo();
+        let work = fixture.work().to_path_buf();
+        fixture
+            .branch("side")
+            .expect("a branch this repository has never published");
+
+        let error = rebase_onto_remote(&work, "origin", "side")
+            .expect_err("a fetch cannot produce a tip the remote has never held");
+        let (args, stderr) = refused(&error);
+
+        assert_eq!(
+            args,
+            vec![
+                "rebase".to_owned(),
+                "--no-autostash".to_owned(),
+                "refs/remotes/origin/side".to_owned(),
+            ],
+            "the refusal is git's own answer about the rebase, and the argument names which \
+             ref was looked for and not found: {args:?}"
+        );
+        assert!(
+            stderr.contains("invalid upstream"),
+            "git's words for a revision it cannot resolve come back unchanged, because \
+             'nothing was fetched' and 'nothing is there to fetch' are different facts: \
+             {stderr}"
+        );
+        assert!(
+            !left_a_rebase_in_progress(&work),
+            "a refusal that never started a rebase leaves none behind to be aborted"
+        );
+        require_clean(&work).expect("the tree was not touched by a call that could not begin");
     }
 }
