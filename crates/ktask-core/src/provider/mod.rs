@@ -45,6 +45,8 @@ use std::path::PathBuf;
 
 use crate::{Bus, Result};
 
+pub mod dummy;
+
 /// Where the figures inside a [`Usage`] came from.
 ///
 /// The source is part of the record rather than metadata. The same counts read
