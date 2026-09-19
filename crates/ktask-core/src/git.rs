@@ -5,12 +5,12 @@ use std::process::Command;
 
 use crate::{Error, Result};
 
-/// Execute a git command and return trimmed stdout.
+/// Execute a git command and return stdout.
 ///
 /// Runs git as a subprocess with the given arguments in the specified root
-/// directory. Returns the trimmed standard output if successful. Non-zero exit
-/// codes are converted to [`Error::Git`] carrying the command arguments and
-/// stderr output.
+/// directory. Returns the standard output if successful, with trailing
+/// newlines removed. Non-zero exit codes are converted to [`Error::Git`]
+/// carrying the command arguments and stderr output.
 ///
 /// # Arguments
 ///
@@ -50,7 +50,7 @@ pub fn git(root: &Path, args: &[&str]) -> Result<String> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    Ok(stdout.trim().to_string())
+    Ok(stdout.trim_end().to_string())
 }
 
 /// Get the SHA of the current HEAD commit.
@@ -196,6 +196,87 @@ pub fn list_worktrees(root: &Path) -> Result<Vec<String>> {
         })
         .collect();
     Ok(worktrees)
+}
+
+/// Require the worktree to be clean (no uncommitted changes).
+///
+/// Returns `Error::Policy` if there are any modified, staged, or untracked files.
+/// Ignored files are not considered. The error message lists all offending paths,
+/// distinguishing between modified, staged, and untracked files.
+///
+/// # Errors
+///
+/// Returns `Error::Policy` if the worktree is not clean.
+pub fn require_clean(worktree: &Path) -> Result<()> {
+    let status = status_porcelain(worktree)?;
+
+    if status.is_empty() {
+        return Ok(());
+    }
+
+    let mut modified = Vec::new();
+    let mut staged = Vec::new();
+    let mut untracked = Vec::new();
+
+    for line in status.lines() {
+        if line.len() < 3 {
+            continue;
+        }
+
+        let x = line.chars().next().unwrap_or(' ');
+        let y = line.chars().nth(1).unwrap_or(' ');
+        let path = line[3..].trim().to_string();
+
+        match (x, y) {
+            ('?', '?') => {
+                untracked.push(path);
+            }
+            (' ', 'M' | 'D' | 'T') => {
+                modified.push(path);
+            }
+            ('M' | 'A' | 'D' | 'R' | 'C' | 'T', ' ') => {
+                staged.push(path);
+            }
+            ('M' | 'A' | 'D' | 'R' | 'C' | 'T', 'M' | 'D' | 'T') => {
+                staged.push(path.clone());
+                modified.push(path);
+            }
+            _ => {}
+        }
+    }
+
+    if modified.is_empty() && staged.is_empty() && untracked.is_empty() {
+        return Ok(());
+    }
+
+    let mut paths = Vec::new();
+    let mut detail_parts = Vec::new();
+
+    if !modified.is_empty() {
+        detail_parts.push(format!("modified: {}", modified.join(", ")));
+        for p in modified {
+            paths.push(std::path::PathBuf::from(p));
+        }
+    }
+
+    if !staged.is_empty() {
+        detail_parts.push(format!("staged: {}", staged.join(", ")));
+        for p in staged {
+            paths.push(std::path::PathBuf::from(p));
+        }
+    }
+
+    if !untracked.is_empty() {
+        detail_parts.push(format!("untracked: {}", untracked.join(", ")));
+        for p in untracked {
+            paths.push(std::path::PathBuf::from(p));
+        }
+    }
+
+    Err(Error::Policy {
+        detail: detail_parts.join("; "),
+        paths,
+    })
 }
 
 #[cfg(test)]
@@ -960,5 +1041,273 @@ mod tests {
         // List should no longer show it after prune
         let list_after = list_worktrees(&repo).unwrap();
         assert!(!list_after.contains(&"leftover-wt".to_string()));
+    }
+
+    #[test]
+    fn require_clean_passes_on_clean_repository() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create and commit a file
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let result = require_clean(&repo);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn require_clean_fails_on_modified_file() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create and commit a file
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        // Modify the file
+        fs::write(&file_path, "modified content").ok();
+
+        let result = require_clean(&repo);
+        assert!(result.is_err());
+        if let Err(Error::Policy { detail, paths }) = result {
+            assert!(detail.contains("modified"));
+            assert!(detail.contains("test.txt"));
+            assert_eq!(paths.len(), 1);
+        } else {
+            panic!("Expected Error::Policy variant");
+        }
+    }
+
+    #[test]
+    fn require_clean_fails_on_staged_file() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create and commit a file
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        // Modify and stage the file
+        fs::write(&file_path, "modified content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let result = require_clean(&repo);
+        assert!(result.is_err());
+        if let Err(Error::Policy { detail, paths }) = result {
+            assert!(detail.contains("staged"));
+            assert!(detail.contains("test.txt"));
+            assert_eq!(paths.len(), 1);
+        } else {
+            panic!("Expected Error::Policy variant");
+        }
+    }
+
+    #[test]
+    fn require_clean_fails_on_untracked_file() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create and commit a file
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        // Create an untracked file
+        let untracked_path = repo.join("untracked.txt");
+        fs::write(&untracked_path, "untracked content").ok();
+
+        let result = require_clean(&repo);
+        assert!(result.is_err());
+        if let Err(Error::Policy { detail, paths }) = result {
+            assert!(detail.contains("untracked"));
+            assert!(detail.contains("untracked.txt"));
+            assert_eq!(paths.len(), 1);
+        } else {
+            panic!("Expected Error::Policy variant");
+        }
+    }
+
+    #[test]
+    fn require_clean_ignores_ignored_files() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create and commit a file
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        let commit1 = Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output();
+        if commit1.is_err() {
+            return;
+        }
+
+        // Create a .gitignore file
+        let gitignore_path = repo.join(".gitignore");
+        fs::write(&gitignore_path, "*.log\n").ok();
+        Command::new("git")
+            .args(["add", ".gitignore"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        let commit2 = Command::new("git")
+            .args(["commit", "-m", "add gitignore"])
+            .current_dir(&repo)
+            .output();
+        if commit2.is_err() {
+            return;
+        }
+
+        // Create an ignored file
+        let ignored_path = repo.join("debug.log");
+        fs::write(&ignored_path, "log content").ok();
+
+        let result = require_clean(&repo);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn require_clean_names_all_offending_paths() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create and commit a file
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        // Create modified file
+        fs::write(&file_path, "modified content").ok();
+
+        // Create staged file
+        let staged_path = repo.join("staged.txt");
+        fs::write(&staged_path, "new content").ok();
+        Command::new("git")
+            .args(["add", "staged.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        // Create untracked file
+        let untracked_path = repo.join("untracked.txt");
+        fs::write(&untracked_path, "untracked content").ok();
+
+        let result = require_clean(&repo);
+        assert!(result.is_err());
+        if let Err(Error::Policy { detail, paths }) = result {
+            // Check that all paths are named in both detail and paths vector
+            assert!(detail.contains("test.txt") || detail.contains("modified"));
+            assert!(detail.contains("staged.txt") || detail.contains("staged"));
+            assert!(detail.contains("untracked.txt") || detail.contains("untracked"));
+            assert_eq!(paths.len(), 3);
+        } else {
+            panic!("Expected Error::Policy variant");
+        }
+    }
+
+    #[test]
+    fn require_clean_distinguishes_categories() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create and commit a file
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        // Create modified file
+        fs::write(&file_path, "modified content").ok();
+
+        // Create staged file
+        let staged_path = repo.join("staged.txt");
+        fs::write(&staged_path, "new content").ok();
+        Command::new("git")
+            .args(["add", "staged.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        // Create untracked file
+        let untracked_path = repo.join("untracked.txt");
+        fs::write(&untracked_path, "untracked content").ok();
+
+        let result = require_clean(&repo);
+        assert!(result.is_err());
+        if let Err(Error::Policy { detail, .. }) = result {
+            // Verify that categories are distinguished in detail
+            assert!(detail.contains("modified:"));
+            assert!(detail.contains("staged:"));
+            assert!(detail.contains("untracked:"));
+        } else {
+            panic!("Expected Error::Policy variant");
+        }
     }
 }
