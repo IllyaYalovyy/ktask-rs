@@ -351,4 +351,41 @@ mod tests {
         assert!(result.stdout.is_empty());
         assert!(result.stderr.is_empty());
     }
+
+    #[test]
+    fn idle_watchdog_keeps_alive_talking_process() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("for i in 1 2 3 4 5; do echo 'tick'; sleep 0.1; done");
+
+        let result = run_streaming(
+            &mut cmd,
+            None,
+            Duration::from_millis(400),
+            Duration::from_secs(10),
+            None,
+        )
+        .expect("run_streaming should succeed");
+
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("tick"));
+    }
+
+    #[test]
+    fn idle_watchdog_kills_a_silent_session() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("echo 'start' && sleep 10");
+
+        let result = run_streaming(
+            &mut cmd,
+            None,
+            Duration::from_millis(300),
+            Duration::from_secs(30),
+            None,
+        )
+        .expect("run_streaming should return result");
+
+        assert_eq!(result.exit_code, -1);
+        assert!(result.stdout.contains("start"));
+    }
 }
