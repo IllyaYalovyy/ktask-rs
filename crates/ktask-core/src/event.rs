@@ -7,6 +7,21 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+/// A structured decision request parsed from a `NEEDS_INPUT` report.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecisionRequest {
+    /// The question being asked.
+    pub question: String,
+    /// Available options.
+    pub options: Vec<String>,
+    /// Trade-offs explanation.
+    pub tradeoffs: String,
+    /// Impact statement.
+    pub impact: String,
+    /// Recommended option, if any.
+    pub recommended: Option<String>,
+}
+
 /// An event in the journal representing a state change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
@@ -140,6 +155,11 @@ pub enum EventKind {
         /// Reason for using the exception.
         reason: String,
     },
+    /// Decision request raised from a NEEDS_INPUT report.
+    DecisionRaised {
+        /// The parsed decision request.
+        request: DecisionRequest,
+    },
 }
 
 impl EventKind {
@@ -168,6 +188,7 @@ impl EventKind {
             EventKind::GateAcknowledged { .. } => "GateAcknowledged",
             EventKind::AttemptRecorded { .. } => "AttemptRecorded",
             EventKind::TddExceptionUsed { .. } => "TddExceptionUsed",
+            EventKind::DecisionRaised { .. } => "DecisionRaised",
         }
     }
 }
