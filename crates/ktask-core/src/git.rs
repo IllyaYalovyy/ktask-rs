@@ -83,8 +83,25 @@
 //! `HEAD` is `None` rather than a branch named `HEAD`, a remote is named by the
 //! caller and never defaulted, and status is asked for with its branch header
 //! for a reason that is easy to mistake for decoration.
+//!
+//! # Task worktrees
+//!
+//! VISION.md §10 runs every task in its own checkout, and three calls make that
+//! real: [`create_worktree`], [`remove_worktree`] and [`list_worktrees`]. Two
+//! rules hold them together, both recorded in ADR-0043.
+//!
+//! A worktree is created from the SHA the caller was handed — resolved to a
+//! commit first, then passed to `git worktree add --detach` as the commit to
+//! start at — so there is no path through this module that builds a task on the
+//! current checkout. The name decides the directory, derived from the repository
+//! and placed beside it, never inside the tree [`is_clean`] reads.
+//!
+//! Removal never forces. A checkout holding uncommitted or unfinished work is
+//! refused with git's own reason, because that work is the evidence a later
+//! attempt reads; the leftovers this is for are the ones that hold nothing — a
+//! registration whose directory an interrupted run left behind.
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::{Error, Result};
@@ -319,6 +336,238 @@ pub fn fetch(root: &Path, remote: &str) -> Result<()> {
     Ok(())
 }
 
+/// The suffix on the directory one repository's task worktrees live in.
+///
+/// It is appended to the repository's own top level rather than joined inside
+/// it, so `…/proj` keeps its task checkouts in `…/proj.ktask-worktrees/`: beside
+/// the repository, named after it so two repositories under one parent cannot
+/// share a directory, and never in the tree [`is_clean`] reads (ADR-0043).
+const MANAGED_SUFFIX: &str = ".ktask-worktrees";
+
+/// One checkout git has registered, as `git worktree list --porcelain` printed
+/// it — the main checkout and every task worktree alike.
+///
+/// Every field is git's own answer rather than a prettier version of it, which
+/// is the rule ADR-0041 sets for the queries above: an operator who re-runs the
+/// command reads the same words this holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Worktree {
+    /// The directory the checkout is in, printed by git as it holds it.
+    pub path: PathBuf,
+    /// The commit its `HEAD` points at. git prints forty zeroes for a checkout
+    /// that has never committed, and this holds that too rather than inventing
+    /// a `None`: an unborn checkout is git's fact to report.
+    pub head: String,
+    /// The full ref it is attached to, as git prints it (`refs/heads/main`), or
+    /// `None` when it is detached. A task worktree is always detached, because
+    /// [`create_worktree`] checks a SHA out (ADR-0041).
+    pub branch: Option<String>,
+    /// Why git considers this entry prunable — a checkout whose directory has
+    /// gone missing is the ordinary one. `None` means git listed no reason, so
+    /// the checkout is there.
+    pub prunable: Option<String>,
+    /// Why somebody locked the checkout out of removal, or an empty reason when
+    /// it is locked without one. `None` means it is not locked.
+    pub locked: Option<String>,
+}
+
+/// Every checkout git has registered for the repository `root` belongs to.
+///
+/// The command is `git worktree list --porcelain`, whose records are the stable
+/// machine-readable ones git documents. The main checkout comes back too, first
+/// in the list: this answers what git was asked and does not filter the answer
+/// down to the entries one caller happens to care about. A caller looking for
+/// its own task worktrees matches on the directory [`create_worktree`] returns.
+///
+/// `root` may be the main checkout or any worktree of the same repository — the
+/// registrations are shared, so the answer is the same either way.
+///
+/// # Errors
+///
+/// [`Error::Git`] when git refuses, most often because `root` holds no
+/// repository. A repository with no linked worktrees is not an error: its list
+/// holds the main checkout alone.
+pub fn list_worktrees(root: &Path) -> Result<Vec<Worktree>> {
+    Ok(parse_worktrees(&git(
+        root,
+        &["worktree", "list", "--porcelain"],
+    )?))
+}
+
+/// Create — or, the second time, hand back — the worktree named `name`.
+///
+/// The checkout is created at `base_sha` and nowhere else: the SHA is resolved
+/// first, then handed to `git worktree add --detach` as the commit to start at,
+/// so the command never runs without a commit and never starts from wherever
+/// `HEAD` happens to be. VISION.md §10's step 2 builds a task on the fetched
+/// remote SHA for exactly this reason — a task that started from the local
+/// checkout would be verified against a commit nobody fetched.
+///
+/// The directory is derived from `name` and from the repository — the managed
+/// directory is the repository's own top level with `.ktask-worktrees` appended,
+/// beside the tree rather than inside it — so one name always means one
+/// directory. Asking again for a name that is already a live worktree reuses it
+/// and changes nothing in it: not its `HEAD`, not its uncommitted files. That is
+/// what lets a remediation continue in the checkout that stopped (VISION.md §7).
+/// A reuse is granted only when the existing checkout builds on `base_sha` — its
+/// own history contains it — so a name can never hand out a checkout that does
+/// not contain the commit this run meant to start from.
+///
+/// # Errors
+///
+/// [`Error::Policy`] when `name` is not one directory name inside the managed
+/// directory, when the name is registered but its checkout is gone (the caller
+/// reclaims it with [`remove_worktree`]), or when the existing checkout does not
+/// build on `base_sha`. Each of those carries the directory it refused to touch.
+/// [`Error::Git`] when `root` holds no repository, when `base_sha` resolves to
+/// no commit, or when git refuses to create the worktree.
+pub fn create_worktree(root: &Path, name: &str, base_sha: &str) -> Result<PathBuf> {
+    let at = worktree_path(root, name)?;
+    let sha = git(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{base_sha}^{{commit}}"),
+        ],
+    )?;
+
+    if let Some(registered) = list_worktrees(root)?.iter().find(|entry| entry.path == at) {
+        if let Some(reason) = registered.prunable.as_deref() {
+            return Err(Error::Policy {
+                detail: format!(
+                    "the name `{name}` is registered at `{}`, but its checkout is gone ({reason}); \
+                     reclaim it with `remove_worktree` before asking for the name again",
+                    registered.path.display()
+                ),
+                paths: vec![at],
+            });
+        }
+        let builds_on = git(root, &["merge-base", &sha, &registered.head])?;
+        if builds_on != sha {
+            return Err(Error::Policy {
+                detail: format!(
+                    "the checkout at `{}` is at {} and does not build on the commit {sha} this \
+                     was asked to start from; remove the worktree or start from the commit it \
+                     holds",
+                    registered.path.display(),
+                    registered.head
+                ),
+                paths: vec![at],
+            });
+        }
+        return Ok(registered.path.clone());
+    }
+
+    git(
+        root,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            &at.display().to_string(),
+            &sha,
+        ],
+    )?;
+    Ok(at)
+}
+
+/// Remove the registered checkout at `worktree`, directory and all.
+///
+/// The command is `git worktree remove` with no `--force`, and what that means
+/// is the point: a checkout holding modified or untracked files is refused, with
+/// git's own reason carried back, because uncommitted work is the evidence a
+/// later attempt reads and this module does not decide to discard it. A locked
+/// checkout is refused for the same reason — somebody else is holding it.
+///
+/// A leftover from an interrupted run is what this is for: git removes a
+/// registration whose directory has already gone, which reclaims the name for
+/// [`create_worktree`], and it deletes the directory of a clean one.
+///
+/// `worktree` is resolved by git the way any git argument is: a relative path
+/// means one relative to `root`. What [`list_worktrees`] reports is always
+/// usable here.
+///
+/// # Errors
+///
+/// [`Error::Git`] for every refusal, git's words included — the main checkout
+/// (`is a main working tree`), a dirty checkout, a locked one, and a path git
+/// does not recognise as a registered checkout.
+pub fn remove_worktree(root: &Path, worktree: &Path) -> Result<()> {
+    git(
+        root,
+        &["worktree", "remove", &worktree.display().to_string()],
+    )?;
+    Ok(())
+}
+
+/// The directory the worktree named `name` belongs in, and the refusal of a
+/// name that would put it somewhere else.
+fn worktree_path(root: &Path, name: &str) -> Result<PathBuf> {
+    let toplevel = git(root, &["rev-parse", "--show-toplevel"])?;
+    let managed = format!("{toplevel}{MANAGED_SUFFIX}");
+    let at = Path::new(&managed).join(name);
+    if !one_component(name) {
+        return Err(Error::Policy {
+            detail: format!("`{name}` is not one directory name inside `{managed}`"),
+            paths: vec![at],
+        });
+    }
+    Ok(at)
+}
+
+/// Whether `name` is exactly one ordinary directory name.
+///
+/// `.` and `..` are refused by what they resolve to rather than by their text:
+/// a name that climbs out of the managed directory would put one task's checkout
+/// where neither the supervisor nor the person cleaning up would think to look.
+fn one_component(name: &str) -> bool {
+    let mut parts = Path::new(name).components();
+    parts
+        .next()
+        .is_some_and(|part| matches!(part, Component::Normal(_)) && parts.next().is_none())
+}
+
+/// `git worktree list --porcelain`'s records, read as they are printed.
+///
+/// A `worktree` line opens an entry and every other line belongs to the one open
+/// until a blank line closes it. Four keys are read. git also prints `detached`
+/// (which is the absence of a `branch` line, already [`None`]) and `bare`, and a
+/// later git may print more: none of them can change what the fields above hold,
+/// so an unrecognised line is skipped rather than treated as damage.
+fn parse_worktrees(printed: &str) -> Vec<Worktree> {
+    let mut listed = Vec::new();
+    let mut open: Option<Worktree> = None;
+    for line in printed.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if let Some(entry) = open.replace(Worktree {
+                path: PathBuf::from(path),
+                head: String::new(),
+                branch: None,
+                prunable: None,
+                locked: None,
+            }) {
+                listed.push(entry);
+            }
+        } else if let Some(entry) = open.as_mut() {
+            if let Some(head) = line.strip_prefix("HEAD ") {
+                head.clone_into(&mut entry.head);
+            } else if let Some(branch) = line.strip_prefix("branch ") {
+                entry.branch = Some(branch.to_owned());
+            } else if let Some(reason) = line.strip_prefix("prunable ") {
+                entry.prunable = Some(reason.to_owned());
+            } else if let Some(reason) = line.strip_prefix("locked") {
+                entry.locked = Some(reason.strip_prefix(' ').unwrap_or(reason).to_owned());
+            }
+        }
+    }
+    if let Some(entry) = open {
+        listed.push(entry);
+    }
+    listed
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -327,7 +576,8 @@ mod tests {
     use tempfile::{TempDir, tempdir};
 
     use super::{
-        current_branch, fetch, git, git_env, head_sha, is_clean, remote_url, status_porcelain,
+        Worktree, create_worktree, current_branch, fetch, git, git_env, head_sha, is_clean,
+        list_worktrees, remote_url, remove_worktree, status_porcelain,
     };
     use crate::Error;
     // The repository-with-an-origin fixture is the crate-wide one, so that a
@@ -991,6 +1241,564 @@ mod tests {
             stderr.contains("nope"),
             "git's refusal names the thing it could not reach, and a fetch that could not start \
              is a git failure rather than a run that quietly continued without a fetch: {stderr}"
+        );
+    }
+
+    /// The `Error::Policy` a refused worktree operation handed back, or a panic naming the
+    /// variant it actually arrived as.
+    ///
+    /// A broken worktree rule is a rule of this project's, not a git refusal: git would have
+    /// happily created the worktree, and the supervisor is the one that decided not to ask.
+    fn refused_by_policy(error: &Error) -> (String, Vec<PathBuf>) {
+        let Error::Policy { detail, paths } = error else {
+            panic!("a broken worktree rule has to arrive as Error::Policy, got: {error}");
+        };
+        (detail.clone(), paths.clone())
+    }
+
+    /// The entry `list` holds for `path`, or a panic listing the paths it did hold.
+    fn listed<'a>(list: &'a [Worktree], path: &Path) -> &'a Worktree {
+        list.iter()
+            .find(|entry| entry.path == path)
+            .unwrap_or_else(|| {
+                let listed = list
+                    .iter()
+                    .map(|entry| entry.path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                panic!("`{}` was not listed. Listed: {listed}", path.display())
+            })
+    }
+
+    #[test]
+    fn a_task_worktree_is_created_at_the_sha_it_was_handed_and_never_at_the_current_checkout() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let base = fixture.seed_sha().to_owned();
+        let later = fixture
+            .commit("later.txt", "mainline moved past the base")
+            .expect("a commit on the branch the checkout stands on");
+        assert_ne!(
+            base, later,
+            "the base and the current checkout have to be different commits, or nothing below \
+             distinguishes one from the other"
+        );
+
+        let tree = create_worktree(&work, "task-7", &base).expect("a worktree at the base commit");
+
+        assert_eq!(
+            head_sha(&tree).expect("a worktree is a repository for the purpose of asking"),
+            base,
+            "the checkout starts at the SHA it was handed — VISION.md §10's step 2 creates the \
+             task worktree from the fetched remote SHA, and a worktree built from wherever \
+             `HEAD` happened to be would verify a commit nobody fetched"
+        );
+        assert_eq!(
+            head_sha(&work).expect("the supervised checkout answers the same question"),
+            later,
+            "creating a task worktree moves, resets or checks out nothing in the repository it \
+             was asked to work in: the user's normal checkout is never touched"
+        );
+        assert_eq!(
+            current_branch(&tree).expect("a worktree answers the branch question too"),
+            None,
+            "a checkout of a SHA is detached, which ADR-0041 reports as `None` rather than as \
+             the literal `HEAD` or as a failure. A branch would be a ref two tasks could not \
+             share, and publication would find a branch name no configuration ever chose"
+        );
+        assert!(
+            !tree.starts_with(&work),
+            "the worktree is outside the repository it was created from, because an untracked \
+             directory inside it makes the supervised tree dirty: {}",
+            tree.display()
+        );
+    }
+
+    #[test]
+    fn a_task_worktree_lives_beside_the_repository_so_the_supervised_checkout_stays_clean() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let tree = create_worktree(&work, "task-7", fixture.seed_sha())
+            .expect("a worktree at the seed commit");
+
+        assert!(
+            is_clean(&work)
+                .expect("the repository answers the dirty question with a worktree in it"),
+            "a worktree kept inside the repository would be an untracked directory, which \
+             `is_clean` counts as dirty and VISION.md §10 turns into a `policy_failure` that \
+             fails this task and every one after it: {:?}",
+            status_porcelain(&work).expect("what the predicate saw")
+        );
+
+        let list = list_worktrees(&work).expect("git answers what it has registered");
+        assert_eq!(
+            list.len(),
+            2,
+            "the repository itself and the one task worktree, and nothing else: {list:?}"
+        );
+        assert_eq!(
+            listed(&list, &tree).head,
+            fixture.seed_sha(),
+            "the worktree is listed at the commit it holds, which is how a later run finds it \
+             again without remembering where it put it"
+        );
+    }
+
+    #[test]
+    fn asking_for_the_same_name_again_reuses_the_worktree_and_keeps_what_the_attempt_left() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let base = fixture.seed_sha().to_owned();
+        let first = create_worktree(&work, "task-7", &base).expect("a worktree at the seed commit");
+        fs::write(first.join("attempt-1.md"), "the first attempt's notes\n")
+            .expect("an uncommitted file inside the worktree");
+        let mut words: Vec<&str> = IDENTITY.to_vec();
+        words.extend([
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "the first attempt's commit",
+        ]);
+        git_env(&first, &words, &[]).expect("a commit made inside the task worktree");
+        let committed = head_sha(&first).expect("the worktree moved off its base");
+        assert_ne!(
+            committed, base,
+            "the attempt did move the checkout off the base"
+        );
+
+        let again = create_worktree(&work, "task-7", &base)
+            .expect("the same name, asked again, is the same task's worktree");
+
+        assert_eq!(
+            again, first,
+            "the name is the identity. VISION.md §7 preserves the worktree across remediation, \
+             so a second call has to hand back the one checkout rather than build a second one"
+        );
+        assert_eq!(
+            fs::read_to_string(first.join("attempt-1.md"))
+                .expect("the file the earlier attempt left behind"),
+            "the first attempt's notes\n",
+            "reuse checks out, resets and cleans nothing: a remediation starts where the \
+             previous attempt stopped, with its uncommitted work still in the tree"
+        );
+        assert_eq!(
+            head_sha(&first).expect("the reused worktree still answers for itself"),
+            committed,
+            "HEAD is where the attempt left it, not back at the base — winding it back would \
+             discard the commit the remediation exists to continue from"
+        );
+        assert_eq!(
+            list_worktrees(&work)
+                .expect("git answers what it has registered")
+                .iter()
+                .filter(|entry| entry.path == first)
+                .count(),
+            1,
+            "one name is one registered worktree, not a fresh checkout beside the old one"
+        );
+    }
+
+    #[test]
+    fn the_same_commit_spelled_two_ways_is_the_same_worktree() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let full = fixture.seed_sha().to_owned();
+        let short = full[..8].to_owned();
+
+        let first = create_worktree(&work, "task-7", &short).expect("an abbreviation is a commit");
+        assert_eq!(
+            head_sha(&first).expect("the worktree answers for itself"),
+            full,
+            "the SHA is resolved to the commit before it is used, so a worktree made from an \
+             abbreviation is indistinguishable from one made from the full id"
+        );
+        assert_eq!(
+            create_worktree(&work, "task-7", &short).expect("the same abbreviation, asked again"),
+            first,
+            "the second call gets the same worktree back instead of a refusal, because the \
+             comparison it is judged by is between commits and not between spellings"
+        );
+    }
+
+    #[test]
+    fn a_name_whose_worktree_does_not_build_on_the_requested_sha_is_refused_and_left_as_it_was() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let base = fixture.seed_sha().to_owned();
+        let moved = fixture
+            .commit(
+                "moved.txt",
+                "a commit above the base the worktree stops short of",
+            )
+            .expect("a commit the existing worktree does not contain");
+        let tree = create_worktree(&work, "task-7", &base).expect("a worktree at the seed commit");
+
+        let (detail, refused) = refused_by_policy(
+            &create_worktree(&work, "task-7", &moved)
+                .expect_err("the existing checkout stops short of the SHA now being asked for"),
+        );
+        assert!(
+            detail.contains(&base) && detail.contains(&moved),
+            "the refusal names both commits — where the checkout is and what this ask wanted — \
+             because the answer decides whether the run rebases, gives up, or asks a human: \
+             {detail}"
+        );
+        assert_eq!(
+            refused,
+            vec![tree.clone()],
+            "the refusal names the directory it refused to touch"
+        );
+        assert_eq!(
+            head_sha(&tree).expect("the refused worktree still answers for itself"),
+            base,
+            "refusing does not reset anything: a checkout that cannot be reused is left exactly \
+             as it was, because the work in it is the evidence a later attempt reads"
+        );
+        assert_eq!(
+            list_worktrees(&work)
+                .expect("git answers what it has registered")
+                .iter()
+                .filter(|entry| entry.path == tree)
+                .count(),
+            1,
+            "and a refusal does not quietly build a second worktree under the same name either"
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_not_one_path_component_is_refused_before_anything_is_created() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+
+        for name in ["", ".", "..", "a/b", "/etc", "../outside", "../../escape"] {
+            let error = create_worktree(&work, name, fixture.seed_sha())
+                .expect_err("`{name}` cannot name one directory inside the managed directory");
+            let (detail, refused) = refused_by_policy(&error);
+            assert_eq!(
+                refused.len(),
+                1,
+                "the refusal names the one directory this call would have written: {detail}"
+            );
+        }
+
+        assert_eq!(
+            list_worktrees(&work)
+                .expect("git answers what it has registered")
+                .len(),
+            1,
+            "not one of those names registered a worktree: only the repository itself is listed. \
+             A name that could climb out would put one task's checkout where another run, or a \
+             person, would not think to look for it"
+        );
+        assert!(
+            is_clean(&work).expect("the repository is answerable afterwards"),
+            "and none of them left anything behind in it either"
+        );
+    }
+
+    #[test]
+    fn a_base_that_is_not_a_commit_is_refused_and_creates_no_worktree() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+
+        let (args, stderr) = refused(
+            &create_worktree(&work, "task-7", "no-such-commit")
+                .expect_err("a word that resolves to nothing is not a base"),
+        );
+        assert_eq!(
+            args,
+            vec![
+                "rev-parse".to_owned(),
+                "--verify".to_owned(),
+                "--end-of-options".to_owned(),
+                "no-such-commit^{commit}".to_owned(),
+            ],
+            "the base is resolved as a commit, by a call that cannot read the rest of its \
+             arguments as options, before anything is created"
+        );
+        assert!(
+            !stderr.is_empty(),
+            "git's own words about what it could not resolve travel with the refusal: {stderr}"
+        );
+        assert_eq!(
+            list_worktrees(&work)
+                .expect("git answers what it has registered")
+                .len(),
+            1,
+            "a refused base leaves no worktree behind, so a retry can start clean"
+        );
+    }
+
+    #[test]
+    fn a_base_that_reads_like_an_option_is_refused_as_a_revision_and_not_run_as_one() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+
+        let (args, stderr) = refused(
+            &create_worktree(&work, "task-7", "--help")
+                .expect_err("`--help` is not a commit to build a task on"),
+        );
+        assert_eq!(
+            args,
+            vec![
+                "rev-parse".to_owned(),
+                "--verify".to_owned(),
+                "--end-of-options".to_owned(),
+                "--help^{commit}".to_owned(),
+            ],
+            "`--end-of-options` is what makes this word an operand rather than a switch, so the \
+             call git was handed is the call this module meant to make"
+        );
+        assert!(
+            !stderr.contains("usage"),
+            "git refused a revision it could not resolve; a usage screen here would mean the \
+             value reached it as an option, which is a caller's text steering a command: {stderr}"
+        );
+    }
+
+    #[test]
+    fn the_worktree_list_reports_what_git_is_registered_and_which_entry_is_the_checkout() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let main_head = head_sha(&work).expect("the checkout has the seed commit");
+        let tree = create_worktree(&work, "task-7", fixture.seed_sha())
+            .expect("a worktree at the seed commit");
+
+        let list = list_worktrees(&work).expect("git answers what it has registered");
+        let checkout = listed(&list, &work);
+        assert_eq!(
+            checkout.head, main_head,
+            "the entry for the supervised checkout reports the commit it holds"
+        );
+        assert_eq!(
+            checkout.branch.as_deref(),
+            Some("refs/heads/main"),
+            "a branch is reported as the full ref git printed, un-shortened: ADR-0041 keeps \
+             git's own answer, so the ref a caller reads is the ref the repository holds"
+        );
+        assert_eq!(
+            checkout.prunable, None,
+            "a checkout that is there is not prunable"
+        );
+        assert_eq!(checkout.locked, None, "and nobody has locked it");
+
+        let task = listed(&list, &tree);
+        assert_eq!(
+            task.head,
+            fixture.seed_sha(),
+            "the task worktree reports its base"
+        );
+        assert_eq!(
+            task.branch, None,
+            "it is detached, so there is no ref to report"
+        );
+    }
+
+    #[test]
+    fn a_worktree_left_by_an_earlier_run_is_listed_as_gone_and_can_be_reclaimed() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let base = fixture.seed_sha().to_owned();
+        let tree = create_worktree(&work, "task-7", &base).expect("a worktree at the seed commit");
+        fs::remove_dir_all(&tree)
+            .expect("the interruption that took the checkout, not the registration");
+
+        let registered = list_worktrees(&work).expect("git answers what it has registered");
+        let leftover = listed(&registered, &tree);
+        assert!(
+            leftover.prunable.is_some(),
+            "the registration outlived the directory and git says so: this is how a supervisor \
+             notices a worktree left behind by an earlier run instead of meeting it as an \
+             `already exists` halfway through creating one: {leftover:?}"
+        );
+
+        let (detail, refused) =
+            refused_by_policy(&create_worktree(&work, "task-7", &base).expect_err(
+                "a registration whose checkout is gone is not a working tree to hand out",
+            ));
+        assert!(
+            detail.contains("remove_worktree"),
+            "the refusal says what to do about the leftover rather than only that it exists: \
+             {detail}"
+        );
+        assert_eq!(
+            refused,
+            vec![tree.clone()],
+            "and names the directory to reclaim"
+        );
+
+        remove_worktree(&work, &tree).expect("reclaiming it is one call, registration included");
+        assert_eq!(
+            list_worktrees(&work)
+                .expect("git answers what it has registered")
+                .len(),
+            1,
+            "the leftover is out of the list, so the next run does not meet it again"
+        );
+
+        let moved = fixture
+            .commit(
+                "moved.txt",
+                "a commit the reclaimed worktree should start from",
+            )
+            .expect("a commit above the seed");
+        let fresh = create_worktree(&work, "task-7", &moved).expect("the name is free again");
+        assert_eq!(
+            fresh, tree,
+            "the same name is the same directory, so a reclaimed name goes \
+                                 where the operator would look for it"
+        );
+        assert_eq!(
+            head_sha(&fresh).expect("the reclaimed worktree answers for itself"),
+            moved,
+            "and it starts at the SHA asked for now, not at whatever the earlier run chose"
+        );
+    }
+
+    #[test]
+    fn removing_a_worktree_takes_its_directory_with_it_and_leaves_the_checkout_alone() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let tree = create_worktree(&work, "task-7", fixture.seed_sha())
+            .expect("a worktree at the seed commit");
+        assert!(tree.exists(), "creating it made a directory");
+
+        remove_worktree(&work, &tree).expect("an untouched worktree is removed");
+
+        assert!(
+            !tree.exists(),
+            "the directory goes with the registration: a supervisor that unregistered worktrees \
+             but left each checkout on disk would fill the machine one task at a time"
+        );
+        assert_eq!(
+            list_worktrees(&work)
+                .expect("git answers what it has registered")
+                .len(),
+            1,
+            "only the repository is left registered"
+        );
+        assert!(
+            is_clean(&work).expect("the supervised checkout still answers"),
+            "removing a worktree does not dirty the repository it came from"
+        );
+        assert_eq!(
+            current_branch(&work).expect("the supervised checkout is still attached"),
+            Some("main".to_owned()),
+            "and the operator's own branch is the one they left it on"
+        );
+    }
+
+    #[test]
+    fn a_worktree_holding_uncommitted_work_is_not_removed_and_the_work_survives() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let tree = create_worktree(&work, "task-7", fixture.seed_sha())
+            .expect("a worktree at the seed commit");
+        fs::write(tree.join("unfinished.rs"), "half an edit\n").expect("uncommitted work");
+
+        let (args, stderr) = refused(
+            &remove_worktree(&work, &tree)
+                .expect_err("a worktree holding someone's unfinished work is not ours to delete"),
+        );
+        assert_eq!(
+            args,
+            vec![
+                "worktree".to_owned(),
+                "remove".to_owned(),
+                tree.display().to_string(),
+            ],
+            "removal asks git and asks it without `--force`: discarding uncommitted work is not \
+             something this module does on its own initiative"
+        );
+        assert!(
+            stderr.contains("modified or untracked"),
+            "git's reason travels, so the operator can decide about the dirt rather than about \
+             a paraphrase: {stderr}"
+        );
+        assert_eq!(
+            fs::read_to_string(tree.join("unfinished.rs")).expect("the file is still there"),
+            "half an edit\n",
+            "the refusal destroys nothing"
+        );
+        assert_eq!(
+            listed(&list_worktrees(&work).expect("git answers"), &tree).prunable,
+            None,
+            "and the worktree is still a working tree, not a leftover"
+        );
+    }
+
+    #[test]
+    fn the_checkout_being_supervised_is_never_one_this_module_removes() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        create_worktree(&work, "task-7", fixture.seed_sha())
+            .expect("a worktree, so there is something a mistake could have removed");
+
+        let (_args, stderr) = refused(
+            &remove_worktree(&work, &work)
+                .expect_err("the main checkout is not a task worktree, however it is named"),
+        );
+        assert!(
+            stderr.contains("main working tree"),
+            "git's refusal is what protects the user's own checkout, and it is heard rather \
+             than swallowed: {stderr}"
+        );
+        assert!(
+            work.exists() && is_clean(&work).expect("the checkout still answers"),
+            "the refused removal left the checkout in place and unchanged"
+        );
+    }
+
+    #[test]
+    fn a_locked_worktree_reports_the_lock_and_survives_an_attempt_to_remove_it() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let tree = create_worktree(&work, "task-7", fixture.seed_sha())
+            .expect("a worktree at the seed commit");
+        let kept = create_worktree(&work, "task-8", fixture.seed_sha())
+            .expect("a second worktree, locked without a reason");
+        git(
+            &work,
+            &[
+                "worktree",
+                "lock",
+                &tree.display().to_string(),
+                "--reason",
+                "a human is reading it",
+            ],
+        )
+        .expect("lock it the way an operator would");
+        git(&work, &["worktree", "lock", &kept.display().to_string()])
+            .expect("a second lock, this one with no reason recorded");
+
+        let list = list_worktrees(&work).expect("git answers what it has registered");
+        assert_eq!(
+            listed(&list, &tree).locked.as_deref(),
+            Some("a human is reading it"),
+            "the lock reason travels, because it is the answer to the question the operator \
+             asks next: why would reclaiming this fail?"
+        );
+        assert_eq!(
+            listed(&list, &kept).locked,
+            Some(String::new()),
+            "a lock with no reason is still a lock: reporting it as unlocked would send someone \
+             to delete a checkout git will not let them delete"
+        );
+        let (_args, stderr) = refused(
+            &remove_worktree(&work, &tree)
+                .expect_err("a locked worktree is held by someone else, not by this run"),
+        );
+        assert!(
+            stderr.contains("locked"),
+            "git says who refused and why: {stderr}"
+        );
+        assert_eq!(
+            create_worktree(&work, "task-7", fixture.seed_sha()).expect(
+                "a lock holds a checkout against being thrown away, not against being used"
+            ),
+            tree,
+            "the locked worktree is still the worktree behind the name"
         );
     }
 }
