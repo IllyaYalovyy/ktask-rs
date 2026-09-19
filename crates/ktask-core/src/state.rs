@@ -610,7 +610,20 @@ fn from_published_verified(commit: &str, event: &crate::event::EventKind) -> Res
     use crate::event::EventKind;
 
     match event {
-        EventKind::TaskDone { commit: _ } => Ok(TaskState::Done),
+        EventKind::TaskDone {
+            commit: event_commit,
+        } => {
+            if event_commit == commit {
+                Ok(TaskState::Done)
+            } else {
+                Err(Error::InvalidTransition {
+                    from: "PublishedVerified".to_string(),
+                    event: format!(
+                        "TaskDone with commit mismatch: expected {commit}, got {event_commit}"
+                    ),
+                })
+            }
+        }
         EventKind::Paused { reason } => Ok(TaskState::Paused {
             reason: reason.clone(),
             resume_to: Box::new(TaskState::PublishedVerified {
@@ -1487,6 +1500,30 @@ mod tests {
             };
             let result = apply(&state, &event).expect("transition");
             assert_eq!(result, TaskState::Done);
+        }
+
+        #[test]
+        fn from_published_verified_task_done_with_mismatched_commit_is_rejected() {
+            let state = TaskState::PublishedVerified {
+                commit: "abc123".to_string(),
+            };
+            let event = EventKind::TaskDone {
+                commit: "def456".to_string(),
+            };
+            let err = apply(&state, &event).expect_err("should be invalid");
+            assert!(err.to_string().contains("commit mismatch"));
+        }
+
+        #[test]
+        fn from_verifying_task_done_is_rejected() {
+            let state = TaskState::Verifying {
+                attempt: AttemptId::new(1),
+            };
+            let event = EventKind::TaskDone {
+                commit: "abc123".to_string(),
+            };
+            let err = apply(&state, &event).expect_err("should be invalid");
+            assert!(err.to_string().contains("Verifying"));
         }
 
         #[test]
