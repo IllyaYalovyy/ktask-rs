@@ -43,6 +43,6 @@ pub use provider::{
     Capabilities, Claude, Codex, Dummy, Invocation, Outcome, Provider, Usage, UsageSource,
 };
 pub use queue::next_runnable;
-pub use remediate::{Breaker, BreakerState, signature};
+pub use remediate::{Breaker, BreakerState, bundle, signature};
 pub use state::{PauseReason, Phase, TaskState};
 pub use task::{Task, TaskStatus};

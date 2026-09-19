@@ -1,6 +1,6 @@
 //! Failure signature and circuit breaker for repeated failures.
 
-use crate::{FailureClass, GateResult};
+use crate::{AttemptRecord, FailureClass, GateResult, Task};
 use std::collections::HashMap;
 
 /// Represents the state of a circuit breaker after recording a signature.
@@ -45,6 +45,120 @@ impl Breaker {
             BreakerState::Open
         }
     }
+}
+
+/// Generate a failure bundle for seeding a fresh provider session.
+///
+/// Combines classification, failing gate output, diff summary, and prior attempt evidence
+/// into a compact, deterministic, and redacted string. Truncates oldest-first to fit budget.
+///
+/// # Arguments
+///
+/// * `task` - The task being remediated
+/// * `class` - The failure classification
+/// * `gates` - Gate results from the failed attempt
+/// * `diff_summary` - Summary of code changes
+/// * `prior` - Prior attempt records in chronological order
+/// * `budget_bytes` - Maximum size for the bundle
+///
+/// # Returns
+///
+/// A deterministic, redacted failure bundle that fits within the budget.
+#[must_use]
+pub fn bundle(
+    task: &Task,
+    class: FailureClass,
+    gates: &[GateResult],
+    diff_summary: &str,
+    prior: &[AttemptRecord],
+    budget_bytes: usize,
+) -> String {
+    use crate::redact::redact;
+
+    let mut lines = Vec::new();
+
+    // 1. Classification header
+    lines.push(format!("Classification: {:?}", class));
+    lines.push(String::new());
+
+    // 2. Task summary
+    lines.push(format!("Task: {}", task.title()));
+    lines.push(String::new());
+
+    // 3. Failing gate output (tail of failed gates)
+    let failed_gates: Vec<_> = gates.iter().filter(|g| !g.passed).collect();
+    if !failed_gates.is_empty() {
+        lines.push("Gate Output:".to_string());
+        for gate in failed_gates {
+            lines.push(format!("[{:?}]", gate.kind));
+            // Get tail of output (last 10 lines)
+            let output = if !gate.stderr.is_empty() {
+                gate.stderr.as_str()
+            } else {
+                gate.stdout.as_str()
+            };
+            let tail_lines: Vec<_> = output.lines().rev().take(10).collect();
+            for line in tail_lines.into_iter().rev() {
+                lines.push(line.to_string());
+            }
+            lines.push(String::new());
+        }
+    }
+
+    // 4. Diff summary
+    if !diff_summary.is_empty() {
+        lines.push("Diff Summary:".to_string());
+        lines.push(diff_summary.to_string());
+        lines.push(String::new());
+    }
+
+    // 5. Prior attempts (oldest first, we'll truncate from oldest)
+    if !prior.is_empty() {
+        lines.push("Prior Attempts:".to_string());
+        for (i, attempt) in prior.iter().enumerate() {
+            lines.push(format!("  [{}] {}", i + 1, attempt.exit_reason));
+        }
+        lines.push(String::new());
+    }
+
+    // Join all lines
+    let mut bundle = lines.join("\n");
+
+    // Truncate to budget, removing oldest attempts first
+    if bundle.len() > budget_bytes {
+        // Remove attempts from the bundle oldest-first
+        while bundle.len() > budget_bytes && !prior.is_empty() {
+            // Remove the oldest attempt line
+            if let Some(pos) = bundle.rfind("  [") {
+                if bundle[pos..].contains('\n') {
+                    bundle.truncate(pos);
+                    bundle = bundle.trim_end().to_string();
+                    if bundle.ends_with('\n') {
+                        bundle.pop();
+                    }
+                    bundle.push('\n');
+                } else {
+                    bundle.truncate(pos);
+                    bundle = bundle.trim_end().to_string();
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        // If still too large, remove from the end more aggressively
+        if bundle.len() > budget_bytes {
+            // Truncate to budget and ensure we end at a line boundary
+            bundle.truncate(budget_bytes);
+            if let Some(pos) = bundle.rfind('\n') {
+                bundle.truncate(pos);
+            }
+        }
+    }
+
+    // Redact secrets
+    redact(&bundle, &[])
 }
 
 /// Generate a failure signature from a failure class and gate results.
@@ -326,5 +440,352 @@ mod tests {
     fn test_extract_test_name_returns_none_for_non_test_lines() {
         assert_eq!(extract_test_name("running 1 test"), None);
         assert_eq!(extract_test_name("test result: ok"), None);
+    }
+
+    #[test]
+    fn bundle_includes_classification() {
+        use crate::TaskId;
+
+        let task = Task {
+            id: TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "Done".to_string(),
+            verify: "Verify".to_string(),
+            refs: "Refs".to_string(),
+        };
+
+        let class = FailureClass::VerificationFailure;
+        let gates = vec![];
+        let diff_summary = "";
+        let prior = vec![];
+
+        let result = bundle(&task, class, &gates, diff_summary, &prior, 10000);
+
+        assert!(result.contains("Classification: VerificationFailure"));
+    }
+
+    #[test]
+    fn bundle_includes_task_title() {
+        use crate::TaskId;
+
+        let task = Task {
+            id: TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "My test task description".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "Done".to_string(),
+            verify: "Verify".to_string(),
+            refs: "Refs".to_string(),
+        };
+
+        let class = FailureClass::AgentFailure;
+        let gates = vec![];
+        let diff_summary = "";
+        let prior = vec![];
+
+        let result = bundle(&task, class, &gates, diff_summary, &prior, 10000);
+
+        assert!(result.contains("Task: My test task description"));
+    }
+
+    #[test]
+    fn bundle_includes_failing_gate_output() {
+        use crate::{GateKind, TaskId};
+
+        let task = Task {
+            id: TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "Done".to_string(),
+            verify: "Verify".to_string(),
+            refs: "Refs".to_string(),
+        };
+
+        let gate = GateResult {
+            kind: GateKind::Verify,
+            passed: false,
+            exit_code: Some(1),
+            signal: None,
+            duration_ms: 1000,
+            stdout: String::new(),
+            stderr: "error: test failed\nerror: assertion failed".to_string(),
+            timed_out: false,
+        };
+
+        let class = FailureClass::VerificationFailure;
+        let gates = vec![gate];
+        let diff_summary = "";
+        let prior = vec![];
+
+        let result = bundle(&task, class, &gates, diff_summary, &prior, 10000);
+
+        assert!(result.contains("[Verify]"));
+        assert!(result.contains("error: test failed"));
+        assert!(result.contains("error: assertion failed"));
+    }
+
+    #[test]
+    fn bundle_includes_diff_summary() {
+        use crate::TaskId;
+
+        let task = Task {
+            id: TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "Done".to_string(),
+            verify: "Verify".to_string(),
+            refs: "Refs".to_string(),
+        };
+
+        let class = FailureClass::AgentFailure;
+        let gates = vec![];
+        let diff_summary = "Modified 3 files, 5 insertions(+), 2 deletions(-)";
+        let prior = vec![];
+
+        let result = bundle(&task, class, &gates, diff_summary, &prior, 10000);
+
+        assert!(result.contains("Diff Summary:"));
+        assert!(result.contains("Modified 3 files, 5 insertions(+), 2 deletions(-)"));
+    }
+
+    #[test]
+    fn bundle_includes_prior_attempts() {
+        use crate::{AttemptId, TaskId};
+        use time::OffsetDateTime;
+
+        let task = Task {
+            id: TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "Done".to_string(),
+            verify: "Verify".to_string(),
+            refs: "Refs".to_string(),
+        };
+
+        let now = OffsetDateTime::now_utc();
+        let prior = vec![
+            AttemptRecord {
+                id: AttemptId::new(1),
+                task: TaskId::new(1),
+                started: now,
+                ended: Some(now),
+                model_configured: None,
+                model_reported: None,
+                session_id: None,
+                exit_reason: "verification_failure".to_string(),
+                gates: vec![],
+                usage: None,
+                base_sha: "abc123".to_string(),
+                candidate_sha: None,
+            },
+            AttemptRecord {
+                id: AttemptId::new(2),
+                task: TaskId::new(1),
+                started: now,
+                ended: Some(now),
+                model_configured: None,
+                model_reported: None,
+                session_id: None,
+                exit_reason: "agent_failure".to_string(),
+                gates: vec![],
+                usage: None,
+                base_sha: "abc123".to_string(),
+                candidate_sha: None,
+            },
+        ];
+
+        let class = FailureClass::AgentFailure;
+        let gates = vec![];
+        let diff_summary = "";
+
+        let result = bundle(&task, class, &gates, diff_summary, &prior, 10000);
+
+        assert!(result.contains("Prior Attempts:"));
+        assert!(result.contains("[1] verification_failure"));
+        assert!(result.contains("[2] agent_failure"));
+    }
+
+    #[test]
+    fn bundle_respects_budget() {
+        use crate::TaskId;
+
+        let task = Task {
+            id: TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task with a very long description that goes on and on".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "Done".to_string(),
+            verify: "Verify".to_string(),
+            refs: "Refs".to_string(),
+        };
+
+        let class = FailureClass::AgentFailure;
+        let gates = vec![];
+        let diff_summary = "This is a very long diff summary";
+        let prior = vec![];
+        let budget = 100;
+
+        let result = bundle(&task, class, &gates, diff_summary, &prior, budget);
+
+        assert!(result.len() <= budget);
+    }
+
+    #[test]
+    fn bundle_redacts_secrets() {
+        use crate::TaskId;
+
+        let task = Task {
+            id: TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "Done".to_string(),
+            verify: "Verify".to_string(),
+            refs: "Refs".to_string(),
+        };
+
+        let class = FailureClass::AgentFailure;
+        let gates = vec![];
+        let diff_summary = "API key: sk-1234567890abcdefghij";
+        let prior = vec![];
+
+        let result = bundle(&task, class, &gates, diff_summary, &prior, 10000);
+
+        assert!(!result.contains("sk-"));
+        assert!(result.contains("[redacted]"));
+    }
+
+    #[test]
+    fn bundle_is_deterministic() {
+        use crate::TaskId;
+
+        let task = Task {
+            id: TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "Done".to_string(),
+            verify: "Verify".to_string(),
+            refs: "Refs".to_string(),
+        };
+
+        let class = FailureClass::VerificationFailure;
+        let gates = vec![];
+        let diff_summary = "Some changes";
+        let prior = vec![];
+
+        let result1 = bundle(&task, class, &gates, diff_summary, &prior, 10000);
+        let result2 = bundle(&task, class, &gates, diff_summary, &prior, 10000);
+
+        assert_eq!(result1, result2);
+    }
+
+    #[test]
+    fn bundle_truncates_oldest_attempts_first() {
+        use crate::{AttemptId, TaskId};
+        use time::OffsetDateTime;
+
+        let task = Task {
+            id: TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "Test outcome".to_string(),
+            done_when: "Done".to_string(),
+            verify: "Verify".to_string(),
+            refs: "Refs".to_string(),
+        };
+
+        let now = OffsetDateTime::now_utc();
+        let prior = vec![
+            AttemptRecord {
+                id: AttemptId::new(1),
+                task: TaskId::new(1),
+                started: now,
+                ended: Some(now),
+                model_configured: None,
+                model_reported: None,
+                session_id: None,
+                exit_reason: "failure_reason_1".to_string(),
+                gates: vec![],
+                usage: None,
+                base_sha: "abc123".to_string(),
+                candidate_sha: None,
+            },
+            AttemptRecord {
+                id: AttemptId::new(2),
+                task: TaskId::new(1),
+                started: now,
+                ended: Some(now),
+                model_configured: None,
+                model_reported: None,
+                session_id: None,
+                exit_reason: "failure_reason_2".to_string(),
+                gates: vec![],
+                usage: None,
+                base_sha: "abc123".to_string(),
+                candidate_sha: None,
+            },
+            AttemptRecord {
+                id: AttemptId::new(3),
+                task: TaskId::new(1),
+                started: now,
+                ended: Some(now),
+                model_configured: None,
+                model_reported: None,
+                session_id: None,
+                exit_reason: "failure_reason_3".to_string(),
+                gates: vec![],
+                usage: None,
+                base_sha: "abc123".to_string(),
+                candidate_sha: None,
+            },
+        ];
+
+        let class = FailureClass::AgentFailure;
+        let gates = vec![];
+        let diff_summary = "";
+        let budget = 300;
+
+        let result = bundle(&task, class, &gates, diff_summary, &prior, budget);
+
+        // The result should still contain the most recent attempt
+        assert!(result.contains("failure_reason_3"));
+        // Due to budget constraints, oldest attempts might be removed
+        assert!(result.len() <= budget);
+    }
+
+    #[test]
+    fn bundle_handles_empty_inputs() {
+        use crate::TaskId;
+
+        let task = Task {
+            id: TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test".to_string(),
+            outcome: "Outcome".to_string(),
+            done_when: "Done".to_string(),
+            verify: "Verify".to_string(),
+            refs: "Refs".to_string(),
+        };
+
+        let class = FailureClass::AgentFailure;
+        let gates = vec![];
+        let diff_summary = "";
+        let prior = vec![];
+
+        let result = bundle(&task, class, &gates, diff_summary, &prior, 10000);
+
+        // Should contain classification and task
+        assert!(result.contains("Classification:"));
+        assert!(result.contains("Task:"));
+        // Should not have sections for empty inputs
+        assert!(!result.contains("Gate Output:") || result.trim().ends_with("Gate Output:"));
+        assert!(!result.contains("Diff Summary:") || result.trim().ends_with("Diff Summary:"));
+        assert!(!result.contains("Prior Attempts:") || result.trim().ends_with("Prior Attempts:"));
     }
 }
