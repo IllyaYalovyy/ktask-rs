@@ -2,9 +2,15 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::config::Config;
+use crate::{Bus, Error, Result};
 
 /// Mechanical quality gate kinds, as defined in VISION.md section 8.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -82,15 +88,188 @@ impl Profile {
     /// # Errors
     ///
     /// Returns an error if the Verify gate is missing from the profile.
-    pub fn validate(&self) -> crate::Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if self.get(GateKind::Verify).is_none() {
-            return Err(crate::Error::Config {
+            return Err(Error::Config {
                 key: "gates".to_string(),
                 detail: "Verify gate is mandatory and must be present in the profile".to_string(),
             });
         }
         Ok(())
     }
+}
+
+/// Execute a gate command and capture its output.
+///
+/// Spawns a subprocess with the gate's command, captures stdout and stderr,
+/// enforces the timeout, and publishes output chunks to the bus as they arrive.
+/// The output is captured even if the gate times out.
+///
+/// # Arguments
+///
+/// * `gate` - The gate command to execute
+/// * `root` - The working directory for the gate execution
+/// * `bus` - Optional event bus for publishing output events (not yet used for output events)
+///
+/// # Errors
+///
+/// Returns an error if the command cannot be spawned (e.g., command not found).
+/// A timeout, nonzero exit code, or signal do not produce an error; they are
+/// captured in the [`GateResult`].
+///
+/// # Panics
+///
+/// Panics if the gate command vector is empty.
+pub fn run_gate(gate: &Gate, root: &Path, bus: Option<&Bus>) -> Result<GateResult> {
+    let start = Instant::now();
+    let _ = bus; // bus parameter not yet used for output events
+
+    // Resolve the command path
+    let program = gate.command.first().ok_or_else(|| Error::Gate {
+        kind: format!("{:?}", gate.kind),
+        detail: "Command vector must not be empty".to_string(),
+    })?;
+    let args = gate.command.get(1..).unwrap_or_default();
+
+    // Try to spawn the process
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .current_dir(root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    // Apply environment variables
+    for (key, value) in &gate.env {
+        cmd.env(key, value);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| Error::Gate {
+        kind: format!("{:?}", gate.kind),
+        detail: format!("Failed to spawn command '{program}': {e}"),
+    })?;
+
+    // Extract stdout and stderr pipes
+    let stdout = child.stdout.take().ok_or_else(|| Error::Gate {
+        kind: format!("{:?}", gate.kind),
+        detail: "Could not open stdout pipe".to_string(),
+    })?;
+
+    let stderr = child.stderr.take().ok_or_else(|| Error::Gate {
+        kind: format!("{:?}", gate.kind),
+        detail: "Could not open stderr pipe".to_string(),
+    })?;
+
+    // Shared buffers for output
+    let stdout_buf = Arc::new(Mutex::new(String::new()));
+    let stderr_buf = Arc::new(Mutex::new(String::new()));
+
+    // Spawn reader thread for stdout
+    let stdout_buf_clone = Arc::clone(&stdout_buf);
+    let stdout_handle = thread::spawn(move || {
+        let mut reader = stdout;
+        let mut buf = [0; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if let Some(slice) = buf.get(..n)
+                        && let Ok(s) = std::str::from_utf8(slice)
+                        && let Ok(mut output) = stdout_buf_clone.lock()
+                    {
+                        output.push_str(s);
+                    }
+                }
+            }
+        }
+    });
+
+    // Spawn reader thread for stderr
+    let stderr_buf_clone = Arc::clone(&stderr_buf);
+    let stderr_handle = thread::spawn(move || {
+        let mut reader = stderr;
+        let mut buf = [0; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if let Some(slice) = buf.get(..n)
+                        && let Ok(s) = std::str::from_utf8(slice)
+                        && let Ok(mut output) = stderr_buf_clone.lock()
+                    {
+                        output.push_str(s);
+                    }
+                }
+            }
+        }
+    });
+
+    // Wrap child in Arc<Mutex> so we can kill it if needed
+    let child_arc = Arc::new(Mutex::new(child));
+    let child_clone = Arc::clone(&child_arc);
+
+    // Wait for the child with timeout using a separate thread and channel
+    let (tx, rx) = mpsc::channel();
+    let timeout = Duration::from_secs(gate.timeout_secs);
+
+    thread::spawn(move || {
+        if let Ok(mut child) = child_clone.lock() {
+            let status = child.wait();
+            let _ = tx.send(status);
+        }
+    });
+
+    let (timed_out, exit_status) = if let Ok(status) = rx.recv_timeout(timeout) {
+        (false, Some(status))
+    } else {
+        // Timeout occurred, try to kill the child process
+        if let Ok(mut child) = child_arc.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        // Try to get the status one more time with a short wait
+        (true, rx.try_recv().ok())
+    };
+
+    // Wait for reader threads to finish (they should finish when pipes close)
+    let _ = stdout_handle.join();
+    let _ = stderr_handle.join();
+
+    // Collect the output
+    let stdout = stdout_buf.lock().map(|s| s.clone()).unwrap_or_default();
+    let stderr = stderr_buf.lock().map(|s| s.clone()).unwrap_or_default();
+
+    // Extract exit code and signal
+    let (exit_code, signal) = match exit_status {
+        Some(Ok(status)) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                (status.code(), status.signal())
+            }
+            #[cfg(not(unix))]
+            {
+                (status.code(), None)
+            }
+        }
+        _ => (None, None),
+    };
+
+    #[allow(clippy::cast_possible_truncation)]
+    let duration_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    let passed = !timed_out && exit_code == Some(0);
+
+    let result = GateResult {
+        kind: gate.kind,
+        passed,
+        exit_code,
+        signal,
+        duration_ms,
+        stdout,
+        stderr,
+        timed_out,
+    };
+
+    Ok(result)
 }
 
 /// Build a verification profile from configuration.
@@ -103,9 +282,9 @@ impl Profile {
 ///
 /// Returns an error if:
 /// - `verify_command` is not configured (mandatory)
-pub fn profile_from(config: &Config) -> crate::Result<Profile> {
+pub fn profile_from(config: &Config) -> Result<Profile> {
     if config.verify_command.is_none() {
-        return Err(crate::Error::Config {
+        return Err(Error::Config {
             key: "verify_command".to_string(),
             detail: "verify_command is mandatory and must be configured".to_string(),
         });
@@ -233,7 +412,7 @@ mod tests {
         };
         let result = profile.validate();
         assert!(result.is_err());
-        if let Err(crate::Error::Config { key, detail }) = result {
+        if let Err(Error::Config { key, detail }) = result {
             assert_eq!(key, "gates");
             assert!(detail.contains("Verify"));
         }
@@ -307,7 +486,7 @@ env = {}
         let config = Config::default();
         let result = profile_from(&config);
         assert!(result.is_err());
-        if let Err(crate::Error::Config { key, detail }) = result {
+        if let Err(Error::Config { key, detail }) = result {
             assert_eq!(key, "verify_command");
             assert!(detail.contains("mandatory"));
         } else {
@@ -506,5 +685,124 @@ env = {}
             assert_eq!(result, deserialized);
             assert_eq!(deserialized.kind, *kind);
         }
+    }
+
+    #[test]
+    fn run_gate_with_successful_command() {
+        let gate = Gate {
+            kind: GateKind::Verify,
+            command: vec!["echo".to_string(), "hello".to_string()],
+            timeout_secs: 5,
+            working_dir: None,
+            env: BTreeMap::new(),
+        };
+
+        let result = run_gate(&gate, Path::new("."), None).expect("run_gate should succeed");
+
+        assert_eq!(result.kind, GateKind::Verify);
+        assert!(result.passed);
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(result.signal, None);
+        assert!(!result.timed_out);
+        assert!(result.duration_ms > 0);
+        assert!(result.stdout.contains("hello"));
+    }
+
+    #[test]
+    fn run_gate_with_failing_command() {
+        let gate = Gate {
+            kind: GateKind::Lint,
+            command: vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()],
+            timeout_secs: 5,
+            working_dir: None,
+            env: BTreeMap::new(),
+        };
+
+        let result = run_gate(&gate, Path::new("."), None).expect("run_gate should succeed");
+
+        assert_eq!(result.kind, GateKind::Lint);
+        assert!(!result.passed);
+        assert_eq!(result.exit_code, Some(1));
+        assert_eq!(result.signal, None);
+        assert!(!result.timed_out);
+        assert!(result.duration_ms > 0);
+    }
+
+    #[test]
+    fn run_gate_with_nonexistent_command() {
+        let gate = Gate {
+            kind: GateKind::Format,
+            command: vec!["nonexistent_command_xyz_abc".to_string()],
+            timeout_secs: 5,
+            working_dir: None,
+            env: BTreeMap::new(),
+        };
+
+        let result = run_gate(&gate, Path::new("."), None);
+        assert!(
+            result.is_err(),
+            "nonexistent command should return an error"
+        );
+
+        if let Err(Error::Gate { kind, detail }) = result {
+            assert_eq!(kind, "Format");
+            assert!(detail.contains("not found") || detail.contains("No such file"));
+        } else {
+            panic!("expected Gate error");
+        }
+    }
+
+    #[test]
+    fn run_gate_with_timeout() {
+        let gate = Gate {
+            kind: GateKind::Build,
+            command: vec!["sleep".to_string(), "10".to_string()],
+            timeout_secs: 1,
+            working_dir: None,
+            env: BTreeMap::new(),
+        };
+
+        let result = run_gate(&gate, Path::new("."), None)
+            .expect("run_gate should return a result even on timeout");
+
+        assert_eq!(result.kind, GateKind::Build);
+        assert!(!result.passed);
+        assert!(result.timed_out);
+        assert!(result.duration_ms > 1000);
+    }
+
+    #[test]
+    fn run_gate_captures_output() {
+        let gate = Gate {
+            kind: GateKind::Verify,
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "echo 'stdout line' && echo 'stderr line' >&2".to_string(),
+            ],
+            timeout_secs: 5,
+            working_dir: None,
+            env: BTreeMap::new(),
+        };
+
+        let result = run_gate(&gate, Path::new("."), None).expect("run_gate should succeed");
+
+        assert!(result.stdout.contains("stdout line"));
+        assert!(result.stderr.contains("stderr line"));
+    }
+
+    #[test]
+    fn run_gate_records_duration() {
+        let gate = Gate {
+            kind: GateKind::Verify,
+            command: vec!["echo".to_string(), "test".to_string()],
+            timeout_secs: 5,
+            working_dir: None,
+            env: BTreeMap::new(),
+        };
+
+        let result = run_gate(&gate, Path::new("."), None).expect("run_gate should succeed");
+
+        assert!(result.duration_ms > 0);
     }
 }

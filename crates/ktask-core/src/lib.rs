@@ -23,7 +23,7 @@ pub use config::Config;
 pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use events::{Bus, Recorder, Subscription};
-pub use gate::{Gate, GateKind, Profile, profile_from};
+pub use gate::{Gate, GateKind, GateResult, Profile, profile_from, run_gate};
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::Journal;
 pub use paths::{config_file, state_root};
