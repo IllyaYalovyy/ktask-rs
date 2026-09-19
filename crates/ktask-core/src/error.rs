@@ -81,6 +81,13 @@ pub enum Error {
         what: String,
     },
 
+    /// Deserialization error.
+    #[error("Deserialization error: {detail}")]
+    Deserialize {
+        /// Error detail.
+        detail: String,
+    },
+
     /// Corrupted data.
     #[error("Corrupt data: {detail}")]
     Corrupt {
