@@ -47,6 +47,12 @@ use crate::{Bus, Result};
 
 pub mod claude;
 pub mod codex;
+// The one suite every adapter above is checked against. Compiled for tests only:
+// its verdict is a panic, which is what an assertion is, while a run may not
+// panic at all — the workspace lints make that an error rather than a style rule.
+// Every adapter lives in this crate, so nothing outside it needs the suite either.
+#[cfg(test)]
+pub mod conformance;
 pub mod dummy;
 pub mod process;
 
