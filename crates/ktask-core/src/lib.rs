@@ -16,6 +16,7 @@ pub mod journal;
 pub mod lock;
 pub mod paths;
 pub mod project;
+pub mod protocol;
 pub mod provider;
 pub mod queue;
 pub mod redact;
@@ -39,6 +40,7 @@ pub use journal::Journal;
 pub use lock::RepoLock;
 pub use paths::{config_file, state_root};
 pub use project::{Project, discover, register};
+pub use protocol::{PhaseSpec, Protocol, WriteScope};
 pub use provider::{
     Capabilities, Claude, Codex, Dummy, Invocation, Outcome, Provider, Usage, UsageSource,
 };
