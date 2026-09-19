@@ -282,6 +282,109 @@ impl Journal {
         Ok(result)
     }
 
+    /// Store tasks in the queue.
+    ///
+    /// Inserts a parsed plan into the tasks table in document order.
+    /// Importing a plan into a non-empty queue is an error naming the existing task count.
+    /// Task status is not stored here; it is derived from the journal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the queue is non-empty or if the insert fails.
+    pub fn put_tasks(&mut self, tasks: &[crate::Task]) -> Result<()> {
+        // Check if queue is non-empty
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))?;
+
+        if count > 0 {
+            return Err(Error::Policy {
+                detail: format!("Cannot import plan: queue already has {count} task(s)"),
+                paths: vec![],
+            });
+        }
+
+        // Insert all tasks
+        let ts = OffsetDateTime::now_utc();
+        let ts_str = ts
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|_| Error::Corrupt {
+                detail: "Failed to format timestamp".to_string(),
+                seq: None,
+            })?;
+
+        for task in tasks {
+            let id = i64::from(task.id.get());
+            let title = task.title().to_string();
+
+            self.conn.execute(
+                "INSERT INTO tasks (id, title, outcome, done_when, verify, refs, protocol, body, added_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    id,
+                    title,
+                    &task.outcome,
+                    &task.done_when,
+                    &task.verify,
+                    &task.refs,
+                    None::<String>,
+                    &task.body,
+                    ts_str,
+                ],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Read tasks from the queue.
+    ///
+    /// Returns all stored tasks ordered by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn tasks(&self) -> Result<Vec<crate::Task>> {
+        use crate::{Task, TaskStatus};
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, outcome, done_when, verify, refs, body FROM tasks ORDER BY id ASC",
+        )?;
+
+        let tasks = stmt.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let outcome: String = row.get(1)?;
+            let done_when: String = row.get(2)?;
+            let verify: String = row.get(3)?;
+            let refs: String = row.get(4)?;
+            let body: String = row.get(5)?;
+
+            Ok((id, outcome, done_when, verify, refs, body))
+        })?;
+
+        let mut result = Vec::new();
+        for task_result in tasks {
+            let (id, outcome, done_when, verify, refs, body) = task_result?;
+
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            let task_id_u32 = id as u32;
+
+            let task = Task {
+                id: TaskId::new(task_id_u32),
+                status: TaskStatus::Pending,
+                body,
+                outcome,
+                done_when,
+                verify,
+                refs,
+            };
+
+            result.push(task);
+        }
+
+        Ok(result)
+    }
+
     /// Initialize or validate the schema.
     ///
     /// Creates all tables and index if they don't exist, validates the
@@ -1081,6 +1184,224 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, kind);
 
+        drop(journal);
+    }
+
+    #[test]
+    fn journal_tasks_empty_queue() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let journal = Journal::open(&journal_path).unwrap();
+        let tasks = journal.tasks().unwrap();
+
+        assert_eq!(tasks.len(), 0);
+        drop(journal);
+    }
+
+    #[test]
+    fn journal_tasks_roundtrip_single_task() {
+        use crate::{TaskStatus, task};
+
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let plan = r"## Fix the bug
+
+**Outcome:** The bug is fixed
+
+**Done-when:** Tests pass
+
+**Verify:** cargo test
+
+**Refs:** Issue #123
+";
+        let parsed = task::parse_plan(plan).unwrap();
+        assert_eq!(parsed.len(), 1);
+
+        // Store tasks
+        let mut journal = Journal::open(&journal_path).unwrap();
+        journal.put_tasks(&parsed).unwrap();
+        drop(journal);
+
+        // Read tasks back
+        let journal = Journal::open(&journal_path).unwrap();
+        let stored = journal.tasks().unwrap();
+
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].id, parsed[0].id);
+        assert_eq!(stored[0].outcome, parsed[0].outcome);
+        assert_eq!(stored[0].done_when, parsed[0].done_when);
+        assert_eq!(stored[0].verify, parsed[0].verify);
+        assert_eq!(stored[0].refs, parsed[0].refs);
+        assert_eq!(stored[0].body, parsed[0].body);
+        assert_eq!(stored[0].status, TaskStatus::Pending);
+        drop(journal);
+    }
+
+    #[test]
+    fn journal_tasks_roundtrip_multiple_tasks() {
+        use crate::task;
+
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let plan = r"## First task
+
+**Outcome:** First outcome
+
+**Done-when:** When first is done
+
+**Verify:** cargo test
+
+**Refs:** Ref 1
+
+## Second task
+
+**Outcome:** Second outcome
+
+**Done-when:** When second is done
+
+**Verify:** cargo test
+
+**Refs:** Ref 2
+
+## Third task
+
+**Outcome:** Third outcome
+
+**Done-when:** When third is done
+
+**Verify:** cargo test
+
+**Refs:** Ref 3
+";
+        let parsed = task::parse_plan(plan).unwrap();
+        assert_eq!(parsed.len(), 3);
+
+        // Store tasks
+        let mut journal = Journal::open(&journal_path).unwrap();
+        journal.put_tasks(&parsed).unwrap();
+        drop(journal);
+
+        // Read tasks back
+        let journal = Journal::open(&journal_path).unwrap();
+        let stored = journal.tasks().unwrap();
+
+        assert_eq!(stored.len(), 3);
+        for i in 0..3 {
+            assert_eq!(stored[i].id, parsed[i].id);
+            assert_eq!(stored[i].outcome, parsed[i].outcome);
+            assert_eq!(stored[i].done_when, parsed[i].done_when);
+            assert_eq!(stored[i].verify, parsed[i].verify);
+            assert_eq!(stored[i].refs, parsed[i].refs);
+            assert_eq!(stored[i].body, parsed[i].body);
+        }
+        drop(journal);
+    }
+
+    #[test]
+    fn journal_put_tasks_into_nonempty_queue_errors() {
+        use crate::task;
+
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let plan1 = r"## First batch
+
+**Outcome:** First
+
+**Done-when:** Done
+
+**Verify:** Test
+
+**Refs:** Ref
+";
+        let plan2 = r"## Second batch
+
+**Outcome:** Second
+
+**Done-when:** Done
+
+**Verify:** Test
+
+**Refs:** Ref
+";
+        let parsed1 = task::parse_plan(plan1).unwrap();
+        let parsed2 = task::parse_plan(plan2).unwrap();
+
+        // Store first batch
+        let mut journal = Journal::open(&journal_path).unwrap();
+        journal.put_tasks(&parsed1).unwrap();
+        drop(journal);
+
+        // Try to store second batch - should fail
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let result = journal.put_tasks(&parsed2);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::Policy { detail, .. } => {
+                assert!(detail.contains("Cannot import plan"));
+                assert!(detail.contains("queue already has"));
+                assert!(detail.contains("1 task(s)"));
+            }
+            _ => panic!("expected Policy error"),
+        }
+        drop(journal);
+    }
+
+    #[test]
+    fn journal_put_tasks_with_multiple_existing_tasks() {
+        use crate::task;
+
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let plan_many = r"## Task 1
+**Outcome:** O1
+**Done-when:** D1
+**Verify:** V1
+**Refs:** R1
+
+## Task 2
+**Outcome:** O2
+**Done-when:** D2
+**Verify:** V2
+**Refs:** R2
+
+## Task 3
+**Outcome:** O3
+**Done-when:** D3
+**Verify:** V3
+**Refs:** R3
+";
+        let new_plan = r"## New task
+**Outcome:** New
+**Done-when:** Done
+**Verify:** Test
+**Refs:** Ref
+";
+
+        let parsed_many = task::parse_plan(plan_many).unwrap();
+        let parsed_new = task::parse_plan(new_plan).unwrap();
+
+        // Store first batch with 3 tasks
+        let mut journal = Journal::open(&journal_path).unwrap();
+        journal.put_tasks(&parsed_many).unwrap();
+        drop(journal);
+
+        // Try to store new plan - should fail with count of 3
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let result = journal.put_tasks(&parsed_new);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::Policy { detail, .. } => {
+                assert!(detail.contains("3 task(s)"));
+            }
+            _ => panic!("expected Policy error"),
+        }
         drop(journal);
     }
 }
