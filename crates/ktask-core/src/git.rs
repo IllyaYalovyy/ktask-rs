@@ -115,6 +115,83 @@ pub fn fetch(root: &Path, remote: &str) -> Result<()> {
     Ok(())
 }
 
+/// Create a new worktree at the given base SHA.
+///
+/// Creates a new git worktree detached at the specified commit SHA. The worktree
+/// is created in a subdirectory named `name` under the repository root.
+///
+/// # Arguments
+///
+/// * `root` - The root directory of the git repository
+/// * `name` - The name of the worktree (used as subdirectory name)
+/// * `base_sha` - The commit SHA to check out in the worktree
+///
+/// # Errors
+///
+/// Returns an error if the git command fails or the SHA is invalid.
+pub fn create_worktree(root: &Path, name: &str, base_sha: &str) -> Result<std::path::PathBuf> {
+    let worktree_path = root.join(name);
+    git(
+        root,
+        &["worktree", "add", "--detach", worktree_path.to_str().unwrap_or(""), base_sha],
+    )?;
+    Ok(worktree_path)
+}
+
+/// Remove a worktree.
+///
+/// Removes a git worktree, cleaning up all associated data. The worktree directory
+/// itself is removed.
+///
+/// # Arguments
+///
+/// * `root` - The root directory of the git repository
+/// * `name` - The name of the worktree to remove
+///
+/// # Errors
+///
+/// Returns an error if the git command fails or the worktree does not exist.
+pub fn remove_worktree(root: &Path, name: &str) -> Result<()> {
+    git(root, &["worktree", "remove", name])?;
+    Ok(())
+}
+
+/// List all worktrees in the repository.
+///
+/// Returns the names of all worktrees excluding the main working directory.
+/// Each line of the output contains the worktree path and metadata.
+///
+/// # Arguments
+///
+/// * `root` - The root directory of the git repository
+///
+/// # Errors
+///
+/// Returns an error if the git command fails.
+pub fn list_worktrees(root: &Path) -> Result<Vec<String>> {
+    let root_canonical = root.canonicalize().ok();
+    let output = git(root, &["worktree", "list"])?;
+    let worktrees: Vec<String> = output
+        .lines()
+        .filter_map(|line| {
+            let path = line.split_whitespace().next()?;
+            if let Ok(p) = Path::new(path).canonicalize() {
+                if let Some(root_c) = &root_canonical {
+                    if &p == root_c {
+                        return None; // Skip main worktree
+                    }
+                }
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    Ok(worktrees)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -625,5 +702,257 @@ mod tests {
 
         // Clean up remote
         let _ = fs::remove_dir_all(&remote_path);
+    }
+
+    #[test]
+    fn create_worktree_creates_detached_worktree() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create a commit
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let sha_result = head_sha(&repo);
+        let Some(sha) = sha_result.ok() else {
+            return;
+        };
+
+        // Create a worktree at the commit
+        let result = create_worktree(&repo, "test-worktree", &sha);
+        assert!(result.is_ok());
+        let worktree_path = result.unwrap();
+
+        // Verify the worktree exists
+        assert!(worktree_path.exists());
+        assert!(worktree_path.join(".git").exists());
+
+        // Check that it's at the correct commit
+        let worktree_sha_result = head_sha(&worktree_path);
+        assert!(worktree_sha_result.is_ok());
+        assert_eq!(worktree_sha_result.unwrap(), sha);
+
+        // Clean up
+        let _ = fs::remove_dir_all(&worktree_path);
+    }
+
+    #[test]
+    fn create_worktree_respects_given_sha() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create first commit
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "content 1").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "commit 1"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let first_sha = head_sha(&repo).unwrap();
+
+        // Create second commit
+        fs::write(&file_path, "content 2").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "commit 2"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let second_sha = head_sha(&repo).unwrap();
+
+        // Create a worktree at the first commit
+        let result = create_worktree(&repo, "test-worktree-1", &first_sha);
+        assert!(result.is_ok());
+        let worktree_path = result.unwrap();
+
+        // Verify the worktree is at the first commit, not the current HEAD
+        let worktree_sha = head_sha(&worktree_path).unwrap();
+        assert_eq!(worktree_sha, first_sha);
+        assert_ne!(worktree_sha, second_sha);
+
+        // Clean up
+        let _ = fs::remove_dir_all(&worktree_path);
+    }
+
+    #[test]
+    fn remove_worktree_deletes_worktree() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create a commit
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let sha = head_sha(&repo).unwrap();
+
+        // Create a worktree
+        let worktree_path = create_worktree(&repo, "test-worktree", &sha).unwrap();
+        assert!(worktree_path.exists());
+
+        // Remove the worktree
+        let result = remove_worktree(&repo, "test-worktree");
+        assert!(result.is_ok());
+
+        // Verify it's gone
+        assert!(!worktree_path.exists());
+    }
+
+    #[test]
+    fn list_worktrees_shows_created_worktrees() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create a commit
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let sha = head_sha(&repo).unwrap();
+
+        // Clean up any leftover worktrees first
+        let existing = list_worktrees(&repo).unwrap();
+        for wt in existing {
+            let _ = remove_worktree(&repo, &wt);
+        }
+
+        // Now list should be empty
+        let initial_list = list_worktrees(&repo).unwrap();
+        assert!(initial_list.is_empty());
+
+        // Create a worktree
+        let _worktree_path = create_worktree(&repo, "test-worktree", &sha).unwrap();
+
+        // List should now contain the worktree
+        let list = list_worktrees(&repo).unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(list.contains(&"test-worktree".to_string()));
+
+        // Clean up
+        let _ = remove_worktree(&repo, "test-worktree");
+    }
+
+    #[test]
+    fn list_worktrees_detects_multiple_worktrees() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create a commit
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let sha = head_sha(&repo).unwrap();
+
+        // Clean up any leftover worktrees first
+        let existing = list_worktrees(&repo).unwrap();
+        for wt in existing {
+            let _ = remove_worktree(&repo, &wt);
+        }
+
+        // Create multiple worktrees
+        let _wt1 = create_worktree(&repo, "wt1", &sha).unwrap();
+        let _wt2 = create_worktree(&repo, "wt2", &sha).unwrap();
+
+        // List should contain both
+        let list = list_worktrees(&repo).unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(list.contains(&"wt1".to_string()));
+        assert!(list.contains(&"wt2".to_string()));
+
+        // Clean up
+        let _ = remove_worktree(&repo, "wt1");
+        let _ = remove_worktree(&repo, "wt2");
+    }
+
+    #[test]
+    fn list_worktrees_detects_leftover_worktree() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create a commit
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let sha = head_sha(&repo).unwrap();
+
+        // Create a worktree
+        let worktree_path = create_worktree(&repo, "leftover-wt", &sha).unwrap();
+
+        // List should show it
+        let list_before = list_worktrees(&repo).unwrap();
+        assert!(list_before.contains(&"leftover-wt".to_string()));
+
+        // Remove the directory manually (simulating leftover)
+        let _ = fs::remove_dir_all(&worktree_path);
+
+        // Clean up git's reference
+        let _ = Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(&repo)
+            .output();
+
+        // List should no longer show it after prune
+        let list_after = list_worktrees(&repo).unwrap();
+        assert!(!list_after.contains(&"leftover-wt".to_string()));
     }
 }
