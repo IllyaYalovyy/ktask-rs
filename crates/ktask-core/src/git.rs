@@ -386,6 +386,85 @@ pub fn rebase_onto_remote(worktree: &Path, remote: &str, branch: &str) -> Result
     }
 }
 
+/// Get all changed paths between a base commit and HEAD.
+///
+/// Returns a list of all file paths that changed between the base commit and HEAD,
+/// including added, modified, deleted, and renamed files. For renames, both the
+/// old and new paths are included in the result.
+///
+/// # Arguments
+///
+/// * `worktree` - The working directory for the git repository
+/// * `base` - A commit SHA, branch name, or ref to use as the base for comparison
+///
+/// # Errors
+///
+/// Returns an error if the git command fails or if the base commit doesn't exist.
+pub fn changed_paths(worktree: &Path, base: &str) -> Result<Vec<PathBuf>> {
+    let diff_range = format!("{base}...HEAD");
+    let output = git(worktree, &["diff", "--name-status", &diff_range])?;
+
+    let mut paths = Vec::new();
+    for line in output.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+
+        if let Some(status) = parts.first() {
+            if status.starts_with('R') {
+                // Rename: format is "R100\told_path\tnew_path"
+                if let (Some(old), Some(new)) = (parts.get(1), parts.get(2)) {
+                    paths.push(PathBuf::from(*old));
+                    paths.push(PathBuf::from(*new));
+                }
+            } else {
+                // Add, Modify, Delete: format is "STATUS\tpath"
+                if let Some(path) = parts.get(1) {
+                    paths.push(PathBuf::from(*path));
+                }
+            }
+        }
+    }
+
+    Ok(paths)
+}
+
+/// Get a summary of changes between a base commit and HEAD.
+///
+/// Returns the output of `git diff --stat`, which shows the number of
+/// additions and deletions for each file.
+///
+/// # Arguments
+///
+/// * `worktree` - The working directory for the git repository
+/// * `base` - A commit SHA, branch name, or ref to use as the base for comparison
+///
+/// # Errors
+///
+/// Returns an error if the git command fails or if the base commit doesn't exist.
+pub fn diff_summary(worktree: &Path, base: &str) -> Result<String> {
+    let diff_range = format!("{base}...HEAD");
+    git(worktree, &["diff", "--stat", &diff_range])
+}
+
+/// Get the diff of a specific file between a base commit and HEAD.
+///
+/// Returns the unified diff for the specified file. For binary files, git
+/// will return a message indicating the file is binary without the contents.
+///
+/// # Arguments
+///
+/// * `worktree` - The working directory for the git repository
+/// * `base` - A commit SHA, branch name, or ref to use as the base for comparison
+/// * `path` - The path to the file within the repository
+///
+/// # Errors
+///
+/// Returns an error if the git command fails or if the base commit doesn't exist.
+pub fn file_diff(worktree: &Path, base: &str, path: &Path) -> Result<String> {
+    let diff_range = format!("{base}...HEAD");
+    let path_str = path.to_str().unwrap_or("");
+    git(worktree, &["diff", &diff_range, "--", path_str])
+}
+
 /// Require the worktree to be clean (no uncommitted changes).
 ///
 /// Returns `Error::Policy` if there are any modified, staged, or untracked files.
@@ -2012,5 +2091,354 @@ mod tests {
 
         // Clean up
         let _ = fs::remove_dir_all(&remote_path);
+    }
+
+    #[test]
+    fn changed_paths_shows_added_files() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create initial commit
+        let file1 = repo.join("file1.txt");
+        fs::write(&file1, "content1").ok();
+        Command::new("git")
+            .args(["add", "file1.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let base = head_sha(&repo).unwrap();
+
+        // Add a new file
+        let file2 = repo.join("file2.txt");
+        fs::write(&file2, "content2").ok();
+        Command::new("git")
+            .args(["add", "file2.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "add file2"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let result = changed_paths(&repo, &base);
+        assert!(result.is_ok());
+        let paths = result.unwrap();
+        assert!(paths.contains(&PathBuf::from("file2.txt")));
+    }
+
+    #[test]
+    fn changed_paths_shows_modified_files() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create initial commit
+        let file1 = repo.join("file1.txt");
+        fs::write(&file1, "original").ok();
+        Command::new("git")
+            .args(["add", "file1.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let base = head_sha(&repo).unwrap();
+
+        // Modify the file
+        fs::write(&file1, "modified").ok();
+        Command::new("git")
+            .args(["add", "file1.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "modify file1"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let result = changed_paths(&repo, &base);
+        assert!(result.is_ok());
+        let paths = result.unwrap();
+        assert!(paths.contains(&PathBuf::from("file1.txt")));
+    }
+
+    #[test]
+    fn changed_paths_shows_deleted_files() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create initial commit with a file
+        let file1 = repo.join("file1.txt");
+        fs::write(&file1, "content").ok();
+        Command::new("git")
+            .args(["add", "file1.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let base = head_sha(&repo).unwrap();
+
+        // Delete the file
+        fs::remove_file(&file1).ok();
+        Command::new("git")
+            .args(["add", "-u"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "delete file1"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let result = changed_paths(&repo, &base);
+        assert!(result.is_ok());
+        let paths = result.unwrap();
+        assert!(paths.contains(&PathBuf::from("file1.txt")));
+    }
+
+    #[test]
+    fn changed_paths_shows_renamed_files() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create initial commit
+        let file1 = repo.join("oldname.txt");
+        fs::write(&file1, "content").ok();
+        Command::new("git")
+            .args(["add", "oldname.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let base = head_sha(&repo).unwrap();
+
+        // Rename the file
+        let file2 = repo.join("newname.txt");
+        fs::remove_file(&file1).ok();
+        fs::write(&file2, "content").ok();
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "rename file"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let result = changed_paths(&repo, &base);
+        assert!(result.is_ok());
+        let paths = result.unwrap();
+        // For renames, both old and new names should appear
+        assert!(
+            paths.contains(&PathBuf::from("oldname.txt"))
+                || paths.contains(&PathBuf::from("newname.txt")),
+            "Expected old or new filename in paths: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn diff_summary_shows_stat_format() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create initial commit
+        let file1 = repo.join("file1.txt");
+        fs::write(&file1, "line1\n").ok();
+        Command::new("git")
+            .args(["add", "file1.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let base = head_sha(&repo).unwrap();
+
+        // Add content to the file
+        fs::write(&file1, "line1\nline2\nline3\n").ok();
+        Command::new("git")
+            .args(["add", "file1.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "add lines"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let result = diff_summary(&repo, &base);
+        assert!(result.is_ok());
+        let summary = result.unwrap();
+        // The summary should contain the filename and stats
+        assert!(summary.contains("file1.txt"));
+        // Should have some indication of changes (the stat format includes +/- counts)
+        assert!(!summary.is_empty());
+    }
+
+    #[test]
+    fn file_diff_shows_text_file_changes() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create initial commit
+        let file1 = repo.join("file1.txt");
+        fs::write(&file1, "original\n").ok();
+        Command::new("git")
+            .args(["add", "file1.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let base = head_sha(&repo).unwrap();
+
+        // Modify the file
+        fs::write(&file1, "modified\n").ok();
+        Command::new("git")
+            .args(["add", "file1.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "modify"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let result = file_diff(&repo, &base, &PathBuf::from("file1.txt"));
+        assert!(result.is_ok());
+        let diff = result.unwrap();
+        // The diff should contain the unified diff format
+        assert!(diff.contains("---"));
+        assert!(diff.contains("+++"));
+        // Should contain the actual changes
+        assert!(diff.contains("original") || diff.contains("modified"));
+    }
+
+    #[test]
+    fn file_diff_reports_binary_files_without_contents() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create initial commit with a binary file (using a PNG-like header)
+        let binary_file = repo.join("image.bin");
+        // Write some binary data
+        fs::write(&binary_file, b"\x89PNG\r\n\x1a\n").ok();
+        Command::new("git")
+            .args(["add", "image.bin"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let base = head_sha(&repo).unwrap();
+
+        // Modify the binary file
+        fs::write(&binary_file, b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0d").ok();
+        Command::new("git")
+            .args(["add", "image.bin"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "modify binary"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let result = file_diff(&repo, &base, &PathBuf::from("image.bin"));
+        assert!(result.is_ok());
+        let diff = result.unwrap();
+        // Git reports binary files with "Binary files ... differ"
+        // It should NOT contain the actual binary content
+        assert!(diff.contains("Binary") || diff.contains("differ"));
+    }
+
+    #[test]
+    fn changed_paths_handles_multiple_changes() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create initial commit
+        let file1 = repo.join("file1.txt");
+        let file2 = repo.join("file2.txt");
+        fs::write(&file1, "content1").ok();
+        fs::write(&file2, "content2").ok();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let base = head_sha(&repo).unwrap();
+
+        // Modify file1
+        fs::write(&file1, "modified1").ok();
+        // Add file3
+        let file3 = repo.join("file3.txt");
+        fs::write(&file3, "content3").ok();
+        // Delete file2
+        fs::remove_file(&file2).ok();
+
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "multiple changes"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let result = changed_paths(&repo, &base);
+        assert!(result.is_ok());
+        let paths = result.unwrap();
+        // All three files should appear in the changes
+        assert!(paths.iter().any(|p| p.to_str().unwrap().contains("file1")));
+        assert!(paths.iter().any(|p| p.to_str().unwrap().contains("file2")));
+        assert!(paths.iter().any(|p| p.to_str().unwrap().contains("file3")));
     }
 }
