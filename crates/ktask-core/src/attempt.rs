@@ -1,11 +1,11 @@
 //! Attempt records: complete evidence of every attempt at a task.
 
-use crate::{AttemptId, GateResult, TaskId, Usage, Project, redact};
+use crate::Result;
+use crate::{AttemptId, GateResult, Project, TaskId, Usage, redact};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use time::OffsetDateTime;
-use crate::Result;
 
 /// Complete record of a single attempt at a task, including all evidence.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -42,7 +42,7 @@ pub struct AttemptRecord {
 /// `<state_dir>/attempts/<task>/<attempt>/`
 ///
 /// Files created:
-/// - `record.json`: Serialized AttemptRecord (redacted)
+/// - `record.json`: Serialized [`AttemptRecord`] (redacted)
 /// - `context.md`: Task context document (redacted)
 /// - `report.md`: Empty placeholder (future use)
 /// - `gates/<kind>.log`: Individual gate output files (redacted)
@@ -90,7 +90,7 @@ pub fn write_evidence(project: &Project, record: &AttemptRecord, context: &str) 
             gate_result.stderr
         );
         let redacted_output = redact::redact(&gate_output, &[]);
-        fs::write(gates_dir.join(format!("{}.log", gate_kind)), redacted_output)?;
+        fs::write(gates_dir.join(format!("{gate_kind}.log")), redacted_output)?;
     }
 
     Ok(())
@@ -99,7 +99,7 @@ pub fn write_evidence(project: &Project, record: &AttemptRecord, context: &str) 
 /// Read attempt records for a task from disk.
 ///
 /// Reads all `record.json` files from `<state_dir>/attempts/<task>/*/`
-/// and deserializes them into AttemptRecord objects, ordered by attempt ID.
+/// and deserializes them into [`AttemptRecord`] objects, ordered by attempt ID.
 ///
 /// # Errors
 ///
@@ -307,10 +307,10 @@ mod tests {
 
         // Read back and verify redaction
         let attempt_dir = state_dir.join("attempts").join("1").join("1");
-        let record_json = fs::read_to_string(attempt_dir.join("record.json"))
-            .expect("read record.json");
-        let context_md = fs::read_to_string(attempt_dir.join("context.md"))
-            .expect("read context.md");
+        let record_json =
+            fs::read_to_string(attempt_dir.join("record.json")).expect("read record.json");
+        let context_md =
+            fs::read_to_string(attempt_dir.join("context.md")).expect("read context.md");
 
         // GitHub token should be redacted
         assert!(!record_json.contains("ghp_"));
@@ -366,8 +366,7 @@ mod tests {
         let gates_dir = state_dir.join("attempts").join("1").join("1").join("gates");
         assert!(gates_dir.join("verify.log").exists());
 
-        let gate_log = fs::read_to_string(gates_dir.join("verify.log"))
-            .expect("read verify.log");
+        let gate_log = fs::read_to_string(gates_dir.join("verify.log")).expect("read verify.log");
         assert!(gate_log.contains("Exit code: 0"));
         assert!(gate_log.contains("Timeout: false"));
         assert!(gate_log.contains("test passed"));
@@ -382,8 +381,7 @@ mod tests {
             state_dir: temp_dir.path().to_path_buf(),
         };
 
-        let records = read_evidence(&project, TaskId::new(999))
-            .expect("read evidence");
+        let records = read_evidence(&project, TaskId::new(999)).expect("read evidence");
 
         assert_eq!(records.len(), 0);
     }
@@ -438,8 +436,7 @@ mod tests {
         write_evidence(&project, &record2, "Context 2").expect("write evidence 2");
 
         // Read all attempts
-        let records = read_evidence(&project, TaskId::new(5))
-            .expect("read evidence");
+        let records = read_evidence(&project, TaskId::new(5)).expect("read evidence");
 
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].id, AttemptId::new(1));
@@ -503,8 +500,14 @@ mod tests {
         let attempt2_path = state_dir.join("attempts").join("3").join("2");
 
         // Both directories should exist
-        assert!(attempt1_path.exists(), "First attempt directory should still exist");
-        assert!(attempt2_path.exists(), "Second attempt directory should exist");
+        assert!(
+            attempt1_path.exists(),
+            "First attempt directory should still exist"
+        );
+        assert!(
+            attempt2_path.exists(),
+            "Second attempt directory should exist"
+        );
 
         // Verify they are different directories
         assert_ne!(
@@ -545,8 +548,8 @@ mod tests {
         // Simulate rebuild by removing and recreating a different part of state
         // (this doesn't affect evidence directories)
         let attempt_dir = state_dir.join("attempts").join("7").join("1");
-        let original_context = fs::read_to_string(attempt_dir.join("context.md"))
-            .expect("read original context");
+        let original_context =
+            fs::read_to_string(attempt_dir.join("context.md")).expect("read original context");
 
         // Delete everything in state_dir except attempts (simulating rebuild)
         for entry in fs::read_dir(&state_dir).expect("read state dir") {
@@ -562,15 +565,13 @@ mod tests {
         }
 
         // Evidence should still be accessible
-        let records = read_evidence(&project, TaskId::new(7))
-            .expect("read evidence after rebuild");
+        let records = read_evidence(&project, TaskId::new(7)).expect("read evidence after rebuild");
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id, AttemptId::new(1));
 
         let context_after_rebuild =
-            fs::read_to_string(attempt_dir.join("context.md"))
-                .expect("read context after rebuild");
+            fs::read_to_string(attempt_dir.join("context.md")).expect("read context after rebuild");
         assert_eq!(original_context, context_after_rebuild);
     }
 }
