@@ -166,10 +166,11 @@ pub fn check_one_active(states: &BTreeMap<TaskId, TaskState>) -> Result<()> {
 ///
 /// A task cannot start before all tasks with lower IDs have been completed,
 /// cancelled, or verified as published. This enforces the ordering invariant.
+/// Gates reach `Acknowledged` rather than `Done` and are considered terminal successes.
 ///
 /// # Errors
 ///
-/// Returns `Error::Policy` if any predecessor is not in `Done`, `Cancelled`, or `PublishedVerified` state.
+/// Returns `Error::Policy` if any predecessor is not in `Done`, `Cancelled`, `PublishedVerified`, or `Acknowledged` state.
 pub fn check_predecessor(states: &BTreeMap<TaskId, TaskState>, next: TaskId) -> Result<()> {
     for (id, state) in states {
         if *id >= next {
@@ -178,7 +179,10 @@ pub fn check_predecessor(states: &BTreeMap<TaskId, TaskState>, next: TaskId) -> 
 
         if !matches!(
             state,
-            TaskState::Done | TaskState::Cancelled | TaskState::PublishedVerified { .. }
+            TaskState::Done
+                | TaskState::Acknowledged { .. }
+                | TaskState::Cancelled
+                | TaskState::PublishedVerified { .. }
         ) {
             return Err(Error::Policy {
                 detail: format!(
@@ -659,7 +663,7 @@ fn from_published_verified(commit: &str, event: &crate::event::EventKind) -> Res
 }
 
 fn from_paused(
-    _reason: &PauseReason,
+    reason: &PauseReason,
     resume_to: &TaskState,
     event: &crate::event::EventKind,
 ) -> Result<TaskState> {
@@ -668,6 +672,19 @@ fn from_paused(
     match event {
         EventKind::Resumed => Ok(resume_to.clone()),
         EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
+        EventKind::GateAcknowledged { by, at } => {
+            if matches!(reason, PauseReason::HumanGate) {
+                Ok(TaskState::Acknowledged {
+                    by: by.clone(),
+                    at: *at,
+                })
+            } else {
+                Err(Error::InvalidTransition {
+                    from: format!("Paused({reason:?})"),
+                    event: event.discriminant().to_string(),
+                })
+            }
+        }
         EventKind::Paused { .. }
         | EventKind::TaskQueued { .. }
         | EventKind::PreflightStarted
@@ -683,8 +700,7 @@ fn from_paused(
         | EventKind::TaskDone { .. }
         | EventKind::TaskFailed { .. }
         | EventKind::Interrupted { .. }
-        | EventKind::RecoveryDecision { .. }
-        | EventKind::GateAcknowledged { .. } => Err(Error::InvalidTransition {
+        | EventKind::RecoveryDecision { .. } => Err(Error::InvalidTransition {
             from: "Paused".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -1575,6 +1591,46 @@ mod tests {
         }
 
         #[test]
+        fn from_paused_gate_acknowledged_with_human_gate_reason() {
+            let resume_to = Box::new(TaskState::Preflight);
+            let state = TaskState::Paused {
+                reason: PauseReason::HumanGate,
+                resume_to,
+            };
+            let at = OffsetDateTime::now_utc();
+            let event = EventKind::GateAcknowledged {
+                by: "user@example.com".to_string(),
+                at,
+            };
+            let result = apply(&state, &event).expect("transition");
+            assert_eq!(
+                result,
+                TaskState::Acknowledged {
+                    by: "user@example.com".to_string(),
+                    at
+                }
+            );
+        }
+
+        #[test]
+        fn from_paused_gate_acknowledged_with_non_human_gate_reason() {
+            let resume_to = Box::new(TaskState::Running {
+                attempt: AttemptId::new(1),
+                phase: Phase::Implement,
+            });
+            let state = TaskState::Paused {
+                reason: PauseReason::Input,
+                resume_to,
+            };
+            let event = EventKind::GateAcknowledged {
+                by: "user@example.com".to_string(),
+                at: OffsetDateTime::now_utc(),
+            };
+            let err = apply(&state, &event).expect_err("should be invalid for non-HumanGate");
+            assert!(err.to_string().contains("Paused"));
+        }
+
+        #[test]
         fn from_paused_illegal_event_task_queued() {
             let state = TaskState::Paused {
                 reason: PauseReason::Input,
@@ -1726,6 +1782,13 @@ mod tests {
                             attempt: attempt1,
                             phase: Phase::Implement,
                         }),
+                    },
+                ),
+                (
+                    "Paused(HumanGate)",
+                    TaskState::Paused {
+                        reason: PauseReason::HumanGate,
+                        resume_to: Box::new(TaskState::Preflight),
                     },
                 ),
                 ("Done", TaskState::Done),
@@ -1914,6 +1977,9 @@ mod tests {
                 ("PublishedVerified", "TaskCancelled"),
                 ("Paused(Running)", "Resumed"),
                 ("Paused(Running)", "TaskCancelled"),
+                ("Paused(HumanGate)", "Resumed"),
+                ("Paused(HumanGate)", "GateAcknowledged"),
+                ("Paused(HumanGate)", "TaskCancelled"),
             ]
             .into_iter()
             .collect();
@@ -2208,6 +2274,25 @@ mod tests {
         assert!(err_msg.contains("task 2"));
         assert!(err_msg.contains("task 1"));
         assert!(err_msg.contains("Running"));
+    }
+
+    #[test]
+    fn check_predecessor_allows_starting_when_all_predecessors_are_acknowledged() {
+        let mut states = BTreeMap::new();
+        states.insert(
+            TaskId::new(1),
+            TaskState::Acknowledged {
+                by: "user@example.com".to_string(),
+                at: OffsetDateTime::now_utc(),
+            },
+        );
+        states.insert(TaskId::new(2), TaskState::Done);
+
+        let result = check_predecessor(&states, TaskId::new(3));
+        assert!(
+            result.is_ok(),
+            "task 3 should be allowed when predecessors are acknowledged gates"
+        );
     }
 
     #[test]
