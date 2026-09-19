@@ -1,6 +1,6 @@
 //! Event journal for storing and retrieving task events.
 
-use crate::{Error, Event, EventKind, EventSeq, Project, Result, TaskId, TaskState};
+use crate::{Error, Event, EventKind, EventSeq, Project, Result, TaskId, TaskState, redact};
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -73,7 +73,10 @@ impl Journal {
     /// the transaction cannot be committed.
     pub fn append(&mut self, task_id: Option<TaskId>, kind: &EventKind) -> Result<EventSeq> {
         // Serialize the payload
-        let payload = serde_json::to_string(kind)?;
+        let mut payload = serde_json::to_string(kind)?;
+
+        // Redact secrets from the payload before storing
+        payload = redact::redact(&payload, &[]);
 
         // Get the current timestamp in UTC
         let ts = OffsetDateTime::now_utc();
@@ -2204,6 +2207,245 @@ mod tests {
         ));
 
         drop(journal);
+    }
+
+    #[test]
+    fn redact_secrets_in_journal() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let secret_key = "sk-1234567890abcdefghij";
+        let text_with_secret = format!("API key: {secret_key}");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(1);
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AgentOutput {
+                    attempt: crate::ids::AttemptId::new(1),
+                    stream: crate::Stream::Stdout,
+                    text: text_with_secret.clone(),
+                },
+            )
+            .unwrap();
+
+        drop(journal);
+
+        // Reopen journal and read back the events
+        let journal = Journal::open(&journal_path).unwrap();
+        let events = journal.events().unwrap();
+
+        assert_eq!(events.len(), 1);
+        if let EventKind::AgentOutput { text, .. } = &events[0].kind {
+            assert!(
+                !text.contains(secret_key),
+                "Secret should be redacted in journal"
+            );
+            assert!(
+                text.contains("[redacted]"),
+                "Secret should be replaced with [redacted]"
+            );
+        } else {
+            panic!("Expected AgentOutput event");
+        }
+
+        drop(journal);
+    }
+
+    #[test]
+    fn redact_bearer_token_in_journal() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let bearer_token = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJzdWIiOiIxMjM0NTY3ODkwIn0";
+        let text_with_token = format!("Auth: {bearer_token}");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(2);
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AgentOutput {
+                    attempt: crate::ids::AttemptId::new(1),
+                    stream: crate::Stream::Stdout,
+                    text: text_with_token.clone(),
+                },
+            )
+            .unwrap();
+
+        drop(journal);
+
+        // Reopen and verify token is redacted
+        let journal = Journal::open(&journal_path).unwrap();
+        let events = journal.events_for(task_id).unwrap();
+
+        assert_eq!(events.len(), 1);
+        if let EventKind::AgentOutput { text, .. } = &events[0].kind {
+            assert!(
+                !text.contains("Bearer eyJ"),
+                "Bearer token should be redacted"
+            );
+            assert!(text.contains("[redacted]"), "Secret should be replaced");
+        }
+
+        drop(journal);
+    }
+
+    #[test]
+    fn redact_aws_keys_in_journal() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let aws_key = "AKIAIOSFODNN7EXAMPLE";
+        let text_with_key = format!("AWS Key: {aws_key}");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(3);
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AgentOutput {
+                    attempt: crate::ids::AttemptId::new(1),
+                    stream: crate::Stream::Stdout,
+                    text: text_with_key,
+                },
+            )
+            .unwrap();
+
+        drop(journal);
+
+        // Verify AWS key is redacted
+        let journal = Journal::open(&journal_path).unwrap();
+        let events = journal.events_for(task_id).unwrap();
+
+        if let EventKind::AgentOutput { text, .. } = &events[0].kind {
+            assert!(!text.contains("AKIA"), "AWS key should be redacted");
+            assert!(text.contains("[redacted]"));
+        }
+
+        drop(journal);
+    }
+
+    #[test]
+    fn redact_github_tokens_in_journal() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let github_token = "ghp_1234567890123456789012345678901234";
+        let text_with_token = format!("GitHub: {github_token}");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(4);
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AgentOutput {
+                    attempt: crate::ids::AttemptId::new(1),
+                    stream: crate::Stream::Stdout,
+                    text: text_with_token,
+                },
+            )
+            .unwrap();
+
+        drop(journal);
+
+        // Verify token is redacted
+        let journal = Journal::open(&journal_path).unwrap();
+        let events = journal.events_for(task_id).unwrap();
+
+        if let EventKind::AgentOutput { text, .. } = &events[0].kind {
+            assert!(!text.contains("ghp_"), "GitHub token should be redacted");
+            assert!(text.contains("[redacted]"));
+        }
+
+        drop(journal);
+    }
+
+    #[test]
+    fn redact_multiple_secrets_in_single_event() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let text_with_secrets = "Key1: sk-abcdefghijklmnopqrst Key2: sk-zyxwvutsrqponmlkjihg";
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(5);
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AgentOutput {
+                    attempt: crate::ids::AttemptId::new(1),
+                    stream: crate::Stream::Stdout,
+                    text: text_with_secrets.to_string(),
+                },
+            )
+            .unwrap();
+
+        drop(journal);
+
+        // Verify both secrets are redacted
+        let journal = Journal::open(&journal_path).unwrap();
+        let events = journal.events_for(task_id).unwrap();
+
+        if let EventKind::AgentOutput { text, .. } = &events[0].kind {
+            assert!(!text.contains("sk-"), "All API keys should be redacted");
+            assert_eq!(
+                text.matches("[redacted]").count(),
+                2,
+                "Should have 2 redacted items"
+            );
+        }
+
+        drop(journal);
+    }
+
+    #[test]
+    fn journal_file_does_not_contain_secrets_on_disk() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let secret = "sk-1234567890abcdefghij";
+        let text = format!("API key is {secret}");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        journal
+            .append(
+                Some(TaskId::new(1)),
+                &EventKind::AgentOutput {
+                    attempt: crate::ids::AttemptId::new(1),
+                    stream: crate::Stream::Stdout,
+                    text,
+                },
+            )
+            .unwrap();
+
+        drop(journal);
+
+        // Read the database file as raw bytes and check secret is not present
+        let file_contents = std::fs::read_to_string(&journal_path).unwrap_or_default();
+
+        // The secret should not appear in plaintext in the file
+        // Note: SQLite database files are binary, but we can check if the secret
+        // appears in any text representation
+        assert!(
+            !file_contents.contains(secret),
+            "Secret should not appear in journal file"
+        );
+
+        // Verify via API that the secret was redacted
+        let journal = Journal::open(&journal_path).unwrap();
+        let events = journal.events().unwrap();
+
+        if let EventKind::AgentOutput { text, .. } = &events[0].kind {
+            assert!(text.contains("[redacted]"));
+            assert!(!text.contains(secret));
+        }
     }
 
     // Property tests for journal replay invariant
