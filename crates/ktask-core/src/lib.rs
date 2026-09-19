@@ -11,6 +11,7 @@ pub mod ids;
 pub mod journal;
 pub mod paths;
 pub mod project;
+pub mod queue;
 pub mod state;
 pub mod task;
 
@@ -22,5 +23,6 @@ pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::Journal;
 pub use paths::{config_file, state_root};
 pub use project::{Project, discover, register};
+pub use queue::next_runnable;
 pub use state::{PauseReason, Phase, TaskState};
 pub use task::{Task, TaskStatus};
