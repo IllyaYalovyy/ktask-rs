@@ -153,7 +153,6 @@ impl Protocol {
     ///
     /// Returns an error if the resolved protocol name is not "direct" or "tdd".
     pub fn for_task(task: &Task, config: &Config) -> Result<Protocol> {
-
         let protocol_name = task
             .protocol_name()
             .unwrap_or_else(|| config.default_protocol.clone());
@@ -174,9 +173,11 @@ impl Protocol {
 }
 
 /// Check if a path matches any of the provided glob patterns.
-fn path_matches_glob(path: &PathBuf, patterns: &[String]) -> bool {
+fn path_matches_glob(path: &std::path::Path, patterns: &[String]) -> bool {
     let path_str = path.to_string_lossy();
-    patterns.iter().any(|pattern| glob_matches(&path_str, pattern))
+    patterns
+        .iter()
+        .any(|pattern| glob_matches(&path_str, pattern))
 }
 
 /// Simple glob pattern matching with support for `*` and `**` wildcards.
@@ -198,8 +199,8 @@ fn glob_matches_impl(path: &str, pattern: &str, path_idx: usize, pattern_idx: us
     }
 
     if pattern_idx + 1 < pattern_bytes.len()
-        && pattern_bytes[pattern_idx] == b'*'
-        && pattern_bytes[pattern_idx + 1] == b'*'
+        && pattern_bytes.get(pattern_idx) == Some(&b'*')
+        && pattern_bytes.get(pattern_idx + 1) == Some(&b'*')
     {
         // Handle `**` wildcard: match any sequence including `/`
         let next_pattern_idx = pattern_idx + 2;
@@ -209,7 +210,7 @@ fn glob_matches_impl(path: &str, pattern: &str, path_idx: usize, pattern_idx: us
             return true;
         }
 
-        if next_pattern_idx < pattern_bytes.len() && pattern_bytes[next_pattern_idx] == b'/' {
+        if pattern_bytes.get(next_pattern_idx) == Some(&b'/') {
             // `**/` case
             let next_pattern_idx = next_pattern_idx + 1;
 
@@ -233,19 +234,19 @@ fn glob_matches_impl(path: &str, pattern: &str, path_idx: usize, pattern_idx: us
 
     if path_idx >= path_bytes.len() {
         // Path exhausted, pattern not exhausted
-        if pattern_idx < pattern_bytes.len() && pattern_bytes[pattern_idx] == b'*' {
+        if pattern_bytes.get(pattern_idx) == Some(&b'*') {
             return glob_matches_impl(path, pattern, path_idx, pattern_idx + 1);
         }
         return false;
     }
 
-    if pattern_bytes[pattern_idx] == b'*' {
+    if pattern_bytes.get(pattern_idx) == Some(&b'*') {
         // Handle `*` wildcard: match any sequence except `/`
         let next_pattern_idx = pattern_idx + 1;
 
         // Try matching from each position until we hit a `/` or end of path
         for i in path_idx..=path_bytes.len() {
-            if i > path_idx && path_bytes[i - 1] == b'/' {
+            if i > path_idx && path_bytes.get(i - 1) == Some(&b'/') {
                 break;
             }
             if glob_matches_impl(path, pattern, i, next_pattern_idx) {
@@ -255,7 +256,7 @@ fn glob_matches_impl(path: &str, pattern: &str, path_idx: usize, pattern_idx: us
         return false;
     }
 
-    if pattern_bytes[pattern_idx] == path_bytes[path_idx] {
+    if pattern_bytes.get(pattern_idx) == path_bytes.get(path_idx) {
         return glob_matches_impl(path, pattern, path_idx + 1, pattern_idx + 1);
     }
 
@@ -277,10 +278,14 @@ fn glob_matches_impl(path: &str, pattern: &str, path_idx: usize, pattern_idx: us
 ///
 /// `Ok(())` if all changes comply with the scope, or a Policy error naming offending paths
 ///
+/// # Errors
+///
+/// Returns `Error::Policy` if any changed path violates the write scope constraints.
+///
 /// # Scope Semantics
 ///
 /// - `All`: any path is allowed
-/// - `TestsOnly`: only paths matching test_globs are allowed
+/// - `TestsOnly`: only paths matching `test_globs` are allowed
 /// - `None`: no paths are allowed (read-only)
 pub fn check_scope(scope: WriteScope, changed: &[PathBuf], test_globs: &[String]) -> Result<()> {
     match scope {
@@ -692,15 +697,27 @@ mod tests {
             "src/**/tests.rs".to_string(),
         ];
 
-        assert!(path_matches_glob(&PathBuf::from("tests/unit.rs"), &default_globs));
-        assert!(path_matches_glob(&PathBuf::from("src/tests/mod.rs"), &default_globs));
-        assert!(path_matches_glob(&PathBuf::from("unit_test.rs"), &default_globs));
+        assert!(path_matches_glob(
+            &PathBuf::from("tests/unit.rs"),
+            &default_globs
+        ));
+        assert!(path_matches_glob(
+            &PathBuf::from("src/tests/mod.rs"),
+            &default_globs
+        ));
+        assert!(path_matches_glob(
+            &PathBuf::from("unit_test.rs"),
+            &default_globs
+        ));
         assert!(path_matches_glob(
             &PathBuf::from("src/module/tests.rs"),
             &default_globs
         ));
 
-        assert!(!path_matches_glob(&PathBuf::from("src/main.rs"), &default_globs));
+        assert!(!path_matches_glob(
+            &PathBuf::from("src/main.rs"),
+            &default_globs
+        ));
         assert!(!path_matches_glob(&PathBuf::from("lib.rs"), &default_globs));
     }
 }
