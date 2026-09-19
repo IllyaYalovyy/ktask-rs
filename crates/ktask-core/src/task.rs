@@ -57,6 +57,41 @@ impl Task {
 
         first_line
     }
+
+    /// Validate that a task has all required sections.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error listing all missing sections if any required section is empty.
+    pub fn validate(&self) -> Result<()> {
+        let mut missing = Vec::new();
+
+        if self.outcome.trim().is_empty() {
+            missing.push("Outcome");
+        }
+        if self.done_when.trim().is_empty() {
+            missing.push("Done-when");
+        }
+        if self.verify.trim().is_empty() {
+            missing.push("Verify");
+        }
+        if self.refs.trim().is_empty() {
+            missing.push("Refs");
+        }
+
+        if !missing.is_empty() {
+            return Err(Error::Policy {
+                detail: format!(
+                    "Task '{}' missing required sections: {}",
+                    self.title(),
+                    missing.join(", ")
+                ),
+                paths: vec![],
+            });
+        }
+
+        Ok(())
+    }
 }
 
 /// Parse a plan document into tasks.
@@ -100,8 +135,7 @@ pub fn parse_plan(text: &str) -> Result<Vec<Task>> {
                 let body_text = body_lines.join("\n");
 
                 // Parse sections from the body
-                let (outcome, done_when, verify, refs, is_gate) =
-                    parse_sections(&body_text, &title)?;
+                let (outcome, done_when, verify, refs, is_gate) = parse_sections(&body_text);
 
                 let status = if is_gate {
                     TaskStatus::HumanGate
@@ -119,6 +153,9 @@ pub fn parse_plan(text: &str) -> Result<Vec<Task>> {
                     refs,
                 };
 
+                // Validate that all required sections are present
+                task.validate()?;
+
                 tasks.push(task);
                 task_id += 1;
             } else {
@@ -132,7 +169,7 @@ pub fn parse_plan(text: &str) -> Result<Vec<Task>> {
     Ok(tasks)
 }
 
-fn parse_sections(text: &str, title: &str) -> Result<(String, String, String, String, bool)> {
+fn parse_sections(text: &str) -> (String, String, String, String, bool) {
     let mut outcome = String::new();
     let mut done_when = String::new();
     let mut verify = String::new();
@@ -173,29 +210,7 @@ fn parse_sections(text: &str, title: &str) -> Result<(String, String, String, St
         }
     }
 
-    // Validate that all required sections are present
-    if outcome.trim().is_empty() {
-        return Err(Error::Deserialize {
-            detail: format!("Task '{title}' missing required section: **Outcome:**"),
-        });
-    }
-    if done_when.trim().is_empty() {
-        return Err(Error::Deserialize {
-            detail: format!("Task '{title}' missing required section: **Done-when:** (or similar)"),
-        });
-    }
-    if verify.trim().is_empty() {
-        return Err(Error::Deserialize {
-            detail: format!("Task '{title}' missing required section: **Verify:**"),
-        });
-    }
-    if refs.trim().is_empty() {
-        return Err(Error::Deserialize {
-            detail: format!("Task '{title}' missing required section: **Refs:**"),
-        });
-    }
-
-    Ok((outcome, done_when, verify, refs, is_gate))
+    (outcome, done_when, verify, refs, is_gate)
 }
 
 fn extract_section(lines: &[&str], i: &mut usize) -> String {
@@ -754,5 +769,96 @@ Code block with special chars:
         assert_eq!(tasks[0].id, TaskId::new(1));
         assert_eq!(tasks[1].id, TaskId::new(2));
         assert_eq!(tasks[2].id, TaskId::new(3));
+    }
+
+    #[test]
+    fn validate_task_with_all_sections() {
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "This is the outcome".to_string(),
+            done_when: "When it's done".to_string(),
+            verify: "Run tests".to_string(),
+            refs: "Link to docs".to_string(),
+        };
+        assert!(task.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_task_missing_one_section() {
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "This is the outcome".to_string(),
+            done_when: "When it's done".to_string(),
+            verify: String::new(),
+            refs: "Link to docs".to_string(),
+        };
+        let result = task.validate();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Verify"));
+        assert!(!err_msg.contains("Outcome"));
+    }
+
+    #[test]
+    fn validate_task_missing_multiple_sections() {
+        let task = Task {
+            id: TaskId::new(1),
+            status: TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: String::new(),
+            done_when: String::new(),
+            verify: String::new(),
+            refs: "Link to docs".to_string(),
+        };
+        let result = task.validate();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Outcome"));
+        assert!(err_msg.contains("Done-when"));
+        assert!(err_msg.contains("Verify"));
+        assert!(!err_msg.contains("Refs"));
+    }
+
+    #[test]
+    fn parse_plan_missing_multiple_sections() {
+        let plan = r"## Task missing sections
+
+**Outcome:** Only outcome is present
+
+**Done-when:**
+
+Some other content here
+";
+        let result = parse_plan(plan);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Verify"));
+        assert!(err_msg.contains("Refs"));
+    }
+
+    #[test]
+    fn parse_plan_with_unknown_sections_preserved_in_body() {
+        let plan = r"## Task with custom section
+
+**Outcome:** The outcome
+
+**Done-when:** When done
+
+**Verify:** cargo test
+
+**Refs:** Documentation
+
+Extra content here
+with some **bold** text
+and a custom section below.
+";
+        let tasks = parse_plan(plan).expect("parse");
+        assert_eq!(tasks.len(), 1);
+        assert!(tasks[0].body.contains("Extra content"));
+        assert!(tasks[0].body.contains("custom section"));
     }
 }
