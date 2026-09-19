@@ -19,6 +19,9 @@ pub mod redact;
 pub mod state;
 pub mod task;
 
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+
 pub use classify::{FailureClass, Recovery, Stream, TddException};
 pub use config::Config;
 pub use error::{Error, Result};
