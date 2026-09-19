@@ -9,6 +9,7 @@ pub mod error;
 pub mod event;
 pub mod ids;
 pub mod paths;
+pub mod project;
 pub mod state;
 pub mod task;
 
@@ -18,5 +19,6 @@ pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use paths::{config_file, state_root};
+pub use project::{Project, discover, register};
 pub use state::{PauseReason, Phase};
 pub use task::{Task, TaskStatus};
