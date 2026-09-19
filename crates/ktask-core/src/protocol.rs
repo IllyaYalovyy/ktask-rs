@@ -4,6 +4,7 @@ use crate::gate::GateKind;
 use crate::state::Phase;
 use crate::{Config, Error, Result, Task};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Write scope for a phase, determining what the agent can modify.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,6 +153,7 @@ impl Protocol {
     ///
     /// Returns an error if the resolved protocol name is not "direct" or "tdd".
     pub fn for_task(task: &Task, config: &Config) -> Result<Protocol> {
+
         let protocol_name = task
             .protocol_name()
             .unwrap_or_else(|| config.default_protocol.clone());
@@ -167,6 +169,148 @@ impl Protocol {
                 ),
                 paths: vec![],
             }),
+        }
+    }
+}
+
+/// Check if a path matches any of the provided glob patterns.
+fn path_matches_glob(path: &PathBuf, patterns: &[String]) -> bool {
+    let path_str = path.to_string_lossy();
+    patterns.iter().any(|pattern| glob_matches(&path_str, pattern))
+}
+
+/// Simple glob pattern matching with support for `*` and `**` wildcards.
+///
+/// - `*` matches any sequence of characters except `/`
+/// - `**` matches any sequence of characters including `/`
+/// - Other characters match literally
+fn glob_matches(path: &str, pattern: &str) -> bool {
+    glob_matches_impl(path, pattern, 0, 0)
+}
+
+/// Recursive helper for glob matching.
+fn glob_matches_impl(path: &str, pattern: &str, path_idx: usize, pattern_idx: usize) -> bool {
+    let path_bytes = path.as_bytes();
+    let pattern_bytes = pattern.as_bytes();
+
+    if pattern_idx >= pattern_bytes.len() {
+        return path_idx >= path_bytes.len();
+    }
+
+    if pattern_idx + 1 < pattern_bytes.len()
+        && pattern_bytes[pattern_idx] == b'*'
+        && pattern_bytes[pattern_idx + 1] == b'*'
+    {
+        // Handle `**` wildcard: match any sequence including `/`
+        let next_pattern_idx = pattern_idx + 2;
+
+        if next_pattern_idx >= pattern_bytes.len() {
+            // `**` at end of pattern matches everything
+            return true;
+        }
+
+        if next_pattern_idx < pattern_bytes.len() && pattern_bytes[next_pattern_idx] == b'/' {
+            // `**/` case
+            let next_pattern_idx = next_pattern_idx + 1;
+
+            // Try matching from each position in the path
+            for i in path_idx..=path_bytes.len() {
+                if glob_matches_impl(path, pattern, i, next_pattern_idx) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // `**` not followed by `/`, treat as regular `*`
+        for i in path_idx..=path_bytes.len() {
+            if glob_matches_impl(path, pattern, i, next_pattern_idx) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if path_idx >= path_bytes.len() {
+        // Path exhausted, pattern not exhausted
+        if pattern_idx < pattern_bytes.len() && pattern_bytes[pattern_idx] == b'*' {
+            return glob_matches_impl(path, pattern, path_idx, pattern_idx + 1);
+        }
+        return false;
+    }
+
+    if pattern_bytes[pattern_idx] == b'*' {
+        // Handle `*` wildcard: match any sequence except `/`
+        let next_pattern_idx = pattern_idx + 1;
+
+        // Try matching from each position until we hit a `/` or end of path
+        for i in path_idx..=path_bytes.len() {
+            if i > path_idx && path_bytes[i - 1] == b'/' {
+                break;
+            }
+            if glob_matches_impl(path, pattern, i, next_pattern_idx) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if pattern_bytes[pattern_idx] == path_bytes[path_idx] {
+        return glob_matches_impl(path, pattern, path_idx + 1, pattern_idx + 1);
+    }
+
+    false
+}
+
+/// Enforce write-scope constraints for a phase.
+///
+/// Checks that changed paths comply with the declared write scope. Returns a Policy error
+/// if any path violates the scope.
+///
+/// # Arguments
+///
+/// - `scope` - The write scope constraint for this phase
+/// - `changed` - Paths that were modified (added, modified, or deleted)
+/// - `test_globs` - Glob patterns identifying test files
+///
+/// # Returns
+///
+/// `Ok(())` if all changes comply with the scope, or a Policy error naming offending paths
+///
+/// # Scope Semantics
+///
+/// - `All`: any path is allowed
+/// - `TestsOnly`: only paths matching test_globs are allowed
+/// - `None`: no paths are allowed (read-only)
+pub fn check_scope(scope: WriteScope, changed: &[PathBuf], test_globs: &[String]) -> Result<()> {
+    match scope {
+        WriteScope::All => Ok(()),
+        WriteScope::None => {
+            if changed.is_empty() {
+                Ok(())
+            } else {
+                Err(Error::Policy {
+                    detail: "phase is read-only; no file modifications allowed".to_string(),
+                    paths: changed.to_vec(),
+                })
+            }
+        }
+        WriteScope::TestsOnly => {
+            let non_test_paths: Vec<PathBuf> = changed
+                .iter()
+                .filter(|path| !path_matches_glob(path, test_globs))
+                .cloned()
+                .collect();
+
+            if non_test_paths.is_empty() {
+                Ok(())
+            } else {
+                Err(Error::Policy {
+                    detail: "phase allows test files only; production files cannot be modified"
+                        .to_string(),
+                    paths: non_test_paths,
+                })
+            }
         }
     }
 }
@@ -420,5 +564,143 @@ mod tests {
         let config = Config::default();
         let protocol = Protocol::for_task(&task, &config).expect("should select protocol");
         assert_eq!(protocol.name, "tdd");
+    }
+
+    #[test]
+    fn glob_matches_single_star() {
+        assert!(glob_matches("test.rs", "*.rs"));
+        assert!(glob_matches("foo.txt", "*.txt"));
+        assert!(!glob_matches("dir/test.rs", "*.rs"));
+        assert!(!glob_matches("test.rs", "*.txt"));
+    }
+
+    #[test]
+    fn glob_matches_double_star() {
+        assert!(glob_matches("test.rs", "**/*.rs"));
+        assert!(glob_matches("dir/test.rs", "**/*.rs"));
+        assert!(glob_matches("a/b/c/test.rs", "**/*.rs"));
+        assert!(!glob_matches("test.txt", "**/*.rs"));
+    }
+
+    #[test]
+    fn glob_matches_double_star_prefix() {
+        assert!(glob_matches("tests/unit.rs", "**/tests/**"));
+        assert!(glob_matches("src/tests/unit.rs", "**/tests/**"));
+        assert!(glob_matches("tests/deep/nested/test.rs", "**/tests/**"));
+        assert!(!glob_matches("src/main.rs", "**/tests/**"));
+    }
+
+    #[test]
+    fn glob_matches_exact_path() {
+        assert!(glob_matches("README.md", "README.md"));
+        assert!(!glob_matches("src/README.md", "README.md"));
+        assert!(!glob_matches("README.md.bak", "README.md"));
+    }
+
+    #[test]
+    fn glob_matches_suffix_pattern() {
+        assert!(glob_matches("unit_test.rs", "*_test.rs"));
+        assert!(glob_matches("integration_test.rs", "*_test.rs"));
+        assert!(!glob_matches("test.rs", "*_test.rs"));
+    }
+
+    #[test]
+    fn check_scope_all_allows_everything() {
+        let changed = vec![PathBuf::from("src/main.rs"), PathBuf::from("tests/unit.rs")];
+        let test_globs = vec!["**/tests/**".to_string()];
+        let result = check_scope(WriteScope::All, &changed, &test_globs);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn check_scope_all_allows_empty_changes() {
+        let changed = vec![];
+        let test_globs = vec!["**/tests/**".to_string()];
+        let result = check_scope(WriteScope::All, &changed, &test_globs);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn check_scope_none_rejects_any_change() {
+        let changed = vec![PathBuf::from("src/main.rs")];
+        let test_globs = vec!["**/tests/**".to_string()];
+        let result = check_scope(WriteScope::None, &changed, &test_globs);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        assert!(err_str.contains("read-only"));
+    }
+
+    #[test]
+    fn check_scope_none_allows_empty_changes() {
+        let changed = vec![];
+        let test_globs = vec!["**/tests/**".to_string()];
+        let result = check_scope(WriteScope::None, &changed, &test_globs);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn check_scope_tests_only_permits_test_edit() {
+        let changed = vec![PathBuf::from("tests/unit_test.rs")];
+        let test_globs = vec!["**/tests/**".to_string(), "**/*_test.rs".to_string()];
+        let result = check_scope(WriteScope::TestsOnly, &changed, &test_globs);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn check_scope_tests_only_rejects_production_edit() {
+        let changed = vec![PathBuf::from("src/main.rs")];
+        let test_globs = vec!["**/tests/**".to_string(), "**/*_test.rs".to_string()];
+        let result = check_scope(WriteScope::TestsOnly, &changed, &test_globs);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_str = err.to_string();
+        assert!(err_str.contains("test files only"));
+    }
+
+    #[test]
+    fn check_scope_tests_only_mixed_files_reports_non_test() {
+        let changed = vec![
+            PathBuf::from("tests/unit.rs"),
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("tests/integration_test.rs"),
+        ];
+        let test_globs = vec!["**/tests/**".to_string(), "**/*_test.rs".to_string()];
+        let result = check_scope(WriteScope::TestsOnly, &changed, &test_globs);
+        assert!(result.is_err());
+        if let Err(Error::Policy { paths, .. }) = result {
+            assert_eq!(paths.len(), 1);
+            assert_eq!(paths[0], PathBuf::from("src/main.rs"));
+        } else {
+            panic!("Expected Policy error");
+        }
+    }
+
+    #[test]
+    fn check_scope_tests_only_empty_changes() {
+        let changed = vec![];
+        let test_globs = vec!["**/tests/**".to_string()];
+        let result = check_scope(WriteScope::TestsOnly, &changed, &test_globs);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn glob_matches_default_test_globs() {
+        let default_globs = vec![
+            "**/tests/**".to_string(),
+            "**/*_test.rs".to_string(),
+            "src/**/tests.rs".to_string(),
+        ];
+
+        assert!(path_matches_glob(&PathBuf::from("tests/unit.rs"), &default_globs));
+        assert!(path_matches_glob(&PathBuf::from("src/tests/mod.rs"), &default_globs));
+        assert!(path_matches_glob(&PathBuf::from("unit_test.rs"), &default_globs));
+        assert!(path_matches_glob(
+            &PathBuf::from("src/module/tests.rs"),
+            &default_globs
+        ));
+
+        assert!(!path_matches_glob(&PathBuf::from("src/main.rs"), &default_globs));
+        assert!(!path_matches_glob(&PathBuf::from("lib.rs"), &default_globs));
     }
 }
