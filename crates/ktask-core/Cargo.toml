@@ -17,6 +17,7 @@ time = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 proptest = { workspace = true }
+nix = { workspace = true }
 
 [lints]
 workspace = true
