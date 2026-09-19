@@ -1,8 +1,9 @@
 //! Event journal for storing and retrieving task events.
 
-use crate::{Error, EventKind, EventSeq, Project, Result, TaskId};
+use crate::{Error, Event, EventKind, EventSeq, Project, Result, TaskId};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
+use time::OffsetDateTime;
 
 /// The current schema version.
 const SCHEMA_VERSION: i32 = 1;
@@ -74,7 +75,7 @@ impl Journal {
         let payload = serde_json::to_string(kind)?;
 
         // Get the current timestamp in UTC
-        let ts = time::OffsetDateTime::now_utc();
+        let ts = OffsetDateTime::now_utc();
         let ts_str = ts
             .format(&time::format_description::well_known::Rfc3339)
             .map_err(|_| Error::Corrupt {
@@ -104,6 +105,181 @@ impl Journal {
         tx.commit()?;
 
         Ok(EventSeq::new(seq))
+    }
+
+    /// Read all events from the journal in sequence order.
+    ///
+    /// Returns all stored events ordered by sequence number ascending.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails or events cannot be deserialized.
+    pub fn events(&self) -> Result<Vec<Event>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT seq, ts, task_id, payload FROM events ORDER BY seq ASC")?;
+
+        let events = stmt.query_map([], |row| {
+            let seq_val: i64 = row.get(0)?;
+            let ts_str: String = row.get(1)?;
+            let task_id_val: Option<i64> = row.get(2)?;
+            let payload_str: String = row.get(3)?;
+
+            Ok((seq_val.cast_unsigned(), ts_str, task_id_val, payload_str))
+        })?;
+
+        let mut result = Vec::new();
+        for event_result in events {
+            let (seq_val, ts_str, task_id_val, payload_str) = event_result?;
+
+            // Parse timestamp
+            let ts = OffsetDateTime::parse(&ts_str, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| Error::Corrupt {
+                    detail: format!("Failed to parse timestamp: {ts_str}"),
+                    seq: Some(seq_val),
+                })?;
+
+            // Deserialize kind from payload
+            let kind: EventKind =
+                serde_json::from_str(&payload_str).map_err(|_| Error::Corrupt {
+                    detail: format!("Failed to deserialize payload for seq {seq_val}"),
+                    seq: Some(seq_val),
+                })?;
+
+            // Convert task_id (stored as i64 in SQLite, originally u32)
+            let task_id = task_id_val.map(|id| {
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let task_id_u32 = id as u32;
+                TaskId::new(task_id_u32)
+            });
+
+            result.push(Event {
+                seq: EventSeq::new(seq_val),
+                ts,
+                task_id,
+                kind,
+            });
+        }
+
+        Ok(result)
+    }
+
+    /// Read events for a specific task in sequence order.
+    ///
+    /// Returns all events associated with the given task, ordered by
+    /// sequence number ascending.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails or events cannot be deserialized.
+    pub fn events_for(&self, task: TaskId) -> Result<Vec<Event>> {
+        let task_val = i64::from(task.get());
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, ts, task_id, payload FROM events WHERE task_id = ?1 ORDER BY seq ASC",
+        )?;
+
+        let events = stmt.query_map([task_val], |row| {
+            let seq_val: i64 = row.get(0)?;
+            let ts_str: String = row.get(1)?;
+            let task_id_val: Option<i64> = row.get(2)?;
+            let payload_str: String = row.get(3)?;
+
+            Ok((seq_val.cast_unsigned(), ts_str, task_id_val, payload_str))
+        })?;
+
+        let mut result = Vec::new();
+        for event_result in events {
+            let (seq_val, ts_str, task_id_val, payload_str) = event_result?;
+
+            // Parse timestamp
+            let ts = OffsetDateTime::parse(&ts_str, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| Error::Corrupt {
+                    detail: format!("Failed to parse timestamp: {ts_str}"),
+                    seq: Some(seq_val),
+                })?;
+
+            // Deserialize kind from payload
+            let kind: EventKind =
+                serde_json::from_str(&payload_str).map_err(|_| Error::Corrupt {
+                    detail: format!("Failed to deserialize payload for seq {seq_val}"),
+                    seq: Some(seq_val),
+                })?;
+
+            // Convert task_id (stored as i64 in SQLite, originally u32)
+            let task_id = task_id_val.map(|id| {
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let task_id_u32 = id as u32;
+                TaskId::new(task_id_u32)
+            });
+
+            result.push(Event {
+                seq: EventSeq::new(seq_val),
+                ts,
+                task_id,
+                kind,
+            });
+        }
+
+        Ok(result)
+    }
+
+    /// Read events since a specific sequence number in sequence order.
+    ///
+    /// Returns all events with sequence number greater than the given
+    /// sequence, ordered by sequence number ascending.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails or events cannot be deserialized.
+    pub fn events_since(&self, seq: EventSeq) -> Result<Vec<Event>> {
+        let seq_val = seq.get().cast_signed();
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, ts, task_id, payload FROM events WHERE seq > ?1 ORDER BY seq ASC",
+        )?;
+
+        let events = stmt.query_map([seq_val], |row| {
+            let seq_val: i64 = row.get(0)?;
+            let ts_str: String = row.get(1)?;
+            let task_id_val: Option<i64> = row.get(2)?;
+            let payload_str: String = row.get(3)?;
+
+            Ok((seq_val.cast_unsigned(), ts_str, task_id_val, payload_str))
+        })?;
+
+        let mut result = Vec::new();
+        for event_result in events {
+            let (seq_val, ts_str, task_id_val, payload_str) = event_result?;
+
+            // Parse timestamp
+            let ts = OffsetDateTime::parse(&ts_str, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| Error::Corrupt {
+                    detail: format!("Failed to parse timestamp: {ts_str}"),
+                    seq: Some(seq_val),
+                })?;
+
+            // Deserialize kind from payload
+            let kind: EventKind =
+                serde_json::from_str(&payload_str).map_err(|_| Error::Corrupt {
+                    detail: format!("Failed to deserialize payload for seq {seq_val}"),
+                    seq: Some(seq_val),
+                })?;
+
+            // Convert task_id (stored as i64 in SQLite, originally u32)
+            let task_id = task_id_val.map(|id| {
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let task_id_u32 = id as u32;
+                TaskId::new(task_id_u32)
+            });
+
+            result.push(Event {
+                seq: EventSeq::new(seq_val),
+                ts,
+                task_id,
+                kind,
+            });
+        }
+
+        Ok(result)
     }
 
     /// Initialize or validate the schema.
@@ -550,12 +726,12 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let journal_path = temp.path().join("journal.db");
 
-        let before = time::OffsetDateTime::now_utc();
+        let before = OffsetDateTime::now_utc();
         let mut journal = Journal::open(&journal_path).unwrap();
         let kind = EventKind::PreflightStarted;
 
         journal.append(None, &kind).unwrap();
-        let after = time::OffsetDateTime::now_utc();
+        let after = OffsetDateTime::now_utc();
 
         // Verify timestamp was stored
         let ts_str: String = journal
@@ -565,8 +741,7 @@ mod tests {
 
         // Parse the timestamp
         let ts =
-            time::OffsetDateTime::parse(&ts_str, &time::format_description::well_known::Rfc3339)
-                .unwrap();
+            OffsetDateTime::parse(&ts_str, &time::format_description::well_known::Rfc3339).unwrap();
 
         // Verify timestamp is within reasonable bounds (before and after)
         assert!(ts >= before);
@@ -646,6 +821,265 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count_after, 1, "Event should not be deleted");
+
+        drop(journal);
+    }
+
+    #[test]
+    fn events_empty_journal() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let journal = Journal::open(&journal_path).unwrap();
+        let events = journal.events().unwrap();
+
+        assert_eq!(events.len(), 0);
+        drop(journal);
+    }
+
+    #[test]
+    fn events_single_event() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind = EventKind::TaskQueued {
+            title: "Test task".to_string(),
+        };
+
+        journal.append(None, &kind).unwrap();
+
+        let events = journal.events().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].seq, EventSeq::new(1));
+        assert_eq!(events[0].task_id, None);
+        assert_eq!(events[0].kind, kind);
+
+        drop(journal);
+    }
+
+    #[test]
+    fn events_many_events() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+
+        // Append multiple events
+        for i in 1..=10 {
+            let kind = EventKind::TaskQueued {
+                title: format!("Task {i}"),
+            };
+            journal.append(None, &kind).unwrap();
+        }
+
+        let events = journal.events().unwrap();
+        assert_eq!(events.len(), 10);
+
+        // Verify ordering by sequence
+        for (i, event) in events.iter().enumerate() {
+            assert_eq!(event.seq, EventSeq::new((i + 1) as u64));
+        }
+
+        drop(journal);
+    }
+
+    #[test]
+    fn events_ordered_by_sequence() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+
+        // Append events with different task IDs to verify ordering is by seq, not insertion time
+        let kind1 = EventKind::TaskQueued {
+            title: "Task 1".to_string(),
+        };
+        let kind2 = EventKind::PreflightStarted;
+        let kind3 = EventKind::TaskQueued {
+            title: "Task 2".to_string(),
+        };
+
+        journal.append(None, &kind1).unwrap();
+        journal.append(None, &kind2).unwrap();
+        journal.append(None, &kind3).unwrap();
+
+        let events = journal.events().unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].seq, EventSeq::new(1));
+        assert_eq!(events[1].seq, EventSeq::new(2));
+        assert_eq!(events[2].seq, EventSeq::new(3));
+
+        drop(journal);
+    }
+
+    #[test]
+    fn events_for_empty_task() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind = EventKind::TaskQueued {
+            title: "Test task".to_string(),
+        };
+
+        // Append an event without a task_id
+        journal.append(None, &kind).unwrap();
+
+        // Query for a specific task that has no events
+        let events = journal.events_for(TaskId::new(42)).unwrap();
+        assert_eq!(events.len(), 0);
+
+        drop(journal);
+    }
+
+    #[test]
+    fn events_for_single_task() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind = EventKind::TaskQueued {
+            title: "Test task".to_string(),
+        };
+
+        let task_id = TaskId::new(42);
+        journal.append(Some(task_id), &kind).unwrap();
+
+        let events = journal.events_for(task_id).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].seq, EventSeq::new(1));
+        assert_eq!(events[0].task_id, Some(task_id));
+        assert_eq!(events[0].kind, kind);
+
+        drop(journal);
+    }
+
+    #[test]
+    fn events_for_multiple_tasks() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind1 = EventKind::TaskQueued {
+            title: "Task 1".to_string(),
+        };
+        let kind2 = EventKind::PreflightStarted;
+
+        let task1 = TaskId::new(1);
+        let task2 = TaskId::new(2);
+
+        // Interleave events from different tasks
+        journal.append(Some(task1), &kind1).unwrap(); // seq 1
+        journal.append(Some(task2), &kind2).unwrap(); // seq 2
+        journal.append(Some(task1), &kind2).unwrap(); // seq 3
+        journal.append(Some(task2), &kind1).unwrap(); // seq 4
+        journal.append(Some(task1), &kind1).unwrap(); // seq 5
+
+        let events_task1 = journal.events_for(task1).unwrap();
+        let events_task2 = journal.events_for(task2).unwrap();
+
+        assert_eq!(events_task1.len(), 3);
+        assert_eq!(events_task2.len(), 2);
+
+        // Verify ordering for task1
+        assert_eq!(events_task1[0].seq, EventSeq::new(1));
+        assert_eq!(events_task1[1].seq, EventSeq::new(3));
+        assert_eq!(events_task1[2].seq, EventSeq::new(5));
+
+        // Verify ordering for task2
+        assert_eq!(events_task2[0].seq, EventSeq::new(2));
+        assert_eq!(events_task2[1].seq, EventSeq::new(4));
+
+        drop(journal);
+    }
+
+    #[test]
+    fn events_since_empty() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let journal = Journal::open(&journal_path).unwrap();
+
+        let events = journal.events_since(EventSeq::new(0)).unwrap();
+        assert_eq!(events.len(), 0);
+
+        drop(journal);
+    }
+
+    #[test]
+    fn events_since_single_event() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind = EventKind::TaskQueued {
+            title: "Test task".to_string(),
+        };
+
+        journal.append(None, &kind).unwrap();
+
+        // Query for events since seq 0 (should return the event at seq 1)
+        let events = journal.events_since(EventSeq::new(0)).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].seq, EventSeq::new(1));
+
+        // Query for events since seq 1 (should be empty)
+        let events = journal.events_since(EventSeq::new(1)).unwrap();
+        assert_eq!(events.len(), 0);
+
+        drop(journal);
+    }
+
+    #[test]
+    fn events_since_multiple_events() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+
+        // Append 5 events
+        for i in 1..=5 {
+            let kind = EventKind::TaskQueued {
+                title: format!("Task {i}"),
+            };
+            journal.append(None, &kind).unwrap();
+        }
+
+        // Query for events since seq 2 (should return seq 3, 4, 5)
+        let events = journal.events_since(EventSeq::new(2)).unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].seq, EventSeq::new(3));
+        assert_eq!(events[1].seq, EventSeq::new(4));
+        assert_eq!(events[2].seq, EventSeq::new(5));
+
+        // Query for events since seq 4 (should return seq 5)
+        let events = journal.events_since(EventSeq::new(4)).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].seq, EventSeq::new(5));
+
+        // Query for events since seq 5 (should be empty)
+        let events = journal.events_since(EventSeq::new(5)).unwrap();
+        assert_eq!(events.len(), 0);
+
+        drop(journal);
+    }
+
+    #[test]
+    fn events_roundtrip_complex_kind() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind = EventKind::PreflightPassed {
+            base_sha: "abc123def456".to_string(),
+        };
+
+        journal.append(None, &kind).unwrap();
+
+        let events = journal.events().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, kind);
 
         drop(journal);
     }
