@@ -1598,5 +1598,262 @@ mod tests {
                 }
             );
         }
+
+        #[test]
+        #[allow(clippy::too_many_lines)]
+        fn every_illegal_transition_is_rejected() {
+            use std::collections::HashSet;
+
+            type EventConstructor = Box<dyn Fn(AttemptId) -> EventKind>;
+
+            let attempt1 = AttemptId::new(1);
+
+            let representative_states = vec![
+                ("Queued", TaskState::Queued),
+                ("Preflight", TaskState::Preflight),
+                (
+                    "Running",
+                    TaskState::Running {
+                        attempt: attempt1,
+                        phase: Phase::Implement,
+                    },
+                ),
+                (
+                    "Remediating",
+                    TaskState::Remediating {
+                        attempt: attempt1,
+                        phase: Phase::Red,
+                    },
+                ),
+                ("Verifying", TaskState::Verifying { attempt: attempt1 }),
+                ("Publishing", TaskState::Publishing { attempt: attempt1 }),
+                (
+                    "PublishedVerified",
+                    TaskState::PublishedVerified {
+                        commit: "abc123".to_string(),
+                    },
+                ),
+                (
+                    "Paused(Running)",
+                    TaskState::Paused {
+                        reason: PauseReason::Input,
+                        resume_to: Box::new(TaskState::Running {
+                            attempt: attempt1,
+                            phase: Phase::Implement,
+                        }),
+                    },
+                ),
+                ("Done", TaskState::Done),
+                (
+                    "Failed",
+                    TaskState::Failed {
+                        class: FailureClass::AgentFailure,
+                        detail: "failed".to_string(),
+                    },
+                ),
+                (
+                    "Acknowledged",
+                    TaskState::Acknowledged {
+                        by: "user".to_string(),
+                        at: OffsetDateTime::now_utc(),
+                    },
+                ),
+                ("Cancelled", TaskState::Cancelled),
+            ];
+
+            let event_constructors: Vec<(&str, EventConstructor)> = vec![
+                (
+                    "TaskQueued",
+                    Box::new(|_| EventKind::TaskQueued {
+                        title: "Test".to_string(),
+                    }),
+                ),
+                (
+                    "PreflightStarted",
+                    Box::new(|_| EventKind::PreflightStarted),
+                ),
+                (
+                    "PreflightPassed",
+                    Box::new(|_| EventKind::PreflightPassed {
+                        base_sha: "abc123".to_string(),
+                    }),
+                ),
+                (
+                    "PreflightFailed",
+                    Box::new(|_| EventKind::PreflightFailed {
+                        class: FailureClass::EnvironmentFailure,
+                        detail: "Missing tool".to_string(),
+                    }),
+                ),
+                (
+                    "AttemptStarted",
+                    Box::new(|attempt| EventKind::AttemptStarted {
+                        attempt,
+                        protocol: "direct".to_string(),
+                        pid: 1234,
+                        base_sha: "abc123".to_string(),
+                    }),
+                ),
+                (
+                    "PhaseEntered",
+                    Box::new(|attempt| EventKind::PhaseEntered {
+                        attempt,
+                        phase: Phase::Implement,
+                    }),
+                ),
+                (
+                    "AgentOutput",
+                    Box::new(|attempt| EventKind::AgentOutput {
+                        attempt,
+                        stream: crate::classify::Stream::Stdout,
+                        text: "output".to_string(),
+                    }),
+                ),
+                (
+                    "VerifyPassed",
+                    Box::new(|attempt| EventKind::VerifyPassed { attempt }),
+                ),
+                (
+                    "VerifyFailed",
+                    Box::new(|attempt| EventKind::VerifyFailed {
+                        attempt,
+                        class: FailureClass::VerificationFailure,
+                        detail: "Test failed".to_string(),
+                    }),
+                ),
+                (
+                    "PublishStarted",
+                    Box::new(|attempt| EventKind::PublishStarted {
+                        attempt,
+                        candidate_sha: "abc123".to_string(),
+                    }),
+                ),
+                (
+                    "PublishVerified",
+                    Box::new(|_| EventKind::PublishVerified {
+                        commit: "abc123".to_string(),
+                        remote_sha: "abc123".to_string(),
+                    }),
+                ),
+                (
+                    "TaskDone",
+                    Box::new(|_| EventKind::TaskDone {
+                        commit: "abc123".to_string(),
+                    }),
+                ),
+                (
+                    "TaskFailed",
+                    Box::new(|_| EventKind::TaskFailed {
+                        class: FailureClass::AgentFailure,
+                        detail: "failed".to_string(),
+                    }),
+                ),
+                (
+                    "TaskCancelled",
+                    Box::new(|_| EventKind::TaskCancelled {
+                        reason: "user requested".to_string(),
+                    }),
+                ),
+                (
+                    "Paused",
+                    Box::new(|_| EventKind::Paused {
+                        reason: PauseReason::Input,
+                    }),
+                ),
+                ("Resumed", Box::new(|_| EventKind::Resumed)),
+                (
+                    "Interrupted",
+                    Box::new(|_| EventKind::Interrupted {
+                        phase: Phase::Implement,
+                    }),
+                ),
+                (
+                    "RecoveryDecision",
+                    Box::new(|_| EventKind::RecoveryDecision {
+                        decision: crate::classify::Recovery::Resume,
+                        detail: "resuming".to_string(),
+                    }),
+                ),
+                (
+                    "GateAcknowledged",
+                    Box::new(|_| EventKind::GateAcknowledged {
+                        by: "user".to_string(),
+                        at: OffsetDateTime::now_utc(),
+                    }),
+                ),
+            ];
+
+            let legal_transitions: HashSet<(&str, &str)> = vec![
+                ("Queued", "TaskQueued"),
+                ("Queued", "PreflightStarted"),
+                ("Queued", "Paused"),
+                ("Queued", "TaskCancelled"),
+                ("Preflight", "PreflightStarted"),
+                ("Preflight", "PreflightPassed"),
+                ("Preflight", "PreflightFailed"),
+                ("Preflight", "AttemptStarted"),
+                ("Preflight", "Paused"),
+                ("Preflight", "TaskCancelled"),
+                ("Running", "PhaseEntered"),
+                ("Running", "AgentOutput"),
+                ("Running", "VerifyPassed"),
+                ("Running", "VerifyFailed"),
+                ("Running", "TaskFailed"),
+                ("Running", "Paused"),
+                ("Running", "Interrupted"),
+                ("Running", "TaskCancelled"),
+                ("Remediating", "PhaseEntered"),
+                ("Remediating", "AgentOutput"),
+                ("Remediating", "AttemptStarted"),
+                ("Remediating", "VerifyPassed"),
+                ("Remediating", "VerifyFailed"),
+                ("Remediating", "TaskFailed"),
+                ("Remediating", "Paused"),
+                ("Remediating", "Interrupted"),
+                ("Remediating", "TaskCancelled"),
+                ("Verifying", "PublishStarted"),
+                ("Verifying", "VerifyFailed"),
+                ("Verifying", "TaskFailed"),
+                ("Verifying", "Paused"),
+                ("Verifying", "Interrupted"),
+                ("Verifying", "TaskCancelled"),
+                ("Publishing", "PublishStarted"),
+                ("Publishing", "PublishVerified"),
+                ("Publishing", "TaskFailed"),
+                ("Publishing", "Paused"),
+                ("Publishing", "Interrupted"),
+                ("Publishing", "TaskCancelled"),
+                ("PublishedVerified", "TaskDone"),
+                ("PublishedVerified", "Paused"),
+                ("PublishedVerified", "Interrupted"),
+                ("PublishedVerified", "TaskCancelled"),
+                ("Paused(Running)", "Resumed"),
+                ("Paused(Running)", "Paused"),
+                ("Paused(Running)", "TaskCancelled"),
+            ]
+            .into_iter()
+            .collect();
+
+            for (state_name, state) in &representative_states {
+                for (event_name, event_fn) in &event_constructors {
+                    let attempt_for_event =
+                        if *state_name == "Remediating" && *event_name == "AttemptStarted" {
+                            AttemptId::new(2)
+                        } else {
+                            attempt1
+                        };
+
+                    let event = event_fn(attempt_for_event);
+                    let result = apply(state, &event);
+                    let is_legal = legal_transitions.contains(&(state_name, event_name));
+
+                    assert_eq!(
+                        result.is_ok(),
+                        is_legal,
+                        "Transition {state_name}+{event_name}: expected legal={is_legal}, got result={result:?}"
+                    );
+                }
+            }
+        }
     }
 }
