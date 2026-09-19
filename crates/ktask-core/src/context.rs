@@ -454,7 +454,7 @@ mod tests {
         assert!(context_template.exists());
 
         let content = std::fs::read_to_string(&context_template).unwrap();
-        assert!(content.len() > 0);
+        assert!(!content.is_empty());
     }
 
     #[test]
