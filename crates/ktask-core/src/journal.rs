@@ -541,6 +541,63 @@ impl Journal {
         Ok(result)
     }
 
+    /// Rebuild materialized state by replaying all events from the journal.
+    ///
+    /// Clears the `task_state` table and reconstructs the state for every task
+    /// by replaying all events through the state machine. This ensures that
+    /// the materialized state is consistent with the event journal, allowing
+    /// recovery from corruption or intentional clearing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The `task_state` table cannot be cleared
+    /// - Events cannot be read from the journal
+    /// - An invalid state transition is encountered (includes the offending sequence number)
+    /// - The state cannot be stored
+    pub fn rebuild_state(&mut self) -> Result<()> {
+        use crate::state;
+
+        // Clear the task_state table
+        self.conn.execute("DELETE FROM task_state", [])?;
+
+        // Collect all events
+        let events = self.events()?;
+
+        // Build a map of task_id -> list of events for that task
+        let mut task_events: BTreeMap<TaskId, Vec<Event>> = BTreeMap::new();
+        for event in events {
+            if let Some(task_id) = event.task_id {
+                task_events.entry(task_id).or_default().push(event);
+            }
+        }
+
+        // Replay events for each task
+        for (task_id, task_event_list) in task_events {
+            // Start with Queued state
+            let mut current_state = TaskState::Queued;
+
+            // Apply each event in order
+            for event in task_event_list {
+                current_state = state::apply(&current_state, &event.kind).map_err(|e| {
+                    // Convert invalid transition to Corrupt with sequence number
+                    match e {
+                        Error::InvalidTransition { from, event: evt } => Error::Corrupt {
+                            detail: format!("Invalid transition from {from} on {evt}"),
+                            seq: Some(event.seq.get()),
+                        },
+                        other => other,
+                    }
+                })?;
+            }
+
+            // Store the final state
+            self.put_state(task_id, &current_state)?;
+        }
+
+        Ok(())
+    }
+
     /// Initialize or validate the schema.
     ///
     /// Creates all tables and index if they don't exist, validates the
@@ -1764,5 +1821,388 @@ mod tests {
             assert_eq!(states.get(&TaskId::new(2)), Some(&TaskState::Preflight));
             drop(journal);
         }
+    }
+
+    #[test]
+    fn rebuild_state_from_empty_journal() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+
+        // Start with no events and no state
+        let states_before = journal.all_states().unwrap();
+        assert_eq!(states_before.len(), 0);
+
+        // Rebuild should succeed even with no events
+        journal.rebuild_state().unwrap();
+
+        let states_after = journal.all_states().unwrap();
+        assert_eq!(states_after.len(), 0);
+
+        drop(journal);
+    }
+
+    #[test]
+    fn rebuild_state_single_task_queued() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(1);
+
+        // Append a TaskQueued event
+        let kind = EventKind::TaskQueued {
+            title: "Test task".to_string(),
+        };
+        journal.append(Some(task_id), &kind).unwrap();
+
+        // Store some initial state (simulating previous work)
+        journal.put_state(task_id, &TaskState::Preflight).unwrap();
+
+        // Verify the state before rebuild
+        assert_eq!(
+            journal.get_state(task_id).unwrap(),
+            Some(TaskState::Preflight)
+        );
+
+        // Rebuild state
+        journal.rebuild_state().unwrap();
+
+        // After rebuild, state should be Queued (the result of replaying TaskQueued)
+        assert_eq!(journal.get_state(task_id).unwrap(), Some(TaskState::Queued));
+
+        drop(journal);
+    }
+
+    #[test]
+    fn rebuild_state_multiple_events_same_task() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(1);
+
+        // Append a sequence of events
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt: crate::ids::AttemptId::new(1),
+                    protocol: "direct".to_string(),
+                    pid: 1234,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+
+        // Store a wrong initial state
+        journal.put_state(task_id, &TaskState::Done).unwrap();
+
+        // Verify the wrong state before rebuild
+        assert_eq!(journal.get_state(task_id).unwrap(), Some(TaskState::Done));
+
+        // Rebuild state
+        journal.rebuild_state().unwrap();
+
+        // After rebuild, state should reflect the last event
+        let rebuilt_state = journal.get_state(task_id).unwrap().unwrap();
+        assert!(matches!(
+            rebuilt_state,
+            TaskState::Running {
+                attempt: crate::ids::AttemptId(1),
+                phase: crate::state::Phase::Goal,
+            }
+        ));
+
+        drop(journal);
+    }
+
+    #[test]
+    fn rebuild_state_multiple_tasks() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task1 = TaskId::new(1);
+        let task2 = TaskId::new(2);
+
+        // Add events for task 1
+        journal
+            .append(
+                Some(task1),
+                &EventKind::TaskQueued {
+                    title: "Task 1".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(Some(task1), &EventKind::PreflightStarted)
+            .unwrap();
+
+        // Add events for task 2
+        journal
+            .append(
+                Some(task2),
+                &EventKind::TaskQueued {
+                    title: "Task 2".to_string(),
+                },
+            )
+            .unwrap();
+
+        // Store wrong states
+        journal.put_state(task1, &TaskState::Done).unwrap();
+        journal
+            .put_state(
+                task2,
+                &TaskState::Failed {
+                    class: crate::classify::FailureClass::PolicyFailure,
+                    detail: "test".to_string(),
+                },
+            )
+            .unwrap();
+
+        // Rebuild state
+        journal.rebuild_state().unwrap();
+
+        // Verify rebuilt states
+        let states = journal.all_states().unwrap();
+        assert_eq!(states.len(), 2);
+        assert_eq!(states.get(&task1), Some(&TaskState::Preflight));
+        assert_eq!(states.get(&task2), Some(&TaskState::Queued));
+
+        drop(journal);
+    }
+
+    #[test]
+    fn rebuild_state_clears_before_replay() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task1 = TaskId::new(1);
+        let task2 = TaskId::new(2);
+
+        // Add events only for task1
+        journal
+            .append(
+                Some(task1),
+                &EventKind::TaskQueued {
+                    title: "Task 1".to_string(),
+                },
+            )
+            .unwrap();
+
+        // Store state for both task1 and task2
+        journal.put_state(task1, &TaskState::Preflight).unwrap();
+        journal.put_state(task2, &TaskState::Done).unwrap();
+
+        let states_before = journal.all_states().unwrap();
+        assert_eq!(states_before.len(), 2);
+
+        // Rebuild state
+        journal.rebuild_state().unwrap();
+
+        // After rebuild, only task1 should exist (task2 has no events)
+        let states_after = journal.all_states().unwrap();
+        assert_eq!(states_after.len(), 1);
+        assert!(states_after.contains_key(&task1));
+        assert!(!states_after.contains_key(&task2));
+
+        drop(journal);
+    }
+
+    #[test]
+    fn rebuild_state_reports_sequence_on_invalid_transition() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(1);
+
+        // Create a sequence of events that will result in an invalid transition
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .unwrap();
+
+        // Try to append an event that's invalid from Queued state
+        // (e.g., TaskDone is not allowed from Queued)
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskDone {
+                    commit: "def456".to_string(),
+                },
+            )
+            .unwrap();
+
+        // Rebuild should fail with the sequence number in the error
+        let result = journal.rebuild_state();
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            Error::Corrupt {
+                detail: _,
+                seq: Some(seq),
+            } => {
+                // The error should reference seq 2 (the TaskDone event)
+                assert_eq!(seq, 2);
+            }
+            e => panic!("Expected Corrupt error with sequence number, got: {e}"),
+        }
+
+        drop(journal);
+    }
+
+    #[test]
+    fn rebuild_state_consistency_with_incremental_writes() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let task_id = TaskId::new(1);
+
+        // First session: incrementally build state
+        {
+            let mut journal = Journal::open(&journal_path).unwrap();
+
+            journal
+                .append(
+                    Some(task_id),
+                    &EventKind::TaskQueued {
+                        title: "Test task".to_string(),
+                    },
+                )
+                .unwrap();
+            journal.put_state(task_id, &TaskState::Queued).unwrap();
+
+            journal
+                .append(Some(task_id), &EventKind::PreflightStarted)
+                .unwrap();
+            journal.put_state(task_id, &TaskState::Preflight).unwrap();
+
+            journal
+                .append(
+                    Some(task_id),
+                    &EventKind::PreflightPassed {
+                        base_sha: "abc123".to_string(),
+                    },
+                )
+                .unwrap();
+            journal.put_state(task_id, &TaskState::Preflight).unwrap();
+
+            drop(journal);
+        }
+
+        // Second session: rebuild and compare
+        {
+            let mut journal = Journal::open(&journal_path).unwrap();
+
+            // Get the state before rebuild
+            let state_before = journal.get_state(task_id).unwrap();
+
+            // Rebuild
+            journal.rebuild_state().unwrap();
+
+            // Get the state after rebuild
+            let state_after = journal.get_state(task_id).unwrap();
+
+            // They should be the same (both should be Preflight)
+            assert_eq!(state_before, state_after);
+            assert_eq!(state_after, Some(TaskState::Preflight));
+
+            drop(journal);
+        }
+    }
+
+    #[test]
+    fn rebuild_state_with_complex_state_transition() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(1);
+
+        // Build a complex sequence of events
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt: crate::ids::AttemptId::new(1),
+                    protocol: "direct".to_string(),
+                    pid: 1234,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PhaseEntered {
+                    attempt: crate::ids::AttemptId::new(1),
+                    phase: crate::state::Phase::Implement,
+                },
+            )
+            .unwrap();
+
+        // Store a wrong state
+        journal.put_state(task_id, &TaskState::Done).unwrap();
+
+        // Rebuild
+        journal.rebuild_state().unwrap();
+
+        // Verify the state matches the expected transition
+        let rebuilt_state = journal.get_state(task_id).unwrap().unwrap();
+        assert!(matches!(
+            rebuilt_state,
+            TaskState::Running {
+                phase: crate::state::Phase::Implement,
+                ..
+            }
+        ));
+
+        drop(journal);
     }
 }
