@@ -8,6 +8,9 @@
 #   model    = "<provider model id>"
 #
 # Changing anything else changes the experiment. Do not edit per run.
+executor = "claude"
+model = "claude-haiku-4-5-20251001"
+mainline_branch = "ktask-rs-haiku"
 
 project_dir = "."
 
