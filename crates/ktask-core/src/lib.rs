@@ -4,5 +4,7 @@
 //! the crate is the reason the invariants in VISION.md can be tested at all.
 
 pub mod error;
+pub mod ids;
 
 pub use error::{Error, Result};
+pub use ids::{AttemptId, EventSeq, TaskId};
