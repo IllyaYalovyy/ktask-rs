@@ -66,7 +66,9 @@ pub fn run_streaming(
     })?;
 
     // Write stdin if provided
-    if let Some(input) = stdin_data && let Some(mut stdin) = child.stdin.take() {
+    if let Some(input) = stdin_data
+        && let Some(mut stdin) = child.stdin.take()
+    {
         let _ = stdin.write_all(input.as_bytes());
     }
 
@@ -195,7 +197,8 @@ fn spawn_reader_thread(
             match reader.read(&mut raw_buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if let Some(slice) = raw_buf.get(..n) && let Ok(s) = std::str::from_utf8(slice)
+                    if let Some(slice) = raw_buf.get(..n)
+                        && let Ok(s) = std::str::from_utf8(slice)
                     {
                         if let Ok(mut output) = buf.lock() {
                             output.push_str(s);
