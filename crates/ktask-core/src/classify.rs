@@ -1040,7 +1040,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_reset_unparseable_returns_none() {
+    fn parse_reset_unparsable_returns_none() {
         use time::macros::offset;
         let now = OffsetDateTime::from_unix_timestamp(1_726_752_000)
             .unwrap()
