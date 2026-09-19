@@ -12,6 +12,7 @@ mod gate;
 pub mod git;
 mod ids;
 pub mod journal;
+pub mod lock;
 mod paths;
 mod project;
 mod queue;
