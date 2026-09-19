@@ -46,10 +46,7 @@ impl Bounds {
         // Check attempts bound first
         if attempts >= self.max_attempts {
             return Decision::Stop {
-                reason: format!(
-                    "max attempts exceeded: {} >= {}",
-                    attempts, self.max_attempts
-                ),
+                reason: format!("max attempts exceeded: {attempts} >= {}", self.max_attempts),
             };
         }
 
@@ -57,19 +54,19 @@ impl Bounds {
         if elapsed >= self.max_elapsed {
             return Decision::Stop {
                 reason: format!(
-                    "max elapsed time exceeded: {:?} >= {:?}",
-                    elapsed, self.max_elapsed
+                    "max elapsed time exceeded: {elapsed:?} >= {:?}",
+                    self.max_elapsed
                 ),
             };
         }
 
         // Check token budget
-        if let Some(max_tokens) = self.max_tokens {
-            if tokens >= max_tokens {
-                return Decision::Stop {
-                    reason: format!("token budget exceeded: {} >= {}", tokens, max_tokens),
-                };
-            }
+        if let Some(max_tokens) = self.max_tokens
+            && tokens >= max_tokens
+        {
+            return Decision::Stop {
+                reason: format!("token budget exceeded: {tokens} >= {max_tokens}"),
+            };
         }
 
         Decision::Continue
@@ -965,19 +962,19 @@ mod tests {
         let attempts_decision = bounds.should_continue(5, Duration::from_secs(100), 50_000);
         match attempts_decision {
             Decision::Stop { reason } => assert!(reason.contains("attempts")),
-            _ => panic!("Expected Stop decision"),
+            Decision::Continue => panic!("Expected Stop decision"),
         }
 
         let elapsed_decision = bounds.should_continue(3, Duration::from_secs(300), 50_000);
         match elapsed_decision {
             Decision::Stop { reason } => assert!(reason.contains("elapsed")),
-            _ => panic!("Expected Stop decision"),
+            Decision::Continue => panic!("Expected Stop decision"),
         }
 
         let tokens_decision = bounds.should_continue(3, Duration::from_secs(100), 100_000);
         match tokens_decision {
             Decision::Stop { reason } => assert!(reason.contains("token")),
-            _ => panic!("Expected Stop decision"),
+            Decision::Continue => panic!("Expected Stop decision"),
         }
     }
 }
