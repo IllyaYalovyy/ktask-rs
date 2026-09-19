@@ -145,30 +145,29 @@ pub fn check_model(configured: Option<&str>, reported: Option<&str>) -> Result<(
 pub fn build(config: &Config) -> Result<Box<dyn Provider>> {
     match config.provider.as_str() {
         "dummy" => {
-            let path = config.dummy_scenario_path.as_ref().ok_or_else(|| {
-                crate::Error::Config {
+            let path = config
+                .dummy_scenario_path
+                .as_ref()
+                .ok_or_else(|| crate::Error::Config {
                     key: "provider".to_string(),
                     detail: "dummy provider requires dummy_scenario_path to be set".to_string(),
-                }
-            })?;
+                })?;
             let content = std::fs::read_to_string(path).map_err(|e| crate::Error::Config {
                 key: "provider".to_string(),
-                detail: format!("failed to read scenario file at {}: {}", path.display(), e),
+                detail: format!("failed to read scenario file at {}: {e}", path.display()),
             })?;
-            let scenario: Scenario = toml::from_str(&content).map_err(|e| crate::Error::Config {
-                key: "provider".to_string(),
-                detail: format!("failed to parse scenario file: {}", e),
-            })?;
+            let scenario: Scenario =
+                toml::from_str(&content).map_err(|e| crate::Error::Config {
+                    key: "provider".to_string(),
+                    detail: format!("failed to parse scenario file: {e}"),
+                })?;
             Ok(Box::new(Dummy::new(scenario)))
         }
         "claude" => Ok(Box::new(Claude::new("claude".to_string()))),
         "codex" => Ok(Box::new(Codex::new("codex".to_string()))),
         name => Err(crate::Error::Config {
             key: "provider".to_string(),
-            detail: format!(
-                "unknown provider '{}'; valid options are: dummy, claude, codex",
-                name
-            ),
+            detail: format!("unknown provider '{name}'; valid options are: dummy, claude, codex"),
         }),
     }
 }
