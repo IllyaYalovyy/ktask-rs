@@ -18,8 +18,12 @@ pub mod claude;
 /// Codex CLI provider adapter.
 pub mod codex;
 
+/// Provider conformance test suite.
+pub mod conformance;
+
 pub use claude::Claude;
 pub use codex::Codex;
+pub use conformance::conformance_suite;
 pub use dummy::{Dummy, Scenario, Step, StepOutcome};
 pub use process::run_streaming;
 pub use usage::{Usage, UsageSource};
