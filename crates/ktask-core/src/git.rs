@@ -84,6 +84,13 @@
 //! caller and never defaulted, and status is asked for with its branch header
 //! for a reason that is easy to mistake for decoration.
 //!
+//! One of them is a rule rather than a fact, and is the only door here that
+//! answers `Error::Policy`: [`require_clean`] reads the same status records and
+//! refuses a tree holding anything outside a commit, naming every offending path
+//! under the kind it belongs to. VISION.md §10 makes a dirty tree at
+//! verification time a `policy_failure`, and this is where that becomes an error
+//! value instead of a clause in a document.
+//!
 //! # Task worktrees
 //!
 //! VISION.md §10 runs every task in its own checkout, and three calls make that
@@ -300,7 +307,8 @@ pub fn status_porcelain(root: &Path) -> Result<Vec<String>> {
 /// publish a commit has to know.
 ///
 /// This reports the fact and stops there. Naming the offending paths and
-/// refusing with [`Error::Policy`] is the dirty-tree check that sits on top.
+/// refusing with [`Error::Policy`] is [`require_clean`], which asks this
+/// question and stops being quiet when the answer is no.
 ///
 /// # Errors
 ///
@@ -309,6 +317,207 @@ pub fn status_porcelain(root: &Path) -> Result<Vec<String>> {
 /// a supervisor that heard otherwise would publish a commit it never made.
 pub fn is_clean(root: &Path) -> Result<bool> {
     Ok(status_porcelain(root)?.is_empty())
+}
+
+/// Where a porcelain record's path text begins: the two status columns and the
+/// space that follows them.
+const PATH_AT: usize = 3;
+
+/// The columns git prints for a path no commit and no index entry has ever held.
+const UNTRACKED_COLUMNS: &str = "??";
+
+/// What git prints between the two paths of a rename or a copy record.
+const RENAME_SEPARATOR: &str = " -> ";
+
+/// The rule [`require_clean`] refuses with, as the first half of the detail.
+const UNCOMMITTED: &str = "the tree holds uncommitted work";
+
+/// Which side of the repository a porcelain record says holds uncommitted work.
+///
+/// The three kinds are git's own and not a vocabulary this module invented: its
+/// first status column is the index against the commit, its second is the
+/// working tree against the index, and `??` is a path neither has ever held.
+/// They are also the three distinctions someone acts on — a staged path is
+/// waiting on `git commit`, a modified one on `git add` first, and an untracked
+/// one on a decision about whether it belongs to the task at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// The index holds a change that no commit contains.
+    Staged,
+    /// The working tree holds a change the index does not.
+    Modified,
+    /// Nothing has ever staged or committed this path.
+    Untracked,
+}
+
+/// Refuse a tree that holds anything outside a commit, naming every path.
+///
+/// VISION.md §10 states the rule in one clause — a dirty tree at verification
+/// time is a `policy_failure` — and [`is_clean`] answers whether it holds. This
+/// is the check that refuses when it does not, which makes it the only
+/// git-level door that answers [`Error::Policy`] rather than a git refusal: the
+/// tree did not fail, a rule about the tree did.
+///
+/// The refusal names **every** offending path. `Error::Policy` exists because
+/// naming one of several would send a human to the wrong file, and a count
+/// sends them to no file at all; the paths arrive in the order the kinds below
+/// are listed, each once however many kinds it belongs to.
+///
+/// # What each kind means, and where the answer comes from
+///
+/// Nothing here asks git a second question. [`status_porcelain`] returns
+/// `XY <path>` records with both columns intact, and the columns decide:
+///
+/// - **staged** — the first column is not a space. The index holds work no
+///   commit does, which is why this refuses rather than waiting: a supervisor
+///   about to verify a candidate commit cannot do so while the index holds a
+///   change that is not in it.
+/// - **modified** — the second column is not a space. The tree holds work the
+///   index has never seen.
+/// - **untracked** — the record is `??`, a path nothing has ever staged. This
+///   is dirty: a file an agent wrote and never added is exactly the work the
+///   rule is about.
+///
+/// A path can belong to two kinds at once: `MM` is staged *and* edited again,
+/// and an unmerged path (`UU`, `AA`) differs from both the commit and the index.
+/// Both are named in both kinds, because committing the index now would still
+/// leave the second half uncommitted — and understating either would be the
+/// check lying about the half it left out.
+///
+/// # What is deliberately not here
+///
+/// - **Ignored paths never trigger this.** git does not list them and neither
+///   does this, which is what lets a project that builds into its own tree
+///   reach verification at all. The defaults are git's, as [`is_clean`] sets
+///   out.
+/// - **A wholly untracked directory is one path.** git collapses it into a
+///   record naming the directory; the refusal reports that answer rather than
+///   asking git for a per-file listing (`-uall`) of its own.
+/// - **A rename names both paths.** git prints `R  from -> to`, and the rename
+///   is only half a change until both the path it left and the path it reached
+///   are committed.
+/// - **Paths are git's own text** — relative to `worktree`'s top level, with
+///   git's C-quoting left in. Unquoting a name here would make this module's
+///   parser the authority on a filename, which ADR-0041 declined for the
+///   queries and this check inherits.
+///
+/// `worktree` is the tree the check reads, and it is the *only* tree it reads:
+/// git runs inside it, so another checkout of the same repository being dirty
+/// cannot fail this one. That matters because VISION.md §10 puts each task in
+/// its own checkout and keeps the user's checkout out of the run.
+///
+/// # Errors
+///
+/// [`Error::Policy`] when anything is uncommitted, listing every offending path
+/// and naming each one's kind in the detail.
+///
+/// [`Error::Git`] when git refused to answer — `worktree` holds no repository,
+/// or its index is locked — propagated from [`status_porcelain`] unchanged. A
+/// tree this cannot read is never reported as a tree that is clean, and it is
+/// never a policy violation either: nothing was broken, nothing was measured.
+pub fn require_clean(worktree: &Path) -> Result<()> {
+    let records = status_porcelain(worktree)?;
+    if records.is_empty() {
+        return Ok(());
+    }
+    let mut staged = Vec::new();
+    let mut modified = Vec::new();
+    let mut untracked = Vec::new();
+    for (kind, path) in records.iter().flat_map(|record| dirt_of(record)) {
+        match kind {
+            Kind::Staged => staged.push(path),
+            Kind::Modified => modified.push(path),
+            Kind::Untracked => untracked.push(path),
+        }
+    }
+    let categories = [
+        ("staged", staged.as_slice()),
+        ("modified", modified.as_slice()),
+        ("untracked", untracked.as_slice()),
+    ];
+    Err(Error::Policy {
+        detail: format!(
+            "{UNCOMMITTED} at `{}`: {}",
+            worktree.display(),
+            listed_by_kind(&categories)
+        ),
+        paths: every_path(&categories),
+    })
+}
+
+/// One porcelain record, read as the (kind, path) pairs it reports.
+///
+/// The two status columns decide the kinds and nothing else is consulted, so a
+/// record that reports both columns lands in both kinds and a rename names both
+/// of its paths. A record with no path after its columns names nothing: it is
+/// still dirt — [`require_clean`] refuses on the record's existence — but an
+/// empty path in a message is a filename nobody can open.
+fn dirt_of(record: &str) -> Vec<(Kind, &str)> {
+    let untracked = record.starts_with(UNTRACKED_COLUMNS);
+    let kinds = [
+        (untracked, Kind::Untracked),
+        (!untracked && !record.starts_with(' '), Kind::Staged),
+        (
+            !untracked && record.chars().nth(1) != Some(' '),
+            Kind::Modified,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(dirty, kind)| dirty.then_some(kind))
+    .collect::<Vec<Kind>>();
+    paths_in(record)
+        .into_iter()
+        .flat_map(|path| kinds.iter().map(move |kind| (*kind, path)))
+        .collect()
+}
+
+/// The paths a record names: one for every status, and two for a rename or a
+/// copy, which git prints `from -> to`.
+///
+/// The separator is git's own, so a name that contains one arrives quoted — and
+/// stays quoted here rather than being second-guessed.
+fn paths_in(record: &str) -> Vec<&str> {
+    match record.get(PATH_AT..) {
+        None => Vec::new(),
+        Some(named) if record.starts_with(['R', 'C']) => named.split(RENAME_SEPARATOR).collect(),
+        Some(named) => vec![named],
+    }
+}
+
+/// Each kind that has paths, with every one of them named beside it.
+///
+/// A kind with nothing in it is left out entirely: `staged ()` in a message
+/// about a tree with nothing staged is a claim that something was there.
+fn listed_by_kind(categories: &[(&str, &[&str])]) -> String {
+    let mut listed = Vec::new();
+    for (label, paths) in categories {
+        if paths.is_empty() {
+            continue;
+        }
+        let named = paths
+            .iter()
+            .map(|path| format!("`{path}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        listed.push(format!("{label} ({named})"));
+    }
+    listed.join("; ")
+}
+
+/// Every path that broke the rule, once each, in the order the kinds list them.
+///
+/// A path belonging to two kinds is listed twice by [`dirt_of`] and named once
+/// here: the same filename twice in a row reads as two files needing attention.
+fn every_path(categories: &[(&str, &[&str])]) -> Vec<PathBuf> {
+    let mut named: Vec<&str> = Vec::new();
+    for (_label, paths) in categories {
+        for path in *paths {
+            if !named.contains(path) {
+                named.push(path);
+            }
+        }
+    }
+    named.into_iter().map(PathBuf::from).collect()
 }
 
 /// Ask `remote` what it holds, and update the local remote-tracking refs.
@@ -576,8 +785,8 @@ mod tests {
     use tempfile::{TempDir, tempdir};
 
     use super::{
-        Worktree, create_worktree, current_branch, fetch, git, git_env, head_sha, is_clean,
-        list_worktrees, remote_url, remove_worktree, status_porcelain,
+        Kind, Worktree, create_worktree, current_branch, dirt_of, fetch, git, git_env, head_sha,
+        is_clean, list_worktrees, remote_url, remove_worktree, require_clean, status_porcelain,
     };
     use crate::Error;
     // The repository-with-an-origin fixture is the crate-wide one, so that a
@@ -1182,6 +1391,471 @@ mod tests {
              {stderr}"
         );
         drop(scratch);
+    }
+
+    /// The refusal [`require_clean`] handed back, or a panic naming the variant
+    /// it actually arrived as.
+    fn refused_as_policy(error: &Error) -> (String, Vec<PathBuf>) {
+        let Error::Policy { detail, paths } = error else {
+            panic!(
+                "uncommitted work is a rule the tree broke, so it has to arrive as \
+                 Error::Policy carrying the paths; got: {error}"
+            );
+        };
+        (detail.clone(), paths.clone())
+    }
+
+    #[test]
+    fn a_tree_with_nothing_outside_a_commit_is_accepted() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        require_clean(&work).expect(
+            "the fixture's commit is committed, so there is nothing here to refuse: \
+                     this is the state publication starts from",
+        );
+        fixture
+            .commit("second.txt", "the second commit")
+            .expect("a second commit, so the answer is not an artifact of the first one");
+        require_clean(&work).expect("committing what was pending leaves nothing uncommitted");
+    }
+
+    #[test]
+    fn an_untracked_file_is_refused_and_named_as_untracked() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("notes.md"), "written by an agent, never staged\n")
+            .expect("an untracked file");
+
+        let error = require_clean(&work).expect_err(
+            "VISION.md §10 makes a dirty tree at verification time a \
+                         `policy_failure`, and a file nobody staged is that dirt",
+        );
+        let (detail, paths) = refused_as_policy(&error);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("notes.md")],
+            "the path itself, not a count: a report of '1 dirty path' sends nobody to the file \
+             that has to be committed"
+        );
+        assert!(
+            detail.contains("untracked (`notes.md`)"),
+            "`??` is the third kind, and naming it is what tells the reader nothing of this \
+             file is in the index yet: {detail}"
+        );
+        assert!(
+            !detail.contains("staged") && !detail.contains("modified"),
+            "an unstaged, untracked file belongs to exactly one kind: {detail}"
+        );
+        assert!(
+            error.to_string().contains("notes.md"),
+            "the rendered failure carries the path, because a journal line is all an operator \
+             reads afterwards: {error}"
+        );
+    }
+
+    #[test]
+    fn an_unstaged_edit_is_named_as_modified_and_not_as_staged() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::write(
+            work.join("seed.txt"),
+            "the first commit\nedited in the tree\n",
+        )
+        .expect("an edit that was never staged");
+
+        let error = require_clean(&work)
+            .expect_err("an edit sitting in the tree is work that never reached a commit");
+        let (detail, paths) = refused_as_policy(&error);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("seed.txt")],
+            "the edited file is named, and the edit is not described as a second path"
+        );
+        assert!(
+            detail.contains("modified (`seed.txt`)"),
+            "the worktree column is the one set here: {detail}"
+        );
+        assert!(
+            !detail.contains("staged"),
+            "the record is ` M seed.txt` — first column a space. ADR-0041 records that the \
+             transport's trim eats exactly that space from the first record, and a check reading \
+             `M seed.txt` would report this as staged and send someone to commit work the index \
+             has never seen: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_staged_change_is_named_as_staged_and_not_as_modified() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("staged.txt"), "added, and staged\n").expect("a new file");
+        git(&work, &["add", "--", "staged.txt"]).expect("stage it, and change nothing else");
+
+        let error = require_clean(&work).expect_err(
+            "work in the index is still work outside a commit: this asks what is \
+                         left to commit, not what is left to stage",
+        );
+        let (detail, paths) = refused_as_policy(&error);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("staged.txt")],
+            "one path, named once, though the record has two columns in it"
+        );
+        assert!(
+            detail.contains("staged (`staged.txt`)"),
+            "`A ` is the staged column set and the worktree column blank: {detail}"
+        );
+        assert!(
+            !detail.contains("modified"),
+            "the tree matches the index here, so calling it modified would point the reader at \
+             an edit that does not exist: {detail}"
+        );
+    }
+
+    #[test]
+    fn every_offending_path_is_named_in_the_kind_it_belongs_to() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("staged.txt"), "added, and staged\n").expect("a file for the index");
+        git(&work, &["add", "--", "staged.txt"]).expect("stage one file");
+        fs::write(work.join("seed.txt"), "the first commit\nedited\n").expect("an unstaged edit");
+        fs::write(work.join("notes.md"), "one untracked file\n").expect("untracked");
+        fs::write(work.join("other.md"), "a second untracked file\n").expect("untracked again");
+
+        let error = require_clean(&work)
+            .expect_err("four paths are uncommitted, and each belongs to a different kind");
+        let (detail, paths) = refused_as_policy(&error);
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("staged.txt"),
+                PathBuf::from("seed.txt"),
+                PathBuf::from("notes.md"),
+                PathBuf::from("other.md"),
+            ],
+            "all four, in the order the kinds are listed: a list that stops at the first path, \
+             or collapses to a count, leaves work nobody was told about"
+        );
+        assert_eq!(
+            detail,
+            format!(
+                "the tree holds uncommitted work at `{}`: staged (`staged.txt`); modified \
+                 (`seed.txt`); untracked (`notes.md`, `other.md`)",
+                work.display()
+            ),
+            "the rule, the directory it was checked in, and every path under the kind it \
+             broke — which is what lets a screen say what is wrong without re-running git"
+        );
+    }
+
+    #[test]
+    fn an_ignored_path_never_triggers_the_refusal() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fixture
+            .commit(".gitignore", "target/\n*.log\n")
+            .expect("two ignore rules, committed because the check reads what git reads");
+        fs::create_dir(work.join("target")).expect("a build output directory");
+        fs::write(work.join("target").join("artifact.bin"), "not source\n")
+            .expect("a file inside it");
+        fs::write(work.join("run.log"), "the gate's own output\n").expect("a file by glob");
+
+        require_clean(&work).expect(
+            "an ignored path is what the repository declared it never wants, not work an agent \
+             forgot to commit: a check that counted it would refuse every task in a project \
+             that builds into its own tree",
+        );
+    }
+
+    #[test]
+    fn a_change_staged_and_then_edited_again_is_named_once_under_both_kinds() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("both.txt"), "staged version\n").expect("a file");
+        git(&work, &["add", "--", "both.txt"]).expect("stage it");
+        fs::write(work.join("both.txt"), "and then edited again\n")
+            .expect("edit the same file after staging it");
+
+        let error = require_clean(&work)
+            .expect_err("`MM`: half of this work is in the index and half of it is not");
+        let (detail, paths) = refused_as_policy(&error);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("both.txt")],
+            "one path is one path, however many kinds it belongs to: the same filename twice \
+             in a row reads as two files that need attention"
+        );
+        assert!(
+            detail.contains("staged (`both.txt`)") && detail.contains("modified (`both.txt`)"),
+            "both halves are named, because committing the index now would still leave the \
+             later edit uncommitted: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_deletion_that_was_never_committed_is_refused_as_a_modified_path() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::remove_file(work.join("seed.txt")).expect("delete the seeded file in the tree");
+
+        let error = require_clean(&work).expect_err(
+            "a tree missing a file its commit contains is not a tree that has \
+                         nothing left to commit",
+        );
+        let (detail, paths) = refused_as_policy(&error);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("seed.txt")],
+            "the deleted file is the path an operator has to decide about"
+        );
+        assert!(
+            detail.contains("modified (`seed.txt`)") && !detail.contains("untracked"),
+            "a deletion is a change to a tracked path (` D`), never an untracked file: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_staged_rename_names_the_path_it_left_and_the_path_it_reached() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        git(&work, &["mv", "seed.txt", "renamed.txt"])
+            .expect("move a tracked file, which git records as a staged rename");
+
+        let error = require_clean(&work).expect_err("a rename in the index is uncommitted work");
+        let (detail, paths) = refused_as_policy(&error);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("seed.txt"), PathBuf::from("renamed.txt")],
+            "git prints a rename as `from -> to` and both halves are paths that differ from the \
+             commit: naming only the destination would hide the deletion the rename is half of"
+        );
+        assert!(
+            detail.contains("staged (`seed.txt`, `renamed.txt`)"),
+            "one record, one kind, both paths under it: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_wholly_untracked_directory_is_named_as_the_directory_git_collapses_it_to() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::create_dir(work.join("newdir")).expect("a directory nothing has ever tracked");
+        fs::write(work.join("newdir").join("one.txt"), "first\n").expect("a file inside it");
+        fs::write(work.join("newdir").join("two.txt"), "second\n").expect("a second file");
+
+        let error = require_clean(&work).expect_err("two untracked files are uncommitted work");
+        let (detail, paths) = refused_as_policy(&error);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("newdir/")],
+            "git collapses a wholly untracked directory into one record naming the directory, \
+             and the check reports that answer rather than a listing of its own: a directory \
+             that is itself entirely outside every commit is not misdescribed by naming it, and \
+             `-uall` would turn git's answer into this module's"
+        );
+        assert!(
+            !detail.contains("one.txt"),
+            "the files inside are named by the directory, exactly once each: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_path_git_quotes_is_named_exactly_as_git_printed_it() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("a file with spaces.txt"), "untracked\n").expect("a name git quotes");
+
+        let error = require_clean(&work).expect_err("a quoted name is still uncommitted work");
+        let (_detail, paths) = refused_as_policy(&error);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("\"a file with spaces.txt\"")],
+            "git's own record, quoting included (ADR-0041): unquoting it here would make this \
+             module's parser the authority on a filename, and a name git decided to quote for a \
+             reason would arrive changed"
+        );
+    }
+
+    #[test]
+    fn a_path_holding_gits_rename_separator_is_still_one_path() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("a -> b.txt"), "untracked\n")
+            .expect("a filename holding the two characters git uses to join a rename");
+
+        let error = require_clean(&work).expect_err("one untracked file is one dirty path");
+        let (_detail, paths) = refused_as_policy(&error);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("\"a -> b.txt\"")],
+            "one file, named once. ` -> ` separates git's two paths only inside an `R` or `C` \
+             record; splitting this one there would name `\"a` and `b.txt\"`, two files that \
+             exist nowhere, and leave the real one unreported"
+        );
+    }
+
+    #[test]
+    fn a_conflicted_merge_is_refused_and_the_conflicted_path_is_named() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fixture
+            .diverge("main")
+            .expect("both sides hold a commit writing the same new file");
+        fetch(&work, "origin").expect("bring the peer's commit into the remote-tracking ref");
+        git(&work, &["merge", "origin/main"])
+            .expect_err("the two sides wrote different bytes to one path, so nothing merges");
+
+        let error = require_clean(&work)
+            .expect_err("a tree holding a conflict holds work no commit contains");
+        let (detail, paths) = refused_as_policy(&error);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("diverged.txt")],
+            "the conflicted file is the path a human or a later attempt has to resolve"
+        );
+        assert!(
+            detail.contains("staged (`diverged.txt`)")
+                && detail.contains("modified (`diverged.txt`)"),
+            "`AA` sets both columns, which is git's way of saying neither side's content is in \
+             the commit and none of it is resolved: the refusal names it in both kinds rather \
+             than picking one and understating the state: {detail}"
+        );
+    }
+
+    #[test]
+    fn the_tree_checked_is_the_one_handed_over_not_another_checkout_of_the_same_repository() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let tree = create_worktree(&work, "task-7", fixture.seed_sha())
+            .expect("a task worktree at the seed commit");
+        fs::write(
+            work.join("left-in-the-checkout.txt"),
+            "the operator's own edit\n",
+        )
+        .expect("make the supervised checkout dirty");
+
+        require_clean(&tree).expect(
+            "the task's checkout is clean: VISION.md §10 keeps the user's checkout out of the \
+             run, so dirt in it is nobody's policy failure and must not stop the task",
+        );
+        fs::write(tree.join("unfinished.rs"), "half an edit\n").expect("dirt in the task tree");
+
+        let error = require_clean(&tree).expect_err("the same check, one file later");
+        let (detail, paths) = refused_as_policy(&error);
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("unfinished.rs")],
+            "the refusal names what is dirty in the tree it was handed, and the other \
+             checkout's file does not join the list: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_directory_that_is_not_a_repository_is_refused_by_git_rather_than_accepted() {
+        let scratch = tempdir().expect("a scratch directory to make a plain directory in");
+        let outside = scratch.path().join("not-a-repository");
+        fs::create_dir(&outside).expect("a plain directory, no repository in it");
+
+        let error = require_clean(&outside)
+            .expect_err("a directory with no repository in it has not been shown to be clean");
+        let (args, _) = refused(&error);
+        assert_eq!(
+            args.first().map(String::as_str),
+            Some("status"),
+            "the refusal is `Error::Git` from the status call, not a policy failure and not a \
+             pass: an unreadable tree is never a clean one, and a run that heard clean here \
+             would publish a commit it never made: {args:?}"
+        );
+        drop(scratch);
+    }
+
+    #[test]
+    fn each_porcelain_status_lands_in_the_kind_its_two_columns_describe() {
+        assert_eq!(
+            dirt_of("A  new.txt"),
+            vec![(Kind::Staged, "new.txt")],
+            "added to the index, index and tree agree"
+        );
+        assert_eq!(
+            dirt_of("M  mod.txt"),
+            vec![(Kind::Staged, "mod.txt")],
+            "the staged half of an edit, and only that half"
+        );
+        assert_eq!(
+            dirt_of("D  gone.txt"),
+            vec![(Kind::Staged, "gone.txt")],
+            "a staged deletion is work in the index"
+        );
+        assert_eq!(
+            dirt_of(" M mod.txt"),
+            vec![(Kind::Modified, "mod.txt")],
+            "the record a plain edit produces: first column a space"
+        );
+        assert_eq!(
+            dirt_of(" D gone.txt"),
+            vec![(Kind::Modified, "gone.txt")],
+            "a deletion in the tree, never staged"
+        );
+        assert_eq!(
+            dirt_of("MM both.txt"),
+            vec![(Kind::Staged, "both.txt"), (Kind::Modified, "both.txt")],
+            "staged and then edited again: both columns, so both kinds"
+        );
+        assert_eq!(
+            dirt_of("AM added.txt"),
+            vec![(Kind::Staged, "added.txt"), (Kind::Modified, "added.txt")],
+            "added to the index, then changed again in the tree"
+        );
+        assert_eq!(
+            dirt_of("UU both.txt"),
+            vec![(Kind::Staged, "both.txt"), (Kind::Modified, "both.txt")],
+            "an unmerged path differs on both sides, and is refused as such"
+        );
+        assert_eq!(
+            dirt_of("?? new.txt"),
+            vec![(Kind::Untracked, "new.txt")],
+            "untracked is its own kind and never also the other two"
+        );
+        assert_eq!(
+            dirt_of("?? \"a quoted name.txt\""),
+            vec![(Kind::Untracked, "\"a quoted name.txt\"")],
+            "the path is what git printed, quoting included"
+        );
+        assert_eq!(
+            dirt_of("R  from.txt -> to.txt"),
+            vec![(Kind::Staged, "from.txt"), (Kind::Staged, "to.txt")],
+            "git's `from -> to` is two paths, both dirty in the same kind"
+        );
+        assert_eq!(
+            dirt_of("C  from.txt -> to.txt"),
+            vec![(Kind::Staged, "from.txt"), (Kind::Staged, "to.txt")],
+            "a staged copy is printed the same way a rename is"
+        );
+        assert_eq!(
+            dirt_of("RM from.txt -> to.txt"),
+            vec![
+                (Kind::Staged, "from.txt"),
+                (Kind::Modified, "from.txt"),
+                (Kind::Staged, "to.txt"),
+                (Kind::Modified, "to.txt"),
+            ],
+            "renamed in the index and edited in the tree: both kinds for each of the two paths"
+        );
+    }
+
+    #[test]
+    fn a_record_with_no_path_after_its_status_columns_names_no_path() {
+        assert_eq!(
+            dirt_of("M "),
+            Vec::<(Kind, &str)>::new(),
+            "a record with nothing after the columns cannot name a path, and inventing an empty \
+             one would put a filename nobody can open into the message an operator reads"
+        );
+        assert_eq!(
+            dirt_of(""),
+            Vec::<(Kind, &str)>::new(),
+            "not even a status to read: nothing to name"
+        );
     }
 
     #[test]
