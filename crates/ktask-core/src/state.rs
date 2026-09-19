@@ -597,12 +597,9 @@ fn from_paused(
 
     match event {
         EventKind::Resumed => Ok(resume_to.clone()),
-        EventKind::Paused { reason: new_reason } => Ok(TaskState::Paused {
-            reason: new_reason.clone(),
-            resume_to: Box::new(resume_to.clone()),
-        }),
         EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
-        EventKind::TaskQueued { .. }
+        EventKind::Paused { .. }
+        | EventKind::TaskQueued { .. }
         | EventKind::PreflightStarted
         | EventKind::PreflightPassed { .. }
         | EventKind::PreflightFailed { .. }
@@ -1479,14 +1476,8 @@ mod tests {
             let event = EventKind::Paused {
                 reason: PauseReason::HumanGate,
             };
-            let result = apply(&state, &event).expect("transition");
-            assert_eq!(
-                result,
-                TaskState::Paused {
-                    reason: PauseReason::HumanGate,
-                    resume_to: resume_to.clone()
-                }
-            );
+            let err = apply(&state, &event).expect_err("nested pause should be rejected");
+            assert!(err.to_string().contains("Paused"));
         }
 
         #[test]
@@ -1828,7 +1819,6 @@ mod tests {
                 ("PublishedVerified", "Interrupted"),
                 ("PublishedVerified", "TaskCancelled"),
                 ("Paused(Running)", "Resumed"),
-                ("Paused(Running)", "Paused"),
                 ("Paused(Running)", "TaskCancelled"),
             ]
             .into_iter()
@@ -1853,6 +1843,121 @@ mod tests {
                         "Transition {state_name}+{event_name}: expected legal={is_legal}, got result={result:?}"
                     );
                 }
+            }
+        }
+
+        #[test]
+        fn pause_and_resume_returns_original_state_for_all_non_terminal_states() {
+            let attempt1 = AttemptId::new(1);
+
+            let non_terminal_states = vec![
+                ("Queued", TaskState::Queued),
+                ("Preflight", TaskState::Preflight),
+                (
+                    "Running",
+                    TaskState::Running {
+                        attempt: attempt1,
+                        phase: Phase::Implement,
+                    },
+                ),
+                (
+                    "Remediating",
+                    TaskState::Remediating {
+                        attempt: attempt1,
+                        phase: Phase::Red,
+                    },
+                ),
+                ("Verifying", TaskState::Verifying { attempt: attempt1 }),
+                ("Publishing", TaskState::Publishing { attempt: attempt1 }),
+                (
+                    "PublishedVerified",
+                    TaskState::PublishedVerified {
+                        commit: "abc123".to_string(),
+                    },
+                ),
+            ];
+
+            for (state_name, state) in non_terminal_states {
+                let pause_event = EventKind::Paused {
+                    reason: PauseReason::Input,
+                };
+                let paused_state =
+                    apply(&state, &pause_event).unwrap_or_else(|_| panic!("pause {state_name}"));
+                assert!(
+                    paused_state.is_paused(),
+                    "{state_name} should be paused after Paused event"
+                );
+
+                let resume_event = EventKind::Resumed;
+                let resumed_state = apply(&paused_state, &resume_event)
+                    .unwrap_or_else(|_| panic!("resume from {state_name}"));
+                assert_eq!(
+                    resumed_state, state,
+                    "{state_name}: resumed state should equal original state"
+                );
+            }
+        }
+
+        #[test]
+        fn nested_pauses_are_rejected_from_all_pause_reasons() {
+            let pause_reasons = vec![
+                PauseReason::Limit { until: None },
+                PauseReason::Input,
+                PauseReason::HumanGate,
+                PauseReason::Interrupted,
+                PauseReason::Blocked,
+            ];
+
+            for initial_reason in &pause_reasons {
+                let state = TaskState::Paused {
+                    reason: initial_reason.clone(),
+                    resume_to: Box::new(TaskState::Queued),
+                };
+
+                for new_reason in &pause_reasons {
+                    let event = EventKind::Paused {
+                        reason: new_reason.clone(),
+                    };
+                    let err = apply(&state, &event).expect_err("nested pause should be rejected");
+                    assert!(
+                        err.to_string().contains("Paused"),
+                        "Error should mention Paused state"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn pausing_terminal_states_is_rejected() {
+            let terminal_states = vec![
+                ("Done", TaskState::Done),
+                (
+                    "Failed",
+                    TaskState::Failed {
+                        class: FailureClass::AgentFailure,
+                        detail: "failed".to_string(),
+                    },
+                ),
+                ("Cancelled", TaskState::Cancelled),
+                (
+                    "Acknowledged",
+                    TaskState::Acknowledged {
+                        by: "user".to_string(),
+                        at: OffsetDateTime::now_utc(),
+                    },
+                ),
+            ];
+
+            for (state_name, state) in terminal_states {
+                let pause_event = EventKind::Paused {
+                    reason: PauseReason::Input,
+                };
+                let err = apply(&state, &pause_event)
+                    .expect_err(&format!("pausing terminal state {state_name}"));
+                assert!(
+                    err.to_string().contains(state_name),
+                    "Error should mention {state_name}"
+                );
             }
         }
     }
