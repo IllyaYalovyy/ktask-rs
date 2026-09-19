@@ -929,6 +929,14 @@ mod sessions {
     const ROOMY_IDLE: Duration = Duration::from_secs(5);
     const ROOMY_HARD: Duration = Duration::from_secs(20);
 
+    /// An idle budget short enough that a test can watch it expire, and the
+    /// margin both idle-watchdog tests below measure themselves against.
+    ///
+    /// Four hundred milliseconds: long enough that a scheduler which delivers a
+    /// `sleep 0.05` a few frames late is not mistaken for a hung session, and
+    /// short enough that a hang is caught in well under a second.
+    const SILENCE_BUDGET: Duration = Duration::from_millis(400);
+
     /// A session whose whole program is `script`.
     fn session(script: &str) -> Command {
         let mut cmd = Command::new(SHELL);
@@ -1367,6 +1375,186 @@ ps -o pgid= -p $$ | tr -d ' ' | sed 's/^/own_group=/'
             "the idle timer is re-armed by each chunk, so a session slower in total than \
              its idle budget still finishes: it was stopped after {:?}",
             started.elapsed()
+        );
+    }
+
+    /// The duration an answer names right after `phrase`, read back as the
+    /// milliseconds it was written with.
+    ///
+    /// What a watchdog reports is the only place a caller can learn how quiet a
+    /// session had gotten, so the two tests below take the number out of the words
+    /// and compare it, rather than trusting that words to have been printed.
+    fn reported_millis(detail: &str, phrase: &str) -> Duration {
+        let at = detail
+            .find(phrase)
+            .unwrap_or_else(|| panic!("the answer was to name {phrase:?}: {detail}"));
+        let digits: String = detail[at + phrase.len()..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        let millis: u64 = digits.parse().unwrap_or_else(|failure| {
+            panic!("`{phrase}` was to be followed by a millisecond count: {failure}: {detail}")
+        });
+        assert!(
+            detail[at + phrase.len() + digits.len()..].starts_with("ms"),
+            "milliseconds are the unit an answer names a duration with: {detail}"
+        );
+        Duration::from_millis(millis)
+    }
+
+    /// The first half of the outcome T058 states: a session that stops talking is
+    /// stopped, and what it is reported for is the silence it fell into.
+    #[test]
+    fn idle_watchdog_kills_a_silent_session() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the pid file");
+        let own_file = scratch.path().join("own");
+        // One line, then its own pid, then thirty seconds of sleep — seventy-five
+        // times the budget it is being watched by. The pid goes to a file and not to
+        // stdout, so reading it back cannot re-arm the clock under test.
+        let script = format!(
+            "printf 'hello\\n'; echo $$ > '{}'; exec sleep 30",
+            own_file.display()
+        );
+        let started = Instant::now();
+
+        let error = run_streaming(
+            &mut session(&script),
+            None,
+            SILENCE_BUDGET,
+            ROOMY_HARD,
+            None,
+        )
+        .expect_err("a session that printed once and then slept through its idle budget hung");
+        let detail = refusal(&error);
+        let waited = started.elapsed();
+
+        let silence = reported_millis(&detail, "silent for ");
+        assert!(
+            silence >= SILENCE_BUDGET,
+            "the answer names the silence it measured, and a watchdog that fired before its \
+             budget was spent stopped a session that had done nothing wrong: reported \
+             {silence:?} against a budget of {SILENCE_BUDGET:?}: {detail}"
+        );
+        assert!(
+            silence < Duration::from_secs(10),
+            "the figure is the gap since the last line arrived — not the thirty seconds the \
+             session meant to sleep, and not its whole life since the spawn: reported \
+             {silence:?} for a session stopped {waited:?} after it printed: {detail}"
+        );
+        assert!(
+            detail.contains("idle timeout"),
+            "the answer names which clock expired, so a hang is tellable from an overlong \
+             run without parsing a number: {detail}"
+        );
+        assert!(
+            !detail.contains("hard timeout"),
+            "this session never came near its ceiling, and an answer naming the other clock \
+             would send a caller looking at the wrong one: {detail}"
+        );
+        assert!(
+            detail.contains("read 6 bytes of stdout and 0 bytes of stderr"),
+            "the one line it managed to print is the evidence a hang gets classified from, \
+             and it survives the kill: {detail}"
+        );
+        assert!(
+            detail.contains("stopped by SIGTERM"),
+            "the watchdog stopped it rather than reporting on it and walking away, and the \
+             answer says how: {detail}"
+        );
+
+        let own = pid_written_to(&own_file);
+        assert!(
+            wait_until_group_is_empty(own, Duration::from_secs(5)).is_empty(),
+            "the answer called the session stopped while pid {own} was still in its group: a \
+             hung CLI holding a lock file, a port or a credential would be handed to the \
+             next attempt"
+        );
+        assert!(
+            !is_running(own),
+            "pid {own} was still executing after the run that reported killing it"
+        );
+        assert!(
+            waited >= SILENCE_BUDGET && waited < Duration::from_secs(10),
+            "the idle clock was enforced and not merely recorded: waited {waited:?} for a \
+             budget of {SILENCE_BUDGET:?}, against a session that intended 30s and a ceiling \
+             of {ROOMY_HARD:?}"
+        );
+
+        // The same hang one step later in a session that had been talking, which is the
+        // case the reported figure is actually asked to describe. Eight lines inside the
+        // budget and then silence: the session is old and quiet at once, and only one of
+        // those two numbers is the fact a hang is classified from. A deadline or a
+        // report keyed to the spawn instead of the last chunk answers this one wrong.
+        let hang_session = "i=1; while [ $i -le 8 ]; do printf 'tick %d\\n' $i; \
+                            i=$((i+1)); sleep 0.15; done; exec sleep 30";
+        let hang_started = Instant::now();
+        let hang_error = run_streaming(
+            &mut session(hang_session),
+            None,
+            SILENCE_BUDGET,
+            ROOMY_HARD,
+            None,
+        )
+        .expect_err("a session that answered eight times and then stopped answering is the ordinary shape of a hang");
+        let hang_detail = refusal(&hang_error);
+        let hang_waited = hang_started.elapsed();
+
+        let hang_silence = reported_millis(&hang_detail, "silent for ");
+        assert!(
+            hang_silence >= SILENCE_BUDGET && hang_silence < SILENCE_BUDGET * 2,
+            "the silence is measured from the last line that arrived, not from the moment \
+             the session was spawned: it had been alive {hang_waited:?} and quiet \
+             {hang_silence:?} against a budget of {SILENCE_BUDGET:?}: {hang_detail}"
+        );
+        assert!(
+            hang_waited >= SILENCE_BUDGET * 3,
+            "three budgets of talking preceded the silence, so the figure above cannot be \
+             the session's age and is not held open by it: it lived {hang_waited:?} on a \
+             budget of {SILENCE_BUDGET:?}: {hang_detail}"
+        );
+        assert!(
+            hang_detail.contains("idle timeout") && !hang_detail.contains("hard timeout"),
+            "the silence ended this session too, whatever it had been doing beforehand, and \
+             a session that reaches its ceiling after a long conversation is a different \
+             failure than this one: {hang_detail}"
+        );
+    }
+
+    /// The other half of the same outcome: a session that keeps answering is slow and
+    /// not gone, so it outlives the clock a silent session dies on. It prints well
+    /// inside its budget every time and runs for several budgets' worth of wall
+    /// clock — a deadline fixed at the spawn would have stopped it mid-sentence.
+    #[test]
+    fn idle_watchdog_spares_a_session_that_keeps_answering() {
+        use std::fmt::Write as _;
+
+        let started = Instant::now();
+        let outcome = run_streaming(
+            &mut session(
+                "i=1; while [ $i -le 20 ]; do printf 'tick %d\\n' $i; i=$((i+1)); sleep 0.05; done",
+            ),
+            None,
+            SILENCE_BUDGET,
+            ROOMY_HARD,
+            None,
+        )
+        .expect("a session that printed every 50ms against a 400ms budget is slow, not gone");
+        let talked = started.elapsed();
+
+        let mut ticks = String::new();
+        for tick in 1..=20 {
+            writeln!(&mut ticks, "tick {tick}").expect("a String cannot refuse a write");
+        }
+        assert_eq!(
+            outcome.stdout, ticks,
+            "every line a living session printed is kept, in order"
+        );
+        assert_eq!(outcome.exit_code, 0);
+        assert!(
+            talked >= SILENCE_BUDGET * 2,
+            "the session was alive through two idle budgets' worth of silence it never fell \
+             into, which is the whole point of re-arming: it finished after {talked:?} on a \
+             budget of {SILENCE_BUDGET:?}"
         );
     }
 
