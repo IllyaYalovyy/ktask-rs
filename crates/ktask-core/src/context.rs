@@ -5,6 +5,7 @@
 
 use crate::{AttemptId, Project, Task};
 use std::fmt::Write;
+use std::path::Path;
 
 /// Assemble a complete prompt for the AI agent.
 ///
@@ -158,6 +159,69 @@ fn load_template_with(
     let global_template = prompt_lib.join("task.md");
 
     std::fs::read_to_string(&global_template).map_err(Into::into)
+}
+
+/// Collect all architecture decision records (ADRs) from the repository.
+///
+/// Reads all ADR files from `docs/adr/` in the repository root, skipping the
+/// template file (`0000-template.md`). Files are read in alphabetical order.
+///
+/// If the `docs/adr` directory does not exist, returns an empty list without error.
+///
+/// # Arguments
+///
+/// * `repo_root` - The root path of the repository
+///
+/// # Returns
+///
+/// A vector of ADR file contents as strings.
+///
+/// # Errors
+///
+/// Returns an error if reading the ADR directory or any ADR files fails.
+pub fn collect_adrs(repo_root: &Path) -> crate::Result<Vec<String>> {
+    let adr_dir = repo_root.join("docs/adr");
+
+    // If the directory doesn't exist, return empty list
+    if !adr_dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let mut adr_files = Vec::new();
+
+    // Read all .md files from the adr directory
+    for entry in std::fs::read_dir(&adr_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        // Only process markdown files
+        if path.extension().and_then(|s| s.to_str()) == Some("md") {
+            let file_name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            // Skip the template file
+            if file_name == "0000-template.md" {
+                continue;
+            }
+
+            adr_files.push(path);
+        }
+    }
+
+    // Sort files by name to ensure consistent order
+    adr_files.sort();
+
+    // Read each file and collect the content
+    let mut adrs = Vec::new();
+    for path in adr_files {
+        let content = std::fs::read_to_string(&path)?;
+        adrs.push(content);
+    }
+
+    Ok(adrs)
 }
 
 #[cfg(test)]
@@ -560,5 +624,112 @@ mod tests {
 
         // Defaults should have been created
         assert!(prompt_lib.join("task.md").exists());
+    }
+
+    #[test]
+    fn context_collect_adrs_returns_empty_for_missing_directory() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let result = collect_adrs(temp.path());
+        assert!(result.is_ok());
+
+        let empty: Vec<String> = vec![];
+        assert_eq!(result.unwrap(), empty);
+    }
+
+    #[test]
+    fn context_collect_adrs_skips_template_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let adr_dir = temp.path().join("docs/adr");
+        std::fs::create_dir_all(&adr_dir).unwrap();
+
+        // Create template and other files
+        std::fs::write(adr_dir.join("0000-template.md"), "# Template\n").unwrap();
+        std::fs::write(adr_dir.join("0001-decision.md"), "# Decision 1\n").unwrap();
+
+        let result = collect_adrs(temp.path());
+        assert!(result.is_ok());
+        let adrs = result.unwrap();
+
+        // Should only have one ADR (not the template)
+        assert_eq!(adrs.len(), 1);
+        assert!(adrs[0].contains("# Decision 1"));
+        assert!(!adrs[0].contains("# Template"));
+    }
+
+    #[test]
+    fn context_collect_adrs_reads_in_alphabetical_order() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let adr_dir = temp.path().join("docs/adr");
+        std::fs::create_dir_all(&adr_dir).unwrap();
+
+        // Create ADR files in non-alphabetical order
+        std::fs::write(adr_dir.join("0003-third.md"), "# Third\n").unwrap();
+        std::fs::write(adr_dir.join("0001-first.md"), "# First\n").unwrap();
+        std::fs::write(adr_dir.join("0002-second.md"), "# Second\n").unwrap();
+
+        let result = collect_adrs(temp.path());
+        assert!(result.is_ok());
+        let adrs = result.unwrap();
+
+        assert_eq!(adrs.len(), 3);
+        assert!(adrs[0].contains("# First"));
+        assert!(adrs[1].contains("# Second"));
+        assert!(adrs[2].contains("# Third"));
+    }
+
+    #[test]
+    fn context_collect_adrs_ignores_non_markdown_files() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let adr_dir = temp.path().join("docs/adr");
+        std::fs::create_dir_all(&adr_dir).unwrap();
+
+        // Create mixed file types
+        std::fs::write(adr_dir.join("0001-decision.md"), "# Decision\n").unwrap();
+        std::fs::write(adr_dir.join("0002-note.txt"), "# Note\n").unwrap();
+        std::fs::write(adr_dir.join("0003-readme"), "# Readme\n").unwrap();
+
+        let result = collect_adrs(temp.path());
+        assert!(result.is_ok());
+        let adrs = result.unwrap();
+
+        // Should only have one ADR (only .md files)
+        assert_eq!(adrs.len(), 1);
+        assert!(adrs[0].contains("# Decision"));
+    }
+
+    #[test]
+    fn context_collect_adrs_multiple_files() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let adr_dir = temp.path().join("docs/adr");
+        std::fs::create_dir_all(&adr_dir).unwrap();
+
+        // Create multiple ADR files
+        std::fs::write(
+            adr_dir.join("0001-architecture.md"),
+            "# ADR 1\n\nUse Rust for implementation\n",
+        )
+        .unwrap();
+        std::fs::write(
+            adr_dir.join("0002-storage.md"),
+            "# ADR 2\n\nUse SQLite for state\n",
+        )
+        .unwrap();
+        std::fs::write(
+            adr_dir.join("0000-template.md"),
+            "# Template\n\nThis is the template\n",
+        )
+        .unwrap();
+
+        let result = collect_adrs(temp.path());
+        assert!(result.is_ok());
+        let adrs = result.unwrap();
+
+        // Should have two ADRs (template is skipped)
+        assert_eq!(adrs.len(), 2);
+        assert!(adrs[0].contains("ADR 1"));
+        assert!(adrs[0].contains("Rust"));
+        assert!(adrs[1].contains("ADR 2"));
+        assert!(adrs[1].contains("SQLite"));
     }
 }
