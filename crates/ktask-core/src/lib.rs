@@ -26,7 +26,7 @@ pub mod task;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
-pub use attempt::AttemptRecord;
+pub use attempt::{AttemptRecord, read_evidence, write_evidence};
 pub use classify::{FailureClass, Recovery, Stream, TddException};
 pub use config::Config;
 pub use error::{Error, Result};
