@@ -162,6 +162,38 @@ pub fn check_one_active(states: &BTreeMap<TaskId, TaskState>) -> Result<()> {
     }
 }
 
+/// Check that all predecessors have reached a published or terminal state.
+///
+/// A task cannot start before all tasks with lower IDs have been completed,
+/// cancelled, or verified as published. This enforces the ordering invariant.
+///
+/// # Errors
+///
+/// Returns `Error::Policy` if any predecessor is not in `Done`, `Cancelled`, or `PublishedVerified` state.
+pub fn check_predecessor(states: &BTreeMap<TaskId, TaskState>, next: TaskId) -> Result<()> {
+    for (id, state) in states {
+        if *id >= next {
+            continue;
+        }
+
+        if !matches!(
+            state,
+            TaskState::Done | TaskState::Cancelled | TaskState::PublishedVerified { .. }
+        ) {
+            return Err(Error::Policy {
+                detail: format!(
+                    "task {} cannot start because predecessor task {} is in state {}",
+                    next,
+                    id,
+                    state.name()
+                ),
+                paths: vec![],
+            });
+        }
+    }
+    Ok(())
+}
+
 fn from_queued(event: &crate::event::EventKind) -> Result<TaskState> {
     use crate::event::EventKind;
 
@@ -2046,5 +2078,130 @@ mod tests {
 
         let result = check_one_active(&states);
         assert!(result.is_ok(), "should allow zero active tasks");
+    }
+
+    #[test]
+    fn check_predecessor_allows_starting_when_all_predecessors_are_done() {
+        let mut states = BTreeMap::new();
+        states.insert(TaskId::new(1), TaskState::Done);
+        states.insert(TaskId::new(2), TaskState::Done);
+
+        let result = check_predecessor(&states, TaskId::new(3));
+        assert!(
+            result.is_ok(),
+            "task 3 should be allowed when predecessors are done"
+        );
+    }
+
+    #[test]
+    fn check_predecessor_allows_starting_when_all_predecessors_are_cancelled() {
+        let mut states = BTreeMap::new();
+        states.insert(TaskId::new(1), TaskState::Cancelled);
+        states.insert(TaskId::new(2), TaskState::Cancelled);
+
+        let result = check_predecessor(&states, TaskId::new(3));
+        assert!(
+            result.is_ok(),
+            "task 3 should be allowed when predecessors are cancelled"
+        );
+    }
+
+    #[test]
+    fn check_predecessor_allows_starting_when_all_predecessors_are_published_verified() {
+        let mut states = BTreeMap::new();
+        states.insert(
+            TaskId::new(1),
+            TaskState::PublishedVerified {
+                commit: "abc123".to_string(),
+            },
+        );
+        states.insert(
+            TaskId::new(2),
+            TaskState::PublishedVerified {
+                commit: "def456".to_string(),
+            },
+        );
+
+        let result = check_predecessor(&states, TaskId::new(3));
+        assert!(
+            result.is_ok(),
+            "task 3 should be allowed when predecessors are published verified"
+        );
+    }
+
+    #[test]
+    fn check_predecessor_blocks_successor_when_predecessor_is_pending() {
+        let mut states = BTreeMap::new();
+        states.insert(TaskId::new(1), TaskState::Queued);
+        states.insert(TaskId::new(2), TaskState::Done);
+
+        let result = check_predecessor(&states, TaskId::new(3));
+        assert!(
+            result.is_err(),
+            "task 3 should be blocked by pending task 1"
+        );
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("task 3"), "error should mention task 3");
+        assert!(err_msg.contains("task 1"), "error should mention task 1");
+        assert!(
+            err_msg.contains("Queued"),
+            "error should mention the Queued state"
+        );
+    }
+
+    #[test]
+    fn check_predecessor_blocks_successor_when_predecessor_is_running() {
+        let mut states = BTreeMap::new();
+        states.insert(
+            TaskId::new(1),
+            TaskState::Running {
+                attempt: AttemptId::new(1),
+                phase: Phase::Implement,
+            },
+        );
+
+        let result = check_predecessor(&states, TaskId::new(2));
+        assert!(
+            result.is_err(),
+            "task 2 should be blocked by running task 1"
+        );
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("task 2"));
+        assert!(err_msg.contains("task 1"));
+        assert!(err_msg.contains("Running"));
+    }
+
+    #[test]
+    fn check_predecessor_allows_first_task() {
+        let states = BTreeMap::new();
+
+        let result = check_predecessor(&states, TaskId::new(1));
+        assert!(
+            result.is_ok(),
+            "first task should always be allowed to start"
+        );
+    }
+
+    #[test]
+    fn check_predecessor_blocks_successor_when_predecessor_is_verifying() {
+        let mut states = BTreeMap::new();
+        states.insert(
+            TaskId::new(1),
+            TaskState::Verifying {
+                attempt: AttemptId::new(1),
+            },
+        );
+
+        let result = check_predecessor(&states, TaskId::new(2));
+        assert!(
+            result.is_err(),
+            "task 2 should be blocked by verifying task 1"
+        );
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("task 2"));
+        assert!(err_msg.contains("task 1"));
     }
 }
