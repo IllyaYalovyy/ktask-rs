@@ -3,7 +3,7 @@
 //! Assembles the complete prompt by combining task context, architectural records,
 //! and the execution template. The assembly is deterministic for the same inputs.
 
-use crate::{AttemptId, Task};
+use crate::{AttemptId, Project, Task};
 use std::fmt::Write;
 
 /// Assemble a complete prompt for the AI agent.
@@ -74,6 +74,92 @@ pub fn assemble(
     result.push_str(&prompt);
 
     result
+}
+
+/// Ensure default prompt templates exist, creating them if necessary.
+///
+/// Creates default templates in the global prompt library directory:
+/// - `task.md`: A default task template containing `{{TASK}}` placeholder
+/// - `context.md`: A default context document
+///
+/// The prompt library is located at `$XDG_CONFIG_HOME/ktask-rs/prompts/`
+/// or `$HOME/.config/ktask-rs/prompts/` if `XDG_CONFIG_HOME` is not set.
+///
+/// This operation is idempotent: if templates already exist, they are not overwritten.
+///
+/// # Errors
+///
+/// Returns an error if the prompt library directory cannot be created or
+/// if environment variables are misconfigured.
+pub fn ensure_defaults() -> crate::Result<()> {
+    ensure_defaults_with_prompt_lib(&crate::prompt_library)
+}
+
+fn ensure_defaults_with_prompt_lib(
+    get_prompt_lib: &dyn Fn() -> crate::Result<std::path::PathBuf>,
+) -> crate::Result<()> {
+    let prompt_lib = get_prompt_lib()?;
+
+    // Create the prompt library directory if it doesn't exist
+    std::fs::create_dir_all(&prompt_lib)?;
+
+    let task_template_path = prompt_lib.join("task.md");
+    let context_template_path = prompt_lib.join("context.md");
+
+    // Create default task.md if it doesn't exist
+    if !task_template_path.exists() {
+        let default_task_template = "# Task Template\n\n{{TASK}}\n";
+        std::fs::write(&task_template_path, default_task_template)?;
+    }
+
+    // Create default context.md if it doesn't exist
+    if !context_template_path.exists() {
+        let default_context_template = "# Project Context\n\nAdd project context here.\n";
+        std::fs::write(&context_template_path, default_context_template)?;
+    }
+
+    Ok(())
+}
+
+/// Load the task template, preferring per-project override over global default.
+///
+/// Searches for the template in this order:
+/// 1. Per-project override at `$project.state_dir/prompts/task.md`
+/// 2. Global default at `$XDG_CONFIG_HOME/ktask-rs/prompts/task.md`
+///
+/// If no template exists, `ensure_defaults()` is called to create the global default.
+///
+/// Templates are never read from inside the repository; they always come from
+/// the XDG config directory or per-project state directory.
+///
+/// # Errors
+///
+/// Returns an error if the template cannot be read or if environment variables
+/// are misconfigured.
+pub fn load_template(project: &Project) -> crate::Result<String> {
+    load_template_with(project, &crate::prompt_library)
+}
+
+fn load_template_with(
+    project: &Project,
+    get_prompt_lib: &dyn Fn() -> crate::Result<std::path::PathBuf>,
+) -> crate::Result<String> {
+    // Try per-project override first
+    let project_override = project.state_dir.join("prompts").join("task.md");
+    if project_override.exists() {
+        return std::fs::read_to_string(&project_override)
+            .map_err(|e| e.into());
+    }
+
+    // Ensure global defaults exist
+    ensure_defaults_with_prompt_lib(get_prompt_lib)?;
+
+    // Load global default
+    let prompt_lib = get_prompt_lib()?;
+    let global_template = prompt_lib.join("task.md");
+
+    std::fs::read_to_string(&global_template)
+        .map_err(|e| e.into())
 }
 
 #[cfg(test)]
@@ -335,5 +421,146 @@ mod tests {
         assert!(result.contains("```"));
         assert!(result.contains("System context"));
         assert!(result.contains("ADR 1"));
+    }
+
+    #[test]
+    fn context_ensure_defaults_creates_task_template() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config_dir = temp.path().join("config");
+        let prompt_lib = config_dir.join("ktask-rs/prompts");
+
+        let get_prompt_lib = || Ok::<_, crate::Error>(prompt_lib.clone());
+
+        let result = ensure_defaults_with_prompt_lib(&get_prompt_lib);
+        assert!(result.is_ok());
+
+        let task_template = prompt_lib.join("task.md");
+        assert!(task_template.exists());
+
+        let content = std::fs::read_to_string(&task_template).unwrap();
+        assert!(content.contains("{{TASK}}"));
+    }
+
+    #[test]
+    fn context_ensure_defaults_creates_context_template() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config_dir = temp.path().join("config");
+        let prompt_lib = config_dir.join("ktask-rs/prompts");
+
+        let get_prompt_lib = || Ok::<_, crate::Error>(prompt_lib.clone());
+
+        let result = ensure_defaults_with_prompt_lib(&get_prompt_lib);
+        assert!(result.is_ok());
+
+        let context_template = prompt_lib.join("context.md");
+        assert!(context_template.exists());
+
+        let content = std::fs::read_to_string(&context_template).unwrap();
+        assert!(content.len() > 0);
+    }
+
+    #[test]
+    fn context_ensure_defaults_is_idempotent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config_dir = temp.path().join("config");
+        let prompt_lib = config_dir.join("ktask-rs/prompts");
+
+        let get_prompt_lib = || Ok::<_, crate::Error>(prompt_lib.clone());
+
+        // Call ensure_defaults twice
+        let result1 = ensure_defaults_with_prompt_lib(&get_prompt_lib);
+        assert!(result1.is_ok());
+
+        let task_template = prompt_lib.join("task.md");
+        let content1 = std::fs::read_to_string(&task_template).unwrap();
+
+        let result2 = ensure_defaults_with_prompt_lib(&get_prompt_lib);
+        assert!(result2.is_ok());
+
+        let content2 = std::fs::read_to_string(&task_template).unwrap();
+
+        // Should not have changed
+        assert_eq!(content1, content2);
+    }
+
+    #[test]
+    fn context_load_template_uses_global_default() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config_dir = temp.path().join("config");
+        let state_dir = temp.path().join("state");
+        let prompt_lib = config_dir.join("ktask-rs/prompts");
+
+        let get_prompt_lib = || Ok::<_, crate::Error>(prompt_lib.clone());
+
+        ensure_defaults_with_prompt_lib(&get_prompt_lib).unwrap();
+
+        // Create a minimal project with state_dir
+        let project = Project {
+            root: temp.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let result = load_template_with(&project, &get_prompt_lib);
+        assert!(result.is_ok());
+
+        let template = result.unwrap();
+        assert!(template.contains("{{TASK}}"));
+    }
+
+    #[test]
+    fn context_load_template_prefers_project_override() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config_dir = temp.path().join("config");
+        let state_dir = temp.path().join("state");
+        let prompt_lib = config_dir.join("ktask-rs/prompts");
+
+        let get_prompt_lib = || Ok::<_, crate::Error>(prompt_lib.clone());
+
+        ensure_defaults_with_prompt_lib(&get_prompt_lib).unwrap();
+
+        // Create project state directory with override
+        let prompts_dir = state_dir.join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        let override_template = "# Project-Specific Template\n{{TASK}}\n";
+        std::fs::write(prompts_dir.join("task.md"), override_template).unwrap();
+
+        let project = Project {
+            root: temp.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let result = load_template_with(&project, &get_prompt_lib);
+        assert!(result.is_ok());
+
+        let template = result.unwrap();
+        assert!(template.contains("# Project-Specific Template"));
+        assert!(!template.contains("# Task Template"));
+    }
+
+    #[test]
+    fn context_load_template_creates_defaults_on_demand() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config_dir = temp.path().join("config");
+        let state_dir = temp.path().join("state");
+        let prompt_lib = config_dir.join("ktask-rs/prompts");
+
+        let get_prompt_lib = || Ok::<_, crate::Error>(prompt_lib.clone());
+
+        // Don't call ensure_defaults; let load_template handle it
+        assert!(!prompt_lib.join("task.md").exists());
+
+        let project = Project {
+            root: temp.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let result = load_template_with(&project, &get_prompt_lib);
+        assert!(result.is_ok());
+
+        // Defaults should have been created
+        assert!(prompt_lib.join("task.md").exists());
     }
 }

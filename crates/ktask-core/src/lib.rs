@@ -32,7 +32,7 @@ pub mod testing;
 pub use attempt::{AttemptRecord, read_evidence, write_evidence};
 pub use classify::{FailureClass, Recovery, Stream, TddException};
 pub use config::Config;
-pub use context::assemble;
+pub use context::{assemble, ensure_defaults, load_template};
 pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use events::{Bus, Recorder, Subscription};
@@ -41,7 +41,7 @@ pub use git::git;
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::Journal;
 pub use lock::RepoLock;
-pub use paths::{config_file, state_root};
+pub use paths::{config_file, prompt_library, state_root};
 pub use project::{Project, discover, register};
 pub use protocol::{PhaseSpec, Protocol, WriteScope};
 pub use provider::{

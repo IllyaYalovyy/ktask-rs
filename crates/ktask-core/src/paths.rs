@@ -30,6 +30,18 @@ pub fn config_file() -> Result<PathBuf> {
     config_file_with_env(&|key| std::env::var(key).ok())
 }
 
+/// Resolve the prompt library directory using `XDG_CONFIG_HOME` or `HOME` fallback.
+///
+/// Returns `$XDG_CONFIG_HOME/ktask-rs/prompts/` if `XDG_CONFIG_HOME` is set,
+/// otherwise `$HOME/.config/ktask-rs/prompts/`.
+///
+/// # Errors
+///
+/// Returns an error if neither `XDG_CONFIG_HOME` nor `HOME` are set.
+pub fn prompt_library() -> Result<PathBuf> {
+    prompt_library_with_env(&|key| std::env::var(key).ok())
+}
+
 /// Resolve the state root directory with injected environment getter.
 ///
 /// This function is used internally and by tests to provide custom environment resolution.
@@ -54,6 +66,22 @@ fn config_file_with_env(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf>
         Ok(PathBuf::from(xdg_config).join("ktask-rs/config.toml"))
     } else if let Some(home) = env("HOME") {
         Ok(PathBuf::from(home).join(".config/ktask-rs/config.toml"))
+    } else {
+        Err(Error::Config {
+            key: "HOME".to_string(),
+            detail: "HOME environment variable must be set".to_string(),
+        })
+    }
+}
+
+/// Resolve the prompt library directory with injected environment getter.
+///
+/// This function is used internally and by tests to provide custom environment resolution.
+fn prompt_library_with_env(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
+    if let Some(xdg_config) = env("XDG_CONFIG_HOME") {
+        Ok(PathBuf::from(xdg_config).join("ktask-rs/prompts"))
+    } else if let Some(home) = env("HOME") {
+        Ok(PathBuf::from(home).join(".config/ktask-rs/prompts"))
     } else {
         Err(Error::Config {
             key: "HOME".to_string(),
@@ -170,6 +198,39 @@ mod tests {
     fn config_file_with_both_unset_errors_on_home() {
         let env = |_key: &str| None;
         let result = config_file_with_env(&env);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("HOME"));
+    }
+
+    #[test]
+    fn prompt_library_with_xdg_config_home_set() {
+        let env = |key: &str| match key {
+            "XDG_CONFIG_HOME" => Some("/custom/config".to_string()),
+            _ => None,
+        };
+        let result = prompt_library_with_env(&env).unwrap();
+        assert_eq!(result, PathBuf::from("/custom/config/ktask-rs/prompts"));
+    }
+
+    #[test]
+    fn prompt_library_with_xdg_config_home_unset_uses_home() {
+        let env = |key: &str| match key {
+            "HOME" => Some("/home/user".to_string()),
+            _ => None,
+        };
+        let result = prompt_library_with_env(&env).unwrap();
+        assert_eq!(
+            result,
+            PathBuf::from("/home/user/.config/ktask-rs/prompts")
+        );
+    }
+
+    #[test]
+    fn prompt_library_with_both_unset_errors_on_home() {
+        let env = |_key: &str| None;
+        let result = prompt_library_with_env(&env);
         assert!(result.is_err());
         let err = result.unwrap_err();
         let err_msg = err.to_string();
