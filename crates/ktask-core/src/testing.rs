@@ -51,18 +51,10 @@ impl ScratchRepo {
         })?;
 
         // Initialize bare origin
-        git_with_config(
-            &origin,
-            &["init", "--bare"],
-            &[],
-        )?;
+        git_with_config(&origin, &["init", "--bare"], &[])?;
 
         // Initialize working repo
-        git_with_config(
-            work.path(),
-            &["init"],
-            &[],
-        )?;
+        git_with_config(work.path(), &["init"], &[])?;
 
         // Add origin remote
         git_with_config(
@@ -78,11 +70,7 @@ impl ScratchRepo {
             detail: format!("Failed to write seed file: {e}"),
         })?;
 
-        git_with_config(
-            work.path(),
-            &["add", "seed.txt"],
-            &[],
-        )?;
+        git_with_config(work.path(), &["add", "seed.txt"], &[])?;
 
         // Use fixed timestamps for deterministic commit hash
         let env = vec![
@@ -90,12 +78,7 @@ impl ScratchRepo {
             ("GIT_COMMITTER_DATE", "2000-01-01 00:00:00 +0000"),
         ];
 
-        git_with_env(
-            work.path(),
-            &["commit", "-m", "seed commit"],
-            &[],
-            &env,
-        )?;
+        git_with_env(work.path(), &["commit", "-m", "seed commit"], &[], &env)?;
 
         Ok(ScratchRepo { work, origin })
     }
@@ -126,23 +109,14 @@ impl ScratchRepo {
         })?;
 
         let filename = test_file.file_name().unwrap().to_str().unwrap();
-        git_with_config(
-            self.path(),
-            &["add", filename],
-            &[],
-        )?;
+        git_with_config(self.path(), &["add", filename], &[])?;
 
         let env = vec![
             ("GIT_AUTHOR_DATE", "2000-01-01 00:00:00 +0000"),
             ("GIT_COMMITTER_DATE", "2000-01-01 00:00:00 +0000"),
         ];
 
-        git_with_env(
-            self.path(),
-            &["commit", "-m", message],
-            &[],
-            &env,
-        )?;
+        git_with_env(self.path(), &["commit", "-m", message], &[], &env)?;
 
         // Get the commit hash
         git_with_config(self.path(), &["rev-parse", "HEAD"], &[])
@@ -331,7 +305,10 @@ mod tests {
         // repo dropped here
 
         assert!(!work_path.exists(), "work directory should be cleaned up");
-        assert!(!origin_path.exists(), "origin directory should be cleaned up");
+        assert!(
+            !origin_path.exists(),
+            "origin directory should be cleaned up"
+        );
 
         Ok(())
     }
