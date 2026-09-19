@@ -311,9 +311,9 @@ mod tests {
         .expect("run_streaming should succeed");
 
         assert_eq!(result.exit_code, 0);
-        assert!(result.stdout.contains("1"));
-        assert!(result.stdout.contains("2"));
-        assert!(result.stdout.contains("3"));
+        assert!(result.stdout.contains('1'));
+        assert!(result.stdout.contains('2'));
+        assert!(result.stdout.contains('3'));
     }
 
     #[test]
