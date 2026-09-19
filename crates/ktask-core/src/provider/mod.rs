@@ -46,6 +46,7 @@ use std::path::PathBuf;
 use crate::{Bus, Result};
 
 pub mod dummy;
+pub mod process;
 
 /// Where the figures inside a [`Usage`] came from.
 ///
