@@ -3,22 +3,50 @@
 use crate::Error;
 use crate::gate::GateResult;
 use crate::provider::Outcome;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-/// Detects if an error message indicates a provider rate/usage limit.
+/// Detects if a message indicates a provider rate/usage limit.
 ///
-/// Checks both stdout and stderr for common provider limit indicators.
-fn limit_message(output: &str) -> bool {
-    let output_lower = output.to_lowercase();
-    output_lower.contains("rate limit")
-        || output_lower.contains("quota exceeded")
-        || output_lower.contains("usage limit")
-        || output_lower.contains("token limit")
-        || output_lower.contains("request limit")
-        || output_lower.contains("over quota")
-        || output_lower.contains("limit reached")
-        || output_lower.contains("too many requests")
+/// Matches against configured regular expression patterns. Returns the matched pattern
+/// if found, or None if no match. When patterns is empty, uses default patterns
+/// covering common Claude and Codex limit messages.
+#[must_use]
+pub fn limit_message(text: &str, patterns: &[String]) -> Option<String> {
+    if patterns.is_empty() {
+        // Use default patterns
+        for pattern in DEFAULT_LIMIT_PATTERNS {
+            if let Ok(re) = Regex::new(pattern)
+                && re.is_match(text)
+            {
+                return Some(pattern.to_string());
+            }
+        }
+    } else {
+        // Use provided patterns
+        for pattern in patterns {
+            if let Ok(re) = Regex::new(pattern)
+                && re.is_match(text)
+            {
+                return Some(pattern.clone());
+            }
+        }
+    }
+    None
 }
+
+/// Default patterns for detecting provider usage limits.
+/// Covers common Claude and Codex limit messages.
+static DEFAULT_LIMIT_PATTERNS: &[&str] = &[
+    r"(?i)rate.?limit",
+    r"(?i)quota.?exceed",
+    r"(?i)usage.?limit",
+    r"(?i)token.?limit",
+    r"(?i)request.?limit",
+    r"(?i)over.?quota",
+    r"(?i)limit.?reach",
+    r"(?i)too.?many.?requests",
+];
 
 /// Classify a task failure before recovery is attempted.
 ///
@@ -55,7 +83,9 @@ pub fn classify(
     }
 
     // Check for provider rate/usage limits
-    if limit_message(&outcome.stderr) || limit_message(&outcome.stdout) {
+    if limit_message(&outcome.stderr, &[]).is_some()
+        || limit_message(&outcome.stdout, &[]).is_some()
+    {
         return FailureClass::ProviderLimit;
     }
 
@@ -524,33 +554,53 @@ mod tests {
 
     #[test]
     fn limit_message_detects_rate_limit() {
-        assert!(limit_message("rate limit exceeded"));
-        assert!(limit_message("Rate Limit Exceeded"));
+        assert!(limit_message("rate limit exceeded", &[]).is_some());
+        assert!(limit_message("Rate Limit Exceeded", &[]).is_some());
     }
 
     #[test]
     fn limit_message_detects_quota() {
-        assert!(limit_message("quota exceeded"));
-        assert!(limit_message("Quota Exceeded"));
+        assert!(limit_message("quota exceeded", &[]).is_some());
+        assert!(limit_message("Quota Exceeded", &[]).is_some());
     }
 
     #[test]
     fn limit_message_detects_usage_limit() {
-        assert!(limit_message("usage limit reached"));
-        assert!(limit_message("Token limit exceeded"));
+        assert!(limit_message("usage limit reached", &[]).is_some());
+        assert!(limit_message("Token limit exceeded", &[]).is_some());
     }
 
     #[test]
     fn limit_message_detects_request_limit() {
-        assert!(limit_message("too many requests"));
-        assert!(limit_message("request limit"));
+        assert!(limit_message("too many requests", &[]).is_some());
+        assert!(limit_message("request limit", &[]).is_some());
     }
 
     #[test]
     fn limit_message_rejects_non_limit_errors() {
-        assert!(!limit_message("connection timeout"));
-        assert!(!limit_message("authentication failed"));
-        assert!(!limit_message("random error"));
+        assert!(limit_message("connection timeout", &[]).is_none());
+        assert!(limit_message("authentication failed", &[]).is_none());
+        assert!(limit_message("random error", &[]).is_none());
+    }
+
+    #[test]
+    fn limit_message_uses_custom_patterns() {
+        let custom = vec!["(?i)custom.*limit".to_string()];
+        assert!(limit_message("Custom Limit Hit", &custom).is_some());
+        assert!(limit_message("rate limit", &custom).is_none());
+    }
+
+    #[test]
+    fn limit_message_returns_matched_pattern() {
+        let result = limit_message("rate limit exceeded", &[]);
+        assert!(result.is_some());
+        let pattern = result.unwrap();
+        assert!(pattern.contains("rate"));
+    }
+
+    #[test]
+    fn limit_message_empty_text_no_match() {
+        assert!(limit_message("", &[]).is_none());
     }
 
     #[test]
