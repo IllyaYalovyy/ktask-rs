@@ -133,7 +133,13 @@ pub fn create_worktree(root: &Path, name: &str, base_sha: &str) -> Result<std::p
     let worktree_path = root.join(name);
     git(
         root,
-        &["worktree", "add", "--detach", worktree_path.to_str().unwrap_or(""), base_sha],
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            worktree_path.to_str().unwrap_or(""),
+            base_sha,
+        ],
     )?;
     Ok(worktree_path)
 }
@@ -176,14 +182,14 @@ pub fn list_worktrees(root: &Path) -> Result<Vec<String>> {
         .filter_map(|line| {
             let path = line.split_whitespace().next()?;
             if let Ok(p) = Path::new(path).canonicalize() {
-                if let Some(root_c) = &root_canonical {
-                    if &p == root_c {
-                        return None; // Skip main worktree
-                    }
+                if let Some(root_c) = &root_canonical
+                    && &p == root_c
+                {
+                    return None; // Skip main worktree
                 }
                 p.file_name()
                     .and_then(|n| n.to_str())
-                    .map(|s| s.to_string())
+                    .map(ToString::to_string)
             } else {
                 None
             }
