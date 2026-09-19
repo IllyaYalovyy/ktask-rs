@@ -1,6 +1,6 @@
 //! Event kinds and their payloads.
 
-use crate::{AttemptId, FailureClass, PauseReason, Phase, Recovery, Stream};
+use crate::{AttemptId, EventSeq, FailureClass, PauseReason, Phase, Recovery, Stream, TaskId};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -153,6 +153,20 @@ impl EventKind {
             EventKind::GateAcknowledged { .. } => "GateAcknowledged",
         }
     }
+}
+
+/// A stored event carrying sequence, timestamp, task and payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Event {
+    /// Monotonic global event sequence number.
+    pub seq: EventSeq,
+    /// Event timestamp in RFC 3339 format (UTC).
+    #[serde(with = "time::serde::rfc3339")]
+    pub ts: OffsetDateTime,
+    /// Task identifier, None for global events.
+    pub task_id: Option<TaskId>,
+    /// Event kind and payload.
+    pub kind: EventKind,
 }
 
 #[cfg(test)]
@@ -521,5 +535,71 @@ mod tests {
             .discriminant(),
             "GateAcknowledged"
         );
+    }
+
+    #[test]
+    fn event_serializes_with_rfc3339_timestamp() {
+        let ts = OffsetDateTime::now_utc();
+        let event = Event {
+            seq: EventSeq::new(42),
+            ts,
+            task_id: Some(TaskId::new(1)),
+            kind: EventKind::TaskQueued {
+                title: "Test task".to_string(),
+            },
+        };
+
+        let json = serde_json::to_string(&event).expect("serialize");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse json");
+
+        // Verify the timestamp is in RFC 3339 format
+        let ts_str = parsed["ts"].as_str().expect("timestamp should be a string");
+        assert!(
+            ts_str.contains('T'),
+            "RFC 3339 format requires 'T' separator"
+        );
+        assert!(
+            ts_str.contains('Z') || ts_str.contains('+') || ts_str.contains('-'),
+            "RFC 3339 format requires timezone info"
+        );
+    }
+
+    #[test]
+    fn event_roundtrips_through_json() {
+        let ts = OffsetDateTime::now_utc();
+        let original = Event {
+            seq: EventSeq::new(42),
+            ts,
+            task_id: Some(TaskId::new(1)),
+            kind: EventKind::TaskQueued {
+                title: "Test task".to_string(),
+            },
+        };
+
+        let json = serde_json::to_string(&original).expect("serialize");
+        let deserialized: Event = serde_json::from_str(&json).expect("deserialize");
+
+        // Verify that the round-trip preserves the same instant
+        assert_eq!(original.seq, deserialized.seq);
+        assert_eq!(original.task_id, deserialized.task_id);
+        assert_eq!(original.kind, deserialized.kind);
+        // OffsetDateTime equality checks the same instant, which is what we need
+        assert_eq!(original.ts, deserialized.ts);
+    }
+
+    #[test]
+    fn event_with_none_task_id() {
+        let ts = OffsetDateTime::now_utc();
+        let event = Event {
+            seq: EventSeq::new(1),
+            ts,
+            task_id: None,
+            kind: EventKind::PreflightStarted,
+        };
+
+        let json = serde_json::to_string(&event).expect("serialize");
+        let deserialized: Event = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(event, deserialized);
     }
 }
