@@ -250,6 +250,51 @@ pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {
     head_sha(worktree)
 }
 
+/// Push a commit and verify it matches on the remote.
+///
+/// Pushes the candidate commit to the remote branch, then fetches to verify
+/// the remote tip matches the candidate SHA. Returns `Error::Git` if the push
+/// fails or if the fetched remote tip does not match the candidate.
+///
+/// # Arguments
+///
+/// * `worktree` - The working directory for the git repository
+/// * `remote` - The remote name (e.g., "origin")
+/// * `branch` - The branch name to push to
+/// * `candidate` - The commit SHA to push and verify
+///
+/// # Errors
+///
+/// Returns `Error::Git` if the push fails or the remote tip does not match
+/// the candidate SHA. The error message includes both SHAs when verification
+/// fails.
+pub fn publish(worktree: &Path, remote: &str, branch: &str, candidate: &str) -> Result<()> {
+    // Push the candidate to the remote branch using full refspec
+    let push_refspec = format!("{}:refs/heads/{}", candidate, branch);
+    git(worktree, &["push", remote, &push_refspec])?;
+
+    // Fetch to ensure we have the latest remote state (fresh fetch, not cached)
+    git(worktree, &["fetch", remote])?;
+
+    // Get the remote tip
+    let remote_ref = format!("refs/remotes/{}/{}", remote, branch);
+    let remote_sha = git(worktree, &["rev-parse", &remote_ref])?;
+
+    // Verify the remote tip matches the candidate
+    if remote_sha != candidate {
+        return Err(Error::Git {
+            args: vec!["push".to_string(), "fetch".to_string(), "verify".to_string()],
+            stderr: format!(
+                "pushed candidate {} but remote tip is {} after verification",
+                &candidate[..8.min(candidate.len())],
+                &remote_sha[..8.min(remote_sha.len())]
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 /// Require the worktree to be clean (no uncommitted changes).
 ///
 /// Returns `Error::Policy` if there are any modified, staged, or untracked files.
@@ -1465,5 +1510,161 @@ mod tests {
         } else {
             panic!("Expected Error::Policy variant");
         }
+    }
+
+    #[test]
+    fn publish_succeeds_when_remote_matches_candidate() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create a bare repository to act as a remote
+        let remote_path = env::temp_dir().join(format!(
+            "ktask-git-remote-publish-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&remote_path);
+        let _ = fs::create_dir_all(&remote_path);
+
+        // Initialize as bare repo
+        if Command::new("git")
+            .args(["init", "--bare"])
+            .current_dir(&remote_path)
+            .output()
+            .is_err()
+        {
+            return;
+        }
+
+        // Add the remote
+        let _ = Command::new("git")
+            .args(["remote", "add", "origin", remote_path.to_str().unwrap()])
+            .current_dir(&repo)
+            .output();
+
+        // Create and commit a file
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let candidate = head_sha(&repo).unwrap();
+
+        // Publish the commit
+        let result = publish(&repo, "origin", "main", &candidate);
+        assert!(
+            result.is_ok(),
+            "publish should succeed when remote matches candidate, but got: {:?}",
+            result.err()
+        );
+
+        // Clean up
+        let _ = fs::remove_dir_all(&remote_path);
+    }
+
+    #[test]
+    fn publish_fails_when_push_is_rejected() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create and commit a file
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let candidate = head_sha(&repo).unwrap();
+
+        // Try to publish to a non-existent remote - this should fail
+        let result = publish(&repo, "nonexistent-remote", "main", &candidate);
+        assert!(
+            result.is_err(),
+            "publish should fail when remote doesn't exist, but got: {:?}",
+            result
+        );
+
+        if let Err(Error::Git { args, stderr }) = result {
+            // Error should be from the push command
+            assert!(args.contains(&"push".to_string()), "Error should be from push");
+            assert!(!stderr.is_empty(), "Error should have stderr");
+        } else {
+            panic!("Expected Error::Git variant");
+        }
+    }
+
+    #[test]
+    fn publish_creates_correct_remote_ref() {
+        let Some(repo) = temp_git_repo() else {
+            return;
+        };
+        // Create a bare repository to act as a remote
+        let remote_path = env::temp_dir().join(format!(
+            "ktask-git-remote-ref-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&remote_path);
+        let _ = fs::create_dir_all(&remote_path);
+
+        // Initialize as bare repo
+        if Command::new("git")
+            .args(["init", "--bare"])
+            .current_dir(&remote_path)
+            .output()
+            .is_err()
+        {
+            return;
+        }
+
+        // Add the remote
+        let _ = Command::new("git")
+            .args(["remote", "add", "origin", remote_path.to_str().unwrap()])
+            .current_dir(&repo)
+            .output();
+
+        // Create and commit a file
+        let file_path = repo.join("test.txt");
+        fs::write(&file_path, "test content").ok();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&repo)
+            .output()
+            .ok();
+
+        let candidate = head_sha(&repo).unwrap();
+
+        // Publish the commit
+        let result = publish(&repo, "origin", "main", &candidate);
+        assert!(result.is_ok(), "publish should succeed");
+
+        // Verify the remote has the correct ref
+        let remote_ref = "refs/remotes/origin/main";
+        let remote_sha = git(&repo, &["rev-parse", remote_ref]).unwrap();
+        assert_eq!(
+            remote_sha, candidate,
+            "remote ref should match candidate after publish"
+        );
+
+        // Clean up
+        let _ = fs::remove_dir_all(&remote_path);
     }
 }
