@@ -45,6 +45,7 @@ use std::path::PathBuf;
 
 use crate::{Bus, Result};
 
+pub mod claude;
 pub mod dummy;
 pub mod process;
 
