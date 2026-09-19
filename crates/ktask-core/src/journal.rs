@@ -1,6 +1,6 @@
 //! Event journal for storing and retrieving task events.
 
-use crate::{Error, Project, Result};
+use crate::{Error, EventKind, EventSeq, Project, Result, TaskId};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
@@ -56,6 +56,54 @@ impl Journal {
     pub fn open_for(project: &Project) -> Result<Journal> {
         let path = Self::journal_path(&project.state_dir);
         Self::open(&path)
+    }
+
+    /// Append an event to the journal.
+    ///
+    /// Appends an event with the given `task_id` and `kind` to the journal,
+    /// storing the event's discriminant in the `kind` column and serializing
+    /// the payload as JSON. The timestamp is automatically set to the current
+    /// time in UTC. The insert is wrapped in a transaction to ensure atomicity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the event cannot be serialized, inserted, or if
+    /// the transaction cannot be committed.
+    pub fn append(&mut self, task_id: Option<TaskId>, kind: &EventKind) -> Result<EventSeq> {
+        // Serialize the payload
+        let payload = serde_json::to_string(kind)?;
+
+        // Get the current timestamp in UTC
+        let ts = time::OffsetDateTime::now_utc();
+        let ts_str = ts
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|_| Error::Corrupt {
+                detail: "Failed to format timestamp".to_string(),
+                seq: None,
+            })?;
+
+        // Get the discriminant
+        let kind_str = kind.discriminant();
+
+        // Convert task_id to Option<i64> for SQLite
+        let task_id_val = task_id.map(|id| i64::from(id.get()));
+
+        // Insert in a transaction
+        let tx = self.conn.transaction()?;
+
+        // Insert the event
+        tx.execute(
+            "INSERT INTO events (ts, task_id, kind, payload) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![ts_str, task_id_val, kind_str, payload],
+        )?;
+
+        // Get the last inserted row ID (the sequence number)
+        let seq = tx.last_insert_rowid().cast_unsigned();
+
+        // Commit the transaction
+        tx.commit()?;
+
+        Ok(EventSeq::new(seq))
     }
 
     /// Initialize or validate the schema.
@@ -335,6 +383,176 @@ mod tests {
 
         // FULL = 2
         assert_eq!(synchronous, 2);
+        drop(journal);
+    }
+
+    #[test]
+    fn append_returns_event_seq() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind = EventKind::TaskQueued {
+            title: "Test task".to_string(),
+        };
+
+        let seq = journal.append(None, &kind).unwrap();
+        assert_eq!(seq, EventSeq::new(1));
+        drop(journal);
+    }
+
+    #[test]
+    fn append_strictly_increasing_sequences() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind = EventKind::TaskQueued {
+            title: "Test task".to_string(),
+        };
+
+        let seq1 = journal.append(None, &kind).unwrap();
+        let seq2 = journal.append(None, &kind).unwrap();
+        let seq3 = journal.append(None, &kind).unwrap();
+
+        assert_eq!(seq1, EventSeq::new(1));
+        assert_eq!(seq2, EventSeq::new(2));
+        assert_eq!(seq3, EventSeq::new(3));
+        drop(journal);
+    }
+
+    #[test]
+    fn append_with_task_id() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind = EventKind::TaskQueued {
+            title: "Test task".to_string(),
+        };
+
+        let task_id = TaskId::new(42);
+        let seq = journal.append(Some(task_id), &kind).unwrap();
+        assert_eq!(seq, EventSeq::new(1));
+
+        // Verify task_id was stored
+        let stored_task_id: i64 = journal
+            .conn
+            .query_row("SELECT task_id FROM events WHERE seq = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored_task_id, 42);
+        drop(journal);
+    }
+
+    #[test]
+    fn append_without_task_id() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind = EventKind::PreflightStarted;
+
+        let seq = journal.append(None, &kind).unwrap();
+        assert_eq!(seq, EventSeq::new(1));
+
+        // Verify task_id is NULL
+        let task_id: Option<i64> = journal
+            .conn
+            .query_row("SELECT task_id FROM events WHERE seq = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(task_id, None);
+        drop(journal);
+    }
+
+    #[test]
+    fn append_sequence_survives_reopen() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        // First session: append some events
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind = EventKind::TaskQueued {
+            title: "Test task".to_string(),
+        };
+
+        let seq1 = journal.append(None, &kind).unwrap();
+        let seq2 = journal.append(None, &kind).unwrap();
+        assert_eq!(seq1, EventSeq::new(1));
+        assert_eq!(seq2, EventSeq::new(2));
+        drop(journal);
+
+        // Second session: reopen and continue appending
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let seq3 = journal.append(None, &kind).unwrap();
+        let seq4 = journal.append(None, &kind).unwrap();
+        assert_eq!(seq3, EventSeq::new(3));
+        assert_eq!(seq4, EventSeq::new(4));
+        drop(journal);
+    }
+
+    #[test]
+    fn append_stores_discriminant_and_payload() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind = EventKind::TaskQueued {
+            title: "Test task".to_string(),
+        };
+
+        journal.append(None, &kind).unwrap();
+
+        // Verify discriminant and payload were stored
+        let (stored_kind, stored_payload): (String, String) = journal
+            .conn
+            .query_row(
+                "SELECT kind, payload FROM events WHERE seq = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(stored_kind, "TaskQueued");
+
+        // Verify payload is valid JSON
+        let parsed: serde_json::Value = serde_json::from_str(&stored_payload).unwrap();
+        assert_eq!(parsed["kind"], "TaskQueued");
+        assert_eq!(parsed["title"], "Test task");
+
+        drop(journal);
+    }
+
+    #[test]
+    fn append_stores_timestamp() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let before = time::OffsetDateTime::now_utc();
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind = EventKind::PreflightStarted;
+
+        journal.append(None, &kind).unwrap();
+        let after = time::OffsetDateTime::now_utc();
+
+        // Verify timestamp was stored
+        let ts_str: String = journal
+            .conn
+            .query_row("SELECT ts FROM events WHERE seq = 1", [], |row| row.get(0))
+            .unwrap();
+
+        // Parse the timestamp
+        let ts =
+            time::OffsetDateTime::parse(&ts_str, &time::format_description::well_known::Rfc3339)
+                .unwrap();
+
+        // Verify timestamp is within reasonable bounds (before and after)
+        assert!(ts >= before);
+        assert!(ts <= after);
+
         drop(journal);
     }
 }
