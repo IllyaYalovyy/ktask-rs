@@ -44,7 +44,7 @@ pub fn git(root: &Path, args: &[&str]) -> Result<String> {
 
     if !output.status.success() {
         return Err(Error::Git {
-            args: args.iter().map(|s| s.to_string()).collect(),
+            args: args.iter().map(ToString::to_string).collect(),
             stderr,
         });
     }
@@ -67,20 +67,20 @@ mod tests {
 
         // Initialize a git repo
         Command::new("git")
-            .args(&["init"])
+            .args(["init"])
             .current_dir(&tmp)
             .output()
             .ok()?;
 
         // Configure git user
         Command::new("git")
-            .args(&["config", "user.email", "test@example.com"])
+            .args(["config", "user.email", "test@example.com"])
             .current_dir(&tmp)
             .output()
             .ok()?;
 
         Command::new("git")
-            .args(&["config", "user.name", "Test User"])
+            .args(["config", "user.name", "Test User"])
             .current_dir(&tmp)
             .output()
             .ok()?;
