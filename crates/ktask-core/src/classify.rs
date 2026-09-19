@@ -267,6 +267,7 @@ pub enum WaitPlan {
 ///
 /// Returns None if the text cannot be parsed as either format.
 #[must_use]
+#[allow(clippy::duration_suboptimal_units)]
 pub fn parse_reset(text: &str, now: OffsetDateTime) -> Option<OffsetDateTime> {
     let trimmed = text.trim();
 
@@ -293,7 +294,9 @@ pub fn parse_reset(text: &str, now: OffsetDateTime) -> Option<OffsetDateTime> {
 
     // Try HH:MM format
     let time_part_hm = time::format_description::parse_borrowed::<1>("[hour]:[minute]").ok();
-    if let Some(fmt) = time_part_hm && let Ok(parsed) = time::Time::parse(trimmed, &fmt) {
+    if let Some(fmt) = time_part_hm
+        && let Ok(parsed) = time::Time::parse(trimmed, &fmt)
+    {
         let mut next_reset = now.replace_time(parsed);
         // If the time has already passed today, schedule for tomorrow
         if next_reset < now {
@@ -311,6 +314,7 @@ pub fn parse_reset(text: &str, now: OffsetDateTime) -> Option<OffsetDateTime> {
 /// Supports formats like:
 /// - "1h", "2h30m", "30m", "45s"
 /// - "1 hour", "2 hours", "30 minutes", "45 seconds"
+#[allow(clippy::duration_suboptimal_units)]
 fn parse_duration(text: &str) -> Option<Duration> {
     let trimmed = text.trim().to_lowercase();
 
@@ -374,6 +378,7 @@ fn parse_duration(text: &str) -> Option<Duration> {
 }
 
 /// Helper to parse duration with full words like "1 hour" or "30 minutes".
+#[allow(clippy::duration_suboptimal_units)]
 fn parse_duration_with_words(text: &str) -> Option<(String, String)> {
     let parts: Vec<&str> = text.split_whitespace().collect();
     if parts.len() == 2
@@ -417,6 +422,7 @@ pub fn wait_plan(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::duration_suboptimal_units)]
     use super::*;
     use crate::gate::GateKind;
 
