@@ -6,6 +6,8 @@
 //! emitting them, and the supervisor stays testable without capturing output.
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
+use ktask_core as _;
+
 fn main() {
-    println!("{} (seed)", ktask_core::seed_marker());
+    eprintln!("ktask-rs: CLI implementation in progress");
 }
