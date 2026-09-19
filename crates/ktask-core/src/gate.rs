@@ -102,6 +102,13 @@ impl Profile {
     }
 }
 
+fn kill_process_group(child_pid: u32) {
+    let pgid = Pid::from_raw(i32::try_from(child_pid).unwrap_or(1));
+    let _ = kill(pgid, Signal::SIGTERM);
+    thread::sleep(Duration::from_millis(100));
+    let _ = kill(pgid, Signal::SIGKILL);
+}
+
 /// Execute a gate command and capture its output.
 ///
 /// Spawns a subprocess with the gate's command, captures stdout and stderr,
@@ -209,7 +216,6 @@ pub fn run_gate(gate: &Gate, root: &Path, bus: Option<&Bus>) -> Result<GateResul
 
     // Store the child PID to kill the process group on timeout
     let child_pid = child.id();
-    let pgid = Pid::from_raw(child_pid as i32);
 
     // Wrap child in Arc<Mutex> so we can kill it if needed
     let child_arc = Arc::new(Mutex::new(child));
@@ -230,12 +236,7 @@ pub fn run_gate(gate: &Gate, root: &Path, bus: Option<&Bus>) -> Result<GateResul
         (false, Some(status))
     } else {
         // Timeout occurred, kill the entire process group
-        // First try SIGTERM
-        let _ = kill(pgid, Signal::SIGTERM);
-        // Give it a grace period
-        thread::sleep(Duration::from_millis(100));
-        // Then SIGKILL to ensure it dies
-        let _ = kill(pgid, Signal::SIGKILL);
+        kill_process_group(child_pid);
         // Wait for child to exit
         if let Ok(mut child) = child_arc.lock() {
             let _ = child.wait();
