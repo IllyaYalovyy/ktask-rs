@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
@@ -11,6 +12,8 @@ use std::time::{Duration, Instant};
 
 use crate::config::Config;
 use crate::{Bus, Error, Result};
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 
 /// Mechanical quality gate kinds, as defined in VISION.md section 8.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -136,7 +139,8 @@ pub fn run_gate(gate: &Gate, root: &Path, bus: Option<&Bus>) -> Result<GateResul
     cmd.args(args)
         .current_dir(root)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .process_group(0);
 
     // Apply environment variables
     for (key, value) in &gate.env {
@@ -203,6 +207,10 @@ pub fn run_gate(gate: &Gate, root: &Path, bus: Option<&Bus>) -> Result<GateResul
         }
     });
 
+    // Store the child PID to kill the process group on timeout
+    let child_pid = child.id();
+    let pgid = Pid::from_raw(child_pid as i32);
+
     // Wrap child in Arc<Mutex> so we can kill it if needed
     let child_arc = Arc::new(Mutex::new(child));
     let child_clone = Arc::clone(&child_arc);
@@ -221,9 +229,15 @@ pub fn run_gate(gate: &Gate, root: &Path, bus: Option<&Bus>) -> Result<GateResul
     let (timed_out, exit_status) = if let Ok(status) = rx.recv_timeout(timeout) {
         (false, Some(status))
     } else {
-        // Timeout occurred, try to kill the child process
+        // Timeout occurred, kill the entire process group
+        // First try SIGTERM
+        let _ = kill(pgid, Signal::SIGTERM);
+        // Give it a grace period
+        thread::sleep(Duration::from_millis(100));
+        // Then SIGKILL to ensure it dies
+        let _ = kill(pgid, Signal::SIGKILL);
+        // Wait for child to exit
         if let Ok(mut child) = child_arc.lock() {
-            let _ = child.kill();
             let _ = child.wait();
         }
         // Try to get the status one more time with a short wait
@@ -769,6 +783,47 @@ env = {}
         assert!(!result.passed);
         assert!(result.timed_out);
         assert!(result.duration_ms > 1000);
+    }
+
+    #[test]
+    fn run_gate_kills_process_group_on_timeout() {
+        let gate = Gate {
+            kind: GateKind::Build,
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "sleep 30 & sleep 30".to_string(),
+            ],
+            timeout_secs: 1,
+            working_dir: None,
+            env: BTreeMap::new(),
+        };
+
+        let result = run_gate(&gate, Path::new("."), None)
+            .expect("run_gate should return a result even on timeout");
+
+        assert_eq!(result.kind, GateKind::Build);
+        assert!(!result.passed);
+        assert!(result.timed_out);
+
+        thread::sleep(Duration::from_millis(500));
+
+        let ps_output = Command::new("pgrep").arg("-f").arg("sleep 30").output();
+
+        match ps_output {
+            Ok(output) => {
+                assert!(
+                    output.stdout.is_empty(),
+                    "no sleep processes should survive timeout"
+                );
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // pgrep not found, skip the check
+            }
+            Err(e) => {
+                panic!("unexpected error checking for sleep processes: {e}");
+            }
+        }
     }
 
     #[test]
