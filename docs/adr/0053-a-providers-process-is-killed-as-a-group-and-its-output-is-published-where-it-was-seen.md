@@ -61,6 +61,16 @@ session transcript to flush and a working tree it may be mid-edit in, so it is
 given longer to answer the first signal — and the bounded wait past the kill is
 what keeps that generosity from becoming the supervisor's own hang.
 
+**An answer names the signal that actually stopped the group.** A final SIGKILL is
+aimed at the group only while it still has a member: an empty group *is* the
+guarantee this task is stated as, and killing nothing while reporting a killing
+would make every timeout say the CLI ignored being asked to stop. Whether a
+session came down on SIGTERM or had to be killed is the difference between a CLI
+that behaves and one that resists being stopped — a distinction an operator reads
+and a failure classifier acts on — so it is kept rather than smoothed into one
+word for "timed out", and the label is raised only by a signal aimed at something
+that was there to receive it.
+
 **Two clocks, both absolute, and the idle one is re-armed by every chunk.** The
 hard deadline is fixed at the spawn and bounds the session however productive it
 proves. The idle deadline is *last chunk plus `idle_timeout`*, recomputed in the
@@ -143,6 +153,9 @@ timeout does report it, because that error has a detail.
   everything it spawned goes down with it; a helper that detaches with `setsid`
   is out of reach by definition and the bounded wait is what stops the supervisor
   being the thing that hangs instead.
+- A timeout's detail says which signal stopped the group, so "it had to be
+  killed" and "it came down when asked" are two different answers, and the first
+  one is only ever given about a group that was still there to be killed.
 - A subscriber sees provider output while the session runs, on both streams, in
   the order it was read — and sees nothing from a session nobody attributed.
   `gate::run_gate` still publishes nothing (ADR-0037), so the two streaming paths
