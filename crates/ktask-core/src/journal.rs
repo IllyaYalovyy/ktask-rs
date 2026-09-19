@@ -154,6 +154,25 @@ impl Journal {
                     [],
                 )?;
 
+                // Create triggers to enforce append-only semantics
+                conn.execute(
+                    "CREATE TRIGGER IF NOT EXISTS trigger_prevent_update_events
+                        BEFORE UPDATE ON events
+                        BEGIN
+                            SELECT RAISE(ABORT, 'journal is append-only: updates not allowed');
+                        END",
+                    [],
+                )?;
+
+                conn.execute(
+                    "CREATE TRIGGER IF NOT EXISTS trigger_prevent_delete_events
+                        BEFORE DELETE ON events
+                        BEGIN
+                            SELECT RAISE(ABORT, 'journal is append-only: deletes not allowed');
+                        END",
+                    [],
+                )?;
+
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, seq)",
                     [],
@@ -552,6 +571,81 @@ mod tests {
         // Verify timestamp is within reasonable bounds (before and after)
         assert!(ts >= before);
         assert!(ts <= after);
+
+        drop(journal);
+    }
+
+    #[test]
+    fn journal_rejects_update() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind = EventKind::TaskQueued {
+            title: "Test task".to_string(),
+        };
+
+        journal.append(None, &kind).unwrap();
+
+        // Verify the original row exists
+        let original_kind: String = journal
+            .conn
+            .query_row("SELECT kind FROM events WHERE seq = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(original_kind, "TaskQueued");
+
+        // Attempt to update the row - should fail
+        let result = journal
+            .conn
+            .execute("UPDATE events SET kind = 'Modified' WHERE seq = 1", []);
+        assert!(result.is_err(), "UPDATE should be rejected by trigger");
+
+        // Verify the row is unchanged
+        let final_kind: String = journal
+            .conn
+            .query_row("SELECT kind FROM events WHERE seq = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            final_kind, "TaskQueued",
+            "Event should remain unchanged after failed UPDATE"
+        );
+
+        drop(journal);
+    }
+
+    #[test]
+    fn journal_rejects_delete() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let kind = EventKind::TaskQueued {
+            title: "Test task".to_string(),
+        };
+
+        journal.append(None, &kind).unwrap();
+
+        // Verify the row exists
+        let count_before: i64 = journal
+            .conn
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count_before, 1);
+
+        // Attempt to delete the row - should fail
+        let result = journal.conn.execute("DELETE FROM events WHERE seq = 1", []);
+        assert!(result.is_err(), "DELETE should be rejected by trigger");
+
+        // Verify the row still exists
+        let count_after: i64 = journal
+            .conn
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count_after, 1, "Event should not be deleted");
 
         drop(journal);
     }
