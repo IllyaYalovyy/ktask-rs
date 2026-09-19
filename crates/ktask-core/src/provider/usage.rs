@@ -13,7 +13,7 @@ pub enum UsageSource {
 }
 
 /// Token and cost reporting for a provider's response.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Usage {
     /// Number of input tokens used, if available.
     pub input_tokens: Option<u64>,

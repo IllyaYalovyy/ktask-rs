@@ -223,7 +223,8 @@ fn from_queued(event: &crate::event::EventKind) -> Result<TaskState> {
         | EventKind::Resumed
         | EventKind::Interrupted { .. }
         | EventKind::RecoveryDecision { .. }
-        | EventKind::GateAcknowledged { .. } => Err(Error::InvalidTransition {
+        | EventKind::GateAcknowledged { .. }
+        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
             from: "Queued".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -260,7 +261,8 @@ fn from_preflight(event: &crate::event::EventKind) -> Result<TaskState> {
         | EventKind::Resumed
         | EventKind::Interrupted { .. }
         | EventKind::RecoveryDecision { .. }
-        | EventKind::GateAcknowledged { .. } => Err(Error::InvalidTransition {
+        | EventKind::GateAcknowledged { .. }
+        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
             from: "Preflight".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -361,7 +363,8 @@ fn from_running(
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
-        | EventKind::GateAcknowledged { .. } => Err(Error::InvalidTransition {
+        | EventKind::GateAcknowledged { .. }
+        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
             from: format!("Running({attempt})"),
             event: event.discriminant().to_string(),
         }),
@@ -477,7 +480,8 @@ fn from_remediating(
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
-        | EventKind::GateAcknowledged { .. } => Err(Error::InvalidTransition {
+        | EventKind::GateAcknowledged { .. }
+        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
             from: format!("Remediating({attempt})"),
             event: event.discriminant().to_string(),
         }),
@@ -548,7 +552,8 @@ fn from_verifying(attempt: AttemptId, event: &crate::event::EventKind) -> Result
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
-        | EventKind::GateAcknowledged { .. } => Err(Error::InvalidTransition {
+        | EventKind::GateAcknowledged { .. }
+        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
             from: format!("Verifying({attempt})"),
             event: event.discriminant().to_string(),
         }),
@@ -603,7 +608,8 @@ fn from_publishing(attempt: AttemptId, event: &crate::event::EventKind) -> Resul
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
-        | EventKind::GateAcknowledged { .. } => Err(Error::InvalidTransition {
+        | EventKind::GateAcknowledged { .. }
+        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
             from: format!("Publishing({attempt})"),
             event: event.discriminant().to_string(),
         }),
@@ -655,7 +661,8 @@ fn from_published_verified(commit: &str, event: &crate::event::EventKind) -> Res
         | EventKind::TaskFailed { .. }
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
-        | EventKind::GateAcknowledged { .. } => Err(Error::InvalidTransition {
+        | EventKind::GateAcknowledged { .. }
+        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
             from: "PublishedVerified".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -700,7 +707,8 @@ fn from_paused(
         | EventKind::TaskDone { .. }
         | EventKind::TaskFailed { .. }
         | EventKind::Interrupted { .. }
-        | EventKind::RecoveryDecision { .. } => Err(Error::InvalidTransition {
+        | EventKind::RecoveryDecision { .. }
+        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
             from: "Paused".to_string(),
             event: event.discriminant().to_string(),
         }),

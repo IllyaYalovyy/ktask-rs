@@ -1,6 +1,8 @@
 //! Event kinds and their payloads.
 
-use crate::{AttemptId, EventSeq, FailureClass, PauseReason, Phase, Recovery, Stream, TaskId};
+use crate::{
+    AttemptId, AttemptRecord, EventSeq, FailureClass, PauseReason, Phase, Recovery, Stream, TaskId,
+};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -125,6 +127,11 @@ pub enum EventKind {
         /// Acknowledgment timestamp.
         at: OffsetDateTime,
     },
+    /// Attempt record was persisted.
+    AttemptRecorded {
+        /// The attempt record.
+        record: Box<AttemptRecord>,
+    },
 }
 
 impl EventKind {
@@ -151,6 +158,7 @@ impl EventKind {
             EventKind::Interrupted { .. } => "Interrupted",
             EventKind::RecoveryDecision { .. } => "RecoveryDecision",
             EventKind::GateAcknowledged { .. } => "GateAcknowledged",
+            EventKind::AttemptRecorded { .. } => "AttemptRecorded",
         }
     }
 }
@@ -172,6 +180,7 @@ pub struct Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AttemptRecord;
 
     #[test]
     fn event_kind_task_queued_roundtrips_through_json() {
@@ -601,5 +610,56 @@ mod tests {
         let deserialized: Event = serde_json::from_str(&json).expect("deserialize");
 
         assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn event_kind_attempt_recorded_roundtrips_through_json() {
+        let now = OffsetDateTime::now_utc();
+        let record = AttemptRecord {
+            id: AttemptId::new(1),
+            task: TaskId::new(1),
+            started: now,
+            ended: Some(now),
+            model_configured: Some("claude-opus".to_string()),
+            model_reported: Some("claude-opus".to_string()),
+            session_id: Some("session-123".to_string()),
+            exit_reason: "success".to_string(),
+            gates: vec![],
+            usage: None,
+            base_sha: "abc123".to_string(),
+            candidate_sha: Some("def456".to_string()),
+        };
+        let event = EventKind::AttemptRecorded {
+            record: Box::new(record),
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        let deserialized: EventKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn event_kind_discriminant_attempt_recorded() {
+        let now = OffsetDateTime::now_utc();
+        let record = AttemptRecord {
+            id: AttemptId::new(1),
+            task: TaskId::new(1),
+            started: now,
+            ended: None,
+            model_configured: None,
+            model_reported: None,
+            session_id: None,
+            exit_reason: "interrupted".to_string(),
+            gates: vec![],
+            usage: None,
+            base_sha: "abc123".to_string(),
+            candidate_sha: None,
+        };
+        assert_eq!(
+            EventKind::AttemptRecorded {
+                record: Box::new(record)
+            }
+            .discriminant(),
+            "AttemptRecorded"
+        );
     }
 }
