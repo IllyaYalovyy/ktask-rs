@@ -27,6 +27,8 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
+use time::macros::format_description;
+use time::{Date, Duration, OffsetDateTime, PlainDateTime, Time, UtcOffset};
 
 use crate::{Error, GateResult, Outcome};
 
@@ -548,17 +550,344 @@ pub fn limit_message(text: &str, patterns: &[String]) -> Option<String> {
     })
 }
 
+/// What a limit costs the run: an instant to wake at, or a bounded interval.
+///
+/// VISION.md §7 gives a [`FailureClass::ProviderLimit`] two responses and no
+/// third: a reset the provider named is waited out to that exact instant, and a
+/// limit that named no reset backs off within bounds. [`wait_plan`] chooses
+/// between them once, from the instant [`parse_reset`] read and the two
+/// configured ceilings, so whatever sleeps is nowhere near the decision and
+/// cannot invent a third response to a limit.
+///
+/// Jitter is deliberately absent, although VISION.md §7 asks for it beside the
+/// margin. This is a pure function of its arguments, and the wait must stay pure
+/// to survive a restart: the journal holds the instant (ADR-0009), so a
+/// supervisor that woke at an instant other than the one it wrote down would be
+/// resuming into a wait longer or shorter than the one it promised. Whoever
+/// sleeps adds jitter *around* the plan, never inside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitPlan {
+    /// Wait until `at`, then ask the provider again: it said when.
+    Deadline {
+        /// The instant to wake at — the reset that was read, plus the margin.
+        at: OffsetDateTime,
+    },
+    /// Wait `wait`, then ask the provider again, with no instant to aim at.
+    Backoff {
+        /// How long to sit: never negative, and never longer than the ceiling
+        /// this plan was built under.
+        wait: Duration,
+    },
+}
+
+/// A shape a reset time is written with, compiled the first time it is read.
+///
+/// As with [`Table`], a shape that does not compile is skipped rather than
+/// panicking, and `every_reset_pattern_compiles` is what stops that being a rule
+/// that quietly stopped existing: every limit written in that shape would fall
+/// back to a bounded wait with no instant in it, and only a run that waited the
+/// wrong length would notice.
+struct ResetPattern {
+    /// The shape as it is written in this file.
+    source: &'static str,
+    /// The same shape compiled, on first use.
+    compiled: OnceLock<Option<Regex>>,
+}
+
+impl ResetPattern {
+    /// A shape that is not compiled yet.
+    const fn new(source: &'static str) -> Self {
+        Self {
+            source,
+            compiled: OnceLock::new(),
+        }
+    }
+
+    /// The compiled shape, or `None` when the shape is not a regular expression.
+    fn regex(&self) -> Option<&Regex> {
+        self.compiled
+            .get_or_init(|| Regex::new(self.source).ok())
+            .as_ref()
+    }
+}
+
+/// A day, with the time and the offset that may stand beside it.
+///
+/// The separator accepts `T`, one space, and the word `at`, which are the three
+/// ways a reset is written down — as a machine-readable instant, as the same
+/// instant typed by a human, and in a sentence.
+static RESET_DAY: ResetPattern = ResetPattern::new(concat!(
+    r"(?i)\b(\d{4}-\d{2}-\d{2})(?:(?:[T ]| ?at )(\d{2}:\d{2}(?::\d{2})?(?:\.\d{1,9})?)",
+    r"(?: ?(Z|[+-]\d{2}:\d{2}))?)?\b",
+));
+
+/// A clock time, and the word or the zone that makes it a deadline.
+///
+/// Either the keyword in front (`at`, `by`, `until`, `till`) or the zone on the
+/// tail (`UTC`, `GMT`, `Z`) is required, and it is required because a line of
+/// output is full of clock times that say only when a line was printed. Which
+/// day the clock falls on is not in the token: it is the next day it occurs on,
+/// counted from the instant the line was read.
+static RESET_CLOCK: ResetPattern = ResetPattern::new(
+    r"(?i)\b(?:(at|by|until|till)[ \t]+)?(\d{1,2}:\d{2}(?::\d{2})?)(?:[ \t]*(utc|gmt|z))?\b",
+);
+
+/// A number beside the unit that says how long a wait it is.
+///
+/// The units are ordered longest first so `250ms` is read as a quarter of a
+/// second rather than as `250m` with an `s` left over, and a fraction is kept
+/// because the per-minute refusals name sub-second waits.
+static RESET_SPAN: ResetPattern = ResetPattern::new(concat!(
+    r"(?i)\b(\d+(?:\.\d+)?)[ \t]*(milliseconds?|ms|microseconds?|us|nanoseconds?|ns|weeks?|",
+    r"wks?|w|days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|sec|s)\b",
+));
+
+/// The HTTP header's bare number of seconds, which carries no unit at all.
+///
+/// `retry-after` is the one form a provider sends a wait as a plain integer, and
+/// the built-in limit table already recognises the header precisely because the
+/// header is the answer — see ADR-0060. The words it may cross are bounded so a
+/// `retry after` early in a long line cannot reach a number two clauses away.
+static RESET_RETRY_AFTER: ResetPattern =
+    ResetPattern::new(r"(?i)\bretry[ _-]?after\b[^\d\n]{0,8}(\d+(?:\.\d+)?)\b");
+
+/// When a provider says the limit lifts, read out of the line that said it.
+///
+/// [`limit_message`] hands over a line; this reads the half of it that decides
+/// the wait. Four shapes are read, in this order, and the first the line holds
+/// is the answer whatever else the line says:
+///
+/// - **A day, with or without a time and an offset.** `2026-09-20T00:00:00Z`,
+///   `2026-09-20 at 09:00` and a bare `2026-09-20` are all read. A time written
+///   with no offset, and a day written with no time, mean UTC; a day with no
+///   time means its first instant, which is the boundary a daily window lifts on.
+/// - **A clock time** — `14:05`, `14:05:30`, with or without `UTC`, `GMT`, `Z` —
+///   resolved to the next day it falls on, so midnight read at 23:59 is a minute
+///   away rather than a day gone. It is only read when the line has made a
+///   deadline of it, and not at all when more words follow that would place it
+///   (`pm`, a named zone, `tomorrow`), because this parser has no twelve-hour
+///   clock, no tzdata, and no rule for whose Tuesday anything is.
+/// - **A duration** — `in 1.8s`, `2h 15m`, `3 days` — summed when written in
+///   several parts, and measured from `now` rather than from midnight.
+/// - **A bare `retry-after`**, whose number is seconds and is the whole answer.
+///
+/// A day that does not exist (`2026-13-45`) answers [`None`] rather than being
+/// re-read as the clock time or the duration inside it: a line that names a day
+/// no calendar holds has named no reset, and honouring half of it would be
+/// waiting on a promise the provider never made. `None` is not a failure —
+/// [`wait_plan`] turns it into a bounded backoff, which is the right response to
+/// a wait nobody has been able to size.
+///
+/// `now` is not decoration. It decides which day a clock time falls on and where
+/// every duration is measured from, and it is the caller's clock rather than one
+/// read here, so the reading stays pure and a test can hold still.
+#[must_use]
+pub fn parse_reset(text: &str, now: OffsetDateTime) -> Option<OffsetDateTime> {
+    if let Some(day) = RESET_DAY.regex()
+        && let Some(found) = day.captures(text)
+    {
+        return read_day(&found);
+    }
+    if let Some(clock) = RESET_CLOCK.regex()
+        && let Some(instant) = clock
+            .captures_iter(text)
+            .find_map(|found| read_clock(text, &found, now))
+    {
+        return Some(instant);
+    }
+    read_span(text, now).or_else(|| read_retry_after(text, now))
+}
+
+/// How long to wait on a limit, given what was read from it and the two ceilings.
+///
+/// A known reset is waited out to the instant plus `margin`: that is VISION.md
+/// §7's "waits until the exact reset time, with margin", and
+/// [`crate::Config::limit_wait_margin_secs`] is the configuration's name for it.
+/// The cushion is what stops a limit that lifts a second early from costing a
+/// second refusal.
+///
+/// Everything else is a bounded backoff of the same configured pause, clamped
+/// into `0 ..= max`, and the bound is the point. It covers a reset that was never
+/// read, a reset whose instant has already passed (the promise is stale, and
+/// waking *at* it means waking now to ask again immediately), and a reset beyond
+/// [`crate::Config::limit_max_wait_secs`] — the ceiling a run will sit through
+/// before it reports a limit rather than appearing to hang. A caller that must
+/// tell "no reset" from "a reset too far out" still holds the `reset` it passed
+/// in; what it can rely on from here is that no plan is negative and none runs
+/// past `max`, so it can sleep without a watchdog of its own.
+#[must_use]
+pub fn wait_plan(
+    reset: Option<OffsetDateTime>,
+    now: OffsetDateTime,
+    margin: Duration,
+    max: Duration,
+) -> WaitPlan {
+    let ceiling = max.max(Duration::ZERO);
+    if let Some(instant) = reset
+        && let Some(deadline) = instant.checked_add(margin)
+        && deadline > now
+        && deadline - now <= ceiling
+    {
+        return WaitPlan::Deadline { at: deadline };
+    }
+    WaitPlan::Backoff {
+        wait: margin.max(Duration::ZERO).min(ceiling),
+    }
+}
+
+/// The instant a day-shaped token names, or `None` when it names none.
+fn read_day(found: &regex::Captures<'_>) -> Option<OffsetDateTime> {
+    let format = format_description!("[year]-[month]-[day]");
+    let day = Date::parse(found.get(1)?.as_str(), &format).ok()?;
+    let Some(clock) = found.get(2) else {
+        return Some(day.with_time(Time::MIDNIGHT).assume_utc());
+    };
+    let time = clock_of(clock.as_str())?;
+    let offset = match found.get(3) {
+        Some(mark) => offset_of(mark.as_str())?,
+        None => UtcOffset::UTC,
+    };
+    Some(PlainDateTime::new(day, time).assume_offset(offset))
+}
+
+/// The next instant a clock-shaped token falls on, counted from `now`.
+fn read_clock(
+    text: &str,
+    found: &regex::Captures<'_>,
+    now: OffsetDateTime,
+) -> Option<OffsetDateTime> {
+    let made_a_deadline = found.get(1).is_some() || found.get(3).is_some();
+    let tail = text.get(found.get(0)?.end()..).unwrap_or("");
+    if !made_a_deadline || wants_more_words(tail) {
+        return None;
+    }
+    let time = clock_of(found.get(2)?.as_str())?;
+    let today = now.to_offset(UtcOffset::UTC).date();
+    let moment = today.with_time(time).assume_utc();
+    if moment >= now {
+        return Some(moment);
+    }
+    Some(today.next_day()?.with_time(time).assume_utc())
+}
+
+/// The instant a run of `N unit` parts names, measured from `now`.
+///
+/// Only the first run is read: a line that names two waits ("try again in 20s;
+/// the window resets in 4h") has one answer, which is the first one, and summing
+/// the two would invent a deadline nobody sent.
+fn read_span(text: &str, now: OffsetDateTime) -> Option<OffsetDateTime> {
+    let finder = RESET_SPAN.regex()?;
+    let mut total = 0.0_f64;
+    let mut parts = 0;
+    let mut end = 0;
+    for found in finder.captures_iter(text) {
+        let whole = found.get(0)?;
+        let gap = text.get(end..whole.start()).unwrap_or("");
+        if parts > 0 && !is_continuation(gap) {
+            break;
+        }
+        total += part_seconds(&found)?;
+        end = whole.end();
+        parts += 1;
+    }
+    if parts == 0 {
+        return None;
+    }
+    now.checked_add(Duration::saturating_seconds_f64(total))
+}
+
+/// The instant a `retry-after` header counts to, measured from `now`.
+fn read_retry_after(text: &str, now: OffsetDateTime) -> Option<OffsetDateTime> {
+    let found = RESET_RETRY_AFTER.regex()?.captures(text)?;
+    let seconds = found.get(1)?.as_str().parse::<f64>().ok()?;
+    now.checked_add(Duration::saturating_seconds_f64(seconds))
+}
+
+/// The `HH:MM[:SS]` a token was written with, to the second.
+fn clock_of(token: &str) -> Option<Time> {
+    let mut parts = token.split(':');
+    let hour = parts.next()?.parse::<u8>().ok()?;
+    let minute = parts.next()?.parse::<u8>().ok()?;
+    let second = match parts.next() {
+        Some(seconds) => seconds.split('.').next()?.parse::<u8>().ok()?,
+        None => 0,
+    };
+    Time::from_hms(hour, minute, second).ok()
+}
+
+/// The offset an instant was written in, where `Z` means UTC.
+fn offset_of(token: &str) -> Option<UtcOffset> {
+    if token.eq_ignore_ascii_case("z") {
+        return Some(UtcOffset::UTC);
+    }
+    let (sign, body) = match token.chars().next() {
+        Some('+') => (1, token.get(1..)?),
+        Some('-') => (-1, token.get(1..)?),
+        _ => return None,
+    };
+    let (hours, minutes) = body.split_once(':')?;
+    let seconds = hours.parse::<i32>().ok()? * 3_600 + minutes.parse::<i32>().ok()? * 60;
+    UtcOffset::from_whole_seconds(sign * seconds).ok()
+}
+
+/// Whether the words between two `N unit` parts continue one duration.
+fn is_continuation(gap: &str) -> bool {
+    let gap = gap.trim();
+    gap.is_empty()
+        || gap.eq_ignore_ascii_case("and")
+        || gap.chars().all(|c| matches!(c, ',' | '-' | ' ' | '\t'))
+}
+
+/// Whether more words follow a clock time — words that would place it.
+///
+/// A clock followed by `pm`, by a zone name, or by `tomorrow` is a deadline this
+/// parser cannot honour. Reading `14:05 tomorrow` as `14:05 today` waits a whole
+/// day early, which is the one answer worse than no answer: the token is refused
+/// and the limit falls back to a bounded backoff.
+fn wants_more_words(tail: &str) -> bool {
+    tail.trim_start_matches([' ', '\t'])
+        .chars()
+        .next()
+        .is_some_and(char::is_alphabetic)
+}
+
+/// How many seconds one `N unit` part is worth.
+fn part_seconds(found: &regex::Captures<'_>) -> Option<f64> {
+    let amount = found.get(1)?.as_str().parse::<f64>().ok()?;
+    let unit = found.get(2)?.as_str().to_ascii_lowercase();
+    Some(amount * seconds_per_unit(&unit)?)
+}
+
+/// The length of one unit, or `None` when the word is not a unit of time.
+fn seconds_per_unit(unit: &str) -> Option<f64> {
+    let seconds = match unit {
+        "ns" => 1e-9,
+        "us" => 1e-6,
+        "ms" => 1e-3,
+        "s" | "sec" | "secs" | "second" | "seconds" => 1.0,
+        "m" | "min" | "mins" | "minute" | "minutes" => 60.0,
+        "h" | "hr" | "hrs" | "hour" | "hours" => 3_600.0,
+        "d" | "day" | "days" => 86_400.0,
+        "w" | "wk" | "wks" | "week" | "weeks" => 604_800.0,
+        _ => return None,
+    };
+    Some(seconds)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         CONFIGURATION, ENVIRONMENT, FailureClass, GIT_UNSTARTED, LIMIT, NEEDS_INPUT, POLICY,
-        PROVIDER_RESIDUAL, TRANSIENT, TddException, classify, limit_message,
+        PROVIDER_RESIDUAL, RESET_CLOCK, RESET_DAY, RESET_RETRY_AFTER, RESET_SPAN, TRANSIENT,
+        TddException, WaitPlan, classify, limit_message, parse_reset, wait_plan,
     };
     use crate::{Error, GateKind, GateResult, Outcome};
     use proptest::prelude::*;
     use serde::de::DeserializeOwned;
     use std::fmt::Debug;
     use std::path::PathBuf;
+    use time::macros::datetime;
+    use time::{Duration, OffsetDateTime};
 
     /// Every `FailureClass`, in the order `docs/DESIGN.md` declares them.
     const FAILURE_CLASSES: [FailureClass; 9] = [
@@ -1321,6 +1650,373 @@ mod tests {
         }
     }
 
+    /// The morning a reset line is read against: early enough that most of the
+    /// day's clock times are still ahead of it.
+    fn morning() -> OffsetDateTime {
+        datetime!(2026-09-19 09:00:00 UTC)
+    }
+
+    /// The last half-minute of a day, which is where a reset read as midnight
+    /// has to land on the far side of rather than behind.
+    fn last_minute_of_the_day() -> OffsetDateTime {
+        datetime!(2026-09-19 23:59:30 UTC)
+    }
+
+    /// The two configured ceilings a limit is waited out under, as
+    /// `docs/DESIGN.md` fixes them: a minute of cushion, a day of ceiling.
+    const MARGIN: Duration = Duration::seconds(60);
+    const CEILING: Duration = Duration::seconds(86_400);
+
+    #[test]
+    fn an_absolute_instant_is_read_from_the_line_that_named_the_limit() {
+        let line = "You have hit your plan's usage limit. It resets at 2026-09-20T00:00:00Z";
+        assert_eq!(
+            parse_reset(line, morning()),
+            Some(datetime!(2026-09-20 00:00:00 UTC)),
+            "VISION.md §7 waits a known reset out to the exact instant, so the \
+             instant on the line is the answer the wait is built from",
+        );
+    }
+
+    #[test]
+    fn an_absolute_instant_keeps_the_offset_it_was_written_in() {
+        let line = "usage limit reached; resets at 2026-09-20T09:00:00+09:00";
+        assert_eq!(
+            parse_reset(line, morning()),
+            Some(datetime!(2026-09-20 00:00:00 UTC)),
+            "a reset written in the provider's own offset is the same instant as \
+             the one waited out, so the offset cannot be dropped or assumed UTC",
+        );
+    }
+
+    #[test]
+    fn an_instant_written_without_an_offset_is_read_as_utc() {
+        let line = "usage limit reached; resets 2026-09-20 09:00";
+        assert_eq!(
+            parse_reset(line, morning()),
+            Some(datetime!(2026-09-20 09:00:00 UTC)),
+            "a time with no zone is read as UTC rather than as the supervisor's \
+             local time, which differs from machine to machine",
+        );
+    }
+
+    /// A day named without a time is that day's first instant, which is the
+    /// day boundary the task's done-when asks for: read one minute before it,
+    /// the wait is a minute long, and read one minute after it the promise has
+    /// already been missed.
+    #[test]
+    fn a_day_written_without_a_time_resets_at_its_first_instant() {
+        assert_eq!(
+            parse_reset("usage limit reached; resets 2026-09-20", morning()),
+            Some(datetime!(2026-09-20 00:00:00 UTC)),
+        );
+        assert_eq!(
+            wait_plan(
+                parse_reset(
+                    "usage limit reached; resets 2026-09-20",
+                    last_minute_of_the_day()
+                ),
+                last_minute_of_the_day(),
+                MARGIN,
+                CEILING,
+            ),
+            WaitPlan::Deadline {
+                at: datetime!(2026-09-20 00:01:00 UTC),
+            },
+            "a day boundary read from the last minute of the day is a minute of \
+             wait plus the margin, not a wait that overshoots into the next day",
+        );
+    }
+
+    #[test]
+    fn a_clock_time_still_ahead_lands_on_the_day_it_was_written() {
+        assert_eq!(
+            parse_reset(
+                "ERROR: usage limit reached; retry after 14:05 UTC",
+                morning()
+            ),
+            Some(datetime!(2026-09-19 14:05:00 UTC)),
+            "the same clock time twice a day is resolved by the instant it was \
+             read at, and this one has not been reached yet",
+        );
+    }
+
+    #[test]
+    fn a_clock_time_already_past_rolls_across_midnight_to_the_next_day() {
+        assert_eq!(
+            parse_reset(
+                "usage limit reached; resets at 00:00:00Z",
+                last_minute_of_the_day()
+            ),
+            Some(datetime!(2026-09-20 00:00:00 UTC)),
+            "midnight read at 23:59:30 is thirty seconds away: reading it as the \
+             midnight that has just passed would wait out a whole day for a limit \
+             that has already lifted",
+        );
+    }
+
+    #[test]
+    fn a_clock_time_rolls_the_year_over_at_the_last_moment_of_the_last_day() {
+        assert_eq!(
+            parse_reset(
+                "usage limit reached; resets at 00:00 UTC",
+                datetime!(2026-12-31 23:59:59 UTC)
+            ),
+            Some(datetime!(2027-01-01 00:00:00 UTC)),
+            "the day after the last day of a year is a day, and a rollover that \
+             stops at 31 December would wake a year early",
+        );
+    }
+
+    #[test]
+    fn a_clock_time_that_is_not_made_a_deadline_is_not_a_reset() {
+        assert_eq!(
+            parse_reset("[09:12:33] usage limit reached for this plan", morning()),
+            None,
+            "a line of log output is full of clock times that say when a line was \
+             printed, and waiting to one of them is a wait nobody asked for",
+        );
+    }
+
+    #[test]
+    fn a_clock_time_written_in_the_meridian_is_not_a_reset() {
+        assert_eq!(
+            parse_reset("usage limit reached; resets at 8:00 pm", morning()),
+            None,
+            "reading 8:00 pm as 08:00 would wake the run twelve hours early, so \
+             a twelve-hour clock falls back to a bounded backoff instead",
+        );
+    }
+
+    #[test]
+    fn a_relative_duration_is_measured_from_the_instant_it_was_read_at() {
+        assert_eq!(
+            parse_reset("retry-after: 3600", morning()),
+            Some(datetime!(2026-09-19 10:00:00 UTC)),
+            "the HTTP header sends a bare number of seconds, and that number is \
+             the whole answer",
+        );
+    }
+
+    #[test]
+    fn a_fractional_duration_keeps_its_fraction() {
+        assert_eq!(
+            parse_reset(
+                "Rate limit reached for gpt-5.1-codex on tokens per min (TPM): Limit \
+                 30000, Used 29998, Requested 900. Please try again in 1.8s.",
+                morning(),
+            ),
+            Some(morning() + Duration::seconds(1) + Duration::nanoseconds(800_000_000)),
+            "the tokens-per-minute refusal names a sub-second wait, and rounding \
+             it up to a second is a different answer from the one sent",
+        );
+    }
+
+    #[test]
+    fn a_duration_written_in_several_parts_is_the_sum_of_them() {
+        assert_eq!(
+            parse_reset("usage limit reached; resets in 2h 15m", morning()),
+            Some(datetime!(2026-09-19 11:15:00 UTC)),
+        );
+    }
+
+    /// A form both CLIs write when the wait is not a round number.
+    #[test]
+    fn a_duration_written_without_a_separator_is_refused_rather_than_half_read() {
+        assert_eq!(
+            parse_reset("usage limit reached; resets in 1h30m", morning()),
+            None,
+            "neither `1h` nor `30m` is a word boundary inside `1h30m`, so the \
+             whole token is refused; reading the `30m` half of it would wait \
+             ninety minutes short of the promise the line made",
+        );
+    }
+
+    #[test]
+    fn a_relative_duration_that_crosses_midnight_lands_the_next_day() {
+        assert_eq!(
+            parse_reset(
+                "usage limit reached; try again in 3 hours",
+                datetime!(2026-09-19 23:00:00 UTC)
+            ),
+            Some(datetime!(2026-09-20 02:00:00 UTC)),
+            "a wait measured from now crosses the day boundary where now asks it \
+             to, and a day kept by truncating to midnight would lose three hours",
+        );
+    }
+
+    #[test]
+    fn an_absolute_day_is_read_before_a_duration_written_beside_it() {
+        assert_eq!(
+            parse_reset(
+                "usage limit reached; resets 2026-09-20, retry-after: 3600",
+                morning()
+            ),
+            Some(datetime!(2026-09-20 00:00:00 UTC)),
+            "an instant the provider named outranks a duration on the same line: \
+             the ceiling lifts at the instant, not one hour after the question",
+        );
+    }
+
+    #[test]
+    fn a_day_that_does_not_exist_is_not_re_read_as_the_clock_inside_it() {
+        assert_eq!(
+            parse_reset(
+                "usage limit reached; resets 2026-13-45T10:00:00Z; retry after 60s",
+                morning()
+            ),
+            None,
+            "a line that names a day no calendar holds has named no reset, and \
+             reading the 10:00 or the 60s out of it would honour a malformed promise",
+        );
+    }
+
+    #[test]
+    fn a_reset_is_read_from_the_line_the_limit_was_named_on() {
+        let text = "reading the queue\nERROR: usage limit reached; resets at \
+                    2026-09-20T00:00:00Z\ndone\n";
+        let line = limit_message(text, &[]).expect("the limit line is the answer T065 returns");
+        assert_eq!(
+            parse_reset(&line, morning()),
+            Some(datetime!(2026-09-20 00:00:00 UTC)),
+            "ADR-0060 returned the line because the reset time is the useful half \
+             of it; this is the half being read",
+        );
+    }
+
+    #[test]
+    fn a_reset_that_cannot_be_placed_costs_a_bounded_backoff_and_never_an_unbounded_wait() {
+        for line in [
+            "You've hit your weekly limit; it will reset at 8pm (America/Los_Angeles) on Tuesday.",
+            "HTTP 429 from api.anthropic.com",
+            "usage limit reached; resets at midnight",
+            "",
+        ] {
+            let reset = parse_reset(line, morning());
+            assert_eq!(
+                reset, None,
+                "{line:?} names no instant this parser can place"
+            );
+            let plan = wait_plan(reset, morning(), MARGIN, CEILING);
+            let WaitPlan::Backoff { wait } = plan else {
+                panic!("an unplaced reset must never become a deadline: {line:?} gave {plan:?}");
+            };
+            assert!(
+                wait > Duration::ZERO && wait <= CEILING,
+                "{line:?} backed off for {wait:?}, which is neither a wait nor inside \
+                 the ceiling the run gave itself",
+            );
+        }
+    }
+
+    #[test]
+    fn a_known_reset_inside_the_ceiling_is_waited_out_to_the_instant_plus_margin() {
+        let reset = datetime!(2026-09-19 13:00:00 UTC);
+        assert_eq!(
+            wait_plan(Some(reset), morning(), MARGIN, CEILING),
+            WaitPlan::Deadline {
+                at: datetime!(2026-09-19 13:01:00 UTC)
+            },
+            "VISION.md §7 waits a known reset out to the instant with margin, so a \
+             limit that lifts a second early does not cost a second refusal",
+        );
+    }
+
+    #[test]
+    fn a_margin_of_nothing_waits_to_the_exact_instant_the_provider_named() {
+        let reset = datetime!(2026-09-19 13:00:00 UTC);
+        assert_eq!(
+            wait_plan(Some(reset), morning(), Duration::ZERO, CEILING),
+            WaitPlan::Deadline { at: reset },
+        );
+    }
+
+    #[test]
+    fn a_reset_the_provider_already_missed_becomes_a_backoff() {
+        let missed = morning() - Duration::hours(1);
+        assert_eq!(
+            wait_plan(Some(missed), morning(), MARGIN, CEILING),
+            WaitPlan::Backoff { wait: MARGIN },
+            "a promise whose instant has passed is no longer a promise about the \
+             future, and waking at it means waking now to ask again immediately",
+        );
+    }
+
+    #[test]
+    fn a_reset_beyond_the_ceiling_is_never_waited_out_as_a_deadline() {
+        let far = morning() + Duration::days(5);
+        assert_eq!(
+            wait_plan(Some(far), morning(), MARGIN, CEILING),
+            WaitPlan::Backoff { wait: MARGIN },
+            "limit_max_wait_secs is the longest wait a run may sit through before \
+             it reports a limit, and a five-day deadline is a run that appears to hang",
+        );
+    }
+
+    #[test]
+    fn a_margin_that_pushes_a_reset_past_the_ceiling_becomes_a_backoff() {
+        let almost = morning() + CEILING - Duration::seconds(30);
+        assert_eq!(
+            wait_plan(Some(almost), morning(), MARGIN, CEILING),
+            WaitPlan::Backoff { wait: MARGIN },
+            "the ceiling is the ceiling whatever the margin does to it",
+        );
+    }
+
+    #[test]
+    fn no_reset_time_is_a_bounded_backoff() {
+        assert_eq!(
+            wait_plan(None, morning(), MARGIN, CEILING),
+            WaitPlan::Backoff { wait: MARGIN },
+            "an unknown reset uses bounded backoff (VISION.md §7); the configured \
+             margin is the pause the configuration already means by asking again",
+        );
+    }
+
+    #[test]
+    fn a_margin_larger_than_the_ceiling_is_clamped_to_the_ceiling() {
+        assert_eq!(
+            wait_plan(None, morning(), Duration::days(2), CEILING),
+            WaitPlan::Backoff { wait: CEILING },
+        );
+    }
+
+    #[test]
+    fn a_ceiling_of_nothing_waits_for_nothing() {
+        for reset in [None, Some(morning() + CEILING)] {
+            assert_eq!(
+                wait_plan(reset, morning(), MARGIN, Duration::ZERO),
+                WaitPlan::Backoff {
+                    wait: Duration::ZERO
+                },
+                "a run that has allowed itself no wait at all is answered with no \
+                 wait rather than with a deadline it refused to sit through",
+            );
+        }
+    }
+
+    /// Every shape a reset is read from is a regular expression.
+    ///
+    /// As with the classification tables, a shape that does not compile is
+    /// skipped rather than panicking, which would otherwise be a rule that
+    /// quietly stopped existing: every limit written in that shape would fall
+    /// back to a bounded wait with no instant in it, and only a run that waited
+    /// the wrong length would notice.
+    #[test]
+    fn every_reset_pattern_compiles() {
+        for (name, pattern) in [
+            ("reset day", &RESET_DAY),
+            ("reset clock", &RESET_CLOCK),
+            ("reset span", &RESET_SPAN),
+            ("reset retry-after", &RESET_RETRY_AFTER),
+        ] {
+            assert!(
+                pattern.regex().is_some(),
+                "{name} is not a regular expression",
+            );
+        }
+    }
+
     proptest! {
         /// The class is decided by the evidence in front of it and by nothing
         /// else: no clock, no randomness, no memory of a previous call.
@@ -1369,6 +2065,52 @@ mod tests {
             prop_assert_eq!(
                 classify(&outcome, &every_gate_passed(), None),
                 FailureClass::AgentFailure,
+            );
+        }
+
+        /// A plan is always a finite wait: a deadline inside the ceiling it was
+        /// handed, or an interval between zero and that ceiling. Nothing here
+        /// can hand the caller a wait it has to put a watchdog on, whatever the
+        /// provider wrote and whatever the two knobs are set to.
+        #[test]
+        fn a_wait_plan_never_waits_longer_than_the_ceiling_it_was_handed(
+            stand in 0i64..315_360_000,
+            reset_delta in -86_400i64..2_592_000,
+            has_reset in any::<bool>(),
+            margin in -60i64..259_200,
+            ceiling in 0i64..259_200,
+        ) {
+            let now = datetime!(2026-01-01 00:00:00 UTC) + Duration::seconds(stand);
+            let reset =
+                has_reset.then(|| now + Duration::seconds(reset_delta));
+            let ceiling = Duration::seconds(ceiling);
+            let plan = wait_plan(reset, now, Duration::seconds(margin), ceiling);
+            match plan {
+                WaitPlan::Deadline { at } => {
+                    prop_assert!(at > now, "a deadline at or behind now waits for nothing: {plan:?}");
+                    prop_assert!(
+                        at - now <= ceiling,
+                        "a deadline past the ceiling hangs the run: {plan:?} > {ceiling:?}"
+                    );
+                }
+                WaitPlan::Backoff { wait } => {
+                    prop_assert!(!wait.is_negative(), "a negative wait is not a wait: {plan:?}");
+                    prop_assert!(
+                        wait <= ceiling.max(Duration::ZERO),
+                        "a backoff past the ceiling hangs the run: {wait:?} > {ceiling:?}"
+                    );
+                }
+            }
+        }
+
+        /// Every shape a reset is read from holds digits — a day, a clock, a
+        /// number beside a unit. Prose alone, however clearly it complains about
+        /// a limit, cannot become a wait.
+        #[test]
+        fn text_that_carries_no_digits_names_no_reset(text in "[a-z ]{0,120}") {
+            prop_assert!(
+                parse_reset(&text, morning()).is_none(),
+                "invented a reset out of {text:?}",
             );
         }
     }
