@@ -16,13 +16,13 @@ time = { workspace = true }
 regex = { workspace = true }
 nix = { workspace = true }
 signal-hook = { workspace = true }
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
 proptest = { workspace = true }
 
 [features]
-testing = []
+testing = ["tempfile"]
 
 [lints]
 workspace = true
