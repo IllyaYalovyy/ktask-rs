@@ -3,27 +3,27 @@
 //! Each command is a thin wrapper over ktask-core that handles I/O,
 //! formatting, and error reporting. No decision logic lives here.
 
+pub(crate) mod ack;
+pub(crate) mod add;
+pub(crate) mod cancel;
 pub(crate) mod doctor;
 pub(crate) mod init;
-pub(crate) mod add;
+pub(crate) mod interrupt;
+pub(crate) mod pause;
 pub(crate) mod plan;
-pub(crate) mod status;
-pub(crate) mod run;
+pub(crate) mod rerun_gate;
+pub(crate) mod resolve;
 pub(crate) mod resume;
 pub(crate) mod retry;
-pub(crate) mod resolve;
-pub(crate) mod ack;
-pub(crate) mod pause;
-pub(crate) mod interrupt;
-pub(crate) mod cancel;
-pub(crate) mod rerun_gate;
+pub(crate) mod run;
+pub(crate) mod status;
 pub(crate) mod tui;
 
-use ktask_core::RunOutcome;
 use crate::cli::Command;
+use ktask_core::RunOutcome;
 
 /// Dispatch a CLI command to its implementation and return the outcome.
-pub fn dispatch(
+pub(crate) fn dispatch(
     command: Command,
     project: Option<ktask_core::Project>,
     config: Option<ktask_core::Config>,
@@ -108,4 +108,3 @@ mod tests {
         }
     }
 }
-

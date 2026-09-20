@@ -2,6 +2,6 @@
 
 use ktask_core::RunOutcome;
 
-pub fn run() -> RunOutcome {
+pub(crate) fn run() -> RunOutcome {
     RunOutcome::Drained
 }

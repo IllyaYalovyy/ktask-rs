@@ -14,7 +14,7 @@ mod render;
 
 use clap::Parser;
 use cli::Cli;
-use ktask_core::{discover, RunOutcome};
+use ktask_core::{RunOutcome, discover};
 use std::path::Path;
 
 fn main() {
@@ -27,14 +27,11 @@ fn main() {
 }
 
 fn run_cli(cli: Cli) -> RunOutcome {
-    let project = resolve_project(&cli.project);
+    let project = resolve_project(cli.project.as_ref());
 
     match project {
         Ok(proj) => {
-            let config = match ktask_core::load_for(&proj) {
-                Ok(cfg) => Some(cfg),
-                Err(_) => None,
-            };
+            let config = ktask_core::load_for(&proj).ok();
             cmd::dispatch(cli.command, Some(proj), config)
         }
         Err(e) => {
@@ -47,7 +44,7 @@ fn run_cli(cli: Cli) -> RunOutcome {
                         "error: no project found\nrun 'ktask-rs init' to register this repository"
                     ));
                     RunOutcome::Usage {
-                        detail: format!("{}", e),
+                        detail: format!("{e}"),
                     }
                 }
             }
@@ -55,7 +52,9 @@ fn run_cli(cli: Cli) -> RunOutcome {
     }
 }
 
-fn resolve_project(project_path: &Option<std::path::PathBuf>) -> ktask_core::Result<ktask_core::Project> {
+fn resolve_project(
+    project_path: Option<&std::path::PathBuf>,
+) -> ktask_core::Result<ktask_core::Project> {
     match project_path {
         Some(path) => ktask_core::register(path),
         None => discover(Path::new(".")),
