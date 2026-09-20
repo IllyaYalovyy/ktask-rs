@@ -6,8 +6,13 @@
 //! emitting them, and the supervisor stays testable without capturing output.
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
+mod cli;
+
+use clap::Parser;
+use cli::Cli;
 use ktask_core as _;
 
 fn main() {
+    let _cli = Cli::parse();
     eprintln!("ktask-rs: CLI implementation in progress");
 }

@@ -10,6 +10,9 @@ name = "ktask-rs"
 path = "src/main.rs"
 
 [dependencies]
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 ktask-core = { path = "../ktask-core", version = "0.1.0" }
 
 [lints]
