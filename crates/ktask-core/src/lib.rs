@@ -29,7 +29,7 @@ mod task;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
-pub use attempt::AttemptRecord;
+pub use attempt::{AttemptRecord, attempt_records};
 pub use classify::{
     FailureClass, TddException, WaitPlan, classify, limit_message, parse_reset, wait_plan,
 };

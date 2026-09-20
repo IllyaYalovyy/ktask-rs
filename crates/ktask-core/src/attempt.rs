@@ -54,6 +54,16 @@
 //! Merging them would lose the only evidence that the provider ran something
 //! other than what it was told to.
 //!
+//! # Reading them back
+//!
+//! [`crate::attempt_records`] answers a task's whole attempt history: every
+//! record it ever journaled, in the order the attempts ran, read out of the rows
+//! that carry them. Ordered by attempt rather than by sequence because a record
+//! is filed when an attempt's recorder reaches it, and read for exactly one task
+//! at a time — a record naming a task other than the row it was filed under is
+//! refused with that row's sequence number rather than quietly dropped, since a
+//! reader cannot be handed evidence and told which half of it to disbelieve.
+//!
 //! # What is not here
 //!
 //! VISION.md §6 also lists "commands run". The record shape this task was given
@@ -72,7 +82,52 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::{AttemptId, GateResult, TaskId, Usage};
+use crate::{AttemptId, Error, EventKind, GateResult, Journal, Result, TaskId, Usage};
+
+/// Every attempt `task` made, each as its own record, in attempt order.
+///
+/// A task's history is a list rather than a row: [`Journal`] is append-only, and
+/// its two triggers refuse the update and the delete that would collapse a retry
+/// into the first attempt's place (ADR-0017). So reading a task's attempts is
+/// reading everything it ever journaled, not reading its latest answer — which
+/// is what VISION.md §7 needs to assemble a failure bundle from an attempt the
+/// next one replaced.
+///
+/// The answer is ordered by [`AttemptRecord::id`] rather than by the order the
+/// rows were written. Evidence is filed when an attempt's recorder gets to it,
+/// so a journal can hold a later attempt before an earlier one, while the order
+/// a reader comparing one attempt with the next wants is the order the attempts
+/// ran. The sort is stable, so records no ordering explains stay as they were
+/// written.
+///
+/// # Errors
+///
+/// [`Error::Corrupt`] when a row filed under `task` carries a record naming a
+/// different task. Which of the two is wrong is not this function's to decide —
+/// the row's task is what the recorder claimed and [`AttemptRecord::task`] is
+/// what the attempt said — and showing a record as evidence about a task that
+/// never ran it is exactly the thing this read exists to refuse, so the row is
+/// refused with its sequence number rather than skipped. The journal's own read
+/// errors pass through unchanged.
+pub fn attempt_records(journal: &Journal, task: TaskId) -> Result<Vec<AttemptRecord>> {
+    let mut records = Vec::new();
+    for event in journal.events_for(task)? {
+        if let EventKind::AttemptRecorded { record } = &event.kind {
+            if record.task != task {
+                return Err(Error::Corrupt {
+                    detail: format!(
+                        "attempt {} is journaled under task {task} but names task {}",
+                        record.id, record.task
+                    ),
+                    seq: Some(event.seq.get()),
+                });
+            }
+            records.push((**record).clone());
+        }
+    }
+    records.sort_by_key(|held| held.id);
+    Ok(records)
+}
 
 /// Everything one run of one task proved, as one durable row.
 ///
@@ -146,8 +201,12 @@ pub struct AttemptRecord {
 #[cfg(test)]
 mod tests {
     use super::AttemptRecord;
-    use crate::{AttemptId, GateKind, GateResult, PauseReason, TaskId, Usage, UsageSource};
+    use crate::{
+        AttemptId, Error, EventKind, GateKind, GateResult, Journal, PauseReason, TaskId, Usage,
+        UsageSource, attempt_records, journal_path,
+    };
     use serde_json::Value;
+    use tempfile::tempdir;
     use time::macros::datetime;
 
     /// The twelve field names a record is written with, spelled out a second
@@ -399,5 +458,168 @@ mod tests {
                  invented from a placeholder"
             );
         }
+    }
+
+    /// The same task's first attempt: an earlier instant, a session that never
+    /// reported a model back, no commit, and no telemetry to report.
+    fn first_attempt() -> AttemptRecord {
+        AttemptRecord {
+            id: AttemptId::new(1),
+            task: TaskId::new(7),
+            started: datetime!(2026-09-19 18:02:11 UTC),
+            ended: Some(datetime!(2026-09-19 18:30:40 UTC)),
+            model_configured: Some("gpt-5.6-sol".to_owned()),
+            model_reported: None,
+            session_id: Some("sess_01HQZJ".to_owned()),
+            exit_reason: "exited 0".to_owned(),
+            gates: Vec::new(),
+            usage: Some(Usage::unavailable()),
+            base_sha: BASE.to_owned(),
+            candidate_sha: None,
+        }
+    }
+
+    /// A journal in a scratch directory, and the directory that keeps it alive.
+    fn journal() -> (tempfile::TempDir, Journal) {
+        let parent = tempdir().expect("a scratch directory beside the repository");
+        let journal = Journal::open(&journal_path(parent.path()))
+            .expect("a new journal opens below the scratch directory");
+        (parent, journal)
+    }
+
+    /// Files `record` under the task it names, which is what a recorder does: the
+    /// row's task and the record's own task are the same task.
+    fn file(journal: &mut Journal, record: &AttemptRecord) {
+        journal
+            .append(
+                Some(record.task),
+                &EventKind::AttemptRecorded {
+                    record: Box::new(record.clone()),
+                },
+            )
+            .expect("an attempt record appends, transition or not");
+    }
+
+    #[test]
+    fn a_retry_adds_an_attempt_record_rather_than_overwriting_the_first() {
+        let (parent, mut journal) = journal();
+        let first = first_attempt();
+        file(&mut journal, &first);
+        file(&mut journal, &record());
+
+        let read = attempt_records(&journal, TaskId::new(7)).expect("two records read back");
+        assert_eq!(read.len(), 2, "one record per attempt, not the newest one");
+        assert_eq!(
+            read[0], first,
+            "the first attempt's record is the record that was filed, not the retry's \
+             answer filed into its place"
+        );
+        assert_eq!(
+            (read[0].session_id.as_deref(), read[1].session_id.as_deref()),
+            (Some("sess_01HQZJ"), Some("sess_01HQZK")),
+            "two sessions of one task stay two sessions"
+        );
+        assert_eq!(
+            (read[0].usage, read[1].usage),
+            (Some(Usage::unavailable()), Some(reported_usage())),
+            "what nobody reported and what the provider reported stay the two different \
+             claims they are"
+        );
+        assert_eq!(
+            (read[0].gates.len(), read[1].gates.len()),
+            (0, 2),
+            "an attempt that never reached a gate keeps an empty list beside an attempt \
+             that reached two"
+        );
+        drop(parent);
+    }
+
+    #[test]
+    fn attempt_records_read_back_in_attempt_order_whatever_order_they_were_journaled_in() {
+        let (parent, mut journal) = journal();
+        let mut third = record();
+        third.id = AttemptId::new(3);
+        third.candidate_sha = Some("c9e2a4d7f0b1".to_owned());
+
+        // Filed late rather than first: a recorder files an attempt's evidence
+        // when it gets to it, so a later attempt's row can be on disk before an
+        // earlier attempt's is.
+        file(&mut journal, &third);
+        file(&mut journal, &first_attempt());
+        file(&mut journal, &record());
+
+        let read = attempt_records(&journal, TaskId::new(7)).expect("three records read back");
+        assert_eq!(
+            read.iter().map(|held| held.id.get()).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "attempt order, which is what a reader comparing one attempt with the next \
+             one needs, and which journal order is not"
+        );
+        assert_eq!(
+            read[2].candidate_sha.as_deref(),
+            Some("c9e2a4d7f0b1"),
+            "the record that was journaled first is still the last one read"
+        );
+        drop(parent);
+    }
+
+    #[test]
+    fn attempt_records_name_the_task_they_were_read_for_and_no_other() {
+        let (parent, mut journal) = journal();
+        file(&mut journal, &first_attempt());
+        let mut elsewhere = record();
+        elsewhere.task = TaskId::new(8);
+        file(&mut journal, &elsewhere);
+
+        let seven = attempt_records(&journal, TaskId::new(7)).expect("one task's records");
+        assert_eq!(
+            seven.iter().map(|held| held.task).collect::<Vec<_>>(),
+            vec![TaskId::new(7)],
+            "reading one task reads that task's attempts and none of its neighbour's"
+        );
+        let eight = attempt_records(&journal, TaskId::new(8)).expect("the other task's records");
+        assert_eq!(
+            eight.iter().map(|held| held.id.get()).collect::<Vec<_>>(),
+            vec![2],
+            "the neighbour keeps the attempt it ran, unread from the task above it"
+        );
+        let none = attempt_records(&journal, TaskId::new(9))
+            .expect("a task that never ran is an empty answer, not an error");
+        assert!(
+            none.is_empty(),
+            "no records is the answer for a task with none, so a screen can render it \
+             without a special case"
+        );
+        drop(parent);
+    }
+
+    #[test]
+    fn an_attempt_record_journaled_under_a_task_it_does_not_name_is_refused() {
+        let (parent, mut journal) = journal();
+        let mut displaced = first_attempt();
+        displaced.task = TaskId::new(8);
+        journal
+            .append(
+                Some(TaskId::new(7)),
+                &EventKind::AttemptRecorded {
+                    record: Box::new(displaced),
+                },
+            )
+            .expect("a record appends under the task its caller named");
+
+        let error = attempt_records(&journal, TaskId::new(7))
+            .expect_err("a record about another task cannot be read as evidence about this one");
+        assert!(
+            matches!(error, Error::Corrupt { seq: Some(1), .. }),
+            "the refusal is the one that carries a location, because a repair starts by \
+             opening the row it names"
+        );
+        assert_eq!(
+            error.to_string(),
+            "corrupt data at seq 1: attempt 1 is journaled under task 7 but names task 8",
+            "the refusal names the row, the attempt and both tasks, because the repair \
+             starts from which of the two is the one that is wrong"
+        );
+        drop(parent);
     }
 }
