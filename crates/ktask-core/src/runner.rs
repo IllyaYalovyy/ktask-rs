@@ -6,6 +6,8 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use time::OffsetDateTime;
 
@@ -85,6 +87,8 @@ pub struct Runner {
     pub recorder: Recorder,
     /// The configured provider for AI agents.
     pub provider: Box<dyn Provider>,
+    /// Flag set when SIGINT is received.
+    interrupted: Arc<AtomicBool>,
 }
 
 /// Result of preflight checks and worktree preparation.
@@ -106,6 +110,7 @@ impl std::fmt::Debug for Runner {
             .field("profile", &self.profile)
             .field("recorder", &self.recorder)
             .field("provider", &self.provider.name())
+            .field("interrupted", &self.interrupted.load(Ordering::Relaxed))
             .finish()
     }
 }
@@ -119,6 +124,7 @@ impl Runner {
     /// - Loads the effective configuration
     /// - Builds the quality gates profile
     /// - Initializes the configured provider
+    /// - Installs a signal handler for SIGINT
     ///
     /// # Arguments
     ///
@@ -139,12 +145,18 @@ impl Runner {
 
         let recorder = Recorder::new(journal, bus);
 
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let interrupt_flag = Arc::clone(&interrupted);
+
+        let _ = signal_hook::flag::register(signal_hook::consts::signal::SIGINT, interrupt_flag);
+
         Ok(Runner {
             project,
             config,
             profile,
             recorder,
             provider,
+            interrupted,
         })
     }
 
@@ -970,6 +982,34 @@ impl Runner {
         Ok(None)
     }
 
+    /// Check if interrupted and handle it.
+    ///
+    /// Returns Ok(Some(state)) if interrupted, Ok(None) if not interrupted.
+    fn check_interrupt(&mut self, task: &Task, attempt: AttemptId, phase: crate::state::Phase) -> Result<Option<crate::TaskState>> {
+        if self.interrupted.load(Ordering::Acquire) {
+            self.recorder.record(
+                Some(task.id),
+                crate::EventKind::Interrupted { phase },
+            )?;
+            self.kill_remaining_processes();
+            return Ok(Some(crate::TaskState::Running { attempt, phase }));
+        }
+        Ok(None)
+    }
+
+    /// Kill any remaining child processes from the provider.
+    fn kill_remaining_processes(&self) {
+        use nix::sys::signal::{kill, Signal};
+        use nix::unistd::Pid;
+
+        let current_pid = std::process::id();
+        if let Ok(pgrp) = nix::unistd::getpgid(Some(Pid::from_raw(current_pid as i32))) {
+            let _ = kill(pgrp, Signal::SIGTERM);
+            std::thread::sleep(Duration::from_millis(100));
+            let _ = kill(pgrp, Signal::SIGKILL);
+        }
+    }
+
     /// Execute the protocol phases for a prepared task.
     ///
     /// Runs through each phase of the selected protocol, updating task state
@@ -1004,6 +1044,10 @@ impl Runner {
         let mut red_phase_summary: Option<crate::gate::TestSummary> = None;
 
         for spec in &protocol.phases {
+            if let Some(state) = self.check_interrupt(task, attempt, spec.phase)? {
+                return Ok(state);
+            }
+
             self.recorder.record(
                 Some(task.id),
                 crate::EventKind::PhaseEntered {
