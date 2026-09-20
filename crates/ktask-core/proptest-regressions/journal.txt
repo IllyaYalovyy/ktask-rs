@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 49487194ba7d3fc3143c1b9b5ce0adeeeb9d64ec5098464ae9afc6eb706b5e32 # shrinks to events = [TaskQueued { title: "Test" }, PreflightStarted, PreflightPassed { base_sha: "abc123" }, AttemptStarted { attempt: AttemptId(1), protocol: "direct", pid: 1234, base_sha: "abc123" }, PhaseEntered { attempt: AttemptId(1), phase: Implement }, AgentOutput { attempt: AttemptId(1), stream: Stdout, text: "Working..." }, VerifyPassed { attempt: AttemptId(1) }, PublishStarted { attempt: AttemptId(1), candidate_sha: "def456" }, PublishVerified { commit: "def456", remote_sha: "def456" }, TaskDone { commit: "def456" }]

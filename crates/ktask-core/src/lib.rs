@@ -25,6 +25,7 @@ pub mod queue;
 pub mod redact;
 pub mod remediate;
 pub mod report;
+pub mod runner;
 pub mod state;
 pub mod task;
 
@@ -54,5 +55,6 @@ pub use provider::{
 pub use queue::next_runnable;
 pub use remediate::{Breaker, BreakerState, bundle, signature};
 pub use report::{ReportResult, parse_report};
+pub use runner::{preflight, PreflightEvidence, PreflightFailure, PreflightReport};
 pub use state::{PauseReason, Phase, TaskState};
 pub use task::{Task, TaskStatus};
