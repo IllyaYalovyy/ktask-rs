@@ -287,6 +287,18 @@ fn describe_event(kind: &EventKind) -> String {
         EventKind::DecisionRaised { request } => {
             format!("Decision raised: {}", request.question)
         }
+        EventKind::SelfHealingReport {
+            attempt,
+            class,
+            repairs,
+            outcome,
+        } => {
+            format!(
+                "Attempt {} self-healing report: {class:?} with {} repairs -> {outcome}",
+                attempt.get(),
+                repairs.len(),
+            )
+        }
     }
 }
 

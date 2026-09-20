@@ -118,6 +118,19 @@ impl TaskState {
 /// # Errors
 ///
 /// Returns `Error::InvalidTransition` if the event is not valid in the current state.
+/// Helper to create an attempt mismatch error.
+fn attempt_mismatch_error(from: &str, event: &crate::event::EventKind) -> Result<TaskState> {
+    Err(Error::InvalidTransition {
+        from: from.to_string(),
+        event: event.discriminant().to_string(),
+    })
+}
+
+/// Apply an event to a task state, returning the new state.
+///
+/// # Errors
+///
+/// Returns an error if the event is not valid for the current state.
 pub fn apply(state: &TaskState, event: &crate::event::EventKind) -> Result<TaskState> {
     match state {
         TaskState::Queued => from_queued(event),
@@ -228,7 +241,8 @@ fn from_queued(event: &crate::event::EventKind) -> Result<TaskState> {
         | EventKind::TddExceptionUsed { .. }
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
-        | EventKind::DecisionRaised { .. } => Err(Error::InvalidTransition {
+        | EventKind::DecisionRaised { .. }
+        | EventKind::SelfHealingReport { .. } => Err(Error::InvalidTransition {
             from: "Queued".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -270,7 +284,8 @@ fn from_preflight(event: &crate::event::EventKind) -> Result<TaskState> {
         | EventKind::TddExceptionUsed { .. }
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
-        | EventKind::DecisionRaised { .. } => Err(Error::InvalidTransition {
+        | EventKind::DecisionRaised { .. }
+        | EventKind::SelfHealingReport { .. } => Err(Error::InvalidTransition {
             from: "Preflight".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -308,13 +323,20 @@ fn from_running(
             if *output_attempt == attempt {
                 Ok(TaskState::Running { attempt, phase })
             } else {
-                Err(Error::InvalidTransition {
-                    from: format!("Running({attempt})"),
-                    event: event.discriminant().to_string(),
-                })
+                attempt_mismatch_error(&format!("Running({attempt})"), event)
             }
         }
         EventKind::TddExceptionUsed { .. } => Ok(TaskState::Running { attempt, phase }),
+        EventKind::SelfHealingReport {
+            attempt: report_attempt,
+            ..
+        } => {
+            if *report_attempt == attempt {
+                Ok(TaskState::Running { attempt, phase })
+            } else {
+                attempt_mismatch_error(&format!("Running({attempt})"), event)
+            }
+        }
         EventKind::VerifyPassed {
             attempt: verify_attempt,
         } => {
@@ -404,10 +426,7 @@ fn from_remediating(
                     phase: *new_phase,
                 })
             } else {
-                Err(Error::InvalidTransition {
-                    from: format!("Remediating({attempt})"),
-                    event: event.discriminant().to_string(),
-                })
+                attempt_mismatch_error(&format!("Remediating({attempt})"), event)
             }
         }
         EventKind::AgentOutput {
@@ -417,13 +436,20 @@ fn from_remediating(
             if *output_attempt == attempt {
                 Ok(TaskState::Remediating { attempt, phase })
             } else {
-                Err(Error::InvalidTransition {
-                    from: format!("Remediating({attempt})"),
-                    event: event.discriminant().to_string(),
-                })
+                attempt_mismatch_error(&format!("Remediating({attempt})"), event)
             }
         }
         EventKind::TddExceptionUsed { .. } => Ok(TaskState::Remediating { attempt, phase }),
+        EventKind::SelfHealingReport {
+            attempt: report_attempt,
+            ..
+        } => {
+            if *report_attempt == attempt {
+                Ok(TaskState::Remediating { attempt, phase })
+            } else {
+                attempt_mismatch_error(&format!("Remediating({attempt})"), event)
+            }
+        }
         EventKind::AttemptStarted {
             attempt: new_attempt,
             ..
@@ -434,10 +460,7 @@ fn from_remediating(
                     phase: Phase::Goal,
                 })
             } else {
-                Err(Error::InvalidTransition {
-                    from: format!("Remediating({attempt})"),
-                    event: event.discriminant().to_string(),
-                })
+                attempt_mismatch_error(&format!("Remediating({attempt})"), event)
             }
         }
         EventKind::VerifyPassed {
@@ -448,10 +471,7 @@ fn from_remediating(
                     attempt: *verify_attempt,
                 })
             } else {
-                Err(Error::InvalidTransition {
-                    from: format!("Remediating({attempt})"),
-                    event: event.discriminant().to_string(),
-                })
+                attempt_mismatch_error(&format!("Remediating({attempt})"), event)
             }
         }
         EventKind::VerifyFailed {
@@ -465,10 +485,7 @@ fn from_remediating(
                     phase: Phase::Red,
                 })
             } else {
-                Err(Error::InvalidTransition {
-                    from: format!("Remediating({attempt})"),
-                    event: event.discriminant().to_string(),
-                })
+                attempt_mismatch_error(&format!("Remediating({attempt})"), event)
             }
         }
         EventKind::TaskFailed {
@@ -582,7 +599,8 @@ fn from_verifying(attempt: AttemptId, event: &crate::event::EventKind) -> Result
         | EventKind::AttemptRecorded { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::GateStarted { .. }
-        | EventKind::GateFinished { .. } => Err(Error::InvalidTransition {
+        | EventKind::GateFinished { .. }
+        | EventKind::SelfHealingReport { .. } => Err(Error::InvalidTransition {
             from: format!("Verifying({attempt})"),
             event: event.discriminant().to_string(),
         }),
@@ -645,7 +663,8 @@ fn from_publishing(attempt: AttemptId, event: &crate::event::EventKind) -> Resul
         | EventKind::AttemptRecorded { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::GateStarted { .. }
-        | EventKind::GateFinished { .. } => Err(Error::InvalidTransition {
+        | EventKind::GateFinished { .. }
+        | EventKind::SelfHealingReport { .. } => Err(Error::InvalidTransition {
             from: format!("Publishing({attempt})"),
             event: event.discriminant().to_string(),
         }),
@@ -702,7 +721,8 @@ fn from_published_verified(commit: &str, event: &crate::event::EventKind) -> Res
         | EventKind::TddExceptionUsed { .. }
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
-        | EventKind::DecisionRaised { .. } => Err(Error::InvalidTransition {
+        | EventKind::DecisionRaised { .. }
+        | EventKind::SelfHealingReport { .. } => Err(Error::InvalidTransition {
             from: "PublishedVerified".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -752,7 +772,8 @@ fn from_paused(
         | EventKind::TddExceptionUsed { .. }
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
-        | EventKind::DecisionRaised { .. } => Err(Error::InvalidTransition {
+        | EventKind::DecisionRaised { .. }
+        | EventKind::SelfHealingReport { .. } => Err(Error::InvalidTransition {
             from: "Paused".to_string(),
             event: event.discriminant().to_string(),
         }),
@@ -2471,5 +2492,148 @@ mod tests {
             err_msg.contains("Verifying") && err_msg.contains("TddExceptionUsed"),
             "Error should mention both Verifying and TddExceptionUsed, got: {err_msg}"
         );
+    }
+
+    #[test]
+    fn self_healing_report_allowed_while_running() {
+        let state = TaskState::Running {
+            attempt: AttemptId::new(1),
+            phase: Phase::Implement,
+        };
+        let event = EventKind::SelfHealingReport {
+            attempt: AttemptId::new(1),
+            class: FailureClass::AgentFailure,
+            repairs: vec!["Fixed import issue".to_string()],
+            outcome: "Remediation succeeded".to_string(),
+        };
+
+        let result = apply(&state, &event);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            TaskState::Running {
+                attempt: AttemptId::new(1),
+                phase: Phase::Implement,
+            }
+        );
+    }
+
+    #[test]
+    fn self_healing_report_allowed_while_remediating() {
+        let state = TaskState::Remediating {
+            attempt: AttemptId::new(2),
+            phase: Phase::Green,
+        };
+        let event = EventKind::SelfHealingReport {
+            attempt: AttemptId::new(2),
+            class: FailureClass::VerificationFailure,
+            repairs: vec![
+                "Updated test expectations".to_string(),
+                "Fixed assertion".to_string(),
+            ],
+            outcome: "Remediation succeeded".to_string(),
+        };
+
+        let result = apply(&state, &event);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            TaskState::Remediating {
+                attempt: AttemptId::new(2),
+                phase: Phase::Green,
+            }
+        );
+    }
+
+    #[test]
+    fn self_healing_report_rejected_when_attempt_mismatch_while_running() {
+        let state = TaskState::Running {
+            attempt: AttemptId::new(1),
+            phase: Phase::Implement,
+        };
+        let event = EventKind::SelfHealingReport {
+            attempt: AttemptId::new(2),
+            class: FailureClass::AgentFailure,
+            repairs: vec![],
+            outcome: "Failed".to_string(),
+        };
+
+        let result = apply(&state, &event);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn self_healing_report_rejected_when_attempt_mismatch_while_remediating() {
+        let state = TaskState::Remediating {
+            attempt: AttemptId::new(1),
+            phase: Phase::Red,
+        };
+        let event = EventKind::SelfHealingReport {
+            attempt: AttemptId::new(2),
+            class: FailureClass::VerificationFailure,
+            repairs: vec![],
+            outcome: "Failed".to_string(),
+        };
+
+        let result = apply(&state, &event);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn self_healing_report_rejected_while_verifying() {
+        let state = TaskState::Verifying {
+            attempt: AttemptId::new(1),
+        };
+        let event = EventKind::SelfHealingReport {
+            attempt: AttemptId::new(1),
+            class: FailureClass::AgentFailure,
+            repairs: vec![],
+            outcome: "Failed".to_string(),
+        };
+
+        let result = apply(&state, &event);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Verifying") && err_msg.contains("SelfHealingReport"));
+    }
+
+    #[test]
+    fn self_healing_report_rejected_while_publishing() {
+        let state = TaskState::Publishing {
+            attempt: AttemptId::new(1),
+        };
+        let event = EventKind::SelfHealingReport {
+            attempt: AttemptId::new(1),
+            class: FailureClass::AgentFailure,
+            repairs: vec![],
+            outcome: "Failed".to_string(),
+        };
+
+        let result = apply(&state, &event);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Publishing") && err_msg.contains("SelfHealingReport"));
+    }
+
+    #[test]
+    fn self_healing_report_rejected_while_paused() {
+        let state = TaskState::Paused {
+            reason: PauseReason::Interrupted,
+            resume_to: Box::new(TaskState::Running {
+                attempt: AttemptId::new(1),
+                phase: Phase::Implement,
+            }),
+        };
+        let event = EventKind::SelfHealingReport {
+            attempt: AttemptId::new(1),
+            class: FailureClass::AgentFailure,
+            repairs: vec![],
+            outcome: "Failed".to_string(),
+        };
+
+        let result = apply(&state, &event);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Paused") && err_msg.contains("SelfHealingReport"));
     }
 }

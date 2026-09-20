@@ -182,6 +182,17 @@ pub enum EventKind {
         /// The parsed decision request.
         request: DecisionRequest,
     },
+    /// Self-healing report emitted after remediation concludes.
+    SelfHealingReport {
+        /// Attempt identifier.
+        attempt: AttemptId,
+        /// Failure classification.
+        class: FailureClass,
+        /// Repairs attempted.
+        repairs: Vec<String>,
+        /// Outcome of remediation.
+        outcome: String,
+    },
 }
 
 impl EventKind {
@@ -213,6 +224,7 @@ impl EventKind {
             EventKind::GateStarted { .. } => "GateStarted",
             EventKind::GateFinished { .. } => "GateFinished",
             EventKind::DecisionRaised { .. } => "DecisionRaised",
+            EventKind::SelfHealingReport { .. } => "SelfHealingReport",
         }
     }
 }
