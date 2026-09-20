@@ -61,4 +61,4 @@ pub use runner::{
     PhaseOutcome, PreflightEvidence, PreflightFailure, PreflightReport, RunOutcome, preflight,
 };
 pub use state::{PauseReason, Phase, TaskState};
-pub use task::{Task, TaskStatus};
+pub use task::{Task, TaskStatus, parse_plan};
