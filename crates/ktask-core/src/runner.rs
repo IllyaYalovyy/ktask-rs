@@ -1314,7 +1314,12 @@ impl PreflightReport {
 impl Runner {
     /// Run the task queue in order until completion or a stop condition.
     ///
-    /// Processes tasks sequentially from the first runnable task to a terminal state.
+    /// Processes tasks sequentially from the first runnable task to a terminal state,
+    /// stopping at the first failure, pause, or gate and returning the appropriate outcome.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if journal operations fail or a task cannot be found in the queue.
     pub fn run_queue(
         &mut self,
         tasks: &[Task],
@@ -1326,83 +1331,7 @@ impl Runner {
             let states = journal.all_states()?;
 
             match crate::queue::next_runnable(tasks, &states)? {
-                None => {
-                    if states.values().any(|s| s.is_paused()) {
-                        for (_task_id, state) in &states {
-                            if let crate::TaskState::Paused {
-                                reason: crate::state::PauseReason::Limit { until },
-                                ..
-                            } = state
-                            {
-                                return Ok(RunOutcome::ProviderLimit {
-                                    until: until.clone(),
-                                });
-                            }
-                        }
-                        for (task_id, state) in &states {
-                            if let crate::TaskState::Paused {
-                                reason: crate::state::PauseReason::Input,
-                                ..
-                            } = state
-                            {
-                                return Ok(RunOutcome::NeedsInput { task: *task_id });
-                            }
-                        }
-                        for (_task_id, state) in &states {
-                            if let crate::TaskState::Paused {
-                                reason: crate::state::PauseReason::Interrupted,
-                                ..
-                            } = state
-                            {
-                                return Ok(RunOutcome::Interrupted);
-                            }
-                        }
-                        for (task_id, state) in &states {
-                            if let crate::TaskState::Paused {
-                                reason: crate::state::PauseReason::HumanGate,
-                                ..
-                            } = state
-                            {
-                                return Ok(RunOutcome::HumanGate { task: *task_id });
-                            }
-                        }
-                        for (_task_id, state) in &states {
-                            if let crate::TaskState::Paused {
-                                reason: crate::state::PauseReason::Blocked,
-                                ..
-                            } = state
-                            {
-                                return Ok(RunOutcome::Drained);
-                            }
-                        }
-                    }
-
-                    if states
-                        .values()
-                        .any(|s| matches!(s, crate::TaskState::Failed { .. }))
-                    {
-                        for task in tasks {
-                            if let Some(crate::TaskState::Failed { .. }) = states.get(&task.id) {
-                                return Ok(RunOutcome::TaskFailed { task: task.id });
-                            }
-                        }
-                    }
-
-                    if states
-                        .values()
-                        .any(|s| matches!(s, crate::TaskState::Acknowledged { .. }))
-                    {
-                        for task in tasks {
-                            if let Some(crate::TaskState::Acknowledged { .. }) =
-                                states.get(&task.id)
-                            {
-                                return Ok(RunOutcome::HumanGate { task: task.id });
-                            }
-                        }
-                    }
-
-                    return Ok(RunOutcome::Drained);
-                }
+                None => return handle_queue_stop(&states, tasks),
                 Some(task_id) => {
                     let task =
                         tasks
@@ -1416,27 +1345,9 @@ impl Runner {
                     let new_state = self.run_task(task)?;
 
                     match &new_state {
-                        crate::TaskState::Done | crate::TaskState::PublishedVerified { .. } => {
-                            continue;
-                        }
+                        crate::TaskState::Done | crate::TaskState::PublishedVerified { .. } => {}
                         crate::TaskState::Paused { reason, .. } => {
-                            return match reason {
-                                crate::state::PauseReason::Limit { until } => {
-                                    Ok(RunOutcome::ProviderLimit {
-                                        until: until.clone(),
-                                    })
-                                }
-                                crate::state::PauseReason::Input => {
-                                    Ok(RunOutcome::NeedsInput { task: task_id })
-                                }
-                                crate::state::PauseReason::Interrupted => {
-                                    Ok(RunOutcome::Interrupted)
-                                }
-                                crate::state::PauseReason::HumanGate => {
-                                    Ok(RunOutcome::HumanGate { task: task_id })
-                                }
-                                crate::state::PauseReason::Blocked => Ok(RunOutcome::Drained),
-                            };
+                            return Ok(pause_to_outcome(task_id, reason));
                         }
                         crate::TaskState::Failed { .. } => {
                             return Ok(RunOutcome::TaskFailed { task: task_id });
@@ -1444,11 +1355,50 @@ impl Runner {
                         crate::TaskState::Acknowledged { .. } => {
                             return Ok(RunOutcome::HumanGate { task: task_id });
                         }
-                        _ => continue,
+                        _ => {}
                     }
                 }
             }
         }
+    }
+}
+
+fn handle_queue_stop(
+    states: &std::collections::BTreeMap<crate::TaskId, crate::TaskState>,
+    tasks: &[Task],
+) -> Result<RunOutcome> {
+    for (task_id, state) in states.iter() {
+        if let crate::TaskState::Paused { reason, .. } = state {
+            return Ok(pause_to_outcome(*task_id, reason));
+        }
+    }
+
+    if let Some(task) = tasks
+        .iter()
+        .find(|t| matches!(states.get(&t.id), Some(crate::TaskState::Failed { .. })))
+    {
+        return Ok(RunOutcome::TaskFailed { task: task.id });
+    }
+
+    if let Some(task) = tasks.iter().find(|t| {
+        matches!(
+            states.get(&t.id),
+            Some(crate::TaskState::Acknowledged { .. })
+        )
+    }) {
+        return Ok(RunOutcome::HumanGate { task: task.id });
+    }
+
+    Ok(RunOutcome::Drained)
+}
+
+fn pause_to_outcome(task_id: crate::TaskId, reason: &crate::state::PauseReason) -> RunOutcome {
+    match reason {
+        crate::state::PauseReason::Limit { until } => RunOutcome::ProviderLimit { until: *until },
+        crate::state::PauseReason::Input => RunOutcome::NeedsInput { task: task_id },
+        crate::state::PauseReason::Interrupted => RunOutcome::Interrupted,
+        crate::state::PauseReason::HumanGate => RunOutcome::HumanGate { task: task_id },
+        crate::state::PauseReason::Blocked => RunOutcome::Drained,
     }
 }
 
