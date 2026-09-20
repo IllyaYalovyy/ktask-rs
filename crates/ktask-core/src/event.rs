@@ -32,16 +32,17 @@
 //!
 //! # Catalog entries that are not here yet
 //!
-//! `docs/DESIGN.md` lists 28 entries; 19 are defined below. The other 9 are
+//! `docs/DESIGN.md` lists 28 entries; 20 are defined below. The other 8 are
 //! absent, and a test asserts their absence rather than trusting it:
 //!
-//! - Eight are deferred by the plan — `GateFinished` (`result: GateResult`),
-//!   `AttemptFinished` (`usage: Option<Usage>`), `AttemptRecorded` (`record:
-//!   AttemptRecord`), `ProviderDetected` (`capabilities: Capabilities`),
-//!   `DecisionRaised` (`request: DecisionRequest`), `DecisionResolved`,
-//!   `SelfHealingReport` and `TddExceptionUsed`. Each arrives with the task
-//!   that emits it and gives it an `apply` arm, so nothing can journal an
-//!   event whose effect on state no task has written yet.
+//! - Seven are deferred by the plan — `GateFinished` (`result: GateResult`),
+//!   `AttemptFinished` (`usage: Option<Usage>`), `ProviderDetected`
+//!   (`capabilities: Capabilities`), `DecisionRaised` (`request:
+//!   DecisionRequest`), `DecisionResolved`, `SelfHealingReport` and
+//!   `TddExceptionUsed`. Each arrives with the task that emits it and gives it
+//!   an `apply` arm, so nothing can journal an event whose effect on state no
+//!   task has written yet. `AttemptRecorded` left this list for T068, which
+//!   defined the type its payload names and the arm that answers it.
 //! - `GateStarted` (`kind: GateKind`) cannot be defined at all: `GateKind` is
 //!   `gate.rs`, which no earlier task has written, and a payload naming it
 //!   would not compile — which is the point of this catalog being a compile
@@ -54,6 +55,7 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use crate::attempt::AttemptRecord;
 use crate::classify::FailureClass;
 use crate::ids::{AttemptId, EventSeq, TaskId};
 use crate::state::{PauseReason, Phase, Recovery, Stream};
@@ -63,7 +65,13 @@ use crate::state::{PauseReason, Phase, Recovery, Stream};
 /// Every field is a fact observed at the moment of the event, not a view of
 /// current state: the journal is append-only and never rewritten, so what a
 /// run looked like halfway through stays readable after it finished.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// It is `PartialEq` rather than [`Eq`], and [`Event`] follows it: an attempt's
+/// record carries the cost its provider reported, which is a float, and a float
+/// is not an equivalence relation. The cost stays a float rather than being
+/// rounded into microdollars, so the number in the journal is the number the
+/// provider said (ADR-0063).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum EventKind {
     /// A task was added to the queue.
@@ -189,6 +197,28 @@ pub enum EventKind {
         /// than taken on trust.
         at: OffsetDateTime,
     },
+    /// One attempt finished, and this is everything it proved.
+    ///
+    /// The record is the whole of an attempt's evidence — its session, the two
+    /// model ids, how it stopped, what every gate said, what it spent, and the
+    /// commits it sits between — filed as one row rather than scattered over
+    /// the entries that happened to be journaled along the way. It changes
+    /// nothing about where the task stands: [`crate::apply`] answers it with
+    /// the state it was asked from, because an attempt's evidence says what
+    /// was, not what happens next. A retry therefore *adds* a record; the
+    /// first attempt's row keeps what it knew (VISION.md §6).
+    ///
+    /// The record is held behind a [`Box`] for the same reason
+    /// [`crate::TaskState::Paused`] holds its `resume_to` behind one: this is
+    /// the largest payload in the catalog, and unboxed every other entry would
+    /// be sized by it. The box is invisible in the bytes — `serde` writes a box
+    /// exactly as it writes what it holds — so a journal row stays the
+    /// `record: AttemptRecord` `docs/DESIGN.md` spells (ADR-0063).
+    AttemptRecorded {
+        /// The attempt's own evidence, naming the attempt and task it belongs
+        /// to.
+        record: Box<AttemptRecord>,
+    },
 }
 
 impl EventKind {
@@ -220,6 +250,7 @@ impl EventKind {
             Self::Interrupted { .. } => "Interrupted",
             Self::RecoveryDecision { .. } => "RecoveryDecision",
             Self::GateAcknowledged { .. } => "GateAcknowledged",
+            Self::AttemptRecorded { .. } => "AttemptRecorded",
         }
     }
 }
@@ -234,7 +265,7 @@ impl EventKind {
 /// and a task's own event are indistinguishable. Read back in `seq` order, a
 /// sequence of these *is* the run — which is why the journal, the event bus and
 /// `--json` all hand round exactly this type.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     /// Where this record sits in the journal's sequence. Assigned by the
     /// journal as it appends, never guessed by whoever produced the event: a
@@ -309,6 +340,7 @@ mod rfc3339_utc {
 #[cfg(test)]
 mod tests {
     use super::{Event, EventKind};
+    use crate::attempt::AttemptRecord;
     use crate::classify::FailureClass;
     use crate::ids::{AttemptId, EventSeq, TaskId};
     use crate::state::{PauseReason, Phase, Recovery, Stream};
@@ -320,7 +352,7 @@ mod tests {
     /// encode is visible rather than mistaken for a placeholder.
     const SHA: &str = "0b78d3f1c2a4";
 
-    /// The 19 entries `docs/DESIGN.md` documents whose payload types exist
+    /// The 20 entries `docs/DESIGN.md` documents whose payload types exist
     /// today, each with the payload field names the table lists for it.
     ///
     /// Spelled out a second time, on purpose: names checked only against the
@@ -349,9 +381,10 @@ mod tests {
         ("Interrupted", &["phase"]),
         ("RecoveryDecision", &["decision", "detail"]),
         ("GateAcknowledged", &["by", "at"]),
+        ("AttemptRecorded", &["record"]),
     ];
 
-    /// The nine entries this catalog does not define yet.
+    /// The eight entries this catalog does not define yet.
     ///
     /// Their absence is asserted, not assumed: an entry added ahead of its
     /// producer would start decoding, and the journal would begin accepting
@@ -375,7 +408,6 @@ mod tests {
                 r#""session_id":null,"model_reported":null"#,
             ),
         ),
-        ("AttemptRecorded", r#""record":{}"#),
         (
             "ProviderDetected",
             r#""provider":"codex","capabilities":{},"version":"0.1.0""#,
@@ -473,7 +505,31 @@ mod tests {
                 by: "operators.name".to_string(),
                 at: datetime!(2026-09-17 12:34:56 UTC),
             },
+            EventKind::AttemptRecorded {
+                record: Box::new(attempt_record(attempt)),
+            },
         ]
+    }
+
+    /// One attempt's evidence, holding what the record's own module fixes. The
+    /// gates list is empty here on purpose: what a nested [`AttemptRecord`]
+    /// keeps field by field is `attempt.rs`'s claim to test, and this file's is
+    /// that the catalog carries the record as one payload field.
+    fn attempt_record(attempt: AttemptId) -> AttemptRecord {
+        AttemptRecord {
+            id: attempt,
+            task: TaskId::new(7),
+            started: datetime!(2026-09-20 09:14:03.5 UTC),
+            ended: Some(datetime!(2026-09-20 09:41:47 UTC)),
+            model_configured: Some("gpt-5.6-sol".to_string()),
+            model_reported: Some("gpt-5.6-sol-2026-09-01".to_string()),
+            session_id: Some("sess_01HQZK".to_string()),
+            exit_reason: "gate verify failed: 2 tests refused".to_string(),
+            gates: Vec::new(),
+            usage: None,
+            base_sha: SHA.to_string(),
+            candidate_sha: Some("b7d1f3a9e5c2".to_string()),
+        }
     }
 
     /// Assert the JSON the journal stores for `event` says `name`, carries

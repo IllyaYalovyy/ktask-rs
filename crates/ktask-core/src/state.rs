@@ -403,6 +403,7 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::AttemptStarted { .. }
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptRecorded { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -454,6 +455,7 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
         EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
         EventKind::TaskQueued { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptRecorded { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -482,6 +484,11 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
 /// which are configuration this pure function cannot read, so deciding that
 /// here would bake a limit into the machine that owns none: the runner counts
 /// and either journals a later attempt or journals `TaskFailed`.
+///
+/// An attempt's record is a third kind of event: evidence rather than a
+/// transition. It names the attempt the state is holding and moves nothing, so
+/// filing it leaves the run where it was — which is also what makes a replay of
+/// a journal that already holds the record change nothing.
 fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<TaskState> {
     const FROM: &str = "Running";
     match event {
@@ -517,6 +524,12 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
         EventKind::AgentOutput { attempt: mine, .. }
         | EventKind::VerifyFailed { attempt: mine, .. } => refuse_unless(
             *mine == attempt,
+            TaskState::Running { attempt, phase },
+            FROM,
+            event,
+        ),
+        EventKind::AttemptRecorded { record } => refuse_unless(
+            record.id == attempt,
             TaskState::Running { attempt, phase },
             FROM,
             event,
@@ -606,6 +619,12 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
         EventKind::AgentOutput { attempt: mine, .. }
         | EventKind::VerifyFailed { attempt: mine, .. } => refuse_unless(
             *mine == attempt,
+            TaskState::Remediating { attempt, phase },
+            FROM,
+            event,
+        ),
+        EventKind::AttemptRecorded { record } => refuse_unless(
+            record.id == attempt,
             TaskState::Remediating { attempt, phase },
             FROM,
             event,
@@ -705,6 +724,12 @@ fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
             FROM,
             event,
         ),
+        EventKind::AttemptRecorded { record } => refuse_unless(
+            record.id == attempt,
+            TaskState::Verifying { attempt },
+            FROM,
+            event,
+        ),
         EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
             class: *class,
             detail: detail.clone(),
@@ -782,6 +807,12 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
             FROM,
             event,
         ),
+        EventKind::AttemptRecorded { record } => refuse_unless(
+            record.id == attempt,
+            TaskState::Publishing { attempt },
+            FROM,
+            event,
+        ),
         EventKind::PublishVerified {
             commit: proved,
             remote_sha,
@@ -832,6 +863,10 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
 /// work that was never published. Nothing else is accepted — not a failure,
 /// not a cancellation, not a gate — because the work is already where it was
 /// meant to get, and a state that proved that cannot unprove it.
+///
+/// An attempt's record belongs to the attempt that produced it, and by here
+/// that attempt is filed and finished: `Publishing` is where its evidence
+/// belongs, and this state holds no attempt to name one against.
 fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState> {
     const FROM: &str = "PublishedVerified";
     match event {
@@ -868,6 +903,7 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::AttemptStarted { .. }
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptRecorded { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -897,6 +933,12 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
 /// closed by an acknowledgement (VISION.md §6). A pause is never a failure
 /// either: `TaskFailed` describes work that will not get done, and a paused run
 /// has not been asked whether it can.
+///
+/// An attempt's record is refused here for the same reason `AttemptStarted` is:
+/// a pause is a wait, not a run, so there is nothing in flight for evidence to
+/// be about. The attempt a pause resumes into is the one that files its own
+/// record, which is why filing is done while an attempt is still held rather
+/// than whenever a run happens to get round to it.
 fn from_paused(
     reason: &PauseReason,
     resume_to: &TaskState,
@@ -931,6 +973,7 @@ fn from_paused(
         | EventKind::AttemptStarted { .. }
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptRecorded { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -1111,7 +1154,7 @@ mod tests {
         PauseReason, Phase, PhaseEntry, Recovery, Stream, TaskState, apply, check_one_active,
         check_predecessor, phase_entry,
     };
-    use crate::{AttemptId, Error, EventKind, FailureClass, TaskId};
+    use crate::{AttemptId, AttemptRecord, Error, EventKind, FailureClass, TaskId};
     use serde::de::DeserializeOwned;
     use std::collections::BTreeMap;
     use std::fmt::Debug;
@@ -1749,11 +1792,32 @@ mod tests {
         }
     }
 
+    /// An attempt's evidence, naming the attempt `attempt`. It carries no
+    /// verdict, so nothing here can mistake it for a transition.
+    fn attempt_recorded(attempt: u32) -> EventKind {
+        EventKind::AttemptRecorded {
+            record: Box::new(AttemptRecord {
+                id: AttemptId::new(attempt),
+                task: TaskId::new(1),
+                started: time::macros::datetime!(2026-09-17 12:00:00 UTC),
+                ended: Some(time::macros::datetime!(2026-09-17 12:20:00 UTC)),
+                model_configured: Some("gpt-5.6-sol".to_owned()),
+                model_reported: None,
+                session_id: Some("sess_01HQZK".to_owned()),
+                exit_reason: "exited 0".to_owned(),
+                gates: Vec::new(),
+                usage: None,
+                base_sha: BASE.to_owned(),
+                candidate_sha: Some(CANDIDATE.to_owned()),
+            }),
+        }
+    }
+
     /// Every catalog entry a journal can hold, carrying what a run would carry.
     /// Written out by hand rather than generated because the point of the list
     /// is that a person named each entry — and because a sweep over it is what
     /// proves no state stays quiet about an event.
-    fn every_event() -> [EventKind; 19] {
+    fn every_event() -> [EventKind; 20] {
         [
             queued(),
             EventKind::PreflightStarted,
@@ -1774,6 +1838,7 @@ mod tests {
             interrupted(Phase::Implement),
             recovered(Recovery::Resume),
             acknowledged(),
+            attempt_recorded(1),
         ]
     }
 
@@ -2079,6 +2144,72 @@ mod tests {
         refuses(&verifying(1), &verify_failed(2));
         refuses(&publishing(1), &publish_started(2));
         refuses(&remediating(2, Phase::Red), &verify_passed(1));
+    }
+
+    /// An attempt's record is evidence, not a verdict: every state holding the
+    /// attempt it names answers it with the state it was asked from. The walk at
+    /// the end is the shape the outcome asks for — a first attempt files its
+    /// record, fails, and the retry that follows files a record of its own
+    /// rather than landing on top of the first one.
+    #[test]
+    fn an_attempt_record_says_what_was_and_moves_the_attempt_it_names() {
+        moves(
+            &working(1, Phase::Green),
+            &attempt_recorded(1),
+            &working(1, Phase::Green),
+        );
+        moves(
+            &remediating(2, Phase::Red),
+            &attempt_recorded(2),
+            &remediating(2, Phase::Red),
+        );
+        moves(&verifying(1), &attempt_recorded(1), &verifying(1));
+        moves(&publishing(1), &attempt_recorded(1), &publishing(1));
+
+        let first_attempt = working(1, Phase::Green);
+        moves(&first_attempt, &attempt_recorded(1), &first_attempt);
+        moves(&first_attempt, &verify_failed(1), &first_attempt);
+        moves(&first_attempt, &started(2), &first_attempt);
+        moves(
+            &first_attempt,
+            &entered(2, Phase::Red),
+            &remediating(2, Phase::Red),
+        );
+        moves(
+            &remediating(2, Phase::Red),
+            &attempt_recorded(2),
+            &remediating(2, Phase::Red),
+        );
+    }
+
+    /// The other half of the same rule. A record cannot be about an attempt the
+    /// state is not holding, and a state that holds no attempt cannot be asked
+    /// about one at all — including a pause, whose held attempt is the one the
+    /// run resumes into rather than one that ever ran.
+    #[test]
+    fn an_attempt_record_is_refused_by_a_state_it_cannot_be_about() {
+        refuses(&working(1, Phase::Implement), &attempt_recorded(2));
+        refuses(&remediating(2, Phase::Red), &attempt_recorded(1));
+        refuses(&verifying(1), &attempt_recorded(3));
+        refuses(&publishing(1), &attempt_recorded(2));
+        refuses(
+            &parked(working(1, Phase::Green), PauseReason::Interrupted),
+            &attempt_recorded(1),
+        );
+        for state in [
+            TaskState::Queued,
+            TaskState::Preflight,
+            published(CANDIDATE),
+        ] {
+            refuses(&state, &attempt_recorded(1));
+        }
+
+        // An attempt's evidence has to be filed while the attempt is held: by the
+        // time a task has failed, been cancelled or closed, the run that would
+        // have written the record is the one this state says is over.
+        for state in [failure(), TaskState::Cancelled, TaskState::Done] {
+            refuses(&state, &attempt_recorded(1));
+        }
     }
 
     #[test]
@@ -2505,12 +2636,18 @@ mod tests {
     /// see `evidence_names_the_attempt_it_belongs_to_or_is_refused` and
     /// `nothing_is_published_until_the_remote_is_read_back_holding_the_commit`.
     ///
+    /// `AttemptRecorded` has no `Remediating` row for the same reason `PhaseEntered`
+    /// has none: the table's state holds attempt 2 while the sweep's record names
+    /// attempt 1, so that pair is a refusal. The move it does make — a record naming
+    /// the attempt a remediation holds — is
+    /// `an_attempt_record_says_what_was_and_moves_the_attempt_it_names`.
+    ///
     /// The length is part of the declaration: a pair leaves this table only on
     /// a written decision that the machine no longer makes the move, and one
     /// pair has left it. `("Paused", "Paused", "Paused")` was a nested pause,
     /// which T028 decided is a mistake rather than a second wait — the refusal
     /// is asserted in `a_pause_above_a_pause_is_refused`, and ADR-0026 is why.
-    const LEGAL: [(&str, &str, &str); 49] = [
+    const LEGAL: [(&str, &str, &str); 52] = [
         ("Queued", "TaskQueued", "Queued"),
         ("Queued", "PreflightStarted", "Preflight"),
         ("Queued", "Paused", "Paused"),
@@ -2526,6 +2663,7 @@ mod tests {
         ("Preflight", "RecoveryDecision", "Preflight"),
         ("Running", "PhaseEntered", "Running"),
         ("Running", "AgentOutput", "Running"),
+        ("Running", "AttemptRecorded", "Running"),
         ("Running", "VerifyPassed", "Publishing"),
         ("Running", "VerifyFailed", "Running"),
         ("Running", "TaskFailed", "Failed"),
@@ -2539,6 +2677,7 @@ mod tests {
         ("Remediating", "RecoveryDecision", "Remediating"),
         ("Verifying", "VerifyPassed", "Publishing"),
         ("Verifying", "VerifyFailed", "Verifying"),
+        ("Verifying", "AttemptRecorded", "Verifying"),
         ("Verifying", "TaskFailed", "Failed"),
         ("Verifying", "TaskCancelled", "Cancelled"),
         ("Verifying", "Paused", "Paused"),
@@ -2547,6 +2686,7 @@ mod tests {
         ("Publishing", "VerifyPassed", "Publishing"),
         ("Publishing", "PublishStarted", "Publishing"),
         ("Publishing", "PublishVerified", "PublishedVerified"),
+        ("Publishing", "AttemptRecorded", "Publishing"),
         ("Publishing", "TaskFailed", "Failed"),
         ("Publishing", "TaskCancelled", "Cancelled"),
         ("Publishing", "Paused", "Paused"),
@@ -2570,7 +2710,7 @@ mod tests {
     /// and a refused pair is refused through `Error::InvalidTransition` naming
     /// both of them. So the sweep fails on a legal move nobody declared, on a
     /// declared move that was withdrawn or retargeted, and on a refusal that
-    /// stopped naming what it refused — and passes for the 228 pairs on nothing
+    /// stopped naming what it refused — and passes for the 240 pairs on nothing
     /// but the table.
     #[test]
     fn every_move_is_a_declared_one_or_a_refusal() {

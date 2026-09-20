@@ -6054,7 +6054,7 @@ mod tests {
 /// # Why the generator generates legal sequences
 ///
 /// It is the walk that is legal, not the text it is written in. Each step picks
-/// one of the catalog's nineteen entries and *aims* it at the state the walk has
+/// one of the catalog's twenty entries and *aims* it at the state the walk has
 /// already reached — the attempt a `VerifyPassed` names is the attempt the task
 /// is on, the commit a `TaskDone` names is the one the remote was proved to hold
 /// — and [`crate::apply`] decides whether the state accepts it. Proposals it
@@ -6082,16 +6082,16 @@ mod replay {
 
     use super::journal_path;
     use crate::{
-        AttemptId, Error, EventKind, FailureClass, Journal, PauseReason, Phase, Recovery, Stream,
-        TaskId, TaskState, apply,
+        AttemptId, AttemptRecord, Error, EventKind, FailureClass, Journal, PauseReason, Phase,
+        Recovery, Stream, TaskId, TaskState, apply,
     };
 
     /// Every property in this module runs at least this many cases, so "at least
     /// 256 cases" is answered by this file rather than by someone's configuration.
     const CASES: u32 = 256;
 
-    /// The nineteen catalog entries, in the order [`EventKind`] declares them.
-    const ENTRIES: usize = 19;
+    /// The twenty catalog entries, in the order [`EventKind`] declares them.
+    const ENTRIES: usize = 20;
 
     /// How many tasks one generated journal may hold, so several accumulators are
     /// always in play and a fold that merged two tasks would be caught.
@@ -6180,7 +6180,7 @@ mod replay {
     /// The randomness one generated step carries.
     #[derive(Debug, Clone, Copy)]
     struct Dice {
-        /// Which of the nineteen catalog entries the step proposes.
+        /// Which of the twenty catalog entries the step proposes.
         entry: usize,
         /// The attempt to name when the reached state holds none.
         attempt: u32,
@@ -6272,7 +6272,7 @@ mod replay {
             )
     }
 
-    /// The nineteen entries as proposals, each aimed at the state the walk reached.
+    /// The twenty entries as proposals, each aimed at the state the walk reached.
     ///
     /// An array of functions rather than a `match` so the generated index selects
     /// an entry the same way every other payload does, and so each entry states its
@@ -6297,6 +6297,7 @@ mod replay {
         interrupted,
         recovery_decision,
         gate_acknowledged,
+        attempt_recorded,
     ];
 
     /// The event a step proposes against `held`.
@@ -6478,6 +6479,33 @@ mod replay {
         EventKind::GateAcknowledged {
             by: text("reviewer", dice),
             at: instant_at(dice.seconds),
+        }
+    }
+
+    /// One attempt's evidence, aimed at the attempt `held` is on.
+    ///
+    /// Only the attempt half is aimed: `apply` reads that half and answers with
+    /// the state it was asked from. [`AttemptRecord::task`] names a slot rather
+    /// than the task the step is filed under, because a proposal is written
+    /// without knowing the row that will carry it — the journal's own task column
+    /// is the recorder's to set, and the claim that a record and the row holding
+    /// it name the same task belongs to `attempt.rs`, not to this walk.
+    fn attempt_recorded(held: &TaskState, dice: Dice) -> EventKind {
+        EventKind::AttemptRecorded {
+            record: Box::new(AttemptRecord {
+                id: attempt(held, dice),
+                task: TaskId::new(dice.text % TASK_SLOTS + 1),
+                started: instant_at(dice.seconds),
+                ended: Some(instant_at(dice.seconds + 1)),
+                model_configured: Some(text("configured", dice)),
+                model_reported: None,
+                session_id: Some(text("session", dice)),
+                exit_reason: text("exited", dice),
+                gates: Vec::new(),
+                usage: None,
+                base_sha: commit(held, dice),
+                candidate_sha: None,
+            }),
         }
     }
 
@@ -6733,7 +6761,7 @@ mod replay {
         .collect()
     }
 
-    /// The nineteen catalog names, likewise spelled out from the schema's own
+    /// The twenty catalog names, likewise spelled out from the schema's own
     /// comment on `events.kind`.
     fn every_entry_name() -> BTreeSet<&'static str> {
         [
@@ -6756,6 +6784,7 @@ mod replay {
             "Interrupted",
             "RecoveryDecision",
             "GateAcknowledged",
+            "AttemptRecorded",
         ]
         .into_iter()
         .collect()
