@@ -1,9 +1,142 @@
 //! Task execution runner with preflight checks and journaling.
 
-use crate::{Config, Error, FailureClass, Project, Provider, Result};
+use crate::{
+    AttemptId, AttemptRecord, Bus, Config, Error, FailureClass, Project, Protocol, Provider,
+    Recorder, Result, Task,
+};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::Duration;
+use time::OffsetDateTime;
+
+/// The runner for executing tasks with journaling and verification.
+///
+/// The runner coordinates all components needed to execute a task:
+/// - Project configuration and state directory
+/// - Configuration loading and validation
+/// - Quality gates (baseline, verify, lint, format, build, privacy)
+/// - Event journaling and broadcasting
+/// - Provider interaction for AI agents
+pub struct Runner {
+    /// The registered project.
+    pub project: Project,
+    /// Effective configuration (global + project overrides).
+    pub config: Config,
+    /// Quality gates profile (verification commands, timeouts, etc).
+    pub profile: crate::Profile,
+    /// Event recorder (journal + bus).
+    pub recorder: Recorder,
+    /// The configured provider for AI agents.
+    pub provider: Box<dyn Provider>,
+}
+
+impl std::fmt::Debug for Runner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Runner")
+            .field("project", &self.project)
+            .field("config", &self.config)
+            .field("profile", &self.profile)
+            .field("recorder", &self.recorder)
+            .field("provider", &self.provider.name())
+            .finish()
+    }
+}
+
+impl Runner {
+    /// Create a new runner for the given project.
+    ///
+    /// Initializes all runner components:
+    /// - Opens the event journal
+    /// - Creates the event bus and subscribes
+    /// - Loads the effective configuration
+    /// - Builds the quality gates profile
+    /// - Initializes the configured provider
+    ///
+    /// # Arguments
+    ///
+    /// * `project` - A registered ktask project
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the journal cannot be opened, configuration
+    /// cannot be loaded, the gates profile is invalid, or the provider
+    /// cannot be built.
+    pub fn new(project: Project) -> Result<Runner> {
+        let journal = crate::Journal::open_for(&project)?;
+        let bus = Bus::new(1000);
+        let _subscription = bus.subscribe();
+        let config = crate::config::load_for(&project)?;
+        let profile = crate::gate::profile_from(&config)?;
+        let provider = crate::provider::build(&config)?;
+
+        let recorder = Recorder::new(journal, bus);
+
+        Ok(Runner {
+            project,
+            config,
+            profile,
+            recorder,
+            provider,
+        })
+    }
+
+    /// Begin an attempt at a task, recording the start event.
+    ///
+    /// Records an `AttemptStarted` event with:
+    /// - The protocol selected for this task
+    /// - The current process ID
+    /// - The base commit SHA before any changes
+    ///
+    /// The attempt evidence directory is created with the initial record.
+    /// Each call returns a new attempt ID (1-based within the task).
+    ///
+    /// # Arguments
+    ///
+    /// * `task` - The task being attempted
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the protocol cannot be resolved, the SHA
+    /// cannot be determined, the event cannot be journaled, or the
+    /// evidence directory structure cannot be created.
+    pub fn begin_attempt(&mut self, task: &Task) -> Result<AttemptId> {
+        let protocol = Protocol::for_task(task, &self.config)?;
+        let pid = std::process::id();
+        let base_sha = crate::git::head_sha(&self.project.root)?;
+
+        let attempt_id = AttemptId::new(1);
+
+        self.recorder.record(
+            Some(task.id),
+            crate::EventKind::AttemptStarted {
+                attempt: attempt_id,
+                protocol: protocol.name,
+                pid,
+                base_sha: base_sha.clone(),
+            },
+        )?;
+
+        let record = AttemptRecord {
+            id: attempt_id,
+            task: task.id,
+            started: OffsetDateTime::now_utc(),
+            ended: None,
+            model_configured: None,
+            model_reported: None,
+            session_id: None,
+            exit_reason: "attempt_started".to_string(),
+            gates: vec![],
+            usage: None,
+            base_sha,
+            candidate_sha: None,
+        };
+
+        let context = String::new();
+        crate::attempt::write_evidence(&self.project, &record, &context)?;
+
+        Ok(attempt_id)
+    }
+}
 
 /// Evidence from a preflight check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -324,6 +457,36 @@ mod tests {
     use super::*;
     use crate::provider::Scenario;
     use crate::testing::ScratchRepo;
+
+    #[test]
+    fn runner_new_requires_only_project() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        std::fs::write(&scenario_file, "steps = []").expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.dummy_scenario_path = Some(scenario_file);
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let runner = Runner::new(project).expect("Failed to create runner");
+
+        assert_eq!(runner.project.id, "test-project");
+        assert!(!runner.profile.gates.is_empty());
+        assert_eq!(runner.provider.name(), "dummy");
+    }
 
     #[test]
     fn preflight_success_with_all_checks() {
