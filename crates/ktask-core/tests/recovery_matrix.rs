@@ -1,3 +1,10 @@
+#![allow(
+    clippy::expect_used,
+    clippy::print_stderr,
+    clippy::too_many_lines,
+    clippy::panic,
+    clippy::uninlined_format_args
+)]
 //! Integration test for crash recovery at every phase boundary.
 //!
 //! Tests that recovery is proven at every phase boundary in the lifecycle, not argued.
