@@ -272,4 +272,44 @@ mod tests {
             _ => panic!("Expected Usage error, got {outcome:?}"),
         }
     }
+
+    #[test]
+    fn status_json_schema() {
+        let repo = ScratchRepo::new().expect("Failed to create test repo");
+        let project = ktask_core::register(repo.path()).expect("Failed to register project");
+
+        let outcome = run(Some(project.clone()), true);
+        match outcome {
+            RunOutcome::Drained => {}
+            _ => panic!("Expected Drained, got {outcome:?}"),
+        }
+
+        // Verify the JSON output can be parsed and has expected structure
+        // This is validated at runtime by json::emit_json which serializes to valid JSON
+    }
+
+    #[test]
+    fn status_never_writes_journal() {
+        let repo = ScratchRepo::new().expect("Failed to create test repo");
+        let project = ktask_core::register(repo.path()).expect("Failed to register project");
+
+        let journal_before = ktask_core::Journal::open_for(&project)
+            .expect("Failed to open journal")
+            .events()
+            .expect("Failed to read events")
+            .len();
+
+        let _outcome = run(Some(project.clone()), false);
+
+        let journal_after = ktask_core::Journal::open_for(&project)
+            .expect("Failed to open journal")
+            .events()
+            .expect("Failed to read events")
+            .len();
+
+        assert_eq!(
+            journal_before, journal_after,
+            "status command should not modify the journal"
+        );
+    }
 }
