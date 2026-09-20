@@ -32,7 +32,7 @@ pub(crate) fn dispatch(
     match command {
         Command::Doctor => doctor::run(json),
         Command::Init => init::run(),
-        Command::Add { file } => add::run(file),
+        Command::Add { file } => add::run(project, file),
         Command::Plan { subcommand } => plan::run(project, subcommand, json),
         Command::Status => status::run(project, json),
         Command::Run { task, from } => run::run(project, config, task, from),
