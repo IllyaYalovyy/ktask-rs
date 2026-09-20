@@ -383,12 +383,18 @@ fn write_file(dir: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
-/// A fixture CLI: `body`, written to `dir/name` and made executable.
+/// A fixture CLI: `body`, written to `dir/name`, made executable, startable.
+///
+/// Startability is waited for rather than assumed, because this file has just
+/// written the file it is about to have execed; see
+/// [`super::wait_until_startable`] for what a session that never started would
+/// otherwise be read as.
 #[cfg(test)]
 fn write_executable(dir: &Path, name: &str, body: &str) -> PathBuf {
     let path = write_file(dir, name, body);
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
         .expect("a fixture CLI can be made executable");
+    super::wait_until_startable(&path);
     path
 }
 

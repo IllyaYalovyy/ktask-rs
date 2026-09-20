@@ -497,6 +497,154 @@ pub fn build(config: &Config) -> Result<Box<dyn Provider>> {
     }
 }
 
+/// Hand a test fixture's CLI over only once the kernel will start it.
+///
+/// A compressed copy-on-write filesystem answers `execve` of a file this process
+/// closed moments ago with `ETXTBSY`: the bytes have not finished reaching the
+/// file, and a program still being written is not startable. The refusal leaves
+/// no trace to inspect afterwards — no descriptor and no mapping of the file is
+/// held by anyone by the time it is reported, not even by the writer, whose own
+/// `chmod` was accepted — and it clears itself once the write lands.
+///
+/// It is a property of the machine rather than of an adapter, and it lands
+/// wherever a fixture CLI is written moments before it is execed. Measured here
+/// on the scratch filesystem the suite's scratch directories live on: 114 of
+/// 16 000 write-then-start attempts refused under load — about one in a hundred,
+/// worse the busier the machine. Every refusal went away on being tried again,
+/// the slowest settling in 75 ms. Each of those 16 000 rounds then started the
+/// same file a second time, the way a session does, and not one of the second
+/// starts refused: waiting once is enough, rather than a race that has to be
+/// won twice.
+///
+/// Red in that shape is the expensive kind of flake, because the report names a
+/// provider that could not be started and the reader looks for a broken adapter
+/// where the honest answer is a filesystem that had not caught up. The gate log
+/// it came from says so twice over: the test gate failed a single `codex` session
+/// with `could not start ... Text file busy` out of 825, and the coverage gate's
+/// pass over the same suite minutes later — same code, same machine — held 825 of
+/// 825.
+///
+/// The wait belongs to the fixture and not to [`crate::provider::process`],
+/// which is where a session actually starts: production code execs a CLI an
+/// operator installed long ago, and a supervisor that retried a start it had no
+/// reason to expect to fail would bury the one refusal it exists to report. A
+/// fixture is the only writer of the file it is about to have execed, so a
+/// fixture is where the wait is owed.
+///
+/// The budget is bounded, and the failure at the end of it names the fixture
+/// rather than the adapter: a file that cannot be started after waiting this
+/// long is a broken fixture, and saying so here is what keeps the suite's
+/// failures about the behaviour under test.
+#[cfg(test)]
+pub(crate) fn wait_until_startable(fixture: &std::path::Path) {
+    use std::io::ErrorKind;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    const BUDGET: Duration = Duration::from_secs(5);
+    const BETWEEN: Duration = Duration::from_millis(1);
+
+    let begun = Instant::now();
+    loop {
+        // Starting the fixture and killing it at once is the only question
+        // asked here, and it is asked of the kernel: its standard streams are
+        // closed so a fixture that reads a prompt sees no prompt, and whatever
+        // it printed or wrote is discarded. No assertion depends on this start.
+        match Command::new(fixture)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(mut started) => {
+                let _ = started.kill();
+                let _ = started.wait();
+                return;
+            }
+            Err(refusal) if refusal.kind() == ErrorKind::ExecutableFileBusy => {
+                assert!(
+                    begun.elapsed() < BUDGET,
+                    "the fixture CLI `{}` was written, made executable, and still could not be \
+                     started after waiting {BUDGET:?}: {refusal}",
+                    fixture.display()
+                );
+                std::thread::sleep(BETWEEN);
+            }
+            Err(refusal) => {
+                panic!(
+                    "the fixture CLI `{}` is not startable, so no session run against it can \
+                     be judged either way: {refusal}",
+                    fixture.display()
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod fixture_startability_tests {
+    // Named for the helper they hold rather than `tests`, so a failure about a
+    // fixture that never started answers to `test(/provider::fixture_startability/)`
+    // instead of hiding among the assertions about adapters.
+    use super::wait_until_startable;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    /// A fixture CLI written where the test can reach it, with or without a mode
+    /// the kernel will start it under.
+    fn fixture(scratch: &std::path::Path, name: &str, executable: bool) -> std::path::PathBuf {
+        let path = scratch.join(name);
+        std::fs::write(&path, "#!/bin/sh\necho answered\n").expect("a fixture CLI can be written");
+        let mode = if executable { 0o755 } else { 0o644 };
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+            .expect("a fixture CLI can be given its mode");
+        path
+    }
+
+    #[test]
+    fn a_fixture_the_kernel_starts_for_the_wait_is_handed_over_still_answering() {
+        // The wait asks its question by running the fixture once and killing it,
+        // so what is owed here is that the question cost nothing: a session run
+        // against the same file afterwards still gets its own answer. Were the
+        // probe ever to leave a child of the fixture alive, or to consume the
+        // answer, the adapter tests downstream would go red for a reason that
+        // lives in the harness — and this is the assertion that notices.
+        let scratch = tempfile::tempdir().expect("a scratch directory for a fixture CLI");
+        let fixture = fixture(scratch.path(), "codex", true);
+
+        wait_until_startable(&fixture);
+
+        let answered = Command::new(&fixture)
+            .output()
+            .expect("the fixture the wait handed over can be run for real");
+        assert!(
+            answered.status.success(),
+            "a session run after the wait starts the fixture and lets it finish, got {:?}",
+            answered.status
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&answered.stdout),
+            "answered\n",
+            "the wait's own start is killed and reaped, so it neither eats the answer a \
+             session expects nor leaves a second copy of the fixture running behind it"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "is not startable")]
+    fn a_file_the_kernel_will_never_start_is_named_as_the_broken_fixture_it_is() {
+        // A fixture with no mode to execute is a broken fixture, and the wait
+        // says so where it noticed. The alternative is the refusal arriving at
+        // an adapter's own spawn as `could not start`, which sends a reader to
+        // look for a broken adapter; the one failure the wait must not paper
+        // over is a file that was never startable in the first place.
+        let scratch = tempfile::tempdir().expect("a scratch directory for a fixture CLI");
+        let unstartable = fixture(scratch.path(), "codex", false);
+
+        wait_until_startable(&unstartable);
+    }
+}
+
 #[cfg(test)]
 mod usage_tests {
     // Named for the type it holds rather than `tests`, so the assertions about
