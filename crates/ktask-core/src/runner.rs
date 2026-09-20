@@ -998,13 +998,9 @@ impl Runner {
                 }
             }
 
-            if let Some(state) = self.handle_gate_execution(
-                prepared,
-                task,
-                attempt,
-                spec,
-                &mut red_phase_summary,
-            )? {
+            if let Some(state) =
+                self.handle_gate_execution(prepared, task, attempt, spec, &mut red_phase_summary)?
+            {
                 return Ok(state);
             }
         }
