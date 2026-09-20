@@ -32,7 +32,11 @@ pub(crate) fn run(
     let filtered_tasks = filter_tasks(&tasks, task, from);
 
     for task_to_run in filtered_tasks {
-        render::out(format_args!("id={} title={} state=done", task_to_run.id, task_to_run.title()));
+        render::out(format_args!(
+            "id={} title={} state=done",
+            task_to_run.id,
+            task_to_run.title()
+        ));
     }
 
     RunOutcome::Drained

@@ -60,7 +60,9 @@ fn scenario_run_drains_the_queue() {
 **Refs:** Run scenario test
 ";
     let task_file = env.write_task("task.md", task_content);
-    let _ = env.run_command(&["add", "--file", task_file.to_string_lossy().as_ref()]).expect_success();
+    let _ = env
+        .run_command(&["add", "--file", task_file.to_string_lossy().as_ref()])
+        .expect_success();
 
     // 3. Run the queue
     let run_output = env.run_command(&["run"]);
