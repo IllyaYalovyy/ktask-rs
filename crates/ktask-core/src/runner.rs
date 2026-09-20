@@ -1331,7 +1331,7 @@ impl Runner {
             let states = journal.all_states()?;
 
             match crate::queue::next_runnable(tasks, &states)? {
-                None => return handle_queue_stop(&states, tasks),
+                None => return Ok(handle_queue_stop(&states, tasks)),
                 Some(task_id) => {
                     let task =
                         tasks
@@ -1345,7 +1345,6 @@ impl Runner {
                     let new_state = self.run_task(task)?;
 
                     match &new_state {
-                        crate::TaskState::Done | crate::TaskState::PublishedVerified { .. } => {}
                         crate::TaskState::Paused { reason, .. } => {
                             return Ok(pause_to_outcome(task_id, reason));
                         }
@@ -1366,10 +1365,10 @@ impl Runner {
 fn handle_queue_stop(
     states: &std::collections::BTreeMap<crate::TaskId, crate::TaskState>,
     tasks: &[Task],
-) -> Result<RunOutcome> {
-    for (task_id, state) in states.iter() {
+) -> RunOutcome {
+    for (task_id, state) in states {
         if let crate::TaskState::Paused { reason, .. } = state {
-            return Ok(pause_to_outcome(*task_id, reason));
+            return pause_to_outcome(*task_id, reason);
         }
     }
 
@@ -1377,7 +1376,7 @@ fn handle_queue_stop(
         .iter()
         .find(|t| matches!(states.get(&t.id), Some(crate::TaskState::Failed { .. })))
     {
-        return Ok(RunOutcome::TaskFailed { task: task.id });
+        return RunOutcome::TaskFailed { task: task.id };
     }
 
     if let Some(task) = tasks.iter().find(|t| {
@@ -1386,10 +1385,10 @@ fn handle_queue_stop(
             Some(crate::TaskState::Acknowledged { .. })
         )
     }) {
-        return Ok(RunOutcome::HumanGate { task: task.id });
+        return RunOutcome::HumanGate { task: task.id };
     }
 
-    Ok(RunOutcome::Drained)
+    RunOutcome::Drained
 }
 
 fn pause_to_outcome(task_id: crate::TaskId, reason: &crate::state::PauseReason) -> RunOutcome {
