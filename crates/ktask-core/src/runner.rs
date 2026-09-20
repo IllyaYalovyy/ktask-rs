@@ -2,7 +2,7 @@
 
 use crate::{
     AttemptId, AttemptRecord, Bus, Config, Error, FailureClass, Project, Protocol, Provider,
-    RepoLock, Recorder, Result, Task,
+    Recorder, RepoLock, Result, Task,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -169,30 +169,36 @@ impl Runner {
     /// or the worktree cannot be created. On preflight failure, returns a failure
     /// classification in the error.
     pub fn prepare(&mut self, task: &Task) -> Result<Prepared> {
-        self.recorder.record(
-            Some(task.id),
-            crate::EventKind::PreflightStarted,
-        )?;
+        self.recorder
+            .record(Some(task.id), crate::EventKind::PreflightStarted)?;
 
         let report = preflight(&self.project, &self.config, self.provider.as_ref())?;
 
         if !report.success {
-            let failure = report.failure.unwrap();
-            let class = failure.classification();
-            let detail = format!("{:?}", failure);
+            match report.failure {
+                Some(failure) => {
+                    let class = failure.classification();
+                    let detail = format!("{failure:?}");
 
-            self.recorder.record(
-                Some(task.id),
-                crate::EventKind::PreflightFailed {
-                    class,
-                    detail,
-                },
-            )?;
+                    self.recorder.record(
+                        Some(task.id),
+                        crate::EventKind::PreflightFailed { class, detail },
+                    )?;
 
-            return Err(Error::Policy {
-                detail: format!("Preflight check failed: {:?}", failure),
-                paths: vec![],
-            });
+                    return Err(Error::Policy {
+                        detail: format!("Preflight check failed: {failure:?}"),
+                        paths: vec![],
+                    });
+                }
+                None => {
+                    return Err(Error::Policy {
+                        detail:
+                            "Preflight failed with success=false but no failure details provided"
+                                .to_string(),
+                        paths: vec![],
+                    });
+                }
+            }
         }
 
         let base_sha = crate::git::head_sha(&self.project.root)?;
@@ -208,12 +214,13 @@ impl Runner {
 
         let remote_ref = format!(
             "refs/remotes/{}/{}",
-            &self.config.mainline_remote, &self.config.mainline_branch
+            self.config.mainline_remote, self.config.mainline_branch
         );
         let remote_sha = crate::git::git(&self.project.root, &["rev-parse", &remote_ref])?;
 
         let worktree_name = format!("task-{}", task.id);
-        let worktree_path = crate::git::create_worktree(&self.project.root, &worktree_name, &remote_sha)?;
+        let worktree_path =
+            crate::git::create_worktree(&self.project.root, &worktree_name, &remote_sha)?;
 
         Ok(Prepared {
             worktree_path,
@@ -819,26 +826,21 @@ mod tests {
         let worktree_path = &prepared.worktree_path;
         assert!(
             worktree_path.exists(),
-            "worktree should exist at {:?}",
-            worktree_path
+            "worktree should exist at {worktree_path:?}",
         );
 
         let task_id = task.id;
         assert!(
-            worktree_path.ends_with(format!("task-{}", task_id)),
-            "worktree path should end with task-{}, got {:?}",
-            task_id,
-            worktree_path
+            worktree_path.ends_with(format!("task-{task_id}")),
+            "worktree path should end with task-{task_id}, got {worktree_path:?}",
         );
 
-        let fetched_sha = crate::git::git(
-            &project.root,
-            &["rev-parse", "refs/remotes/origin/master"],
-        )
-        .expect("Failed to get fetched SHA");
+        let fetched_sha =
+            crate::git::git(&project.root, &["rev-parse", "refs/remotes/origin/master"])
+                .expect("Failed to get fetched SHA");
 
-        let worktree_sha = crate::git::head_sha(worktree_path)
-            .expect("Failed to get worktree HEAD SHA");
+        let worktree_sha =
+            crate::git::head_sha(worktree_path).expect("Failed to get worktree HEAD SHA");
 
         assert_eq!(
             worktree_sha, fetched_sha,
@@ -1007,6 +1009,9 @@ mod tests {
         };
 
         let result = runner.prepare(&task);
-        assert!(result.is_err(), "prepare should fail when baseline gate fails");
+        assert!(
+            result.is_err(),
+            "prepare should fail when baseline gate fails"
+        );
     }
 }
