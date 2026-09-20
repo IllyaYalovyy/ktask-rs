@@ -57,6 +57,25 @@ fn has_worktree_changes(project: &Project, task_id: TaskId) -> bool {
     true
 }
 
+/// Check if a published commit landed on the remote.
+///
+/// Fetches the remote and compares the mainline branch tip with the candidate SHA.
+/// Returns true if the remote tip matches the candidate SHA, false if it doesn't or doesn't exist.
+fn check_publish_landed(project: &Project, candidate_sha: &str) -> Result<bool> {
+    // Fetch the remote to get the latest state
+    crate::git::fetch(&project.root, "origin")?;
+
+    // Get the remote mainline branch tip SHA
+    let remote_ref = "refs/remotes/origin/main";
+    let Ok(remote_sha) = crate::git::git(&project.root, &["rev-parse", remote_ref]) else {
+        // If the remote ref doesn't exist, the push didn't land
+        return Ok(false);
+    };
+
+    // Compare the remote SHA with the candidate SHA
+    Ok(remote_sha == candidate_sha)
+}
+
 /// Reconcile the journal state with actual system state after a crash.
 ///
 /// For each task not in a terminal state, determines whether the task should be
@@ -134,6 +153,27 @@ pub fn reconcile(journal: &mut Journal, project: &Project) -> Result<Vec<Recover
                     Recovery::AlreadyApplied
                 } else {
                     Recovery::MarkInterrupted
+                }
+            }
+            EventKind::PublishStarted {
+                attempt: _,
+                candidate_sha,
+            } => {
+                // Check if the push succeeded by comparing remote tip with candidate SHA
+                match check_publish_landed(project, candidate_sha) {
+                    Ok(true) => {
+                        // Push succeeded: record PublishVerified event to advance to PublishedVerified state
+                        journal.append(
+                            Some(task_id),
+                            &EventKind::PublishVerified {
+                                commit: candidate_sha.clone(),
+                                remote_sha: candidate_sha.clone(),
+                            },
+                        )?;
+                        Recovery::AlreadyApplied
+                    }
+                    Ok(false) => Recovery::Resume,
+                    Err(_) => Recovery::MarkInterrupted,
                 }
             }
             _ => {
@@ -461,5 +501,167 @@ mod tests {
         let decisions = reconcile(&mut journal, &project).expect("reconcile");
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0].decision, Recovery::MarkInterrupted);
+    }
+
+    #[test]
+    fn reconcile_publish_started_when_push_landed() {
+        let repo = ScratchRepo::new().expect("create scratch repo");
+        let project = create_project(&repo);
+        let mut journal = Journal::open_for(&project).expect("open journal");
+
+        let task_id = TaskId::new(1);
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .expect("append task queued");
+
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
+            .expect("append preflight started");
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .expect("append preflight passed");
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt: crate::AttemptId::new(1),
+                    protocol: "direct".to_string(),
+                    pid: 999_999,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .expect("append attempt started");
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::VerifyPassed {
+                    attempt: crate::AttemptId::new(1),
+                },
+            )
+            .expect("append verify passed");
+
+        // Get the current HEAD SHA from the repo, then push it
+        let candidate_sha = crate::git::head_sha(repo.path()).expect("get repo HEAD SHA");
+        repo.push("origin", "HEAD:refs/heads/main")
+            .expect("push to origin");
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PublishStarted {
+                    attempt: crate::AttemptId::new(1),
+                    candidate_sha: candidate_sha.clone(),
+                },
+            )
+            .expect("append publish started");
+
+        journal.rebuild_state().expect("rebuild state");
+
+        let decisions = reconcile(&mut journal, &project).expect("reconcile");
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(
+            decisions[0].decision,
+            Recovery::AlreadyApplied,
+            "When push landed (remote tip == candidate), should recover with AlreadyApplied"
+        );
+
+        // Verify that PublishVerified event was recorded
+        let events = journal.events_for(task_id).expect("get events");
+        let has_publish_verified = events
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::PublishVerified { .. }));
+        assert!(
+            has_publish_verified,
+            "PublishVerified event should be recorded when push landed"
+        );
+    }
+
+    #[test]
+    fn reconcile_publish_started_when_push_not_landed() {
+        let repo = ScratchRepo::new().expect("create scratch repo");
+        let project = create_project(&repo);
+        let mut journal = Journal::open_for(&project).expect("open journal");
+
+        let task_id = TaskId::new(1);
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .expect("append task queued");
+
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
+            .expect("append preflight started");
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .expect("append preflight passed");
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt: crate::AttemptId::new(1),
+                    protocol: "direct".to_string(),
+                    pid: 999_999,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .expect("append attempt started");
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::VerifyPassed {
+                    attempt: crate::AttemptId::new(1),
+                },
+            )
+            .expect("append verify passed");
+
+        // Use a SHA that doesn't exist on remote
+        let different_sha = "0000000000000000000000000000000000000000".to_string();
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PublishStarted {
+                    attempt: crate::AttemptId::new(1),
+                    candidate_sha: different_sha,
+                },
+            )
+            .expect("append publish started");
+
+        journal.rebuild_state().expect("rebuild state");
+
+        let decisions = reconcile(&mut journal, &project).expect("reconcile");
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(
+            decisions[0].decision,
+            Recovery::Resume,
+            "When push didn't land (remote tip != candidate), should recover with Resume"
+        );
     }
 }
