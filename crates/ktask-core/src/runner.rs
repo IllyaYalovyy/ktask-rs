@@ -938,9 +938,8 @@ impl Runner {
         attempt: AttemptId,
         prepared: &Prepared,
     ) -> Result<crate::TaskState> {
-        use crate::state::{Phase, TaskState};
+        use crate::state::TaskState;
 
-        // Resolve the protocol for this task
         let protocol = match Protocol::for_task(task, &self.config) {
             Ok(p) => p,
             Err(e) => {
@@ -959,14 +958,10 @@ impl Runner {
             }
         };
 
-        // Track test summary from red phase for green phase verification
         let mut red_phase_summary: Option<crate::gate::TestSummary> = None;
-        // Track whether remediation has already run the gate for this phase
         let mut remediation_already_ran_gate = false;
 
-        // Execute each phase in the protocol
         for spec in &protocol.phases {
-            // Record phase entry
             self.recorder.record(
                 Some(task.id),
                 crate::EventKind::PhaseEntered {
@@ -975,64 +970,23 @@ impl Runner {
                 },
             )?;
 
-            // Run the phase (agent execution)
             match self.run_phase(prepared, task, attempt, spec) {
-                Ok(PhaseOutcome::Success) => {
-                    // Phase succeeded, continue to gate if present
-                }
+                Ok(PhaseOutcome::Success) => {}
                 Ok(PhaseOutcome::Failure {
                     class: FailureClass::ProviderLimit,
                     detail: _,
-                }) => {
-                    // Provider limit - pause and don't fail
-                    let pause_reason = crate::state::PauseReason::Limit { until: None };
-                    self.recorder.record(
-                        Some(task.id),
-                        crate::EventKind::Paused {
-                            reason: pause_reason.clone(),
-                        },
-                    )?;
-                    return Ok(TaskState::Paused {
-                        reason: pause_reason,
-                        resume_to: Box::new(TaskState::Running {
-                            attempt,
-                            phase: spec.phase,
-                        }),
-                    });
-                }
+                }) => return self.handle_pause_on_provider_limit(task, attempt, spec.phase),
                 Ok(PhaseOutcome::Failure {
                     class: FailureClass::NeedsInput,
                     detail: _,
-                }) => {
-                    // Needs input - pause and don't fail
-                    let pause_reason = crate::state::PauseReason::Input;
-                    self.recorder.record(
-                        Some(task.id),
-                        crate::EventKind::Paused {
-                            reason: pause_reason.clone(),
-                        },
-                    )?;
-                    return Ok(TaskState::Paused {
-                        reason: pause_reason,
-                        resume_to: Box::new(TaskState::Running {
-                            attempt,
-                            phase: spec.phase,
-                        }),
-                    });
-                }
+                }) => return self.handle_pause_on_needs_input(task, attempt, spec.phase),
                 Ok(PhaseOutcome::Failure { class, detail: _ }) => {
-                    // Phase failed - attempt remediation
-                    let gate_results = vec![]; // No gate results yet at phase failure
-                    if let Some(state) =
-                        self.attempt_remediation(task, prepared, spec, class, &gate_results)?
-                    {
+                    if let Some(state) = self.handle_phase_failure(task, prepared, spec, class)? {
                         return Ok(state);
                     }
-                    // Remediation succeeded - the gate was already run during remediation
                     remediation_already_ran_gate = true;
                 }
                 Err(e) => {
-                    // Execution error
                     let class = FailureClass::EnvironmentFailure;
                     let detail = format!("{e:?}");
                     self.recorder.record(
@@ -1046,46 +1000,118 @@ impl Runner {
                 }
             }
 
-            // Run gate if specified for this phase (unless remediation already ran it)
-            if remediation_already_ran_gate {
-                // Remediation already ran the gate, clear the flag for next phase
-                remediation_already_ran_gate = false;
-            } else if let Some(_gate) = spec.gate {
-                match self.gate_phase(prepared, task.id, attempt, spec, red_phase_summary.as_ref())
-                {
-                    Ok(summary) => {
-                        // Store red phase summary for green phase verification
-                        if spec.phase == Phase::Red {
-                            red_phase_summary = Some(summary.clone());
-                        }
-                    }
-                    Err(_e) => {
-                        // Gate failed - attempt remediation
-                        let class = FailureClass::VerificationFailure;
-                        let gate_results = vec![]; // Simplified - should extract actual gate results
-                        if let Some(state) =
-                            self.attempt_remediation(task, prepared, spec, class, &gate_results)?
-                        {
-                            return Ok(state);
-                        }
-                        // Remediation succeeded, continue
-                        // Note: After remediation, gates re-run from scratch, so red_phase_summary is cleared
-                        red_phase_summary = None;
-                    }
-                }
+            remediation_already_ran_gate = false;
+            if let Some(state) = self.handle_gate_execution(
+                prepared,
+                task,
+                attempt,
+                spec,
+                &mut red_phase_summary,
+            )? {
+                return Ok(state);
             }
         }
 
-        // All phases completed: verify and publish
+        self.handle_verify_and_publish(prepared, task, attempt)
+    }
+
+    fn handle_pause_on_provider_limit(
+        &mut self,
+        task: &Task,
+        attempt: AttemptId,
+        phase: crate::state::Phase,
+    ) -> Result<crate::TaskState> {
+        let pause_reason = crate::state::PauseReason::Limit { until: None };
+        self.recorder.record(
+            Some(task.id),
+            crate::EventKind::Paused {
+                reason: pause_reason.clone(),
+            },
+        )?;
+        Ok(crate::TaskState::Paused {
+            reason: pause_reason,
+            resume_to: Box::new(crate::TaskState::Running { attempt, phase }),
+        })
+    }
+
+    fn handle_pause_on_needs_input(
+        &mut self,
+        task: &Task,
+        attempt: AttemptId,
+        phase: crate::state::Phase,
+    ) -> Result<crate::TaskState> {
+        let pause_reason = crate::state::PauseReason::Input;
+        self.recorder.record(
+            Some(task.id),
+            crate::EventKind::Paused {
+                reason: pause_reason.clone(),
+            },
+        )?;
+        Ok(crate::TaskState::Paused {
+            reason: pause_reason,
+            resume_to: Box::new(crate::TaskState::Running { attempt, phase }),
+        })
+    }
+
+    fn handle_phase_failure(
+        &mut self,
+        task: &Task,
+        prepared: &Prepared,
+        spec: &PhaseSpec,
+        class: FailureClass,
+    ) -> Result<Option<crate::TaskState>> {
+        let gate_results = vec![];
+        self.attempt_remediation(task, prepared, spec, class, &gate_results)
+    }
+
+    fn handle_gate_execution(
+        &mut self,
+        prepared: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+        spec: &PhaseSpec,
+        red_phase_summary: &mut Option<crate::gate::TestSummary>,
+    ) -> Result<Option<crate::TaskState>> {
+        use crate::state::Phase;
+
+        if spec.gate.is_none() {
+            return Ok(None);
+        }
+
+        match self.gate_phase(prepared, task.id, attempt, spec, red_phase_summary.as_ref()) {
+            Ok(summary) => {
+                if spec.phase == Phase::Red {
+                    *red_phase_summary = Some(summary.clone());
+                }
+                Ok(None)
+            }
+            Err(_e) => {
+                let class = FailureClass::VerificationFailure;
+                let gate_results = vec![];
+                if let Some(state) =
+                    self.attempt_remediation(task, prepared, spec, class, &gate_results)?
+                {
+                    return Ok(Some(state));
+                }
+                *red_phase_summary = None;
+                Ok(None)
+            }
+        }
+    }
+
+    fn handle_verify_and_publish(
+        &mut self,
+        prepared: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+    ) -> Result<crate::TaskState> {
         match self.verify_and_publish(prepared, task, attempt) {
             Ok(commit_sha) => {
-                // Record task done
                 self.recorder.record(
                     Some(task.id),
                     crate::EventKind::TaskDone { commit: commit_sha },
                 )?;
-
-                Ok(TaskState::Done)
+                Ok(crate::TaskState::Done)
             }
             Err(e) => {
                 let class = match e {
@@ -1104,7 +1130,7 @@ impl Runner {
                     },
                 )?;
 
-                Ok(TaskState::Failed { class, detail })
+                Ok(crate::TaskState::Failed { class, detail })
             }
         }
     }
