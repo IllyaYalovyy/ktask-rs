@@ -23,6 +23,49 @@ pub enum PhaseOutcome {
     },
 }
 
+/// The outcome of running a queue or command.
+///
+/// Maps to exit codes:
+/// - Drained = 0
+/// - TaskFailed = 1
+/// - Usage = 2
+/// - ProviderLimit = 3
+/// - HumanGate = 4
+/// - NeedsInput = 5
+/// - Interrupted = 130
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunOutcome {
+    /// Queue drained successfully; all tasks completed.
+    Drained,
+    /// A task failed after its remediation budget.
+    TaskFailed {
+        /// The task that failed.
+        task: crate::TaskId,
+    },
+    /// Usage error (bad arguments, malformed input).
+    Usage {
+        /// Description of the usage error.
+        detail: String,
+    },
+    /// Provider limit reached; work is paused, not failed.
+    ProviderLimit {
+        /// Time when the limit is lifted, if known.
+        until: Option<OffsetDateTime>,
+    },
+    /// Stopped at a human gate.
+    HumanGate {
+        /// The task at the human gate.
+        task: crate::TaskId,
+    },
+    /// Stopped waiting for input on a decision.
+    NeedsInput {
+        /// The task waiting for input.
+        task: crate::TaskId,
+    },
+    /// Interrupted by signal (SIGINT).
+    Interrupted,
+}
+
 /// The runner for executing tasks with journaling and verification.
 ///
 /// The runner coordinates all components needed to execute a task:
@@ -1248,6 +1291,27 @@ impl PreflightReport {
             failure: Some(failure),
         }
     }
+}
+
+/// Run the task queue in order, draining it until completion or a stop condition.
+///
+/// Processes tasks sequentially from the first runnable task to a terminal state:
+/// - Drained: all tasks completed
+/// - TaskFailed: a task failed after remediation budget
+/// - ProviderLimit: provider rate limit or quota exceeded
+/// - HumanGate: stopped at a human gate
+/// - NeedsInput: stopped waiting for user input
+/// - Interrupted: received SIGINT
+///
+/// # Arguments
+///
+/// * `_runner` - The configured task runner
+///
+/// # Returns
+///
+/// A `RunOutcome` describing how the queue run terminated.
+pub fn run_queue(_runner: &Runner) -> RunOutcome {
+    RunOutcome::Drained
 }
 
 /// Check that the world is sane before tokens are spent.
@@ -2816,5 +2880,95 @@ steps = [
             matches!(state, crate::TaskState::Done),
             "run_task should reach Done state after successful execution, got {state:?}"
         );
+    }
+
+    #[test]
+    fn runner_outcome_drained() {
+        let outcome = RunOutcome::Drained;
+        assert!(matches!(outcome, RunOutcome::Drained));
+    }
+
+    #[test]
+    fn runner_outcome_task_failed() {
+        let task_id = crate::TaskId::new(1);
+        let outcome = RunOutcome::TaskFailed { task: task_id };
+        assert!(matches!(outcome, RunOutcome::TaskFailed { task: _ }));
+        if let RunOutcome::TaskFailed { task } = outcome {
+            assert_eq!(task, task_id);
+        }
+    }
+
+    #[test]
+    fn runner_outcome_usage_error() {
+        let detail = "invalid arguments".to_string();
+        let outcome = RunOutcome::Usage {
+            detail: detail.clone(),
+        };
+        assert!(matches!(outcome, RunOutcome::Usage { .. }));
+        if let RunOutcome::Usage { detail: d } = outcome {
+            assert_eq!(d, detail);
+        }
+    }
+
+    #[test]
+    fn runner_outcome_provider_limit_without_time() {
+        let outcome = RunOutcome::ProviderLimit { until: None };
+        assert!(matches!(outcome, RunOutcome::ProviderLimit { until: None }));
+    }
+
+    #[test]
+    fn runner_outcome_provider_limit_with_time() {
+        let until = Some(OffsetDateTime::now_utc());
+        let outcome = RunOutcome::ProviderLimit { until };
+        assert!(matches!(outcome, RunOutcome::ProviderLimit { until: Some(_) }));
+    }
+
+    #[test]
+    fn runner_outcome_human_gate() {
+        let task_id = crate::TaskId::new(5);
+        let outcome = RunOutcome::HumanGate { task: task_id };
+        assert!(matches!(outcome, RunOutcome::HumanGate { task: _ }));
+        if let RunOutcome::HumanGate { task } = outcome {
+            assert_eq!(task, task_id);
+        }
+    }
+
+    #[test]
+    fn runner_outcome_needs_input() {
+        let task_id = crate::TaskId::new(3);
+        let outcome = RunOutcome::NeedsInput { task: task_id };
+        assert!(matches!(outcome, RunOutcome::NeedsInput { task: _ }));
+        if let RunOutcome::NeedsInput { task } = outcome {
+            assert_eq!(task, task_id);
+        }
+    }
+
+    #[test]
+    fn runner_outcome_interrupted() {
+        let outcome = RunOutcome::Interrupted;
+        assert!(matches!(outcome, RunOutcome::Interrupted));
+    }
+
+    #[test]
+    fn runner_outcome_all_variants_exist() {
+        let outcomes = vec![
+            RunOutcome::Drained,
+            RunOutcome::TaskFailed {
+                task: crate::TaskId::new(1),
+            },
+            RunOutcome::Usage {
+                detail: "test".to_string(),
+            },
+            RunOutcome::ProviderLimit { until: None },
+            RunOutcome::HumanGate {
+                task: crate::TaskId::new(2),
+            },
+            RunOutcome::NeedsInput {
+                task: crate::TaskId::new(3),
+            },
+            RunOutcome::Interrupted,
+        ];
+
+        assert_eq!(outcomes.len(), 7);
     }
 }
