@@ -1,8 +1,8 @@
 //! Task execution runner with preflight checks and journaling.
 
 use crate::{
-    AttemptId, AttemptRecord, Bus, Config, Error, FailureClass, Project, Protocol, Provider,
-    Recorder, RepoLock, Result, Task, PhaseSpec,
+    AttemptId, AttemptRecord, Bus, Config, Error, FailureClass, PhaseSpec, Project, Protocol,
+    Provider, Recorder, RepoLock, Result, Task,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -382,14 +382,24 @@ impl Runner {
 
         // Check that changed paths respect the write scope
         let changed_paths = crate::git::changed_paths(&prep.worktree_path, &prep.base_sha)?;
-        match crate::protocol::check_scope(spec.write_scope, &changed_paths, &self.config.test_globs) {
+        match crate::protocol::check_scope(
+            spec.write_scope,
+            &changed_paths,
+            &self.config.test_globs,
+        ) {
             Ok(()) => Ok(PhaseOutcome::Success),
-            Err(Error::Policy { detail, paths }) => {
-                Ok(PhaseOutcome::Failure {
-                    class: FailureClass::PolicyFailure,
-                    detail: format!("{} (offending files: {})", detail, paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")),
-                })
-            }
+            Err(Error::Policy { detail, paths }) => Ok(PhaseOutcome::Failure {
+                class: FailureClass::PolicyFailure,
+                detail: format!(
+                    "{} (offending files: {})",
+                    detail,
+                    paths
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }),
             Err(e) => Err(e),
         }
     }
@@ -1261,7 +1271,11 @@ stdout = "Task completed"
         let result = runner.run_phase(&prepared, &task, attempt, &spec);
 
         // The result should be a PhaseOutcome::Failure, not an error
-        assert!(result.is_ok(), "run_phase should return a failure outcome, not an error: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "run_phase should return a failure outcome, not an error: {:?}",
+            result
+        );
         let outcome = result.unwrap();
         match outcome {
             PhaseOutcome::Failure { class, detail } => {
@@ -1334,8 +1348,7 @@ stdout = "Task completed"
         let forbidden_file = prepared.worktree_path.join("src").join("main.rs");
         std::fs::create_dir_all(forbidden_file.parent().unwrap())
             .expect("Failed to create src directory");
-        std::fs::write(&forbidden_file, "// Modified\n")
-            .expect("Failed to write forbidden file");
+        std::fs::write(&forbidden_file, "// Modified\n").expect("Failed to write forbidden file");
         crate::git::git(&prepared.worktree_path, &["add", "src/main.rs"])
             .expect("Failed to stage file");
         crate::git::git(
@@ -1349,8 +1362,7 @@ stdout = "Task completed"
         if let Some(parent) = report_path.parent() {
             std::fs::create_dir_all(parent).expect("Failed to create report dir");
         }
-        std::fs::write(&report_path, "KTASK_RESULT: DONE\n")
-            .expect("Failed to write report");
+        std::fs::write(&report_path, "KTASK_RESULT: DONE\n").expect("Failed to write report");
 
         // Use a read-only scope to trigger the violation
         let spec = PhaseSpec {
@@ -1364,7 +1376,11 @@ stdout = "Task completed"
         let result = runner.run_phase(&prepared, &task, attempt, &spec);
 
         // The result should be a PhaseOutcome::Failure
-        assert!(result.is_ok(), "run_phase should return a failure outcome: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "run_phase should return a failure outcome: {:?}",
+            result
+        );
         let outcome = result.unwrap();
         match outcome {
             PhaseOutcome::Failure { class, detail } => {
