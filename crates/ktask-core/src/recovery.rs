@@ -266,7 +266,7 @@ mod tests {
                 &EventKind::AttemptStarted {
                     attempt: crate::AttemptId::new(1),
                     protocol: "direct".to_string(),
-                    pid: 999999,
+                    pid: 999_999,
                     base_sha: "abc123".to_string(),
                 },
             )
@@ -330,7 +330,7 @@ mod tests {
                 &EventKind::AttemptStarted {
                     attempt: crate::AttemptId::new(1),
                     protocol: "direct".to_string(),
-                    pid: 999999,
+                    pid: 999_999,
                     base_sha: "abc123".to_string(),
                 },
             )
@@ -380,7 +380,7 @@ mod tests {
                 &EventKind::AttemptStarted {
                     attempt: crate::AttemptId::new(1),
                     protocol: "direct".to_string(),
-                    pid: 999999,
+                    pid: 999_999,
                     base_sha: "abc123".to_string(),
                 },
             )
@@ -439,7 +439,7 @@ mod tests {
                 &EventKind::AttemptStarted {
                     attempt: crate::AttemptId::new(1),
                     protocol: "direct".to_string(),
-                    pid: 999999,
+                    pid: 999_999,
                     base_sha: "abc123".to_string(),
                 },
             )
