@@ -54,7 +54,7 @@ pub use provider::{
 };
 pub use queue::next_runnable;
 pub use remediate::{Breaker, BreakerState, bundle, signature};
-pub use report::{ReportResult, parse_report};
+pub use report::{ReportResult, parse_report, report_path};
 pub use runner::{PreflightEvidence, PreflightFailure, PreflightReport, preflight};
 pub use state::{PauseReason, Phase, TaskState};
 pub use task::{Task, TaskStatus};

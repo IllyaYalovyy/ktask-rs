@@ -3,7 +3,26 @@
 //! An agent's report is parsed into a typed result. The first non-empty line must be
 //! exactly `KTASK_RESULT: DONE`, `FAILED` or `NEEDS_INPUT`.
 
-use crate::Error;
+use crate::{AttemptId, Error, Project, TaskId};
+use std::path::PathBuf;
+
+/// Get the expected report path for an attempt.
+///
+/// Returns `<state_dir>/attempts/<task>/<attempt>/report.md`.
+///
+/// # Arguments
+/// * `project` - The registered ktask project
+/// * `task` - The task identifier
+/// * `attempt` - The attempt identifier
+#[must_use]
+pub fn report_path(project: &Project, task: TaskId, attempt: AttemptId) -> PathBuf {
+    project
+        .state_dir
+        .join("attempts")
+        .join(task.to_string())
+        .join(attempt.to_string())
+        .join("report.md")
+}
 
 /// Result of parsing an agent's report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,5 +156,84 @@ mod tests {
         assert!(msg.contains("DONE"));
         assert!(msg.contains("FAILED"));
         assert!(msg.contains("NEEDS_INPUT"));
+    }
+
+    #[test]
+    fn report_path_returns_correct_structure() {
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let state_dir = temp_dir.path().to_path_buf();
+
+        let project = Project {
+            root: PathBuf::from("/tmp/repo"),
+            id: "test-proj".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let path = report_path(&project, TaskId::new(1), AttemptId::new(1));
+
+        let expected = state_dir
+            .join("attempts")
+            .join("1")
+            .join("1")
+            .join("report.md");
+
+        assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn report_path_differs_for_different_attempts() {
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let state_dir = temp_dir.path().to_path_buf();
+
+        let project = Project {
+            root: PathBuf::from("/tmp/repo"),
+            id: "test-proj".to_string(),
+            state_dir,
+        };
+
+        let path1 = report_path(&project, TaskId::new(1), AttemptId::new(1));
+        let path2 = report_path(&project, TaskId::new(1), AttemptId::new(2));
+
+        assert_ne!(path1, path2);
+        assert!(path1.ends_with("1/report.md"));
+        assert!(path2.ends_with("2/report.md"));
+    }
+
+    #[test]
+    fn report_path_differs_for_different_tasks() {
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let state_dir = temp_dir.path().to_path_buf();
+
+        let project = Project {
+            root: PathBuf::from("/tmp/repo"),
+            id: "test-proj".to_string(),
+            state_dir,
+        };
+
+        let path1 = report_path(&project, TaskId::new(1), AttemptId::new(1));
+        let path2 = report_path(&project, TaskId::new(2), AttemptId::new(1));
+
+        assert_ne!(path1, path2);
+        // Both should end with report.md but be in different task directories
+        assert!(path1.ends_with("1/1/report.md"));
+        assert!(path2.ends_with("2/1/report.md"));
+    }
+
+    #[test]
+    fn report_path_ends_with_report_md() {
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let state_dir = temp_dir.path().to_path_buf();
+
+        let project = Project {
+            root: PathBuf::from("/tmp/repo"),
+            id: "test-proj".to_string(),
+            state_dir,
+        };
+
+        let path = report_path(&project, TaskId::new(5), AttemptId::new(3));
+
+        assert!(path.ends_with("report.md"));
+        let path_str = path.to_string_lossy();
+        assert!(path_str.contains("attempts/5/3/report.md"));
     }
 }
