@@ -6,8 +6,8 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use time::OffsetDateTime;
 
@@ -985,29 +985,19 @@ impl Runner {
     /// Check if interrupted and handle it.
     ///
     /// Returns Ok(Some(state)) if interrupted, Ok(None) if not interrupted.
-    fn check_interrupt(&mut self, task: &Task, attempt: AttemptId, phase: crate::state::Phase) -> Result<Option<crate::TaskState>> {
+    fn check_interrupt(
+        &mut self,
+        task: &Task,
+        attempt: AttemptId,
+        phase: crate::state::Phase,
+    ) -> Result<Option<crate::TaskState>> {
         if self.interrupted.load(Ordering::Acquire) {
-            self.recorder.record(
-                Some(task.id),
-                crate::EventKind::Interrupted { phase },
-            )?;
-            self.kill_remaining_processes();
+            self.recorder
+                .record(Some(task.id), crate::EventKind::Interrupted { phase })?;
+            kill_remaining_processes();
             return Ok(Some(crate::TaskState::Running { attempt, phase }));
         }
         Ok(None)
-    }
-
-    /// Kill any remaining child processes from the provider.
-    fn kill_remaining_processes(&self) {
-        use nix::sys::signal::{kill, Signal};
-        use nix::unistd::Pid;
-
-        let current_pid = std::process::id();
-        if let Ok(pgrp) = nix::unistd::getpgid(Some(Pid::from_raw(current_pid as i32))) {
-            let _ = kill(pgrp, Signal::SIGTERM);
-            std::thread::sleep(Duration::from_millis(100));
-            let _ = kill(pgrp, Signal::SIGKILL);
-        }
     }
 
     /// Execute the protocol phases for a prepared task.
@@ -1635,6 +1625,20 @@ fn disk_free(path: &Path) -> Result<u64> {
         Err(_) => Err(Error::Io(std::io::Error::other(
             "failed to get filesystem statistics",
         ))),
+    }
+}
+
+/// Kill any remaining child processes from the provider.
+fn kill_remaining_processes() {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+
+    let current_pid = std::process::id();
+    #[allow(clippy::cast_possible_wrap)]
+    if let Ok(pgrp) = nix::unistd::getpgid(Some(Pid::from_raw(current_pid as i32))) {
+        let _ = kill(pgrp, Signal::SIGTERM);
+        std::thread::sleep(Duration::from_millis(100));
+        let _ = kill(pgrp, Signal::SIGKILL);
     }
 }
 

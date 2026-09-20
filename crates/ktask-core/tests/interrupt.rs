@@ -53,10 +53,7 @@ fn interrupt_journals_interrupted_event() {
     let phase = ktask_core::state::Phase::Implement;
 
     recorder
-        .record(
-            Some(task_id),
-            EventKind::Interrupted { phase },
-        )
+        .record(Some(task_id), EventKind::Interrupted { phase })
         .expect("record interrupted event");
 
     // Verify the event was recorded
