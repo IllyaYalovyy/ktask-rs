@@ -49,14 +49,15 @@ pub fn register(root: &Path) -> Result<Project> {
         use std::os::unix::fs::PermissionsExt;
 
         if !state_dir.exists() {
-            std::fs::create_dir(&state_dir)?;
+            // Use create_dir_all to handle missing parents and race conditions
+            std::fs::create_dir_all(&state_dir)?;
             let perms = Permissions::from_mode(0o700);
             std::fs::set_permissions(&state_dir, perms)?;
         }
     }
     #[cfg(not(unix))]
     {
-        let _ = std::fs::create_dir(&state_dir); // ignore error if already exists
+        let _ = std::fs::create_dir_all(&state_dir); // ignore error if already exists
     }
 
     // Create or open the meta file to record the project root
