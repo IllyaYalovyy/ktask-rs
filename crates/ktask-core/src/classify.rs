@@ -861,9 +861,9 @@ fn part_seconds(found: &regex::Captures<'_>) -> Option<f64> {
 /// The length of one unit, or `None` when the word is not a unit of time.
 fn seconds_per_unit(unit: &str) -> Option<f64> {
     let seconds = match unit {
-        "ns" => 1e-9,
-        "us" => 1e-6,
-        "ms" => 1e-3,
+        "ns" | "nanosecond" | "nanoseconds" => 1e-9,
+        "us" | "microsecond" | "microseconds" => 1e-6,
+        "ms" | "millisecond" | "milliseconds" => 1e-3,
         "s" | "sec" | "secs" | "second" | "seconds" => 1.0,
         "m" | "min" | "mins" | "minute" | "minutes" => 60.0,
         "h" | "hr" | "hrs" | "hour" | "hours" => 3_600.0,
@@ -879,9 +879,13 @@ mod tests {
     use super::{
         CONFIGURATION, ENVIRONMENT, FailureClass, GIT_UNSTARTED, LIMIT, NEEDS_INPUT, POLICY,
         PROVIDER_RESIDUAL, RESET_CLOCK, RESET_DAY, RESET_RETRY_AFTER, RESET_SPAN, TRANSIENT,
-        TddException, WaitPlan, classify, limit_message, parse_reset, wait_plan,
+        TddException, classify, limit_message,
     };
-    use crate::{Error, GateKind, GateResult, Outcome};
+    // The three wait items are taken from the crate root rather than from this
+    // module: a test that reaches the module directly would keep passing after
+    // the re-export at `crate::` was dropped, and the kernel only ever sees the
+    // root.
+    use crate::{Error, GateKind, GateResult, Outcome, WaitPlan, parse_reset, wait_plan};
     use proptest::prelude::*;
     use serde::de::DeserializeOwned;
     use std::fmt::Debug;
@@ -1690,6 +1694,20 @@ mod tests {
     }
 
     #[test]
+    fn an_offset_behind_utc_is_subtracted_on_the_right_side() {
+        assert_eq!(
+            parse_reset(
+                "usage limit reached; resets at 2026-09-20T02:00:00-05:30",
+                morning(),
+            ),
+            Some(datetime!(2026-09-20 07:30:00 UTC)),
+            "the sign decides which way both parts of the offset go, and an hour \
+             and a minute that are each dropped or each added wake the run hours \
+             either side of the instant the provider named",
+        );
+    }
+
+    #[test]
     fn an_instant_written_without_an_offset_is_read_as_utc() {
         let line = "usage limit reached; resets 2026-09-20 09:00";
         assert_eq!(
@@ -1697,6 +1715,17 @@ mod tests {
             Some(datetime!(2026-09-20 09:00:00 UTC)),
             "a time with no zone is read as UTC rather than as the supervisor's \
              local time, which differs from machine to machine",
+        );
+    }
+
+    #[test]
+    fn fractional_seconds_on_an_instant_are_honoured_to_the_second() {
+        assert_eq!(
+            parse_reset("resets at 2026-09-20T00:00:00.500Z", morning()),
+            Some(datetime!(2026-09-20 00:00:00 UTC)),
+            "a machine-written instant may carry a fraction the wait cannot use; \
+             the margin beside it is a minute, so the fraction is truncated and \
+             not carried into the plan",
         );
     }
 
@@ -1743,6 +1772,14 @@ mod tests {
 
     #[test]
     fn a_clock_time_already_past_rolls_across_midnight_to_the_next_day() {
+        // Pin the boundary the other way as well: a clock read at the very
+        // instant it names is that instant, not the same clock time one day
+        // away. Rolling a deadline that is already due is a whole day spent
+        // waiting for a limit that has already lifted.
+        assert_eq!(
+            parse_reset("usage limit reached; resets at 09:00 UTC", morning()),
+            Some(morning()),
+        );
         assert_eq!(
             parse_reset(
                 "usage limit reached; resets at 00:00:00Z",
@@ -2113,5 +2150,77 @@ mod tests {
                 "invented a reset out of {text:?}",
             );
         }
+    }
+    /// Every unit word the duration shape accepts, beside the wait one of them
+    /// names. `seconds_per_unit` is a table of magnitudes and nothing else in
+    /// the suite reads a week, a microsecond, or the word `mins`: a length
+    /// written wrong there is a run that waits by orders of magnitude, which is
+    /// exactly the answer this table exists to keep from happening.
+    #[test]
+    fn every_duration_unit_means_the_length_the_table_says() {
+        for (written, expected) in [
+            ("1 ns", Duration::nanoseconds(1)),
+            ("1 microsecond", Duration::microseconds(1)),
+            ("2 us", Duration::microseconds(2)),
+            ("3 milliseconds", Duration::milliseconds(3)),
+            ("4 ms", Duration::milliseconds(4)),
+            ("5 s", Duration::seconds(5)),
+            ("6 sec", Duration::seconds(6)),
+            ("7 secs", Duration::seconds(7)),
+            ("8 second", Duration::seconds(8)),
+            ("9 seconds", Duration::seconds(9)),
+            ("1 m", Duration::seconds(60)),
+            ("2 min", Duration::seconds(120)),
+            ("3 mins", Duration::seconds(180)),
+            ("4 minute", Duration::seconds(240)),
+            ("5 minutes", Duration::seconds(300)),
+            ("1 h", Duration::seconds(3_600)),
+            ("2 hr", Duration::seconds(7_200)),
+            ("3 hrs", Duration::seconds(10_800)),
+            ("4 hour", Duration::seconds(14_400)),
+            ("5 hours", Duration::seconds(18_000)),
+            ("1 d", Duration::seconds(86_400)),
+            ("2 day", Duration::seconds(172_800)),
+            ("3 days", Duration::seconds(259_200)),
+            ("1 w", Duration::seconds(604_800)),
+            ("2 wk", Duration::seconds(1_209_600)),
+            ("3 wks", Duration::seconds(1_814_400)),
+            ("4 week", Duration::seconds(2_419_200)),
+            ("5 weeks", Duration::seconds(3_024_000)),
+        ] {
+            assert_eq!(
+                parse_reset(
+                    &format!("usage limit reached; resets in {written}"),
+                    morning(),
+                ),
+                Some(morning() + expected),
+                "`{written}` is not the wait it names",
+            );
+        }
+    }
+
+    #[test]
+    fn parts_joined_by_a_word_or_a_punctuation_mark_are_one_duration() {
+        for line in [
+            "usage limit reached; resets in 2h and 15m",
+            "usage limit reached; resets in 2h, 15m",
+            "usage limit reached; resets in 2h - 15m",
+        ] {
+            assert_eq!(
+                parse_reset(line, morning()),
+                Some(datetime!(2026-09-19 11:15:00 UTC)),
+                "{line:?} names one wait written in two parts",
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_first_wait_on_a_line_is_summed() {
+        assert_eq!(
+            parse_reset("try again in 20s; the window resets in 4h", morning()),
+            Some(datetime!(2026-09-19 09:00:20 UTC)),
+            "a line that names two waits has one answer, and adding them would \
+                 invent a deadline no provider sent",
+        );
     }
 }
