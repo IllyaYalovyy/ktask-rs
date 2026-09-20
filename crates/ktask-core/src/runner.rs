@@ -2,10 +2,10 @@
 
 use crate::{
     AttemptId, AttemptRecord, Bus, Config, Error, FailureClass, Project, Protocol, Provider,
-    Recorder, Result, Task,
+    RepoLock, Recorder, Result, Task,
 };
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use time::OffsetDateTime;
 
@@ -28,6 +28,17 @@ pub struct Runner {
     pub recorder: Recorder,
     /// The configured provider for AI agents.
     pub provider: Box<dyn Provider>,
+}
+
+/// Result of preflight checks and worktree preparation.
+#[derive(Debug)]
+pub struct Prepared {
+    /// Path to the created worktree.
+    pub worktree_path: PathBuf,
+    /// Base commit SHA for the worktree.
+    pub base_sha: String,
+    /// Repository lock held for this preparation.
+    pub lock: RepoLock,
 }
 
 impl std::fmt::Debug for Runner {
@@ -135,6 +146,80 @@ impl Runner {
         crate::attempt::write_evidence(&self.project, &record, &context)?;
 
         Ok(attempt_id)
+    }
+
+    /// Prepare for task execution by running preflight checks and creating a worktree.
+    ///
+    /// Performs preflight validation to ensure the world is sane before spending tokens:
+    /// - Records preflight started event
+    /// - Runs all preflight checks
+    /// - On success, records preflight passed event
+    /// - Acquires the repository lock
+    /// - Creates a worktree checked out at the fetched remote SHA
+    ///
+    /// If preflight fails, the method records the failure classification and releases the lock.
+    ///
+    /// # Arguments
+    ///
+    /// * `task` - The task being prepared
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if preflight checks fail, the lock cannot be acquired,
+    /// or the worktree cannot be created. On preflight failure, returns a failure
+    /// classification in the error.
+    pub fn prepare(&mut self, task: &Task) -> Result<Prepared> {
+        self.recorder.record(
+            Some(task.id),
+            crate::EventKind::PreflightStarted,
+        )?;
+
+        let report = preflight(&self.project, &self.config, self.provider.as_ref())?;
+
+        if !report.success {
+            let failure = report.failure.unwrap();
+            let class = failure.classification();
+            let detail = format!("{:?}", failure);
+
+            self.recorder.record(
+                Some(task.id),
+                crate::EventKind::PreflightFailed {
+                    class,
+                    detail,
+                },
+            )?;
+
+            return Err(Error::Policy {
+                detail: format!("Preflight check failed: {:?}", failure),
+                paths: vec![],
+            });
+        }
+
+        let base_sha = crate::git::head_sha(&self.project.root)?;
+
+        self.recorder.record(
+            Some(task.id),
+            crate::EventKind::PreflightPassed {
+                base_sha: base_sha.clone(),
+            },
+        )?;
+
+        let lock = RepoLock::acquire(&self.project.state_dir, Duration::from_secs(5))?;
+
+        let remote_ref = format!(
+            "refs/remotes/{}/{}",
+            &self.config.mainline_remote, &self.config.mainline_branch
+        );
+        let remote_sha = crate::git::git(&self.project.root, &["rev-parse", &remote_ref])?;
+
+        let worktree_name = format!("task-{}", task.id);
+        let worktree_path = crate::git::create_worktree(&self.project.root, &worktree_name, &remote_sha)?;
+
+        Ok(Prepared {
+            worktree_path,
+            base_sha,
+            lock,
+        })
     }
 }
 
@@ -428,7 +513,7 @@ fn check_lock(
     project: &Project,
     evidence: &mut Vec<PreflightEvidence>,
 ) -> std::result::Result<(), PreflightFailure> {
-    match crate::RepoLock::acquire(&project.state_dir, Duration::from_secs(5)) {
+    match RepoLock::acquire(&project.state_dir, Duration::from_secs(5)) {
         Ok(_lock) => {
             evidence.push(PreflightEvidence::LockAcquired);
             Ok(())
@@ -627,5 +712,301 @@ mod tests {
             detail: "timeout".to_string(),
         };
         assert_eq!(failure.classification(), FailureClass::PolicyFailure);
+    }
+
+    #[test]
+    fn runner_prepare_records_preflight_started() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        crate::git::git(repo.path(), &["push", "-u", "origin", "master"])
+            .expect("Failed to push to origin");
+
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let gitignore = repo.path().join(".gitignore");
+        std::fs::write(&gitignore, ".ktask/\n").expect("Failed to write .gitignore");
+        crate::git::git(repo.path(), &["add", ".gitignore"]).expect("Failed to add .gitignore");
+        crate::git::git(repo.path(), &["commit", "-m", "Add .gitignore"])
+            .expect("Failed to commit .gitignore");
+        crate::git::git(repo.path(), &["push", "origin", "master"])
+            .expect("Failed to push .gitignore");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        std::fs::write(&scenario_file, "steps = []").expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["true".to_string()]);
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.dummy_scenario_path = Some(scenario_file);
+        config.mainline_branch = "master".to_string();
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project).expect("Failed to create runner");
+
+        let task = Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "test outcome".to_string(),
+            done_when: "test done".to_string(),
+            verify: "test verify".to_string(),
+            refs: "test refs".to_string(),
+        };
+
+        let result = runner.prepare(&task);
+        assert!(result.is_ok(), "prepare should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    fn runner_prepare_creates_worktree_from_fetched_sha() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        crate::git::git(repo.path(), &["push", "-u", "origin", "master"])
+            .expect("Failed to push to origin");
+
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let gitignore = repo.path().join(".gitignore");
+        std::fs::write(&gitignore, ".ktask/\n").expect("Failed to write .gitignore");
+        crate::git::git(repo.path(), &["add", ".gitignore"]).expect("Failed to add .gitignore");
+        crate::git::git(repo.path(), &["commit", "-m", "Add .gitignore"])
+            .expect("Failed to commit .gitignore");
+        crate::git::git(repo.path(), &["push", "origin", "master"])
+            .expect("Failed to push .gitignore");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        std::fs::write(&scenario_file, "steps = []").expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["true".to_string()]);
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.dummy_scenario_path = Some(scenario_file);
+        config.mainline_branch = "master".to_string();
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project.clone()).expect("Failed to create runner");
+
+        let task = Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "test outcome".to_string(),
+            done_when: "test done".to_string(),
+            verify: "test verify".to_string(),
+            refs: "test refs".to_string(),
+        };
+
+        let prepared = runner.prepare(&task).expect("prepare should succeed");
+
+        let worktree_path = &prepared.worktree_path;
+        assert!(
+            worktree_path.exists(),
+            "worktree should exist at {:?}",
+            worktree_path
+        );
+
+        let task_id = task.id;
+        assert!(
+            worktree_path.ends_with(format!("task-{}", task_id)),
+            "worktree path should end with task-{}, got {:?}",
+            task_id,
+            worktree_path
+        );
+
+        let fetched_sha = crate::git::git(
+            &project.root,
+            &["rev-parse", "refs/remotes/origin/master"],
+        )
+        .expect("Failed to get fetched SHA");
+
+        let worktree_sha = crate::git::head_sha(worktree_path)
+            .expect("Failed to get worktree HEAD SHA");
+
+        assert_eq!(
+            worktree_sha, fetched_sha,
+            "worktree should be checked out at fetched remote SHA"
+        );
+    }
+
+    #[test]
+    fn runner_prepare_holds_lock() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        crate::git::git(repo.path(), &["push", "-u", "origin", "master"])
+            .expect("Failed to push to origin");
+
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let gitignore = repo.path().join(".gitignore");
+        std::fs::write(&gitignore, ".ktask/\n").expect("Failed to write .gitignore");
+        crate::git::git(repo.path(), &["add", ".gitignore"]).expect("Failed to add .gitignore");
+        crate::git::git(repo.path(), &["commit", "-m", "Add .gitignore"])
+            .expect("Failed to commit .gitignore");
+        crate::git::git(repo.path(), &["push", "origin", "master"])
+            .expect("Failed to push .gitignore");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        std::fs::write(&scenario_file, "steps = []").expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["true".to_string()]);
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.dummy_scenario_path = Some(scenario_file);
+        config.mainline_branch = "master".to_string();
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project.clone()).expect("Failed to create runner");
+
+        let task = Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "test outcome".to_string(),
+            done_when: "test done".to_string(),
+            verify: "test verify".to_string(),
+            refs: "test refs".to_string(),
+        };
+
+        let _prepared = runner.prepare(&task).expect("prepare should succeed");
+
+        let lock_path = state_dir.join(".repo.lock");
+        assert!(
+            lock_path.exists(),
+            "lock file should exist while prepared is held"
+        );
+    }
+
+    #[test]
+    fn runner_prepare_releases_lock_on_drop() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        crate::git::git(repo.path(), &["push", "-u", "origin", "master"])
+            .expect("Failed to push to origin");
+
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let gitignore = repo.path().join(".gitignore");
+        std::fs::write(&gitignore, ".ktask/\n").expect("Failed to write .gitignore");
+        crate::git::git(repo.path(), &["add", ".gitignore"]).expect("Failed to add .gitignore");
+        crate::git::git(repo.path(), &["commit", "-m", "Add .gitignore"])
+            .expect("Failed to commit .gitignore");
+        crate::git::git(repo.path(), &["push", "origin", "master"])
+            .expect("Failed to push .gitignore");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        std::fs::write(&scenario_file, "steps = []").expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["true".to_string()]);
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.dummy_scenario_path = Some(scenario_file);
+        config.mainline_branch = "master".to_string();
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project.clone()).expect("Failed to create runner");
+
+        let task = Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "test outcome".to_string(),
+            done_when: "test done".to_string(),
+            verify: "test verify".to_string(),
+            refs: "test refs".to_string(),
+        };
+
+        {
+            let _prepared = runner.prepare(&task).expect("prepare should succeed");
+            let lock_path = state_dir.join(".repo.lock");
+            assert!(lock_path.exists(), "lock file should exist");
+        }
+
+        let lock_path = state_dir.join(".repo.lock");
+        assert!(
+            !lock_path.exists(),
+            "lock file should be released after prepared is dropped"
+        );
+    }
+
+    #[test]
+    fn runner_prepare_fails_when_baseline_gate_fails() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let gitignore = repo.path().join(".gitignore");
+        std::fs::write(&gitignore, ".ktask/\n").expect("Failed to write .gitignore");
+        crate::git::git(repo.path(), &["add", ".gitignore"]).expect("Failed to add .gitignore");
+        crate::git::git(repo.path(), &["commit", "-m", "Add .gitignore"])
+            .expect("Failed to commit .gitignore");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        std::fs::write(&scenario_file, "steps = []").expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["false".to_string()]);
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.dummy_scenario_path = Some(scenario_file);
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project.clone()).expect("Failed to create runner");
+
+        let task = Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "test outcome".to_string(),
+            done_when: "test done".to_string(),
+            verify: "test verify".to_string(),
+            refs: "test refs".to_string(),
+        };
+
+        let result = runner.prepare(&task);
+        assert!(result.is_err(), "prepare should fail when baseline gate fails");
     }
 }
