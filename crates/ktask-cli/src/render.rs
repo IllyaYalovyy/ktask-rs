@@ -8,6 +8,14 @@ use std::io::{self, Write};
 use std::sync::OnceLock;
 
 static COLOR_ENABLED: OnceLock<bool> = OnceLock::new();
+static VERBOSITY: OnceLock<Verbosity> = OnceLock::new();
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Verbosity {
+    Quiet,
+    Normal,
+    Verbose,
+}
 
 /// Initialize color support based on `--no-color` flag and `NO_COLOR` environment variable.
 pub(crate) fn init(no_color_flag: bool) {
@@ -16,12 +24,29 @@ pub(crate) fn init(no_color_flag: bool) {
     let _ = COLOR_ENABLED.set(use_color);
 }
 
+/// Initialize verbosity level based on `--quiet` and `--verbose` flags.
+pub(crate) fn init_verbosity(quiet: bool, verbose: bool) {
+    let verbosity = if quiet {
+        Verbosity::Quiet
+    } else if verbose {
+        Verbosity::Verbose
+    } else {
+        Verbosity::Normal
+    };
+    let _ = VERBOSITY.set(verbosity);
+}
+
 /// Check if color output is enabled.
 fn color_enabled() -> bool {
     *COLOR_ENABLED.get_or_init(|| {
         let no_color_env = std::env::var("NO_COLOR").is_ok();
         !no_color_env
     })
+}
+
+/// Get the current verbosity level.
+fn get_verbosity() -> Verbosity {
+    *VERBOSITY.get_or_init(|| Verbosity::Normal)
 }
 
 /// Remove ANSI color codes from a string.
@@ -64,7 +89,12 @@ pub(crate) fn out(args: fmt::Arguments<'_>) {
 ///
 /// This is for diagnostic output, status updates, and other non-essential
 /// information that should not interfere with machine-readable output.
+/// Respects the verbosity level set by `init_verbosity`.
 pub(crate) fn progress(args: fmt::Arguments<'_>) {
+    if get_verbosity() == Verbosity::Quiet {
+        return;
+    }
+
     let output = args.to_string();
     let output = if color_enabled() {
         output
