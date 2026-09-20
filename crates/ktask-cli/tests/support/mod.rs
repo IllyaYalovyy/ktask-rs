@@ -44,8 +44,7 @@ impl ScenarioEnv {
         let binary_path = if let Ok(path) = env::var("CARGO_BIN_EXE_ktask_rs") {
             PathBuf::from(path)
         } else {
-            let manifest_dir =
-                env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+            let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
             PathBuf::from(manifest_dir)
                 .ancestors()
                 .find(|p| p.join("target/debug/ktask-rs").exists())

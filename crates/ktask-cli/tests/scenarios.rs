@@ -29,11 +29,7 @@ fn scenario_init_add_status() {
     let task_file = env.write_task("task.md", task_content);
 
     // 3. Add the task
-    let add_output = env.run_command(&[
-        "add",
-        "--file",
-        task_file.to_string_lossy().as_ref(),
-    ]);
+    let add_output = env.run_command(&["add", "--file", task_file.to_string_lossy().as_ref()]);
     let _ = add_output.clone().expect_success();
     add_output.assert_stdout_contains("id=");
 
