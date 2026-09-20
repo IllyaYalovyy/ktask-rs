@@ -367,6 +367,7 @@ dependencies = [
  "ktask-core",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
