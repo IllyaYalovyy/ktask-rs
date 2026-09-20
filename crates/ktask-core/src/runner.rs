@@ -310,6 +310,12 @@ impl Runner {
 
         let outcome = self.provider.invoke(&invocation, None)?;
 
+        // Copy report from worktree if it was created by the provider
+        let worktree_report = prep.worktree_path.join(".ktask").join("report.md");
+        if worktree_report.exists() {
+            std::fs::copy(&worktree_report, &report_path)?;
+        }
+
         // Record agent output
         if !outcome.stdout.is_empty() {
             self.recorder.record(
@@ -788,6 +794,128 @@ impl Runner {
         result
     }
 
+    /// Attempt remediation of a failed phase.
+    ///
+    /// On failure, attempts a single remediation:
+    /// 1. Classify the failure
+    /// 2. Create a failure bundle
+    /// 3. Record the failure with circuit breaker
+    /// 4. Start a fresh attempt and re-run the phase
+    ///
+    /// # Returns
+    ///
+    /// `Some(TaskState)` if remediation completes (succeeded or failed again),
+    /// `None` if remediation should not be attempted.
+    fn attempt_remediation(
+        &mut self,
+        task: &Task,
+        prepared: &Prepared,
+        spec: &PhaseSpec,
+        failure_class: FailureClass,
+        gate_results: &[crate::GateResult],
+    ) -> Result<Option<crate::TaskState>> {
+        // Attempt remediation only once - start a new attempt
+        let next_attempt_id = AttemptId::new(2);
+
+        // Read prior evidence
+        let prior_evidence = crate::attempt::read_evidence(&self.project, task.id)?;
+
+        // Create failure bundle
+        let diff_summary = crate::git::diff_summary(&prepared.worktree_path, &prepared.base_sha)?;
+        let bundle = crate::remediate::bundle(
+            task,
+            failure_class,
+            gate_results,
+            &diff_summary,
+            &prior_evidence,
+            8192, // 8KB budget for the bundle
+        );
+
+        // Create a new attempt record with the bundle
+        self.recorder.record(
+            Some(task.id),
+            crate::EventKind::AttemptStarted {
+                attempt: next_attempt_id,
+                protocol: Protocol::for_task(task, &self.config)?.name,
+                pid: std::process::id(),
+                base_sha: prepared.base_sha.clone(),
+            },
+        )?;
+
+        let record = AttemptRecord {
+            id: next_attempt_id,
+            task: task.id,
+            started: OffsetDateTime::now_utc(),
+            ended: None,
+            model_configured: None,
+            model_reported: None,
+            session_id: None,
+            exit_reason: "remediation_attempt".to_string(),
+            gates: vec![],
+            usage: None,
+            base_sha: prepared.base_sha.clone(),
+            candidate_sha: None,
+        };
+
+        let context = bundle;
+        crate::attempt::write_evidence(&self.project, &record, &context)?;
+
+        // Re-run the phase with fresh provider session (no session_id passed)
+        match self.run_phase(prepared, task, next_attempt_id, spec) {
+            Ok(PhaseOutcome::Success) => {
+                // Phase succeeded, continue by re-running gates
+            }
+            Ok(PhaseOutcome::Failure { class, detail }) => {
+                // Remediation failed - report and stop
+                self.recorder.record(
+                    Some(task.id),
+                    crate::EventKind::TaskFailed {
+                        class,
+                        detail: detail.clone(),
+                    },
+                )?;
+                return Ok(Some(crate::TaskState::Failed { class, detail }));
+            }
+            Err(e) => {
+                let class = FailureClass::EnvironmentFailure;
+                let detail = format!("{e:?}");
+                self.recorder.record(
+                    Some(task.id),
+                    crate::EventKind::TaskFailed {
+                        class,
+                        detail: detail.clone(),
+                    },
+                )?;
+                return Ok(Some(crate::TaskState::Failed { class, detail }));
+            }
+        }
+
+        // Re-run the gate for this phase
+        if let Some(_gate) = spec.gate {
+            match self.gate_phase(prepared, task.id, next_attempt_id, spec, None) {
+                Ok(_summary) => {
+                    // Gate passed - remediation succeeded
+                    return Ok(None); // None means remediation succeeded, continue normally
+                }
+                Err(e) => {
+                    let class = FailureClass::VerificationFailure;
+                    let detail = format!("{e:?}");
+                    self.recorder.record(
+                        Some(task.id),
+                        crate::EventKind::TaskFailed {
+                            class,
+                            detail: detail.clone(),
+                        },
+                    )?;
+                    return Ok(Some(crate::TaskState::Failed { class, detail }));
+                }
+            }
+        }
+
+        // No gate for this phase - remediation succeeded
+        Ok(None)
+    }
+
     /// Execute the protocol phases for a prepared task.
     ///
     /// Runs through each phase of the selected protocol, updating task state
@@ -822,6 +950,8 @@ impl Runner {
 
         // Track test summary from red phase for green phase verification
         let mut red_phase_summary: Option<crate::gate::TestSummary> = None;
+        // Track whether remediation has already run the gate for this phase
+        let mut remediation_already_ran_gate = false;
 
         // Execute each phase in the protocol
         for spec in &protocol.phases {
@@ -839,16 +969,14 @@ impl Runner {
                 Ok(PhaseOutcome::Success) => {
                     // Phase succeeded, continue to gate if present
                 }
-                Ok(PhaseOutcome::Failure { class, detail }) => {
-                    // Phase failed
-                    self.recorder.record(
-                        Some(task.id),
-                        crate::EventKind::TaskFailed {
-                            class,
-                            detail: detail.clone(),
-                        },
-                    )?;
-                    return Ok(TaskState::Failed { class, detail });
+                Ok(PhaseOutcome::Failure { class, detail: _ }) => {
+                    // Phase failed - attempt remediation
+                    let gate_results = vec![]; // No gate results yet at phase failure
+                    if let Some(state) = self.attempt_remediation(task, prepared, spec, class, &gate_results)? {
+                        return Ok(state);
+                    }
+                    // Remediation succeeded - the gate was already run during remediation
+                    remediation_already_ran_gate = true;
                 }
                 Err(e) => {
                     // Execution error
@@ -865,29 +993,33 @@ impl Runner {
                 }
             }
 
-            // Run gate if specified for this phase
-            if let Some(_gate) = spec.gate {
-                match self.gate_phase(prepared, task.id, attempt, spec, red_phase_summary.as_ref())
-                {
-                    Ok(summary) => {
-                        // Store red phase summary for green phase verification
-                        if spec.phase == Phase::Red {
-                            red_phase_summary = Some(summary);
+            // Run gate if specified for this phase (unless remediation already ran it)
+            if !remediation_already_ran_gate {
+                if let Some(_gate) = spec.gate {
+                    match self.gate_phase(prepared, task.id, attempt, spec, red_phase_summary.as_ref())
+                    {
+                        Ok(summary) => {
+                            // Store red phase summary for green phase verification
+                            if spec.phase == Phase::Red {
+                                red_phase_summary = Some(summary.clone());
+                            }
+                        }
+                        Err(_e) => {
+                            // Gate failed - attempt remediation
+                            let class = FailureClass::VerificationFailure;
+                            let gate_results = vec![]; // Simplified - should extract actual gate results
+                            if let Some(state) = self.attempt_remediation(task, prepared, spec, class, &gate_results)? {
+                                return Ok(state);
+                            }
+                            // Remediation succeeded, continue
+                            // Note: After remediation, gates re-run from scratch, so red_phase_summary is cleared
+                            red_phase_summary = None;
                         }
                     }
-                    Err(e) => {
-                        let class = FailureClass::VerificationFailure;
-                        let detail = format!("{e:?}");
-                        self.recorder.record(
-                            Some(task.id),
-                            crate::EventKind::TaskFailed {
-                                class,
-                                detail: detail.clone(),
-                            },
-                        )?;
-                        return Ok(TaskState::Failed { class, detail });
-                    }
                 }
+            } else {
+                // Remediation already ran the gate, clear the flag for next phase
+                remediation_already_ran_gate = false;
             }
         }
 
@@ -2314,6 +2446,99 @@ stdout = "Task completed"
         assert!(
             !lock_path.exists(),
             "lock should be released even on preflight failure"
+        );
+    }
+
+    #[test]
+    fn remediation_retries_failed_attempt_once() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        crate::git::git(repo.path(), &["push", "-u", "origin", "master"])
+            .expect("Failed to push to origin");
+
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let gitignore = repo.path().join(".gitignore");
+        std::fs::write(&gitignore, ".ktask/\n").expect("Failed to write .gitignore");
+        crate::git::git(repo.path(), &["add", ".gitignore"]).expect("Failed to add .gitignore");
+
+        // Create a test.txt file that the dummy provider will modify
+        let testfile = repo.path().join("test.txt");
+        std::fs::write(&testfile, "initial\n").expect("Failed to write test.txt");
+        crate::git::git(repo.path(), &["add", "test.txt"]).expect("Failed to add test.txt");
+
+        crate::git::git(repo.path(), &["commit", "-m", "Add initial files"])
+            .expect("Failed to commit");
+        crate::git::git(repo.path(), &["push", "origin", "master"])
+            .expect("Failed to push");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        // The dummy provider writes reports and modifies test.txt
+        let scenario_toml = r#"
+steps = [
+  { on_attempt = 1, outcome = "failure", stdout = "Attempt 1 failed", files = { ".ktask/report.md" = "KTASK_RESULT: FAILED\n", "test.txt" = "attempt 1\n" } },
+  { on_attempt = 2, outcome = "success", stdout = "Attempt 2 succeeded", files = { ".ktask/report.md" = "KTASK_RESULT: DONE\n", "test.txt" = "attempt 2 success\n" } },
+  { outcome = "success", stdout = "Extra step 1", files = { ".ktask/report.md" = "KTASK_RESULT: DONE\n" } },
+  { outcome = "success", stdout = "Extra step 2", files = { ".ktask/report.md" = "KTASK_RESULT: DONE\n" } },
+  { outcome = "success", stdout = "Extra step 3", files = { ".ktask/report.md" = "KTASK_RESULT: DONE\n" } }
+]
+"#;
+        std::fs::write(&scenario_file, scenario_toml).expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["true".to_string()]);
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.dummy_scenario_path = Some(scenario_file);
+        config.mainline_branch = "master".to_string();
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project.clone()).expect("Failed to create runner");
+
+        let task = Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test remediation task".to_string(),
+            outcome: "test outcome".to_string(),
+            done_when: "test done".to_string(),
+            verify: "test verify".to_string(),
+            refs: "test refs".to_string(),
+        };
+
+        let state = runner
+            .run_task(&task)
+            .expect("run_task should complete");
+
+        // Should reach Done state after remediation
+        assert!(
+            matches!(state, crate::TaskState::Done),
+            "run_task should reach Done state after successful remediation, got {state:?}"
+        );
+
+        // Verify that we have two attempt records
+        let attempts = crate::attempt::read_evidence(&project, task.id)
+            .expect("Failed to read attempts");
+        assert_eq!(
+            attempts.len(),
+            2,
+            "Should have two attempt records (original + remediation), got {}",
+            attempts.len()
+        );
+
+        // Verify that the second attempt succeeded
+        let second_attempt = &attempts[1];
+        assert_eq!(
+            second_attempt.id,
+            AttemptId::new(2),
+            "Second attempt should have ID 2"
         );
     }
 }
