@@ -2,12 +2,26 @@
 
 use crate::{
     AttemptId, AttemptRecord, Bus, Config, Error, FailureClass, Project, Protocol, Provider,
-    Recorder, RepoLock, Result, Task,
+    Recorder, RepoLock, Result, Task, PhaseSpec,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use time::OffsetDateTime;
+
+/// The outcome of running a single phase.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PhaseOutcome {
+    /// Phase completed successfully.
+    Success,
+    /// Phase failed with a classified failure.
+    Failure {
+        /// Classification of the failure.
+        class: FailureClass,
+        /// Detailed description of the failure.
+        detail: String,
+    },
+}
 
 /// The runner for executing tasks with journaling and verification.
 ///
@@ -227,6 +241,172 @@ impl Runner {
             base_sha,
             lock,
         })
+    }
+
+    /// Run a single phase of task execution.
+    ///
+    /// Executes a phase by:
+    /// 1. Recording the phase entry
+    /// 2. Assembling the context and prompt
+    /// 3. Creating the report directory
+    /// 4. Invoking the provider
+    /// 5. Validating the model IDs
+    /// 6. Reading and parsing the report
+    /// 7. Checking that changed paths respect the write scope
+    ///
+    /// # Arguments
+    ///
+    /// * `prep` - The prepared execution state (worktree, lock, base SHA)
+    /// * `task` - The task being executed
+    /// * `attempt` - The current attempt number
+    /// * `spec` - The phase specification with write scope and gates
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PhaseOutcome::Failure` if:
+    /// - The report is missing or cannot be parsed
+    /// - Changed paths violate the write scope
+    /// - The model ID check fails
+    pub fn run_phase(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+        spec: &PhaseSpec,
+    ) -> Result<PhaseOutcome> {
+        // Record phase entry
+        self.recorder.record(
+            Some(task.id),
+            crate::EventKind::PhaseEntered {
+                attempt,
+                phase: spec.phase,
+            },
+        )?;
+
+        // Collect ADRs from the repository
+        let adrs = crate::collect_adrs(&self.project.root)?;
+
+        // Load the context document from the prompt library
+        let context_doc = self.load_context_doc()?;
+
+        // Load the template
+        let template = crate::load_template(&self.project)?;
+
+        // Assemble the prompt
+        let prompt = crate::assemble(task, &context_doc, &adrs, &template, attempt, 1);
+
+        // Create the report directory
+        let report_path = crate::report_path(&self.project, task.id, attempt);
+        if let Some(parent) = report_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Invoke the provider
+        let invocation = crate::provider::Invocation {
+            prompt,
+            model: self.config.model.clone(),
+            working_dir: prep.worktree_path.clone(),
+        };
+
+        let outcome = self.provider.invoke(&invocation, None)?;
+
+        // Record agent output
+        if !outcome.stdout.is_empty() {
+            self.recorder.record(
+                Some(task.id),
+                crate::EventKind::AgentOutput {
+                    attempt,
+                    stream: crate::Stream::Stdout,
+                    text: outcome.stdout.clone(),
+                },
+            )?;
+        }
+
+        if !outcome.stderr.is_empty() {
+            self.recorder.record(
+                Some(task.id),
+                crate::EventKind::AgentOutput {
+                    attempt,
+                    stream: crate::Stream::Stderr,
+                    text: outcome.stderr.clone(),
+                },
+            )?;
+        }
+
+        // Check model ID consistency
+        let configured_model = self.config.model.as_deref();
+        let reported_model = outcome.session_id.as_deref();
+        crate::provider::check_model(configured_model, reported_model)?;
+
+        // Read the report
+        let report_content = match std::fs::read_to_string(&report_path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(PhaseOutcome::Failure {
+                    class: FailureClass::VerificationFailure,
+                    detail: "Agent did not produce a report at the expected location".to_string(),
+                });
+            }
+            Err(e) => return Err(Error::Io(e)),
+        };
+
+        // Parse the report
+        let report_result = match crate::report::parse_report(&report_content) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(PhaseOutcome::Failure {
+                    class: FailureClass::VerificationFailure,
+                    detail: format!("Failed to parse report: {}", e),
+                });
+            }
+        };
+
+        // If the report indicates failure or needs input, return that as a failure
+        match report_result {
+            crate::ReportResult::Failed => {
+                return Ok(PhaseOutcome::Failure {
+                    class: FailureClass::AgentFailure,
+                    detail: "Agent reported failure in the task".to_string(),
+                });
+            }
+            crate::ReportResult::NeedsInput => {
+                return Ok(PhaseOutcome::Failure {
+                    class: FailureClass::NeedsInput,
+                    detail: "Agent reported that input is needed".to_string(),
+                });
+            }
+            crate::ReportResult::Done => {
+                // Continue to scope check
+            }
+        }
+
+        // Check that changed paths respect the write scope
+        let changed_paths = crate::git::changed_paths(&prep.worktree_path, &prep.base_sha)?;
+        match crate::protocol::check_scope(spec.write_scope, &changed_paths, &self.config.test_globs) {
+            Ok(()) => Ok(PhaseOutcome::Success),
+            Err(Error::Policy { detail, paths }) => {
+                Ok(PhaseOutcome::Failure {
+                    class: FailureClass::PolicyFailure,
+                    detail: format!("{} (offending files: {})", detail, paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")),
+                })
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Load the context document from the prompt library.
+    ///
+    /// Tries to load `context.md` from the global prompt library.
+    /// Returns an empty string if the file doesn't exist.
+    fn load_context_doc(&self) -> Result<String> {
+        let prompt_lib = crate::prompt_library()?;
+        let context_path = prompt_lib.join("context.md");
+
+        match std::fs::read_to_string(&context_path) {
+            Ok(content) => Ok(content),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+            Err(e) => Err(Error::Io(e)),
+        }
     }
 }
 
@@ -1013,5 +1193,187 @@ mod tests {
             result.is_err(),
             "prepare should fail when baseline gate fails"
         );
+    }
+
+    #[test]
+    fn runner_run_phase_fails_when_report_is_missing() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        crate::git::git(repo.path(), &["push", "-u", "origin", "master"])
+            .expect("Failed to push to origin");
+
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let gitignore = repo.path().join(".gitignore");
+        std::fs::write(&gitignore, ".ktask/\n").expect("Failed to write .gitignore");
+        crate::git::git(repo.path(), &["add", ".gitignore"]).expect("Failed to add .gitignore");
+        crate::git::git(repo.path(), &["commit", "-m", "Add .gitignore"])
+            .expect("Failed to commit .gitignore");
+        crate::git::git(repo.path(), &["push", "origin", "master"])
+            .expect("Failed to push .gitignore");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        // Create a scenario with a step that succeeds but doesn't write a report
+        let scenario_toml = r#"
+[[steps]]
+outcome = "success"
+stdout = "Task completed"
+"#;
+        std::fs::write(&scenario_file, scenario_toml).expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["true".to_string()]);
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.dummy_scenario_path = Some(scenario_file);
+        config.mainline_branch = "master".to_string();
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project.clone()).expect("Failed to create runner");
+
+        let task = Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "test outcome".to_string(),
+            done_when: "test done".to_string(),
+            verify: "test verify".to_string(),
+            refs: "test refs".to_string(),
+        };
+
+        let prepared = runner.prepare(&task).expect("prepare should succeed");
+        let spec = PhaseSpec {
+            phase: crate::Phase::Implement,
+            write_scope: crate::WriteScope::All,
+            gate: None,
+            records_evidence: true,
+        };
+        let attempt = AttemptId::new(1);
+
+        let result = runner.run_phase(&prepared, &task, attempt, &spec);
+
+        // The result should be a PhaseOutcome::Failure, not an error
+        assert!(result.is_ok(), "run_phase should return a failure outcome, not an error: {:?}", result);
+        let outcome = result.unwrap();
+        match outcome {
+            PhaseOutcome::Failure { class, detail } => {
+                assert_eq!(class, FailureClass::VerificationFailure);
+                assert!(detail.contains("did not produce a report"));
+            }
+            PhaseOutcome::Success => {
+                panic!("run_phase should have failed due to missing report");
+            }
+        }
+    }
+
+    #[test]
+    fn runner_run_phase_fails_when_write_scope_violated() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        crate::git::git(repo.path(), &["push", "-u", "origin", "master"])
+            .expect("Failed to push to origin");
+
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let gitignore = repo.path().join(".gitignore");
+        std::fs::write(&gitignore, ".ktask/\n").expect("Failed to write .gitignore");
+        crate::git::git(repo.path(), &["add", ".gitignore"]).expect("Failed to add .gitignore");
+        crate::git::git(repo.path(), &["commit", "-m", "Add .gitignore"])
+            .expect("Failed to commit .gitignore");
+        crate::git::git(repo.path(), &["push", "origin", "master"])
+            .expect("Failed to push .gitignore");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["true".to_string()]);
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.mainline_branch = "master".to_string();
+
+        // Create a scenario that writes the report
+        let scenario_file = state_dir.join("scenario.toml");
+        let scenario_toml = r#"
+[[steps]]
+outcome = "success"
+stdout = "Task completed"
+"#;
+        std::fs::write(&scenario_file, scenario_toml).expect("Failed to write scenario file");
+        config.dummy_scenario_path = Some(scenario_file);
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project.clone()).expect("Failed to create runner");
+
+        let task = Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "test outcome".to_string(),
+            done_when: "test done".to_string(),
+            verify: "test verify".to_string(),
+            refs: "test refs".to_string(),
+        };
+
+        let prepared = runner.prepare(&task).expect("prepare should succeed");
+
+        // Manually create a forbidden file change in the worktree
+        let forbidden_file = prepared.worktree_path.join("src").join("main.rs");
+        std::fs::create_dir_all(forbidden_file.parent().unwrap())
+            .expect("Failed to create src directory");
+        std::fs::write(&forbidden_file, "// Modified\n")
+            .expect("Failed to write forbidden file");
+        crate::git::git(&prepared.worktree_path, &["add", "src/main.rs"])
+            .expect("Failed to stage file");
+        crate::git::git(
+            &prepared.worktree_path,
+            &["commit", "-m", "Modified forbidden file"],
+        )
+        .expect("Failed to commit");
+
+        // Create the report directory and file
+        let report_path = crate::report_path(&project, task.id, AttemptId::new(1));
+        if let Some(parent) = report_path.parent() {
+            std::fs::create_dir_all(parent).expect("Failed to create report dir");
+        }
+        std::fs::write(&report_path, "KTASK_RESULT: DONE\n")
+            .expect("Failed to write report");
+
+        // Use a read-only scope to trigger the violation
+        let spec = PhaseSpec {
+            phase: crate::Phase::Verify,
+            write_scope: crate::WriteScope::None,
+            gate: None,
+            records_evidence: true,
+        };
+        let attempt = AttemptId::new(1);
+
+        let result = runner.run_phase(&prepared, &task, attempt, &spec);
+
+        // The result should be a PhaseOutcome::Failure
+        assert!(result.is_ok(), "run_phase should return a failure outcome: {:?}", result);
+        let outcome = result.unwrap();
+        match outcome {
+            PhaseOutcome::Failure { class, detail } => {
+                assert_eq!(class, FailureClass::PolicyFailure);
+                assert!(detail.contains("read-only") || detail.contains("not allowed"));
+            }
+            PhaseOutcome::Success => {
+                panic!("run_phase should have failed due to write scope violation");
+            }
+        }
     }
 }
