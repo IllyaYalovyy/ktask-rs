@@ -23,6 +23,7 @@ pub mod protocol;
 pub mod provider;
 pub mod queue;
 pub mod redact;
+pub mod recovery;
 pub mod remediate;
 pub mod report;
 pub mod runner;
@@ -53,6 +54,7 @@ pub use provider::{
     Capabilities, Claude, Codex, Dummy, Invocation, Outcome, Provider, Usage, UsageSource,
 };
 pub use queue::next_runnable;
+pub use recovery::{RecoveryDecision, reconcile};
 pub use remediate::{Breaker, BreakerState, bundle, signature};
 pub use report::{ReportResult, parse_report, report_path};
 pub use runner::{
