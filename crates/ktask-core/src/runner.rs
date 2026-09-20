@@ -738,13 +738,13 @@ impl Runner {
     ///
     /// # Returns
     ///
-    /// The final TaskState after execution (Done on success, Failed on error,
+    /// The final `TaskState` after execution (Done on success, Failed on error,
     /// or an intermediate pause state).
     ///
     /// # Errors
     ///
     /// Returns an error if journal operations fail. Other failures are recorded
-    /// as TaskFailed or handled as intermediate states.
+    /// as `TaskFailed` or handled as intermediate states.
     pub fn run_task(&mut self, task: &Task) -> Result<crate::TaskState> {
         use crate::state::TaskState;
 
@@ -824,7 +824,7 @@ impl Runner {
         let mut red_phase_summary: Option<crate::gate::TestSummary> = None;
 
         // Execute each phase in the protocol
-        for spec in protocol.phases.iter() {
+        for spec in &protocol.phases {
             // Record phase entry
             self.recorder.record(
                 Some(task.id),
@@ -897,9 +897,7 @@ impl Runner {
                 // Record task done
                 self.recorder.record(
                     Some(task.id),
-                    crate::EventKind::TaskDone {
-                        commit: commit_sha,
-                    },
+                    crate::EventKind::TaskDone { commit: commit_sha },
                 )?;
 
                 Ok(TaskState::Done)
@@ -2156,7 +2154,9 @@ stdout = "Task completed (Publish phase)"
         };
 
         // Begin attempt (this creates the empty report)
-        let attempt_id = runner.begin_attempt(&task).expect("begin_attempt should succeed");
+        let attempt_id = runner
+            .begin_attempt(&task)
+            .expect("begin_attempt should succeed");
 
         // Prepare: run preflight and create worktree
         let prepared = runner.prepare(&task).expect("prepare should succeed");
@@ -2166,7 +2166,8 @@ stdout = "Task completed (Publish phase)"
         std::fs::write(&report_path, "KTASK_RESULT: DONE\n").expect("Failed to write report");
 
         // Now run the task phases
-        let state = runner.run_task_with_prepared(&task, attempt_id, &prepared)
+        let state = runner
+            .run_task_with_prepared(&task, attempt_id, &prepared)
             .expect("run_task_with_prepared should succeed");
 
         // Clean up
@@ -2177,8 +2178,7 @@ stdout = "Task completed (Publish phase)"
         // Should reach Done state
         assert!(
             matches!(state, crate::TaskState::Done),
-            "run_task should reach Done state, got {:?}",
-            state
+            "run_task should reach Done state, got {state:?}"
         );
     }
 
@@ -2246,9 +2246,7 @@ stdout = "Task completed"
         let worktree_path = project.root.join(".git").join("worktrees");
         let worktrees: Vec<_> = std::fs::read_dir(&worktree_path)
             .ok()
-            .and_then(|entries| {
-                entries.collect::<std::io::Result<Vec<_>>>().ok()
-            })
+            .and_then(|entries| entries.collect::<std::io::Result<Vec<_>>>().ok())
             .unwrap_or_default();
 
         assert!(
@@ -2301,13 +2299,14 @@ stdout = "Task completed"
             refs: "test refs".to_string(),
         };
 
-        let state = runner.run_task(&task).expect("run_task should return failed state");
+        let state = runner
+            .run_task(&task)
+            .expect("run_task should return failed state");
 
         // Should reach Failed state
         assert!(
             matches!(state, crate::TaskState::Failed { .. }),
-            "run_task should reach Failed state on preflight failure, got {:?}",
-            state
+            "run_task should reach Failed state on preflight failure, got {state:?}"
         );
 
         // Check that lock is released even on failure
