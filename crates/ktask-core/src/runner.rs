@@ -972,7 +972,9 @@ impl Runner {
                 Ok(PhaseOutcome::Failure { class, detail: _ }) => {
                     // Phase failed - attempt remediation
                     let gate_results = vec![]; // No gate results yet at phase failure
-                    if let Some(state) = self.attempt_remediation(task, prepared, spec, class, &gate_results)? {
+                    if let Some(state) =
+                        self.attempt_remediation(task, prepared, spec, class, &gate_results)?
+                    {
                         return Ok(state);
                     }
                     // Remediation succeeded - the gate was already run during remediation
@@ -994,32 +996,32 @@ impl Runner {
             }
 
             // Run gate if specified for this phase (unless remediation already ran it)
-            if !remediation_already_ran_gate {
-                if let Some(_gate) = spec.gate {
-                    match self.gate_phase(prepared, task.id, attempt, spec, red_phase_summary.as_ref())
-                    {
-                        Ok(summary) => {
-                            // Store red phase summary for green phase verification
-                            if spec.phase == Phase::Red {
-                                red_phase_summary = Some(summary.clone());
-                            }
-                        }
-                        Err(_e) => {
-                            // Gate failed - attempt remediation
-                            let class = FailureClass::VerificationFailure;
-                            let gate_results = vec![]; // Simplified - should extract actual gate results
-                            if let Some(state) = self.attempt_remediation(task, prepared, spec, class, &gate_results)? {
-                                return Ok(state);
-                            }
-                            // Remediation succeeded, continue
-                            // Note: After remediation, gates re-run from scratch, so red_phase_summary is cleared
-                            red_phase_summary = None;
-                        }
-                    }
-                }
-            } else {
+            if remediation_already_ran_gate {
                 // Remediation already ran the gate, clear the flag for next phase
                 remediation_already_ran_gate = false;
+            } else if let Some(_gate) = spec.gate {
+                match self.gate_phase(prepared, task.id, attempt, spec, red_phase_summary.as_ref())
+                {
+                    Ok(summary) => {
+                        // Store red phase summary for green phase verification
+                        if spec.phase == Phase::Red {
+                            red_phase_summary = Some(summary.clone());
+                        }
+                    }
+                    Err(_e) => {
+                        // Gate failed - attempt remediation
+                        let class = FailureClass::VerificationFailure;
+                        let gate_results = vec![]; // Simplified - should extract actual gate results
+                        if let Some(state) =
+                            self.attempt_remediation(task, prepared, spec, class, &gate_results)?
+                        {
+                            return Ok(state);
+                        }
+                        // Remediation succeeded, continue
+                        // Note: After remediation, gates re-run from scratch, so red_phase_summary is cleared
+                        red_phase_summary = None;
+                    }
+                }
             }
         }
 
@@ -2469,8 +2471,7 @@ stdout = "Task completed"
 
         crate::git::git(repo.path(), &["commit", "-m", "Add initial files"])
             .expect("Failed to commit");
-        crate::git::git(repo.path(), &["push", "origin", "master"])
-            .expect("Failed to push");
+        crate::git::git(repo.path(), &["push", "origin", "master"]).expect("Failed to push");
 
         let scenario_file = state_dir.join("scenario.toml");
         // The dummy provider writes reports and modifies test.txt
@@ -2513,9 +2514,7 @@ steps = [
             refs: "test refs".to_string(),
         };
 
-        let state = runner
-            .run_task(&task)
-            .expect("run_task should complete");
+        let state = runner.run_task(&task).expect("run_task should complete");
 
         // Should reach Done state after remediation
         assert!(
@@ -2524,8 +2523,8 @@ steps = [
         );
 
         // Verify that we have two attempt records
-        let attempts = crate::attempt::read_evidence(&project, task.id)
-            .expect("Failed to read attempts");
+        let attempts =
+            crate::attempt::read_evidence(&project, task.id).expect("Failed to read attempts");
         assert_eq!(
             attempts.len(),
             2,
