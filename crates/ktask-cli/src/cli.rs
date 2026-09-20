@@ -175,7 +175,13 @@ mod tests {
     fn run_parses() {
         let args = vec!["ktask-rs", "run"];
         let cli = Cli::try_parse_from(args).expect("Failed to parse run");
-        assert!(matches!(cli.command, Command::Run { task: None, from: None }));
+        assert!(matches!(
+            cli.command,
+            Command::Run {
+                task: None,
+                from: None
+            }
+        ));
     }
 
     #[test]
@@ -183,7 +189,10 @@ mod tests {
         let args = vec!["ktask-rs", "run", "--task", "t-001"];
         let cli = Cli::try_parse_from(args).expect("Failed to parse run with task");
         match cli.command {
-            Command::Run { task: Some(id), from: None } => {
+            Command::Run {
+                task: Some(id),
+                from: None,
+            } => {
                 assert_eq!(id, "t-001");
             }
             _ => panic!("Unexpected command"),
@@ -195,7 +204,10 @@ mod tests {
         let args = vec!["ktask-rs", "run", "--from", "t-001"];
         let cli = Cli::try_parse_from(args).expect("Failed to parse run with from");
         match cli.command {
-            Command::Run { task: None, from: Some(id) } => {
+            Command::Run {
+                task: None,
+                from: Some(id),
+            } => {
                 assert_eq!(id, "t-001");
             }
             _ => panic!("Unexpected command"),
@@ -235,10 +247,15 @@ mod tests {
 
     #[test]
     fn resolve_with_note_parses() {
-        let args = vec!["ktask-rs", "resolve", "--task", "t-001", "--note", "approved"];
+        let args = vec![
+            "ktask-rs", "resolve", "--task", "t-001", "--note", "approved",
+        ];
         let cli = Cli::try_parse_from(args).expect("Failed to parse resolve with note");
         match cli.command {
-            Command::Resolve { task, note: Some(n) } => {
+            Command::Resolve {
+                task,
+                note: Some(n),
+            } => {
                 assert_eq!(task, "t-001");
                 assert_eq!(n, "approved");
             }
@@ -305,10 +322,20 @@ mod tests {
 
     #[test]
     fn rerun_gate_with_gate_parses() {
-        let args = vec!["ktask-rs", "rerun-gate", "--task", "t-001", "--gate", "build"];
+        let args = vec![
+            "ktask-rs",
+            "rerun-gate",
+            "--task",
+            "t-001",
+            "--gate",
+            "build",
+        ];
         let cli = Cli::try_parse_from(args).expect("Failed to parse rerun-gate with gate");
         match cli.command {
-            Command::RerunGate { task, gate: Some(g) } => {
+            Command::RerunGate {
+                task,
+                gate: Some(g),
+            } => {
                 assert_eq!(task, "t-001");
                 assert_eq!(g, "build");
             }
@@ -365,7 +392,14 @@ mod tests {
 
     #[test]
     fn multiple_global_options_parse() {
-        let args = vec!["ktask-rs", "--json", "--verbose", "--project", "/path", "run"];
+        let args = vec![
+            "ktask-rs",
+            "--json",
+            "--verbose",
+            "--project",
+            "/path",
+            "run",
+        ];
         let cli = Cli::try_parse_from(args).expect("Failed to parse with multiple global options");
         assert!(cli.json);
         assert!(cli.verbose);
