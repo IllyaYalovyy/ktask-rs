@@ -85,11 +85,27 @@ pub fn register(root: &Path) -> Result<Project> {
 /// Returns `NotFound` if no git repository is found, or if the
 /// environment is misconfigured.
 pub fn discover(start: &Path) -> Result<Project> {
+    discover_with_state_root(start, None)
+}
+
+/// Discover a project with an optional state root override.
+///
+/// If `state_root_override` is provided, uses it instead of resolving
+/// the state root from the environment. Used for testing and custom configurations.
+///
+/// # Errors
+///
+/// Returns `NotFound` if no git repository is found, or if the
+/// environment is misconfigured.
+pub fn discover_with_state_root(
+    start: &Path,
+    state_root_override: Option<&Path>,
+) -> Result<Project> {
     let mut current = start.to_path_buf();
 
     loop {
         if current.join(".git").exists() {
-            return register(&current);
+            return register_with_state_root(&current, state_root_override);
         }
 
         if !current.pop() {
@@ -98,6 +114,70 @@ pub fn discover(start: &Path) -> Result<Project> {
             });
         }
     }
+}
+
+/// Register a project with an optional state root override.
+///
+/// If `state_root_override` is provided, uses it instead of resolving
+/// the state root from the environment. Used for testing and custom configurations.
+///
+/// # Errors
+///
+/// Returns an error if the state directory cannot be created or
+/// if the environment is misconfigured and no override is provided.
+pub fn register_with_state_root(
+    root: &Path,
+    state_root_override: Option<&Path>,
+) -> Result<Project> {
+    let root = root.canonicalize().unwrap_or_else(|_| {
+        if root.is_absolute() {
+            root.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .ok()
+                .map_or_else(|| root.to_path_buf(), |cwd| cwd.join(root))
+        }
+    });
+
+    let remote = get_origin_url(&root).ok();
+    let id = crate::paths::project_id(&root, remote.as_deref());
+
+    let state_root = if let Some(override_root) = state_root_override {
+        override_root.to_path_buf()
+    } else {
+        crate::paths::state_root()?
+    };
+    let state_dir = state_root.join(&id);
+
+    // Create state directory with mode 0700 (rwx------)
+    #[cfg(unix)]
+    {
+        use std::fs::Permissions;
+        use std::os::unix::fs::PermissionsExt;
+
+        if !state_dir.exists() {
+            // Use create_dir_all to handle missing parents and race conditions
+            std::fs::create_dir_all(&state_dir)?;
+            let perms = Permissions::from_mode(0o700);
+            std::fs::set_permissions(&state_dir, perms)?;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = std::fs::create_dir_all(&state_dir); // ignore error if already exists
+    }
+
+    // Create or open the meta file to record the project root
+    let meta_file = state_dir.join("meta.txt");
+    if !meta_file.exists() {
+        std::fs::write(&meta_file, format!("root={}\n", root.display()))?;
+    }
+
+    Ok(Project {
+        root,
+        id,
+        state_dir,
+    })
 }
 
 /// Get the origin URL of a git repository if it exists.

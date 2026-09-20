@@ -48,7 +48,9 @@ pub use journal::Journal;
 pub use lock::RepoLock;
 pub use log::{Level, LogRecord, Logger};
 pub use paths::{config_file, prompt_library, state_root};
-pub use project::{Project, discover, register};
+pub use project::{
+    Project, discover, discover_with_state_root, register, register_with_state_root,
+};
 pub use protocol::{PhaseSpec, Protocol, WriteScope};
 pub use provider::{
     Capabilities, Claude, Codex, Dummy, Invocation, Outcome, Provider, Usage, UsageSource,
