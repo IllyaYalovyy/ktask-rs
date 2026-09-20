@@ -37,7 +37,7 @@ pub(crate) fn dispatch(
         Command::Status => status::run(project, json),
         Command::Run { task, from } => run::run(project, config, task, from),
         Command::Resume => resume::run(project, config),
-        Command::Retry { task } => retry::run(project, config, task),
+        Command::Retry { task } => retry::run(project, config, &task),
         Command::Resolve { task, note } => resolve::run(project, task, note),
         Command::Ack { task } => ack::run(project, task),
         Command::Pause => pause::run(project),

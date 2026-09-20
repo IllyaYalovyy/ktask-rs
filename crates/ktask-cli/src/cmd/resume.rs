@@ -51,12 +51,7 @@ pub(crate) fn run(
 
     let first_incomplete = tasks
         .iter()
-        .find(|t| {
-            states
-                .get(&t.id)
-                .map(|state| !state.is_terminal())
-                .unwrap_or(false)
-        })
+        .find(|t| states.get(&t.id).is_some_and(|state| !state.is_terminal()))
         .map(|t| t.id.to_string());
 
     let Some(from_id) = first_incomplete else {
@@ -162,7 +157,7 @@ mod tests {
             )
             .expect("Failed to put state");
 
-        let outcome = crate::cmd::retry::run(Some(project), None, "2".to_string());
+        let outcome = crate::cmd::retry::run(Some(project), None, "2");
         match outcome {
             RunOutcome::Drained => {}
             _ => panic!("Expected Drained, got {outcome:?}"),

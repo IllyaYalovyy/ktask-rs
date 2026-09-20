@@ -6,7 +6,7 @@ use ktask_core::{Journal, RunOutcome, TaskState, ids::TaskId, queue};
 pub(crate) fn run(
     project: Option<ktask_core::Project>,
     _config: Option<ktask_core::Config>,
-    task: String,
+    task: &str,
 ) -> RunOutcome {
     let Some(proj) = project else {
         return RunOutcome::Usage {
@@ -69,11 +69,9 @@ pub(crate) fn run(
 
             RunOutcome::Drained
         }
-        _ => {
-            return RunOutcome::Usage {
-                detail: format!("task {task} is not failed"),
-            };
-        }
+        _ => RunOutcome::Usage {
+            detail: format!("task {task} is not failed"),
+        },
     }
 }
 
@@ -87,7 +85,7 @@ mod tests {
         let repo = ScratchRepo::new().expect("Failed to create test repo");
         let project = ktask_core::register(repo.path()).expect("Failed to register project");
 
-        let outcome = run(Some(project), None, "1".to_string());
+        let outcome = run(Some(project), None, "1");
         match outcome {
             RunOutcome::Usage { .. } => {}
             _ => panic!("Expected Usage (exit 2), got {outcome:?}"),
