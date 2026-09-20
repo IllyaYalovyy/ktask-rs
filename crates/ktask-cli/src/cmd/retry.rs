@@ -1,7 +1,7 @@
 //! Retry command: start a fresh attempt on a failed task.
 
 use crate::render;
-use ktask_core::{RunOutcome, queue, Journal, TaskState, ids::TaskId};
+use ktask_core::{Journal, RunOutcome, TaskState, ids::TaskId, queue};
 
 pub(crate) fn run(
     project: Option<ktask_core::Project>,
@@ -56,11 +56,8 @@ pub(crate) fn run(
     let state = states.get(&task_id);
     match state {
         Some(TaskState::Failed { .. }) => {
-            let filtered_tasks: Vec<_> = tasks
-                .iter()
-                .filter(|t| t.id == task_id)
-                .cloned()
-                .collect();
+            let filtered_tasks: Vec<_> =
+                tasks.iter().filter(|t| t.id == task_id).cloned().collect();
 
             for task_to_run in filtered_tasks {
                 render::out(format_args!(

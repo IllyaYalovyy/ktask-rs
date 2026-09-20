@@ -1,7 +1,7 @@
 //! Resume command: continue from the first incomplete task.
 
 use crate::render;
-use ktask_core::{RunOutcome, queue, Journal};
+use ktask_core::{Journal, RunOutcome, queue};
 
 pub(crate) fn run(
     project: Option<ktask_core::Project>,
@@ -98,7 +98,7 @@ fn filter_tasks(
 mod tests {
     use super::*;
     use ktask_core::testing::ScratchRepo;
-    use ktask_core::{Task, TaskStatus, TaskState, ids::TaskId};
+    use ktask_core::{Task, TaskState, TaskStatus, ids::TaskId};
 
     fn make_task(id: u32) -> Task {
         Task {
@@ -153,17 +153,16 @@ mod tests {
 
         let mut journal2 = Journal::open_for(&project).expect("Failed to open journal");
         journal2
-            .put_state(TaskId::new(2), &TaskState::Failed {
-                class: ktask_core::FailureClass::AgentFailure,
-                detail: "Test failure".to_string(),
-            })
+            .put_state(
+                TaskId::new(2),
+                &TaskState::Failed {
+                    class: ktask_core::FailureClass::AgentFailure,
+                    detail: "Test failure".to_string(),
+                },
+            )
             .expect("Failed to put state");
 
-        let outcome = crate::cmd::retry::run(
-            Some(project),
-            None,
-            "2".to_string(),
-        );
+        let outcome = crate::cmd::retry::run(Some(project), None, "2".to_string());
         match outcome {
             RunOutcome::Drained => {}
             _ => panic!("Expected Drained, got {outcome:?}"),
