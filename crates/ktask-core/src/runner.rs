@@ -2882,93 +2882,98 @@ steps = [
         );
     }
 
-    #[test]
-    fn runner_outcome_drained() {
-        let outcome = RunOutcome::Drained;
-        assert!(matches!(outcome, RunOutcome::Drained));
-    }
+    #[cfg(test)]
+    mod outcome {
+        use super::*;
 
-    #[test]
-    fn runner_outcome_task_failed() {
-        let task_id = crate::TaskId::new(1);
-        let outcome = RunOutcome::TaskFailed { task: task_id };
-        assert!(matches!(outcome, RunOutcome::TaskFailed { task: _ }));
-        if let RunOutcome::TaskFailed { task } = outcome {
-            assert_eq!(task, task_id);
+        #[test]
+        fn drained() {
+            let outcome = RunOutcome::Drained;
+            assert!(matches!(outcome, RunOutcome::Drained));
         }
-    }
 
-    #[test]
-    fn runner_outcome_usage_error() {
-        let detail = "invalid arguments".to_string();
-        let outcome = RunOutcome::Usage {
-            detail: detail.clone(),
-        };
-        assert!(matches!(outcome, RunOutcome::Usage { .. }));
-        if let RunOutcome::Usage { detail: d } = outcome {
-            assert_eq!(d, detail);
+        #[test]
+        fn task_failed() {
+            let task_id = crate::TaskId::new(1);
+            let outcome = RunOutcome::TaskFailed { task: task_id };
+            assert!(matches!(outcome, RunOutcome::TaskFailed { task: _ }));
+            if let RunOutcome::TaskFailed { task } = outcome {
+                assert_eq!(task, task_id);
+            }
         }
-    }
 
-    #[test]
-    fn runner_outcome_provider_limit_without_time() {
-        let outcome = RunOutcome::ProviderLimit { until: None };
-        assert!(matches!(outcome, RunOutcome::ProviderLimit { until: None }));
-    }
-
-    #[test]
-    fn runner_outcome_provider_limit_with_time() {
-        let until = Some(OffsetDateTime::now_utc());
-        let outcome = RunOutcome::ProviderLimit { until };
-        assert!(matches!(outcome, RunOutcome::ProviderLimit { until: Some(_) }));
-    }
-
-    #[test]
-    fn runner_outcome_human_gate() {
-        let task_id = crate::TaskId::new(5);
-        let outcome = RunOutcome::HumanGate { task: task_id };
-        assert!(matches!(outcome, RunOutcome::HumanGate { task: _ }));
-        if let RunOutcome::HumanGate { task } = outcome {
-            assert_eq!(task, task_id);
+        #[test]
+        fn usage_error() {
+            let detail = "invalid arguments".to_string();
+            let outcome = RunOutcome::Usage {
+                detail: detail.clone(),
+            };
+            assert!(matches!(outcome, RunOutcome::Usage { .. }));
+            if let RunOutcome::Usage { detail: d } = outcome {
+                assert_eq!(d, detail);
+            }
         }
-    }
 
-    #[test]
-    fn runner_outcome_needs_input() {
-        let task_id = crate::TaskId::new(3);
-        let outcome = RunOutcome::NeedsInput { task: task_id };
-        assert!(matches!(outcome, RunOutcome::NeedsInput { task: _ }));
-        if let RunOutcome::NeedsInput { task } = outcome {
-            assert_eq!(task, task_id);
+        #[test]
+        fn provider_limit_without_time() {
+            let outcome = RunOutcome::ProviderLimit { until: None };
+            assert!(matches!(outcome, RunOutcome::ProviderLimit { until: None }));
         }
-    }
 
-    #[test]
-    fn runner_outcome_interrupted() {
-        let outcome = RunOutcome::Interrupted;
-        assert!(matches!(outcome, RunOutcome::Interrupted));
-    }
+        #[test]
+        fn provider_limit_with_time() {
+            let until = Some(OffsetDateTime::now_utc());
+            let outcome = RunOutcome::ProviderLimit { until };
+            assert!(matches!(outcome, RunOutcome::ProviderLimit { until: Some(_) }));
+        }
 
-    #[test]
-    fn runner_outcome_all_variants_exist() {
-        let outcomes = vec![
-            RunOutcome::Drained,
-            RunOutcome::TaskFailed {
-                task: crate::TaskId::new(1),
-            },
-            RunOutcome::Usage {
-                detail: "test".to_string(),
-            },
-            RunOutcome::ProviderLimit { until: None },
-            RunOutcome::HumanGate {
-                task: crate::TaskId::new(2),
-            },
-            RunOutcome::NeedsInput {
-                task: crate::TaskId::new(3),
-            },
-            RunOutcome::Interrupted,
-        ];
+        #[test]
+        fn human_gate() {
+            let task_id = crate::TaskId::new(5);
+            let outcome = RunOutcome::HumanGate { task: task_id };
+            assert!(matches!(outcome, RunOutcome::HumanGate { task: _ }));
+            if let RunOutcome::HumanGate { task } = outcome {
+                assert_eq!(task, task_id);
+            }
+        }
 
-        assert_eq!(outcomes.len(), 7);
+        #[test]
+        fn needs_input() {
+            let task_id = crate::TaskId::new(3);
+            let outcome = RunOutcome::NeedsInput { task: task_id };
+            assert!(matches!(outcome, RunOutcome::NeedsInput { task: _ }));
+            if let RunOutcome::NeedsInput { task } = outcome {
+                assert_eq!(task, task_id);
+            }
+        }
+
+        #[test]
+        fn interrupted() {
+            let outcome = RunOutcome::Interrupted;
+            assert!(matches!(outcome, RunOutcome::Interrupted));
+        }
+
+        #[test]
+        fn all_variants_exist() {
+            let outcomes = vec![
+                RunOutcome::Drained,
+                RunOutcome::TaskFailed {
+                    task: crate::TaskId::new(1),
+                },
+                RunOutcome::Usage {
+                    detail: "test".to_string(),
+                },
+                RunOutcome::ProviderLimit { until: None },
+                RunOutcome::HumanGate {
+                    task: crate::TaskId::new(2),
+                },
+                RunOutcome::NeedsInput {
+                    task: crate::TaskId::new(3),
+                },
+                RunOutcome::Interrupted,
+            ];
+
+            assert_eq!(outcomes.len(), 7);
+        }
     }
 }
