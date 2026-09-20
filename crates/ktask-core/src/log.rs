@@ -257,6 +257,33 @@ fn describe_event(kind: &EventKind) -> String {
         EventKind::TddExceptionUsed { exception, reason } => {
             format!("TDD exception used: {exception:?}: {reason}")
         }
+        EventKind::GateStarted {
+            attempt,
+            gate_kind,
+            tree_hash,
+        } => {
+            format!(
+                "Attempt {} gate {:?} started (tree: {})",
+                attempt.get(),
+                gate_kind,
+                tree_hash
+            )
+        }
+        EventKind::GateFinished {
+            attempt,
+            gate_kind,
+            passed,
+            tree_hash,
+            ..
+        } => {
+            format!(
+                "Attempt {} gate {:?} finished (passed: {}, tree: {})",
+                attempt.get(),
+                gate_kind,
+                passed,
+                tree_hash
+            )
+        }
         EventKind::DecisionRaised { request } => {
             format!("Decision raised: {}", request.question)
         }

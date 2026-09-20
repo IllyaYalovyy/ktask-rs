@@ -155,6 +155,28 @@ pub enum EventKind {
         /// Reason for using the exception.
         reason: String,
     },
+    /// Gate execution started.
+    GateStarted {
+        /// Attempt identifier.
+        attempt: AttemptId,
+        /// Gate kind being executed.
+        gate_kind: crate::gate::GateKind,
+        /// Tree hash at start of gate.
+        tree_hash: String,
+    },
+    /// Gate execution finished.
+    GateFinished {
+        /// Attempt identifier.
+        attempt: AttemptId,
+        /// Gate kind that was executed.
+        gate_kind: crate::gate::GateKind,
+        /// Whether the gate passed.
+        passed: bool,
+        /// Gate result output.
+        stdout: String,
+        /// Tree hash after gate.
+        tree_hash: String,
+    },
     /// Decision request raised from a `NEEDS_INPUT` report.
     DecisionRaised {
         /// The parsed decision request.
@@ -188,6 +210,8 @@ impl EventKind {
             EventKind::GateAcknowledged { .. } => "GateAcknowledged",
             EventKind::AttemptRecorded { .. } => "AttemptRecorded",
             EventKind::TddExceptionUsed { .. } => "TddExceptionUsed",
+            EventKind::GateStarted { .. } => "GateStarted",
+            EventKind::GateFinished { .. } => "GateFinished",
             EventKind::DecisionRaised { .. } => "DecisionRaised",
         }
     }

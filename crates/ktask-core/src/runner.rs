@@ -404,6 +404,126 @@ impl Runner {
         }
     }
 
+    /// Execute a phase's gate and verify its results.
+    ///
+    /// Runs the gate command specified in the phase spec and verifies the results based
+    /// on the phase type (red or green). Records gate execution events and returns the
+    /// test summary.
+    ///
+    /// For red phases: verifies that new failing tests were introduced.
+    /// For green phases: verifies that expected tests pass and no regression occurred.
+    ///
+    /// # Arguments
+    ///
+    /// * `prep` - The prepared execution state (worktree, lock, base SHA)
+    /// * `task_id` - The task ID for recording events
+    /// * `attempt` - The current attempt ID
+    /// * `spec` - The phase specification with gate information
+    /// * `before` - Previous test summary for comparison (required for red/green phases)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The gate command cannot be found or executed
+    /// - The test output cannot be parsed
+    /// - Red phase has no new failing tests
+    /// - Green phase fails to pass expected tests or regresses others
+    pub fn gate_phase(
+        &mut self,
+        prep: &Prepared,
+        task_id: crate::TaskId,
+        attempt: AttemptId,
+        spec: &PhaseSpec,
+        before: Option<&crate::gate::TestSummary>,
+    ) -> Result<crate::gate::TestSummary> {
+        // Get the gate for this phase
+        let gate = spec
+            .gate
+            .ok_or_else(|| Error::Gate {
+                kind: format!("{:?}", spec.phase),
+                detail: "Phase has no gate configured".to_string(),
+            })?;
+
+        let gate_spec = self.profile.get(gate).ok_or_else(|| Error::Gate {
+            kind: format!("{:?}", gate),
+            detail: "Gate not found in profile".to_string(),
+        })?;
+
+        // Compute tree hash before gate (using git rev-parse)
+        let tree_hash_before =
+            crate::git::git(&prep.worktree_path, &["rev-parse", "HEAD^{tree}"])?;
+
+        // Record gate started
+        self.recorder.record(
+            Some(task_id),
+            crate::EventKind::GateStarted {
+                attempt,
+                gate_kind: gate,
+                tree_hash: tree_hash_before,
+            },
+        )?;
+
+        // Execute the gate
+        let result = crate::gate::run_gate(gate_spec, &prep.worktree_path, None)?;
+
+        // Parse the test summary from the gate output
+        let test_summary =
+            crate::gate::parse_cargo(&result.stdout).unwrap_or_else(|| crate::gate::TestSummary {
+                passed: 0,
+                failed: 0,
+                ignored: 0,
+                failures: vec![],
+            });
+
+        // Compute tree hash after gate
+        let tree_hash_after =
+            crate::git::git(&prep.worktree_path, &["rev-parse", "HEAD^{tree}"])?;
+
+        // Record gate finished
+        self.recorder.record(
+            Some(task_id),
+            crate::EventKind::GateFinished {
+                attempt,
+                gate_kind: gate,
+                passed: result.passed,
+                stdout: result.stdout.clone(),
+                tree_hash: tree_hash_after,
+            },
+        )?;
+
+        // Verify gate results based on phase type
+        use crate::state::Phase;
+
+        match spec.phase {
+            Phase::Red => {
+                let before_summary = before.ok_or_else(|| Error::Gate {
+                    kind: "red".to_string(),
+                    detail: "Red phase requires previous test summary".to_string(),
+                })?;
+
+                // Verify that red phase produces new failing tests
+                let _newly_failing = crate::protocol::verify_red(before_summary, &test_summary)?;
+            }
+            Phase::Green => {
+                let before_summary = before.ok_or_else(|| Error::Gate {
+                    kind: "green".to_string(),
+                    detail: "Green phase requires previous test summary".to_string(),
+                })?;
+
+                // Get the tests that should pass (from red phase failures)
+                let expected_to_pass: Vec<String> = before_summary.failures.clone();
+
+                // Verify that green phase passes the expected tests
+                crate::protocol::verify_green(&expected_to_pass, &test_summary)?;
+            }
+            _ => {
+                // Other phases don't have red/green gating logic
+            }
+        }
+
+        Ok(test_summary)
+    }
+
     /// Load the context document from the prompt library.
     ///
     /// Tries to load `context.md` from the global prompt library.

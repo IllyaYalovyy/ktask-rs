@@ -226,6 +226,8 @@ fn from_queued(event: &crate::event::EventKind) -> Result<TaskState> {
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::DecisionRaised { .. } => Err(Error::InvalidTransition {
             from: "Queued".to_string(),
             event: event.discriminant().to_string(),
@@ -266,6 +268,8 @@ fn from_preflight(event: &crate::event::EventKind) -> Result<TaskState> {
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::DecisionRaised { .. } => Err(Error::InvalidTransition {
             from: "Preflight".to_string(),
             event: event.discriminant().to_string(),
@@ -373,7 +377,9 @@ fn from_running(
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
-        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. } => Err(Error::InvalidTransition {
             from: format!("Running({attempt})"),
             event: event.discriminant().to_string(),
         }),
@@ -495,7 +501,9 @@ fn from_remediating(
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
-        | EventKind::AttemptRecorded { .. } => Err(Error::InvalidTransition {
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. } => Err(Error::InvalidTransition {
             from: format!("Remediating({attempt})"),
             event: event.discriminant().to_string(),
         }),
@@ -572,7 +580,9 @@ fn from_verifying(attempt: AttemptId, event: &crate::event::EventKind) -> Result
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
-        | EventKind::TddExceptionUsed { .. } => Err(Error::InvalidTransition {
+        | EventKind::TddExceptionUsed { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. } => Err(Error::InvalidTransition {
             from: format!("Verifying({attempt})"),
             event: event.discriminant().to_string(),
         }),
@@ -633,7 +643,9 @@ fn from_publishing(attempt: AttemptId, event: &crate::event::EventKind) -> Resul
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
-        | EventKind::TddExceptionUsed { .. } => Err(Error::InvalidTransition {
+        | EventKind::TddExceptionUsed { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. } => Err(Error::InvalidTransition {
             from: format!("Publishing({attempt})"),
             event: event.discriminant().to_string(),
         }),
@@ -688,6 +700,8 @@ fn from_published_verified(commit: &str, event: &crate::event::EventKind) -> Res
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::DecisionRaised { .. } => Err(Error::InvalidTransition {
             from: "PublishedVerified".to_string(),
             event: event.discriminant().to_string(),
@@ -736,6 +750,8 @@ fn from_paused(
         | EventKind::RecoveryDecision { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::DecisionRaised { .. } => Err(Error::InvalidTransition {
             from: "Paused".to_string(),
             event: event.discriminant().to_string(),
