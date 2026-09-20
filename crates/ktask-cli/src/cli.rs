@@ -7,6 +7,7 @@ use std::path::PathBuf;
 #[command(name = "ktask-rs")]
 #[command(about = "A supervisor for unattended AI coding work")]
 #[command(version)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Command,
@@ -72,7 +73,7 @@ pub(crate) enum Command {
         task: String,
     },
 
-    /// Answer a waiting_input question
+    /// Answer a `waiting_input` question
     Resolve {
         /// Task ID
         #[arg(long, required = true)]
