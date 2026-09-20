@@ -1305,13 +1305,139 @@ impl PreflightReport {
 ///
 /// # Arguments
 ///
-/// * `_runner` - The configured task runner
+/// * `tasks` - The queue of tasks to run
+/// * `from` - Optional task ID to resume from
 ///
 /// # Returns
 ///
 /// A `RunOutcome` describing how the queue run terminated.
-pub fn run_queue(_runner: &Runner) -> RunOutcome {
-    RunOutcome::Drained
+impl Runner {
+    /// Run the task queue in order until completion or a stop condition.
+    ///
+    /// Processes tasks sequentially from the first runnable task to a terminal state.
+    pub fn run_queue(&mut self, tasks: &[Task], _from: Option<crate::TaskId>) -> Result<RunOutcome> {
+        let journal = crate::Journal::open_for(&self.project)?;
+
+        loop {
+            let states = journal.all_states()?;
+
+            match crate::queue::next_runnable(tasks, &states)? {
+                None => {
+                    if states.values().any(|s| s.is_paused()) {
+                        for (_task_id, state) in &states {
+                            if let crate::TaskState::Paused {
+                                reason: crate::state::PauseReason::Limit { until },
+                                ..
+                            } = state
+                            {
+                                return Ok(RunOutcome::ProviderLimit {
+                                    until: until.clone(),
+                                });
+                            }
+                        }
+                        for (task_id, state) in &states {
+                            if let crate::TaskState::Paused {
+                                reason: crate::state::PauseReason::Input,
+                                ..
+                            } = state
+                            {
+                                return Ok(RunOutcome::NeedsInput { task: *task_id });
+                            }
+                        }
+                        for (_task_id, state) in &states {
+                            if let crate::TaskState::Paused {
+                                reason: crate::state::PauseReason::Interrupted,
+                                ..
+                            } = state
+                            {
+                                return Ok(RunOutcome::Interrupted);
+                            }
+                        }
+                        for (task_id, state) in &states {
+                            if let crate::TaskState::Paused {
+                                reason: crate::state::PauseReason::HumanGate,
+                                ..
+                            } = state
+                            {
+                                return Ok(RunOutcome::HumanGate { task: *task_id });
+                            }
+                        }
+                        for (_task_id, state) in &states {
+                            if let crate::TaskState::Paused {
+                                reason: crate::state::PauseReason::Blocked,
+                                ..
+                            } = state
+                            {
+                                return Ok(RunOutcome::Drained);
+                            }
+                        }
+                    }
+
+                    if states.values().any(|s| matches!(s, crate::TaskState::Failed { .. })) {
+                        for task in tasks {
+                            if let Some(crate::TaskState::Failed { .. }) = states.get(&task.id) {
+                                return Ok(RunOutcome::TaskFailed { task: task.id });
+                            }
+                        }
+                    }
+
+                    if states
+                        .values()
+                        .any(|s| matches!(s, crate::TaskState::Acknowledged { .. }))
+                    {
+                        for task in tasks {
+                            if let Some(crate::TaskState::Acknowledged { .. }) = states.get(&task.id) {
+                                return Ok(RunOutcome::HumanGate { task: task.id });
+                            }
+                        }
+                    }
+
+                    return Ok(RunOutcome::Drained);
+                }
+                Some(task_id) => {
+                    let task = tasks
+                        .iter()
+                        .find(|t| t.id == task_id)
+                        .ok_or_else(|| Error::Policy {
+                            detail: format!("Task {task_id} not found in queue"),
+                            paths: vec![],
+                        })?;
+
+                    let new_state = self.run_task(task)?;
+
+                    match &new_state {
+                        crate::TaskState::Done | crate::TaskState::PublishedVerified { .. } => {
+                            continue;
+                        }
+                        crate::TaskState::Paused { reason, .. } => {
+                            return match reason {
+                                crate::state::PauseReason::Limit { until } => {
+                                    Ok(RunOutcome::ProviderLimit {
+                                        until: until.clone(),
+                                    })
+                                }
+                                crate::state::PauseReason::Input => {
+                                    Ok(RunOutcome::NeedsInput { task: task_id })
+                                }
+                                crate::state::PauseReason::Interrupted => Ok(RunOutcome::Interrupted),
+                                crate::state::PauseReason::HumanGate => {
+                                    Ok(RunOutcome::HumanGate { task: task_id })
+                                }
+                                crate::state::PauseReason::Blocked => Ok(RunOutcome::Drained),
+                            };
+                        }
+                        crate::TaskState::Failed { .. } => {
+                            return Ok(RunOutcome::TaskFailed { task: task_id });
+                        }
+                        crate::TaskState::Acknowledged { .. } => {
+                            return Ok(RunOutcome::HumanGate { task: task_id });
+                        }
+                        _ => continue,
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Check that the world is sane before tokens are spent.
@@ -2879,6 +3005,43 @@ steps = [
         assert!(
             matches!(state, crate::TaskState::Done),
             "run_task should reach Done state after successful execution, got {state:?}"
+        );
+    }
+
+    #[test]
+    fn runner_run_queue_returns_drained_on_empty_queue() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        std::fs::write(&scenario_file, "steps = []").expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["true".to_string()]);
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.dummy_scenario_path = Some(scenario_file);
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project).expect("Failed to create runner");
+        let tasks: Vec<Task> = vec![];
+
+        let outcome = runner
+            .run_queue(&tasks, None)
+            .expect("run_queue should succeed on empty queue");
+
+        assert!(
+            matches!(outcome, RunOutcome::Drained),
+            "Empty queue should result in Drained, got {outcome:?}"
         );
     }
 

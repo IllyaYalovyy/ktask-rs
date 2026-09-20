@@ -57,7 +57,6 @@ pub use remediate::{Breaker, BreakerState, bundle, signature};
 pub use report::{ReportResult, parse_report, report_path};
 pub use runner::{
     PhaseOutcome, PreflightEvidence, PreflightFailure, PreflightReport, RunOutcome, preflight,
-    run_queue,
 };
 pub use state::{PauseReason, Phase, TaskState};
 pub use task::{Task, TaskStatus};
