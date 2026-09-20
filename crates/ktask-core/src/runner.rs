@@ -520,6 +520,191 @@ impl Runner {
         Ok(test_summary)
     }
 
+    /// Verify completion gates and publish the changes.
+    ///
+    /// Executes the final verification and publication steps:
+    /// 1. Commits any staged/modified changes
+    /// 2. Ensures the worktree is clean (policy requirement)
+    /// 3. Runs the completion gate set and records results
+    /// 4. On success: publishes and records verification
+    /// 5. On publication conflict: rebases and reruns gates before retrying once
+    ///
+    /// # Arguments
+    ///
+    /// * `prep` - The prepared execution state (worktree, lock, base SHA)
+    /// * `task` - The task being verified and published
+    /// * `attempt` - The current attempt identifier
+    ///
+    /// # Returns
+    ///
+    /// On success: the SHA of the published commit.
+    ///
+    /// # Errors
+    ///
+    /// Returns error on commit failure, dirty tree (policy failure),
+    /// verification failure, publication conflict that requires rebase,
+    /// or conflicting rebase (requires human intervention).
+    pub fn verify_and_publish(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+    ) -> Result<String> {
+        // Commit any staged or modified changes
+        let commit_sha = crate::git::commit_all(
+            &prep.worktree_path,
+            &format!("Complete task {}: {}", task.id, task.title()),
+        )?;
+
+        // Policy: clean tree at verification time (all changes committed)
+        crate::git::require_clean(&prep.worktree_path)?;
+
+        // Run completion gate set
+        let gate_results = crate::gate::run_completion_set(
+            &self.profile,
+            &prep.worktree_path,
+            &prep.base_sha,
+            None,
+        )?;
+
+        // Check if all gates passed
+        let all_passed = gate_results.iter().all(|r| r.passed);
+
+        if !all_passed {
+            // Find the first failed gate for the detail message
+            let failed_gate = gate_results
+                .iter()
+                .find(|r| !r.passed)
+                .map_or_else(|| "unknown gate".to_string(), |r| format!("{:?}", r.kind));
+
+            self.recorder.record(
+                Some(task.id),
+                crate::EventKind::VerifyFailed {
+                    attempt,
+                    class: FailureClass::VerificationFailure,
+                    detail: format!("Gate failed: {failed_gate}"),
+                },
+            )?;
+
+            return Err(Error::Gate {
+                kind: failed_gate,
+                detail: "Completion gate verification failed".to_string(),
+            });
+        }
+
+        // Record successful verification
+        self.recorder
+            .record(Some(task.id), crate::EventKind::VerifyPassed { attempt })?;
+
+        // Record publish start with candidate SHA
+        self.recorder.record(
+            Some(task.id),
+            crate::EventKind::PublishStarted {
+                attempt,
+                candidate_sha: commit_sha.clone(),
+            },
+        )?;
+
+        // Attempt to publish (with one retry on rebase)
+        for attempt_num in 0..2 {
+            match crate::git::publish(
+                &prep.worktree_path,
+                &self.config.mainline_remote,
+                &self.config.mainline_branch,
+                &commit_sha,
+            ) {
+                Ok(()) => {
+                    // Success: publish completed
+                    let remote_ref = format!(
+                        "refs/remotes/{}/{}",
+                        self.config.mainline_remote, self.config.mainline_branch
+                    );
+                    let remote_sha =
+                        crate::git::git(&prep.worktree_path, &["rev-parse", &remote_ref])?;
+
+                    self.recorder.record(
+                        Some(task.id),
+                        crate::EventKind::PublishVerified {
+                            commit: commit_sha.clone(),
+                            remote_sha,
+                        },
+                    )?;
+
+                    return Ok(commit_sha);
+                }
+                Err(_) if attempt_num == 0 => {
+                    // First attempt failed: try to rebase and retry
+                    match crate::git::rebase_onto_remote(
+                        &prep.worktree_path,
+                        &self.config.mainline_remote,
+                        &self.config.mainline_branch,
+                    ) {
+                        Ok(crate::git::RebaseOutcome::Applied { .. }) => {
+                            // Rebase succeeded: rerun gates and retry publish
+                            let rerun_results = crate::gate::run_completion_set(
+                                &self.profile,
+                                &prep.worktree_path,
+                                &prep.base_sha,
+                                None,
+                            )?;
+
+                            if !rerun_results.iter().all(|r| r.passed) {
+                                let failed_gate =
+                                    rerun_results.iter().find(|r| !r.passed).map_or_else(
+                                        || "unknown gate".to_string(),
+                                        |r| format!("{:?}", r.kind),
+                                    );
+
+                                self.recorder.record(
+                                    Some(task.id),
+                                    crate::EventKind::VerifyFailed {
+                                        attempt,
+                                        class: FailureClass::VerificationFailure,
+                                        detail: format!("Gate failed after rebase: {failed_gate}"),
+                                    },
+                                )?;
+
+                                return Err(Error::Gate {
+                                    kind: failed_gate,
+                                    detail: "Completion gate verification failed after rebase"
+                                        .to_string(),
+                                });
+                            }
+
+                            // Gates passed after rebase, continue to retry
+                        }
+                        Ok(crate::git::RebaseOutcome::Conflict { paths }) => {
+                            // Conflicting rebase: requires human intervention
+                            return Err(Error::Git {
+                                args: vec!["rebase".to_string(), "conflict".to_string()],
+                                stderr: format!("Rebase conflict on paths: {}", paths.len()),
+                            });
+                        }
+                        Err(e) => {
+                            // Rebase error
+                            return Err(e);
+                        }
+                    }
+                    // Continue to next iteration to retry publish
+                }
+                Err(e) if attempt_num == 1 => {
+                    // Second attempt also failed
+                    return Err(e);
+                }
+                Err(e) => {
+                    // Should not reach here due to loop bounds
+                    return Err(e);
+                }
+            }
+        }
+
+        // Should not reach here
+        Err(Error::Gate {
+            kind: "publish".to_string(),
+            detail: "Publication failed after all retry attempts".to_string(),
+        })
+    }
+
     /// Load the context document from the prompt library.
     ///
     /// Tries to load `context.md` from the global prompt library.
@@ -1505,5 +1690,198 @@ stdout = "Task completed"
                 panic!("run_phase should have failed due to write scope violation");
             }
         }
+    }
+
+    #[test]
+    fn runner_verify_and_publish_requires_clean_tree() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        crate::git::git(repo.path(), &["push", "-u", "origin", "master"])
+            .expect("Failed to push to origin");
+
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let gitignore = repo.path().join(".gitignore");
+        std::fs::write(&gitignore, ".ktask/\n").expect("Failed to write .gitignore");
+        crate::git::git(repo.path(), &["add", ".gitignore"]).expect("Failed to add .gitignore");
+        crate::git::git(repo.path(), &["commit", "-m", "Add .gitignore"])
+            .expect("Failed to commit .gitignore");
+        crate::git::git(repo.path(), &["push", "origin", "master"])
+            .expect("Failed to push .gitignore");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        std::fs::write(&scenario_file, "steps = []").expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["true".to_string()]);
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.dummy_scenario_path = Some(scenario_file);
+        config.mainline_branch = "master".to_string();
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project.clone()).expect("Failed to create runner");
+
+        let task = Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "test outcome".to_string(),
+            done_when: "test done".to_string(),
+            verify: "test verify".to_string(),
+            refs: "test refs".to_string(),
+        };
+
+        let prepared = runner.prepare(&task).expect("prepare should succeed");
+
+        // Create a dirty file in the worktree
+        let dirty_file = prepared.worktree_path.join("dirty.txt");
+        std::fs::write(&dirty_file, "dirty content").expect("Failed to create dirty file");
+
+        let attempt = AttemptId::new(1);
+
+        // Should fail because tree is not clean
+        let result = runner.verify_and_publish(&prepared, &task, attempt);
+
+        assert!(
+            result.is_err(),
+            "verify_and_publish should fail when tree is dirty"
+        );
+    }
+
+    #[test]
+    fn runner_verify_and_publish_records_verify_passed_on_success() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        crate::git::git(repo.path(), &["push", "-u", "origin", "master"])
+            .expect("Failed to push to origin");
+
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let gitignore = repo.path().join(".gitignore");
+        std::fs::write(&gitignore, ".ktask/\n").expect("Failed to write .gitignore");
+        crate::git::git(repo.path(), &["add", ".gitignore"]).expect("Failed to add .gitignore");
+        crate::git::git(repo.path(), &["commit", "-m", "Add .gitignore"])
+            .expect("Failed to commit .gitignore");
+        crate::git::git(repo.path(), &["push", "origin", "master"])
+            .expect("Failed to push .gitignore");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        std::fs::write(&scenario_file, "steps = []").expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["true".to_string()]);
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.dummy_scenario_path = Some(scenario_file);
+        config.mainline_branch = "master".to_string();
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project.clone()).expect("Failed to create runner");
+
+        let task = Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "test outcome".to_string(),
+            done_when: "test done".to_string(),
+            verify: "test verify".to_string(),
+            refs: "test refs".to_string(),
+        };
+
+        let prepared = runner.prepare(&task).expect("prepare should succeed");
+
+        // Create and stage a file change (but don't commit - verify_and_publish will do that)
+        let test_file = prepared.worktree_path.join("test.txt");
+        std::fs::write(&test_file, "test content").expect("Failed to create test file");
+        crate::git::git(&prepared.worktree_path, &["add", "test.txt"])
+            .expect("Failed to stage test file");
+
+        let attempt = AttemptId::new(1);
+
+        // Should succeed: verify_and_publish commits staged changes, then verifies and publishes
+        let result = runner.verify_and_publish(&prepared, &task, attempt);
+
+        assert!(
+            result.is_ok(),
+            "verify_and_publish should succeed: {result:?}"
+        );
+    }
+
+    #[test]
+    fn runner_verify_and_publish_records_verify_failed_on_gate_failure() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        crate::git::git(repo.path(), &["push", "-u", "origin", "master"])
+            .expect("Failed to push to origin");
+
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let gitignore = repo.path().join(".gitignore");
+        std::fs::write(&gitignore, ".ktask/\n").expect("Failed to write .gitignore");
+        crate::git::git(repo.path(), &["add", ".gitignore"]).expect("Failed to add .gitignore");
+        crate::git::git(repo.path(), &["commit", "-m", "Add .gitignore"])
+            .expect("Failed to commit .gitignore");
+        crate::git::git(repo.path(), &["push", "origin", "master"])
+            .expect("Failed to push .gitignore");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        std::fs::write(&scenario_file, "steps = []").expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["true".to_string()]);
+        config.verify_command = Some(vec!["false".to_string()]); // Failing gate
+        config.dummy_scenario_path = Some(scenario_file);
+        config.mainline_branch = "master".to_string();
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project.clone()).expect("Failed to create runner");
+
+        let task = Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task".to_string(),
+            outcome: "test outcome".to_string(),
+            done_when: "test done".to_string(),
+            verify: "test verify".to_string(),
+            refs: "test refs".to_string(),
+        };
+
+        let prepared = runner.prepare(&task).expect("prepare should succeed");
+
+        let attempt = AttemptId::new(1);
+
+        // Should fail because verify gate fails
+        let result = runner.verify_and_publish(&prepared, &task, attempt);
+
+        assert!(
+            result.is_err(),
+            "verify_and_publish should fail when verify gate fails"
+        );
     }
 }
