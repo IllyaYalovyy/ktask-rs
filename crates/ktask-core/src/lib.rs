@@ -35,7 +35,7 @@ pub mod testing;
 
 pub use attempt::{AttemptRecord, read_evidence, write_evidence};
 pub use classify::{FailureClass, Recovery, Stream, TddException};
-pub use config::Config;
+pub use config::{Config, load_for};
 pub use context::{assemble, collect_adrs, ensure_defaults, load_template};
 pub use decision::parse_decision_request;
 pub use error::{Error, Result};
