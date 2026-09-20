@@ -81,17 +81,16 @@ pub enum PreflightFailure {
 }
 
 impl PreflightFailure {
-    /// Classify the failure into a FailureClass.
+    /// Classify the failure into a `FailureClass`.
+    #[must_use]
     pub fn classification(&self) -> FailureClass {
         match self {
-            PreflightFailure::RemoteFetchFailed { .. } => FailureClass::EnvironmentFailure,
-            PreflightFailure::RepositoryDirty { .. } => FailureClass::PolicyFailure,
+            PreflightFailure::RemoteFetchFailed { .. }
+            | PreflightFailure::InsufficientDiskSpace { .. } => FailureClass::EnvironmentFailure,
+            PreflightFailure::RepositoryDirty { .. }
+            | PreflightFailure::LockNotAcquirable { .. } => FailureClass::PolicyFailure,
             PreflightFailure::BaselineGateFailed { .. } => FailureClass::VerificationFailure,
-            PreflightFailure::ProviderUnavailable { .. } => {
-                FailureClass::ProviderConfiguration
-            }
-            PreflightFailure::InsufficientDiskSpace { .. } => FailureClass::EnvironmentFailure,
-            PreflightFailure::LockNotAcquirable { .. } => FailureClass::PolicyFailure,
+            PreflightFailure::ProviderUnavailable { .. } => FailureClass::ProviderConfiguration,
         }
     }
 }
@@ -136,7 +135,7 @@ impl PreflightReport {
 /// 4. Check sufficient disk space
 /// 5. Verify repository lock is acquirable
 ///
-/// Each failure carries its own FailureClass. The report includes evidence
+/// Each failure carries its own `FailureClass`. The report includes evidence
 /// from all successful checks up to the first failure.
 ///
 /// # Arguments
@@ -147,105 +146,128 @@ impl PreflightReport {
 ///
 /// # Returns
 ///
-/// A PreflightReport containing success status and evidence. On failure,
+/// A `PreflightReport` containing success status and evidence. On failure,
 /// the report includes the first failure encountered and all prior evidence.
+///
+/// # Errors
+///
+/// Returns an error if the journal or filesystem operations fail.
 pub fn preflight(
     project: &Project,
     config: &Config,
     provider: &dyn Provider,
 ) -> Result<PreflightReport> {
     let mut evidence = Vec::new();
+
+    if let Err(failure) = check_remote_fetch(project, config, &mut evidence) {
+        return Ok(PreflightReport::failed(evidence, failure));
+    }
+
+    if let Err(failure) = check_repo_clean(project, &mut evidence) {
+        return Ok(PreflightReport::failed(evidence, failure));
+    }
+
+    if let Err(failure) = check_baseline_gate(project, config, &mut evidence) {
+        return Ok(PreflightReport::failed(evidence, failure));
+    }
+
+    let _caps = provider.capabilities();
+    evidence.push(PreflightEvidence::ProviderAvailable {
+        provider: provider.name().to_string(),
+    });
+
+    if let Err(failure) = check_disk_space(project, config, &mut evidence) {
+        return Ok(PreflightReport::failed(evidence, failure));
+    }
+
+    if let Err(failure) = check_lock(project, &mut evidence) {
+        return Ok(PreflightReport::failed(evidence, failure));
+    }
+
+    Ok(PreflightReport::success(evidence))
+}
+
+fn check_remote_fetch(
+    project: &Project,
+    config: &Config,
+    evidence: &mut Vec<PreflightEvidence>,
+) -> std::result::Result<(), PreflightFailure> {
     let remote = &config.mainline_remote;
     let branch = &config.mainline_branch;
-
-    // Check 1: Fetch from remote
     match crate::git::fetch(&project.root, remote) {
         Ok(()) => {
             evidence.push(PreflightEvidence::RemoteFetched {
                 remote: remote.clone(),
                 branch: branch.clone(),
             });
+            Ok(())
         }
-        Err(_) => {
-            return Ok(PreflightReport::failed(
-                evidence,
-                PreflightFailure::RemoteFetchFailed {
-                    remote: remote.clone(),
-                    detail: format!("failed to fetch from remote '{}'", remote),
-                },
-            ));
-        }
+        Err(_) => Err(PreflightFailure::RemoteFetchFailed {
+            remote: remote.clone(),
+            detail: format!("failed to fetch from remote '{remote}'"),
+        }),
     }
+}
 
-    // Check 2: Repository clean
+fn check_repo_clean(
+    project: &Project,
+    evidence: &mut Vec<PreflightEvidence>,
+) -> std::result::Result<(), PreflightFailure> {
     match crate::git::is_clean(&project.root) {
         Ok(true) => {
             evidence.push(PreflightEvidence::RepositoryClean);
+            Ok(())
         }
         Ok(false) => {
             let status = crate::git::status_porcelain(&project.root)
                 .unwrap_or_else(|_| "unknown status".to_string());
-            return Ok(PreflightReport::failed(
-                evidence,
-                PreflightFailure::RepositoryDirty { status },
-            ));
+            Err(PreflightFailure::RepositoryDirty { status })
         }
-        Err(_) => {
-            return Ok(PreflightReport::failed(
-                evidence,
-                PreflightFailure::RepositoryDirty {
-                    status: "failed to check status".to_string(),
-                },
-            ));
-        }
+        Err(_) => Err(PreflightFailure::RepositoryDirty {
+            status: "failed to check status".to_string(),
+        }),
     }
+}
 
-    // Check 3: Baseline gate
+fn check_baseline_gate(
+    project: &Project,
+    config: &Config,
+    evidence: &mut Vec<PreflightEvidence>,
+) -> std::result::Result<(), PreflightFailure> {
     if let Some(baseline_cmd) = &config.baseline_command {
         let gate = crate::Gate {
             kind: crate::GateKind::Baseline,
             command: baseline_cmd.clone(),
-            timeout_secs: config.gate_timeout_secs as u64,
+            timeout_secs: u64::from(config.gate_timeout_secs),
             working_dir: None,
-            env: Default::default(),
+            env: std::collections::BTreeMap::default(),
         };
-
         match crate::run_gate(&gate, &project.root, None) {
-            Ok(result) => {
-                if result.passed {
-                    evidence.push(PreflightEvidence::BaselineGateGreen);
-                } else {
-                    return Ok(PreflightReport::failed(
-                        evidence,
-                        PreflightFailure::BaselineGateFailed {
-                            exit_code: result.exit_code,
-                            stdout: result.stdout,
-                            stderr: result.stderr,
-                        },
-                    ));
-                }
+            Ok(result) if result.passed => {
+                evidence.push(PreflightEvidence::BaselineGateGreen);
+                Ok(())
             }
-            Err(_) => {
-                return Ok(PreflightReport::failed(
-                    evidence,
-                    PreflightFailure::BaselineGateFailed {
-                        exit_code: None,
-                        stdout: String::new(),
-                        stderr: "failed to execute baseline gate".to_string(),
-                    },
-                ));
-            }
+            Ok(result) => Err(PreflightFailure::BaselineGateFailed {
+                exit_code: result.exit_code,
+                stdout: result.stdout,
+                stderr: result.stderr,
+            }),
+            Err(_) => Err(PreflightFailure::BaselineGateFailed {
+                exit_code: None,
+                stdout: String::new(),
+                stderr: "failed to execute baseline gate".to_string(),
+            }),
         }
+    } else {
+        Ok(())
     }
+}
 
-    // Check 4: Provider available
-    // Provider is considered available if it can report capabilities
-    let _caps = provider.capabilities();
-    evidence.push(PreflightEvidence::ProviderAvailable {
-        provider: provider.name().to_string(),
-    });
-
-    // Check 5: Disk space
+fn check_disk_space(
+    project: &Project,
+    config: &Config,
+    evidence: &mut Vec<PreflightEvidence>,
+) -> std::result::Result<(), PreflightFailure> {
     match disk_free(&project.root) {
         Ok(free_bytes) => {
             let required = config.min_free_disk_bytes;
@@ -254,45 +276,34 @@ pub fn preflight(
                     free_bytes,
                     required_bytes: required,
                 });
+                Ok(())
             } else {
-                return Ok(PreflightReport::failed(
-                    evidence,
-                    PreflightFailure::InsufficientDiskSpace {
-                        available_bytes: free_bytes,
-                        required_bytes: required,
-                    },
-                ));
+                Err(PreflightFailure::InsufficientDiskSpace {
+                    available_bytes: free_bytes,
+                    required_bytes: required,
+                })
             }
         }
-        Err(_) => {
-            return Ok(PreflightReport::failed(
-                evidence,
-                PreflightFailure::InsufficientDiskSpace {
-                    available_bytes: 0,
-                    required_bytes: config.min_free_disk_bytes,
-                },
-            ));
-        }
+        Err(_) => Err(PreflightFailure::InsufficientDiskSpace {
+            available_bytes: 0,
+            required_bytes: config.min_free_disk_bytes,
+        }),
     }
+}
 
-    // Check 6: Repository lock acquirable
+fn check_lock(
+    project: &Project,
+    evidence: &mut Vec<PreflightEvidence>,
+) -> std::result::Result<(), PreflightFailure> {
     match crate::RepoLock::acquire(&project.state_dir, Duration::from_secs(5)) {
         Ok(_lock) => {
             evidence.push(PreflightEvidence::LockAcquired);
-            // Lock is held until the PreflightReport is dropped or explicitly released
-            // For now we drop it immediately after verification
+            Ok(())
         }
-        Err(_) => {
-            return Ok(PreflightReport::failed(
-                evidence,
-                PreflightFailure::LockNotAcquirable {
-                    detail: "failed to acquire repository lock".to_string(),
-                },
-            ));
-        }
+        Err(_) => Err(PreflightFailure::LockNotAcquirable {
+            detail: "failed to acquire repository lock".to_string(),
+        }),
     }
-
-    Ok(PreflightReport::success(evidence))
 }
 
 /// Get the free disk space on the filesystem containing the given path.
@@ -302,8 +313,7 @@ fn disk_free(path: &Path) -> Result<u64> {
             let available = stat.blocks_available() * stat.block_size();
             Ok(available)
         }
-        Err(_) => Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        Err(_) => Err(Error::Io(std::io::Error::other(
             "failed to get filesystem statistics",
         ))),
     }
@@ -312,8 +322,8 @@ fn disk_free(path: &Path) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::ScratchRepo;
     use crate::provider::Scenario;
+    use crate::testing::ScratchRepo;
 
     #[test]
     fn preflight_success_with_all_checks() {
@@ -330,9 +340,7 @@ mod tests {
         let mut config = Config::default();
         config.baseline_command = Some(vec!["true".to_string()]);
 
-        let scenario = Scenario {
-            steps: vec![],
-        };
+        let scenario = Scenario { steps: vec![] };
         let provider = crate::Dummy::new(scenario);
 
         let result = preflight(&project, &config, &provider).expect("Preflight check failed");
@@ -357,9 +365,7 @@ mod tests {
         let mut config = Config::default();
         config.baseline_command = Some(vec!["false".to_string()]);
 
-        let scenario = Scenario {
-            steps: vec![],
-        };
+        let scenario = Scenario { steps: vec![] };
         let provider = crate::Dummy::new(scenario);
 
         let result = preflight(&project, &config, &provider).expect("Preflight check failed");
@@ -371,10 +377,7 @@ mod tests {
             failure,
             PreflightFailure::BaselineGateFailed { .. }
         ));
-        assert_eq!(
-            failure.classification(),
-            FailureClass::VerificationFailure
-        );
+        assert_eq!(failure.classification(), FailureClass::VerificationFailure);
     }
 
     #[test]
@@ -395,9 +398,7 @@ mod tests {
         let mut config = Config::default();
         config.baseline_command = Some(vec!["true".to_string()]);
 
-        let scenario = Scenario {
-            steps: vec![],
-        };
+        let scenario = Scenario { steps: vec![] };
         let provider = crate::Dummy::new(scenario);
 
         let result = preflight(&project, &config, &provider).expect("Preflight check failed");
@@ -405,10 +406,7 @@ mod tests {
         assert!(!result.success);
         assert!(result.failure.is_some());
         let failure = result.failure.unwrap();
-        assert!(matches!(
-            failure,
-            PreflightFailure::RepositoryDirty { .. }
-        ));
+        assert!(matches!(failure, PreflightFailure::RepositoryDirty { .. }));
         assert_eq!(failure.classification(), FailureClass::PolicyFailure);
     }
 
@@ -445,7 +443,10 @@ mod tests {
             provider: "claude".to_string(),
             detail: "not configured".to_string(),
         };
-        assert_eq!(failure.classification(), FailureClass::ProviderConfiguration);
+        assert_eq!(
+            failure.classification(),
+            FailureClass::ProviderConfiguration
+        );
     }
 
     #[test]
