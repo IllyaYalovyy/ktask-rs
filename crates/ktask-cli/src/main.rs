@@ -8,14 +8,17 @@
 
 mod cli;
 mod exit;
+mod json;
+mod render;
 
 use clap::Parser;
 use cli::Cli;
 use ktask_core::RunOutcome;
 
 fn main() {
-    let _cli = Cli::parse();
-    eprintln!("ktask-rs: CLI implementation in progress");
+    let cli = Cli::parse();
+    render::init(cli.no_color);
+    render::progress(format_args!("ktask-rs: CLI implementation in progress"));
 
     // Placeholder: use drained outcome for now
     let outcome = RunOutcome::Drained;
