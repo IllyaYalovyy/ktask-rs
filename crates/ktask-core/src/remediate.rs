@@ -46,17 +46,70 @@
 //! journal record a trip leaves behind, so the run that stopped says so in the
 //! same append-only file every other decision is in.
 
-//! The failure bundle VISION.md §7 asks every remediation session to be seeded
-//! with is not here. `docs/DESIGN.md` files it beside the breaker because both
-//! belong to `remediate.rs`, but a bundle is assembled from a diff and a prior
-//! attempt's evidence, which is the runner's to hand over.
+//! # What a bundle is
+//!
+//! VISION.md §7 requires that every remediation launch a *fresh* provider
+//! session seeded with a compact failure bundle: the classification, the gate
+//! output, the diff summary and the prior attempts' evidence. [`bundle`] is that
+//! bundle. It is a projection of the evidence handed to it, because a bundle
+//! cannot read a git tree or open a journal from inside a formatter: the diff and
+//! the attempt records are the runner's to hand over.
+//!
+//! # Why the same failure is the same bytes
+//!
+//! A bundle holds *what happened*, not *when*. A stopwatch reading, a wall-clock
+//! instant and a session id are the three things a rerun of one failure always
+//! changes, and a bundle that carried them would not match itself across two
+//! runs — which is the property VISION.md §7's determinism and T069's done-when
+//! both ask for. The instants stay in the journal, where a run's timing is read
+//! from; what earns a place in a budget is the refusal, the diff, and what the
+//! earlier attempts made of the same task. Prior attempts are sorted by their own
+//! number for the same reason [`crate::attempt_records`] sorts: evidence is filed
+//! when an attempt's recorder reaches it, and one failure handed over in another
+//! order is one bundle, not two.
+//!
+//! # Where the budget goes
+//!
+//! `budget_bytes` is a ceiling in bytes and the bundle never costs more of them.
+//! What is lost is decided by one rule: *write what a session needs most last,
+//! and shed from the front*. The blocks are laid down oldest first — the oldest
+//! prior attempt, then the newer ones, then this attempt's diff summary, then the
+//! gates that refused in the order they ran, then the frame that names the
+//! class — and trimmed from the front of that order, so a block that only partly
+//! fits keeps its tail. Read back, the bundle is newest-first: the failure being
+//! remediated at the top and the history beneath it, and a budget too small for
+//! the frame is left holding the class line, which is the one line that decides
+//! what the response to a failure is (VISION.md §7).
+//!
+//! Keeping tails is also why a gate contributes the *tail* of what it wrote: the
+//! last lines of a refusing command are its verdict and the first are its
+//! progress. And the frame counts what it holds — how many prior attempts there
+//! were, and which kinds of gate refused — so a bundle trimmed below that
+//! evidence still says how much there was, rather than letting a session conclude
+//! that there was less.
+//!
+//! # Redaction, before the cut
+//!
+//! Every field goes through [`crate::redact::redact`] *before* it is trimmed, and
+//! that order is not interchangeable. A cut can land inside a secret, and half a
+//! shaped secret is a shape the redaction table no longer recognises: truncating
+//! first and redacting second leaks exactly as much as it must. Redacting first
+//! means the worst a cut can do is halve a mask, which leaks nothing.
+//!
+//! The signature T069 fixes carries no `secret_patterns`, so a bundle honours the
+//! built-in table alone. A project that has named the shape its own keys take
+//! redacts them where the bundle's inputs were read; that gap is reported rather
+//! than quietly closed here, because closing it would mean widening a signature
+//! another task is already written against.
 
 use regex::Regex;
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
-use crate::{EventKind, FailureClass, GateResult, parse_cargo};
+use crate::{
+    AttemptRecord, EventKind, FailureClass, GateResult, Task, Usage, parse_cargo, redact::redact,
+};
 
 /// How many hexadecimal characters a signature carries.
 ///
@@ -334,6 +387,369 @@ pub fn trip_event(class: FailureClass, signature: &str, seen: u32) -> EventKind 
     }
 }
 
+/// The two spaces every line of a gate's or a diff's own text sits under the
+/// line that names it.
+const INDENT: &str = "  ";
+
+/// One part of a bundle — the frame, one diff summary, one refusing gate, one
+/// prior attempt — as the lines it contributes, oldest first.
+type Block = Vec<String>;
+
+/// The compact failure bundle a fresh remediation session is launched with.
+///
+/// VISION.md §7 requires that a remediation is a *new* session seeded with a
+/// compact bundle rather than a continuation of the session that failed, and
+/// that the bundle carries the classification, the gate output, the diff summary
+/// and the prior attempts' outcomes. [`bundle`] is that bundle. It is a
+/// projection of the evidence handed to it rather than a reader of it: the diff
+/// and the attempt records are the runner's to gather, and a function that
+/// neither reads a git tree nor opens a journal is one whose output a rerun can
+/// be expected to reproduce byte for byte.
+///
+/// # Shape
+///
+/// The evidence is laid down oldest first — the prior attempts in attempt order,
+/// then this attempt's diff summary, then the gates that refused in the order
+/// they ran, then the frame that names the task and the class — and rendered
+/// newest-first, so a session reads the refusal it is being asked to fix before
+/// the history underneath it. Refusing gates contribute the whole of what they
+/// wrote; satisfied ones contribute nothing, because a green gate's chatter is
+/// not evidence and spends the budget a refusal needs.
+///
+/// # Where the budget goes
+///
+/// `budget_bytes` is a ceiling in bytes and the bundle never costs more of them;
+/// `0` answers with an empty bundle. What does not fit is shed from the front of
+/// the oldest-first order, so a block that only partly fits keeps its *tail* —
+/// the verdict at the end of a refusing command rather than its progress, and
+/// the newest attempt rather than the oldest. The frame is laid down last and so
+/// is shed last, which is why a bundle trimmed to a handful of bytes is still a
+/// classified failure; it also counts the evidence a tighter budget dropped, so
+/// a session cannot conclude that there was less of it than there was.
+///
+/// # Redaction, before the cut
+///
+/// Every piece of free text goes through [`crate::redact::redact`] *before* any
+/// of it is trimmed, never after. A cut can land inside a secret, and half a
+/// shaped secret is a shape the table of shapes (ADR-0032) no longer recognises,
+/// so redacting after trimming leaks exactly as much as it must avoid. Redacting
+/// first means the worst a cut can do is halve a [`crate::redact::MASK`], which
+/// leaks nothing.
+///
+/// [`crate::redact::redact`] is called with no configured patterns, because the
+/// signature this function is specified by carries none: a project's own
+/// `secret_patterns` are honoured where a bundle's inputs are read, and
+/// widening this signature to reach them would change what every other caller
+/// compares.
+///
+/// # What is deliberately absent
+///
+/// No instant, no stopwatch reading, no session or model id, no base sha. Those
+/// are the things a rerun of one failure always changes, and a bundle carrying
+/// them would not match itself across two runs — which is the determinism
+/// VISION.md §7 ranks above token economy, and what the signature and the
+/// breaker compare. They stay in the journal, which is where a run's timing is
+/// read from ([`crate::attempt_records`]).
+#[must_use]
+pub fn bundle(
+    task: &Task,
+    class: FailureClass,
+    gates: &[GateResult],
+    diff_summary: &str,
+    prior: &[AttemptRecord],
+    budget_bytes: usize,
+) -> String {
+    let mut blocks = oldest_first(prior);
+    blocks.push(diff_block(diff_summary));
+    blocks.extend(gate_blocks(gates));
+    blocks.push(frame(task, class, gates, prior));
+    let mut draft = Draft::new(blocks);
+    draft.fit(budget_bytes);
+    draft.render()
+}
+
+/// A bundle's blocks while they are being fitted to a budget.
+struct Draft {
+    /// The blocks, oldest first: the front of this list is what is shed first.
+    blocks: Vec<Block>,
+    /// The bytes [`Draft::render`] would cost for these blocks as they stand.
+    bytes: usize,
+}
+
+impl Draft {
+    /// The draft those blocks cost, before any trimming.
+    fn new(blocks: Vec<Block>) -> Self {
+        let text: usize = blocks.iter().flatten().map(String::len).sum();
+        let separators = blocks.iter().map(Vec::len).sum::<usize>().saturating_sub(1);
+        Self {
+            blocks,
+            bytes: text.saturating_add(separators),
+        }
+    }
+
+    /// Shed from the front of the oldest block until the draft fits `budget`.
+    ///
+    /// The cut is a byte cut at a character boundary, and it always makes
+    /// progress: a line whose first character is too wide for what remains of
+    /// the budget goes entirely rather than the bundle going over it.
+    fn fit(&mut self, budget: usize) {
+        while self.bytes > budget {
+            let deficit = self.bytes.saturating_sub(budget);
+            let Some(line) = self.blocks.first_mut().and_then(|block| block.first_mut()) else {
+                self.bytes = 0;
+                return;
+            };
+            let shed = front_of(line, deficit);
+            line.drain(..shed);
+            self.bytes = self.bytes.saturating_sub(shed);
+            let emptied = line.is_empty();
+            if emptied {
+                self.drop_front_line();
+            }
+        }
+    }
+
+    /// Discard the emptied line at the front, and the separator it took with it.
+    ///
+    /// A block whose only line has gone is dropped whole, so the block label is
+    /// what a trimmed transcript loses first — which is why [`frame`] counts the
+    /// evidence rather than only showing it.
+    fn drop_front_line(&mut self) {
+        if self.blocks.first().is_some_and(|block| block.len() <= 1) {
+            self.blocks.remove(0);
+        } else if let Some(block) = self.blocks.first_mut() {
+            block.remove(0);
+        }
+        if self.blocks.is_empty() {
+            self.bytes = 0;
+        } else {
+            self.bytes = self.bytes.saturating_sub(1);
+        }
+    }
+
+    /// The blocks as the bundle: newest block first, oldest last, no trailing
+    /// newline to spend the budget on.
+    fn render(&self) -> String {
+        let lines: Vec<&str> = self
+            .blocks
+            .iter()
+            .rev()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        lines.join("\n")
+    }
+}
+
+/// How many bytes come off the front of `line` to give back `deficit` of them.
+///
+/// A cut in the middle of a character is not a cut at all — it is an invalid
+/// `String` — so the cut backs off to the nearest boundary it can reach. Only
+/// when the whole of the deficit is smaller than the first character does it
+/// overshoot, and by less than one character.
+fn front_of(line: &str, deficit: usize) -> usize {
+    let want = deficit.min(line.len());
+    if line.is_char_boundary(want) {
+        return want;
+    }
+    let mut boundary = want;
+    while boundary > 0 && !line.is_char_boundary(boundary) {
+        boundary = boundary.saturating_sub(1);
+    }
+    if boundary > 0 {
+        return boundary;
+    }
+    line.chars().next().map_or(0, char::len_utf8)
+}
+
+/// The four lines that name the failure, laid down last so they are shed last.
+///
+/// The counts are why this is a frame and not a heading. A bundle trimmed below
+/// its own evidence says how much evidence there was, so a session that was
+/// handed a third of it cannot conclude that there was a third.
+fn frame(task: &Task, class: FailureClass, gates: &[GateResult], prior: &[AttemptRecord]) -> Block {
+    let id = task.id;
+    let title = scrub(task.title());
+    let refused = list_or(&refused_kinds(gates), "none");
+    let attempts = prior.len();
+    vec![
+        format!("task {id}: {title}"),
+        format!("prior attempts: {attempts}"),
+        format!("gates refused: {refused}"),
+        format!("class: {class:?}"),
+    ]
+}
+
+/// The kinds of the gates that refused, in the order they ran.
+fn refused_kinds(gates: &[GateResult]) -> Vec<&'static str> {
+    gates
+        .iter()
+        .filter(|gate| !gate.passed)
+        .map(|gate| gate.kind.as_str())
+        .collect()
+}
+
+/// One line per prior attempt, in attempt order.
+///
+/// Sorted by the attempt's own number rather than left as they were handed over,
+/// because [`crate::attempt_records`] files evidence as each attempt's recorder
+/// reaches it: one failure gathered in another order is one bundle, not two.
+fn oldest_first(prior: &[AttemptRecord]) -> Vec<Block> {
+    let mut ordered: Vec<&AttemptRecord> = prior.iter().collect();
+    ordered.sort_by_key(|record| record.id);
+    ordered
+        .iter()
+        .map(|record| vec![attempt_line(record)])
+        .collect()
+}
+
+/// What one earlier attempt did, on the one line a bounded bundle affords it.
+///
+/// The gates it refused, the commit it produced, what it spent and the sentence
+/// it stopped with are the four facts that stop a remediation re-running a fix
+/// that already failed; its transcript, its session id and its clock are not.
+fn attempt_line(attempt: &AttemptRecord) -> String {
+    let refused = list_or(&refused_kinds(&attempt.gates), "nothing");
+    let commit = match &attempt.candidate_sha {
+        Some(sha) => {
+            let sha = scrub(sha);
+            format!("produced {sha}")
+        }
+        None => "produced no commit".to_owned(),
+    };
+    let spent = spent(attempt.usage.as_ref());
+    let stopped = sentence(&attempt.exit_reason);
+    let number = attempt.id;
+    format!("prior attempt {number}: refused {refused} | {commit} | {spent} | exited \"{stopped}\"")
+}
+
+/// What an attempt's session reported spending, or why nobody knows.
+///
+/// A figure that was never reported is left out rather than written as a zero.
+/// [`crate::Usage::unavailable`] is the difference between a session that asked
+/// and was told nothing and one that spent nothing, and a remediation that reads
+/// `in=0` has been told the second of those.
+fn spent(usage: Option<&Usage>) -> String {
+    let Some(usage) = usage else {
+        return "usage unasked".to_owned();
+    };
+    let mut figures = Vec::new();
+    if let Some(input) = usage.input_tokens {
+        figures.push(format!("in={input}"));
+    }
+    if let Some(output) = usage.output_tokens {
+        figures.push(format!("out={output}"));
+    }
+    if let Some(cached) = usage.cached_tokens {
+        figures.push(format!("cached={cached}"));
+    }
+    if let Some(cost) = usage.cost_usd {
+        figures.push(format!("cost=${cost}"));
+    }
+    if figures.is_empty() {
+        return "usage unreported".to_owned();
+    }
+    format!("usage {}", figures.join(" "))
+}
+
+/// This attempt's diff summary, under a label of its own.
+fn diff_block(diff_summary: &str) -> Block {
+    let mut block = vec![String::from("diff:")];
+    let lines = body_lines(diff_summary);
+    if lines.is_empty() {
+        block.push(format!("{INDENT}no diff summary was given"));
+    } else {
+        block.extend(lines);
+    }
+    block
+}
+
+/// One block per refusing gate, in the order the gates ran.
+fn gate_blocks(gates: &[GateResult]) -> Vec<Block> {
+    gates
+        .iter()
+        .filter(|gate| !gate.passed)
+        .map(gate_block)
+        .collect()
+}
+
+/// A refusing gate: how it stopped, then the whole of what it said.
+fn gate_block(gate: &GateResult) -> Block {
+    let verdict = verdict(gate);
+    let kind = gate.kind.as_str();
+    let mut block = vec![format!("failing gate {kind} ({verdict}):")];
+    let written = format!("{}\n{}", gate.stdout, gate.stderr);
+    let lines = body_lines(&written);
+    if lines.is_empty() {
+        block.push(format!("{INDENT}the gate refused without writing anything"));
+    } else {
+        block.extend(lines);
+    }
+    block
+}
+
+/// How a gate stopped, in the one form that says why it is a failure.
+///
+/// A timeout is its own fact and the kill that enforced it is not the failure
+/// ([`GateResult::timed_out`]); a process stopped by a signal has no exit code
+/// to name, and a gate that reported neither has neither.
+fn verdict(gate: &GateResult) -> String {
+    if gate.timed_out {
+        return "timed out".to_owned();
+    }
+    if let Some(signal) = gate.signal {
+        return format!("signal {signal}");
+    }
+    if let Some(code) = gate.exit_code {
+        return format!("exit {code}");
+    }
+    String::from("stopped without a verdict")
+}
+
+/// A piece of evidence's own text as redacted, indented lines.
+///
+/// Blank lines and trailing whitespace go: a bundle is read under a byte
+/// ceiling, and the blank lines of a transcript are the part of it that carries
+/// nothing.
+fn body_lines(text: &str) -> Vec<String> {
+    let scrubbed = scrub(text);
+    scrubbed
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| format!("{INDENT}{line}"))
+        .collect()
+}
+
+/// Redact a piece of free text with the built-in table, before it is trimmed.
+fn scrub(text: &str) -> String {
+    redact(text, &[])
+}
+
+/// An exit reason as one line: redacted, and every run of whitespace folded into
+/// a single space.
+///
+/// A prior attempt gets one line of a bounded bundle, and the reason an agent
+/// stopped with is free text that is often several lines long.
+fn sentence(text: &str) -> String {
+    scrub(text)
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join(" ")
+}
+
+/// The refusing gates' kinds, space-separated, or what to say when none refused.
+///
+/// The two empty answers differ because the two empties are different facts: a
+/// run whose gates all refused nothing is a run that failed before the gates
+/// could say anything about it.
+fn list_or(items: &[&str], when_empty: &str) -> String {
+    if items.is_empty() {
+        return when_empty.to_owned();
+    }
+    items.join(" ")
+}
+
 /// The lowercase hexadecimal prefix of the SHA-256 of `text`.
 fn hashed(text: &str) -> String {
     Sha256::digest(text.as_bytes())
@@ -347,13 +763,14 @@ fn hashed(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::RULES;
-    use super::{Breaker, BreakerState, signature, trip_event};
+    use super::{Breaker, BreakerState, bundle, signature, trip_event};
     use crate::{
-        AttemptId, EventKind, FailureClass, GateKind, GateResult, Journal, Phase, TaskId,
-        TaskState, apply, journal_path,
+        AttemptId, AttemptRecord, EventKind, FailureClass, GateKind, GateResult, Journal, Phase,
+        Task, TaskId, TaskState, TaskStatus, Usage, UsageSource, apply, journal_path, redact::MASK,
     };
     use proptest::prelude::*;
     use tempfile::{TempDir, tempdir};
+    use time::macros::datetime;
 
     /// The signature's documented shape: this many lowercase hex characters.
     const HEX_CHARS: usize = 16;
@@ -867,5 +1284,637 @@ mod tests {
                 detail: detail.clone(),
             },
         );
+    }
+
+    /// The task every bundle here is assembled for: task 7 of this queue.
+    fn task_7() -> Task {
+        Task {
+            id: TaskId::new(7),
+            status: TaskStatus::Pending,
+            body: "## T069 Failure bundle assembly\n\n**Outcome:** a compact bundle.\n".to_owned(),
+            outcome: "remediation starts from a compact, deterministic bundle".to_owned(),
+            done_when: "the same failure produces a byte-identical bundle".to_owned(),
+            verify: "cargo nextest run -p ktask-core -E 'test(/remediate::/)'".to_owned(),
+            refs: "VISION.md section 7".to_owned(),
+            gate: None,
+        }
+    }
+
+    /// One prior attempt of task 7: the `number`th run, which refused `refused`,
+    /// stopped with `reason`, and produced `candidate` if it produced a commit.
+    fn prior_attempt(
+        number: u32,
+        kinds: &[GateKind],
+        candidate: Option<&str>,
+        reason: &str,
+        usage: Option<Usage>,
+    ) -> AttemptRecord {
+        AttemptRecord {
+            id: AttemptId::new(number),
+            task: TaskId::new(7),
+            started: datetime!(2026-09-20 09:14:03 UTC),
+            ended: Some(datetime!(2026-09-20 09:41:47 UTC)),
+            model_configured: Some("gpt-5.6-sol".to_owned()),
+            model_reported: Some("gpt-5.6-sol-2026-09-01".to_owned()),
+            session_id: Some("sess_01HQZK".to_owned()),
+            exit_reason: reason.to_owned(),
+            gates: kinds
+                .iter()
+                .map(|kind| refused(*kind, "", "the gate refused\n", 40))
+                .collect(),
+            usage,
+            base_sha: "0b78d3f1c2a4".to_owned(),
+            candidate_sha: candidate.map(str::to_owned),
+        }
+    }
+
+    /// The failure every budget is priced against: two gates that refused (build
+    /// first, then verify), a diff summary, and two prior attempts. Every line of
+    /// it carries a marker of its own, so where a budget cut a bundle is read
+    /// straight off the bundle.
+    fn failure() -> (Vec<GateResult>, String, Vec<AttemptRecord>) {
+        let gates = vec![
+            refused(
+                GateKind::Build,
+                "",
+                "GATE-ONE-OLDEST\nGATE-ONE-NEWEST\n",
+                900,
+            ),
+            refused(
+                GateKind::Verify,
+                "GATE-TWO-OLDEST\nGATE-TWO-NEWEST\n",
+                "",
+                1_400,
+            ),
+        ];
+        let diff = "DIFF-OLDEST\nDIFF-NEWEST\n".to_owned();
+        let attempts = vec![
+            prior_attempt(
+                1,
+                &[GateKind::Verify],
+                Some("aaaaaaaaaaaa"),
+                "PRIOR-ONE",
+                None,
+            ),
+            prior_attempt(
+                2,
+                &[GateKind::Verify, GateKind::Build],
+                None,
+                "PRIOR-TWO",
+                Some(Usage::unavailable()),
+            ),
+        ];
+        (gates, diff, attempts)
+    }
+
+    /// [`failure`] trimmed to `budget` bytes.
+    fn priced_at(budget: usize) -> String {
+        let (gates, diff, attempts) = failure();
+        bundle(
+            &task_7(),
+            FailureClass::VerificationFailure,
+            &gates,
+            &diff,
+            &attempts,
+            budget,
+        )
+    }
+
+    /// [`failure`] with a budget nothing could exceed.
+    fn complete() -> String {
+        priced_at(usize::MAX)
+    }
+
+    /// The smallest budget whose bundle still holds `marker`.
+    ///
+    /// A budget is the only way to ask which evidence a bundle loses first: a
+    /// marker that appears at a smaller budget is the evidence a tight
+    /// remediation session is left with.
+    fn budget_holding(marker: &str) -> usize {
+        let ceiling = complete().len();
+        (0..=ceiling)
+            .find(|budget| priced_at(*budget).contains(marker))
+            .unwrap_or_else(|| panic!("`{marker}` is nowhere in the {ceiling}-byte whole bundle"))
+    }
+
+    /// The three shapes a secret arrives in, one planted in each kind of evidence
+    /// a bundle is assembled from.
+    fn secret_failure() -> (Vec<GateResult>, String, Vec<AttemptRecord>) {
+        let gates = vec![refused(
+            GateKind::Verify,
+            "BEFORE-THE-LEAK\nOPENAI_KEY=sk-proj-AAAAAAAAAAAAAAAAAAAAAAAAAAAA\nAFTER-THE-LEAK\n",
+            "Authorization: Bearer supersecretvalue123\n",
+            900,
+        )];
+        let diff =
+            "added a line: aws_secret_access=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n".to_owned();
+        let attempts = vec![prior_attempt(
+            1,
+            &[GateKind::Verify],
+            None,
+            "pull https://gitlab-ci-token:glpat-aaaaaaaaaaaaaaaaaaaa@corp.example/repo refused",
+            None,
+        )];
+        (gates, diff, attempts)
+    }
+
+    /// The values [`secret_failure`] plants, each of which must be gone from every
+    /// bundle of it at every budget.
+    const SECRETS: [&str; 4] = [
+        "sk-proj-AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "supersecretvalue123",
+        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "glpat-aaaaaaaaaaaaaaaaaaaa",
+    ];
+
+    /// [`secret_failure`] trimmed to `budget` bytes.
+    fn secret_priced_at(budget: usize) -> String {
+        let (gates, diff, attempts) = secret_failure();
+        bundle(
+            &task_7(),
+            FailureClass::PolicyFailure,
+            &gates,
+            &diff,
+            &attempts,
+            budget,
+        )
+    }
+
+    /// The bundle every gate-only test assembles: [`task_7`], one class, and
+    /// `gates` as the whole of the run's evidence.
+    fn one_run(gates: &[GateResult]) -> String {
+        bundle(
+            &task_7(),
+            FailureClass::VerificationFailure,
+            gates,
+            "",
+            &[],
+            usize::MAX,
+        )
+    }
+
+    /// The bundle `attempts` as the only prior evidence.
+    fn one_history(attempts: &[AttemptRecord]) -> String {
+        bundle(
+            &task_7(),
+            FailureClass::AgentFailure,
+            &[],
+            "",
+            attempts,
+            usize::MAX,
+        )
+    }
+
+    #[test]
+    fn a_bundle_holds_the_classification_the_gate_output_the_diff_and_the_history() {
+        let text = complete();
+        assert!(
+            text.contains("class: VerificationFailure"),
+            "the class is what decides the response, so it has to be in the bundle: {text}"
+        );
+        assert!(
+            text.contains("task 7: ## T069 Failure bundle assembly"),
+            "a bundle has to name the task it is a failure of: {text}"
+        );
+        assert!(
+            text.contains("GATE-ONE-OLDEST") && text.contains("GATE-TWO-NEWEST"),
+            "every refusing gate is evidence a fresh session cannot recompute: {text}"
+        );
+        assert!(
+            text.contains("DIFF-OLDEST") && text.contains("DIFF-NEWEST"),
+            "the diff summary is what the session was last told about the tree: {text}"
+        );
+        assert!(
+            text.contains("PRIOR-ONE") && text.contains("PRIOR-TWO"),
+            "prior attempt outcomes are what stops a remediation retrying a fix that \
+             already failed: {text}"
+        );
+        assert!(
+            text.contains("usage unasked") && text.contains("usage unreported"),
+            "an attempt's cost is part of its outcome: {text}"
+        );
+    }
+
+    #[test]
+    fn one_failure_renders_one_bundle_whatever_order_the_attempts_arrived_in() {
+        let (gates, diff, mut reversed) = failure();
+        reversed.reverse();
+        let (_gates, _diff, ordered) = failure();
+        assert_eq!(
+            bundle(
+                &task_7(),
+                FailureClass::VerificationFailure,
+                &gates,
+                &diff,
+                &reversed,
+                usize::MAX,
+            ),
+            bundle(
+                &task_7(),
+                FailureClass::VerificationFailure,
+                &gates,
+                &diff,
+                &ordered,
+                usize::MAX,
+            ),
+            "evidence is filed when an attempt's recorder reaches it, so the same failure \
+             handed over in another order is one bundle, not two",
+        );
+    }
+
+    #[test]
+    fn one_failure_renders_one_bundle_when_only_the_clock_and_the_session_moved() {
+        let (gates, diff, attempts) = failure();
+        let mut rerun_gates = gates.clone();
+        for gate in &mut rerun_gates {
+            gate.duration_ms = gate.duration_ms.saturating_add(9_120_004);
+        }
+        let mut rerun_attempts = attempts.clone();
+        for attempt in &mut rerun_attempts {
+            attempt.started = datetime!(2026-09-21 22:47:19 UTC);
+            attempt.ended = Some(datetime!(2026-09-22 03:12:55 UTC));
+            attempt.session_id = Some("sess_01ZZZZ".to_owned());
+            attempt.model_reported = Some("gpt-5.6-sol-2026-10-01".to_owned());
+        }
+        assert_eq!(
+            bundle(
+                &task_7(),
+                FailureClass::VerificationFailure,
+                &gates,
+                &diff,
+                &attempts,
+                usize::MAX,
+            ),
+            bundle(
+                &task_7(),
+                FailureClass::VerificationFailure,
+                &rerun_gates,
+                &diff,
+                &rerun_attempts,
+                usize::MAX,
+            ),
+            "a stopwatch reading and a session id are the two things a rerun of one failure \
+             always changes, and a bundle that carried them would never match itself",
+        );
+    }
+
+    #[test]
+    fn a_gate_that_was_satisfied_contributes_no_output() {
+        let text = one_run(&[
+            refused(GateKind::Build, "", "BUILD-REFUSED\n", 900),
+            passed_lint(72_000),
+        ]);
+        assert!(
+            text.contains("BUILD-REFUSED"),
+            "the gate that refused has to be in it: {text}"
+        );
+        assert!(
+            !text.contains("Finished in 3.2s"),
+            "a green gate's chatter is not failure evidence and spends the budget it would \
+             have paid for a refusal: {text}"
+        );
+        assert!(
+            text.contains("gates refused: build"),
+            "the frame lists which gates refused: {text}"
+        );
+        assert!(
+            !text.contains("lint"),
+            "a satisfied gate is not named as a refusal: {text}"
+        );
+    }
+
+    #[test]
+    fn a_refusal_that_wrote_nothing_says_so() {
+        let text = one_run(&[refused(GateKind::Privacy, "", "", 30)]);
+        assert!(
+            text.contains("failing gate privacy (exit 101)"),
+            "a refusal with no output still names its gate: {text}"
+        );
+        assert!(
+            text.contains("without writing"),
+            "an empty transcript is a fact about the refusal, not an empty block: {text}"
+        );
+    }
+
+    #[test]
+    fn a_timed_out_gate_is_named_by_its_timeout_not_the_signal_that_stopped_it() {
+        let mut timed = refused(GateKind::Verify, "still running\n", "", 1_800_000);
+        timed.timed_out = true;
+        timed.exit_code = None;
+        timed.signal = Some(9);
+        let text = one_run(&[timed]);
+        assert!(
+            text.contains("failing gate verify (timed out)"),
+            "a timeout is its own fact and the kill that enforced it is not the failure: {text}"
+        );
+
+        let mut killed = refused(GateKind::Lint, "", "killed mid-run\n", 4_000);
+        killed.exit_code = None;
+        killed.signal = Some(11);
+        let text = one_run(&[killed]);
+        assert!(
+            text.contains("failing gate lint (signal 11)"),
+            "a gate stopped by a signal has no exit code to name: {text}"
+        );
+    }
+
+    #[test]
+    fn a_gate_stopped_with_neither_a_code_nor_a_signal_says_only_that() {
+        let mut stalled = refused(GateKind::Format, "", "checked 400 files\n", 4_000);
+        stalled.exit_code = None;
+        stalled.signal = None;
+        let text = one_run(&[stalled]);
+        assert!(
+            text.contains("failing gate format (stopped without a verdict)"),
+            "a gate that reported no code and no signal is a third kind of stop, and the \
+             bundle may not guess which of the other two it was: {text}"
+        );
+        assert!(
+            text.contains("checked 400 files"),
+            "what it did write is still the evidence: {text}"
+        );
+    }
+
+    #[test]
+    fn a_figure_that_was_not_reported_is_not_written_as_a_zero() {
+        let text = one_history(&[
+            prior_attempt(1, &[GateKind::Verify], None, "PRIOR-ONE", None),
+            prior_attempt(
+                2,
+                &[GateKind::Verify],
+                None,
+                "PRIOR-TWO",
+                Some(Usage::unavailable()),
+            ),
+        ]);
+        assert!(
+            text.contains("usage unasked"),
+            "an attempt with no session to ask is told apart from one that asked and was \
+             told nothing: {text}"
+        );
+        assert!(
+            text.contains("usage unreported"),
+            "a session that reported nothing is not a session that spent nothing: {text}"
+        );
+        for substituted in ["in=0", "out=0", "cached=0", "cost=$0"] {
+            assert!(
+                !text.contains(substituted),
+                "`{substituted}` is a zero standing in for a figure nobody reported: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_prior_attempt_reports_the_commit_it_produced_and_what_it_spent() {
+        let spent = Usage {
+            input_tokens: Some(12_000),
+            output_tokens: Some(3_400),
+            cached_tokens: None,
+            cost_usd: Some(0.42),
+            source: UsageSource::Provider,
+        };
+        let text = one_history(&[
+            prior_attempt(
+                1,
+                &[GateKind::Verify],
+                Some("b7d1f3a9e5c2"),
+                "PRIOR-ONE",
+                Some(spent),
+            ),
+            prior_attempt(2, &[], None, "PRIOR-TWO", Some(Usage::unavailable())),
+        ]);
+        assert!(
+            text.contains("produced b7d1f3a9e5c2"),
+            "what an attempt committed is where a remediation starts reading: {text}"
+        );
+        assert!(
+            text.contains("in=12000") && text.contains("out=3400") && text.contains("cost=$0.42"),
+            "the figures a session did report are its outcome: {text}"
+        );
+        assert!(
+            !text.contains("cached="),
+            "a figure that was never reported is left out rather than guessed: {text}"
+        );
+        assert!(
+            text.contains("produced no commit"),
+            "an attempt that committed nothing says so: {text}"
+        );
+        assert!(
+            text.contains("refused nothing"),
+            "an attempt whose gates were all satisfied still failed for another reason, and \
+             the bundle says which half of the run was green: {text}"
+        );
+    }
+
+    #[test]
+    fn a_tight_bundle_keeps_the_newest_evidence_and_loses_the_oldest() {
+        assert!(
+            budget_holding("GATE-TWO-NEWEST") < budget_holding("GATE-TWO-OLDEST"),
+            "a gate's tail is the part a remediation reads, so its head is what goes first",
+        );
+        assert!(
+            budget_holding("GATE-TWO-OLDEST") < budget_holding("DIFF-NEWEST"),
+            "the gate that refused is the newest evidence there is: it survives a diff",
+        );
+        assert!(
+            budget_holding("DIFF-NEWEST") < budget_holding("PRIOR-TWO"),
+            "this attempt's own diff is newer than the attempt before it",
+        );
+        assert!(
+            budget_holding("PRIOR-TWO") < budget_holding("PRIOR-ONE"),
+            "of two prior attempts the oldest is the one a bounded bundle loses",
+        );
+        assert!(
+            budget_holding("GATE-TWO-NEWEST") < budget_holding("GATE-ONE-NEWEST"),
+            "the gate that ran last is the newest refusal, so the refusal before it is what a \
+             tight budget spends first",
+        );
+    }
+
+    #[test]
+    fn a_gate_block_loses_its_own_label_before_the_output_it_names() {
+        let budget = budget_holding("GATE-TWO-NEWEST");
+        let text = priced_at(budget);
+        assert!(
+            text.contains("GATE-TWO-NEWEST"),
+            "the budget was found by looking for this line: {text}"
+        );
+        assert!(
+            !text.contains("failing gate verify"),
+            "a block's label is the oldest line of its block, so a trimmed transcript arrives \
+             unnamed: {text}"
+        );
+        assert!(
+            text.contains("gates refused: build verify"),
+            "which is why the frame names the refusing gates whatever survived of them: {text}"
+        );
+    }
+
+    #[test]
+    fn the_class_is_the_last_thing_a_tight_budget_loses() {
+        let class_line = complete()
+            .lines()
+            .find(|line| line.starts_with("class: "))
+            .expect("the frame names the class")
+            .to_owned();
+        assert_eq!(
+            budget_holding(&class_line),
+            class_line.len(),
+            "the class line is the last thing in the bundle and the first thing a budget \
+             that cannot pay for it cuts into",
+        );
+        let starved = priced_at(class_line.len() - 1);
+        assert!(
+            !starved.contains("task 7"),
+            "a budget too small for the class has already lost the task it names: {starved}"
+        );
+        assert!(
+            class_line.ends_with(&starved),
+            "what is left of a starved bundle is the tail of the class line: {starved}"
+        );
+    }
+
+    #[test]
+    fn the_frame_still_counts_the_evidence_a_tight_budget_dropped() {
+        let budget = budget_holding("DIFF-OLDEST") - 1;
+        let text = priced_at(budget);
+        assert!(
+            !text.contains("DIFF-OLDEST"),
+            "the budget was chosen for having lost this line: {text}"
+        );
+        assert!(
+            !text.contains("PRIOR-ONE") && !text.contains("PRIOR-TWO"),
+            "the prior attempts are older than the diff, so they went first: {text}"
+        );
+        assert!(
+            text.contains("prior attempts: 2"),
+            "a session handed two attempts of evidence and told there were two cannot tell \
+             itself that there were only two: {text}"
+        );
+        assert!(
+            text.contains("gates refused: build verify"),
+            "and the same about the gates that refused: {text}"
+        );
+    }
+
+    #[test]
+    fn a_bundle_never_costs_more_than_its_budget() {
+        let ceiling = complete().len();
+        for budget in 0..=ceiling + 8 {
+            let text = priced_at(budget);
+            assert!(
+                text.len() <= budget,
+                "a budget of {budget} bytes cost {}: {text}",
+                text.len(),
+            );
+        }
+        assert_eq!(
+            priced_at(ceiling),
+            complete(),
+            "the whole bundle costs exactly what it costs, so a budget that can pay for it \
+             loses nothing",
+        );
+    }
+
+    #[test]
+    fn an_empty_budget_answers_an_empty_bundle() {
+        assert_eq!(priced_at(0), "", "no budget is no bundle, not a whole one");
+    }
+
+    #[test]
+    fn a_secret_in_the_evidence_never_reaches_the_bundle() {
+        let text = secret_priced_at(usize::MAX);
+        for secret in SECRETS {
+            assert!(
+                !text.contains(secret),
+                "`{secret}` survived the redaction a bundle is required to run: {text}"
+            );
+        }
+        assert!(
+            text.contains(MASK),
+            "a bundle that lost the secret without a mask lost the line instead, which is not \
+             the same guarantee: {text}"
+        );
+        assert!(
+            text.contains("BEFORE-THE-LEAK") && text.contains("AFTER-THE-LEAK"),
+            "the prose beside a secret is kept: only the value goes: {text}"
+        );
+    }
+
+    #[test]
+    fn no_budget_leaks_a_secret() {
+        let ceiling = secret_priced_at(usize::MAX).len();
+        for budget in 0..=ceiling + 8 {
+            let text = secret_priced_at(budget);
+            assert!(
+                text.len() <= budget,
+                "a budget of {budget} bytes cost {}",
+                text.len(),
+            );
+            for secret in SECRETS {
+                assert!(
+                    !text.contains(secret),
+                    "a cut at {budget} bytes left `{secret}` behind, which is what redacting \
+                     before truncating rather than after is there to prevent: {text}"
+                );
+            }
+        }
+    }
+
+    proptest! {
+        /// No budget is ever exceeded, whatever the evidence holds — including
+        /// text whose characters are wider than one byte, where the cut has to
+        /// land on a character rather than a byte.
+        #[test]
+        fn a_bundle_never_costs_more_than_its_budget_prop(
+            transcript in any::<String>(),
+            reason in any::<String>(),
+            budget in 0usize..600,
+        ) {
+            let gates = vec![refused(GateKind::Verify, &transcript, "", 700)];
+            let attempts = vec![prior_attempt(1, &[GateKind::Verify], Some("abc"), &reason, None)];
+            let text = bundle(
+                &task_7(),
+                FailureClass::AgentFailure,
+                &gates,
+                "DIFF\n",
+                &attempts,
+                budget,
+            );
+            prop_assert!(
+                text.len() <= budget,
+                "a budget of {budget} bytes cost {} bytes",
+                text.len(),
+            );
+        }
+
+        /// The bundle is a projection of the evidence handed to it, so two calls
+        /// over equal evidence are the same bytes.
+        #[test]
+        fn the_same_evidence_renders_the_same_bytes(
+            transcript in "[\\x20-\\x7e]{0,300}",
+            diff in "[\\x20-\\x7e]{0,120}",
+            budget in 0usize..400,
+        ) {
+            let gates = vec![refused(GateKind::Verify, &transcript, "", 700)];
+            let attempts = vec![prior_attempt(1, &[GateKind::Verify], None, "PRIOR", None)];
+            let once = bundle(
+                &task_7(),
+                FailureClass::VerificationFailure,
+                &gates,
+                &diff,
+                &attempts,
+                budget,
+            );
+            let twice = bundle(
+                &task_7(),
+                FailureClass::VerificationFailure,
+                &gates,
+                &diff,
+                &attempts,
+                budget,
+            );
+            prop_assert_eq!(once, twice);
+        }
     }
 }
