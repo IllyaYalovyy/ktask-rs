@@ -40,13 +40,10 @@ struct StatusOutput {
 }
 
 pub(crate) fn run(project: Option<Project>, json_output: bool) -> RunOutcome {
-    let project = match project {
-        Some(p) => p,
-        None => {
-            return RunOutcome::Usage {
-                detail: "no project found".to_string(),
-            };
-        }
+    let Some(project) = project else {
+        return RunOutcome::Usage {
+            detail: "no project found".to_string(),
+        };
     };
 
     let tasks = match queue::load(&project) {
@@ -118,7 +115,7 @@ pub(crate) fn run(project: Option<Project>, json_output: bool) -> RunOutcome {
 
     if json_output {
         let output = StatusOutput {
-            project: project.id.to_string(),
+            project: project.id.clone(),
             tasks: task_statuses,
             summary,
         };
@@ -134,10 +131,10 @@ pub(crate) fn run(project: Option<Project>, json_output: bool) -> RunOutcome {
                 task_info.attempts
             );
             if let Some(started) = &task_info.started_at {
-                let _ = std::fmt::write(&mut line, format_args!(" started={}", started));
+                let _ = std::fmt::write(&mut line, format_args!(" started={started}"));
             }
             if let Some(ended) = &task_info.ended_at {
-                let _ = std::fmt::write(&mut line, format_args!(" ended={}", ended));
+                let _ = std::fmt::write(&mut line, format_args!(" ended={ended}"));
             }
             render::out(format_args!("{} {}", task_info.title, line));
         }
@@ -174,12 +171,10 @@ fn get_timing_info(
                 let started_str = last
                     .started
                     .format(&time::format_description::well_known::Rfc3339)
-                    .ok()
-                    .map(|s| s.to_string());
+                    .ok();
                 let ended_str = last.ended.as_ref().and_then(|t| {
                     t.format(&time::format_description::well_known::Rfc3339)
                         .ok()
-                        .map(|s| s.to_string())
                 });
                 (started_str, ended_str)
             } else {
@@ -194,13 +189,13 @@ fn get_timing_info(
 fn get_phase_name(state: &TaskState) -> Option<String> {
     match state {
         TaskState::Running { phase, .. } | TaskState::Remediating { phase, .. } => {
-            Some(phase_name(phase).to_string())
+            Some(phase_name(*phase).to_owned())
         }
         _ => None,
     }
 }
 
-fn phase_name(phase: &Phase) -> &'static str {
+fn phase_name(phase: Phase) -> &'static str {
     match phase {
         Phase::Goal => "Goal",
         Phase::Scope => "Scope",
@@ -293,7 +288,7 @@ mod tests {
         let repo = ScratchRepo::new().expect("Failed to create test repo");
         let project = ktask_core::register(repo.path()).expect("Failed to register project");
 
-        let journal_before = ktask_core::Journal::open_for(&project)
+        let journal_before = Journal::open_for(&project)
             .expect("Failed to open journal")
             .events()
             .expect("Failed to read events")
@@ -301,7 +296,7 @@ mod tests {
 
         let _outcome = run(Some(project.clone()), false);
 
-        let journal_after = ktask_core::Journal::open_for(&project)
+        let journal_after = Journal::open_for(&project)
             .expect("Failed to open journal")
             .events()
             .expect("Failed to read events")
