@@ -26,13 +26,13 @@ pub enum PhaseOutcome {
 /// The outcome of running a queue or command.
 ///
 /// Maps to exit codes:
-/// - Drained = 0
-/// - TaskFailed = 1
-/// - Usage = 2
-/// - ProviderLimit = 3
-/// - HumanGate = 4
-/// - NeedsInput = 5
-/// - Interrupted = 130
+/// - `Drained` = 0
+/// - `TaskFailed` = 1
+/// - `Usage` = 2
+/// - `ProviderLimit` = 3
+/// - `HumanGate` = 4
+/// - `NeedsInput` = 5
+/// - `Interrupted` = 130
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunOutcome {
     /// Queue drained successfully; all tasks completed.
@@ -1296,12 +1296,12 @@ impl PreflightReport {
 /// Run the task queue in order, draining it until completion or a stop condition.
 ///
 /// Processes tasks sequentially from the first runnable task to a terminal state:
-/// - Drained: all tasks completed
-/// - TaskFailed: a task failed after remediation budget
-/// - ProviderLimit: provider rate limit or quota exceeded
-/// - HumanGate: stopped at a human gate
-/// - NeedsInput: stopped waiting for user input
-/// - Interrupted: received SIGINT
+/// - `Drained`: all tasks completed
+/// - `TaskFailed`: a task failed after remediation budget
+/// - `ProviderLimit`: provider rate limit or quota exceeded
+/// - `HumanGate`: stopped at a human gate
+/// - `NeedsInput`: stopped waiting for user input
+/// - `Interrupted`: received SIGINT
 ///
 /// # Arguments
 ///
@@ -2924,7 +2924,10 @@ steps = [
         fn provider_limit_with_time() {
             let until = Some(OffsetDateTime::now_utc());
             let outcome = RunOutcome::ProviderLimit { until };
-            assert!(matches!(outcome, RunOutcome::ProviderLimit { until: Some(_) }));
+            assert!(matches!(
+                outcome,
+                RunOutcome::ProviderLimit { until: Some(_) }
+            ));
         }
 
         #[test]
@@ -2955,7 +2958,7 @@ steps = [
 
         #[test]
         fn all_variants_exist() {
-            let outcomes = vec![
+            let outcomes = [
                 RunOutcome::Drained,
                 RunOutcome::TaskFailed {
                     task: crate::TaskId::new(1),
