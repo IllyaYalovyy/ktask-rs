@@ -287,7 +287,7 @@ impl Runner {
         let adrs = crate::collect_adrs(&self.project.root)?;
 
         // Load the context document from the prompt library
-        let context_doc = self.load_context_doc()?;
+        let context_doc = Self::load_context_doc()?;
 
         // Load the template
         let template = crate::load_template(&self.project)?;
@@ -356,7 +356,7 @@ impl Runner {
             Err(e) => {
                 return Ok(PhaseOutcome::Failure {
                     class: FailureClass::VerificationFailure,
-                    detail: format!("Failed to parse report: {}", e),
+                    detail: format!("Failed to parse report: {e}"),
                 });
             }
         };
@@ -408,7 +408,7 @@ impl Runner {
     ///
     /// Tries to load `context.md` from the global prompt library.
     /// Returns an empty string if the file doesn't exist.
-    fn load_context_doc(&self) -> Result<String> {
+    fn load_context_doc() -> Result<String> {
         let prompt_lib = crate::prompt_library()?;
         let context_path = prompt_lib.join("context.md");
 
@@ -1273,8 +1273,7 @@ stdout = "Task completed"
         // The result should be a PhaseOutcome::Failure, not an error
         assert!(
             result.is_ok(),
-            "run_phase should return a failure outcome, not an error: {:?}",
-            result
+            "run_phase should return a failure outcome, not an error: {result:?}"
         );
         let outcome = result.unwrap();
         match outcome {
@@ -1378,8 +1377,7 @@ stdout = "Task completed"
         // The result should be a PhaseOutcome::Failure
         assert!(
             result.is_ok(),
-            "run_phase should return a failure outcome: {:?}",
-            result
+            "run_phase should return a failure outcome: {result:?}"
         );
         let outcome = result.unwrap();
         match outcome {
