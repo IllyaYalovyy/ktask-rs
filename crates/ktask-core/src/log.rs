@@ -71,7 +71,7 @@ impl Logger {
                 detail: format!("Failed to format date: {e}"),
             })?;
 
-        let log_file = logs_dir.join(format!("run-{}.jsonl", date_str));
+        let log_file = logs_dir.join(format!("run-{date_str}.jsonl"));
 
         let file = OpenOptions::new()
             .create(true)
@@ -97,6 +97,11 @@ impl Logger {
     /// The message is redacted using the global redaction patterns before
     /// being written. Messages are filtered based on the current log level:
     /// only messages at or above the current level are logged.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the timestamp cannot be formatted, the message
+    /// cannot be serialized to JSON, or the write to the file fails.
     pub fn log(
         &mut self,
         level: Level,
@@ -123,8 +128,8 @@ impl Logger {
             ts,
             level,
             task_id: task_id.map(|id| id.to_string()),
-            attempt: attempt.map(|a| a.get()),
-            phase: phase.map(|p| format!("{:?}", p)),
+            attempt: attempt.map(AttemptId::get),
+            phase: phase.map(|p| format!("{p:?}")),
             message: redacted,
         };
 
@@ -133,7 +138,7 @@ impl Logger {
             detail: e.to_string(),
         })?;
 
-        writeln!(self.file, "{}", json_line)?;
+        writeln!(self.file, "{json_line}")?;
         self.file.flush()?;
 
         Ok(())
@@ -142,6 +147,10 @@ impl Logger {
     /// Log an event from the event bus.
     ///
     /// Extracts relevant information from the event and logs it appropriately.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the event cannot be logged (same as `log`).
     pub fn log_event(&mut self, event: &Event) -> Result<()> {
         let level = match &event.kind {
             EventKind::PreflightFailed { .. }
@@ -166,12 +175,12 @@ impl Logger {
 /// Extract attempt ID and phase from an event.
 fn extract_attempt_and_phase(kind: &EventKind) -> (Option<AttemptId>, Option<Phase>) {
     match kind {
-        EventKind::AttemptStarted { attempt, .. } => (Some(*attempt), None),
         EventKind::PhaseEntered { attempt, phase } => (Some(*attempt), Some(*phase)),
-        EventKind::AgentOutput { attempt, .. } => (Some(*attempt), None),
-        EventKind::VerifyPassed { attempt } => (Some(*attempt), None),
-        EventKind::VerifyFailed { attempt, .. } => (Some(*attempt), None),
-        EventKind::PublishStarted { attempt, .. } => (Some(*attempt), None),
+        EventKind::AttemptStarted { attempt, .. }
+        | EventKind::AgentOutput { attempt, .. }
+        | EventKind::VerifyPassed { attempt }
+        | EventKind::VerifyFailed { attempt, .. }
+        | EventKind::PublishStarted { attempt, .. } => (Some(*attempt), None),
         _ => (None, None),
     }
 }
@@ -179,13 +188,13 @@ fn extract_attempt_and_phase(kind: &EventKind) -> (Option<AttemptId>, Option<Pha
 /// Create a human-readable description of an event.
 fn describe_event(kind: &EventKind) -> String {
     match kind {
-        EventKind::TaskQueued { title } => format!("Task queued: {}", title),
+        EventKind::TaskQueued { title } => format!("Task queued: {title}"),
         EventKind::PreflightStarted => "Preflight checks started".to_string(),
         EventKind::PreflightPassed { base_sha } => {
-            format!("Preflight checks passed (base: {})", base_sha)
+            format!("Preflight checks passed (base: {base_sha})")
         }
         EventKind::PreflightFailed { class, detail } => {
-            format!("Preflight checks failed: {:?}: {}", class, detail)
+            format!("Preflight checks failed: {class:?}: {detail}")
         }
         EventKind::AttemptStarted {
             attempt, protocol, ..
@@ -228,28 +237,25 @@ fn describe_event(kind: &EventKind) -> String {
             )
         }
         EventKind::PublishVerified { commit, remote_sha } => {
-            format!(
-                "Publish verified (local: {} remote: {})",
-                commit, remote_sha
-            )
+            format!("Publish verified (local: {commit} remote: {remote_sha})")
         }
-        EventKind::TaskDone { commit } => format!("Task completed (commit: {})", commit),
+        EventKind::TaskDone { commit } => format!("Task completed (commit: {commit})"),
         EventKind::TaskFailed { class, detail } => {
-            format!("Task failed: {:?}: {}", class, detail)
+            format!("Task failed: {class:?}: {detail}")
         }
-        EventKind::TaskCancelled { reason } => format!("Task cancelled: {}", reason),
-        EventKind::Paused { reason } => format!("Task paused: {:?}", reason),
+        EventKind::TaskCancelled { reason } => format!("Task cancelled: {reason}"),
+        EventKind::Paused { reason } => format!("Task paused: {reason:?}"),
         EventKind::Resumed => "Task resumed".to_string(),
-        EventKind::Interrupted { phase } => format!("Task interrupted at {:?}", phase),
+        EventKind::Interrupted { phase } => format!("Task interrupted at {phase:?}"),
         EventKind::RecoveryDecision { decision, detail } => {
-            format!("Recovery decision: {:?}: {}", decision, detail)
+            format!("Recovery decision: {decision:?}: {detail}")
         }
         EventKind::AttemptRecorded { .. } => "Attempt recorded".to_string(),
         EventKind::GateAcknowledged { by, .. } => {
-            format!("Gate acknowledged by {}", by)
+            format!("Gate acknowledged by {by}")
         }
         EventKind::TddExceptionUsed { exception, reason } => {
-            format!("TDD exception used: {:?}: {}", exception, reason)
+            format!("TDD exception used: {exception:?}: {reason}")
         }
         EventKind::DecisionRaised { request } => {
             format!("Decision raised: {}", request.question)
@@ -268,9 +274,7 @@ mod tests {
         let date_str = OffsetDateTime::now_utc()
             .format(time::macros::format_description!("[year]-[month]-[day]"))
             .unwrap();
-        state_dir
-            .join("logs")
-            .join(format!("run-{}.jsonl", date_str))
+        state_dir.join("logs").join(format!("run-{date_str}.jsonl"))
     }
 
     #[test]
@@ -386,13 +390,7 @@ mod tests {
 
         for secret in secrets {
             logger
-                .log(
-                    Level::Info,
-                    None,
-                    None,
-                    None,
-                    &format!("Secret: {}", secret),
-                )
+                .log(Level::Info, None, None, None, &format!("Secret: {secret}"))
                 .unwrap();
         }
 
