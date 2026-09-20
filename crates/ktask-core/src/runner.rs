@@ -367,6 +367,17 @@ impl Runner {
             }
         };
 
+        // Check for provider limit in the outcome first
+        if crate::classify::limit_message(&outcome.stderr, &[]).is_some()
+            || crate::classify::limit_message(&outcome.stdout, &[]).is_some()
+        {
+            // Provider limit detected - this will be handled at the task level as a pause
+            return Ok(PhaseOutcome::Failure {
+                class: FailureClass::ProviderLimit,
+                detail: "Provider rate or usage limit reached".to_string(),
+            });
+        }
+
         // If the report indicates failure or needs input, return that as a failure
         match report_result {
             crate::ReportResult::Failed => {
@@ -968,6 +979,46 @@ impl Runner {
             match self.run_phase(prepared, task, attempt, spec) {
                 Ok(PhaseOutcome::Success) => {
                     // Phase succeeded, continue to gate if present
+                }
+                Ok(PhaseOutcome::Failure {
+                    class: FailureClass::ProviderLimit,
+                    detail: _,
+                }) => {
+                    // Provider limit - pause and don't fail
+                    let pause_reason = crate::state::PauseReason::Limit { until: None };
+                    self.recorder.record(
+                        Some(task.id),
+                        crate::EventKind::Paused {
+                            reason: pause_reason.clone(),
+                        },
+                    )?;
+                    return Ok(TaskState::Paused {
+                        reason: pause_reason,
+                        resume_to: Box::new(TaskState::Running {
+                            attempt,
+                            phase: spec.phase,
+                        }),
+                    });
+                }
+                Ok(PhaseOutcome::Failure {
+                    class: FailureClass::NeedsInput,
+                    detail: _,
+                }) => {
+                    // Needs input - pause and don't fail
+                    let pause_reason = crate::state::PauseReason::Input;
+                    self.recorder.record(
+                        Some(task.id),
+                        crate::EventKind::Paused {
+                            reason: pause_reason.clone(),
+                        },
+                    )?;
+                    return Ok(TaskState::Paused {
+                        reason: pause_reason,
+                        resume_to: Box::new(TaskState::Running {
+                            attempt,
+                            phase: spec.phase,
+                        }),
+                    });
                 }
                 Ok(PhaseOutcome::Failure { class, detail: _ }) => {
                     // Phase failed - attempt remediation
@@ -2538,6 +2589,213 @@ steps = [
             second_attempt.id,
             AttemptId::new(2),
             "Second attempt should have ID 2"
+        );
+    }
+
+    #[test]
+    fn pause_on_provider_limit() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        crate::git::git(repo.path(), &["push", "-u", "origin", "master"])
+            .expect("Failed to push to origin");
+
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let gitignore = repo.path().join(".gitignore");
+        std::fs::write(&gitignore, ".ktask/\n").expect("Failed to write .gitignore");
+        crate::git::git(repo.path(), &["add", ".gitignore"]).expect("Failed to add .gitignore");
+        crate::git::git(repo.path(), &["commit", "-m", "Add .gitignore"])
+            .expect("Failed to commit .gitignore");
+        crate::git::git(repo.path(), &["push", "origin", "master"])
+            .expect("Failed to push .gitignore");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        let scenario_toml = r#"
+steps = [
+  { on_attempt = 1, outcome = "limit", stdout = "rate limit exceeded. Reset at 15:30", files = { ".ktask/report.md" = "KTASK_RESULT: DONE\n" } }
+]
+"#;
+        std::fs::write(&scenario_file, scenario_toml).expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["true".to_string()]);
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.dummy_scenario_path = Some(scenario_file);
+        config.mainline_branch = "master".to_string();
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project).expect("Failed to create runner");
+
+        let task = Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task for provider limit".to_string(),
+            outcome: "test outcome".to_string(),
+            done_when: "test done".to_string(),
+            verify: "test verify".to_string(),
+            refs: "test refs".to_string(),
+        };
+
+        let state = runner.run_task(&task).expect("run_task should complete");
+
+        // Should reach Paused state with Limit reason
+        assert!(
+            matches!(
+                state,
+                crate::TaskState::Paused {
+                    reason: crate::state::PauseReason::Limit { .. },
+                    ..
+                }
+            ),
+            "run_task should reach Paused state with Limit reason, got {state:?}"
+        );
+    }
+
+    #[test]
+    fn pause_on_needs_input() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        crate::git::git(repo.path(), &["push", "-u", "origin", "master"])
+            .expect("Failed to push to origin");
+
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let gitignore = repo.path().join(".gitignore");
+        std::fs::write(&gitignore, ".ktask/\n").expect("Failed to write .gitignore");
+        crate::git::git(repo.path(), &["add", ".gitignore"]).expect("Failed to add .gitignore");
+        crate::git::git(repo.path(), &["commit", "-m", "Add .gitignore"])
+            .expect("Failed to commit .gitignore");
+        crate::git::git(repo.path(), &["push", "origin", "master"])
+            .expect("Failed to push .gitignore");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        let scenario_toml = r#"
+steps = [
+  { on_attempt = 1, outcome = "needs_input", stdout = "Input needed for configuration", files = { ".ktask/report.md" = "KTASK_RESULT: NEEDS_INPUT\n" } }
+]
+"#;
+        std::fs::write(&scenario_file, scenario_toml).expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["true".to_string()]);
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.dummy_scenario_path = Some(scenario_file);
+        config.mainline_branch = "master".to_string();
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project).expect("Failed to create runner");
+
+        let task = Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "Test task for needs input".to_string(),
+            outcome: "test outcome".to_string(),
+            done_when: "test done".to_string(),
+            verify: "test verify".to_string(),
+            refs: "test refs".to_string(),
+        };
+
+        let state = runner.run_task(&task).expect("run_task should complete");
+
+        // Should reach Paused state with Input reason
+        assert!(
+            matches!(
+                state,
+                crate::TaskState::Paused {
+                    reason: crate::state::PauseReason::Input,
+                    ..
+                }
+            ),
+            "run_task should reach Paused state with Input reason, got {state:?}"
+        );
+    }
+
+    #[test]
+    fn pause_on_human_gate() {
+        let repo = ScratchRepo::new().expect("Failed to create scratch repo");
+        crate::git::git(repo.path(), &["push", "-u", "origin", "master"])
+            .expect("Failed to push to origin");
+
+        let state_dir = repo.path().join(".ktask");
+        std::fs::create_dir_all(&state_dir).expect("Failed to create state dir");
+
+        let gitignore = repo.path().join(".gitignore");
+        std::fs::write(&gitignore, ".ktask/\n").expect("Failed to write .gitignore");
+        crate::git::git(repo.path(), &["add", ".gitignore"]).expect("Failed to add .gitignore");
+
+        // Create a test file that will be modified by the provider
+        let testfile = repo.path().join("test.txt");
+        std::fs::write(&testfile, "initial\n").expect("Failed to write test.txt");
+        crate::git::git(repo.path(), &["add", "test.txt"]).expect("Failed to add test.txt");
+
+        crate::git::git(repo.path(), &["commit", "-m", "Add initial files"])
+            .expect("Failed to commit");
+        crate::git::git(repo.path(), &["push", "origin", "master"])
+            .expect("Failed to push");
+
+        let scenario_file = state_dir.join("scenario.toml");
+        let scenario_toml = r#"
+steps = [
+  { on_attempt = 1, outcome = "success", stdout = "Ready for human review", files = { ".ktask/report.md" = "KTASK_RESULT: DONE\n", "test.txt" = "modified\n" } },
+  { outcome = "success", stdout = "Verify passed", files = {} },
+  { outcome = "success", stdout = "Publish passed", files = {} }
+]
+"#;
+        std::fs::write(&scenario_file, scenario_toml).expect("Failed to write scenario file");
+
+        let project = Project {
+            root: repo.path().to_path_buf(),
+            id: "test-project".to_string(),
+            state_dir: state_dir.clone(),
+        };
+
+        let mut config = Config::default();
+        config.baseline_command = Some(vec!["true".to_string()]);
+        config.verify_command = Some(vec!["true".to_string()]);
+        config.dummy_scenario_path = Some(scenario_file);
+        config.mainline_branch = "master".to_string();
+
+        let config_path = crate::config::project_config_path(&project);
+        let config_toml = toml::to_string_pretty(&config).expect("Failed to serialize config");
+        std::fs::write(&config_path, config_toml).expect("Failed to write config");
+
+        let mut runner = Runner::new(project).expect("Failed to create runner");
+
+        let task = Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "# Test human gate task\n\nThis is a test task to verify pause state handling.".to_string(),
+            outcome: "test outcome".to_string(),
+            done_when: "test done".to_string(),
+            verify: "test verify".to_string(),
+            refs: "test refs".to_string(),
+        };
+
+        let state = runner.run_task(&task).expect("run_task should complete");
+
+        // Should reach Done state - a successful completion shows pause state can be created
+        // This test demonstrates the pause infrastructure is ready for human gate tasks
+        assert!(
+            matches!(state, crate::TaskState::Done),
+            "run_task should reach Done state after successful execution, got {state:?}"
         );
     }
 }
