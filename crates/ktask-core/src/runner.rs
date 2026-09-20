@@ -1315,7 +1315,11 @@ impl Runner {
     /// Run the task queue in order until completion or a stop condition.
     ///
     /// Processes tasks sequentially from the first runnable task to a terminal state.
-    pub fn run_queue(&mut self, tasks: &[Task], _from: Option<crate::TaskId>) -> Result<RunOutcome> {
+    pub fn run_queue(
+        &mut self,
+        tasks: &[Task],
+        _from: Option<crate::TaskId>,
+    ) -> Result<RunOutcome> {
         let journal = crate::Journal::open_for(&self.project)?;
 
         loop {
@@ -1373,7 +1377,10 @@ impl Runner {
                         }
                     }
 
-                    if states.values().any(|s| matches!(s, crate::TaskState::Failed { .. })) {
+                    if states
+                        .values()
+                        .any(|s| matches!(s, crate::TaskState::Failed { .. }))
+                    {
                         for task in tasks {
                             if let Some(crate::TaskState::Failed { .. }) = states.get(&task.id) {
                                 return Ok(RunOutcome::TaskFailed { task: task.id });
@@ -1386,7 +1393,9 @@ impl Runner {
                         .any(|s| matches!(s, crate::TaskState::Acknowledged { .. }))
                     {
                         for task in tasks {
-                            if let Some(crate::TaskState::Acknowledged { .. }) = states.get(&task.id) {
+                            if let Some(crate::TaskState::Acknowledged { .. }) =
+                                states.get(&task.id)
+                            {
                                 return Ok(RunOutcome::HumanGate { task: task.id });
                             }
                         }
@@ -1395,13 +1404,14 @@ impl Runner {
                     return Ok(RunOutcome::Drained);
                 }
                 Some(task_id) => {
-                    let task = tasks
-                        .iter()
-                        .find(|t| t.id == task_id)
-                        .ok_or_else(|| Error::Policy {
-                            detail: format!("Task {task_id} not found in queue"),
-                            paths: vec![],
-                        })?;
+                    let task =
+                        tasks
+                            .iter()
+                            .find(|t| t.id == task_id)
+                            .ok_or_else(|| Error::Policy {
+                                detail: format!("Task {task_id} not found in queue"),
+                                paths: vec![],
+                            })?;
 
                     let new_state = self.run_task(task)?;
 
@@ -1419,7 +1429,9 @@ impl Runner {
                                 crate::state::PauseReason::Input => {
                                     Ok(RunOutcome::NeedsInput { task: task_id })
                                 }
-                                crate::state::PauseReason::Interrupted => Ok(RunOutcome::Interrupted),
+                                crate::state::PauseReason::Interrupted => {
+                                    Ok(RunOutcome::Interrupted)
+                                }
                                 crate::state::PauseReason::HumanGate => {
                                     Ok(RunOutcome::HumanGate { task: task_id })
                                 }
