@@ -18,6 +18,7 @@ mod project;
 pub mod provider;
 mod queue;
 pub mod redact;
+mod remediate;
 mod state;
 mod task;
 
@@ -43,6 +44,7 @@ pub use paths::{config_file, project_id, state_root};
 pub use project::{Project, discover, project_config_path, register};
 pub use provider::{Capabilities, Invocation, Outcome, Provider, Usage, UsageSource};
 pub use queue::{load, next_runnable};
+pub use remediate::{Breaker, BreakerState, signature, trip_event};
 pub use state::{
     PauseReason, Phase, Recovery, Stream, TaskState, apply, check_one_active, check_predecessor,
 };
