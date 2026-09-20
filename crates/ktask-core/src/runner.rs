@@ -2748,8 +2748,7 @@ steps = [
 
         crate::git::git(repo.path(), &["commit", "-m", "Add initial files"])
             .expect("Failed to commit");
-        crate::git::git(repo.path(), &["push", "origin", "master"])
-            .expect("Failed to push");
+        crate::git::git(repo.path(), &["push", "origin", "master"]).expect("Failed to push");
 
         let scenario_file = state_dir.join("scenario.toml");
         let scenario_toml = r#"
@@ -2782,7 +2781,8 @@ steps = [
         let task = Task {
             id: crate::TaskId::new(1),
             status: crate::TaskStatus::Pending,
-            body: "# Test human gate task\n\nThis is a test task to verify pause state handling.".to_string(),
+            body: "# Test human gate task\n\nThis is a test task to verify pause state handling."
+                .to_string(),
             outcome: "test outcome".to_string(),
             done_when: "test done".to_string(),
             verify: "test verify".to_string(),
