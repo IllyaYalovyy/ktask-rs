@@ -7,12 +7,18 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 mod cli;
+mod exit;
 
 use clap::Parser;
 use cli::Cli;
-use ktask_core as _;
+use ktask_core::RunOutcome;
 
 fn main() {
     let _cli = Cli::parse();
     eprintln!("ktask-rs: CLI implementation in progress");
+
+    // Placeholder: use drained outcome for now
+    let outcome = RunOutcome::Drained;
+    let code = exit::code_for(&outcome);
+    std::process::exit(code);
 }
