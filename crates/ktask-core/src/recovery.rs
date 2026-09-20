@@ -29,28 +29,32 @@ fn is_process_alive(pid: u32) -> bool {
 
 /// Get the task worktree path for a task.
 fn task_worktree_path(project: &Project, task_id: TaskId) -> PathBuf {
-    project.root.join(".ktask").join("worktrees").join(task_id.to_string())
+    project
+        .root
+        .join(".ktask")
+        .join("worktrees")
+        .join(task_id.to_string())
 }
 
 /// Check if the task worktree has any changes (modified files or new commits).
-fn has_worktree_changes(project: &Project, task_id: TaskId) -> Result<bool> {
+fn has_worktree_changes(project: &Project, task_id: TaskId) -> bool {
     let worktree_path = task_worktree_path(project, task_id);
 
     // If worktree doesn't exist, there are no changes
     if !worktree_path.exists() {
-        return Ok(false);
+        return false;
     }
 
     // Check if the worktree has any uncommitted changes or new commits
     // For now, we'll check if the worktree path exists and has a .git directory
     let git_dir = worktree_path.join(".git");
     if !git_dir.exists() {
-        return Ok(false);
+        return false;
     }
 
     // Check if there are any changes in the worktree
     // This is a simplified check - a full implementation would use git status
-    Ok(true)
+    true
 }
 
 /// Reconcile the journal state with actual system state after a crash.
@@ -79,41 +83,43 @@ pub fn reconcile(journal: &mut Journal, project: &Project) -> Result<Vec<Recover
 
         // Get the last event for this task
         let events = journal.events_for(task_id)?;
-        if events.is_empty() {
-            continue;
-        }
 
-        let last_event = &events[events.len() - 1];
+        let Some(last_event) = events.last() else {
+            continue;
+        };
 
         // Determine the decision based on the last event and system state
         let decision = match &last_event.kind {
-            EventKind::AttemptStarted { attempt: _, protocol: _, pid, base_sha: _ } => {
+            EventKind::AttemptStarted {
+                attempt: _,
+                protocol: _,
+                pid,
+                base_sha: _,
+            } => {
                 if is_process_alive(*pid) {
                     Recovery::Resume
-                } else {
+                } else if has_worktree_changes(project, task_id) {
                     // Process is dead, check if changes were already applied
-                    if has_worktree_changes(project, task_id)? {
-                        Recovery::AlreadyApplied
-                    } else {
-                        Recovery::MarkInterrupted
-                    }
+                    Recovery::AlreadyApplied
+                } else {
+                    Recovery::MarkInterrupted
                 }
             }
             EventKind::PhaseEntered { .. } | EventKind::AgentOutput { .. } => {
                 // In a phase but no process info directly in these events
                 // Check the preceding AttemptStarted event
-                if let Some(attempt_started) = events.iter().rev().find(|e| {
-                    matches!(e.kind, EventKind::AttemptStarted { .. })
-                }) {
+                if let Some(attempt_started) = events
+                    .iter()
+                    .rev()
+                    .find(|e| matches!(e.kind, EventKind::AttemptStarted { .. }))
+                {
                     if let EventKind::AttemptStarted { pid, .. } = &attempt_started.kind {
                         if is_process_alive(*pid) {
                             Recovery::Resume
+                        } else if has_worktree_changes(project, task_id) {
+                            Recovery::AlreadyApplied
                         } else {
-                            if has_worktree_changes(project, task_id)? {
-                                Recovery::AlreadyApplied
-                            } else {
-                                Recovery::MarkInterrupted
-                            }
+                            Recovery::MarkInterrupted
                         }
                     } else {
                         Recovery::MarkInterrupted
@@ -124,7 +130,7 @@ pub fn reconcile(journal: &mut Journal, project: &Project) -> Result<Vec<Recover
             }
             EventKind::VerifyFailed { .. } | EventKind::VerifyPassed { .. } => {
                 // Verify phase, process likely already done
-                if has_worktree_changes(project, task_id)? {
+                if has_worktree_changes(project, task_id) {
                     Recovery::AlreadyApplied
                 } else {
                     Recovery::MarkInterrupted
@@ -143,10 +149,13 @@ pub fn reconcile(journal: &mut Journal, project: &Project) -> Result<Vec<Recover
         );
 
         // Record the decision in the journal
-        journal.append(Some(task_id), &EventKind::RecoveryDecision {
-            decision,
-            detail: detail.clone(),
-        })?;
+        journal.append(
+            Some(task_id),
+            &EventKind::RecoveryDecision {
+                decision,
+                detail: detail.clone(),
+            },
+        )?;
 
         decisions.push(RecoveryDecision {
             task_id,
@@ -192,18 +201,32 @@ mod tests {
         let task_id = TaskId::new(1);
 
         // Task queued -> cancelled (terminal state)
-        journal.append(Some(task_id), &EventKind::TaskQueued {
-            title: "Test task".to_string(),
-        }).expect("append task queued");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .expect("append task queued");
 
-        journal.append(Some(task_id), &EventKind::TaskCancelled {
-            reason: "User cancelled".to_string(),
-        }).expect("append task cancelled");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskCancelled {
+                    reason: "User cancelled".to_string(),
+                },
+            )
+            .expect("append task cancelled");
 
         journal.rebuild_state().expect("rebuild state");
 
         let decisions = reconcile(&mut journal, &project).expect("reconcile");
-        assert_eq!(decisions.len(), 0, "Terminal tasks should not generate decisions");
+        assert_eq!(
+            decisions.len(),
+            0,
+            "Terminal tasks should not generate decisions"
+        );
     }
 
     #[test]
@@ -214,24 +237,40 @@ mod tests {
 
         let task_id = TaskId::new(1);
 
-        journal.append(Some(task_id), &EventKind::TaskQueued {
-            title: "Test task".to_string(),
-        }).expect("append task queued");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .expect("append task queued");
 
-        journal.append(Some(task_id), &EventKind::PreflightStarted)
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
             .expect("append preflight started");
 
-        journal.append(Some(task_id), &EventKind::PreflightPassed {
-            base_sha: "abc123".to_string(),
-        }).expect("append preflight passed");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .expect("append preflight passed");
 
         // Use a non-existent PID so the process is not alive
-        journal.append(Some(task_id), &EventKind::AttemptStarted {
-            attempt: crate::AttemptId::new(1),
-            protocol: "direct".to_string(),
-            pid: 999999,
-            base_sha: "abc123".to_string(),
-        }).expect("append attempt started");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt: crate::AttemptId::new(1),
+                    protocol: "direct".to_string(),
+                    pid: 999999,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .expect("append attempt started");
 
         journal.rebuild_state().expect("rebuild state");
 
@@ -245,10 +284,13 @@ mod tests {
 
         // Verify the decision was recorded in the journal
         let events = journal.events_for(task_id).expect("get events");
-        let has_recovery_decision = events.iter().any(|e| {
-            matches!(e.kind, EventKind::RecoveryDecision { .. })
-        });
-        assert!(has_recovery_decision, "Recovery decision should be recorded in journal");
+        let has_recovery_decision = events
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::RecoveryDecision { .. }));
+        assert!(
+            has_recovery_decision,
+            "Recovery decision should be recorded in journal"
+        );
     }
 
     #[test]
@@ -259,24 +301,40 @@ mod tests {
 
         let task_id = TaskId::new(1);
 
-        journal.append(Some(task_id), &EventKind::TaskQueued {
-            title: "Test task".to_string(),
-        }).expect("append task queued");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .expect("append task queued");
 
-        journal.append(Some(task_id), &EventKind::PreflightStarted)
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
             .expect("append preflight started");
 
-        journal.append(Some(task_id), &EventKind::PreflightPassed {
-            base_sha: "abc123".to_string(),
-        }).expect("append preflight passed");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .expect("append preflight passed");
 
         // Use a non-existent PID
-        journal.append(Some(task_id), &EventKind::AttemptStarted {
-            attempt: crate::AttemptId::new(1),
-            protocol: "direct".to_string(),
-            pid: 999999,
-            base_sha: "abc123".to_string(),
-        }).expect("append attempt started");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt: crate::AttemptId::new(1),
+                    protocol: "direct".to_string(),
+                    pid: 999999,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .expect("append attempt started");
 
         journal.rebuild_state().expect("rebuild state");
 
@@ -293,29 +351,50 @@ mod tests {
 
         let task_id = TaskId::new(1);
 
-        journal.append(Some(task_id), &EventKind::TaskQueued {
-            title: "Test task".to_string(),
-        }).expect("append task queued");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .expect("append task queued");
 
-        journal.append(Some(task_id), &EventKind::PreflightStarted)
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
             .expect("append preflight started");
 
-        journal.append(Some(task_id), &EventKind::PreflightPassed {
-            base_sha: "abc123".to_string(),
-        }).expect("append preflight passed");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .expect("append preflight passed");
 
         // Use a non-existent PID
-        journal.append(Some(task_id), &EventKind::AttemptStarted {
-            attempt: crate::AttemptId::new(1),
-            protocol: "direct".to_string(),
-            pid: 999999,
-            base_sha: "abc123".to_string(),
-        }).expect("append attempt started");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt: crate::AttemptId::new(1),
+                    protocol: "direct".to_string(),
+                    pid: 999999,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .expect("append attempt started");
 
-        journal.append(Some(task_id), &EventKind::PhaseEntered {
-            attempt: crate::AttemptId::new(1),
-            phase: crate::Phase::Implement,
-        }).expect("append phase entered");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PhaseEntered {
+                    attempt: crate::AttemptId::new(1),
+                    phase: crate::Phase::Implement,
+                },
+            )
+            .expect("append phase entered");
 
         journal.rebuild_state().expect("rebuild state");
 
@@ -332,29 +411,50 @@ mod tests {
 
         let task_id = TaskId::new(1);
 
-        journal.append(Some(task_id), &EventKind::TaskQueued {
-            title: "Test task".to_string(),
-        }).expect("append task queued");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .expect("append task queued");
 
-        journal.append(Some(task_id), &EventKind::PreflightStarted)
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
             .expect("append preflight started");
 
-        journal.append(Some(task_id), &EventKind::PreflightPassed {
-            base_sha: "abc123".to_string(),
-        }).expect("append preflight passed");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .expect("append preflight passed");
 
-        journal.append(Some(task_id), &EventKind::AttemptStarted {
-            attempt: crate::AttemptId::new(1),
-            protocol: "direct".to_string(),
-            pid: 999999,
-            base_sha: "abc123".to_string(),
-        }).expect("append attempt started");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt: crate::AttemptId::new(1),
+                    protocol: "direct".to_string(),
+                    pid: 999999,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .expect("append attempt started");
 
-        journal.append(Some(task_id), &EventKind::VerifyFailed {
-            attempt: crate::AttemptId::new(1),
-            class: crate::FailureClass::AgentFailure,
-            detail: "Test failure".to_string(),
-        }).expect("append verify failed");
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::VerifyFailed {
+                    attempt: crate::AttemptId::new(1),
+                    class: crate::FailureClass::AgentFailure,
+                    detail: "Test failure".to_string(),
+                },
+            )
+            .expect("append verify failed");
 
         journal.rebuild_state().expect("rebuild state");
 
