@@ -7,6 +7,7 @@ pub(crate) fn run(
     _config: Option<ktask_core::Config>,
     _task: String,
     _gate: Option<String>,
+    _json: bool,
 ) -> RunOutcome {
     RunOutcome::Drained
 }

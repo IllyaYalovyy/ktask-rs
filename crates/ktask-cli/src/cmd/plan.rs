@@ -6,6 +6,7 @@ use ktask_core::RunOutcome;
 pub(crate) fn run(
     _project: Option<ktask_core::Project>,
     _subcommand: PlanSubcommand,
+    _json: bool,
 ) -> RunOutcome {
     RunOutcome::Drained
 }

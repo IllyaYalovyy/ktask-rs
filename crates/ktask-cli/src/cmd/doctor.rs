@@ -2,6 +2,6 @@
 
 use ktask_core::RunOutcome;
 
-pub(crate) fn run() -> RunOutcome {
+pub(crate) fn run(_json: bool) -> RunOutcome {
     RunOutcome::Drained
 }

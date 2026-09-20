@@ -27,13 +27,14 @@ pub(crate) fn dispatch(
     command: Command,
     project: Option<ktask_core::Project>,
     config: Option<ktask_core::Config>,
+    json: bool,
 ) -> RunOutcome {
     match command {
-        Command::Doctor => doctor::run(),
+        Command::Doctor => doctor::run(json),
         Command::Init => init::run(),
         Command::Add { file } => add::run(file),
-        Command::Plan { subcommand } => plan::run(project, subcommand),
-        Command::Status => status::run(project),
+        Command::Plan { subcommand } => plan::run(project, subcommand, json),
+        Command::Status => status::run(project, json),
         Command::Run { task, from } => run::run(project, config, task, from),
         Command::Resume => resume::run(project, config),
         Command::Retry { task } => retry::run(project, config, task),
@@ -42,7 +43,7 @@ pub(crate) fn dispatch(
         Command::Pause => pause::run(project),
         Command::Interrupt => interrupt::run(project),
         Command::Cancel { task } => cancel::run(project, task),
-        Command::RerunGate { task, gate } => rerun_gate::run(project, config, task, gate),
+        Command::RerunGate { task, gate } => rerun_gate::run(project, config, task, gate, json),
         Command::Tui => tui::run(project, config),
     }
 }
@@ -104,7 +105,7 @@ mod tests {
 
         // Call dispatch on each variant to ensure they all dispatch without panicking.
         for variant in variants {
-            let _ = dispatch(variant, None, None);
+            let _ = dispatch(variant, None, None, false);
         }
     }
 }
