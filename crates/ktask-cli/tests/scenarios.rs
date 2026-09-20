@@ -39,3 +39,33 @@ fn scenario_init_add_status() {
     // The status should show one task
     status_output.assert_stdout_contains("Test Task");
 }
+
+/// End-to-end test: run command drains the queue with the dummy provider.
+#[test]
+fn scenario_run_drains_the_queue() {
+    let env = ScenarioEnv::new();
+
+    // 1. Initialize the project
+    let _ = env.run_command(&["init"]).expect_success();
+
+    // 2. Create and add a simple task
+    let task_content = "## Simple Task
+
+**Outcome:** Complete a simple task
+
+**Done-when:** The task runs and completes
+
+**Verify:** true
+
+**Refs:** Run scenario test
+";
+    let task_file = env.write_task("task.md", task_content);
+    let _ = env.run_command(&["add", "--file", task_file.to_string_lossy().as_ref()]).expect_success();
+
+    // 3. Run the queue
+    let run_output = env.run_command(&["run"]);
+    let _ = run_output.clone().expect_success();
+    // Result line should appear in stdout
+    run_output.assert_stdout_contains("id=1");
+    run_output.assert_stdout_contains("Simple Task");
+}
