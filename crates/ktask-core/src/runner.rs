@@ -959,7 +959,6 @@ impl Runner {
         };
 
         let mut red_phase_summary: Option<crate::gate::TestSummary> = None;
-        let mut remediation_already_ran_gate = false;
 
         for spec in &protocol.phases {
             self.recorder.record(
@@ -984,7 +983,6 @@ impl Runner {
                     if let Some(state) = self.handle_phase_failure(task, prepared, spec, class)? {
                         return Ok(state);
                     }
-                    remediation_already_ran_gate = true;
                 }
                 Err(e) => {
                     let class = FailureClass::EnvironmentFailure;
@@ -1000,7 +998,6 @@ impl Runner {
                 }
             }
 
-            remediation_already_ran_gate = false;
             if let Some(state) = self.handle_gate_execution(
                 prepared,
                 task,
