@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used)]
 //! Integration test for interrupt handling.
 //!
 //! Tests that interrupting (SIGINT) leaves durable, resumable state:
@@ -18,15 +19,15 @@ fn setup_project() -> (TempDir, Project) {
 
     // Initialize a git repo
     let _ = Command::new("git")
-        .args(&["init"])
+        .args(["init"])
         .current_dir(&root)
         .output();
     let _ = Command::new("git")
-        .args(&["config", "user.email", "test@example.com"])
+        .args(["config", "user.email", "test@example.com"])
         .current_dir(&root)
         .output();
     let _ = Command::new("git")
-        .args(&["config", "user.name", "Test User"])
+        .args(["config", "user.name", "Test User"])
         .current_dir(&root)
         .output();
 
