@@ -11,7 +11,7 @@ use tempfile::TempDir;
 /// A phase boundary test case.
 #[derive(Debug)]
 struct BoundaryTest {
-    /// Name of the boundary (e.g., "preflight_to_running")
+    /// Name of the boundary (e.g., `preflight_to_running`)
     name: &'static str,
     /// Description of what should happen at this boundary
     description: &'static str,
@@ -247,8 +247,7 @@ fn test_boundary(boundary: &BoundaryTest) {
     );
 
     // 3. Events are in sequence with no gaps
-    let mut expected_seq = 1u64;
-    for event in events.iter() {
+    for (expected_seq, event) in (1u64..).zip(&events) {
         assert_eq!(
             event.seq.get(),
             expected_seq,
@@ -257,10 +256,12 @@ fn test_boundary(boundary: &BoundaryTest) {
             expected_seq,
             event.seq.get()
         );
-        expected_seq += 1;
     }
 
-    eprintln!("  ✓ Boundary {} passed: journal survived, state is correct", boundary.name);
+    eprintln!(
+        "  ✓ Boundary {} passed: journal survived, state is correct",
+        boundary.name
+    );
 }
 
 #[test]
