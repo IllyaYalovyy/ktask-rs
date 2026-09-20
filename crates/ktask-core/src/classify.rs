@@ -372,6 +372,13 @@ fn is_verification(gates: &[GateResult]) -> bool {
 /// Whether the machine, rather than the work, refused: a command that never
 /// started, a host that cannot do what the gate asked, or a fault of the
 /// supervisor itself.
+///
+/// The two halves of the gate test are not interchangeable. A gate records
+/// `passed` only when its command exited successfully within its budget, so a
+/// passing gate always carries a status and has therefore reached a verdict:
+/// reading the pair as "failing *or* without a verdict" would let a gate that
+/// passed argue that the machine refused, which is the one thing a green gate
+/// cannot mean.
 fn is_environment(
     error: Option<&Error>,
     gates: &[GateResult],
