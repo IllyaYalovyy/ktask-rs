@@ -161,22 +161,64 @@ static CONFIGURATION: Table = Table::new(&[
     r"(?i)no retry can start",
 ]);
 
-/// The words a usage limit is named with, before an operator configures more.
+/// The words a plan limit is named with, before an operator configures more.
 ///
-/// Deliberately short: the Claude and Codex wordings belong to the task that
-/// owns usage-limit detection together with the `limit_patterns` key that will
-/// feed `patterns` of [`limit_message`], and a table that guessed at them would
-/// be edited the first time a real CLI contradicted it.
+/// Every phrase is wording a provider writes rather than a paraphrase of one,
+/// and `LIMIT_FIXTURES` in the tests holds the line each was written for. That
+/// upkeep is worth paying because a limit is the class reached only by reading
+/// text: miss the wording and the same evidence lands on the fallback, which
+/// spends a bounded remediation on what should have been a pause and reports
+/// exit 1 where `docs/CONTRACT.md` §1 says a parked queue exits 3.
+///
+/// Both CLIs say it twice over — a sentence for whoever is watching the run, and
+/// a machine-readable error `type` for the log — so the table reads both. A JSON
+/// body whose whole content is `"type":"rate_limit_error"` is as much a limit as
+/// the subscription sentence Claude Code prints above it, and Codex's quota
+/// refusal arrives as prose and as `insufficient_quota` in the same release.
+///
+/// What is deliberately *not* here is as much of the table as what is.
+/// `overloaded_error` and a dropped stream belong to
+/// [`TRANSIENT`]: there is no plan ceiling to wait out, and the same work asked
+/// again usually lands. A context-window refusal ("prompt is too long") is
+/// named nowhere either, even though it is a limit of a kind — it has no reset
+/// time, so reading it as [`FailureClass::ProviderLimit`] would back off from a
+/// request that will be refused identically forever, where the class the run
+/// lands in should be the one a shorter prompt gets out of. An operator whose
+/// provider words a limit differently configures it rather than waiting for a
+/// release: `patterns` of [`limit_message`] exists for exactly that.
 static LIMIT: Table = Table::new(&[
-    r"(?i)\b(?:usage|rate|quota|credit|plan|billing|request)[ _-]?limits?\b",
+    // The ceiling, named by what it is a ceiling on. Claude Code leads with the
+    // window (`session`, `daily`, `weekly`); an Anthropic organization that has
+    // spent its budget says `spend limit` and means the month.
+    concat!(
+        r"(?i)\b(?:usage|rate|quota|credit|plan|billing|request|subscription|session|daily",
+        r"|weekly|monthly|spend)[ _-]?limits?\b",
+    ),
+    // The ceiling first and what happened to it second, which is how OpenAI's
+    // tokens-per-minute refusal is written: the limit noun comes before the
+    // number that was crossed.
     r"(?i)\blimits?\b[^\n]{0,24}\b(?:reached|exceeded|hit|applied)\b",
-    r"(?i)\b(?:hit|reached|exceeded|over)\b[^\n]{0,24}\blimits?\b",
+    // What ran out, said before the thing that ran out: OpenAI's quota refusal
+    // leads with the verb, and `credits`/`allowance` are how a plan is named
+    // once there is no limit noun in the sentence at all.
+    r"(?i)\b(?:hit|reached|exceeded|over)\b[^\n]{0,24}\b(?:limits?|quota|credits?|allowance)\b",
+    // The status both APIs answer with, and the reason phrase that is the whole
+    // body when a CLI prints the HTTP line instead of the JSON behind it.
     r"(?i)\b429\b",
     r"(?i)too many requests",
+    // The money door, which both providers end at: a quota a platform team set,
+    // a balance Anthropic says is "too low", credits that have run out.
     r"(?i)\bquota\b[^\n]{0,24}\b(?:exhausted|exceeded|reached|depleted)\b",
-    r"(?i)insufficient[^\n]{0,24}\b(?:quota|credit|balance|funds)\b",
-    r"(?i)credit balance[^\n]{0,24}\b(?:too low|exhausted|depleted)\b",
-    r"(?i)\bretry after\b",
+    r"(?i)insufficient[^\n]{0,24}\b(?:quota|credits?|balance|funds)\b",
+    r"(?i)credit balance[^\n]{0,24}\b(?:too low|exhausted|depleted|empty)\b",
+    r"(?i)\b(?:out of|depleted|exhausted|used up)\b[^\n]{0,12}\bcredits?\b",
+    // How long to wait, which both APIs send: the HTTP header and the prose
+    // form are one rule, and the reset time sits beside it on the same line.
+    r"(?i)\bretry[ _-]?after\b",
+    // The error `type`s, which are what a JSON error body carries when it
+    // carries no prose to read at all.
+    r"(?i)\b(?:rate|usage|plan|quota|credit|billing)[ _-]?limit[ _-]?(?:error|exceeded)\b",
+    r"(?i)\binsufficient[ _-]?quota\b",
 ]);
 
 /// The provider faults a fresh attempt may outlive.
@@ -851,6 +893,19 @@ mod tests {
         assert_eq!(limit_message("test result: ok. 42 passed\n", &[]), None);
     }
 
+    /// The distance a phrase allows is part of the phrase.
+    ///
+    /// Both verb phrases reach across a few words at most, because a CLI's
+    /// refusal is one clause long. Without that bound a paragraph about a
+    /// budget and, two sentences later, an unrelated `limit` would be read as
+    /// one refusal — and the run would pause on prose that named nothing.
+    #[test]
+    fn a_limit_noun_too_far_from_its_verb_is_not_a_limit() {
+        let line = "You exceeded the budget the task was given for the whole run, and \
+                    no limit was named anywhere in it.";
+        assert_eq!(limit_message(line, &[]), None);
+    }
+
     #[test]
     fn a_configured_pattern_that_is_not_a_regex_is_skipped_and_not_fatal() {
         let patterns = vec!["(unclosed".to_owned()];
@@ -860,6 +915,82 @@ mod tests {
             "a broken pattern costs its own match, not the whole reading",
         );
         assert_eq!(limit_message("nothing to read here", &patterns), None);
+    }
+
+    /// One provider line for each built-in limit pattern, in table order.
+    ///
+    /// The wordings are the two CLIs this project drives rather than invented
+    /// prose: Claude Code's subscription refusals and Anthropic's API error
+    /// body for the first half, Codex's rate-limit snapshot and its
+    /// `insufficient_quota` body for the second.
+    ///
+    /// The list is positional, so a pattern added to [`LIMIT`] without a line
+    /// beside it fails the build. That is the point: `every_table_compiles`
+    /// proves a default parses, and nothing else proves a default is the words
+    /// a real provider writes — an unexercised default is a rule nobody has
+    /// seen work, and a default narrowed by mistake stops recognising the
+    /// release it was written for in silence.
+    const LIMIT_FIXTURES: &[&str] = &[
+        "You've hit your weekly limit; it will reset at 8pm (America/Los_Angeles) on Tuesday.",
+        "Rate limit reached for gpt-5.1-codex in organization org-ktask on tokens per min \
+         (TPM): Limit 30000, Used 29998, Requested 900. Please try again in 1.8s.",
+        "You exceeded your current quota, please check your plan and billing details.",
+        "HTTP 429 from api.anthropic.com",
+        "Reason phrase: Too Many Requests",
+        "Project quota exhausted; ask your organization to raise it.",
+        "Insufficient credits to run this request; add a payment method to continue.",
+        "API error (400): credit balance is too low",
+        "You're out of credits; add more to keep the run going.",
+        "retry-after: 3600",
+        r#"{"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded."}}"#,
+        r#"{"error":{"type":"insufficient_quota","message":"You exceeded your current quota."}}"#,
+    ];
+
+    #[test]
+    fn every_default_limit_pattern_has_a_fixture_the_defaults_recognise() {
+        assert_eq!(
+            LIMIT_FIXTURES.len(),
+            LIMIT.phrases.len(),
+            "a default limit pattern was added or removed without a fixture beside it",
+        );
+        for (index, &line) in LIMIT_FIXTURES.iter().enumerate() {
+            let phrase = LIMIT.phrases[index];
+            assert!(
+                LIMIT.compiled()[index].is_match(line),
+                "fixture {line:?} is no longer the line {phrase:?} was written for",
+            );
+            assert_eq!(
+                limit_message(line, &[]).as_deref(),
+                Some(line),
+                "the defaults no longer recognise {line:?}, which {phrase:?} exists to catch",
+            );
+        }
+    }
+
+    #[test]
+    fn a_default_limit_fixture_is_never_read_as_the_works_own_failure() {
+        for &line in LIMIT_FIXTURES {
+            let on_stdout = classify(&session(1, line, ""), &[], None);
+            let on_stderr = classify(&session(1, "", line), &[], None);
+            let beside_a_refused_gate = classify(&session(1, "", line), &[verify_refused()], None);
+            assert_eq!(
+                on_stdout,
+                FailureClass::ProviderLimit,
+                "{line:?} on stdout is waited out, not remediated",
+            );
+            assert_eq!(
+                on_stderr,
+                FailureClass::ProviderLimit,
+                "{line:?} on stderr is waited out, not remediated",
+            );
+            assert_eq!(
+                beside_a_refused_gate,
+                FailureClass::ProviderLimit,
+                "{line:?} is a limit even with a red gate beside it: the limit arm runs \
+                 first, so a wait never spends a remediation on a test that failed \
+                 because the session stopped mid-run",
+            );
+        }
     }
 
     #[test]
