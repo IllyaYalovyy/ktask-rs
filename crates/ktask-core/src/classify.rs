@@ -2001,6 +2001,35 @@ mod tests {
     }
 
     #[test]
+    fn a_deadline_exactly_now_is_a_backoff_rather_than_a_wait_for_nothing() {
+        assert_eq!(
+            wait_plan(Some(morning() - MARGIN), morning(), MARGIN, CEILING),
+            WaitPlan::Backoff { wait: MARGIN },
+            "the instant plus the margin is exactly `now`, so waking at it is \
+             waking now: a deadline may be honoured only when it asks for some \
+             wait, or a refused endpoint is asked again at zero interval",
+        );
+    }
+
+    #[test]
+    fn a_deadline_exactly_at_the_ceiling_is_still_waited_out() {
+        assert_eq!(
+            wait_plan(
+                Some(morning() + CEILING - MARGIN),
+                morning(),
+                MARGIN,
+                CEILING,
+            ),
+            WaitPlan::Deadline {
+                at: morning() + CEILING,
+            },
+            "`limit_max_wait_secs` is the longest wait a run may sit through, so \
+             the longest legal deadline is honoured rather than dropped one \
+             second inside the bound",
+        );
+    }
+
+    #[test]
     fn no_reset_time_is_a_bounded_backoff() {
         assert_eq!(
             wait_plan(None, morning(), MARGIN, CEILING),
