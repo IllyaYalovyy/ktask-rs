@@ -436,22 +436,21 @@ impl Runner {
         spec: &PhaseSpec,
         before: Option<&crate::gate::TestSummary>,
     ) -> Result<crate::gate::TestSummary> {
+        use crate::state::Phase;
+
         // Get the gate for this phase
-        let gate = spec
-            .gate
-            .ok_or_else(|| Error::Gate {
-                kind: format!("{:?}", spec.phase),
-                detail: "Phase has no gate configured".to_string(),
-            })?;
+        let gate = spec.gate.ok_or_else(|| Error::Gate {
+            kind: format!("{:?}", spec.phase),
+            detail: "Phase has no gate configured".to_string(),
+        })?;
 
         let gate_spec = self.profile.get(gate).ok_or_else(|| Error::Gate {
-            kind: format!("{:?}", gate),
+            kind: format!("{gate:?}"),
             detail: "Gate not found in profile".to_string(),
         })?;
 
         // Compute tree hash before gate (using git rev-parse)
-        let tree_hash_before =
-            crate::git::git(&prep.worktree_path, &["rev-parse", "HEAD^{tree}"])?;
+        let tree_hash_before = crate::git::git(&prep.worktree_path, &["rev-parse", "HEAD^{tree}"])?;
 
         // Record gate started
         self.recorder.record(
@@ -476,8 +475,7 @@ impl Runner {
             });
 
         // Compute tree hash after gate
-        let tree_hash_after =
-            crate::git::git(&prep.worktree_path, &["rev-parse", "HEAD^{tree}"])?;
+        let tree_hash_after = crate::git::git(&prep.worktree_path, &["rev-parse", "HEAD^{tree}"])?;
 
         // Record gate finished
         self.recorder.record(
@@ -492,8 +490,6 @@ impl Runner {
         )?;
 
         // Verify gate results based on phase type
-        use crate::state::Phase;
-
         match spec.phase {
             Phase::Red => {
                 let before_summary = before.ok_or_else(|| Error::Gate {
