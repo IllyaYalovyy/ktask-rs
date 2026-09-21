@@ -138,10 +138,10 @@ fn get_input_from_editor() -> std::io::Result<String> {
         .status()?;
 
     if !output.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("editor exited with code {:?}", output.code()),
-        ));
+        return Err(std::io::Error::other(format!(
+            "editor exited with code {:?}",
+            output.code()
+        )));
     }
 
     let content = std::fs::read_to_string(temp_file.path())?;
@@ -165,12 +165,11 @@ fn find_next_adr_number(project: &ktask_core::Project) -> std::io::Result<PathBu
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if let Ok(num) = name.split('-').next().unwrap_or("0").parse::<i32>() {
-                        max_num = max_num.max(num);
-                    }
-                }
+            if path.extension().and_then(|s| s.to_str()) == Some("md")
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && let Ok(num) = name.split('-').next().unwrap_or("0").parse::<i32>()
+            {
+                max_num = max_num.max(num);
             }
         }
     } else {
