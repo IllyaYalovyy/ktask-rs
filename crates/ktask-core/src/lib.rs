@@ -45,7 +45,9 @@ pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::{Journal, journal_path};
 pub use paths::{config_file, project_id, state_root};
 pub use project::{Project, discover, project_config_path, register};
-pub use protocol::{PhaseSpec, Protocol, WriteScope, check_scope, for_task, verify_red};
+pub use protocol::{
+    PhaseSpec, Protocol, WriteScope, check_scope, for_task, verify_green, verify_red,
+};
 pub use provider::{Capabilities, Invocation, Outcome, Provider, Usage, UsageSource};
 pub use queue::{load, next_runnable};
 pub use remediate::{

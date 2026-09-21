@@ -101,6 +101,29 @@
 //! survives the phase: a failure set that did not change is refused, so "the
 //! suite was already red" cannot be filed as proof a test came first, and a red
 //! phase that ended green means precisely what it looks like.
+//!
+//! # How green is confirmed
+//!
+//! §9 step 4 hands the runner the other half: "The runner confirms the new test
+//! passes." [`verify_green`] is handed the names [`verify_red`] returned and the
+//! summary of one re-run of that same targeted command, and it refuses two
+//! different claims. A named test the run still lists as failing is the phase
+//! ending where red ended. A test the run lists as failing that nobody named is
+//! the one that ends a task quietly, because [`Phase::Green`] holds every path
+//! open and an edit that broke an unrelated test looks, from outside the phase,
+//! exactly like an edit that fixed one — so a regression elsewhere is refused,
+//! by name, rather than being left for the final verification gate to find after
+//! the attempt was already called good.
+//!
+//! The two halves differ in one way that is not symmetric. Red's evidence is a
+//! *difference* between two runs and so needs both; green's is a property of one
+//! run, because the phase's own red run is what fixed which tests were passing
+//! when it started. That is also the whole of its weakness: [`TestSummary`] lists
+//! what failed and never what passed, so a test that vanished from the run —
+//! renamed, deleted, ignored — vanishes from the failure list too, and only the
+//! run's own passing count can say the run was too small to have confirmed
+//! anything. [`verify_green`] reads that count as a floor for exactly that
+//! reason, and says in the open what the floor does not reach.
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -643,6 +666,125 @@ pub fn verify_red(before: &TestSummary, after: &TestSummary) -> Result<Vec<Strin
         });
     }
     Ok(fresh)
+}
+
+/// The sentence a green phase is refused by when its run cannot confirm it.
+const GREEN_RULE: &str = "a green phase has to leave every test the red phase named passing and \
+                          no test that was passing before it failing";
+
+/// Confirm a green phase passed the tests red made it fail and broke nothing else.
+///
+/// VISION.md §9 step 4 is the runner's, like step 2: once green opens the
+/// implementation, "the runner confirms the new test passes." `expected` is what
+/// [`verify_red`] returned for the phase — the names that failed and did not fail
+/// before it — and `after` is the summary of one run of the *same*
+/// `targeted_test_command` the red phase ran. Two claims come out of those two
+/// arguments, and the phase is refused when either of them fails.
+///
+/// **The named tests have to pass.** A name `expected` holds that
+/// [`TestSummary::failures`] still lists is the test the phase existed for, still
+/// failing: green ended where red ended.
+///
+/// **Nothing else may start failing.** [`Phase::Green`] takes
+/// [`WriteScope::All`] — the implementation is what the phase was for — so the run
+/// answers for everything the command covers, not only for its own test. A name
+/// the run lists that `expected` does not was not failing when the phase started,
+/// because [`verify_red`] handed over every name that newly failed and green is
+/// re-running that same list; it is failing now, which is a regression, and it is
+/// refused by name. "The new test passes" is worth nothing if the sentence has to
+/// end "...and four others no longer do," and an edit that broke an unrelated test
+/// looks, from the outside, exactly like an edit that fixed one.
+///
+/// # Absence is the signal, and how far it reaches
+///
+/// [`TestSummary`] holds counts and a failure list and no list of the tests that
+/// passed, so a name is confirmed to pass by not appearing in
+/// [`TestSummary::failures`]. That is sound rather than hopeful because of what
+/// [`crate::parse_cargo`] refuses (ADR-0039): output whose `failures:` block names
+/// fewer tests than its own result line counted, and a transcript that opened a
+/// test binary and never wrote its count. A summary that exists at all therefore
+/// names every test that failed, so everything the run ran is either listed here
+/// or passed.
+///
+/// What is left is a test the run never ran at all: renamed out of the filter,
+/// deleted, or given an `#[ignore]`, it vanishes from the failure list without
+/// passing. ADR-0072 named that a third answer needing its own ruling, and the
+/// ruling is the run's own `passed` count read as a floor — `k` distinct names
+/// cannot all have passed in a run that reported fewer than `k` passing tests, so
+/// the empty re-run a deleted test leaves behind is refused rather than filed as
+/// the evidence §9 wants. It is a floor and not a proof: a run with a test
+/// swallowed by a *larger* population still reads as green here. The rest of that
+/// door is outside this predicate — the re-run has to be the same command red ran,
+/// since a wider or narrower filter changes what "was passing before" means, and
+/// §9 step 6's full verification runs the whole suite after the phase that could
+/// have shrunk it.
+///
+/// # Errors
+///
+/// [`Error::Gate`] naming [`GateKind::Targeted`] — the gate [`tdd`]'s green phase
+/// declares — quotes the rule and then the names in both buckets (a name
+/// two binaries both reported is named once, as in [`verify_red`], because one
+/// broken test is one thing to report), or the passing count against the names it
+/// fell short of. Like [`verify_red`] this is a gate error and not a
+/// [`Error::Policy`]: `classify` gives a gate error no class of its own (ADR-0059),
+/// so the attempt lands as an
+/// [`FailureClass::AgentFailure`](crate::FailureClass::AgentFailure) and earns the
+/// bounded fresh session that can repair a regression, which a policy failure
+/// would not.
+///
+/// Nothing calls it yet, as with [`check_scope`] and [`verify_red`]: the runner
+/// that walks a protocol's phases wires all three, and files what this refuses
+/// beside the gate log ADR-0065 already gives the attempt — which is where
+/// §9's GREEN evidence (command, output, tree hash) comes from, and why that phase
+/// declares [`PhaseSpec::records_evidence`].
+pub fn verify_green(expected: &[String], after: &TestSummary) -> Result<()> {
+    let mut named = HashSet::new();
+    let mut distinct = Vec::new();
+    for name in expected {
+        if named.insert(name.as_str()) {
+            distinct.push(name.clone());
+        }
+    }
+
+    let mut seen = HashSet::new();
+    let mut still = Vec::new();
+    let mut regressed = Vec::new();
+    for name in &after.failures {
+        if !seen.insert(name.as_str()) {
+            continue;
+        }
+        if named.contains(name.as_str()) {
+            still.push(name.clone());
+        } else {
+            regressed.push(name.clone());
+        }
+    }
+    if !still.is_empty() || !regressed.is_empty() {
+        return Err(Error::Gate {
+            kind: GateKind::Targeted.to_string(),
+            detail: format!(
+                "{GREEN_RULE}; the run reported (expected and still failing: {}; passing before \
+                 and failing now: {})",
+                listed(&still),
+                listed(&regressed)
+            ),
+        });
+    }
+
+    let wanted = u32::try_from(distinct.len()).unwrap_or(u32::MAX);
+    if wanted > after.passed {
+        return Err(Error::Gate {
+            kind: GateKind::Targeted.to_string(),
+            detail: format!(
+                "{GREEN_RULE}; the run reported {} passing tests against the {} named to be \
+                 confirmed ({}), so at least one of them did not pass",
+                after.passed,
+                wanted,
+                listed(&distinct)
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// The tests one summary named as failing, written for the refusal that quotes
@@ -1605,6 +1747,166 @@ mod tests {
             vec![twice.to_owned()],
             "two test binaries can each hold a test of the same name, and the green phase re-runs \
              a test by name, so the evidence names it once"
+        );
+    }
+
+    /// What one targeted run reported, spelled by how many tests it says passed
+    /// as well as by the names it lists as failing. Green reads both halves of
+    /// [`TestSummary`], so its fixture has to be able to say "ran nothing".
+    fn report_running(passed: u32, failures: &[&str]) -> TestSummary {
+        TestSummary {
+            passed,
+            failed: u32::try_from(failures.len()).expect("a fixture cannot list a negative count"),
+            ignored: 0,
+            failures: failures.iter().map(|name| (*name).to_owned()).collect(),
+        }
+    }
+
+    /// `expected`, as the owned list the signature asks for.
+    fn named(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    /// Assert `verify_green(named, after)` refuses, and answer with the sentence
+    /// it refused by.
+    fn refused_green(expected: &[&str], after: &TestSummary) -> String {
+        let error = verify_green(&named(expected), after)
+            .expect_err("a green phase whose run cannot confirm it is refused, not accepted");
+        let Error::Gate { kind, detail } = error else {
+            panic!(
+                "a green phase refused by its own targeted check is refused as a gate failure, got {error}"
+            );
+        };
+        assert_eq!(
+            kind,
+            GateKind::Targeted.to_string(),
+            "the gate the green phase declares is the one that refuses it, not `{kind}`"
+        );
+        detail
+    }
+
+    #[test]
+    fn the_named_test_passing_and_nothing_else_failing_is_a_green_phase() {
+        let new = "protocol::tests::verify_green_refuses_a_regression_by_name";
+        verify_green(&named(&[new]), &report_running(11, &[])).expect(
+            "the run listed no failing test and reported enough passing tests to cover the one \
+             it was asked about: that is §9 step 4 said out loud",
+        );
+    }
+
+    #[test]
+    fn a_phase_named_no_test_and_the_run_named_no_failure_is_accepted() {
+        // Emptiness is red's refusal, not green's: `verify_red` cannot hand back
+        // an empty list, so a caller that arrives with no names has nothing to
+        // confirm and a run that failed nothing to say so with.
+        verify_green(&named(&[]), &report_running(0, &[]))
+            .expect("no name to confirm and no failure to answer for is a phase that passed");
+    }
+
+    #[test]
+    fn a_test_the_phase_was_for_that_still_fails_refuses_the_phase_and_names_it() {
+        let new = "protocol::tests::verify_green_refuses_a_regression_by_name";
+        assert_eq!(
+            refused_green(&[new], &report_running(11, &[new])),
+            format!(
+                "{GREEN_RULE}; the run reported (expected and still failing: `{new}`; passing \
+                 before and failing now: nothing)"
+            ),
+            "the test the phase existed for is still failing, and the refusal has to name it \
+             instead of reporting a phase that merely failed to confirm"
+        );
+    }
+
+    #[test]
+    fn a_regression_outside_the_named_tests_refuses_the_phase_and_names_the_test() {
+        let new = "protocol::tests::verify_green_refuses_a_regression_by_name";
+        let broke = "journal::tests::append_refuses_a_sequence_gap";
+        assert_eq!(
+            refused_green(&[new], &report_running(11, &[broke])),
+            format!(
+                "{GREEN_RULE}; the run reported (expected and still failing: nothing; passing \
+                 before and failing now: `{broke}`)"
+            ),
+            "green holds the whole tree open, so a test that was passing when red ended and fails \
+             now is this phase's own doing, and it is refused by name"
+        );
+    }
+
+    #[test]
+    fn a_refusal_names_every_test_that_stayed_red_and_every_one_the_phase_broke() {
+        let kept = "protocol::tests::verify_green_refuses_a_regression_by_name";
+        let also = "protocol::tests::verify_green_accepts_a_run_that_confirms_it";
+        let broke = "git::tests::fetch_brings_back_the_tip_it_was_asked_for";
+        let detail = refused_green(&[kept, also], &report_running(9, &[broke, kept]));
+        assert!(
+            detail.contains(&format!("expected and still failing: `{kept}`")),
+            "the name the phase was for is refused by name, and the one that passed is not \
+             named at all: {detail}"
+        );
+        assert!(
+            !detail.contains(also),
+            "{also} passed, so the refusal has no business naming it: {detail}"
+        );
+        assert!(
+            detail.contains(&format!("passing before and failing now: `{broke}`")),
+            "the name the phase broke is refused by name: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_name_two_binaries_both_reported_is_named_once_in_the_refusal() {
+        let twice = "task::tests::parse_plan_refuses_an_unknown_protocol";
+        assert_eq!(
+            refused_green(&[], &report_running(5, &[twice, twice])),
+            format!(
+                "{GREEN_RULE}; the run reported (expected and still failing: nothing; passing \
+                 before and failing now: `{twice}`)"
+            ),
+            "one test broke, and a refusal that names it twice reads as two"
+        );
+    }
+
+    #[test]
+    fn a_run_that_reported_too_few_passing_tests_to_have_passed_them_is_refused() {
+        let first = "protocol::tests::verify_green_refuses_a_regression_by_name";
+        let second = "protocol::tests::verify_green_accepts_a_run_that_confirms_it";
+        assert_eq!(
+            refused_green(&[first, second], &report_running(1, &[])),
+            format!(
+                "{GREEN_RULE}; the run reported 1 passing tests against the 2 named to be \
+                 confirmed (`{first}`, `{second}`), so at least one of them did not pass"
+            ),
+            "a name is absent from the failure list either because it passed or because it never \
+             ran, and only the count can tell those two apart here"
+        );
+    }
+
+    #[test]
+    fn a_re_run_that_ran_nothing_at_all_is_refused_rather_than_read_as_a_pass() {
+        // The dodge the count floor exists for: rename the test, delete it, or
+        // give it an `#[ignore]`, and the same filter now matches nothing. An
+        // empty run reads as green to a check that only looks for failures.
+        let new = "protocol::tests::verify_green_refuses_a_regression_by_name";
+        assert!(
+            refused_green(&[new], &report_running(0, &[]))
+                .contains("so at least one of them did not pass"),
+            "a run that ran nothing passed nothing, so {new} did not pass"
+        );
+    }
+
+    #[test]
+    fn a_name_expected_twice_counts_once_against_the_runs_passing_count() {
+        // The floor is over names, not list entries: one test is one thing to
+        // prove (as in `verify_red`), so a name written twice is covered by one
+        // passing test and refused by the run that had none.
+        let twice = "protocol::tests::verify_green_refuses_a_regression_by_name";
+        verify_green(&named(&[twice, twice]), &report_running(1, &[]))
+            .expect("the same name written twice is one test to pass, and the run passed one test");
+        assert!(
+            refused_green(&[twice, twice], &report_running(0, &[]))
+                .contains("the 1 named to be confirmed"),
+            "the refusal counts the name, not the two entries it was written in: \
+             the run reported nothing passing"
         );
     }
 }
