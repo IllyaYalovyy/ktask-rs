@@ -93,8 +93,7 @@ pub(crate) fn run(project: Option<ktask_core::Project>, task: Option<String>) ->
                 tasks
                     .iter()
                     .find(|t| t.id == task_id)
-                    .map(|t| t.title())
-                    .unwrap_or("Unknown")
+                    .map_or("Unknown", ktask_core::Task::title)
             ));
 
             RunOutcome::Drained

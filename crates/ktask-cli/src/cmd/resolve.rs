@@ -114,8 +114,7 @@ pub(crate) fn run(
                 tasks
                     .iter()
                     .find(|t| t.id == task_id)
-                    .map(|t| t.title())
-                    .unwrap_or("Unknown")
+                    .map_or("Unknown", ktask_core::Task::title)
             ));
 
             RunOutcome::Drained
@@ -177,7 +176,7 @@ fn find_next_adr_number(project: &ktask_core::Project) -> std::io::Result<PathBu
     }
 
     let next_num = max_num + 1;
-    Ok(adr_dir.join(format!("{:04}-decision.md", next_num)))
+    Ok(adr_dir.join(format!("{next_num:04}-decision.md")))
 }
 
 fn write_adr(path: &PathBuf, decision: &str) -> std::io::Result<()> {
@@ -191,18 +190,17 @@ fn write_adr(path: &PathBuf, decision: &str) -> std::io::Result<()> {
     let adr_num = filename.split('-').next().unwrap_or("0000");
 
     let content = format!(
-        "# {}. Decision\n\n\
+        "# {adr_num}. Decision\n\n\
          - **Status:** accepted\n\
-         - **Date:** {}\n\n\
+         - **Date:** {date}\n\n\
          ## Context\n\n\
          (context to be filled)\n\n\
          ## Decision\n\n\
-         {}\n\n\
+         {decision}\n\n\
          ## Alternatives considered\n\n\
          (alternatives to be filled)\n\n\
          ## Consequences\n\n\
-         (consequences to be filled)\n",
-        adr_num, date, decision
+         (consequences to be filled)\n"
     );
 
     std::fs::write(path, content)
