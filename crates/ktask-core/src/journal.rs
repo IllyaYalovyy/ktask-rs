@@ -749,6 +749,7 @@ impl Journal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ids::AttemptId;
     use tempfile::TempDir;
 
     #[test]
@@ -2265,6 +2266,45 @@ mod tests {
         journal
             .append(
                 Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt: AttemptId::new(1),
+                    protocol: "direct".to_string(),
+                    pid: 1234,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PhaseEntered {
+                    attempt: AttemptId::new(1),
+                    phase: crate::state::Phase::Implement,
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
                 &EventKind::AgentOutput {
                     attempt: crate::ids::AttemptId::new(1),
                     stream: crate::Stream::Stdout,
@@ -2279,8 +2319,14 @@ mod tests {
         let journal = Journal::open(&journal_path).unwrap();
         let events = journal.events().unwrap();
 
-        assert_eq!(events.len(), 1);
-        if let EventKind::AgentOutput { text, .. } = &events[0].kind {
+        // Find the AgentOutput event (should be the last one)
+        let agent_output = events
+            .iter()
+            .rev()
+            .find(|e| matches!(e.kind, EventKind::AgentOutput { .. }))
+            .expect("Expected AgentOutput event");
+
+        if let EventKind::AgentOutput { text, .. } = &agent_output.kind {
             assert!(
                 !text.contains(secret_key),
                 "Secret should be redacted in journal"
@@ -2310,6 +2356,45 @@ mod tests {
         journal
             .append(
                 Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt: AttemptId::new(1),
+                    protocol: "direct".to_string(),
+                    pid: 1234,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PhaseEntered {
+                    attempt: AttemptId::new(1),
+                    phase: crate::state::Phase::Implement,
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
                 &EventKind::AgentOutput {
                     attempt: crate::ids::AttemptId::new(1),
                     stream: crate::Stream::Stdout,
@@ -2324,8 +2409,14 @@ mod tests {
         let journal = Journal::open(&journal_path).unwrap();
         let events = journal.events_for(task_id).unwrap();
 
-        assert_eq!(events.len(), 1);
-        if let EventKind::AgentOutput { text, .. } = &events[0].kind {
+        // Find the AgentOutput event (should be the last one)
+        let agent_output = events
+            .iter()
+            .rev()
+            .find(|e| matches!(e.kind, EventKind::AgentOutput { .. }))
+            .expect("Expected AgentOutput event");
+
+        if let EventKind::AgentOutput { text, .. } = &agent_output.kind {
             assert!(
                 !text.contains("Bearer eyJ"),
                 "Bearer token should be redacted"
@@ -2347,6 +2438,45 @@ mod tests {
         let mut journal = Journal::open(&journal_path).unwrap();
         let task_id = TaskId::new(3);
 
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt: AttemptId::new(1),
+                    protocol: "direct".to_string(),
+                    pid: 1234,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PhaseEntered {
+                    attempt: AttemptId::new(1),
+                    phase: crate::state::Phase::Implement,
+                },
+            )
+            .unwrap();
         journal
             .append(
                 Some(task_id),
@@ -2386,6 +2516,45 @@ mod tests {
         journal
             .append(
                 Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt: AttemptId::new(1),
+                    protocol: "direct".to_string(),
+                    pid: 1234,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PhaseEntered {
+                    attempt: AttemptId::new(1),
+                    phase: crate::state::Phase::Implement,
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
                 &EventKind::AgentOutput {
                     attempt: crate::ids::AttemptId::new(1),
                     stream: crate::Stream::Stdout,
@@ -2418,6 +2587,45 @@ mod tests {
         let mut journal = Journal::open(&journal_path).unwrap();
         let task_id = TaskId::new(5);
 
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt: AttemptId::new(1),
+                    protocol: "direct".to_string(),
+                    pid: 1234,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PhaseEntered {
+                    attempt: AttemptId::new(1),
+                    phase: crate::state::Phase::Implement,
+                },
+            )
+            .unwrap();
         journal
             .append(
                 Some(task_id),
@@ -2456,9 +2664,49 @@ mod tests {
         let text = format!("API key is {secret}");
 
         let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(1);
         journal
             .append(
-                Some(TaskId::new(1)),
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt: AttemptId::new(1),
+                    protocol: "direct".to_string(),
+                    pid: 1234,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PhaseEntered {
+                    attempt: AttemptId::new(1),
+                    phase: crate::state::Phase::Implement,
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                Some(task_id),
                 &EventKind::AgentOutput {
                     attempt: crate::ids::AttemptId::new(1),
                     stream: crate::Stream::Stdout,
