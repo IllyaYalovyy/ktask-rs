@@ -166,6 +166,32 @@
 //! git command in that directory into a step inside an unfinished replay. ADR-0048
 //! records the three choices that hold this together.
 
+//! # Reading what changed
+//!
+//! Three doors read a task's diff, and they are the only places a run asks what a
+//! worktree holds that its base does not. VISION.md §9 needs one answer to
+//! "which paths did this phase touch" — a write scope nobody checks is a sentence
+//! in a prompt — and §7's failure bundle needs a diff it can afford to carry.
+//! ADR-0069 records the four choices they share.
+//!
+//! [`changed_paths`] is the enforcement answer, and it asks git two questions
+//! because one is not the truth: a rename leaves a path behind that
+//! `git diff --name-only` never mentions, and a file an agent wrote and never
+//! staged is in no commit at all. Both listings are asked for with `-z`, because
+//! a name git decides to quote comes back as text that names no file once it is a
+//! [`PathBuf`]. [`diff_summary`] is the evidence answer: git's own `--stat`, which
+//! counts lines per file and quotes none of them. [`file_diff`] is the answer a
+//! human reads for one file, and it is the only one of the three with bytes to
+//! lose — it runs git's own diff engine, because a machine configured with
+//! `diff.external` or a `textconv` filter would otherwise have that program's
+//! output journalled as the task's evidence, and a binary file's contents turned
+//! up in a bundle is what §11 forbids.
+//!
+//! All three compare `base` against the tree as it stands, not against `HEAD`:
+//! §10's step 3 commits the work only after the work is done, so anything else
+//! would report an unfinished task as one that changed nothing.
+
+use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -577,6 +603,16 @@ fn every_path(categories: &[(&str, &[&str])]) -> Vec<PathBuf> {
     }
     named.into_iter().map(PathBuf::from).collect()
 }
+
+/// The flag that makes git's path output usable as paths rather than as text.
+///
+/// Asked for a listing for a terminal, git wraps a name it finds unusual in
+/// quotes and escapes what is inside it — a `"` or a backslash always, and with
+/// the default `core.quotePath` any byte above 127 as an octal escape. Right for
+/// a terminal, wrong for a [`PathBuf`]: the quoted spelling names no file. `-z`
+/// switches the quoting off and separates entries with a byte no path can hold,
+/// which is what makes splitting the answer exact rather than a guess.
+const NUL_SEPARATED: &str = "-z";
 
 /// The pathspec [`commit_all`] stages: git's own name for the top level of the
 /// tree it was run in.
@@ -1199,6 +1235,180 @@ fn parse_worktrees(printed: &str) -> Vec<Worktree> {
     listed
 }
 
+/// Every path the worktree holds differently from `base`, as paths.
+///
+/// `base` is the commit the work started from — the SHA the task worktree was
+/// created at, VISION.md §10's step 2 — and what it is compared against is the
+/// tree as it stands now: a committed change, a staged one and an edit nobody
+/// has staged are all in the answer, and so is a deletion no commit has
+/// recorded yet. That is deliberate. The caller this exists for decides whether
+/// a phase stayed inside its write scope (§9 — "production paths are read-only"
+/// is a rule about files), and a set built from what an agent chose to commit is
+/// a set the agent chose.
+///
+/// Two git commands answer it, because neither alone is the truth:
+///
+/// ```text
+/// git diff --name-only --no-renames -z <base>    # what a commit or the index knows
+/// git ls-files --others --exclude-standard -z    # what nothing has ever staged
+/// ```
+///
+/// - **a rename is two paths.** `--no-renames` is not a mistyped
+///   `--find-renames`: with rename detection on, git prints the *destination*
+///   and stays silent about the path that was deleted to make it, so a caller
+///   guarding `docs/QUALITY.md` would watch a task move it aside and see only
+///   the file that arrived. With detection off a rename is what it did — one
+///   path deleted, another created.
+/// - **a path nothing has ever staged counts.** It is what §10's step 3 has to
+///   commit or refuse, and ADR-0044 already calls an untracked path
+///   uncommitted work; a brand-new file is also the likeliest way for a phase to
+///   leave its scope. An *ignored* path does not count: `--exclude-standard`
+///   applies the repository's own rules, which is what keeps a project that
+///   builds into its own tree from reporting its build output as the task's work.
+/// - **`-z`, because the answer is a path and not a sentence.** Without it git
+///   wraps a name it finds unusual in quotes and escapes the bytes in it, and a
+///   quoted name made into a [`PathBuf`] names no file on disk — the caller could
+///   not open it, compare it or refuse it. [`require_clean`] keeps git's quoting
+///   on purpose, because its paths are half of a message a human reads; these
+///   are not.
+///
+/// The two listings come back as one set in path order, each path once, so two
+/// runs over one tree hand a caller the same list rather than one list per run.
+/// Paths are relative to `worktree`'s top level, which is the frame git itself
+/// answers in and the frame [`file_diff`] reads from.
+///
+/// What it cannot see is what git will not name: an ignored path, and — because
+/// it reads the one directory it was handed — a change made in a different
+/// checkout of the same repository.
+///
+/// # Errors
+///
+/// [`Error::Git`] when either command refuses: `worktree` holds no repository, or
+/// `base` is a revision it cannot resolve. An empty list then means git answered
+/// "nothing differs", never "I could not tell" — a tree this could not read is
+/// an error, not a clean answer.
+pub fn changed_paths(worktree: &Path, base: &str) -> Result<Vec<PathBuf>> {
+    let tracked = git(
+        worktree,
+        &["diff", "--name-only", "--no-renames", NUL_SEPARATED, base],
+    )?;
+    let never_staged = git(
+        worktree,
+        &["ls-files", "--others", "--exclude-standard", NUL_SEPARATED],
+    )?;
+    Ok(merged_paths(&tracked, &never_staged))
+}
+
+/// The two NUL-separated listings, as one ordered set of paths.
+///
+/// A set rather than the two lists end to end, because the order git answers in
+/// is the order of each listing on its own and the caller compares these lists:
+/// the merge is what makes "what changed" one answer instead of two. The empty
+/// field a trailing separator leaves behind is dropped, because an empty path is
+/// a path that names nothing.
+fn merged_paths(tracked: &str, never_staged: &str) -> Vec<PathBuf> {
+    tracked
+        .split('\0')
+        .chain(never_staged.split('\0'))
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .collect::<BTreeSet<PathBuf>>()
+        .into_iter()
+        .collect()
+}
+
+/// What changed between `base` and the worktree, as git's own `--stat`.
+///
+/// One line per changed path with its insertion and deletion counts, and git's
+/// total underneath:
+///
+/// ```text
+/// crates/ktask-core/src/git.rs | 42 +++++++++++++++++++
+/// README.md                    |  2 +-
+/// 2 files changed, 43 insertions(+), 1 deletion(-)
+/// ```
+///
+/// The summary and not the diff, because VISION.md §7's failure bundle carries a
+/// "diff summary" beside the gate output and inside a byte budget: a whole diff
+/// would crowd out the gate error it was assembled to explain. What git printed
+/// comes back unedited — the column widths, its abbreviation of a path too long
+/// for them, and its `Bin` line for a file whose bytes are not text are git's
+/// decisions, and a summary that has been reformatted once is a summary that can
+/// be reformatted again by whoever comes next.
+///
+/// Two consequences make this a different door from [`changed_paths`] rather than
+/// a second spelling of it: a path nothing has ever staged sits in no blob, so
+/// it has no lines for a diffstat to count, and a rename is one line naming where
+/// it went rather than the two paths it touched. Whoever decides what a phase was
+/// allowed to touch wants the paths.
+///
+/// # Errors
+///
+/// [`Error::Git`] when git refuses: no repository at `worktree`, or a `base` it
+/// cannot resolve. A tree identical to its base is not an error — it summarizes
+/// as an empty string, which is how a caller tells "this task changed nothing"
+/// from "the diff could not be read".
+pub fn diff_summary(worktree: &Path, base: &str) -> Result<String> {
+    git(worktree, &["diff", "--stat", base])
+}
+
+/// The diff for one path between `base` and the worktree, as git prints it.
+///
+/// `path` is read from `worktree`'s top level — the frame git answers in, the
+/// frame [`changed_paths`] reports in, and therefore the frame a path from that
+/// list can be handed here unchanged. The same file spelled from the filesystem
+/// root lands on the same answer. The path is one `argv` entry after a `--`, so
+/// nothing in a filename is a git option or a shell word: this is the same reason
+/// [`git`] takes words rather than a command string, and it matters more here than
+/// almost anywhere else in this module, because the names being diffed are the
+/// ones an agent chose.
+///
+/// The answer is git's own text — header, hunk ranges, the lines that went and
+/// the lines that came. VISION.md §13's git screen renders it for the selected
+/// file and a human reads it to decide whether the work is right, so nothing here
+/// trims, re-wraps or re-orders what git printed.
+///
+/// Two flags pin whose answer this is, and they are the same worry twice: a
+/// supervisor's evidence has to be git's verdict about the task's bytes, not
+/// something a program on whichever machine ran last produced.
+///
+/// - **`--no-ext-diff`.** `diff.external` replaces git's diff with the output of
+///   whatever a repository or a global configuration points at. Without this, a
+///   driver named in someone's dotfiles would be journalled, redacted and shown
+///   as this task's evidence.
+/// - **`--no-textconv`.** A `textconv` filter turns a binary file into text so
+///   that it *can* be diffed, which is precisely what this door must not do: the
+///   contents of a binary file have no business in a journal, a bundle or a
+///   terminal pane (VISION.md §11). A binary file is reported by git's own
+///   `Binary files … differ` line and none of its bytes.
+///
+/// Both belong on this door only: `--stat` and `--name-only` are computed by git's
+/// own diff engine and never reach an external driver or a filter, so the other
+/// two calls carry no flags no test could contradict.
+///
+/// # Errors
+///
+/// [`Error::Git`] when git refuses: no repository at `worktree`, a `base` it
+/// cannot resolve, or a `path` lying outside the worktree — which git refuses in
+/// its own words and this passes through rather than second-guessing, because
+/// that sentence names the repository the path is outside and is the proof the
+/// path was handed to git rather than opened here. A path differing from `base`
+/// in nothing answers with an empty string, which is also the answer for a path
+/// neither in `base` nor in the tree: no difference is not a failure to find one.
+pub fn file_diff(worktree: &Path, base: &str, path: &Path) -> Result<String> {
+    git(
+        worktree,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            base,
+            "--",
+            &path.to_string_lossy(),
+        ],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1208,9 +1418,9 @@ mod tests {
     use tempfile::{TempDir, tempdir};
 
     use super::{
-        Kind, RebaseOutcome, Worktree, commit_all, create_worktree, current_branch, dirt_of, fetch,
-        git, git_env, head_sha, is_clean, list_worktrees, publish, rebase_onto_remote, remote_url,
-        remove_worktree, require_clean, status_porcelain,
+        Kind, RebaseOutcome, Worktree, changed_paths, commit_all, create_worktree, current_branch,
+        diff_summary, dirt_of, fetch, file_diff, git, git_env, head_sha, is_clean, list_worktrees,
+        publish, rebase_onto_remote, remote_url, remove_worktree, require_clean, status_porcelain,
     };
     use crate::{Error, Result};
     // The repository-with-an-origin fixture is the crate-wide one, so that a
@@ -4028,5 +4238,513 @@ mod tests {
             "a refusal that never started a rebase leaves none behind to be aborted"
         );
         require_clean(&work).expect("the tree was not touched by a call that could not begin");
+    }
+    /// A file whose bytes are not text: a signature, a NUL, an ASCII marker that
+    /// must never reach a diff's body, and a byte no decoder maps to a character.
+    ///
+    /// It goes into the index as it is staged, because a path `git diff` has
+    /// never heard of is not in a diff: the alternative is a fixture that commits
+    /// through a helper which writes text and cannot write these bytes.
+    fn stage_a_binary(work: &Path, name: &str) {
+        fs::write(
+            work.join(name),
+            b"\x89PNG\r\n\x1a\n\x00IN-THE-BLOB-MARKER\x00\xfe",
+        )
+        .expect("a file holding bytes that are not text");
+        git(work, &["add", "--", name]).expect("a path git can diff needs an index entry");
+    }
+
+    /// Make `script` executable and name it as the repository's own external diff
+    /// driver, which is what a developer's machine does with
+    /// `git config diff.external` — and what `git` then runs instead of diffing.
+    fn make_the_repository_diff_elsewhere(work: &Path, script: &Path) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::write(script, "#!/bin/sh\nprintf 'EXTERNAL-DIFF-RAN\\n'\n")
+            .expect("a driver a machine could have configured");
+        fs::set_permissions(script, fs::Permissions::from_mode(0o755))
+            .expect("git runs the driver, so it has to be executable");
+        git(
+            work,
+            &[
+                "config",
+                "--local",
+                "diff.external",
+                &script.display().to_string(),
+            ],
+        )
+        .expect("the configuration a developer's machine is entitled to hold");
+    }
+
+    #[test]
+    fn an_edited_an_added_and_a_deleted_path_all_appear_as_changed_paths() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fixture
+            .commit("keep.txt", "a tracked file the task will edit")
+            .expect("a file to edit");
+        fixture
+            .commit("doomed.txt", "a tracked file the task will delete")
+            .expect("a file to delete");
+        let base = head_sha(&work).expect("the commit the task's work starts from");
+        fixture
+            .commit("added-by-the-task.txt", "a path the base never held")
+            .expect("an addition, committed");
+        fs::write(work.join("keep.txt"), "the work, not yet committed\n")
+            .expect("an edit to a tracked path");
+        fs::remove_file(work.join("doomed.txt")).expect("a deletion no commit recorded");
+
+        assert_eq!(
+            changed_paths(&work, &base)
+                .expect("a tree can always be asked what it holds differently"),
+            vec![
+                PathBuf::from("added-by-the-task.txt"),
+                PathBuf::from("doomed.txt"),
+                PathBuf::from("keep.txt"),
+            ],
+            "added, modified and deleted, each named once, in path order — and the deletion is \
+             named although no commit recorded it: whoever calls this decides whether a phase \
+             stayed inside its write scope (VISION.md §9), and a set holding only what an agent \
+             chose to commit is a set the agent chose"
+        );
+    }
+
+    #[test]
+    fn a_staged_rename_appears_as_the_path_it_left_and_the_path_it_reached() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        git(&work, &["mv", "seed.txt", "named-again.txt"]).expect("a rename, staged in the index");
+
+        assert_eq!(
+            changed_paths(&work, fixture.seed_sha()).expect("the rename is a changed path"),
+            vec![PathBuf::from("named-again.txt"), PathBuf::from("seed.txt")],
+            "both names, not the destination alone: `git diff --name-only` prints one line per \
+             file and picks the new name, so a caller guarding a path would watch a task move \
+             `docs/QUALITY.md` aside and see only the file that arrived. The path that left is \
+             the one that was deleted"
+        );
+    }
+
+    #[test]
+    fn a_move_nobody_told_git_about_appears_as_a_deletion_and_a_new_path() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::rename(work.join("seed.txt"), work.join("moved-by-hand.txt"))
+            .expect("a rename done on disk, with no `git mv` and nothing staged");
+
+        assert_eq!(
+            changed_paths(&work, fixture.seed_sha())
+                .expect("a tree git never heard about is still a tree"),
+            vec![
+                PathBuf::from("moved-by-hand.txt"),
+                PathBuf::from("seed.txt")
+            ],
+            "an agent that renames with the filesystem rather than with git is the ordinary \
+             case, not the exotic one: the old path is the deletion the diff reports and the new \
+             one is the path nothing has committed, so the two halves come from the two \
+             questions this function asks"
+        );
+    }
+
+    #[test]
+    fn a_path_nothing_has_committed_is_a_changed_path_and_an_ignored_one_is_not() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fixture
+            .commit(".gitignore", "build/")
+            .expect("an ignore rule the repository itself holds");
+        fixture
+            .commit(
+                "z-last.txt",
+                "a committed change that sorts after the untracked path",
+            )
+            .expect("a tracked change");
+        fs::write(work.join("a-brand-new.txt"), "written, never added\n")
+            .expect("a file the attempt created");
+        fs::create_dir(work.join("build")).expect("a directory the repository ignores");
+        fs::write(work.join("build").join("artifact.bin"), "output\n").expect("ignored output");
+
+        assert_eq!(
+            changed_paths(&work, fixture.seed_sha()).expect("the tree answers for itself"),
+            vec![
+                PathBuf::from(".gitignore"),
+                PathBuf::from("a-brand-new.txt"),
+                PathBuf::from("z-last.txt"),
+            ],
+            "three facts in one answer. The path nothing ever staged counts, because this \
+             module already calls `??` uncommitted work (ADR-0044) and a new file is the likeliest \
+             way out of a write scope. The ignored one does not, because a repository that builds \
+             into its own tree would otherwise report its build output as the task's work. And \
+             the order is the paths' own, from both questions, so two runs over one tree hand \
+             their caller one list rather than one per run"
+        );
+    }
+
+    #[test]
+    fn a_name_git_would_quote_comes_back_as_the_bytes_the_file_really_has() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let quoted = "a \"quoted\" name.txt";
+        let accented = "notes-\u{e9}.txt";
+        fixture
+            .commit(quoted, "a name holding a double quote")
+            .expect("a name git wraps in quotes when it prints one for a terminal");
+        fixture
+            .commit(accented, "a name with a byte above 127")
+            .expect("a name git escapes in octal by default");
+        let untracked = "untracked \"odd\" name.txt";
+        fs::write(work.join(untracked), "written, never added\n")
+            .expect("an unusual name nothing has ever staged");
+
+        assert_eq!(
+            changed_paths(&work, fixture.seed_sha())
+                .expect("an unusual name is not an unreadable tree"),
+            vec![
+                PathBuf::from(quoted),
+                PathBuf::from(accented),
+                PathBuf::from(untracked),
+            ],
+            "the name exactly as the directory holds it, quotes and octal escapes nowhere in it \
+             — for a path git has committed and for one it has not, since the two listings are \
+             asked the same way. A quoted name made into a PathBuf names no file, so the caller \
+             could not open it, compare it or refuse it; and unlike the paths in a policy \
+             message, which keep git's quoting on purpose, these are paths"
+        );
+    }
+
+    #[test]
+    fn a_tree_standing_on_the_base_it_is_compared_to_reports_nothing_changed() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+
+        assert_eq!(
+            changed_paths(fixture.work(), fixture.seed_sha())
+                .expect("a tree equal to its base is an answer, not a failure"),
+            Vec::<PathBuf>::new(),
+            "git prints nothing when nothing differs, and nothing is an empty list rather than \
+             a list holding one empty path: a caller checking a phase's write scope would read \
+             an empty PathBuf as a path and refuse a task that touched no file at all"
+        );
+    }
+
+    #[test]
+    fn a_base_that_is_not_a_commit_refuses_naming_the_call_that_asked_for_it() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+
+        let error = changed_paths(fixture.work(), "no-such-base")
+            .expect_err("a revision this repository has never held cannot be compared against");
+        let (args, stderr) = refused(&error);
+
+        assert_eq!(
+            args,
+            vec![
+                "diff".to_owned(),
+                "--name-only".to_owned(),
+                "--no-renames".to_owned(),
+                "-z".to_owned(),
+                "no-such-base".to_owned(),
+            ],
+            "the failure names the exact call, so a journal line says which question git \
+             refused to answer: {args:?}"
+        );
+        assert!(
+            stderr.contains("no-such-base"),
+            "git's own words about the revision it could not resolve come back unchanged: \
+             {stderr}"
+        );
+    }
+
+    #[test]
+    fn the_summary_is_gits_stat_lines_and_not_the_lines_that_changed() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("seed.txt"), "the work an agent did\n").expect("an edit");
+        fixture
+            .commit("added.txt", "a new file holding several lines of its own")
+            .expect("an addition");
+
+        let summary = diff_summary(&work, fixture.seed_sha())
+            .expect("a tree that differs from its base can be summarised");
+
+        assert!(
+            summary.contains("seed.txt") && summary.contains("added.txt"),
+            "every changed path is listed, which is what makes the summary usable as the diff \
+             half of a failure bundle (VISION.md §7): {summary}"
+        );
+        assert!(
+            summary.contains("2 files changed"),
+            "and git's own total closes it, so a reader can tell a short summary from a \
+             complete one: {summary}"
+        );
+        assert!(
+            !summary.contains("the work an agent did") && !summary.contains("several lines"),
+            "the summary counts lines per file and quotes none of them: it is what a bundle \
+             holds beside a gate's output, and a whole diff would crowd the evidence out: \
+             {summary}"
+        );
+    }
+
+    #[test]
+    fn a_tree_standing_on_its_base_summarizes_as_nothing_at_all() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+
+        assert_eq!(
+            diff_summary(fixture.work(), fixture.seed_sha())
+                .expect("nothing changed is a tree that can be summarised"),
+            "",
+            "no output is an empty summary rather than an error, and not a header either: a \
+             caller writing this into an attempt's evidence must be able to tell 'the task \
+             changed nothing' from 'the diff failed'"
+        );
+    }
+
+    #[test]
+    fn a_path_nothing_has_committed_is_counted_by_the_paths_and_not_by_the_summary() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("never-added.txt"), "written by the attempt\n").expect("a new file");
+
+        let summary = diff_summary(&work, fixture.seed_sha())
+            .expect("a tree with one untracked file still has a diff to summarise");
+
+        assert_eq!(
+            summary, "",
+            "git's `--stat` counts lines in blobs, and this path is in no blob yet"
+        );
+        assert_eq!(
+            changed_paths(&work, fixture.seed_sha()).expect("the same tree, as paths"),
+            vec![PathBuf::from("never-added.txt")],
+            "which is why the paths and the summary are two doors: the file an agent wrote and \
+             never staged has to reach a write-scope check even though it has nothing for a \
+             diffstat to count"
+        );
+    }
+
+    #[test]
+    fn a_binary_file_is_summarised_in_bytes_rather_than_in_lines() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        stage_a_binary(&work, "picture.png");
+
+        let summary = diff_summary(&work, fixture.seed_sha())
+            .expect("a binary file is a change like any other");
+
+        assert!(
+            summary.contains("picture.png") && summary.contains("Bin"),
+            "a file whose bytes are not text is reported as bytes: `Bin`, where a line count \
+             would be a guess, and its contents nowhere: {summary}"
+        );
+        assert!(
+            !summary.contains("IN-THE-BLOB-MARKER"),
+            "the summary of a binary file holds none of it: {summary}"
+        );
+    }
+
+    #[test]
+    fn the_diff_for_one_path_holds_its_lines_and_no_other_paths_lines() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("seed.txt"), "the work an agent did\n").expect("an edit");
+        fixture
+            .commit("other.txt", "a change in a file nobody asked about")
+            .expect("a second changed path");
+
+        let diff = file_diff(&work, fixture.seed_sha(), Path::new("seed.txt"))
+            .expect("one path of a changed tree can be asked about on its own");
+
+        assert!(
+            diff.contains("-the first commit") && diff.contains("+the work an agent did"),
+            "the removed line and the added line are both there, because a reader deciding \
+             whether the work is right needs both sides and not a count: {diff}"
+        );
+        assert!(
+            !diff.contains("other.txt"),
+            "and the file that was not asked for is nowhere in it, header included — this is \
+             the answer the git screen renders for the row someone selected (T150): {diff}"
+        );
+    }
+
+    #[test]
+    fn a_path_is_read_from_the_worktrees_top_level_however_deep_and_however_spelled() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::create_dir_all(work.join("nested/deep")).expect("a directory inside the worktree");
+        fixture
+            .commit("nested/deep/leaf.txt", "a file well below the top level")
+            .expect("a nested path, committed");
+        fs::write(
+            work.join("nested/deep/leaf.txt"),
+            "edited below the top level\n",
+        )
+        .expect("an edit to it");
+
+        let relative = file_diff(&work, fixture.seed_sha(), Path::new("nested/deep/leaf.txt"))
+            .expect("a path relative to the worktree's top level names the file");
+        let absolute = file_diff(
+            &work,
+            fixture.seed_sha(),
+            &work.join("nested/deep/leaf.txt"),
+        )
+        .expect("the same file spelled from the root of the filesystem");
+
+        assert!(
+            relative.contains("+edited below the top level"),
+            "a path below the top level is diffed like one at the root, and the answer is \
+             that file's: {relative}"
+        );
+        assert_eq!(
+            relative, absolute,
+            "one file, one answer, whichever spelling the caller had: git runs inside the \
+             worktree, so a relative path is read from its top level and an absolute path \
+             inside it lands on the same file"
+        );
+    }
+
+    #[test]
+    fn a_deleted_path_diffs_as_its_own_removal() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::remove_file(work.join("seed.txt")).expect("a deletion, never committed");
+
+        let diff = file_diff(&work, fixture.seed_sha(), Path::new("seed.txt"))
+            .expect("a deleted path is a changed path, so it has a diff");
+
+        assert!(
+            diff.contains("-the first commit") && diff.contains("+++ /dev/null"),
+            "the lines that went and the marker that says nothing comes after them, so a \
+             reader can see a deletion is a deletion rather than an empty change: {diff}"
+        );
+    }
+
+    #[test]
+    fn a_path_that_never_differed_from_the_base_diffs_as_nothing() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        fs::write(work.join("seed.txt"), "the work an agent did\n").expect("an edit elsewhere");
+
+        let diff = file_diff(&work, fixture.seed_sha(), Path::new("added-by-nobody.txt"))
+            .expect("a path holding no difference is not a failed question");
+
+        assert_eq!(
+            diff, "",
+            "an unaskable path and an unchanged one both answer with nothing, which is the \
+             honest answer to 'what changed here' and git's own: the caller sees an empty pane, \
+             not an error where there was none"
+        );
+    }
+
+    #[test]
+    fn a_binary_file_is_reported_as_differing_with_none_of_its_bytes() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        stage_a_binary(&work, "picture.png");
+
+        let diff = file_diff(&work, fixture.seed_sha(), Path::new("picture.png"))
+            .expect("a binary file is a changed path, so it can be opened");
+
+        assert!(
+            diff.contains("Binary files") && diff.contains("picture.png"),
+            "git's own sentence for a file it will not print, which is the answer a human \
+             needs: this file changed, and here is why nothing is shown: {diff}"
+        );
+        assert!(
+            !diff.contains("IN-THE-BLOB-MARKER") && !diff.contains('\u{0}'),
+            "no byte of the file is in the answer — not its text, because it has none, and \
+             not its NULs either: this string goes into a journal, a bundle and a terminal \
+             pane, and a build artifact's bytes belong in none of them: {diff:?}"
+        );
+    }
+
+    #[test]
+    fn a_configured_text_filter_cannot_turn_a_binary_file_into_contents() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        let filter = fixture.path().join("convert-to-text.sh");
+        fs::write(&filter, "#!/bin/sh\ncat \"$1\"\n").expect("a filter that prints the file");
+        fs::set_permissions(&filter, fs::Permissions::from_mode(0o755))
+            .expect("git runs the filter, so it has to be executable");
+        git(
+            &work,
+            &[
+                "config",
+                "--local",
+                "diff.png.textconv",
+                &filter.display().to_string(),
+            ],
+        )
+        .expect("the text filter a developer's machine is entitled to configure");
+        git(&work, &["config", "--local", "diff.png.binary", "true"])
+            .expect("and the declaration that the file is binary");
+        fs::write(work.join(".gitattributes"), "*.png diff=png\n")
+            .expect("the attribute that sends this kind of file to that driver");
+        stage_a_binary(&work, "picture.png");
+
+        let diff = file_diff(&work, fixture.seed_sha(), Path::new("picture.png"))
+            .expect("a configured filter does not make the file undiffable");
+
+        assert!(
+            !diff.contains("IN-THE-BLOB-MARKER"),
+            "with a `textconv` filter on the path git would hand back what the filter printed \
+             instead of the file's diff, which is the file's contents arriving by way of a \
+             program this machine configured: {diff}"
+        );
+        assert!(
+            diff.contains("Binary files"),
+            "the answer is git's own line about a binary file, whatever the configuration \
+             beside it says: {diff}"
+        );
+    }
+
+    #[test]
+    fn a_configured_diff_driver_is_not_the_one_answering() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let work = fixture.work().to_path_buf();
+        make_the_repository_diff_elsewhere(&work, &fixture.path().join("their-diff.sh"));
+        fs::write(work.join("seed.txt"), "the work an agent did\n").expect("an edit");
+
+        let diff = file_diff(&work, fixture.seed_sha(), Path::new("seed.txt"))
+            .expect("an external driver does not make a file undiffable");
+
+        assert!(
+            !diff.contains("EXTERNAL-DIFF-RAN"),
+            "the driver never ran: `diff.external` replaces git's answer with whatever a \
+             machine's configuration points at, and a supervisor's evidence cannot be that \
+             program's output: {diff}"
+        );
+        assert!(
+            diff.contains("+the work an agent did"),
+            "git's own hunk came back instead: {diff}"
+        );
+    }
+
+    #[test]
+    fn a_path_outside_the_worktree_is_refused_and_nothing_outside_it_is_read() {
+        let fixture = scratch_repo().expect("a disposable repository, seed commit pushed");
+        let outside = fixture.path().join("not-in-the-repository.txt");
+        fs::write(&outside, "another project's file\n").expect("a file outside the worktree");
+
+        let error = file_diff(fixture.work(), fixture.seed_sha(), &outside)
+            .expect_err("a path outside the tree being read has no diff in it");
+        let (args, stderr) = refused(&error);
+
+        assert_eq!(
+            args,
+            vec![
+                "diff".to_owned(),
+                "--no-ext-diff".to_owned(),
+                "--no-textconv".to_owned(),
+                fixture.seed_sha().to_owned(),
+                "--".to_owned(),
+                outside.display().to_string(),
+            ],
+            "the path reached git as the argument it was handed, after the `--` that keeps a \
+             name beginning with a dash an argument: {args:?}"
+        );
+        assert!(
+            stderr.contains("outside repository"),
+            "git refused it because it lies outside this repository, which is also the proof \
+             that this function asks git rather than opening the file itself: {stderr}"
+        );
     }
 }
