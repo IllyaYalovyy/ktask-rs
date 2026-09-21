@@ -551,7 +551,7 @@ fn missing_sections(task: &Task) -> Vec<&'static str> {
 /// noun that fits the count: one missing reads `the Refs: section`, two read
 /// `the Verify: and Refs: sections`, and four are joined with commas before
 /// the last.
-fn missing_phrase(missing: &[&str]) -> String {
+pub(crate) fn missing_phrase(missing: &[&str]) -> String {
     let word = if missing.len() == 1 {
         "section"
     } else {

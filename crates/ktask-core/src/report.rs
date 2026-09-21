@@ -94,6 +94,46 @@ fn header_line(text: &str) -> Option<&str> {
     text.lines().map(str::trim).find(|line| !line.is_empty())
 }
 
+/// Everything an agent wrote below the header of its report.
+///
+/// The header is the first line with content on it, which is the line
+/// [`header_line`] reads the claim from and the line this stops after; what
+/// follows is the prose the sections of a [`NEEDS_INPUT`](ReportResult::NeedsInput)
+/// report are read out of by [`mod@crate::decision`]. A report that held only
+/// its header has an empty body, which is an answer rather than a refusal here:
+/// deciding whether an empty body is enough is what reads the body.
+pub(crate) fn body_after_header(text: &str) -> &str {
+    let mut past_header = text;
+    while let Some(line) = rest_of_first_line(past_header) {
+        if line.trim().is_empty() {
+            let consumed = line.len();
+            past_header = slice_after(past_header, consumed);
+            continue;
+        }
+        past_header = slice_after(past_header, line.len());
+        break;
+    }
+    past_header
+}
+
+/// The first line of `text`, with the newline that ends it kept, or nothing once
+/// the text is gone.
+///
+/// The newline is kept so the length handed to [`slice_after`] moves the reader
+/// past the line rather than to its last character.
+fn rest_of_first_line(text: &str) -> Option<&str> {
+    text.split_inclusive('\n').next()
+}
+
+/// `text` from `bytes` onward, which is every length this module computes.
+///
+/// A slice rather than an index expression because a report is text an agent
+/// wrote: a boundary that landed mid-character is a report to refuse, not a
+/// panic in the supervisor reading it.
+fn slice_after(text: &str, bytes: usize) -> &str {
+    text.get(bytes..).unwrap_or("")
+}
+
 /// The refusal of a report whose header cannot be read.
 ///
 /// `found` is the line that was read, quoted, or the word `nothing` when the
