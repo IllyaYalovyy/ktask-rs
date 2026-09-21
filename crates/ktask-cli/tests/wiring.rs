@@ -86,7 +86,7 @@ fn wiring_end_to_end_drains_queue() {
         .expect("failed to parse state directory");
     eprintln!("Init state dir: {}", init_state_dir);
 
-    // 2. Create a plan file with just one task for now
+    // 2. Create a plan file with both tasks
     let plan_content = "## Task One
 
 **Outcome:** First task completes successfully
@@ -96,17 +96,28 @@ fn wiring_end_to_end_drains_queue() {
 **Verify:** true
 
 **Refs:** Wiring proof task 1
+
+## Task Two
+
+**Outcome:** Second task completes successfully
+
+**Done-when:** Task has been executed through the full pipeline
+
+**Verify:** true
+
+**Refs:** Wiring proof task 2
 ";
 
     let plan_file = env.write_task("plan.md", plan_content);
 
-    // 3. Add the task via plan import
+    // 3. Add both tasks via plan import
     let add_output = env.run_command(&["add", "--file", plan_file.to_string_lossy().as_ref()]);
     eprintln!("Add output: {}", add_output.stdout);
     let _ = add_output.clone().expect_success();
     add_output.assert_stdout_contains("id=1");
+    // Note: add command only outputs the first task id even if multiple tasks are added
 
-    // The add command writes to .ktask/queue.json, so we need to commit that
+    // The add command writes to the journal, so we need to commit any repo changes
     let status = Command::new("git")
         .arg("add")
         .arg("-A")
@@ -133,67 +144,94 @@ fn wiring_end_to_end_drains_queue() {
         .expect("failed to push tasks commit");
     assert!(status.success());
 
-    // 4. Create a dummy scenario file - provide many steps for all phases and attempts
-    let scenario_content = r#"[[steps]]
+    // 4. Create a dummy scenario file.
+    // Direct protocol has: Implement, Verify, Publish phases.
+    // Each task needs about 7 steps: 1 Implement + 5 Verify gates + 1 Publish
+    let scenario_content = r#"# Task 1: Phase 1 - Implement
+[[steps]]
 on_task = 1
 outcome = "success"
 stdout = "Task 1 - Implement phase"
 
 [steps.files]
-".ktask/report.md" = """
-KTASK_RESULT: DONE
-
-Task 1 completed successfully"""
 "README.md" = "Work done for task 1"
 "src/main.rs" = "fn main() { println!(\"Task 1 work\"); }"
+".ktask/report.md" = "KTASK_RESULT: DONE\n\nTask 1 completed successfully"
+
+# Task 1: Phase 2 - Verify gates (5 gates)
+[[steps]]
+on_task = 1
+outcome = "success"
+stdout = "task 1 verify gate 1"
 
 [[steps]]
 on_task = 1
 outcome = "success"
-stdout = "Task 1 - Verify phase"
+stdout = "task 1 verify gate 2"
 
 [[steps]]
 on_task = 1
 outcome = "success"
-stdout = "Task 1 - Publish phase"
+stdout = "task 1 verify gate 3"
 
 [[steps]]
 on_task = 1
 outcome = "success"
-stdout = "Task 1 - Remediation attempt - Implement"
+stdout = "task 1 verify gate 4"
+
+[[steps]]
+on_task = 1
+outcome = "success"
+stdout = "task 1 verify gate 5"
+
+# Task 1: Phase 3 - Publish gate
+[[steps]]
+on_task = 1
+outcome = "success"
+stdout = "task 1 publish gate"
+
+# Task 2: Phase 1 - Implement
+[[steps]]
+on_task = 2
+outcome = "success"
+stdout = "Task 2 - Implement phase"
 
 [steps.files]
-".ktask/report.md" = """
-KTASK_RESULT: DONE
+"README.md" = "Work done for task 2"
+"src/main.rs" = "fn main() { println!(\"Task 2 work\"); }"
+".ktask/report.md" = "KTASK_RESULT: DONE\n\nTask 2 completed successfully"
 
-Task 1 remediation completed"""
-"README.md" = "Work done for task 1 remediation"
-"src/main.rs" = "fn main() { println!(\"Task 1 work - remediation\"); }"
+# Task 2: Phase 2 - Verify gates (5 gates)
+[[steps]]
+on_task = 2
+outcome = "success"
+stdout = "task 2 verify gate 1"
 
 [[steps]]
-on_task = 1
+on_task = 2
 outcome = "success"
-stdout = "Task 1 - Remediation - Verify"
+stdout = "task 2 verify gate 2"
 
 [[steps]]
-on_task = 1
+on_task = 2
 outcome = "success"
-stdout = "Task 1 - Remediation - Publish"
+stdout = "task 2 verify gate 3"
 
 [[steps]]
-on_task = 1
+on_task = 2
 outcome = "success"
-stdout = "Extra steps for safety"
+stdout = "task 2 verify gate 4"
 
 [[steps]]
-on_task = 1
+on_task = 2
 outcome = "success"
-stdout = "Extra steps for safety 2"
+stdout = "task 2 verify gate 5"
 
+# Task 2: Phase 3 - Publish gate
 [[steps]]
-on_task = 1
+on_task = 2
 outcome = "success"
-stdout = "Extra steps for safety 3"
+stdout = "task 2 publish gate"
 "#;
 
     let scenario_file = env.repo_dir.join(".ktask-scenario.toml");
@@ -334,18 +372,19 @@ verify_command = ["true"]
 
     let _ = run_output.clone().expect_success();
 
-    // Count TaskDone events
+    // Count TaskDone events - should have 2 (one per task)
     let task_done_count = events
         .iter()
         .filter(|e| matches!(e.kind, ktask_core::EventKind::TaskDone { .. }))
         .count();
 
     assert_eq!(
-        task_done_count, 1,
-        "Expected 1 TaskDone event in journal, found {}",
+        task_done_count, 2,
+        "Expected 2 TaskDone events (one per task) in journal, found {}",
         task_done_count
     );
 
-    // 8. Verify the run command output indicates success
+    // 8. Verify the run command output indicates success for both tasks
     run_output.assert_stdout_contains("Task One");
+    run_output.assert_stdout_contains("Task Two");
 }

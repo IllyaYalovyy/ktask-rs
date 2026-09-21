@@ -232,32 +232,29 @@ pub fn list_worktrees(root: &Path) -> Result<Vec<String>> {
 ///
 /// The SHA-1 hash of the new commit on success.
 pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {
-    // Check if there are any modifications to tracked files
+    // Check if there are any modifications or untracked files
     let status = status_porcelain(worktree)?;
-    let has_tracked_changes = status.lines().any(|line| {
-        if line.len() < 3 {
+    let has_changes = status.lines().any(|line| {
+        if line.is_empty() || line.len() < 2 {
             return false;
         }
+        // Any non-space character in the status means there's a change
         let x = line.chars().next().unwrap_or(' ');
         let y = line.chars().nth(1).unwrap_or(' ');
-        // Look for modified tracked files (not untracked)
-        // Modified tracked: ' ' + 'M'|'D'|'T'
-        // Staged: first char is 'M'|'A'|'D'|'R'|'C'|'T'
-        matches!(
-            (x, y),
-            (' ', 'M' | 'D' | 'T') | ('M' | 'A' | 'D' | 'R' | 'C' | 'T', _)
-        )
+        // Skip ignored files
+        !(x == '!' || x == '.')
     });
 
-    if !has_tracked_changes {
+    if !has_changes {
         return Err(Error::Policy {
             detail: "nothing staged to commit".to_string(),
             paths: vec![],
         });
     }
 
-    // Stage all tracked changes (modifications and deletions)
-    git(worktree, &["add", "-u"])?;
+    // Stage all changes: tracked modifications, deletions, and untracked files
+    // Use -A to add everything including new files
+    git(worktree, &["add", "-A"])?;
 
     // Commit the changes
     git(worktree, &["commit", "-m", message])?;

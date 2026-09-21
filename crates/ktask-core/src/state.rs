@@ -352,6 +352,26 @@ fn from_running(
                 attempt_mismatch_error(&format!("Running({attempt})"), event)
             }
         }
+        EventKind::GateStarted {
+            attempt: gate_attempt,
+            ..
+        } => {
+            if *gate_attempt == attempt {
+                Ok(TaskState::Running { attempt, phase })
+            } else {
+                attempt_mismatch_error(&format!("Running({attempt})"), event)
+            }
+        }
+        EventKind::GateFinished {
+            attempt: gate_attempt,
+            ..
+        } => {
+            if *gate_attempt == attempt {
+                Ok(TaskState::Running { attempt, phase })
+            } else {
+                attempt_mismatch_error(&format!("Running({attempt})"), event)
+            }
+        }
         EventKind::VerifyPassed {
             attempt: verify_attempt,
         } => {
@@ -415,8 +435,6 @@ fn from_running(
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
-        | EventKind::GateStarted { .. }
-        | EventKind::GateFinished { .. }
         | EventKind::DecisionResolved { .. } => Err(Error::InvalidTransition {
             from: format!("Running({attempt})"),
             event: event.discriminant().to_string(),
@@ -461,6 +479,26 @@ fn from_remediating(
             ..
         } => {
             if *report_attempt == attempt {
+                Ok(TaskState::Remediating { attempt, phase })
+            } else {
+                attempt_mismatch_error(&format!("Remediating({attempt})"), event)
+            }
+        }
+        EventKind::GateStarted {
+            attempt: gate_attempt,
+            ..
+        } => {
+            if *gate_attempt == attempt {
+                Ok(TaskState::Remediating { attempt, phase })
+            } else {
+                attempt_mismatch_error(&format!("Remediating({attempt})"), event)
+            }
+        }
+        EventKind::GateFinished {
+            attempt: gate_attempt,
+            ..
+        } => {
+            if *gate_attempt == attempt {
                 Ok(TaskState::Remediating { attempt, phase })
             } else {
                 attempt_mismatch_error(&format!("Remediating({attempt})"), event)
@@ -535,8 +573,6 @@ fn from_remediating(
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
-        | EventKind::GateStarted { .. }
-        | EventKind::GateFinished { .. }
         | EventKind::DecisionResolved { .. } => Err(Error::InvalidTransition {
             from: format!("Remediating({attempt})"),
             event: event.discriminant().to_string(),
@@ -1987,6 +2023,24 @@ mod tests {
                     }),
                 ),
                 (
+                    "GateStarted",
+                    Box::new(|attempt| EventKind::GateStarted {
+                        attempt,
+                        gate_kind: crate::gate::GateKind::Verify,
+                        tree_hash: "abc123".to_string(),
+                    }),
+                ),
+                (
+                    "GateFinished",
+                    Box::new(|attempt| EventKind::GateFinished {
+                        attempt,
+                        gate_kind: crate::gate::GateKind::Verify,
+                        passed: true,
+                        stdout: "output".to_string(),
+                        tree_hash: "abc123".to_string(),
+                    }),
+                ),
+                (
                     "TaskDone",
                     Box::new(|_| EventKind::TaskDone {
                         commit: "abc123".to_string(),
@@ -2053,6 +2107,8 @@ mod tests {
                 ("Running", "Paused"),
                 ("Running", "Interrupted"),
                 ("Running", "TaskCancelled"),
+                ("Running", "GateStarted"),
+                ("Running", "GateFinished"),
                 ("Remediating", "PhaseEntered"),
                 ("Remediating", "AgentOutput"),
                 ("Remediating", "AttemptStarted"),
@@ -2062,6 +2118,8 @@ mod tests {
                 ("Remediating", "Paused"),
                 ("Remediating", "Interrupted"),
                 ("Remediating", "TaskCancelled"),
+                ("Remediating", "GateStarted"),
+                ("Remediating", "GateFinished"),
                 ("Verifying", "PublishStarted"),
                 ("Verifying", "VerifyFailed"),
                 ("Verifying", "TaskFailed"),

@@ -873,6 +873,17 @@ impl Runner {
         // Attempt remediation only once - start a new attempt
         let next_attempt_id = AttemptId::new(2);
 
+        // Transition from Running to Remediating via VerifyFailed event
+        // This is required for the state machine: AttemptStarted is only valid from Remediating
+        self.recorder.record(
+            Some(task.id),
+            crate::EventKind::VerifyFailed {
+                attempt: AttemptId::new(1),
+                class: failure_class,
+                detail: format!("Remediation attempt: {failure_class:?}"),
+            },
+        )?;
+
         // Read prior evidence
         let prior_evidence = crate::attempt::read_evidence(&self.project, task.id)?;
 
