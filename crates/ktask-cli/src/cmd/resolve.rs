@@ -192,17 +192,25 @@ fn write_adr(path: &PathBuf, decision: &str) -> std::io::Result<()> {
     let date = now.format(time::macros::format_description!("[year]-[month]-[day]"))
         .unwrap_or_else(|_| "2026-09-20".to_string());
 
+    // Extract the ADR number from the filename (NNNN-decision.md -> NNNN)
+    let filename = path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("0000");
+    let adr_num = filename.split('-').next().unwrap_or("0000");
+
     let content = format!(
-        "# {{}}. Decision\n\n\
+        "# {}. Decision\n\n\
          - **Status:** accepted\n\
          - **Date:** {}\n\n\
          ## Context\n\n\
          (context to be filled)\n\n\
          ## Decision\n\n\
          {}\n\n\
+         ## Alternatives considered\n\n\
+         (alternatives to be filled)\n\n\
          ## Consequences\n\n\
          (consequences to be filled)\n",
-        date, decision
+        adr_num, date, decision
     );
 
     std::fs::write(path, content)
