@@ -2,14 +2,16 @@
 
 use crate::render;
 use ktask_core::{
-    Journal, RunOutcome, gate::{GateKind, profile_from, run_completion_set, run_gate},
-    ids::TaskId, queue,
+    Journal, RunOutcome,
+    gate::{GateKind, profile_from, run_completion_set, run_gate},
+    ids::TaskId,
+    queue,
 };
 
 pub(crate) fn run(
     project: Option<ktask_core::Project>,
     config: Option<ktask_core::Config>,
-    task: String,
+    task: &str,
     gate: Option<String>,
     json: bool,
 ) -> RunOutcome {
@@ -101,47 +103,9 @@ pub(crate) fn run(
     }
 
     // Run gates
-    let results = if let Some(gate_kind_str) = gate {
-        // Parse gate kind from string
-        let kind = parse_gate_kind(&gate_kind_str);
-        match kind {
-            Some(k) => {
-                match profile.get(k) {
-                    Some(gate_def) => {
-                        match run_gate(gate_def, &worktree_path, None) {
-                            Ok(result) => vec![result],
-                            Err(e) => {
-                                render::progress(format_args!("error running gate: {e}"));
-                                return RunOutcome::Usage {
-                                    detail: format!("{e}"),
-                                };
-                            }
-                        }
-                    }
-                    None => {
-                        return RunOutcome::Usage {
-                            detail: format!("gate {gate_kind_str} not configured"),
-                        };
-                    }
-                }
-            }
-            None => {
-                return RunOutcome::Usage {
-                    detail: format!("invalid gate kind: {gate_kind_str}"),
-                };
-            }
-        }
-    } else {
-        // Run the whole completion set
-        match run_completion_set(&profile, &worktree_path, "HEAD", None) {
-            Ok(results) => results,
-            Err(e) => {
-                render::progress(format_args!("error running gates: {e}"));
-                return RunOutcome::Usage {
-                    detail: format!("{e}"),
-                };
-            }
-        }
+    let results = match run_gates(&profile, &worktree_path, gate) {
+        Ok(results) => results,
+        Err(outcome) => return outcome,
     };
 
     // Output results
@@ -165,6 +129,45 @@ pub(crate) fn run(
     }
 
     RunOutcome::Drained
+}
+
+fn run_gates(
+    profile: &ktask_core::gate::Profile,
+    worktree_path: &std::path::Path,
+    gate: Option<String>,
+) -> Result<Vec<ktask_core::gate::GateResult>, RunOutcome> {
+    if let Some(gate_kind_str) = gate {
+        let kind = parse_gate_kind(&gate_kind_str);
+        match kind {
+            Some(k) => match profile.get(k) {
+                Some(gate_def) => match run_gate(gate_def, worktree_path, None) {
+                    Ok(result) => Ok(vec![result]),
+                    Err(e) => {
+                        render::progress(format_args!("error running gate: {e}"));
+                        Err(RunOutcome::Usage {
+                            detail: format!("{e}"),
+                        })
+                    }
+                },
+                None => Err(RunOutcome::Usage {
+                    detail: format!("gate {gate_kind_str} not configured"),
+                }),
+            },
+            None => Err(RunOutcome::Usage {
+                detail: format!("invalid gate kind: {gate_kind_str}"),
+            }),
+        }
+    } else {
+        match run_completion_set(profile, worktree_path, "HEAD", None) {
+            Ok(results) => Ok(results),
+            Err(e) => {
+                render::progress(format_args!("error running gates: {e}"));
+                Err(RunOutcome::Usage {
+                    detail: format!("{e}"),
+                })
+            }
+        }
+    }
 }
 
 fn parse_gate_kind(s: &str) -> Option<GateKind> {
@@ -191,7 +194,7 @@ mod tests {
         let repo = ScratchRepo::new().expect("Failed to create test repo");
         let project = ktask_core::register(repo.path()).expect("Failed to register project");
 
-        let outcome = run(Some(project), None, "not_a_number".to_string(), None, false);
+        let outcome = run(Some(project), None, "not_a_number", None, false);
         match outcome {
             RunOutcome::Usage { .. } => {}
             _ => panic!("Expected Usage (exit 2), got {outcome:?}"),
@@ -203,7 +206,7 @@ mod tests {
         let repo = ScratchRepo::new().expect("Failed to create test repo");
         let project = ktask_core::register(repo.path()).expect("Failed to register project");
 
-        let outcome = run(Some(project), None, "999".to_string(), None, false);
+        let outcome = run(Some(project), None, "999", None, false);
         match outcome {
             RunOutcome::Usage { .. } => {}
             _ => panic!("Expected Usage (exit 2), got {outcome:?}"),
