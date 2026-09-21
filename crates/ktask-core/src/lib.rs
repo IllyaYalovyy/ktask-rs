@@ -6,6 +6,7 @@
 mod attempt;
 mod classify;
 pub mod config;
+mod context;
 mod error;
 mod event;
 mod events;
@@ -35,6 +36,7 @@ pub use classify::{
     FailureClass, TddException, WaitPlan, classify, limit_message, parse_reset, wait_plan,
 };
 pub use config::Config;
+pub use context::assemble;
 pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use events::{Bus, Recorder, Subscription};

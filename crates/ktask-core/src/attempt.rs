@@ -239,7 +239,11 @@ pub struct AttemptRecord {
 }
 
 /// The directory every task's evidence sits in, below a project's state directory.
-const EVIDENCE_ROOT: &str = "attempts";
+///
+/// `pub(crate)` rather than private because [`crate::assemble`] names the same
+/// layout in the report path it hands an agent: two spellings of one layout is
+/// how a prompt and an evidence directory end up disagreeing (ADR-0075).
+pub(crate) const EVIDENCE_ROOT: &str = "attempts";
 
 /// The directory of one attempt's gate output, inside its evidence directory.
 const GATES_DIR: &str = "gates";
