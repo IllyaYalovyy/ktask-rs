@@ -414,6 +414,7 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::Interrupted { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. }
         | EventKind::RecoveryDecision {
             decision: Recovery::MarkInterrupted,
             ..
@@ -467,6 +468,7 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
         | EventKind::Interrupted { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. }
         | EventKind::RecoveryDecision {
             decision: Recovery::MarkInterrupted,
             ..
@@ -491,6 +493,13 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
 /// transition. It names the attempt the state is holding and moves nothing, so
 /// filing it leaves the run where it was — which is also what makes a replay of
 /// a journal that already holds the record change nothing.
+///
+/// A question the agent is not authorised to answer stops the attempt rather
+/// than moving it along: `DecisionRaised` parks `Running` above itself with
+/// §6's reason for waiting, so the attempt that asked is the attempt a `Resumed`
+/// returns to, phases and all. What parks it is the ask rather than the ask's
+/// answer — see ADR-0079 for why the question lives in the journal record and
+/// not in the pause.
 ///
 /// A declared exception to test-first (§9) is that third kind too, and this is
 /// one of the two states allowed to answer it. It names no attempt because the
@@ -546,6 +555,10 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
             event,
         ),
         EventKind::TddExceptionUsed { .. } => Ok(TaskState::Running { attempt, phase }),
+        EventKind::DecisionRaised { .. } => Ok(parked(
+            TaskState::Running { attempt, phase },
+            PauseReason::Input,
+        )),
         EventKind::VerifyPassed { attempt: mine } => refuse_unless(
             *mine == attempt,
             TaskState::Publishing { attempt },
@@ -601,9 +614,15 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
 /// attempt the machine is still allowed to start is the runner's count, not
 /// this function's, exactly as it is in `Running`.
 ///
-/// That includes `Running`'s evidence. A remediation works phases like any other
-/// attempt, so a task that declared an exception to test-first claims it here
-/// too, and the claim again says what was rather than where the task may go.
+/// That includes `Running`'s evidence, and `Running`'s question: a remediation
+/// can stop at a fork the task never decided just as easily as a first attempt
+/// can, so the ask parks `Remediating` above itself for the same wait. Parking
+/// the remediation rather than the first attempt is what makes the answer come
+/// back to the attempt that found the problem.
+///
+/// A declared exception to test-first (§9) is that third kind too, so a task that
+/// declared one claims it here as well, and the claim again says what was rather
+/// than where the task may go.
 fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<TaskState> {
     const FROM: &str = "Remediating";
     match event {
@@ -646,6 +665,10 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
             event,
         ),
         EventKind::TddExceptionUsed { .. } => Ok(TaskState::Remediating { attempt, phase }),
+        EventKind::DecisionRaised { .. } => Ok(parked(
+            TaskState::Remediating { attempt, phase },
+            PauseReason::Input,
+        )),
         EventKind::VerifyPassed { attempt: mine } => refuse_unless(
             *mine == attempt,
             TaskState::Publishing { attempt },
@@ -776,6 +799,7 @@ fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. } => Err(refused(FROM, event)),
     }
 }
@@ -870,6 +894,7 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. } => Err(refused(FROM, event)),
     }
 }
@@ -931,6 +956,7 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::Resumed
         | EventKind::Interrupted { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. } => Err(refused(FROM, event)),
     }
 }
@@ -1002,7 +1028,8 @@ fn from_paused(
         | EventKind::TaskFailed { .. }
         | EventKind::Paused { .. }
         | EventKind::Interrupted { .. }
-        | EventKind::TddExceptionUsed { .. } => Err(refused(FROM, event)),
+        | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. } => Err(refused(FROM, event)),
     }
 }
 
@@ -1175,7 +1202,10 @@ mod tests {
         PauseReason, Phase, PhaseEntry, Recovery, Stream, TaskState, apply, check_one_active,
         check_predecessor, phase_entry,
     };
-    use crate::{AttemptId, AttemptRecord, Error, EventKind, FailureClass, TaskId, TddException};
+    use crate::{
+        AttemptId, AttemptRecord, DecisionRequest, Error, EventKind, FailureClass, TaskId,
+        TddException,
+    };
     use serde::de::DeserializeOwned;
     use std::collections::BTreeMap;
     use std::fmt::Debug;
@@ -1845,11 +1875,27 @@ mod tests {
         }
     }
 
+    /// The ask a `NEEDS_INPUT` report leaves behind, read off a report by
+    /// [`crate::decision`]. Like [`exception_used`] it names no attempt:
+    /// `docs/DESIGN.md` gives the entry one payload field, so the state holding
+    /// the attempt that stopped is the one that has to say what a question means.
+    fn decision_asked() -> EventKind {
+        EventKind::DecisionRaised {
+            request: DecisionRequest {
+                question: "Which sequence does the journal keep?".to_owned(),
+                options: vec!["the explicit one".to_owned(), "rowid".to_owned()],
+                tradeoffs: "a raw dump of the table stays readable".to_owned(),
+                impact: "every replay, and the order History prints".to_owned(),
+                recommended: Some("the explicit one".to_owned()),
+            },
+        }
+    }
+
     /// Every catalog entry a journal can hold, carrying what a run would carry.
     /// Written out by hand rather than generated because the point of the list
     /// is that a person named each entry — and because a sweep over it is what
     /// proves no state stays quiet about an event.
-    fn every_event() -> [EventKind; 21] {
+    fn every_event() -> [EventKind; 22] {
         [
             queued(),
             EventKind::PreflightStarted,
@@ -1870,6 +1916,7 @@ mod tests {
             interrupted(Phase::Implement),
             recovered(Recovery::Resume),
             exception_used(),
+            decision_asked(),
             acknowledged(),
             attempt_recorded(1),
         ]
@@ -2272,6 +2319,55 @@ mod tests {
         let held = apply(&working(1, Phase::Red), &pause(PauseReason::Blocked))
             .expect("a blocked phase parks the run");
         refuses(&held, &exception_used());
+    }
+
+    /// §6's wait for a decision is the one pause a report *asks* for, so it parks
+    /// where the asking happened: the run stops above the attempt that stopped
+    /// working, and the answer a human gives resumes that attempt rather than a
+    /// fresh one. The two directions are asserted together because a park that
+    /// resumes somewhere else has thrown away the attempt's phases.
+    #[test]
+    fn a_decision_request_parks_the_attempt_that_asked_it() {
+        for state in [working(1, Phase::Implement), remediating(2, Phase::Red)] {
+            let waiting = parked(state.clone(), PauseReason::Input);
+            moves(&state, &decision_asked(), &waiting);
+            moves(&waiting, &EventKind::Resumed, &state);
+        }
+    }
+
+    /// The question is asked where an agent is working and nowhere else. A state
+    /// with no agent at work has no report to read a question out of, and a
+    /// terminal state has no work left to wait for one — so a journal cannot
+    /// acquire a wait for input after the attempt that would have asked it has
+    /// stopped, which is what keeps `waiting_input` a state a human can act on.
+    #[test]
+    fn a_decision_is_asked_only_in_the_states_where_an_agent_works() {
+        for state in one_state_per_variant() {
+            let works = matches!(
+                state,
+                TaskState::Running { .. } | TaskState::Remediating { .. }
+            );
+            if works {
+                moves(
+                    &state,
+                    &decision_asked(),
+                    &parked(state.clone(), PauseReason::Input),
+                );
+            } else {
+                refuses(&state, &decision_asked());
+            }
+        }
+    }
+
+    /// A question asked while the run is already standing still for a human is
+    /// the refusal ADR-0026 makes of a nested pause, and for the same reason: the
+    /// wait already open holds everything a human has been given to answer, and a
+    /// second one stacked on it has nothing below it to resume.
+    #[test]
+    fn a_decision_asked_above_a_wait_is_refused_like_a_second_pause() {
+        let waiting = parked(working(1, Phase::Green), PauseReason::Input);
+        refuses(&waiting, &decision_asked());
+        refuses(&waiting, &pause(PauseReason::Input));
     }
 
     /// The other half of the same rule. A record cannot be about an attempt the
@@ -2738,12 +2834,20 @@ mod tests {
     /// no attempt, no commit and no phase, so it keeps a row in each of the two
     /// states an agent works in and has none in any other state.
     ///
+    /// `DecisionRaised` keeps the same two rows and moves both, because §6's
+    /// structured request is the one payload that says *why* the run waits: the
+    /// question a human is asked has to come from an agent that was at work and
+    /// stopped, so `Running` and `Remediating` park above themselves with
+    /// `PauseReason::Input` and every other state refuses to be asked. ADR-0079
+    /// records the pair, and why a report that asked nothing never reaches this
+    /// table at all.
+    ///
     /// The length is part of the declaration: a pair leaves this table only on
     /// a written decision that the machine no longer makes the move, and one
     /// pair has left it. `("Paused", "Paused", "Paused")` was a nested pause,
     /// which T028 decided is a mistake rather than a second wait — the refusal
     /// is asserted in `a_pause_above_a_pause_is_refused`, and ADR-0026 is why.
-    const LEGAL: [(&str, &str, &str); 54] = [
+    const LEGAL: [(&str, &str, &str); 56] = [
         ("Queued", "TaskQueued", "Queued"),
         ("Queued", "PreflightStarted", "Preflight"),
         ("Queued", "Paused", "Paused"),
@@ -2761,6 +2865,7 @@ mod tests {
         ("Running", "AgentOutput", "Running"),
         ("Running", "AttemptRecorded", "Running"),
         ("Running", "TddExceptionUsed", "Running"),
+        ("Running", "DecisionRaised", "Paused"),
         ("Running", "VerifyPassed", "Publishing"),
         ("Running", "VerifyFailed", "Running"),
         ("Running", "TaskFailed", "Failed"),
@@ -2769,6 +2874,7 @@ mod tests {
         ("Running", "Interrupted", "Paused"),
         ("Running", "RecoveryDecision", "Running"),
         ("Remediating", "TddExceptionUsed", "Remediating"),
+        ("Remediating", "DecisionRaised", "Paused"),
         ("Remediating", "TaskFailed", "Failed"),
         ("Remediating", "TaskCancelled", "Cancelled"),
         ("Remediating", "Paused", "Paused"),
@@ -2808,7 +2914,7 @@ mod tests {
     /// and a refused pair is refused through `Error::InvalidTransition` naming
     /// both of them. So the sweep fails on a legal move nobody declared, on a
     /// declared move that was withdrawn or retargeted, and on a refusal that
-    /// stopped naming what it refused — and passes for the 252 pairs on nothing
+    /// stopped naming what it refused — and passes for the 264 pairs on nothing
     /// but the table.
     #[test]
     fn every_move_is_a_declared_one_or_a_refusal() {

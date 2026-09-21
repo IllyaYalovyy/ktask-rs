@@ -32,17 +32,18 @@
 //!
 //! # Catalog entries that are not here yet
 //!
-//! `docs/DESIGN.md` lists 28 entries; 21 are defined below. The other 7 are
+//! `docs/DESIGN.md` lists 28 entries; 22 are defined below. The other 6 are
 //! absent, and a test asserts their absence rather than trusting it:
 //!
-//! - Six are deferred by the plan — `GateFinished` (`result: GateResult`),
+//! - Five are deferred by the plan — `GateFinished` (`result: GateResult`),
 //!   `AttemptFinished` (`usage: Option<Usage>`), `ProviderDetected`
-//!   (`capabilities: Capabilities`), `DecisionRaised` (`request:
-//!   DecisionRequest`), `DecisionResolved` and `SelfHealingReport`. Each
-//!   arrives with the task that emits it and gives it an `apply` arm, so
-//!   nothing can journal an event whose effect on state no task has written
-//!   yet. `AttemptRecorded` left this list for T068 and `TddExceptionUsed` for
-//!   T079, which wrote the arm §9's exception is answered by.
+//!   (`capabilities: Capabilities`), `DecisionResolved` and
+//!   `SelfHealingReport`. Each arrives with the task that emits it and gives it
+//!   an `apply` arm, so nothing can journal an event whose effect on state no
+//!   task has written yet. `AttemptRecorded` left this list for T068,
+//!   `TddExceptionUsed` for T079, which wrote the arm §9's exception is
+//!   answered by, and `DecisionRaised` for T084, which wrote the arm §6's wait
+//!   for a decision is answered by.
 //! - `GateStarted` (`kind: GateKind`) cannot be defined at all: `GateKind` is
 //!   `gate.rs`, which no earlier task has written, and a payload naming it
 //!   would not compile — which is the point of this catalog being a compile
@@ -57,6 +58,7 @@ use time::OffsetDateTime;
 
 use crate::attempt::AttemptRecord;
 use crate::classify::{FailureClass, TddException};
+use crate::decision::DecisionRequest;
 use crate::ids::{AttemptId, EventSeq, TaskId};
 use crate::state::{PauseReason, Phase, Recovery, Stream};
 
@@ -211,6 +213,20 @@ pub enum EventKind {
         /// audit is an override nobody will admit to having used.
         reason: String,
     },
+    /// An agent stopped at a decision it is not authorised to make, and asked a
+    /// human to make it.
+    ///
+    /// The ask itself is the payload, because VISION.md §6 makes a wait for input
+    /// carry "a structured decision request (question, options, trade-offs,
+    /// impact)" — the parts a decision is actually answered from, read off the
+    /// report by [`decision_request`](crate::decision_request) and stored whole,
+    /// so the inbox shows a human what was asked rather than that something was.
+    /// ADR-0079 records why a report that asked nothing raises no event at all,
+    /// and so why this payload cannot be empty.
+    DecisionRaised {
+        /// What was asked, in the parts a decision is made from.
+        request: DecisionRequest,
+    },
     /// A human acknowledged a gate that had stopped the run.
     GateAcknowledged {
         /// Who acknowledged it.
@@ -272,6 +288,7 @@ impl EventKind {
             Self::Interrupted { .. } => "Interrupted",
             Self::RecoveryDecision { .. } => "RecoveryDecision",
             Self::TddExceptionUsed { .. } => "TddExceptionUsed",
+            Self::DecisionRaised { .. } => "DecisionRaised",
             Self::GateAcknowledged { .. } => "GateAcknowledged",
             Self::AttemptRecorded { .. } => "AttemptRecorded",
         }
@@ -365,6 +382,7 @@ mod tests {
     use super::{Event, EventKind};
     use crate::attempt::AttemptRecord;
     use crate::classify::{FailureClass, TddException};
+    use crate::decision::DecisionRequest;
     use crate::ids::{AttemptId, EventSeq, TaskId};
     use crate::state::{PauseReason, Phase, Recovery, Stream};
     use serde_json::Value;
@@ -375,7 +393,7 @@ mod tests {
     /// encode is visible rather than mistaken for a placeholder.
     const SHA: &str = "0b78d3f1c2a4";
 
-    /// The 21 entries `docs/DESIGN.md` documents whose payload types exist
+    /// The 22 entries `docs/DESIGN.md` documents whose payload types exist
     /// today, each with the payload field names the table lists for it.
     ///
     /// Spelled out a second time, on purpose: names checked only against the
@@ -404,11 +422,12 @@ mod tests {
         ("Interrupted", &["phase"]),
         ("RecoveryDecision", &["decision", "detail"]),
         ("TddExceptionUsed", &["exception", "reason"]),
+        ("DecisionRaised", &["request"]),
         ("GateAcknowledged", &["by", "at"]),
         ("AttemptRecorded", &["record"]),
     ];
 
-    /// The seven entries this catalog does not define yet.
+    /// The six entries this catalog does not define yet.
     ///
     /// Their absence is asserted, not assumed: an entry added ahead of its
     /// producer would start decoding, and the journal would begin accepting
@@ -435,13 +454,6 @@ mod tests {
         (
             "ProviderDetected",
             r#""provider":"codex","capabilities":{},"version":"0.1.0""#,
-        ),
-        (
-            "DecisionRaised",
-            concat!(
-                r#""request":{"question":"which?","options":["a","b"],"#,
-                r#""tradeoffs":"cost","impact":"queue","recommended":"a"}"#,
-            ),
         ),
         (
             "DecisionResolved",
@@ -524,6 +536,15 @@ mod tests {
             EventKind::TddExceptionUsed {
                 exception: TddException::Documentation,
                 reason: "documentation only; no behaviour to pin".to_string(),
+            },
+            EventKind::DecisionRaised {
+                request: DecisionRequest {
+                    question: "Which layout does the journal keep?".to_string(),
+                    options: vec!["sequence".to_string(), "rowid".to_string()],
+                    tradeoffs: "a raw dump stays readable".to_string(),
+                    impact: "every replay".to_string(),
+                    recommended: Some("sequence".to_string()),
+                },
             },
             EventKind::GateAcknowledged {
                 by: "operators.name".to_string(),
