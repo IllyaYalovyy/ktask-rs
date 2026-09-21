@@ -783,6 +783,7 @@ mod tests {
     };
     use serde_json::Value;
     use std::fs;
+    use std::io::ErrorKind;
     use std::os::unix::fs::{PermissionsExt as _, symlink};
     use std::path::{Path, PathBuf};
     use tempfile::tempdir;
@@ -2269,6 +2270,146 @@ mod tests {
         assert!(
             !elsewhere.join("2").exists(),
             "nothing was written through the link"
+        );
+    }
+
+    /// A path whose permissions one test took away, handed back when it ends.
+    ///
+    /// The restore lives in [`Drop`] rather than at the end of the test body,
+    /// because a failing assertion unwinds past the end: a scratch directory left
+    /// at `0o000` cannot be removed, so the next test would trip over what this
+    /// one left behind and be blamed for it.
+    struct Sealed {
+        path: PathBuf,
+        before: u32,
+    }
+
+    impl Drop for Sealed {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(self.before));
+        }
+    }
+
+    /// Take `path` down to `wanted`, remembering what it was so it goes back.
+    fn sealed(path: &Path, wanted: u32) -> Sealed {
+        let before = mode(path);
+        fs::set_permissions(path, fs::Permissions::from_mode(wanted)).unwrap_or_else(|why| {
+            panic!("`{}` should take mode {wanted:o}: {why}", path.display())
+        });
+        Sealed {
+            path: path.to_path_buf(),
+            before,
+        }
+    }
+
+    #[test]
+    fn evidence_below_a_state_directory_occupied_by_a_file_is_refused() {
+        let scratch = tempdir().expect("a scratch directory beside the repository");
+        let id = "0123456789abcdef".to_owned();
+        let state_dir = scratch.path().join("state").join(&id);
+        fs::create_dir_all(state_dir.parent().expect("a state directory has a parent"))
+            .expect("a scratch application directory");
+        fs::write(&state_dir, "not a directory\n")
+            .expect("a file sits where a project's state directory belongs");
+        let project = Project {
+            root: scratch.path().join("repository"),
+            id,
+            state_dir: state_dir.clone(),
+        };
+
+        let error = write_evidence(&project, &record(), CONTEXT)
+            .expect_err("a file is not a directory a task's evidence can live below");
+        let message = format!("{error:?}");
+        let Error::Policy { detail, paths } = error else {
+            panic!("a state directory occupied by a file is a policy refusal: {message}");
+        };
+        assert_eq!(
+            paths,
+            vec![state_dir.clone()],
+            "the refusal names the file it refused to replace"
+        );
+        assert!(
+            detail.ends_with("is already there and is not a directory"),
+            "{detail}"
+        );
+        assert_eq!(
+            fs::read_to_string(&state_dir).expect("the file the writer refused to touch"),
+            "not a directory\n",
+            "a refusal about a path it cannot write must not have written over it"
+        );
+    }
+
+    #[test]
+    fn a_state_directory_the_filesystem_will_not_let_us_look_at_is_not_reported_absent() {
+        let scratch = tempdir().expect("a scratch directory beside the repository");
+        let project = registered(scratch.path());
+        let app_dir = project
+            .state_dir
+            .parent()
+            .expect("a state directory is below an application directory")
+            .to_path_buf();
+        let _sealed = sealed(&app_dir, 0o000);
+
+        let error = write_evidence(&project, &record(), CONTEXT)
+            .expect_err("a directory we cannot look inside is not a project never registered");
+        assert!(
+            matches!(&error, Error::Io(why) if why.kind() == ErrorKind::PermissionDenied),
+            "the filesystem's own refusal is the answer: a NotFound would send the operator \
+             to register the project again, which is not the thing that went wrong: {error:?}"
+        );
+    }
+
+    #[test]
+    fn an_attempt_directory_we_cannot_list_is_not_read_as_a_task_that_never_ran() {
+        let scratch = tempdir().expect("a scratch directory beside the repository");
+        let project = registered(scratch.path());
+        write_evidence(&project, &record(), CONTEXT).expect("an attempt writes its evidence");
+        let task_dir = project.state_dir.join("attempts").join("7");
+        let _sealed = sealed(&task_dir, 0o000);
+
+        let error = read_evidence(&project, TaskId::new(7))
+            .expect_err("an attempt directory we cannot list is not a task with no attempts");
+        assert!(
+            matches!(&error, Error::Io(why) if why.kind() == ErrorKind::PermissionDenied),
+            "a task whose evidence exists but cannot be listed must not answer as empty, \
+             because an empty answer is the one that hides an attempt that ran: {error:?}"
+        );
+    }
+
+    #[test]
+    fn a_record_the_filesystem_will_not_let_us_read_is_refused_rather_than_answered() {
+        let scratch = tempdir().expect("a scratch directory beside the repository");
+        let project = registered(scratch.path());
+        let held = record();
+        write_evidence(&project, &held, CONTEXT).expect("an attempt writes its evidence");
+        let filed = attempt_dir(&project, 7, 2).join("record.json");
+        let bytes = fs::read(&filed).expect("the record a write just filed");
+
+        {
+            let _sealed = sealed(&filed, 0o200);
+
+            let error = write_evidence(&project, &held, CONTEXT)
+                .expect_err("a record we cannot open is not a record that is not there");
+            assert!(
+                matches!(&error, Error::Io(why) if why.kind() == ErrorKind::PermissionDenied),
+                "a write that cannot check what an attempt already holds has to refuse it, \
+                 since replacing a record it never read is how an attempt answers twice: \
+                 {error:?}"
+            );
+
+            let read = read_evidence(&project, TaskId::new(7))
+                .expect_err("a record we cannot open is not a record that is damaged");
+            assert!(
+                matches!(&read, Error::Io(why) if why.kind() == ErrorKind::PermissionDenied),
+                "the filesystem's refusal is not the answer `Corrupt`, which asks for a \
+                 repair that would delete a file holding its evidence: {read:?}"
+            );
+        }
+
+        assert_eq!(
+            fs::read(&filed).expect("the record is readable again"),
+            bytes,
+            "neither refusal wrote to the file it could not read"
         );
     }
 }
