@@ -90,13 +90,25 @@
 //! [`crate::check_no_policy_edit`] is the other check on the same diff and not a
 //! rival: a scope says which phase may write where, and that one says no phase
 //! may write the rules the run is judged by, whichever scope it held.
+//!
+//! # How red is confirmed
+//!
+//! A scope says what an agent may write; §9's claim about red is a claim about
+//! *time* — the test failed before the implementation existed — and no rule
+//! about paths can prove that. [`verify_red`] is that half. The runner runs the
+//! phase's targeted check twice, once before the agent works and once after, and
+//! the difference between the two failure lists is the only evidence that
+//! survives the phase: a failure set that did not change is refused, so "the
+//! suite was already red" cannot be filed as proof a test came first, and a red
+//! phase that ended green means precisely what it looks like.
 
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::gate::GateKind;
+use crate::gate::{GateKind, TestSummary};
 use crate::state::Phase;
 use crate::task::Task;
 
@@ -549,6 +561,102 @@ fn match_name_chars(pattern: &[char], name: &[char]) -> bool {
             (*head == *first || *first == '?') && match_name_chars(rest, below)
         }),
     }
+}
+
+/// The sentence a red phase is refused by when its run holds no new failure.
+const RED_RULE: &str =
+    "a red phase has to leave a test that failed after the change and did not fail before it";
+
+/// Confirm a red phase left a genuinely new failing test, and name it.
+///
+/// VISION.md §9's step 2 belongs to the runner, not the agent: "The runner
+/// executes `targeted_test_command` and confirms the expected *new* failure."
+/// Two runs of that one command answer the question — `before` the run the phase
+/// started from, `after` the run that ended it — and only a comparison of the two
+/// separates a test written to fail from a suite that was already red. An
+/// unchanged failure set is refused for that reason: an agent that edited
+/// nothing that fails, added a test that passes, or repaired an old failure all
+/// look identical at the end of the phase, which is exactly what §9 refuses to
+/// take on faith.
+///
+/// The answer is a list of names rather than a verdict, because names are what
+/// the rest of the protocol acts on: [`tdd`]'s [`Phase::Green`] re-runs the tests
+/// that just failed, in these words, to prove they pass now, and §9's "RED and
+/// GREEN evidence (command, output, tree hash) is stored with the attempt" files
+/// them as red's half of that record — which is why that phase declares
+/// [`PhaseSpec::records_evidence`].
+///
+/// # Names, not counts
+///
+/// The difference is taken over [`TestSummary::failures`] and not
+/// [`TestSummary::failed`], because a count moves for reasons that have nothing
+/// to do with newness: repairing one old failure lowers it while adding no
+/// evidence, and renaming a failing test raises a name nobody has read while the
+/// failure itself stays as old as the baseline. The list is complete rather than
+/// suggestive because [`crate::parse_cargo`] refuses output whose `failures:`
+/// block holds a different number of names than that output's own line counted —
+/// a summary that exists at all names every test that failed.
+///
+/// A name two test binaries both reported is answered once, at the position the
+/// run first wrote it: one test is one thing to prove in green, and evidence
+/// naming it twice would be read as two obligations.
+///
+/// # Errors
+///
+/// [`Error::Gate`] naming [`GateKind::Targeted`] — the gate [`tdd`]'s red phase
+/// declares — when nothing failed newly. The sentence quotes the rule and both
+/// runs' lists, so the inspector and the failure bundle show an operator the
+/// comparison that refused instead of a bare "failed". The classifier gives that
+/// variant no class of its own (ADR-0059), so an attempt refused here lands as
+/// [`FailureClass::AgentFailure`](crate::FailureClass::AgentFailure) unless the
+/// caller's own gate list argues otherwise — and that is the right landing: a
+/// bounded fresh session can answer this refusal by writing a test that really
+/// fails, which is why it is not an [`Error::Policy`], a class that earns no
+/// retry.
+///
+/// Like the rest of this module this holds no I/O and no clock: the two summaries
+/// are the ones a caller got by running the gate twice. Nothing calls it yet, as
+/// with [`check_scope`] — the runner that walks a protocol's phases is the task
+/// that wires both.
+pub fn verify_red(before: &TestSummary, after: &TestSummary) -> Result<Vec<String>> {
+    let already_failing = before
+        .failures
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let mut named = HashSet::new();
+    let mut fresh = Vec::new();
+    for name in &after.failures {
+        if already_failing.contains(name.as_str()) || !named.insert(name.as_str()) {
+            continue;
+        }
+        fresh.push(name.clone());
+    }
+    if fresh.is_empty() {
+        return Err(Error::Gate {
+            kind: GateKind::Targeted.to_string(),
+            detail: format!(
+                "{RED_RULE}; the run found none (failing before: {}; failing after: {})",
+                listed(&before.failures),
+                listed(&after.failures)
+            ),
+        });
+    }
+    Ok(fresh)
+}
+
+/// The tests one summary named as failing, written for the refusal that quotes
+/// them — and worded so that a run with no failing test says `nothing` rather
+/// than leaving the reader to read an empty pair of brackets as a bug.
+fn listed(failures: &[String]) -> String {
+    if failures.is_empty() {
+        return "nothing".to_owned();
+    }
+    failures
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -1377,6 +1485,126 @@ mod tests {
         assert_eq!(
             for_task(&task, &Config::default()).expect("`tdd` is a protocol this build runs"),
             tdd(),
+        );
+    }
+
+    /// What one targeted run reported, spelled by the tests it named as failing.
+    ///
+    /// The counts are [`crate::parse_cargo`]'s own — one name per failing test —
+    /// so a fixture cannot drift into claiming a failure it does not list.
+    fn report(failures: &[&str]) -> TestSummary {
+        TestSummary {
+            passed: 1,
+            failed: u32::try_from(failures.len()).expect("a fixture cannot list a negative count"),
+            ignored: 0,
+            failures: failures.iter().map(|name| (*name).to_owned()).collect(),
+        }
+    }
+
+    /// Assert `verify_red(before, after)` refuses, and answer with the sentence it
+    /// refused by. Named apart from `refused` above, which refuses a write scope.
+    fn refused_red(before: &TestSummary, after: &TestSummary) -> String {
+        let error = verify_red(before, after)
+            .expect_err("a run with no newly failing test is refused, not accepted");
+        let Error::Gate { kind, detail } = error else {
+            panic!("a red phase that found no new failure is refused by its gate, got {error}");
+        };
+        assert_eq!(
+            kind,
+            GateKind::Targeted.to_string(),
+            "the gate the red phase declares is the one that refuses it, not `{kind}`"
+        );
+        detail
+    }
+
+    #[test]
+    fn a_test_that_fails_after_and_not_before_is_the_new_failure() {
+        let new = "store::tests::retry_refuses_a_task_that_is_not_active";
+        let found = verify_red(&report(&[]), &report(&[new])).expect(
+            "a phase that started with nothing failing and ended with a test failing is red",
+        );
+        assert_eq!(
+            found,
+            vec![new.to_owned()],
+            "the phase started with nothing failing and ended with one test failing: that name \
+             is the evidence §9 asks red to leave behind"
+        );
+    }
+
+    #[test]
+    fn an_unchanged_failure_set_is_refused_and_says_what_it_compared() {
+        let old = "store::tests::publish_refuses_a_dirty_tree";
+        assert_eq!(
+            refused_red(&report(&[old]), &report(&[old])),
+            format!(
+                "a red phase has to leave a test that failed after the change and did not fail \
+                 before it; the run found none (failing before: `{old}`; failing after: \
+                 `{old}`)"
+            ),
+            "the same failure before and after is a test that was already broken, and the \
+             refusal has to quote the comparison an operator can check"
+        );
+    }
+
+    #[test]
+    fn a_run_that_lists_no_failing_test_at_all_is_refused() {
+        let detail = refused_red(&report(&[]), &report(&[]));
+        assert!(detail.contains("failing before: nothing"), "{detail}");
+        assert!(detail.contains("failing after: nothing"), "{detail}");
+    }
+
+    #[test]
+    fn a_failure_that_already_failed_is_not_evidence_of_a_new_test() {
+        let old = "journal::tests::append_refuses_a_sequence_gap";
+        let older = "journal::tests::read_hands_over_one_record_and_keeps_none";
+        let fresh = "journal::tests::rebuild_folds_before_it_touches_the_projection";
+        let found = verify_red(&report(&[old, older]), &report(&[old, older, fresh]))
+            .expect("a test that was not failing before is failing now");
+        assert_eq!(
+            found,
+            vec![fresh.to_owned()],
+            "the two names that failed before the phase say nothing about it; only the name that \
+             did not fail before is a test written first"
+        );
+    }
+
+    #[test]
+    fn the_new_names_come_back_in_the_order_the_run_listed_them() {
+        let first = "git::tests::fetch_brings_back_the_tip_it_was_asked_for";
+        let second = "git::tests::a_conflicted_rebase_is_aborted_before_its_evidence_goes";
+        let found = verify_red(&report(&[]), &report(&[second, first]))
+            .expect("two newly failing tests is a red phase");
+        assert_eq!(
+            found,
+            vec![second.to_owned(), first.to_owned()],
+            "evidence keeps the order the run wrote, so reading the same log twice compares equal"
+        );
+    }
+
+    #[test]
+    fn a_failure_that_stopped_failing_is_not_a_new_one() {
+        // The count moved, and the count is not the question: the phase repaired
+        // one old failure and left the other standing, and neither is a test that
+        // was written first.
+        let kept = "git::tests::commit_refuses_an_empty_tree";
+        let repaired = "git::tests::a_lock_names_its_holder";
+        assert!(
+            refused_red(&report(&[repaired, kept]), &report(&[kept]))
+                .contains("the run found none"),
+            "a count that fell is not a test that was newly written to fail"
+        );
+    }
+
+    #[test]
+    fn a_name_two_binaries_both_reported_is_returned_once() {
+        let twice = "task::tests::parse_plan_refuses_an_unknown_protocol";
+        let found = verify_red(&report(&[]), &report(&[twice, twice]))
+            .expect("a failing test is a failing test whoever listed it");
+        assert_eq!(
+            found,
+            vec![twice.to_owned()],
+            "two test binaries can each hold a test of the same name, and the green phase re-runs \
+             a test by name, so the evidence names it once"
         );
     }
 }
