@@ -22,6 +22,7 @@ pub mod provider;
 mod queue;
 pub mod redact;
 mod remediate;
+mod report;
 mod state;
 mod task;
 
@@ -56,6 +57,7 @@ pub use remediate::{
     Bound, Bounds, Breaker, BreakerState, bundle, check_no_policy_edit, policy_edit_event,
     should_continue, signature, trip_event,
 };
+pub use report::{ReportResult, parse_report};
 pub use state::{
     PauseReason, Phase, Recovery, Stream, TaskState, apply, check_one_active, check_predecessor,
 };
