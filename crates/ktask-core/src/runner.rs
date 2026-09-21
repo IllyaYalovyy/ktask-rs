@@ -1000,6 +1000,46 @@ impl Runner {
         Ok(None)
     }
 
+    /// Check if pause or interrupt signal has been written and handle it.
+    ///
+    /// Returns Ok(Some(state)) if paused or interrupted, Ok(None) if neither signal present.
+    fn check_control_signals(
+        &mut self,
+        task: &Task,
+        attempt: AttemptId,
+        phase: crate::state::Phase,
+    ) -> Result<Option<crate::TaskState>> {
+        // Check for pause signal
+        if crate::control::check_pause(&self.project)? {
+            crate::control::clear_pause(&self.project)?;
+            let reason = crate::state::PauseReason::Blocked;
+            self.recorder.record(
+                Some(task.id),
+                crate::EventKind::Paused {
+                    reason: reason.clone(),
+                },
+            )?;
+            return Ok(Some(crate::TaskState::Paused {
+                reason,
+                resume_to: Box::new(crate::TaskState::Running { attempt, phase }),
+            }));
+        }
+
+        // Check for interrupt signal
+        if crate::control::check_interrupt(&self.project)? {
+            crate::control::clear_interrupt(&self.project)?;
+            self.recorder
+                .record(Some(task.id), crate::EventKind::Interrupted { phase })?;
+            kill_remaining_processes();
+            return Ok(Some(crate::TaskState::Paused {
+                reason: crate::state::PauseReason::Interrupted,
+                resume_to: Box::new(crate::TaskState::Running { attempt, phase }),
+            }));
+        }
+
+        Ok(None)
+    }
+
     /// Execute the protocol phases for a prepared task.
     ///
     /// Runs through each phase of the selected protocol, updating task state
@@ -1035,6 +1075,10 @@ impl Runner {
 
         for spec in &protocol.phases {
             if let Some(state) = self.check_interrupt(task, attempt, spec.phase)? {
+                return Ok(state);
+            }
+
+            if let Some(state) = self.check_control_signals(task, attempt, spec.phase)? {
                 return Ok(state);
             }
 
