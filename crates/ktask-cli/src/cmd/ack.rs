@@ -5,10 +5,7 @@ use ktask_core::{Journal, RunOutcome, TaskState, ids::TaskId, queue};
 use std::collections::BTreeMap;
 use time::OffsetDateTime;
 
-pub(crate) fn run(
-    project: Option<ktask_core::Project>,
-    task: Option<String>,
-) -> RunOutcome {
+pub(crate) fn run(project: Option<ktask_core::Project>, task: Option<String>) -> RunOutcome {
     let Some(proj) = project else {
         return RunOutcome::Usage {
             detail: "no project found".to_string(),
@@ -47,16 +44,14 @@ pub(crate) fn run(
 
     // Find the task to acknowledge
     let task_id = match task {
-        Some(t) => {
-            match t.parse::<u32>() {
-                Ok(id) => TaskId::new(id),
-                Err(_) => {
-                    return RunOutcome::Usage {
-                        detail: format!("invalid task id: {t}"),
-                    };
-                }
+        Some(t) => match t.parse::<u32>() {
+            Ok(id) => TaskId::new(id),
+            Err(_) => {
+                return RunOutcome::Usage {
+                    detail: format!("invalid task id: {t}"),
+                };
             }
-        }
+        },
         None => {
             // Find the first paused task with HumanGate reason
             match find_human_gate(&states) {
@@ -95,7 +90,8 @@ pub(crate) fn run(
             render::out(format_args!(
                 "id={} title={} state=done",
                 task_id,
-                tasks.iter()
+                tasks
+                    .iter()
                     .find(|t| t.id == task_id)
                     .map(|t| t.title())
                     .unwrap_or("Unknown")

@@ -288,7 +288,11 @@ fn describe_event(kind: &EventKind) -> String {
             format!("Decision raised: {}", request.question)
         }
         EventKind::DecisionResolved { adr_path, answer } => {
-            format!("Decision resolved and saved to {}: {}", adr_path.display(), answer)
+            format!(
+                "Decision resolved and saved to {}: {}",
+                adr_path.display(),
+                answer
+            )
         }
         EventKind::SelfHealingReport {
             attempt,

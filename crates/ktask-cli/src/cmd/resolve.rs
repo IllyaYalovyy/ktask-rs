@@ -65,17 +65,15 @@ pub(crate) fn run(
             // Get the answer: either from --note or from $EDITOR
             let answer = match note {
                 Some(n) => n,
-                None => {
-                    match get_input_from_editor() {
-                        Ok(a) => a,
-                        Err(e) => {
-                            render::progress(format_args!("error opening editor: {e}"));
-                            return RunOutcome::Usage {
-                                detail: format!("{e}"),
-                            };
-                        }
+                None => match get_input_from_editor() {
+                    Ok(a) => a,
+                    Err(e) => {
+                        render::progress(format_args!("error opening editor: {e}"));
+                        return RunOutcome::Usage {
+                            detail: format!("{e}"),
+                        };
                     }
-                }
+                },
             };
 
             // Find next ADR number
@@ -113,7 +111,8 @@ pub(crate) fn run(
             render::out(format_args!(
                 "id={} title={} state=done",
                 task_id,
-                tasks.iter()
+                tasks
+                    .iter()
                     .find(|t| t.id == task_id)
                     .map(|t| t.title())
                     .unwrap_or("Unknown")
@@ -168,12 +167,7 @@ fn find_next_adr_number(project: &ktask_core::Project) -> std::io::Result<PathBu
 
             if path.extension().and_then(|s| s.to_str()) == Some("md") {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if let Ok(num) = name
-                        .split('-')
-                        .next()
-                        .unwrap_or("0")
-                        .parse::<i32>()
-                    {
+                    if let Ok(num) = name.split('-').next().unwrap_or("0").parse::<i32>() {
                         max_num = max_num.max(num);
                     }
                 }
@@ -189,13 +183,12 @@ fn find_next_adr_number(project: &ktask_core::Project) -> std::io::Result<PathBu
 
 fn write_adr(path: &PathBuf, decision: &str) -> std::io::Result<()> {
     let now = time::OffsetDateTime::now_utc();
-    let date = now.format(time::macros::format_description!("[year]-[month]-[day]"))
+    let date = now
+        .format(time::macros::format_description!("[year]-[month]-[day]"))
         .unwrap_or_else(|_| "2026-09-20".to_string());
 
     // Extract the ADR number from the filename (NNNN-decision.md -> NNNN)
-    let filename = path.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("0000");
+    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("0000");
     let adr_num = filename.split('-').next().unwrap_or("0000");
 
     let content = format!(
