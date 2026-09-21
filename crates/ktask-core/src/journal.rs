@@ -1324,11 +1324,9 @@ mod tests {
         // Interleave events from different tasks - valid sequences only
         journal.append(Some(task1), &kind1).unwrap(); // seq 1, task1: Queued
         journal.append(Some(task2), &kind1).unwrap(); // seq 2, task2: Queued
-        journal.append(
-            Some(task2),
-            &EventKind::PreflightStarted,
-        )
-        .unwrap(); // seq 3, task2: Queued -> Preflight
+        journal
+            .append(Some(task2), &EventKind::PreflightStarted)
+            .unwrap(); // seq 3, task2: Queued -> Preflight
         journal.append(Some(task1), &kind2).unwrap(); // seq 4, task1: Queued -> Preflight
         journal
             .append(

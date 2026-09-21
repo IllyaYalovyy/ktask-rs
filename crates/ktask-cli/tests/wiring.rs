@@ -19,7 +19,6 @@ use support::ScenarioEnv;
 /// - Journal persistence
 /// - Log file writing
 #[test]
-#[ignore = "WIP: Task 2 verify gate issue - investigate dummy provider phase handling"]
 fn wiring_end_to_end_drains_queue() {
     let env = ScenarioEnv::new();
 
@@ -94,7 +93,7 @@ fn wiring_end_to_end_drains_queue() {
 
 **Done-when:** Task has been executed through the full pipeline
 
-**Verify:** true
+**Verify:** Verify that implementation is correct using provided tools
 
 **Refs:** Wiring proof task 1
 
@@ -104,7 +103,7 @@ fn wiring_end_to_end_drains_queue() {
 
 **Done-when:** Task has been executed through the full pipeline
 
-**Verify:** true
+**Verify:** Verify that implementation is correct using provided tools
 
 **Refs:** Wiring proof task 2
 ";
@@ -146,16 +145,14 @@ fn wiring_end_to_end_drains_queue() {
     assert!(status.success());
 
     // 4. Create a dummy scenario file.
-    // Direct protocol has: Implement, Verify, Publish phases.
-    // Each task needs about 7 steps: 1 Implement + 5 Verify gates + 1 Publish
-    let scenario_content = r#"# Comprehensive scenario with abundant steps for both tasks
+    // Simple scenario: create a report file in each Implement step (steps 0, 3).
+    // These are called in sequence for task 1 and task 2.
+    let scenario_content = r#"# Scenario with sufficient steps for both tasks
 [[steps]]
 outcome = "success"
 stdout = "step 1"
 
 [steps.files]
-"README.md" = "Work"
-"src/main.rs" = "fn main(){}"
 ".ktask/report.md" = "KTASK_RESULT: DONE"
 
 [[steps]]
@@ -170,109 +167,118 @@ stdout = "step 3"
 outcome = "success"
 stdout = "step 4"
 
+[steps.files]
+".ktask/report.md" = "KTASK_RESULT: DONE"
+
 [[steps]]
 outcome = "success"
 stdout = "step 5"
+
+[steps.files]
+".ktask/report.md" = "KTASK_RESULT: DONE"
 
 [[steps]]
 outcome = "success"
 stdout = "step 6"
 
-[[steps]]
-outcome = "success"
-stdout = "step 7"
+[steps.files]
+".ktask/report.md" = "KTASK_RESULT: DONE"
 
 [[steps]]
 outcome = "success"
-stdout = "step 8"
+stdout = "task attempt step 7"
 
 [[steps]]
 outcome = "success"
-stdout = "step 9"
+stdout = "task attempt step 8"
 
 [[steps]]
 outcome = "success"
-stdout = "step 10"
+stdout = "task attempt step 9"
 
 [[steps]]
 outcome = "success"
-stdout = "step 11"
+stdout = "task attempt step 10"
 
 [[steps]]
 outcome = "success"
-stdout = "step 12"
+stdout = "task attempt step 11"
 
 [[steps]]
 outcome = "success"
-stdout = "step 13"
+stdout = "task attempt step 12"
 
 [[steps]]
 outcome = "success"
-stdout = "step 14"
+stdout = "task attempt step 13"
 
 [[steps]]
 outcome = "success"
-stdout = "step 15"
+stdout = "task attempt step 14"
 
 [[steps]]
 outcome = "success"
-stdout = "step 16"
+stdout = "task attempt step 15"
 
 [[steps]]
 outcome = "success"
-stdout = "step 17"
+stdout = "task attempt step 16"
 
 [[steps]]
 outcome = "success"
-stdout = "step 18"
+stdout = "task attempt step 17"
 
 [[steps]]
 outcome = "success"
-stdout = "step 19"
+stdout = "task attempt step 18"
 
 [[steps]]
 outcome = "success"
-stdout = "step 20"
+stdout = "task attempt step 19"
 
 [[steps]]
 outcome = "success"
-stdout = "step 21"
+stdout = "task attempt step 20"
 
 [[steps]]
 outcome = "success"
-stdout = "step 22"
+stdout = "task attempt step 21"
 
 [[steps]]
 outcome = "success"
-stdout = "step 23"
+stdout = "task attempt step 22"
 
 [[steps]]
 outcome = "success"
-stdout = "step 24"
+stdout = "task attempt step 23"
 
 [[steps]]
 outcome = "success"
-stdout = "step 25"
+stdout = "task attempt step 24"
 
 [[steps]]
 outcome = "success"
-stdout = "step 26"
+stdout = "task attempt step 25"
 
 [[steps]]
 outcome = "success"
-stdout = "step 27"
+stdout = "task attempt step 26"
 
 [[steps]]
 outcome = "success"
-stdout = "step 28"
+stdout = "task attempt step 27"
 
 [[steps]]
 outcome = "success"
-stdout = "step 29"
+stdout = "task attempt step 28"
 
 [[steps]]
 outcome = "success"
-stdout = "step 30"
+stdout = "task attempt step 29"
+
+[[steps]]
+outcome = "success"
+stdout = "task attempt step 30"
 "#;
 
     let scenario_file = env.repo_dir.join(".ktask-scenario.toml");
@@ -309,11 +315,12 @@ stdout = "step 30"
     // 5. Create a config file in the state directory
     let state_path = std::path::PathBuf::from(init_state_dir);
 
+    // Use a verify_command that doesn't check the report, just succeeds
     let config_content = format!(
         r#"provider = "dummy"
 default_protocol = "direct"
 dummy_scenario_path = "{}"
-verify_command = ["true"]
+verify_command = ["/bin/sh", "-c", "exit 0"]
 "#,
         scenario_file.display()
     );
