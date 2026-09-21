@@ -31,6 +31,10 @@ const APP_DIR: &str = "ktask-rs";
 /// own below its state directory (see `crate::project_config_path`).
 pub(crate) const CONFIG_NAME: &str = "config.toml";
 
+/// The directory the private prompt library lives in, below the configuration
+/// directory (VISION.md §11). See [`prompt_library`].
+const PROMPTS_DIR: &str = "prompts";
+
 /// How many hexadecimal characters each half of a project id carries — the
 /// first 16 of the 64 a SHA-256 digest prints as.
 const ID_HEX_CHARS: usize = 16;
@@ -67,6 +71,28 @@ pub fn config_file() -> Result<PathBuf> {
     config_file_with(&process_env)
 }
 
+/// The private prompt library: `$XDG_CONFIG_HOME/ktask-rs/prompts`, or
+/// `$HOME/.config/ktask-rs/prompts` when the variable is unset or empty.
+///
+/// VISION.md §11 puts a project's prompts and templates here rather than in the
+/// repository they supervise: a global, private library every project can read
+/// and no project's history can carry. It is the directory `ensure_defaults`
+/// fills in on a machine that has never had one, and the fallback a project
+/// falls back to when it wrote no override of its own (see
+/// `crate::context::load_template`).
+///
+/// Like [`state_root`] and [`config_file`], this resolves a location and touches
+/// nothing: `doctor` and the configuration screen say where the library *would*
+/// be before anything decides to write in it.
+///
+/// # Errors
+///
+/// [`Error::Config`] with `key` `HOME` when neither `XDG_CONFIG_HOME` nor
+/// `HOME` names a usable base directory.
+pub fn prompt_library() -> Result<PathBuf> {
+    prompt_library_with(&process_env)
+}
+
 /// [`state_root`] with the environment supplied by the caller, which is how a
 /// test injects variables without touching process state.
 ///
@@ -84,9 +110,32 @@ pub(crate) fn state_root_with(env: &dyn Fn(&str) -> Option<String>) -> Result<Pa
 /// document for a project, and does it through the same injected accessor
 /// rather than a second recipe for the same file.
 pub(crate) fn config_file_with(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
-    Ok(base(env, "XDG_CONFIG_HOME", Path::new(".config"))?
-        .join(APP_DIR)
-        .join(CONFIG_NAME))
+    Ok(config_root_with(env)?.join(CONFIG_NAME))
+}
+
+/// [`prompt_library`] with the environment supplied by the caller.
+///
+/// Crate-visible for the reason [`state_root_with`] is: `crate::context` both
+/// writes the library's default documents and reads them back, and does each
+/// through this accessor rather than a second recipe for where configuration
+/// lives.
+pub(crate) fn prompt_library_with(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
+    Ok(config_root_with(env)?.join(PROMPTS_DIR))
+}
+
+/// The directory ktask-rs owns inside `$XDG_CONFIG_HOME`:
+/// `$XDG_CONFIG_HOME/ktask-rs`, or `$HOME/.config/ktask-rs` when the variable is
+/// unset or empty.
+///
+/// Both files this directory owns — the machine's configuration document and the
+/// prompt library — are built below it, so the fallback and the empty-value rule
+/// are written once.
+///
+/// # Errors
+///
+/// [`Error::Config`] when neither `XDG_CONFIG_HOME` nor `HOME` is usable.
+fn config_root_with(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
+    Ok(base(env, "XDG_CONFIG_HOME", Path::new(".config"))?.join(APP_DIR))
 }
 
 /// The process environment as an accessor, for the public entry points.
@@ -180,8 +229,8 @@ fn hex_prefix(digest: &impl AsRef<[u8]>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_file_with, project_id, state_root_with};
-    use crate::{Error, config_file, state_root};
+    use super::{config_file_with, project_id, prompt_library_with, state_root_with};
+    use crate::{Error, config_file, prompt_library, state_root};
     use sha2::{Digest as _, Sha256};
     use std::ffi::{OsStr, OsString};
     use std::fs;
@@ -386,6 +435,114 @@ mod tests {
     /// A variable read straight from the process, an empty one treated as absent.
     fn process(key: &str) -> Option<String> {
         std::env::var(key).ok().filter(|found| !found.is_empty())
+    }
+
+    #[test]
+    fn prompt_library_is_the_prompts_directory_under_xdg_config_home() {
+        let resolved = prompt_library_with(&env(&[
+            ("XDG_CONFIG_HOME", "/etc/ada-config"),
+            ("HOME", "/home/ada"),
+        ]))
+        .expect("XDG_CONFIG_HOME names the base directory");
+        assert_eq!(resolved, PathBuf::from("/etc/ada-config/ktask-rs/prompts"));
+    }
+
+    #[test]
+    fn prompt_library_falls_back_to_dot_config_under_home_without_xdg_config_home() {
+        let resolved = prompt_library_with(&env(&home_only("/home/ada")))
+            .expect("HOME is the documented fallback source");
+        assert_eq!(
+            resolved,
+            PathBuf::from("/home/ada/.config/ktask-rs/prompts")
+        );
+    }
+
+    #[test]
+    fn prompt_library_ignores_xdg_state_home() {
+        let resolved = prompt_library_with(&env(&[
+            ("XDG_CONFIG_HOME", "/etc/ada-config"),
+            ("XDG_STATE_HOME", "/var/lib/ada-state"),
+            ("HOME", "/home/ada"),
+        ]))
+        .expect("the config variable is the one the prompt library reads");
+        assert_eq!(resolved, PathBuf::from("/etc/ada-config/ktask-rs/prompts"));
+    }
+
+    #[test]
+    fn prompt_library_treats_an_empty_xdg_config_home_as_unset() {
+        let resolved = prompt_library_with(&env(&[("XDG_CONFIG_HOME", ""), ("HOME", "/home/ada")]))
+            .expect("an empty base directory is no base directory");
+        assert_eq!(
+            resolved,
+            PathBuf::from("/home/ada/.config/ktask-rs/prompts")
+        );
+    }
+
+    #[test]
+    fn prompt_library_error_names_home_when_xdg_config_home_and_home_are_unset() {
+        let error = prompt_library_with(&env(&[])).expect_err("nothing says where prompts go");
+        assert!(
+            matches!(&error, Error::Config { key, .. } if key == "HOME"),
+            "{error}"
+        );
+        let message = error.to_string();
+        assert!(message.contains("HOME"), "{message}");
+        assert!(message.contains("XDG_CONFIG_HOME"), "{message}");
+    }
+
+    #[test]
+    fn prompt_library_is_beside_the_config_file_in_one_ktask_rs_directory() {
+        let shared = env(&[("XDG_CONFIG_HOME", "/home/ada/.base")]);
+        let file = config_file_with(&shared).expect("the machine's own document");
+        let library = prompt_library_with(&shared).expect("the machine's own prompts");
+        assert_eq!(
+            library.parent(),
+            file.parent(),
+            "one directory owns the configuration document and the prompt library"
+        );
+        assert_eq!(
+            library.file_name().and_then(|name| name.to_str()),
+            Some("prompts"),
+            "the library is the `prompts` directory, which is what an operator is told to open"
+        );
+    }
+
+    #[test]
+    fn prompt_library_resolves_a_home_that_is_not_there_without_making_it() {
+        // Resolving is an answer, not a side effect: `doctor` and the TUI ask
+        // where the library is before any of them decides to write in it.
+        let resolved = prompt_library_with(&env(&home_only("/ktask-rs-absent-home")))
+            .expect("HOME names the fallback base");
+        assert_eq!(
+            resolved,
+            PathBuf::from("/ktask-rs-absent-home/.config/ktask-rs/prompts")
+        );
+        assert!(
+            !resolved.exists(),
+            "resolving where the library goes created it: {}",
+            resolved.display()
+        );
+    }
+
+    #[test]
+    fn prompt_library_resolves_the_process_environment_it_actually_has() {
+        match (process("XDG_CONFIG_HOME"), process("HOME")) {
+            (Some(base), _) => assert_eq!(
+                prompt_library().expect("the environment names a base"),
+                PathBuf::from(base).join("ktask-rs/prompts")
+            ),
+            (None, Some(home)) => assert_eq!(
+                prompt_library().expect("HOME names the fallback base"),
+                PathBuf::from(home).join(".config/ktask-rs/prompts")
+            ),
+            (None, None) => {
+                let error = prompt_library().expect_err("nothing names a base");
+                assert!(
+                    matches!(&error, Error::Config { key, .. } if key == "HOME"),
+                    "{error}"
+                );
+            }
+        }
     }
 
     /// The id `docs/DESIGN.md` specifies, rebuilt here from the bytes of the

@@ -1,4 +1,5 @@
-//! The prompt a provider is handed, assembled by the runner.
+//! The prompt a provider is handed, and where the documents it is built from
+//! live.
 //!
 //! VISION.md §6 makes context assembly the runner's job: "Task context is
 //! assembled by the runner, never hand-injected per task: in v0.1 it is a static
@@ -15,18 +16,39 @@
 //! what lets a remediation, a failures screen or an operator with a shell read
 //! back the exact words a session was given.
 //!
-//! Nothing here reads a clock, the environment or the filesystem, and that is the
-//! whole of why the output is reproducible: a remediation is judged against the
-//! attempt it replaces, and a prompt assembled from an instant or a directory
-//! listing could not be. ADR-0075 records the decisions this file had to make,
-//! including what the header can name as the report path when no project is in
-//! scope to say where its state lives.
+//! ## The two halves of this module
+//!
+//! [`assemble`] is the pure half: it reads no clock, no environment and no path,
+//! which is the whole of why its output is reproducible. A remediation is judged
+//! against the attempt it replaces, and a prompt assembled from an instant or a
+//! directory listing could not be. ADR-0075 records the decisions that file had to
+//! make, including what the header can name as the report path when no project is
+//! in scope to say where its state lives.
+//!
+//! [`ensure_defaults`] and [`load_template`] are the other half, and they do touch
+//! the filesystem, because a prompt has to come from somewhere before it can be
+//! assembled. VISION.md §11 is where they send an operator: the global, private
+//! prompt library below `$XDG_CONFIG_HOME`, and a project's own override below its
+//! state directory — never the working copy, which VISION.md §3's invariant 6
+//! keeps clear of the supervisor's files. Both rules are mechanical here rather
+//! than advisory: a template is read from one of those two places or the call
+//! refuses, and a path reached through a symbolic link is refused rather than
+//! followed, because a link is the one way an override could point back inside the
+//! repository. These two read the environment to find the library, so like
+//! `paths`, `config` and `project` they take it through an accessor and keep the
+//! environment-blind answer in [`assemble`]: see `docs/DESIGN.md` Conventions.
 
-use std::path::PathBuf;
+use std::fs::{self, DirBuilder, OpenOptions, Permissions};
+use std::io::{self, Write as _};
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::path::{Path, PathBuf};
 
 use crate::attempt::EVIDENCE_ROOT;
 use crate::ids::{AttemptId, TaskId};
+use crate::paths::{process_env, prompt_library_with};
+use crate::project::Project;
 use crate::task::Task;
+use crate::{Error, Result};
 
 /// Where a prompt template wants the task body, as [`Task::body`].
 const TASK_PLACEHOLDER: &str = "{{TASK}}";
@@ -59,6 +81,72 @@ const TASK_HEADING: &str = "# The task";
 
 /// The blank line that separates one part of a prompt from the next.
 const SECTION_BREAK: &str = "\n\n";
+
+/// The filename of the prompt template, both as the library's default and as a
+/// project's own override beside it.
+const TEMPLATE_NAME: &str = "task.md";
+
+/// The filename of the context document in the prompt library.
+const CONTEXT_NAME: &str = "context.md";
+
+/// The directory below a project's state directory where its own prompts live.
+///
+/// It carries the library's own directory name on purpose: an override is spelled
+/// the same way in either place, so the whole workflow is to copy
+/// `prompts/task.md` out of the library, edit the copy, and put it in the
+/// project's `prompts/`.
+const OVERRIDE_DIR: &str = "prompts";
+
+/// The mode of the prompt library and of a project's override directory: the
+/// prompts of every project one machine supervises belong to one operator.
+const LIBRARY_DIR_MODE: u32 = 0o700;
+
+/// The mode of a document this module writes.
+const DOCUMENT_MODE: u32 = 0o600;
+
+/// The prompt template a machine that never had one starts with.
+///
+/// It names [`TASK_PLACEHOLDER`], because a template without it hands a provider a
+/// prompt that asks for nothing, and it states the two rules that hold on every
+/// task this tool runs: scope, and the fact that completion is mechanical.
+const DEFAULT_TEMPLATE: &str = "# Task\n\n\
+                                {{TASK}}\n\n\
+                                ## How to work\n\n\
+                                - Do the task above, and nothing else. Work you noticed but were \
+                                not asked for belongs in your report, not in the diff.\n\
+                                - Nothing is done on your say-so. The runner re-runs every check \
+                                itself, so a weakened check, a skipped test or an edited gate \
+                                proves nothing and reads as a policy failure.\n\
+                                - Prompts, context, logs, reports and state belong to the \
+                                supervisor and live outside the repository. Never write one \
+                                inside it.\n\n\
+                                ## Finishing\n\n\
+                                Write your report to the path the header names. Make its first \
+                                line exactly one of `KTASK_RESULT: DONE`, \
+                                `KTASK_RESULT: FAILED` or `KTASK_RESULT: NEEDS_INPUT`, then say \
+                                what you changed, what you ran to prove it, and what you \
+                                deliberately left undone. If a decision is not yours to make, \
+                                ask rather than guess.\n";
+
+/// The context document a machine that never had one starts with.
+///
+/// A placeholder rather than an opinion: VISION.md §6 makes this the standing half
+/// of every prompt, and the project it describes is the one thing this crate cannot
+/// know. It names no [`TASK_PLACEHOLDER`], because a context document is passed to
+/// a session as it stands and is not a template to fill.
+const DEFAULT_CONTEXT: &str = "# Project context\n\n\
+                              Replace this document with what an agent cannot see in the \
+                              repository but has to know to work in it. It is sent to every \
+                              session, ahead of the task and the recorded decisions, so \
+                              whatever is written here is paid for on every attempt.\n\n\
+                              ## What this project is\n\n\
+                              One paragraph: what it is for, who uses it, and what done means \
+                              here.\n\n\
+                              ## How work is done here\n\n\
+                              - The commands that build, test and check this project, and the \
+                              order they run in.\n\
+                              - The conventions no linter will catch.\n\
+                              - The paths and subjects an agent must not touch.\n";
 
 /// The prompt one attempt is handed.
 ///
@@ -187,22 +275,295 @@ fn filled(template: &str, body: &str) -> String {
     format!("{template}\n\n{TASK_HEADING}\n\n{body}")
 }
 
+/// Create the private prompt library and the two documents it starts with.
+///
+/// VISION.md §11 makes the prompt library the home of the template and the context
+/// document every session is sent, and VISION.md §6 makes both of them the standing
+/// half of a prompt. A library that has never been written into is neither: on a
+/// fresh machine the first task of the first project would otherwise fail on a
+/// missing file before an agent had been asked for anything. This answers by making
+/// the library, so a first run has a prompt to send and an operator has two files
+/// worth editing before the second run.
+///
+/// ## Only the half that is missing
+///
+/// A document that is already there is left exactly as it is — its bytes, and the
+/// mode somebody gave it. An operator's own template is the reason a prompt library
+/// exists, and a run that reset it on its way past would be the third tool this
+/// decade to quietly overwrite somebody's configuration.
+///
+/// ## Permissions
+///
+/// The library is `0700` and each document written here is `0600`: VISION.md §11
+/// asks for restrictive permissions rather than for a considerate umask. A library
+/// directory somebody else opened is taken back to `0700` on the way past, because
+/// a grant that was never asked for cannot be removed by asking for it.
+///
+/// # Errors
+///
+/// [`Error::Config`] when neither `XDG_CONFIG_HOME` nor `HOME` names a base (see
+/// [`crate::prompt_library`]); [`Error::Policy`] when the library path or one of its
+/// documents is occupied by something else, or is reached through a symbolic link;
+/// [`Error::Io`] when a directory or a document could not be written.
+pub fn ensure_defaults() -> Result<()> {
+    ensure_defaults_with(&process_env)
+}
+
+/// The prompt template one project is sent: its own override, or the library's.
+///
+/// The order is VISION.md §11's: a per-project override wins over the global
+/// default, and both live outside the repository, so a project's prompt is never a
+/// file an agent could commit into the project's own history. The override is
+/// `<state_dir>/prompts/task.md`; the fallback is [`crate::prompt_library`]`/task.md`.
+///
+/// The library is created first, exactly as [`ensure_defaults`] creates it, so a
+/// first run has a template to hand back rather than a missing file to report, and
+/// so the two documents an operator was meant to find are the two that are there.
+///
+/// The text is handed back as the file holds it — untrimmed, undecorated. Whether
+/// it wants a task in it is [`assemble`]'s question, and it is asked the same way
+/// of a project's own template as of the default.
+///
+/// # What is never read
+///
+/// Nothing below `project.root`. A working copy that holds its own `task.md`, or a
+/// `prompts/` directory of its own, is not an override: it is the supervisor's
+/// business leaking into the repository, which VISION.md §3's invariant 6 forbids
+/// and this function does not negotiate with. An override reached through a
+/// symbolic link is refused for the same reason — a link is the one way an override
+/// could point back inside the working copy, and it is refused rather than followed
+/// because where it points is exactly what cannot be checked from here.
+///
+/// # Errors
+///
+/// As [`ensure_defaults`], plus [`Error::Policy`] when an override path is occupied
+/// by something that is not a file or is reached through a link, and
+/// [`Error::Corrupt`] when the chosen document is not UTF-8 text. A project with no
+/// state directory yet is not an error: it has written no override, so the library
+/// answers.
+pub fn load_template(project: &Project) -> Result<String> {
+    load_template_with(&process_env, project)
+}
+
+/// [`ensure_defaults`] with the environment supplied by the caller, which is how a
+/// test aims the library at a scratch directory: `docs/DESIGN.md` Conventions keeps
+/// a test out of both this repository and the operator's real configuration.
+fn ensure_defaults_with(env: &dyn Fn(&str) -> Option<String>) -> Result<()> {
+    let library = prompt_library_with(env)?;
+    private_directory(&library)?;
+    write_default(&library.join(TEMPLATE_NAME), DEFAULT_TEMPLATE)?;
+    write_default(&library.join(CONTEXT_NAME), DEFAULT_CONTEXT)?;
+    Ok(())
+}
+
+/// [`load_template`] with the environment supplied by the caller.
+fn load_template_with(env: &dyn Fn(&str) -> Option<String>, project: &Project) -> Result<String> {
+    ensure_defaults_with(env)?;
+    let source = match project_override(project)? {
+        Some(path) => path,
+        None => prompt_library_with(env)?.join(TEMPLATE_NAME),
+    };
+    read_document(&source)
+}
+
+/// The project's own template, when it wrote one.
+///
+/// `Ok(None)` is the ordinary answer for a project that never wrote one, including
+/// one whose state directory does not exist yet: not having an override is the
+/// common case, not a defect, and a run is not entitled to register a project just
+/// by reading a prompt. Anything that is *there* in the wrong shape is refused by
+/// name, because an operator who wrote an override and pointed it at the wrong
+/// thing deserves to be told rather than to be sent the default.
+fn project_override(project: &Project) -> Result<Option<PathBuf>> {
+    let directory = project.state_dir.join(OVERRIDE_DIR);
+    match presence(&directory)? {
+        Presence::Directory => {}
+        Presence::Link => return Err(reached_by_link(&directory)),
+        Presence::File => return Err(unusable(&directory, "a directory")),
+        Presence::Absent => return Ok(None),
+    }
+    let path = directory.join(TEMPLATE_NAME);
+    match presence(&path)? {
+        Presence::File => Ok(Some(path)),
+        Presence::Link => Err(reached_by_link(&path)),
+        Presence::Directory => Err(unusable(&path, "a file")),
+        Presence::Absent => Ok(None),
+    }
+}
+
+/// Make `path` exist as a directory only its owner can read.
+///
+/// The mode is set rather than only asked for at creation, which is how
+/// `crate::project` makes a state directory and why the two agree: a directory that
+/// already exists keeps whatever mode somebody gave it, and only a set takes a grant
+/// back.
+fn private_directory(path: &Path) -> Result<()> {
+    match presence(path)? {
+        Presence::Directory => {}
+        Presence::Link => return Err(reached_by_link(path)),
+        Presence::File => return Err(unusable(path, "a directory")),
+        Presence::Absent => {
+            // `recursive` with a `mode` applies that mode to every directory it
+            // creates, so the `ktask-rs` directory above the library is no more
+            // open than the library.
+            DirBuilder::new()
+                .mode(LIBRARY_DIR_MODE)
+                .recursive(true)
+                .create(path)?;
+        }
+    }
+    fs::set_permissions(path, Permissions::from_mode(LIBRARY_DIR_MODE))?;
+    Ok(())
+}
+
+/// Write `text` to `path` unless something is already there.
+///
+/// An existing document is left alone — bytes and mode both — because the reason a
+/// prompt library exists is to hold the prompt somebody wrote. A missing one is
+/// created with `create_new` rather than with a write that follows: two runs on one
+/// machine then agree without either having to lock, and the loser of the race
+/// finds its own bytes already in place because both write the same default.
+fn write_default(path: &Path, text: &str) -> Result<()> {
+    match presence(path)? {
+        Presence::File => return Ok(()),
+        Presence::Link => return Err(reached_by_link(path)),
+        Presence::Directory => return Err(unusable(path, "a file")),
+        Presence::Absent => {}
+    }
+    let mut file = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(DOCUMENT_MODE)
+        .open(path)
+    {
+        Ok(file) => file,
+        // Another run got here between the look above and this one. Its bytes are
+        // these bytes, and overwriting them is what this function exists to refuse.
+        Err(why) if why.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(why) => return Err(why.into()),
+    };
+    file.write_all(text.as_bytes())?;
+    fs::set_permissions(path, Permissions::from_mode(DOCUMENT_MODE))?;
+    // Synced, not merely written: a document created but left in the page cache
+    // comes back as an empty file, and an empty template is left in place by the
+    // rule above, because something is there.
+    file.sync_all()?;
+    Ok(())
+}
+
+/// Read a prompt document as the text it is required to be.
+fn read_document(path: &Path) -> Result<String> {
+    let bytes = fs::read(path)?;
+    String::from_utf8(bytes).map_err(|why| Error::Corrupt {
+        detail: format!("`{}` is not UTF-8 text: {why}", path.display()),
+        seq: None,
+    })
+}
+
+/// What the filesystem says a path is, without following a symbolic link.
+enum Presence {
+    /// Nothing is at the path, and no directory above it refused the question.
+    Absent,
+    /// A directory.
+    Directory,
+    /// An ordinary file.
+    File,
+    /// A symbolic link, wherever it points.
+    Link,
+}
+
+/// [`Presence`] for `path`, as the filesystem says it rather than as the name
+/// suggests.
+///
+/// A link is answered before its type because a link is never the thing this module
+/// may read or write, and asking what it points at is the question this module must
+/// not answer.
+fn presence(path: &Path) -> Result<Presence> {
+    match fs::symlink_metadata(path) {
+        Ok(found) if found.file_type().is_symlink() => Ok(Presence::Link),
+        Ok(found) if found.is_dir() => Ok(Presence::Directory),
+        Ok(found) if found.is_file() => Ok(Presence::File),
+        Ok(_) => Err(unusable(path, "a file or a directory")),
+        Err(why) if refused_because_absent(&why) => Ok(Presence::Absent),
+        Err(why) => Err(why.into()),
+    }
+}
+
+/// Whether the filesystem says the path simply is not there.
+///
+/// `NotADirectory` is the same answer for this module: a level above the path is not
+/// a directory, so nothing that belongs below it can be there.
+fn refused_because_absent(why: &io::Error) -> bool {
+    matches!(
+        why.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+    )
+}
+
+/// Refuse a path that is there and is not the kind of thing this module needs.
+fn unusable(path: &Path, wanted: &str) -> Error {
+    Error::Policy {
+        detail: format!("`{}` is already there and is not {wanted}", path.display()),
+        paths: vec![path.to_path_buf()],
+    }
+}
+
+/// Refuse a prompt-library or override path reached through a symbolic link.
+///
+/// Refused in both directions on one rule: this module neither writes through a
+/// link, which would file a run's document wherever it points, nor reads through
+/// one, which is how a template meant for the private library turns out to be a
+/// file inside the repository the run supervises. Copying the file is the workflow
+/// VISION.md §11 describes, and the one that can be checked.
+fn reached_by_link(path: &Path) -> Error {
+    Error::Policy {
+        detail: format!(
+            "`{}` is refused because it is a symbolic link; copy the file rather than \
+             linking it, since a link can lead into the repository these documents must \
+             stay out of",
+            path.display(),
+        ),
+        paths: vec![path.to_path_buf()],
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{TASK_PLACEHOLDER, assemble};
+    use super::{
+        DOCUMENT_MODE, LIBRARY_DIR_MODE, TASK_PLACEHOLDER, assemble, ensure_defaults,
+        ensure_defaults_with, load_template, load_template_with,
+    };
     use crate::{
-        AttemptId, AttemptRecord, Project, Task, TaskId, TaskStatus, Usage, evidence_dir,
-        write_evidence,
+        AttemptId, AttemptRecord, Error, Project, Task, TaskId, TaskStatus, Usage, evidence_dir,
+        prompt_library, write_evidence,
     };
     use proptest::collection::vec;
     use proptest::prelude::*;
-    use std::fs;
-    use tempfile::tempdir;
+    use std::env::var_os;
+    use std::fs::{self, Permissions};
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Output, Stdio};
+    use tempfile::{TempDir, tempdir};
     use time::macros::datetime;
 
     /// The queue position, the queue length and the attempt the fixtures use.
     const TASK_NUMBER: u32 = 12;
     const TOTAL: usize = 40;
+
+    /// The id the prompt-library fixtures give their project, so a test can name
+    /// the state directory the way a registration would.
+    const PROJECT_ID: &str = "0123456789abcdef";
+
+    /// Set on a child copy of this binary to name the scratch home it is to work
+    /// in; its presence is the whole of the child role. See
+    /// `the_public_entry_points_read_the_environment_the_process_actually_has`.
+    const CHILD_SCRATCH: &str = "KTASK_PROMPT_LIBRARY_CHILD";
+
+    /// The one test a child copy of this binary is told to run: itself, with the
+    /// variable above set so that it takes the other branch.
+    const CHILD_TEST: &str =
+        "context::tests::the_public_entry_points_read_the_environment_the_process_actually_has";
 
     /// A context document in the shape `.ktask/context.md` is written in.
     const CONTEXT: &str = "# Project context\n\nRead VISION.md first.";
@@ -553,5 +914,681 @@ mod tests {
                 prop_assert!(once.contains(adr.trim_end()), "a decision went missing");
             }
         }
+    }
+
+    /// The three scratch directories one prompt-library test needs.
+    ///
+    /// None of them is created by the fixture: whether a base directory exists
+    /// yet is one of the things these tests are about. All three are below a
+    /// [`TempDir`], which `docs/DESIGN.md` Conventions requires of every fixture
+    /// so a test never leaves a file in this repository.
+    struct Scratch {
+        /// What `XDG_CONFIG_HOME` names: the base the prompt library is built under.
+        config: PathBuf,
+        /// What `XDG_STATE_HOME` names: the base a project's state directory is
+        /// built under.
+        state: PathBuf,
+        /// The project's working copy: the one directory no prompt or context
+        /// document of ours is ever read from, and nothing here ever writes.
+        repository: PathBuf,
+        /// Held so the bases exist until the test ends.
+        root: TempDir,
+    }
+
+    impl Scratch {
+        /// A scratch home whose bases do not exist yet.
+        fn new() -> Self {
+            let root = tempdir().expect("a scratch home outside the repository");
+            let (config, state, repository) = layout(root.path());
+            Self {
+                config,
+                state,
+                repository,
+                root,
+            }
+        }
+
+        /// The environment these bases name: both XDG variables and no `HOME`,
+        /// so an answer never depends on the machine running the suite.
+        fn env(&self) -> impl Fn(&str) -> Option<String> {
+            environment(vec![
+                ("XDG_CONFIG_HOME", self.config.clone()),
+                ("XDG_STATE_HOME", self.state.clone()),
+            ])
+        }
+
+        /// The state directory a registration names for this scratch's project,
+        /// whether or not it exists.
+        fn state_dir(&self) -> PathBuf {
+            self.state.join(PROJECT_ID)
+        }
+
+        /// Where this project's own prompts live, below its state directory.
+        fn override_dir(&self) -> PathBuf {
+            self.state_dir().join("prompts")
+        }
+
+        /// The project under test.
+        fn project(&self) -> Project {
+            Project {
+                root: self.repository.clone(),
+                id: PROJECT_ID.to_owned(),
+                state_dir: self.state_dir(),
+            }
+        }
+
+        /// The scratch directory itself, for a file that belongs to nobody's
+        /// layout — a link target outside the library, for instance.
+        fn outside(&self) -> &Path {
+            self.root.path()
+        }
+    }
+
+    /// An environment made of exactly these variables, owned by the closure so a
+    /// test can ask the same environment twice. An empty list is the environment
+    /// of a process that was started with nothing usable in it.
+    fn environment(entries: Vec<(&str, PathBuf)>) -> impl Fn(&str) -> Option<String> {
+        move |key| {
+            entries
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| value.to_string_lossy().into_owned())
+        }
+    }
+
+    /// The three bases a scratch home is made of, below `root`.
+    ///
+    /// A child copy of this test derives the same three from the home its parent
+    /// named, so a scratch layout is spelled in exactly one place.
+    fn layout(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        (
+            root.join("config-home"),
+            root.join("state-home"),
+            root.join("repository"),
+        )
+    }
+
+    /// The prompt library the Paths section of `docs/DESIGN.md` specifies below a
+    /// configuration base, spelled out here rather than reached through
+    /// `crate::paths::prompt_library`: an expectation computed with the code under
+    /// test would accept the library quietly moving.
+    fn library_under(config_home: &Path) -> PathBuf {
+        config_home.join("ktask-rs").join("prompts")
+    }
+
+    /// The mode bits a path carries, to the last three.
+    fn mode(path: &Path) -> u32 {
+        fs::metadata(path)
+            .unwrap_or_else(|why| panic!("`{}` could not be looked at: {why}", path.display()))
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    /// The names inside a directory, sorted.
+    fn names(directory: &Path) -> Vec<String> {
+        let mut found: Vec<String> = fs::read_dir(directory)
+            .unwrap_or_else(|why| panic!("`{}` could not be listed: {why}", directory.display()))
+            .map(|entry| {
+                entry
+                    .expect("a listable directory entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// Read a document back, panicking with its path if it cannot be read.
+    fn document(path: &Path) -> String {
+        fs::read_to_string(path)
+            .unwrap_or_else(|why| panic!("`{}` is unreadable: {why}", path.display()))
+    }
+
+    /// Write a document, with its parents made first.
+    fn write_document(path: &Path, text: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("a directory to write a document in");
+        }
+        fs::write(path, text).expect("a document can be written");
+    }
+
+    #[test]
+    fn a_first_use_writes_a_task_template_and_a_context_document() {
+        let home = Scratch::new();
+        ensure_defaults_with(&home.env())
+            .expect("a machine that never had a prompt library gets one");
+        let library = library_under(&home.config);
+        let template = library.join("task.md");
+        let context = library.join("context.md");
+
+        assert!(
+            template.is_file(),
+            "no task template was written at {}",
+            template.display()
+        );
+        assert!(
+            context.is_file(),
+            "no context document was written at {}",
+            context.display()
+        );
+        let written = document(&template);
+        assert!(
+            written.contains("{{TASK}}"),
+            "the default template never names the task, so every prompt built from it \
+             would ask for nothing:\n{written}"
+        );
+        assert!(!document(&context).trim().is_empty());
+    }
+
+    #[test]
+    fn the_two_defaults_are_different_documents_and_only_one_is_a_template() {
+        // The context document is handed to a session as it stands; the template
+        // is the part with a hole in it. Swapping the two would send a project's
+        // context to the assembler and the task nowhere, which only a test that
+        // tells them apart can notice.
+        let home = Scratch::new();
+        ensure_defaults_with(&home.env()).expect("a first use writes both documents");
+        let library = library_under(&home.config);
+        let template = document(&library.join("task.md"));
+        let context = document(&library.join("context.md"));
+
+        assert_ne!(template, context);
+        assert!(
+            !context.contains("{{TASK}}"),
+            "the context document holds a hole:\n{context}"
+        );
+
+        let prompt = assemble(&task(), &context, &[], &template, AttemptId::new(1), 1);
+        assert!(
+            prompt.contains(task().body.trim_end()),
+            "the default template does not carry the task it was written for:\n{prompt}"
+        );
+        assert!(
+            !prompt.contains("{{TASK}}"),
+            "a placeholder reached the provider:\n{prompt}"
+        );
+    }
+
+    #[test]
+    fn ensure_defaults_writes_once_and_never_overwrites_a_document_it_finds() {
+        let home = Scratch::new();
+        ensure_defaults_with(&home.env()).expect("a first use writes the defaults");
+        let library = library_under(&home.config);
+        let context = library.join("context.md");
+        let written = document(&context);
+        write_document(&library.join("task.md"), "an operator's own prompt\n");
+
+        ensure_defaults_with(&home.env())
+            .expect("a second use finds the library and asks nothing of it");
+
+        assert_eq!(
+            document(&library.join("task.md")),
+            "an operator's own prompt\n",
+            "ensuring the defaults overwrote the template somebody wrote"
+        );
+        assert_eq!(document(&context), written, "the context document moved");
+    }
+
+    #[test]
+    fn ensure_defaults_keeps_the_library_and_its_documents_private() {
+        let home = Scratch::new();
+        ensure_defaults_with(&home.env()).expect("a first use writes the defaults");
+        let library = library_under(&home.config);
+
+        assert_eq!(
+            mode(&library),
+            0o700,
+            "the library holds the prompts of every project this machine supervises"
+        );
+        for name in ["task.md", "context.md"] {
+            assert_eq!(
+                mode(&library.join(name)),
+                0o600,
+                "`{name}` is readable by everybody but the operator"
+            );
+        }
+    }
+
+    #[test]
+    fn ensure_defaults_takes_back_a_library_directory_somebody_opened() {
+        let home = Scratch::new();
+        let library = library_under(&home.config);
+        fs::create_dir_all(&library).expect("a library somebody else made");
+        fs::set_permissions(&library, Permissions::from_mode(0o755))
+            .expect("an open library is a mode away");
+
+        ensure_defaults_with(&home.env()).expect("a first use writes the defaults");
+
+        assert_eq!(
+            mode(&library),
+            0o700,
+            "a grant back is a set, not a request"
+        );
+    }
+
+    #[test]
+    fn ensure_defaults_creates_the_configuration_directories_that_are_not_there() {
+        let home = Scratch::new();
+        assert!(
+            !home.config.exists(),
+            "the fixture must start with no configuration base"
+        );
+
+        ensure_defaults_with(&home.env()).expect("a missing base is made, not complained about");
+
+        assert!(
+            library_under(&home.config).join("task.md").is_file(),
+            "the base directories above the library were never made"
+        );
+    }
+
+    #[test]
+    fn ensure_defaults_refuses_a_prompts_path_occupied_by_a_file() {
+        let home = Scratch::new();
+        let occupied = library_under(&home.config);
+        write_document(&occupied, "not a directory\n");
+
+        let problem = ensure_defaults_with(&home.env())
+            .expect_err("a file where the library belongs is not a library");
+
+        assert!(
+            matches!(&problem, Error::Policy { paths, .. } if paths == &vec![occupied.clone()]),
+            "{problem}"
+        );
+        assert!(problem.to_string().contains("prompts"), "{problem}");
+    }
+
+    #[test]
+    fn ensure_defaults_refuses_a_document_reached_through_a_link() {
+        let home = Scratch::new();
+        let library = library_under(&home.config);
+        let target = home.outside().join("somebody-elses-prompt.md");
+        write_document(&target, "not ours\n");
+        fs::create_dir_all(&library).expect("a library with a link in it");
+        let template = library.join("task.md");
+        symlink(&target, &template).expect("a link stands where the template belongs");
+
+        let problem = ensure_defaults_with(&home.env())
+            .expect_err("a link is not a document this module may write");
+
+        assert!(
+            matches!(&problem, Error::Policy { paths, .. } if paths == &vec![template.clone()]),
+            "{problem}"
+        );
+        assert!(problem.to_string().contains("link"), "{problem}");
+        assert_eq!(
+            document(&target),
+            "not ours\n",
+            "a default was written through a link, wherever it pointed"
+        );
+    }
+
+    #[test]
+    fn ensure_defaults_reports_a_refusal_to_look_inside_a_base_it_cannot_read() {
+        let home = Scratch::new();
+        fs::create_dir_all(&home.config).expect("a configuration base");
+        fs::set_permissions(&home.config, Permissions::from_mode(0o000))
+            .expect("a base this process cannot read");
+
+        let problem = ensure_defaults_with(&home.env())
+            .expect_err("a base that cannot be examined cannot be written either");
+        fs::set_permissions(&home.config, Permissions::from_mode(0o700))
+            .expect("the scratch base is readable again for cleanup");
+
+        assert!(matches!(problem, Error::Io(_)), "{problem}");
+    }
+
+    #[test]
+    fn a_first_load_creates_the_defaults_rather_than_failing() {
+        let home = Scratch::new();
+
+        let loaded = load_template_with(&home.env(), &home.project())
+            .expect("a first run makes the library instead of failing");
+
+        let library = library_under(&home.config);
+        assert!(library.join("task.md").is_file());
+        assert!(
+            library.join("context.md").is_file(),
+            "a first load wrote a template into a library with no context to send with it"
+        );
+        assert_eq!(loaded, document(&library.join("task.md")));
+        assert!(
+            loaded.contains("{{TASK}}"),
+            "the template a first run handed back carries no task:\n{loaded}"
+        );
+    }
+
+    #[test]
+    fn a_project_override_is_preferred_over_the_library_default() {
+        let home = Scratch::new();
+        write_document(
+            &library_under(&home.config).join("task.md"),
+            "the global default\n",
+        );
+        write_document(
+            &home.override_dir().join("task.md"),
+            "this project's own prompt\n",
+        );
+
+        let loaded = load_template_with(&home.env(), &home.project())
+            .expect("a project that wrote its own template gets it");
+
+        assert_eq!(loaded, "this project's own prompt\n");
+    }
+
+    #[test]
+    fn the_library_default_is_used_when_the_project_wrote_no_override() {
+        let home = Scratch::new();
+        write_document(
+            &library_under(&home.config).join("task.md"),
+            "the global default\n",
+        );
+
+        let loaded = load_template_with(&home.env(), &home.project())
+            .expect("a project with no override gets the library's copy");
+
+        assert_eq!(loaded, "the global default\n");
+    }
+
+    #[test]
+    fn nothing_is_read_or_written_inside_the_repository() {
+        // VISION.md §11: prompts and templates live in the private prompt library,
+        // and a per-project override lives in the state directory — never in the
+        // working copy, where an agent's own commit would carry it into public
+        // history. The repository holds a `task.md` and a `prompts/` of its own to
+        // prove neither is consulted nor disturbed.
+        let home = Scratch::new();
+        write_document(&home.repository.join("task.md"), "REPOSITORY COPY\n");
+        write_document(
+            &home.repository.join("prompts").join("task.md"),
+            "REPOSITORY COPY\n",
+        );
+        write_document(
+            &home.repository.join("prompts").join("context.md"),
+            "REPOSITORY COPY\n",
+        );
+        let before = names(&home.repository);
+
+        let loaded = load_template_with(&home.env(), &home.project())
+            .expect("a project whose repository holds a template still loads one");
+
+        assert_eq!(
+            loaded,
+            document(&library_under(&home.config).join("task.md"))
+        );
+        assert!(
+            !loaded.contains("REPOSITORY COPY"),
+            "a template was read from inside the repository:\n{loaded}"
+        );
+        assert_eq!(
+            names(&home.repository),
+            before,
+            "loading a prompt left something behind in the working copy"
+        );
+    }
+
+    #[test]
+    fn an_override_wins_over_both_the_library_and_a_copy_inside_the_repository() {
+        let home = Scratch::new();
+        write_document(
+            &library_under(&home.config).join("task.md"),
+            "the global default\n",
+        );
+        write_document(
+            &home.repository.join("prompts").join("task.md"),
+            "REPOSITORY COPY\n",
+        );
+        write_document(
+            &home.override_dir().join("task.md"),
+            "this project's own prompt\n",
+        );
+
+        let loaded = load_template_with(&home.env(), &home.project())
+            .expect("the override is readable like any other document");
+
+        assert_eq!(loaded, "this project's own prompt\n");
+    }
+
+    #[test]
+    fn a_project_with_no_state_directory_yet_gets_the_library_default() {
+        let home = Scratch::new();
+        write_document(
+            &library_under(&home.config).join("task.md"),
+            "the global default\n",
+        );
+
+        let loaded = load_template_with(&home.env(), &home.project())
+            .expect("an unregistered project is not a reason to fail");
+
+        assert_eq!(loaded, "the global default\n");
+        assert!(
+            !home.state_dir().exists(),
+            "loading a prompt registered a project by making its state directory"
+        );
+    }
+
+    #[test]
+    fn load_template_refuses_an_override_reached_through_a_link() {
+        // The one way an override could point back inside the repository is a
+        // symbolic link, and an operator can write one by accident, so the
+        // refusal is mechanical rather than a line in a document.
+        let home = Scratch::new();
+        write_document(
+            &library_under(&home.config).join("task.md"),
+            "the global default\n",
+        );
+        let inside = home.repository.join("prompts").join("task.md");
+        write_document(&inside, "REPOSITORY COPY\n");
+        let override_path = home.override_dir().join("task.md");
+        fs::create_dir_all(home.override_dir()).expect("an override directory");
+        symlink(&inside, &override_path).expect("a link back into the repository");
+
+        let problem = load_template_with(&home.env(), &home.project())
+            .expect_err("an override is read as the file it is, not as whatever it points at");
+
+        assert!(
+            matches!(&problem, Error::Policy { paths, .. } if paths == &vec![override_path.clone()]),
+            "{problem}"
+        );
+        assert!(problem.to_string().contains("link"), "{problem}");
+    }
+
+    #[test]
+    fn load_template_refuses_an_override_path_occupied_by_a_file() {
+        let home = Scratch::new();
+        write_document(
+            &library_under(&home.config).join("task.md"),
+            "the global default\n",
+        );
+        write_document(&home.override_dir(), "not a directory\n");
+
+        let problem = load_template_with(&home.env(), &home.project())
+            .expect_err("an override directory that is a file is a mistake worth naming");
+
+        assert!(
+            matches!(&problem, Error::Policy { paths, .. } if paths == &vec![home.override_dir()]),
+            "{problem}"
+        );
+    }
+
+    #[test]
+    fn load_template_refuses_a_template_that_is_not_text() {
+        let home = Scratch::new();
+        write_document(
+            &library_under(&home.config).join("task.md"),
+            "the global default\n",
+        );
+        fs::create_dir_all(home.override_dir()).expect("an override directory");
+        fs::write(
+            home.override_dir().join("task.md"),
+            [0xff_u8, 0xfe, 0x00, 0x01],
+        )
+        .expect("a document that is not text can be written");
+
+        let problem = load_template_with(&home.env(), &home.project())
+            .expect_err("a provider is never handed bytes that are not text");
+
+        assert!(matches!(problem, Error::Corrupt { .. }), "{problem}");
+        assert!(problem.to_string().contains("task.md"), "{problem}");
+    }
+
+    #[test]
+    fn neither_document_reports_a_configuration_error_when_nothing_names_a_home() {
+        let home = Scratch::new();
+        let nothing = environment(Vec::new());
+
+        for problem in [
+            ensure_defaults_with(&nothing).expect_err("nothing says where prompts go"),
+            load_template_with(&nothing, &home.project())
+                .expect_err("nothing says where prompts go"),
+        ] {
+            assert!(
+                matches!(&problem, Error::Config { key, .. } if key == "HOME"),
+                "{problem}"
+            );
+        }
+    }
+
+    /// The two public entry points read the environment the process actually has.
+    ///
+    /// Everything else in this module is tested through an injected accessor,
+    /// which is what `docs/DESIGN.md` Conventions requires of a test — and that
+    /// leaves the two wrappers handing the process environment to those tested
+    /// bodies untested by construction. They cannot be reached from inside the
+    /// suite: a test may not change the environment of the process it shares with
+    /// every other test on the machine running it. So this test starts a second
+    /// copy of itself with the variables set on its way in, which is exactly how a
+    /// runner gets them, and asserts on what that copy left in a scratch home.
+    ///
+    /// In the child the same body takes the other branch and becomes the thing
+    /// under test, so there is no orphan test that only the parent ever runs and
+    /// that asserts nothing when the suite runs it.
+    #[test]
+    fn the_public_entry_points_read_the_environment_the_process_actually_has() {
+        if let Some(home) = var_os(CHILD_SCRATCH) {
+            act_as_child(Path::new(&home));
+            return;
+        }
+
+        let scratch = Scratch::new();
+        let outcome = run_child(&scratch);
+        assert!(
+            outcome.status.success(),
+            "a copy of this binary told that XDG_CONFIG_HOME is {} could not reach a \
+             prompt (exit {}):\n{}",
+            scratch.config.display(),
+            outcome.status,
+            String::from_utf8_lossy(&outcome.stderr)
+        );
+
+        // The child asked for a prompt and got one; what it left behind is what
+        // the process-environment half of this module promises.
+        let library = library_under(&scratch.config);
+        assert_eq!(
+            names(&library),
+            ["context.md".to_owned(), "task.md".to_owned()],
+            "the public `ensure_defaults` left this in {} rather than the two default \
+             documents",
+            library.display()
+        );
+        assert_eq!(
+            mode(&library),
+            LIBRARY_DIR_MODE,
+            "the library the public entry points made is readable by somebody other than \
+             its owner"
+        );
+        for document in ["context.md", "task.md"] {
+            assert_eq!(
+                mode(&library.join(document)),
+                DOCUMENT_MODE,
+                "`{document}` a first run wrote is not private to its owner"
+            );
+        }
+        assert!(
+            !scratch.repository.exists(),
+            "reaching a prompt through the public entry points created {} inside the \
+             working copy",
+            scratch.repository.display()
+        );
+    }
+
+    /// Start a second copy of this binary whose environment names `scratch`, and
+    /// hand back what it said and how it ended.
+    fn run_child(scratch: &Scratch) -> Output {
+        let executable = std::env::current_exe()
+            .expect("the child is another copy of this binary, which can name itself");
+        Command::new(executable)
+            .env(CHILD_SCRATCH, scratch.root.path())
+            .env("XDG_CONFIG_HOME", &scratch.config)
+            // Not read by anything here today, and set so that a later resolver
+            // of a state directory aims at the scratch home rather than at the
+            // operator's real one.
+            .env("XDG_STATE_HOME", &scratch.state)
+            // No fallback may answer for the variable under test.
+            .env_remove("HOME")
+            // `cargo nextest` names a protocol descriptor on the environment; a
+            // grandchild answering on its parent's protocol stream would corrupt
+            // the report of the very test that spawned it.
+            .env_remove("NEXTEST_TEST_BUFFER_ID")
+            // Coverage runs say where the counts go: not on top of the parent's file.
+            .env_remove("LLVM_PROFILE_FILE")
+            // The scratch home, so that anything this child writes by accident —
+            // including a coverage profile it was told not to name — lands there
+            // rather than in the crate whose tests it is running.
+            .current_dir(&scratch.root)
+            // Exactly one test — this one — and no capture standing between a
+            // failure inside the child and the pipe the parent reads.
+            .args(["--exact", CHILD_TEST, "--nocapture"])
+            .stdin(Stdio::null())
+            .output()
+            .expect("another copy of this binary could not be started")
+    }
+
+    /// Reach the prompt library the way the runner does: only through the public
+    /// entry points, which read this process's own environment.
+    ///
+    /// A failed assertion here is a panic, which the harness ends the child with —
+    /// the parent reads it as the non-zero exit it asserts against, and this
+    /// message comes back inside the parent's failure.
+    fn act_as_child(scratch_home: &Path) {
+        let (config, state, repository) = layout(scratch_home);
+        ensure_defaults().expect("a first run creates the library instead of failing");
+        let library = config.join("ktask-rs").join("prompts");
+        assert_eq!(
+            prompt_library().expect("the child's own environment names a base"),
+            library,
+            "the public resolver does not point below the XDG_CONFIG_HOME the child was \
+             started with"
+        );
+        let default = fs::read_to_string(library.join("task.md"))
+            .expect("a first run leaves a template behind, not a missing file");
+        assert!(
+            default.contains(TASK_PLACEHOLDER),
+            "the template a first run wrote names no task:\n{default}"
+        );
+
+        let project = Project {
+            root: repository,
+            id: PROJECT_ID.to_owned(),
+            state_dir: state.join(PROJECT_ID),
+        };
+        assert_eq!(
+            load_template(&project).expect("a project that wrote no override still gets a prompt"),
+            default,
+            "a project with no override of its own did not get the library's default"
+        );
+
+        write_document(
+            &state.join(PROJECT_ID).join("prompts").join("task.md"),
+            "the project's own words\n",
+        );
+        assert_eq!(
+            load_template(&project).expect("a project's own template can be read"),
+            "the project's own words\n",
+            "the library default won over the override this project wrote"
+        );
     }
 }

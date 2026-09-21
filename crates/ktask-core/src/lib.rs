@@ -37,7 +37,7 @@ pub use classify::{
     FailureClass, TddException, WaitPlan, classify, limit_message, parse_reset, wait_plan,
 };
 pub use config::Config;
-pub use context::assemble;
+pub use context::{assemble, ensure_defaults, load_template};
 pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use events::{Bus, Recorder, Subscription};
@@ -46,7 +46,7 @@ pub use gate::{
 };
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::{Journal, journal_path};
-pub use paths::{config_file, project_id, state_root};
+pub use paths::{config_file, project_id, prompt_library, state_root};
 pub use project::{Project, discover, project_config_path, register};
 pub use protocol::{
     PhaseSpec, Protocol, WriteScope, check_scope, for_task, verify_green, verify_red,
