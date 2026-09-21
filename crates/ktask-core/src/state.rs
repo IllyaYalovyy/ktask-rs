@@ -242,6 +242,7 @@ fn from_queued(event: &crate::event::EventKind) -> Result<TaskState> {
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::SelfHealingReport { .. } => Err(Error::InvalidTransition {
             from: "Queued".to_string(),
             event: event.discriminant().to_string(),
@@ -285,6 +286,7 @@ fn from_preflight(event: &crate::event::EventKind) -> Result<TaskState> {
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::SelfHealingReport { .. } => Err(Error::InvalidTransition {
             from: "Preflight".to_string(),
             event: event.discriminant().to_string(),
@@ -401,7 +403,8 @@ fn from_running(
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::GateStarted { .. }
-        | EventKind::GateFinished { .. } => Err(Error::InvalidTransition {
+        | EventKind::GateFinished { .. }
+        | EventKind::DecisionResolved { .. } => Err(Error::InvalidTransition {
             from: format!("Running({attempt})"),
             event: event.discriminant().to_string(),
         }),
@@ -520,7 +523,8 @@ fn from_remediating(
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::GateStarted { .. }
-        | EventKind::GateFinished { .. } => Err(Error::InvalidTransition {
+        | EventKind::GateFinished { .. }
+        | EventKind::DecisionResolved { .. } => Err(Error::InvalidTransition {
             from: format!("Remediating({attempt})"),
             event: event.discriminant().to_string(),
         }),
@@ -600,6 +604,7 @@ fn from_verifying(attempt: AttemptId, event: &crate::event::EventKind) -> Result
         | EventKind::TddExceptionUsed { .. }
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::SelfHealingReport { .. } => Err(Error::InvalidTransition {
             from: format!("Verifying({attempt})"),
             event: event.discriminant().to_string(),
@@ -664,6 +669,7 @@ fn from_publishing(attempt: AttemptId, event: &crate::event::EventKind) -> Resul
         | EventKind::TddExceptionUsed { .. }
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::SelfHealingReport { .. } => Err(Error::InvalidTransition {
             from: format!("Publishing({attempt})"),
             event: event.discriminant().to_string(),
@@ -722,6 +728,7 @@ fn from_published_verified(commit: &str, event: &crate::event::EventKind) -> Res
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::SelfHealingReport { .. } => Err(Error::InvalidTransition {
             from: "PublishedVerified".to_string(),
             event: event.discriminant().to_string(),
@@ -745,6 +752,16 @@ fn from_paused(
                     by: by.clone(),
                     at: *at,
                 })
+            } else {
+                Err(Error::InvalidTransition {
+                    from: format!("Paused({reason:?})"),
+                    event: event.discriminant().to_string(),
+                })
+            }
+        }
+        EventKind::DecisionResolved { .. } => {
+            if matches!(reason, PauseReason::Input) {
+                Ok(resume_to.clone())
             } else {
                 Err(Error::InvalidTransition {
                     from: format!("Paused({reason:?})"),
