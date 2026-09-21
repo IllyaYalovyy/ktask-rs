@@ -70,6 +70,29 @@
 //! at the other end: no [`GateKind`] spells publication, so the proof §3's
 //! invariant 7 demands — the commit a fetch brought back — is evidence the
 //! phase records itself.
+//!
+//! # How a phase's scope is enforced
+//!
+//! A phase's [`PhaseSpec::write_scope`] is a declaration; [`check_scope`] is the
+//! enforcement, and it is what makes §9's "the agent may add or modify tests
+//! only" a rule rather than a sentence in a prompt. It is handed the paths the
+//! *repository* says changed — the list [`crate::git::changed_paths`] reads out
+//! of `git diff` and the untracked listing — because the alternative is the
+//! agent's own account of what it edited, and §3's invariant 4 is precisely a
+//! refusal to take a run's evidence from the party being graded.
+//!
+//! It stays a pure predicate, like the rest of the module: no `git`, no
+//! filesystem, no clock. It resolves a scope against a diff and answers with a
+//! [`crate::Error::Policy`] or with nothing, which is what makes the two cases
+//! §9 turns on testable without a repository to dirty — a production file
+//! touched during red, and a verify phase that touched nothing.
+//!
+//! [`crate::check_no_policy_edit`] is the other check on the same diff and not a
+//! rival: a scope says which phase may write where, and that one says no phase
+//! may write the rules the run is judged by, whichever scope it held.
+
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
 
 use crate::config::Config;
 use crate::error::{Error, Result};
@@ -331,11 +354,209 @@ pub fn for_task(task: &Task, config: &Config) -> Result<Protocol> {
     })
 }
 
+/// The sentence a refusal quotes when a phase wrote a path its scope did not
+/// grant.
+const SCOPE_RULE: &str = "a phase may not write outside the paths its write scope declares";
+
+/// The sentence a refusal quotes when a changed path cannot be placed inside the
+/// worktree the scope is drawn on — the one case this check cannot judge, and so
+/// it is refused rather than trusted. See [`check_scope`].
+const UNLOCATABLE_RULE: &str =
+    "a changed path that cannot be located inside the worktree is refused rather than trusted";
+
+/// The one pattern that stands for a whole path segment, or for any number of
+/// them. Anywhere else — `**tests.rs` — it is two ordinary `*`.
+const DOUBLE_STAR: &str = "**";
+
+/// Refuse a phase whose diff wrote outside the paths its scope grants.
+///
+/// `changed` is what the repository says the phase touched: the paths
+/// [`crate::git::changed_paths`] reads out of `git diff` and the untracked
+/// listing, repository-relative and in path order. It is never the agent's list.
+/// §9's "the agent may add or modify tests only" is a rule about files, and a
+/// rule about files that is checked against the account of the party being
+/// graded is a sentence in a prompt.
+///
+/// The three scopes answer three questions:
+///
+/// - [`WriteScope::All`] grants the worktree. `direct`'s implement phase and
+///   `tdd`'s green and refactor phases run under it, and it is no grant over
+///   anything outside the worktree: a path that cannot be placed inside it is
+///   refused here too.
+/// - [`WriteScope::TestsOnly`] grants exactly the paths `test_globs` names and
+///   nothing else — production code, and with it the gate configuration the run
+///   is judged by. This is red's scope, and the reason §9's claim that the tests
+///   came first is checkable rather than claimed.
+/// - [`WriteScope::None`] grants nothing: every changed path is an offender,
+///   which is §10's "dirty tree at verification time" arriving as a policy
+///   failure instead of as a suite run against an uncommitted tree. An empty
+///   diff passes, because a phase that changed nothing has nothing to refuse.
+///
+/// `test_globs` is the project's [`Config::test_globs`] — the language
+/// profile's, not a list compiled in beside the protocol (ADR-0068). One
+/// protocol means the same thing in a Rust tree and a TypeScript tree because a
+/// phase declares the *kind* of access it grants and the project supplies the
+/// paths. An empty list makes `TestsOnly` grant nothing, which is the safe
+/// reading of a project that never said where its tests live: the alternative is
+/// a red phase writing wherever a guessed layout pointed.
+///
+/// # What a glob matches
+///
+/// Matching is on a path's components, so no pattern crosses a directory
+/// boundary by accident:
+///
+/// | pattern | matches |
+/// |---|---|
+/// | `*` | any run of characters inside one path segment, and no separator |
+/// | `?` | exactly one character inside one path segment |
+/// | `**` | only as a whole segment: no directory, or this one and every directory below it |
+/// | any other character | itself, `.` and `-` included |
+///
+/// A pattern is anchored where it is written, so `src/**/tests.rs` matches
+/// `src/tests.rs` and `src/store/tests.rs` and not a root-level `tests.rs`.
+/// Braces and bracketed classes are not a glob language here: `*.{rs,test}`
+/// matches a file whose name ends in `{rs,test}`, which is a refusal an operator
+/// notices rather than a scope that quietly widened past what was written. A
+/// path that is not valid UTF-8 matches no glob, a glob being text, so a
+/// `TestsOnly` phase cannot write one and every other scope treats it as the
+/// ordinary path it is.
+///
+/// # Errors
+///
+/// [`Error::Policy`] quoting the rule broken — both sentences when a diff broke
+/// two — and naming every offending path in the order `changed` listed them, so
+/// the inspector and the failure bundle send a human to the files that broke the
+/// scope and to no others. The classifier already reads a policy error as
+/// [`FailureClass::PolicyFailure`](crate::FailureClass::PolicyFailure), which is
+/// §7's "forbidden file, dirty tree, attempted gate bypass" and earns no retry:
+/// an agent cannot repair a scope violation by editing more files.
+pub fn check_scope(scope: WriteScope, changed: &[PathBuf], test_globs: &[String]) -> Result<()> {
+    let mut offenders = Vec::new();
+    let mut outside = false;
+    let mut unlocatable = false;
+    for path in changed {
+        let Some(parts) = inside_worktree(path) else {
+            unlocatable = true;
+            offenders.push(path.clone());
+            continue;
+        };
+        if writes_outside(scope, &parts, test_globs) {
+            outside = true;
+            offenders.push(path.clone());
+        }
+    }
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    let mut rules = Vec::with_capacity(2);
+    if outside {
+        rules.push(SCOPE_RULE);
+    }
+    if unlocatable {
+        rules.push(UNLOCATABLE_RULE);
+    }
+    Err(Error::Policy {
+        detail: rules.join("; "),
+        paths: offenders,
+    })
+}
+
+/// The components of `path`, as far as they lie inside the worktree.
+///
+/// `.` is dropped and `..` walks back up the components it was given, so
+/// `src/../tests/mod.rs` is read as the test path it names. A path this cannot
+/// place — absolute, or climbing above the root the scope is drawn on — answers
+/// [`None`] rather than a guess, because a check that passed what it could not
+/// read would let `../elsewhere/tests/mod_test.rs` into a red phase on the
+/// strength of a name that happens to match a test glob.
+fn inside_worktree(path: &Path) -> Option<Vec<&OsStr>> {
+    let mut parts: Vec<&OsStr> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => parts.push(part),
+            Component::ParentDir => {
+                parts.pop()?;
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    (!parts.is_empty()).then_some(parts)
+}
+
+/// Whether `scope` forbids a write to the path whose components are `parts`.
+///
+/// `test_globs` is asked of [`WriteScope::TestsOnly`] alone: `All` grants the
+/// whole worktree whatever its shape, and `None` grants so little that the shape
+/// does not matter.
+fn writes_outside(scope: WriteScope, parts: &[&OsStr], test_globs: &[String]) -> bool {
+    match scope {
+        WriteScope::All => false,
+        WriteScope::None => true,
+        WriteScope::TestsOnly => !matches_a_glob(parts, test_globs),
+    }
+}
+
+/// Whether any of `test_globs` names the path whose components are `parts`.
+fn matches_a_glob(parts: &[&OsStr], test_globs: &[String]) -> bool {
+    test_globs.iter().any(|glob| matches_glob(glob, parts))
+}
+
+/// Whether `glob` names the path whose components are `parts`.
+fn matches_glob(glob: &str, parts: &[&OsStr]) -> bool {
+    let segments: Vec<&str> = parts.iter().filter_map(|part| part.to_str()).collect();
+    if segments.len() != parts.len() {
+        return false;
+    }
+    match_segments(&glob.split('/').collect::<Vec<_>>(), &segments)
+}
+
+/// Whether `pattern`'s segment patterns match `segments`, from the front of each.
+fn match_segments(pattern: &[&str], segments: &[&str]) -> bool {
+    match pattern {
+        [] => segments.is_empty(),
+        [DOUBLE_STAR, deeper @ ..] => {
+            match_segments(deeper, segments)
+                || segments
+                    .split_first()
+                    .is_some_and(|(_head, below)| match_segments(pattern, below))
+        }
+        [word, deeper @ ..] => segments
+            .split_first()
+            .is_some_and(|(head, below)| match_name(word, head) && match_segments(deeper, below)),
+    }
+}
+
+/// Whether the one segment pattern `word` matches the one path segment `name`.
+fn match_name(word: &str, name: &str) -> bool {
+    match_name_chars(
+        &word.chars().collect::<Vec<_>>(),
+        &name.chars().collect::<Vec<_>>(),
+    )
+}
+
+/// Whether `pattern` matches `name` character for character, `*` and `?` aside.
+fn match_name_chars(pattern: &[char], name: &[char]) -> bool {
+    match pattern {
+        [] => name.is_empty(),
+        ['*', rest @ ..] => {
+            match_name_chars(rest, name)
+                || name
+                    .split_first()
+                    .is_some_and(|(_head, below)| match_name_chars(pattern, below))
+        }
+        [first, rest @ ..] => name.split_first().is_some_and(|(head, below)| {
+            (*head == *first || *first == '?') && match_name_chars(rest, below)
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{AttemptId, Config, Error, EventKind, Task, TaskStatus};
     use serde_json::Value;
+    use std::path::PathBuf;
 
     /// Every protocol v1 can build.
     ///
@@ -786,6 +1007,363 @@ mod tests {
                 .expect("a blank names nothing, so the default answers"),
             tdd(),
         );
+    }
+
+    /// The paths a Rust project's `test_globs` name, as `Config` ships them.
+    fn rust_globs() -> Vec<String> {
+        Config::default().test_globs
+    }
+
+    /// A language profile's globs, as the configuration holds them.
+    fn glob_list(patterns: &[&str]) -> Vec<String> {
+        patterns
+            .iter()
+            .map(|pattern| (*pattern).to_owned())
+            .collect()
+    }
+
+    /// A diff of `paths`, in the order written, as [`crate::git::changed_paths`]
+    /// hands one over.
+    fn diff(paths: &[&str]) -> Vec<PathBuf> {
+        paths.iter().map(PathBuf::from).collect()
+    }
+
+    /// Assert `scope` permits `paths`, resolved against `globs`.
+    fn permitted(scope: WriteScope, paths: &[&str], globs: &[String]) {
+        if let Err(error) = check_scope(scope, &diff(paths), globs) {
+            panic!("{scope:?} refused {paths:?} under {globs:?}: {error}");
+        }
+    }
+
+    /// The refusal `scope` handed back for `paths` resolved against `globs`, as
+    /// the rule it quoted and the paths it named.
+    fn refused(scope: WriteScope, paths: &[&str], globs: &[String]) -> (String, Vec<String>) {
+        let error = check_scope(scope, &diff(paths), globs)
+            .expect_err("the diff is one the scope is expected to refuse");
+        match error {
+            Error::Policy { detail, paths } => (
+                detail,
+                paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>(),
+            ),
+            other => panic!("a write-scope refusal is a policy violation, not {other}"),
+        }
+    }
+
+    #[test]
+    fn tests_only_refuses_a_production_edit_and_names_the_path() {
+        // The done-when, first half: the red phase's whole point is that this
+        // edit ends the attempt rather than passing with the test suite green.
+        let production = "crates/ktask-core/src/protocol.rs";
+        let (detail, named) = refused(WriteScope::TestsOnly, &[production], &rust_globs());
+        assert_eq!(
+            named,
+            [production],
+            "a production edit has to be refused by name, or the refusal cannot be acted on",
+        );
+        assert_eq!(
+            detail, SCOPE_RULE,
+            "a scope refusal quotes the scope rule alone"
+        );
+    }
+
+    #[test]
+    fn tests_only_permits_an_edit_to_a_test_path() {
+        // The done-when, second half. Four spellings a Rust project's tests
+        // actually come in, each matched by a different default glob.
+        permitted(
+            WriteScope::TestsOnly,
+            &[
+                "crates/ktask-core/tests/protocol.rs",
+                "tests/terminal.rs",
+                "crates/ktask-core/src/gate_test.rs",
+                "src/parser/tests.rs",
+            ],
+            &rust_globs(),
+        );
+    }
+
+    #[test]
+    fn a_default_glob_reaches_where_it_was_written_and_a_project_glob_reaches_further() {
+        // The third shipped glob is `src/**/tests.rs`, anchored at the root like
+        // every pattern that opens with a name — so in a workspace it covers a
+        // top-level `src/` and no other. Refusing the deeper one is the anchor
+        // working, and the fix is the project's own glob, which is exactly the
+        // knob §9's per-language configuration is for.
+        let nested = "crates/ktask-core/src/parser/tests.rs";
+        let (_, named) = refused(WriteScope::TestsOnly, &[nested], &rust_globs());
+        assert_eq!(
+            named,
+            [nested],
+            "`src/**/tests.rs` does not start with a `**/`, so it may not reach into a crate's              own src/ and silently become a whole-tree pattern",
+        );
+
+        let widened = glob_list(&["crates/**/src/**/tests.rs"]);
+        permitted(WriteScope::TestsOnly, &[nested], &widened);
+    }
+
+    #[test]
+    fn tests_only_names_every_production_path_and_no_test_path() {
+        let (detail, named) = refused(
+            WriteScope::TestsOnly,
+            &[
+                "crates/ktask-core/src/protocol.rs",
+                "crates/ktask-core/tests/protocol.rs",
+                "docs/CONTRACT.md",
+            ],
+            &rust_globs(),
+        );
+        assert_eq!(
+            named,
+            ["crates/ktask-core/src/protocol.rs", "docs/CONTRACT.md"],
+            "one clean path in a dirty diff cannot pay for the two that broke the scope, and              the refusal lists them in the order the diff did",
+        );
+        assert_eq!(detail, SCOPE_RULE);
+    }
+
+    #[test]
+    fn none_refuses_a_test_edit_as_soon_as_a_production_one() {
+        let (detail, named) = refused(
+            WriteScope::None,
+            &[
+                "crates/ktask-core/tests/protocol.rs",
+                "crates/ktask-cli/src/main.rs",
+            ],
+            &rust_globs(),
+        );
+        assert_eq!(
+            named,
+            [
+                "crates/ktask-core/tests/protocol.rs",
+                "crates/ktask-cli/src/main.rs"
+            ],
+            "verify and publish hold nothing, so a test path is as much a dirty tree as a              production one",
+        );
+        assert_eq!(detail, SCOPE_RULE);
+    }
+
+    #[test]
+    fn none_permits_a_phase_that_changed_nothing() {
+        // §10's completion phases run on a tree that is already committed, and
+        // an empty diff is the case that passes: refusing it would fail every
+        // honest run, and permitting a non-empty one would verify uncommitted
+        // work.
+        permitted(WriteScope::None, &[], &rust_globs());
+    }
+
+    #[test]
+    fn all_permits_a_production_edit_and_a_test_edit_alike() {
+        permitted(
+            WriteScope::All,
+            &[
+                "crates/ktask-core/src/protocol.rs",
+                "crates/ktask-core/tests/protocol.rs",
+            ],
+            &rust_globs(),
+        );
+    }
+
+    #[test]
+    fn all_is_granted_the_whole_tree_without_being_asked_what_a_test_is() {
+        // `test_globs` bears on `TestsOnly` alone: an implementation phase keeps
+        // its write scope even in a project that named no test path at all.
+        permitted(WriteScope::All, &["crates/ktask-core/src/protocol.rs"], &[]);
+    }
+
+    #[test]
+    fn tests_only_with_no_globs_written_permits_no_path_at_all() {
+        let (detail, named) = refused(
+            WriteScope::TestsOnly,
+            &["crates/ktask-core/tests/protocol.rs"],
+            &[],
+        );
+        assert_eq!(
+            named,
+            ["crates/ktask-core/tests/protocol.rs"],
+            "a project that wrote no `test_globs` never said where its tests live, so red has              nowhere to write; guessing a layout would send the phase wherever the guess pointed",
+        );
+        assert_eq!(detail, SCOPE_RULE);
+    }
+
+    #[test]
+    fn what_counts_as_a_test_is_the_projects_glob_not_a_compiled_in_layout() {
+        // The done-when's third clause, both directions. The same protocol, the
+        // same scope, and a different language profile moves the line.
+        let typescript = glob_list(&["__tests__/**", "**/*.test.ts"]);
+        permitted(
+            WriteScope::TestsOnly,
+            &["__tests__/auth.test.ts", "src/deep/session.test.ts"],
+            &typescript,
+        );
+        let (_, named) = refused(WriteScope::TestsOnly, &["src/auth.ts"], &typescript);
+        assert_eq!(
+            named,
+            ["src/auth.ts"],
+            "the profile's own production code stays read-only                                            under its own globs"
+        );
+
+        let (_, named) = refused(
+            WriteScope::TestsOnly,
+            &["__tests__/auth.test.ts"],
+            &rust_globs(),
+        );
+        assert_eq!(
+            named,
+            ["__tests__/auth.test.ts"],
+            "the check has no private notion of a test path that overrides what the project              wrote: under the Rust globs that file is production",
+        );
+    }
+
+    #[test]
+    fn a_path_that_climbs_out_of_the_worktree_is_refused_however_it_is_named() {
+        // `..` is the hole this closes: the name ends in `_test.rs` and matches
+        // the default glob, so a matcher that read the string as written would
+        // let the red phase edit another checkout's tests.
+        let climbing = "../elsewhere/tests/auth_test.rs";
+        let (detail, named) = refused(WriteScope::TestsOnly, &[climbing], &rust_globs());
+        assert_eq!(
+            named,
+            [climbing],
+            "a path that walks out of the worktree is refused even though its tail matches a              test glob",
+        );
+        assert_eq!(
+            detail, UNLOCATABLE_RULE,
+            "the refusal says the path could not be placed, which is the reason the glob was              never asked",
+        );
+    }
+
+    #[test]
+    fn a_scope_that_grants_the_worktree_grants_nothing_outside_it() {
+        let (detail, named) = refused(WriteScope::All, &["/etc/hosts"], &rust_globs());
+        assert_eq!(
+            named,
+            ["/etc/hosts"],
+            "`All` is every path in the worktree, and an absolute path is not in it",
+        );
+        assert_eq!(detail, UNLOCATABLE_RULE);
+    }
+
+    #[test]
+    fn a_diff_with_both_a_stray_path_and_a_scope_break_quotes_both_rules() {
+        let (_, named) = refused(
+            WriteScope::TestsOnly,
+            &["/etc/hosts", "crates/ktask-core/src/protocol.rs"],
+            &rust_globs(),
+        );
+        assert_eq!(named, ["/etc/hosts", "crates/ktask-core/src/protocol.rs"]);
+        let (detail, _) = refused(
+            WriteScope::TestsOnly,
+            &["crates/ktask-core/src/protocol.rs", "../elsewhere/notes.md"],
+            &rust_globs(),
+        );
+        assert_eq!(
+            detail,
+            format!("{SCOPE_RULE}; {UNLOCATABLE_RULE}"),
+            "one refusal has to say both what was written outside the scope and that a path              could not be located, or a reader is sent to fix half of it",
+        );
+    }
+
+    #[test]
+    fn a_path_that_walks_back_inside_the_worktree_is_the_path_it_names() {
+        // `..` inside the root is a path, not an escape: dropping it is what
+        // keeps this refusal from refusing paths git itself would print.
+        permitted(
+            WriteScope::TestsOnly,
+            &[
+                "crates/ktask-core/src/../tests/protocol.rs",
+                "./tests/terminal.rs",
+            ],
+            &rust_globs(),
+        );
+    }
+
+    #[test]
+    fn one_star_stays_inside_one_directory() {
+        let narrow = glob_list(&["tests/*.rs"]);
+        permitted(WriteScope::TestsOnly, &["tests/protocol.rs"], &narrow);
+        let (_, named) = refused(
+            WriteScope::TestsOnly,
+            &["tests/fixture/protocol.rs"],
+            &narrow,
+        );
+        assert_eq!(
+            named,
+            ["tests/fixture/protocol.rs"],
+            "`*` crossing a directory boundary would turn one typed glob into `**`",
+        );
+    }
+
+    #[test]
+    fn a_double_star_stands_for_any_number_of_directories_including_none() {
+        let module = glob_list(&["src/**/tests.rs"]);
+        permitted(
+            WriteScope::TestsOnly,
+            &[
+                "src/tests.rs",
+                "src/store/tests.rs",
+                "src/store/memory/tests.rs",
+            ],
+            &module,
+        );
+        let (_, named) = refused(
+            WriteScope::TestsOnly,
+            &["tests.rs", "src/tests.rs.bak"],
+            &module,
+        );
+        assert_eq!(
+            named,
+            ["tests.rs", "src/tests.rs.bak"],
+            "a pattern is anchored where it was written and a name is matched whole: `src/` is              literal, and `tests.rs.bak` is not `tests.rs`",
+        );
+    }
+
+    #[test]
+    fn a_question_mark_stands_for_exactly_one_character() {
+        let helpers = glob_list(&["tests/fixture?.rs"]);
+        permitted(WriteScope::TestsOnly, &["tests/fixture1.rs"], &helpers);
+        let (_, named) = refused(
+            WriteScope::TestsOnly,
+            &["tests/fixture12.rs", "tests/fixture.rs"],
+            &helpers,
+        );
+        assert_eq!(
+            named,
+            ["tests/fixture12.rs", "tests/fixture.rs"],
+            "`?` matching a run, or nothing, is a glob wider than the one written",
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_not_text_is_never_a_test_path() {
+        // A glob is text, so a name that is not UTF-8 matches no pattern — it
+        // stays a path, and an implementation phase keeps its scope over it.
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let odd = PathBuf::from(OsStr::from_bytes(b"tests/fixture\xff.rs"));
+        let changed = std::slice::from_ref(&odd);
+        let error = check_scope(WriteScope::TestsOnly, changed, &rust_globs())
+            .expect_err("a name that is not text is not a test path, whoever wrote the glob");
+        assert!(matches!(error, Error::Policy { .. }), "{error}");
+        if let Err(error) = check_scope(WriteScope::All, changed, &rust_globs()) {
+            panic!("an implementation phase lost its scope over a path it can name: {error}");
+        }
+    }
+
+    #[test]
+    fn braces_and_bracketed_classes_match_literally() {
+        // Pinned so the absence of a brace expansion is a decision rather than an
+        // oversight: a glob language the configuration did not get has to refuse,
+        // not silently widen what a red phase may write.
+        let braces = glob_list(&["**/*.{rs,test}"]);
+        let (_, named) = refused(
+            WriteScope::TestsOnly,
+            &["src/auth.rs", "src/auth.test"],
+            &braces,
+        );
+        assert_eq!(named, ["src/auth.rs", "src/auth.test"]);
     }
 
     #[test]
