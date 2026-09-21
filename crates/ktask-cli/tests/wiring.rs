@@ -147,182 +147,93 @@ fn wiring_end_to_end_drains_queue() {
     // 4. Create a dummy scenario file.
     // Direct protocol has: Implement, Verify, Publish phases.
     // Each task needs about 7 steps: 1 Implement + 5 Verify gates + 1 Publish
-    let scenario_content = r#"# Task 1 steps
+    let scenario_content = r#"# Simple scenario: both tasks succeed without remediation
+# All steps use generic dummy provider output, minimal file modifications
+
 [[steps]]
 outcome = "success"
-stdout = "Task 1 step 1"
+stdout = "dummy step 1"
 
 [steps.files]
-"README.md" = "Work done for task 1"
-"src/main.rs" = "fn main() { println!(\"Task 1 work\"); }"
-".ktask/report.md" = "KTASK_RESULT: DONE\n\nTask 1 completed successfully"
+"README.md" = "Task work"
+"src/main.rs" = "fn main(){}"
+".ktask/report.md" = "KTASK_RESULT: DONE"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 1 step 2"
+stdout = "dummy step 2"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 1 step 3"
+stdout = "dummy step 3"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 1 step 4"
+stdout = "dummy step 4"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 1 step 5"
+stdout = "dummy step 5"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 1 step 6"
+stdout = "dummy step 6"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 1 step 7"
+stdout = "dummy step 7"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 1 step 8"
+stdout = "dummy step 8"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 1 step 9"
+stdout = "dummy step 9"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 1 step 10"
+stdout = "dummy step 10"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 1 step 11"
+stdout = "dummy step 11"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 1 step 12"
+stdout = "dummy step 12"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 1 step 13"
-
-# Task 2 steps - initial attempt
-[[steps]]
-outcome = "success"
-stdout = "Task 2 step 1"
-
-[steps.files]
-"README.md" = "Work done for task 2"
-"src/main.rs" = "fn main() { println!(\"Task 2 work\"); }"
-".ktask/report.md" = "KTASK_RESULT: DONE\n\nTask 2 completed successfully"
+stdout = "dummy step 13"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 2 step 2"
+stdout = "dummy step 14"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 2 step 3"
+stdout = "dummy step 15"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 2 step 4"
+stdout = "dummy step 16"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 2 step 5"
+stdout = "dummy step 17"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 2 step 6"
+stdout = "dummy step 18"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 2 step 7"
+stdout = "dummy step 19"
 
 [[steps]]
 outcome = "success"
-stdout = "Task 2 step 8"
-
-[[steps]]
-outcome = "success"
-stdout = "Task 2 step 9"
-
-[[steps]]
-outcome = "success"
-stdout = "Task 2 step 10"
-
-[[steps]]
-outcome = "success"
-stdout = "Task 2 step 11"
-
-[[steps]]
-outcome = "success"
-stdout = "Task 2 step 12"
-
-[[steps]]
-outcome = "success"
-stdout = "Task 2 step 13"
-
-# Extra remediation steps for both tasks
-[[steps]]
-outcome = "success"
-stdout = "Extra step 1"
-
-[[steps]]
-outcome = "success"
-stdout = "Extra step 2"
-
-[[steps]]
-outcome = "success"
-stdout = "Extra step 3"
-
-[[steps]]
-outcome = "success"
-stdout = "Extra step 4"
-
-[[steps]]
-outcome = "success"
-stdout = "Extra step 5"
-
-[[steps]]
-outcome = "success"
-stdout = "Extra step 6"
-
-[[steps]]
-outcome = "success"
-stdout = "Extra step 7"
-
-[[steps]]
-outcome = "success"
-stdout = "Extra step 8"
-
-[[steps]]
-outcome = "success"
-stdout = "Extra step 9"
-
-[[steps]]
-outcome = "success"
-stdout = "Extra step 10"
-
-[[steps]]
-outcome = "success"
-stdout = "Extra step 11"
-
-[[steps]]
-outcome = "success"
-stdout = "Extra step 12"
-
-[[steps]]
-outcome = "success"
-stdout = "Extra step 13"
-
-[[steps]]
-outcome = "success"
-stdout = "Extra step 14"
-
-[[steps]]
-outcome = "success"
-stdout = "Extra step 15"
+stdout = "dummy step 20"
 "#;
 
     let scenario_file = env.repo_dir.join(".ktask-scenario.toml");
