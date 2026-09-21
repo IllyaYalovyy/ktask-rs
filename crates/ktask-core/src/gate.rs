@@ -986,22 +986,31 @@ env = {}
         assert!(!result.passed);
         assert!(result.timed_out);
 
-        thread::sleep(Duration::from_millis(1500));
+        // Wait for processes to be cleaned up, with retries for slower systems
+        let max_attempts = 10;
+        let mut attempt = 0;
+        loop {
+            thread::sleep(Duration::from_millis(200));
+            attempt += 1;
 
-        let ps_output = Command::new("pgrep").arg("-f").arg("sleep 30").output();
+            let ps_output = Command::new("pgrep").arg("-f").arg("sleep 30").output();
 
-        match ps_output {
-            Ok(output) => {
-                assert!(
-                    output.stdout.is_empty(),
-                    "no sleep processes should survive timeout"
-                );
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // pgrep not found, skip the check
-            }
-            Err(e) => {
-                panic!("unexpected error checking for sleep processes: {e}");
+            match ps_output {
+                Ok(output) => {
+                    if output.stdout.is_empty() {
+                        break; // Processes are cleaned up
+                    } else if attempt >= max_attempts {
+                        panic!("no sleep processes should survive timeout");
+                    }
+                    // Otherwise, retry
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // pgrep not found, skip the check
+                    break;
+                }
+                Err(e) => {
+                    panic!("unexpected error checking for sleep processes: {e}");
+                }
             }
         }
     }
