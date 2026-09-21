@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::error::{Error, Result};
+use crate::event::EventKind;
 use crate::report::body_after_header;
 use crate::task::missing_phrase;
 use crate::{ReportResult, parse_report};
@@ -139,6 +140,23 @@ pub fn decision_request(text: &str) -> Result<Option<DecisionRequest>> {
         return Err(refused(&missing));
     }
     Ok(Some(request))
+}
+
+/// The journal record a report asks for, when its header claims `NEEDS_INPUT`.
+///
+/// [`decision_request`] reads the ask; this puts it in the catalog entry that
+/// opens the wait, so a runner has one call for the three answers a report can
+/// give: the record to journal, nothing at all because the report claimed `DONE`
+/// or `FAILED`, or a refusal of the pause it claimed without asking. Journaling
+/// what comes back parks the attempt that wrote it ([`crate::apply`], and
+/// ADR-0079 for why the record is the question rather than a note about it).
+///
+/// # Errors
+///
+/// Whatever [`decision_request`] refuses: the report's unreadable header, or a
+/// `NEEDS_INPUT` whose body is short of a required section.
+pub fn decision_event(text: &str) -> Result<Option<EventKind>> {
+    Ok(decision_request(text)?.map(|request| EventKind::DecisionRaised { request }))
 }
 
 /// The required sections a body did not fill, in the order the format names them.
@@ -281,7 +299,7 @@ fn refused(missing: &[&str]) -> Error {
 #[cfg(test)]
 mod tests {
     use super::{DecisionRequest, SECTIONS};
-    use crate::{Error, Result, parse_report};
+    use crate::{Error, EventKind, Result, parse_report};
     use proptest::prelude::*;
 
     /// The three headers [`crate::parse_report`] accepts, spelled here so a
@@ -328,8 +346,9 @@ mod tests {
         "Impact: every replay.\n",
     );
 
-    /// The message a report was refused for.
-    fn refusal(asked: Result<Option<DecisionRequest>>) -> String {
+    /// The message a report was refused for, whichever of the two readings
+    /// refused it: the request alone, or the record it would have become.
+    fn refusal<T>(asked: Result<Option<T>>) -> String {
         asked
             .err()
             .unwrap_or_else(|| panic!("a report that was read cannot be the answer here"))
@@ -651,6 +670,72 @@ mod tests {
         assert!(
             message.contains("`Question:`"),
             "prose that explains a blocker without asking a question is not a pause: {message}"
+        );
+    }
+
+    /// The record a report asks for, or the panic its absence deserves.
+    fn raised(text: &str) -> EventKind {
+        super::decision_event(text)
+            .expect("a well-formed request is not a refusal")
+            .unwrap_or_else(|| panic!("a NEEDS_INPUT report has to raise its question"))
+    }
+
+    #[test]
+    fn a_needs_input_report_raises_the_record_that_opens_the_wait() {
+        let event = raised(REQUEST);
+        let EventKind::DecisionRaised { request } = &event else {
+            panic!(
+                "a pause for input is journaled as the ask, not as another event: {:?}",
+                event.discriminant()
+            );
+        };
+        assert_eq!(
+            request.question, "Should the journal keep its own sequence or adopt SQLite's rowid?",
+            "the record a human reads has to hold the sentence the agent wrote"
+        );
+        assert_eq!(
+            event.discriminant(),
+            "DecisionRaised",
+            "the kind column the journal indexes on is the entry docs/DESIGN.md names"
+        );
+    }
+
+    #[test]
+    fn a_report_that_asks_for_nothing_raises_no_record() {
+        for header in ["DONE", "FAILED"] {
+            let body = REQUEST.replace("KTASK_RESULT: NEEDS_INPUT\n", "");
+            let text = format!("KTASK_RESULT: {header}\n{body}");
+            assert_eq!(
+                super::decision_event(&text).ok().flatten(),
+                None,
+                "a {header} report cannot stop the queue on a question it did not ask"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pause_claimed_without_a_question_raises_no_record_and_says_which_section() {
+        let text = MINIMAL.replace("Question: Which sequence?\n", "");
+        let message = refusal(super::decision_event(&text));
+        assert!(
+            message.contains("`Question:`"),
+            "the runner is told which section to send back for: {message}"
+        );
+    }
+
+    #[test]
+    fn a_raised_record_survives_the_encoding_the_journal_stores() {
+        let event = raised(REQUEST);
+        let text = serde_json::to_string(&event).expect("a raised record encodes as JSON");
+        let decoded: EventKind =
+            serde_json::from_str(&text).expect("what the journal writes is read back");
+        assert_eq!(
+            decoded, event,
+            "the question read out of the journal has to be the question that was asked"
+        );
+        assert!(
+            text.contains("Should the journal keep its own sequence"),
+            "a record that stored the ask as anything but its own text would lose it: {text}"
         );
     }
 
