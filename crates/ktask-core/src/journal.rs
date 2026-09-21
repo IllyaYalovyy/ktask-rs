@@ -983,6 +983,11 @@ fn stored_entry(payload: &str, column: &str, seq: EventSeq) -> Result<EventKind>
 /// - **Gate** is read out of the body on the way back (`task::gate_of`), because
 ///   a gate is marked by a section of the body rather than by a column or a
 ///   status, and the schema gives a row no gate to hold (ADR-0019).
+/// - **Protocol** is the one optional section that does have a column, so
+///   [`Journal::put_tasks`] writes the word the task declared into it and
+///   [`Journal::tasks`] reads it back from there: `NULL` is reserved for the
+///   absence the schema comments — "NULL means the configured default" — rather
+///   than used for a task that named one.
 ///
 /// # Why a module, and why this one
 ///
@@ -999,16 +1004,16 @@ mod tasks {
 
     /// One queue row, in the order [`Journal::tasks`] spells its columns.
     ///
-    /// `title`, `protocol` and `added_at` are absent on purpose: the first is a
-    /// projection of `body` that no read should trust a second copy of, the
-    /// second is NULL for every row this build writes, and the third dates a row
-    /// for whoever asks when it arrived. None of the three is a field of [`Task`].
+    /// `title` and `added_at` are absent on purpose: the first is a projection of
+    /// `body` that no read should trust a second copy of, the second dates a row
+    /// for whoever asks when it arrived. Neither is a field of [`Task`].
     struct TaskRow {
         id: i64,
         outcome: String,
         done_when: String,
         verify: String,
         refs: String,
+        protocol: Option<String>,
         body: String,
     }
 
@@ -1080,7 +1085,7 @@ mod tasks {
                 validate(task)?;
                 transaction.execute(
                     "INSERT INTO tasks (id, title, outcome, done_when, verify, refs, protocol, \
-                     body, added_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8)",
+                     body, added_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     params![
                         i64::from(position.get()),
                         task.title(),
@@ -1088,6 +1093,7 @@ mod tasks {
                         task.done_when,
                         task.verify,
                         task.refs,
+                        task.protocol,
                         task.body,
                         added_at
                     ],
@@ -1118,7 +1124,8 @@ mod tasks {
         /// row this build cannot say a word about.
         pub fn tasks(&self) -> Result<Vec<Task>> {
             let mut statement = self.conn.prepare(
-                "SELECT id, outcome, done_when, verify, refs, body FROM tasks ORDER BY id",
+                "SELECT id, outcome, done_when, verify, refs, protocol, body FROM tasks \
+                 ORDER BY id",
             )?;
             statement
                 .query_map([], task_row)?
@@ -1154,7 +1161,8 @@ mod tasks {
             done_when: row.get(2)?,
             verify: row.get(3)?,
             refs: row.get(4)?,
-            body: row.get(5)?,
+            protocol: row.get(5)?,
+            body: row.get(6)?,
         })
     }
 
@@ -1163,7 +1171,10 @@ mod tasks {
     /// Two of its fields are supplied rather than read, because a row holds
     /// neither: `status`, which is the journal's to report, and `gate`, which
     /// only the body carries. Reading a stored copy of either would hand back a
-    /// fact the text and the journal are free to disagree with.
+    /// fact the text and the journal are free to disagree with. A protocol is
+    /// read from its column instead, because `docs/DESIGN.md` gives the row that
+    /// column and a `NULL` in it means the absence — the configured default —
+    /// and not a word that got lost on the way in.
     fn stored_task(record: TaskRow) -> Result<Task> {
         let id = stored_position(record.id)?;
         let gate = gate_of(&record.body);
@@ -1176,6 +1187,7 @@ mod tasks {
             verify: record.verify,
             refs: record.refs,
             gate,
+            protocol: record.protocol,
         })
     }
 
@@ -1406,6 +1418,77 @@ mod tasks {
                 "`title` is the body's projection, written for a reader who lists the queue \
                  without parsing a body — the third one cut at 80 characters like every other \
                  title in the queue"
+            );
+        }
+
+        /// A one-task plan that names the protocol it is worked with.
+        const TDD_PLAN: &str = "\
+## Work the queue red first
+
+**Outcome:** a task carries the protocol it was worked with.
+**Done-when:** the queue's row holds the word and a read hands it back.
+**Verify:** `cargo nextest run -p ktask-core`
+**Refs:** VISION.md section 9
+**Protocol:** tdd
+";
+
+        #[test]
+        fn a_task_that_names_a_protocol_is_stored_with_it_and_reads_it_back() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let parsed = parse_plan(TDD_PLAN).expect("a task may name a protocol this build runs");
+
+            journal
+                .put_tasks(&parsed)
+                .expect("an empty queue takes a plan the parser accepted");
+
+            assert_eq!(
+                stored_rows(&journal.conn)
+                    .first()
+                    .expect("one row was written")
+                    .protocol
+                    .as_deref(),
+                Some("tdd"),
+                "`protocol` is the column docs/DESIGN.md gives this fact, and NULL is reserved \
+                 for a task that names none — a queue that stored the word nowhere would be a \
+                 queue that lost it",
+            );
+            assert_eq!(
+                journal
+                    .tasks()
+                    .expect("the queue is readable")
+                    .first()
+                    .expect("one row was written")
+                    .protocol
+                    .as_deref(),
+                Some("tdd"),
+                "a read hands back the protocol the import was given, so `status` can display \
+                 the choice without parsing a body",
+            );
+        }
+
+        #[test]
+        fn the_queue_refuses_a_task_whose_protocol_it_cannot_name() {
+            let parent = scratch();
+            let mut journal = open_journal(parent.path());
+            let unrunnable = Task {
+                protocol: Some("spec-first".to_owned()),
+                ..parse_plan(TDD_PLAN)
+                    .expect("the scratch plan is a plan the parser accepts")
+                    .remove(0)
+            };
+
+            let error = journal
+                .put_tasks(std::slice::from_ref(&unrunnable))
+                .expect_err("a task no build can run never enters the queue");
+            assert!(
+                error.to_string().contains("spec-first"),
+                "the refusal names the word it refused, and the queue is left empty: {error}"
+            );
+            assert!(
+                stored_rows(&journal.conn).is_empty(),
+                "the refusal is the whole of the import: no row is written for a task that \
+                 cannot be worked"
             );
         }
 

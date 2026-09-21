@@ -82,6 +82,22 @@ pub struct Task {
     /// gate column, and a task read back out of the database has it read out of its
     /// body by `task::gate_of`.
     pub gate: Option<String>,
+    /// The `**Protocol:**` section — the work protocol this task is worked with,
+    /// as written.
+    ///
+    /// `None` is not a failed parse but the absence that lets a project's
+    /// [`crate::Config::default_protocol`] answer; the chain that resolves the
+    /// two words into phases is [`crate::protocol::for_task`], and `direct` is
+    /// what a queue with nothing written anywhere is worked under.
+    ///
+    /// The word is checked here, when the task is added, rather than when an
+    /// attempt starts: a task no build can work is not a queued task, and a
+    /// run that discovered the fact twenty minutes in would have spent the
+    /// attempt to report it ([`validate`] asks; the import, `plan lint` and the
+    /// door to the queue all hold to that one answer). Unlike a gate, which the
+    /// body alone carries, this fact has the column `docs/DESIGN.md` gives it,
+    /// so a queue row stores the word instead of re-reading the block.
+    pub protocol: Option<String>,
 }
 
 /// How many characters [`Task::title`] keeps before it cuts the line.
@@ -93,6 +109,14 @@ const TITLE_MAX_CHARS: usize = 80;
 
 /// The label whose section makes a task a human gate.
 const GATE_SECTION: &str = "Gate";
+
+/// The label whose section names the work protocol a task is worked with.
+const PROTOCOL_SECTION: &str = "Protocol";
+
+/// The [`crate::Error::Config`] key a `**Protocol:**` naming no protocol is
+/// refused under — the section's own word, lowercase, the way `provider` keys
+/// the setting that names an adapter nobody has.
+const PROTOCOL_KEY: &str = "protocol";
 
 /// The most indentation a heading may have and still be a heading.
 ///
@@ -165,8 +189,10 @@ struct Block<'a> {
 /// database.
 ///
 /// A `**Gate:**` section marks the task a human gate and is kept as
-/// [`Task::gate`]; the four required sections are kept in their own fields, and
-/// any other bold label is kept in the body alone.
+/// [`Task::gate`]; a `**Protocol:**` section is kept as [`Task::protocol`], and
+/// is refused here if it names no protocol this build runs; the four required
+/// sections are kept in their own fields, and any other bold label is kept in
+/// the body alone.
 ///
 /// # Errors
 ///
@@ -200,16 +226,63 @@ pub fn parse_plan(text: &str) -> Result<Vec<Task>> {
 /// [`Error::Policy`] naming every required section the task lacks, not only
 /// the first: a reader who has to run the check once per mistake learns that
 /// the check cannot be trusted to have looked. No path is listed, because a
-/// row of the queue broke the rule rather than a file.
+/// row of the queue broke the rule rather than a file. [`Error::Config`] keyed
+/// `protocol` when the task's optional `**Protocol:**` section names no
+/// protocol this build runs — which is why an unknown name never reaches an
+/// attempt: the queue's door, [`crate::Journal::put_tasks`], asks this question
+/// of every row before it writes one.
 pub fn validate(task: &Task) -> Result<()> {
     let missing = missing_sections(task);
-    if missing.is_empty() {
-        return Ok(());
+    if !missing.is_empty() {
+        return Err(Error::Policy {
+            detail: format!("task {} is missing {}", task.id, missing_phrase(&missing)),
+            paths: Vec::new(),
+        });
     }
-    Err(Error::Policy {
-        detail: format!("task {} is missing {}", task.id, missing_phrase(&missing)),
-        paths: Vec::new(),
-    })
+    // Asked second, and of the same task: a block short of its required sections
+    // has a shape to fix before anyone is told the word under its
+    // `**Protocol:**` is unrunnable.
+    check_protocol(task.protocol.as_deref(), &format!("task {}", task.id))
+}
+
+/// Ask that the word a `**Protocol:**` section holds names a protocol this build
+/// runs, refusing it with `subject` — the task, or the block and line it came
+/// from — written into the sentence a reader acts on.
+///
+/// The two rungs of the answer are the two a person can act on: a section with
+/// nothing under it names no protocol and has to be filled in or deleted, and a
+/// word that names nothing runnable is refused by quoting it back beside the two
+/// words that would have worked. The names themselves come from
+/// [`crate::protocol`], the one place they are spelled, so a refusal cannot
+/// promise a protocol the build does not have.
+///
+/// # Errors
+///
+/// [`Error::Config`] keyed `protocol` naming the word, the two that exist, and
+/// `subject`.
+fn check_protocol(written: Option<&str>, subject: &str) -> Result<()> {
+    let Some(text) = written else {
+        return Ok(());
+    };
+    let name = text.trim();
+    if name.is_empty() {
+        return Err(Error::Config {
+            key: PROTOCOL_KEY.to_owned(),
+            detail: format!(
+                "the `**{PROTOCOL_SECTION}:**` section of {subject} has nothing written under \
+                 it, which names no work protocol: write {} or leave the section out to take \
+                 the configured default",
+                crate::protocol::alternatives(" or "),
+            ),
+        });
+    }
+    if crate::protocol::by_name(name).is_none() {
+        return Err(Error::Config {
+            key: PROTOCOL_KEY.to_owned(),
+            detail: format!("{} — {subject}", crate::protocol::refusal(name)),
+        });
+    }
+    Ok(())
 }
 
 /// The `**Gate:**` section a task body carries, if it carries one.
@@ -407,17 +480,24 @@ fn build_task(id: TaskId, block: &Block<'_>) -> Result<Task> {
         verify: text_of(&sections, "Verify"),
         refs: text_of(&sections, "Refs"),
         gate: sections.get(GATE_SECTION).cloned(),
+        protocol: sections.get(PROTOCOL_SECTION).cloned(),
     };
     // The same predicate [`validate`] asks of a row already in the queue. The
     // report differs because the readers do: whoever holds this error is
     // holding the document, so the message gives them the line to open.
     let missing = missing_sections(&task);
-    if missing.is_empty() {
-        return Ok(task);
+    if !missing.is_empty() {
+        return Err(Error::NotFound {
+            what: missing_message(block, &missing),
+        });
     }
-    Err(Error::NotFound {
-        what: missing_message(block, &missing),
-    })
+    // The same question [`validate`] asks of a row, phrased for a reader who is
+    // holding the document rather than the queue.
+    check_protocol(
+        task.protocol.as_deref(),
+        &format!("`{}` (line {})", block.heading, block.starts_at),
+    )
+    .map(|()| task)
 }
 
 /// Each required section of a task, under the label the document writes it
@@ -516,6 +596,7 @@ mod tests {
             verify: "cargo test".to_owned(),
             refs: "docs/DESIGN.md".to_owned(),
             gate: None,
+            protocol: None,
         }
     }
 
@@ -1122,6 +1203,149 @@ cargo test
         assert_eq!(task.refs, "none");
     }
 
+    /// The four required sections, so a protocol test differs from a complete
+    /// task by one line and nothing else.
+    const COMPLETE_TASK: &str = "\
+## T075 Choose the protocol
+
+**Outcome:** a task carries the protocol it is worked with.
+**Done-when:** the choice is stored with the task.
+**Verify:** `cargo nextest run -p ktask-core`
+**Refs:** VISION.md section 9
+";
+
+    /// The refusal sentence a word that names no protocol earns, shared with
+    /// the run-time refusal in `protocol.rs` so one fact has one wording.
+    const NOT_A_PROTOCOL: &str = "`spec-first` is not a work protocol this build runs; \
+the two it has are `direct` and `tdd`";
+
+    #[test]
+    fn a_protocol_section_names_the_protocol_the_task_is_worked_with() {
+        let document = format!("{COMPLETE_TASK}\n**Protocol:** tdd\n");
+        let tasks = parse_plan(&document).expect("a task may name the protocol it is worked with");
+        let task = tasks.first().expect("one task was parsed");
+        assert_eq!(
+            task.protocol.as_deref(),
+            Some("tdd"),
+            "the word under `**Protocol:**` is kept as written, which is the word \
+             `protocol::for_task` selects the phases by",
+        );
+        validate(task).expect("a task naming a protocol this build runs is a well-formed task");
+        assert!(
+            task.body.contains("**Protocol:** tdd"),
+            "the section stays in the body it was written into: a supervisor imports a plan \
+             and never edits it"
+        );
+    }
+
+    #[test]
+    fn a_task_with_no_protocol_section_names_no_protocol() {
+        let tasks = parse_plan(COMPLETE_TASK).expect("the section is optional");
+        let task = tasks.first().expect("one task was parsed");
+        assert_eq!(
+            task.protocol, None,
+            "no section is not an empty choice: it is the absence that lets \
+             `default_protocol` answer",
+        );
+    }
+
+    #[test]
+    fn a_protocol_section_written_twice_keeps_the_first_word() {
+        let document = format!("{COMPLETE_TASK}\n**Protocol:** tdd\n\n**Protocol:** direct\n");
+        let tasks = parse_plan(&document).expect("a repeated label is not a malformed task");
+        let task = tasks.first().expect("one task was parsed");
+        assert_eq!(
+            task.protocol.as_deref(),
+            Some("tdd"),
+            "a label written twice holds the text written under it first, as every other \
+             label in a task block does",
+        );
+    }
+
+    #[test]
+    fn a_protocol_label_inside_a_fence_names_no_protocol() {
+        let document = format!("{COMPLETE_TASK}\n```markdown\n**Protocol:** spec-first\n```\n");
+        let tasks =
+            parse_plan(&document).expect("a label inside a fence is a line of somebody's example");
+        let task = tasks.first().expect("one task was parsed");
+        assert_eq!(
+            task.protocol, None,
+            "a quoted label is not a chosen protocol, and an example of a word this build \
+             does not run must not fail the import it illustrates",
+        );
+    }
+
+    #[test]
+    fn a_protocol_section_with_nothing_under_it_fails_the_import() {
+        let document = format!("{COMPLETE_TASK}\n**Protocol:**\n");
+        let error = parse_plan(&document)
+            .expect_err("a `**Protocol:**` that holds nothing names no protocol to run");
+        let message = error.to_string();
+        assert!(
+            message.contains("protocol") && message.contains("names no work protocol"),
+            "the refusal says which section is empty and what to write there: {message}"
+        );
+        assert!(
+            message.contains("T075") || message.contains("line"),
+            "whoever holds this error is holding the document, so it gives them the block: {message}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_protocol_name_is_refused_when_the_task_is_added() {
+        let document = format!("{COMPLETE_TASK}\n**Protocol:** spec-first\n");
+        let error = parse_plan(&document)
+            .expect_err("a word that names no protocol must not enter the queue");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "config error `protocol`: {NOT_A_PROTOCOL} — `## T075 Choose the protocol` \
+                 (line 1)"
+            ),
+            "the refusal names the word it refused, the words that would have worked, and the \
+             block to go back to"
+        );
+    }
+
+    #[test]
+    fn a_row_holding_an_unknown_protocol_never_validates() {
+        // The same question `add` asks before it writes a row, asked of the row:
+        // `plan lint` and the door to the queue cannot hold a task to two
+        // standards.
+        let mut task = parse_plan(COMPLETE_TASK)
+            .expect("the scratch task is a task")
+            .remove(0);
+        task.protocol = Some("spec-first".to_owned());
+        let error = validate(&task).expect_err("a row nobody can run is not a queue entry");
+        assert_eq!(
+            error.to_string(),
+            format!("config error `protocol`: {NOT_A_PROTOCOL} — task 1"),
+            "the refusal names the task the operator has to fix, in the words the import \
+             refused it by"
+        );
+    }
+
+    #[test]
+    fn a_protocol_word_is_matched_exactly_as_it_is_written() {
+        for written in ["Direct", "TDD", "direct ", " tdd"] {
+            let document = format!("{COMPLETE_TASK}\n**Protocol:** {written}\n");
+            let parsed = parse_plan(&document);
+            if written.trim() == "direct" || written.trim() == "tdd" {
+                assert!(
+                    parsed.is_ok(),
+                    "`{written}` is `{}` with whitespace around it, which the section \
+                     trimming already removes: {parsed:?}",
+                    written.trim(),
+                );
+                continue;
+            }
+            assert!(
+                parsed.is_err(),
+                "`{written}` is not a protocol this build runs and must not be folded into one",
+            );
+        }
+    }
+
     #[test]
     fn ids_count_from_one_and_stop_at_the_largest_a_task_id_can_hold() {
         assert_eq!(
@@ -1185,7 +1409,7 @@ mod properties {
 
     /// The section labels the queue keeps a field for, and the only labels a
     /// generated line may never begin with.
-    const KEPT_LABELS: &[&str] = &["Outcome", "Done-when", "Verify", "Refs", "Gate"];
+    const KEPT_LABELS: &[&str] = &["Outcome", "Done-when", "Verify", "Refs", "Gate", "Protocol"];
 
     /// The characters a fence may be made of.
     const MARKERS: &[char] = &['`', '~'];
@@ -1437,6 +1661,7 @@ mod properties {
         verify: String,
         refs: String,
         gate: Option<String>,
+        protocol: Option<&'static str>,
         blanks: usize,
     }
 
@@ -1458,6 +1683,9 @@ mod properties {
             write_a_section(&mut text, "Done-when", &self.done_when);
             write_a_section(&mut text, "Verify", &self.verify);
             write_a_section(&mut text, "Refs", &self.refs);
+            if let Some(protocol) = self.protocol {
+                write_a_section(&mut text, "Protocol", protocol);
+            }
             if let Some(gate) = &self.gate {
                 // A `**Gate:**` with nothing under it is written that way: the
                 // section is the fact, its text is a courtesy.
@@ -1491,8 +1719,17 @@ mod properties {
         text.push('\n');
     }
 
+    /// The word a `**Protocol:**` section may hold: no section at all, or one of
+    /// the two names a build runs. No name that is not in
+    /// [`crate::protocol::names`] may be generated, because every generated task
+    /// is asserted to validate.
+    fn protocol_word() -> impl Strategy<Value = Option<&'static str>> {
+        prop_oneof![Just(None), Just(Some("direct")), Just(Some("tdd")),]
+    }
+
     /// One task spec: a heading of one or two fragments, noise, maybe a fence,
-    /// the four sections, maybe a gate, and the blank lines that trail it.
+    /// the four sections, maybe a protocol, maybe a gate, and the blank lines
+    /// that trail it.
     fn spec() -> impl Strategy<Value = Spec> {
         (
             vec(select(FRAGMENTS), 1..3),
@@ -1503,10 +1740,22 @@ mod properties {
             line_text(),
             line_text(),
             gate_text(),
+            protocol_word(),
             0..3usize,
         )
             .prop_map(
-                |(heading, noise, fence, outcome, done_when, verify, refs, gate, blanks)| Spec {
+                |(
+                    heading,
+                    noise,
+                    fence,
+                    outcome,
+                    done_when,
+                    verify,
+                    refs,
+                    gate,
+                    protocol,
+                    blanks,
+                )| Spec {
                     heading: heading.join(" "),
                     noise,
                     fence,
@@ -1515,6 +1764,7 @@ mod properties {
                     verify,
                     refs,
                     gate,
+                    protocol,
                     blanks,
                 },
             )
@@ -1658,7 +1908,10 @@ mod properties {
     /// re-derive the section from the body. So the columns are read back
     /// without a gate, and the stored body is read back with everything, which
     /// is the claim that holds either way: the body the queue keeps is enough
-    /// to reproduce the task.
+    /// to reproduce the task. `protocol` *is* a column, and so is kept: an
+    /// absent protocol is the `NULL` the schema comments "means the configured
+    /// default", which is a fact a read has to be able to tell apart from a
+    /// word that went missing.
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct StoredTask {
         id: u32,
@@ -1667,6 +1920,7 @@ mod properties {
         done_when: Vec<u8>,
         verify: Vec<u8>,
         refs: Vec<u8>,
+        protocol: Option<Vec<u8>>,
         body: Vec<u8>,
     }
 
@@ -1680,6 +1934,11 @@ mod properties {
                 done_when: task.done_when.as_bytes().to_vec(),
                 verify: task.verify.as_bytes().to_vec(),
                 refs: task.refs.as_bytes().to_vec(),
+                protocol: task
+                    .protocol
+                    .as_ref()
+                    .map(String::as_bytes)
+                    .map(<[u8]>::to_vec),
                 body: task.body.as_bytes().to_vec(),
             }
         }
@@ -1695,6 +1954,7 @@ mod properties {
                 verify: column_text(&self.verify),
                 refs: column_text(&self.refs),
                 gate: None,
+                protocol: self.protocol.as_ref().map(|bytes| column_text(bytes)),
             }
         }
 
@@ -1763,6 +2023,12 @@ mod properties {
                     &spec.gate,
                     "a gate is a `**Gate:**` section, kept with what it asks"
                 );
+                prop_assert_eq!(
+                    &task.protocol,
+                    &spec.protocol.map(str::to_owned),
+                    "a `**Protocol:**` section is kept as the word it holds, and its absence \
+                     stays an absence"
+                );
                 prop_assert_eq!(task.status, TaskStatus::Pending);
                 prop_assert_eq!(task.title(), spec.title(), "the title is the heading line");
                 prop_assert!(validate(task).is_ok(), "a task that imported validates");
@@ -1773,7 +2039,8 @@ mod properties {
                 prop_assert_eq!(
                     &columns,
                     &Task { gate: None, ..task.clone() },
-                    "the columns hold the task, text in any script included"
+                    "the columns hold the task, protocol included and text in any script \
+                     included"
                 );
                 prop_assert_eq!(
                     column_text(&row.title),
@@ -1784,7 +2051,7 @@ mod properties {
                 prop_assert_eq!(
                     Task { id: task.id, ..reread },
                     task.clone(),
-                    "the stored body reproduces the whole task, gate included"
+                    "the stored body reproduces the whole task, gate and protocol included"
                 );
             }
             assert_blocks_are_the_document(&document, &tasks)?;

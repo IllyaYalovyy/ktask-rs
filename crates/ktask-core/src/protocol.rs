@@ -30,6 +30,20 @@
 //! says so, which is why no later task has to widen that enum and why it has no
 //! `SpecFirst` variant.
 //!
+//! # Where a task's protocol comes from
+//!
+//! §9 chooses a protocol *per task*, so a declaration has to be reachable by a
+//! word. [`for_task`] answers that question: the word a task's `**Protocol:**`
+//! section holds wins, else the project's [`Config::default_protocol`], else
+//! [`direct`] — and a word that names none of them is refused rather than
+//! quietly worked. The names, the constructors they select and the sentence
+//! that refuses an unknown one are spelled once, in `PROTOCOLS` below, so a
+//! refusal cannot promise a protocol this build does not have. Choosing stays
+//! declaration and not I/O: the two words are fields of a [`Task`] and a
+//! [`Config`] the caller is already holding, and the check that an unknown word
+//! is refused *when the task is added* lives beside the names it validates
+//! (ADR-0070).
+//!
 //! # Where the ending comes from
 //!
 //! §9's constitution is structural, not advisory: "every protocol must
@@ -57,8 +71,11 @@
 //! invariant 7 demands — the commit a fetch brought back — is evidence the
 //! phase records itself.
 
+use crate::config::Config;
+use crate::error::{Error, Result};
 use crate::gate::GateKind;
 use crate::state::Phase;
+use crate::task::Task;
 
 /// Which paths of the task worktree an agent may modify while a phase is in
 /// force.
@@ -212,9 +229,113 @@ pub fn tdd() -> Protocol {
     )
 }
 
+/// One protocol's word and the constructor that builds it from nothing.
+type Named = (&'static str, fn() -> Protocol);
+
+/// The two protocols v1 ships, each under the word that selects it.
+///
+/// The one place the two names are spelled. [`by_name`] resolves a word a task
+/// or a configuration wrote, [`names`] lists the words a refusal offers, and
+/// the two constructors are reached through this list rather than named at each
+/// call site — so the word an operator may write, the phases a run walks and
+/// the sentence that refuses a word nobody runs cannot drift apart.
+const PROTOCOLS: [Named; 2] = [("direct", direct), ("tdd", tdd)];
+
+/// The words a task's `**Protocol:**` section and a project's
+/// [`Config::default_protocol`] may hold.
+#[must_use]
+pub(crate) fn names() -> [&'static str; 2] {
+    PROTOCOLS.map(|(name, _build)| name)
+}
+
+/// The v1 names, quoted and joined by `separator`, for a sentence that offers
+/// them: `refusal` joins them with `and`, [`crate::task`] offers them with `or`.
+pub(crate) fn alternatives(separator: &str) -> String {
+    names()
+        .into_iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(separator)
+}
+
+/// The protocol a word selects, matched exactly.
+///
+/// No folding, no trimming, no prefix: a word that had to be repaired to match
+/// is a word the operator wrote wrong, and running a task under a protocol they
+/// did not ask for is the cheaper-looking mistake this refuses to make.
+pub(crate) fn by_name(name: &str) -> Option<Protocol> {
+    PROTOCOLS
+        .into_iter()
+        .find(|(word, _build)| *word == name)
+        .map(|(_word, build)| build())
+}
+
+/// The sentence a word that names no protocol is refused by — written here so
+/// the import that rejects a task file, the lint that rejects a row and the run
+/// that refuses an attempt all refuse it in the same words.
+pub(crate) fn refusal(name: &str) -> String {
+    format!(
+        "`{name}` is not a work protocol this build runs; the two it has are {}",
+        alternatives(" and ")
+    )
+}
+
+/// The protocol `task` is worked with: the word its own `**Protocol:**` section
+/// holds, else the project's [`Config::default_protocol`], else [`direct`].
+///
+/// The order is the whole of the function, and it is §9's: "Protocols are chosen
+/// per task", and a project "defaults to" one. A task's word wins over the
+/// project's, and the project's word wins over the compiled-in `direct` — which
+/// is the last rung rather than another setting, because a queue with nothing
+/// written anywhere still has to be worked, and §9 calls `direct` the v0.1
+/// default.
+///
+/// The returned [`Protocol::name`] is the word [`crate::EventKind::AttemptStarted`]
+/// journals for the attempt about to start: an attempt that did not record which
+/// protocol it ran under cannot be replayed, and a `PhaseEntered` naming a phase
+/// no protocol declared is unfalsifiable without the protocol beside it.
+///
+/// A blank is no word: a section, or a setting, with nothing written in it names
+/// nothing and falls through to the rung below it rather than being read as a
+/// choice of `direct`. An *empty* `**Protocol:**` section is refused earlier, by
+/// [`crate::validate`] when the task is added; a blank reaching here is a row
+/// assembled in memory, which is answered the same way an unset default is.
+///
+/// # Errors
+///
+/// [`Error::Config`] keyed `protocol` when the task's own word names no protocol
+/// this build runs, and keyed `default_protocol` when the project's does — naming
+/// the word that was refused and the two that would have worked. A name should
+/// have been refused when the task was added ([`crate::validate`] asks it of
+/// every row); reaching here with one means the row was written by something that
+/// did not ask, and the attempt is refused rather than quietly worked `direct`.
+pub fn for_task(task: &Task, config: &Config) -> Result<Protocol> {
+    if let Some(name) = task
+        .protocol
+        .as_deref()
+        .map(str::trim)
+        .filter(|word| !word.is_empty())
+    {
+        return by_name(name).ok_or_else(|| Error::Config {
+            key: "protocol".to_owned(),
+            detail: refusal(name),
+        });
+    }
+    let default = config.default_protocol.trim();
+    if default.is_empty() {
+        return Ok(direct());
+    }
+    by_name(default).ok_or_else(|| Error::Config {
+        key: "default_protocol".to_owned(),
+        detail: refusal(default),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AttemptId, Config, Error, EventKind, Task, TaskStatus};
+    use serde_json::Value;
 
     /// Every protocol v1 can build.
     ///
@@ -454,6 +575,230 @@ mod tests {
                     },
                 ],
             },
+        );
+    }
+
+    /// A parsed queue task declaring `**Protocol:**` `name`, or naming none.
+    ///
+    /// Built by [`crate::parse_plan`] rather than by a struct literal, because a
+    /// queue row is what a run is handed and a protocol chosen against anything
+    /// else is chosen against a shape the queue never holds.
+    fn task_declaring(name: Option<&str>) -> Task {
+        let mut document = "\
+## T075 Choose the protocol for one task
+
+**Outcome:** a task's protocol is chosen before its first attempt.
+**Done-when:** the choice is stored and displayed.
+**Verify:** `cargo nextest run -p ktask-core`
+**Refs:** VISION.md section 9
+"
+        .to_owned();
+        if let Some(protocol) = name {
+            document.push_str("**Protocol:** ");
+            document.push_str(protocol);
+            document.push('\n');
+        }
+        let mut tasks = crate::parse_plan(&document)
+            .expect("a task that names a protocol it knows is a well-formed task");
+        tasks.remove(0)
+    }
+
+    /// The same task, holding `name` as its protocol whatever the word is — the
+    /// shape only a row written by some other build could reach, and the one a
+    /// refusal has to survive.
+    fn task_holding(name: &str) -> Task {
+        Task {
+            protocol: Some(name.to_owned()),
+            ..task_declaring(None)
+        }
+    }
+
+    /// A project's configuration, with only its default protocol changed.
+    ///
+    /// Assigned rather than built with `..Config::default()`: a `Config` holds a
+    /// private provenance map, so struct-update syntax is closed outside
+    /// `config.rs` — which is the right rule, since a hand-built configuration
+    /// should record nothing it did not load.
+    fn configured(default: &str) -> Config {
+        let mut config = Config::default();
+        config.default_protocol = default.to_owned();
+        config
+    }
+
+    #[test]
+    fn a_task_that_names_tdd_is_worked_with_the_tdd_phases() {
+        let chosen = for_task(&task_declaring(Some("tdd")), &Config::default())
+            .expect("`tdd` is a protocol this build runs");
+        assert_eq!(
+            chosen,
+            tdd(),
+            "the word a task writes selects the phases §9 declares under that word, and nothing else",
+        );
+        assert_eq!(chosen.name, "tdd");
+    }
+
+    #[test]
+    fn a_task_that_names_direct_is_worked_with_the_direct_phases() {
+        let chosen = for_task(&task_declaring(Some("direct")), &Config::default())
+            .expect("`direct` is a protocol this build runs");
+        assert_eq!(chosen, direct());
+        assert_eq!(chosen.name, "direct");
+    }
+
+    #[test]
+    fn a_task_that_names_nothing_takes_the_projects_default() {
+        let chosen = for_task(&task_declaring(None), &configured("tdd"))
+            .expect("a project may default its queue to `tdd`");
+        assert_eq!(
+            chosen,
+            tdd(),
+            "a task that names no protocol is worked the way its project says, not the way \
+             this module happens to prefer",
+        );
+    }
+
+    #[test]
+    fn the_task_is_asked_before_the_project() {
+        let chosen = for_task(&task_declaring(Some("direct")), &configured("tdd"))
+            .expect("the task's own word is a protocol this build runs");
+        assert_eq!(
+            chosen,
+            direct(),
+            "`default_protocol` is a default, so a task that names `direct` is worked `direct` \
+             however its project is configured",
+        );
+    }
+
+    #[test]
+    fn a_project_that_writes_no_default_is_worked_direct() {
+        let chosen = for_task(&task_declaring(None), &configured("   "))
+            .expect("a default with nothing written in it is no default at all");
+        assert_eq!(
+            chosen,
+            direct(),
+            "`direct` is the last rung of the chain and the one §9 calls the v0.1 default, so \
+             a task with nothing to ask either way is worked that way",
+        );
+    }
+
+    #[test]
+    fn a_task_naming_a_protocol_nobody_runs_is_refused_before_an_attempt_starts() {
+        let error = for_task(&task_holding("spec-first"), &Config::default()).expect_err(
+            "a word that names no phases cannot be run, and must not be run as `direct` instead",
+        );
+        let Error::Config { key, detail } = error else {
+            panic!("an unusable protocol word is a configuration error, not {error}");
+        };
+        assert_eq!(
+            key, "protocol",
+            "the refusal names the section the word came from"
+        );
+        assert!(
+            detail.contains("spec-first") && detail.contains("direct") && detail.contains("tdd"),
+            "the refusal has to quote the word it refused and the words that would have \
+             worked: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_default_that_names_nothing_runnable_is_refused_rather_than_run_as_direct() {
+        let error = for_task(&task_declaring(None), &configured("tdd-v2"))
+            .expect_err("a misspelt default is not the same instruction as no instruction");
+        let Error::Config { key, detail } = error else {
+            panic!("an unusable `default_protocol` is a configuration error, not {error}");
+        };
+        assert_eq!(
+            key, "default_protocol",
+            "the refusal names the setting the operator has to fix, not the task that tripped on it"
+        );
+        assert!(
+            detail.contains("tdd-v2") && detail.contains("direct") && detail.contains("tdd"),
+            "the refusal has to quote the word it refused and the words that would have \
+             worked: {detail}"
+        );
+    }
+
+    #[test]
+    fn the_word_attempt_started_journals_names_the_protocol_that_was_chosen() {
+        for name in ["direct", "tdd"] {
+            let chosen = for_task(&task_declaring(Some(name)), &Config::default())
+                .expect("both v1 words name a protocol this build runs");
+            let event = EventKind::AttemptStarted {
+                attempt: AttemptId::new(1),
+                protocol: chosen.name.to_owned(),
+                pid: 4242,
+                base_sha: "0b78d3f1c2a4b5e6d7f8091a2b3c4d5e6f708192".to_owned(),
+            };
+            let encoded = serde_json::to_value(&event).expect("a journal record encodes");
+            assert_eq!(
+                encoded.get("protocol").and_then(Value::as_str),
+                Some(name),
+                "`AttemptStarted` has to carry the word the task was worked under, or the \
+                 journal records an attempt with no protocol",
+            );
+            let decoded: EventKind = serde_json::from_value(encoded)
+                .expect("the record a run writes is one it can read back");
+            let EventKind::AttemptStarted { protocol, .. } = decoded else {
+                panic!("the record written was an `AttemptStarted`");
+            };
+            assert_eq!(
+                by_name(&protocol).expect("the journaled word names a protocol"),
+                chosen,
+                "the word in the journal has to rebuild the phases the attempt ran, or a \
+                 replay cannot say what an attempt did",
+            );
+        }
+    }
+
+    #[test]
+    fn the_names_a_word_may_hold_are_the_names_the_constructors_carry() {
+        // `by_name`, the refusal's sentence and `default_protocol` all speak
+        // this list, so the test that pins the constructors' names pins the
+        // words a task and a configuration are allowed to write.
+        let words = names();
+        assert_eq!(words, ["direct", "tdd"]);
+        for protocol in every_protocol() {
+            assert_eq!(
+                by_name(protocol.name).expect("a constructor's own name selects it"),
+                protocol,
+                "`{}` is not reachable by the word it carries",
+                protocol.name,
+            );
+        }
+        assert!(
+            by_name("Direct").is_none() && by_name(" TDD ").is_none() && by_name("").is_none(),
+            "the word is matched exactly: a name that needed folding or trimming is a word \
+             the operator wrote wrong, not a near miss",
+        );
+    }
+
+    #[test]
+    fn a_protocol_field_with_nothing_written_in_it_is_no_word_at_all() {
+        // Only a row assembled in memory can hold this: an empty
+        // `**Protocol:**` section is refused when the task is added. A blank is
+        // read as the absence it is, so the project's default answers rather
+        // than the task being run `direct` because a field was left half
+        // written.
+        let mut task = task_declaring(None);
+        task.protocol = Some("   ".to_owned());
+        assert_eq!(
+            for_task(&task, &configured("tdd"))
+                .expect("a blank names nothing, so the default answers"),
+            tdd(),
+        );
+    }
+
+    #[test]
+    fn a_task_built_by_hand_still_answers_for_its_protocol() {
+        // The queue's own task, held without a body: the choice is a field, so
+        // a caller that assembled the row rather than parsing it is asked the
+        // same question.
+        let mut task = task_declaring(None);
+        task.protocol = Some("tdd".to_owned());
+        task.status = TaskStatus::Pending;
+        assert_eq!(
+            for_task(&task, &Config::default()).expect("`tdd` is a protocol this build runs"),
+            tdd(),
         );
     }
 }

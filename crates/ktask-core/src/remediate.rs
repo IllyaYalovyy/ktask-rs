@@ -1675,6 +1675,7 @@ mod tests {
             verify: "cargo nextest run -p ktask-core -E 'test(/remediate::/)'".to_owned(),
             refs: "VISION.md section 7".to_owned(),
             gate: None,
+            protocol: None,
         }
     }
 
