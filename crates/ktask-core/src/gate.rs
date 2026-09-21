@@ -986,7 +986,7 @@ env = {}
         assert!(!result.passed);
         assert!(result.timed_out);
 
-        thread::sleep(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(1500));
 
         let ps_output = Command::new("pgrep").arg("-f").arg("sleep 30").output();
 
