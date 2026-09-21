@@ -100,10 +100,9 @@ path — and the runner gets one call that turns a project and a task into bytes
   availability win, and the one failure mode this function exists to prevent: an
   omission that looks like a decision the project never made. Loud beats available here
   for the same reason `load_template` refuses a non-UTF-8 template.
-- **Recurse into subdirectories, or accept `.markdown`.** Nothing writes either. A
-  `drafts/`
-  folder is exactly the neighbour that should *not* reach a session, and a rule about
-  extensions grows one extension at a time.
+- **Recurse into subdirectories, or accept `.markdown`.** Nothing writes either, and a
+  `drafts/` folder is exactly the neighbour that should *not* reach a session. A rule
+  about extensions would grow one extension at a time.
 - **Add `load_context(project)` so the context document gets an override too.**
   ADR-0077 declined it for want of a caller and §11 names an override for the template
   alone. `build_prompt` reads the library's document; if a project ever needs its own,
