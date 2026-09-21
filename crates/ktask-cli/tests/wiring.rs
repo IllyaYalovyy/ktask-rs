@@ -87,13 +87,16 @@ stdout = "Task 2 completed"
     // 5. Create a config file in the state directory
     let state_path = std::path::PathBuf::from(init_state_dir);
 
-    let config_content = r#"provider = "dummy"
+    let config_content = format!(
+        r#"provider = "dummy"
 default_protocol = "direct"
-dummy_scenario_path = ".ktask-scenario.toml"
+dummy_scenario_path = "{}"
 verify_command = ["true"]
 targeted_test_command = ["true"]
 baseline_command = ["true"]
-"#;
+"#,
+        scenario_file.display()
+    );
 
     let config_file = state_path.join("config.toml");
     fs::write(&config_file, config_content).expect("failed to write config file");
@@ -101,6 +104,7 @@ baseline_command = ["true"]
 
     // 6. Run the queue
     let run_output = env.run_command(&["run"]);
+    eprintln!("Run exit code: {}", run_output.exit_code);
     eprintln!("Run output: {}", run_output.stdout);
     eprintln!("Run stderr: {}", run_output.stderr);
     let _ = run_output.clone().expect_success();
@@ -108,6 +112,16 @@ baseline_command = ["true"]
     // 7. Check that both tasks are Done by reading the journal using ktask-core
     let journal_dir = std::path::PathBuf::from(init_state_dir);
     let journal_path = journal_dir.join("journal.db");
+
+    // Debug: check what files exist in the state directory
+    eprintln!("State dir: {:?}", journal_dir);
+    if journal_dir.exists() {
+        for entry in fs::read_dir(&journal_dir).expect("failed to read state dir") {
+            let entry = entry.expect("failed to read entry");
+            eprintln!("  State file: {:?}", entry.path());
+        }
+    }
+
     assert!(
         journal_path.exists(),
         "Journal file should exist at {:?}",
@@ -115,6 +129,12 @@ baseline_command = ["true"]
     );
 
     let journal = ktask_core::Journal::open(&journal_path).expect("failed to open journal");
+
+    let tasks_in_journal = journal.tasks().expect("failed to read tasks");
+    eprintln!("Tasks in journal: {}", tasks_in_journal.len());
+    for task in &tasks_in_journal {
+        eprintln!("  Task {}: {}", task.id, task.title());
+    }
 
     let events = journal.events().expect("failed to read events");
     eprintln!("Total events: {}", events.len());
