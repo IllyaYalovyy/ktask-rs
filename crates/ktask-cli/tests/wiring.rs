@@ -133,33 +133,67 @@ fn wiring_end_to_end_drains_queue() {
         .expect("failed to push tasks commit");
     assert!(status.success());
 
-    // 4. Create a dummy scenario file - needs multiple steps for different phases
+    // 4. Create a dummy scenario file - provide many steps for all phases and attempts
     let scenario_content = r#"[[steps]]
 on_task = 1
 outcome = "success"
-stdout = "Task 1 - baseline gate"
-
-[[steps]]
-on_task = 1
-outcome = "success"
-stdout = "Task 1 completed"
+stdout = "Task 1 - Implement phase"
 
 [steps.files]
 ".ktask/report.md" = """
 KTASK_RESULT: DONE
 
 Task 1 completed successfully"""
-"task1_work.txt" = "Work done for task 1"
+"README.md" = "Work done for task 1"
+"src/main.rs" = "fn main() { println!(\"Task 1 work\"); }"
 
 [[steps]]
 on_task = 1
 outcome = "success"
-stdout = "Task 1 - verify gate"
+stdout = "Task 1 - Verify phase"
 
 [[steps]]
 on_task = 1
 outcome = "success"
-stdout = "Task 1 - publication"
+stdout = "Task 1 - Publish phase"
+
+[[steps]]
+on_task = 1
+outcome = "success"
+stdout = "Task 1 - Remediation attempt - Implement"
+
+[steps.files]
+".ktask/report.md" = """
+KTASK_RESULT: DONE
+
+Task 1 remediation completed"""
+"README.md" = "Work done for task 1 remediation"
+"src/main.rs" = "fn main() { println!(\"Task 1 work - remediation\"); }"
+
+[[steps]]
+on_task = 1
+outcome = "success"
+stdout = "Task 1 - Remediation - Verify"
+
+[[steps]]
+on_task = 1
+outcome = "success"
+stdout = "Task 1 - Remediation - Publish"
+
+[[steps]]
+on_task = 1
+outcome = "success"
+stdout = "Extra steps for safety"
+
+[[steps]]
+on_task = 1
+outcome = "success"
+stdout = "Extra steps for safety 2"
+
+[[steps]]
+on_task = 1
+outcome = "success"
+stdout = "Extra steps for safety 3"
 "#;
 
     let scenario_file = env.repo_dir.join(".ktask-scenario.toml");
