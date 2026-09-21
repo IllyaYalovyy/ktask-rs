@@ -439,7 +439,7 @@ fn write_default(path: &Path, text: &str) -> Result<()> {
         Ok(file) => file,
         // Another run got here between the look above and this one. Its bytes are
         // these bytes, and overwriting them is what this function exists to refuse.
-        Err(why) if why.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(why) if created_by_another_run(&why) => return Ok(()),
         Err(why) => return Err(why.into()),
     };
     file.write_all(text.as_bytes())?;
@@ -500,6 +500,19 @@ fn refused_because_absent(why: &io::Error) -> bool {
     )
 }
 
+/// Whether a creation refused with `AlreadyExists` is the race this function would
+/// rather win than report.
+///
+/// Two runs on one machine can reach the same missing document at the same moment,
+/// and both write the same default, so the loser has nothing to say: the bytes it
+/// came to write are already there. Every other refusal — a directory that may not
+/// be written into, a full disk, a file system that is read-only — is a real
+/// failure, and saying which is which in a named function is what keeps the
+/// decision readable from inside the match without being untestable there.
+fn created_by_another_run(why: &io::Error) -> bool {
+    why.kind() == io::ErrorKind::AlreadyExists
+}
+
 /// Refuse a path that is there and is not the kind of thing this module needs.
 fn unusable(path: &Path, wanted: &str) -> Error {
     Error::Policy {
@@ -530,8 +543,8 @@ fn reached_by_link(path: &Path) -> Error {
 #[cfg(test)]
 mod tests {
     use super::{
-        DOCUMENT_MODE, LIBRARY_DIR_MODE, TASK_PLACEHOLDER, assemble, ensure_defaults,
-        ensure_defaults_with, load_template, load_template_with,
+        DOCUMENT_MODE, LIBRARY_DIR_MODE, TASK_PLACEHOLDER, assemble, created_by_another_run,
+        ensure_defaults, ensure_defaults_with, load_template, load_template_with,
     };
     use crate::{
         AttemptId, AttemptRecord, Error, Project, Task, TaskId, TaskStatus, Usage, evidence_dir,
@@ -541,7 +554,9 @@ mod tests {
     use proptest::prelude::*;
     use std::env::var_os;
     use std::fs::{self, Permissions};
+    use std::io;
     use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output, Stdio};
     use tempfile::{TempDir, tempdir};
@@ -1227,6 +1242,29 @@ mod tests {
     }
 
     #[test]
+    fn ensure_defaults_refuses_something_that_is_neither_file_nor_directory() {
+        // A socket answers to no read and no write of text, so it is neither of the
+        // two shapes this module can work with, and overwriting the assumption that
+        // anything left of those two is a file is how a prompt ends up coming from
+        // nowhere.
+        let home = Scratch::new();
+        let library = library_under(&home.config);
+        fs::create_dir_all(&library).expect("the library directory to bind a socket in");
+        let template = library.join("task.md");
+        let _socket =
+            UnixListener::bind(&template).expect("a socket can be bound in the scratch library");
+
+        let problem = ensure_defaults_with(&home.env())
+            .expect_err("something that holds no text is not a template somebody wrote");
+
+        assert!(
+            matches!(&problem, Error::Policy { paths, .. } if paths == &vec![template.clone()]),
+            "{problem}"
+        );
+        assert!(problem.to_string().contains("a file"), "{problem}");
+    }
+
+    #[test]
     fn ensure_defaults_reports_a_refusal_to_look_inside_a_base_it_cannot_read() {
         let home = Scratch::new();
         fs::create_dir_all(&home.config).expect("a configuration base");
@@ -1239,6 +1277,29 @@ mod tests {
             .expect("the scratch base is readable again for cleanup");
 
         assert!(matches!(problem, Error::Io(_)), "{problem}");
+    }
+
+    #[test]
+    fn a_creation_refused_because_another_run_got_there_first_is_not_a_failure() {
+        // The race itself needs two processes arriving in the wrong order, which no
+        // headless test can schedule. The decision it turns on is not raced against
+        // a clock here: which refusal counts as "somebody already wrote my bytes" is
+        // answered from an error value alone, and answered both ways.
+        assert!(
+            created_by_another_run(&io::Error::from(io::ErrorKind::AlreadyExists)),
+            "a document another run created first was treated as a failure to write"
+        );
+        for other in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::IsADirectory,
+            io::ErrorKind::StorageFull,
+        ] {
+            assert!(
+                !created_by_another_run(&io::Error::from(other)),
+                "a creation refused with {other:?} was forgiven as though another run \
+                 had written the document"
+            );
+        }
     }
 
     #[test]
@@ -1410,6 +1471,48 @@ mod tests {
 
         assert!(
             matches!(&problem, Error::Policy { paths, .. } if paths == &vec![home.override_dir()]),
+            "{problem}"
+        );
+    }
+
+    #[test]
+    fn a_socket_where_the_override_belongs_is_refused_rather_than_read() {
+        let home = Scratch::new();
+        fs::create_dir_all(home.override_dir()).expect("an override directory");
+        let template = home.override_dir().join("task.md");
+        let _socket =
+            UnixListener::bind(&template).expect("a socket can be bound in the override directory");
+
+        let problem = load_template_with(&home.env(), &home.project())
+            .expect_err("a prompt is read from a file, and this path holds no text at all");
+
+        assert!(
+            matches!(&problem, Error::Policy { paths, .. } if paths == &vec![template.clone()]),
+            "{problem}"
+        );
+        assert!(problem.to_string().contains("a file"), "{problem}");
+    }
+
+    #[test]
+    fn load_template_refuses_a_state_directory_it_cannot_look_inside() {
+        // Not being allowed to look is not the same answer as there being nothing
+        // there. Confusing the two would hand a project that did write an override
+        // the library's default, quietly, because a permission stood in the way of
+        // checking — the silent fallback this module refuses everywhere else.
+        let home = Scratch::new();
+        fs::create_dir_all(home.state_dir()).expect("a state directory to close");
+        fs::set_permissions(home.state_dir(), Permissions::from_mode(0o000))
+            .expect("a state directory this process may not look inside");
+
+        let refused = load_template_with(&home.env(), &home.project());
+        fs::set_permissions(home.state_dir(), Permissions::from_mode(0o700))
+            .expect("the state directory is open again for cleanup");
+
+        let problem = refused.expect_err(
+            "an override that could not be looked for is not an override that is absent",
+        );
+        assert!(
+            matches!(&problem, Error::Io(why) if why.kind() == io::ErrorKind::PermissionDenied),
             "{problem}"
         );
     }
