@@ -7,6 +7,7 @@ pub mod attempt;
 pub mod classify;
 pub mod config;
 pub mod context;
+pub mod control;
 pub mod decision;
 pub mod error;
 pub mod event;
