@@ -22,6 +22,54 @@ use support::ScenarioEnv;
 fn wiring_end_to_end_drains_queue() {
     let env = ScenarioEnv::new();
 
+    // Create an initial commit so git operations have a HEAD to work with
+    let repo_dir = env.repo_dir.clone();
+    let status = Command::new("git")
+        .arg("config")
+        .arg("user.email")
+        .arg("test@example.com")
+        .current_dir(&repo_dir)
+        .status()
+        .expect("failed to set git user email");
+    assert!(status.success());
+
+    let status = Command::new("git")
+        .arg("config")
+        .arg("user.name")
+        .arg("Test User")
+        .current_dir(&repo_dir)
+        .status()
+        .expect("failed to set git user name");
+    assert!(status.success());
+
+    let status = Command::new("git")
+        .arg("checkout")
+        .arg("-b")
+        .arg("main")
+        .current_dir(&repo_dir)
+        .status()
+        .expect("failed to create main branch");
+    assert!(status.success());
+
+    let status = Command::new("git")
+        .arg("commit")
+        .arg("--allow-empty")
+        .arg("-m")
+        .arg("Initial commit")
+        .current_dir(&repo_dir)
+        .status()
+        .expect("failed to create initial commit");
+    assert!(status.success());
+
+    let status = Command::new("git")
+        .arg("push")
+        .arg("origin")
+        .arg("main")
+        .current_dir(&repo_dir)
+        .status()
+        .expect("failed to push initial commit");
+    assert!(status.success());
+
     // 1. Initialize the project
     let init_output = env.run_command(&["init"]);
     eprintln!("Init output: {}", init_output.stdout);

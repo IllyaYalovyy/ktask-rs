@@ -151,17 +151,30 @@ pub fn apply(state: &TaskState, event: &crate::event::EventKind) -> Result<TaskS
     }
 }
 
-/// Check that at most one task is in a non-paused active state.
+/// Check that at most one task is executing.
 ///
-/// A non-paused active state is any state that is neither terminal nor paused.
+/// A task is considered executing if it's in a state between Queued and terminal (i.e.,
+/// Preflight, Running, Remediating, Verifying, Publishing, or `PublishedVerified`).
+/// Queued tasks are not executing and multiple can exist; only one task can be
+/// executing at a time to prevent concurrent work.
 ///
 /// # Errors
 ///
-/// Returns `Error::Policy` if more than one task is in a non-paused active state.
+/// Returns `Error::Policy` if more than one task is executing.
 pub fn check_one_active(states: &BTreeMap<TaskId, TaskState>) -> Result<()> {
     let active_tasks: Vec<TaskId> = states
         .iter()
-        .filter(|(_, state)| !state.is_terminal() && !state.is_paused())
+        .filter(|(_, state)| {
+            matches!(
+                state,
+                TaskState::Preflight
+                    | TaskState::Running { .. }
+                    | TaskState::Remediating { .. }
+                    | TaskState::Verifying { .. }
+                    | TaskState::Publishing { .. }
+                    | TaskState::PublishedVerified { .. }
+            )
+        })
         .map(|(id, _)| *id)
         .collect();
 

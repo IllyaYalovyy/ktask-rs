@@ -109,6 +109,10 @@ pub fn reconcile(journal: &mut Journal, project: &Project) -> Result<Vec<Recover
 
         // Determine the decision based on the last event and system state
         let decision = match &last_event.kind {
+            EventKind::TaskQueued { .. } => {
+                // Task is queued but hasn't started execution yet, nothing to reconcile
+                continue;
+            }
             EventKind::AttemptStarted {
                 attempt: _,
                 protocol: _,

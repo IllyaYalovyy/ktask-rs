@@ -26,6 +26,13 @@ pub(crate) fn run(
         }
     };
 
+    if let Err(e) = journal.rebuild_state() {
+        render::progress(format_args!("error rebuilding state: {e}"));
+        return RunOutcome::Usage {
+            detail: format!("{e}"),
+        };
+    }
+
     match recovery::reconcile(&mut journal, &proj) {
         Ok(decisions) => {
             for decision in decisions {
@@ -77,13 +84,18 @@ pub(crate) fn run(
         match r.run_queue(&tasks, from_id) {
             Ok(outcome) => {
                 // Output task results before returning
-                let journal = match ktask_core::Journal::open_for(&r.project) {
+                let mut journal = match ktask_core::Journal::open_for(&r.project) {
                     Ok(j) => j,
                     Err(e) => {
                         render::progress(format_args!("error opening journal for results: {e}"));
                         return outcome;
                     }
                 };
+
+                if let Err(e) = journal.rebuild_state() {
+                    render::progress(format_args!("error rebuilding state for results: {e}"));
+                    return outcome;
+                }
 
                 let states = match journal.all_states() {
                     Ok(s) => s,

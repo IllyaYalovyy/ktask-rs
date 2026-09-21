@@ -80,6 +80,18 @@ pub(crate) fn run(project: Option<Project>, file: Option<PathBuf>) -> RunOutcome
         };
     }
 
+    for task in &tasks {
+        let event = ktask_core::EventKind::TaskQueued {
+            title: task.title().to_string(),
+        };
+        if let Err(e) = journal.append(Some(task.id), &event) {
+            render::progress(format_args!("error journaling task queued: {e}"));
+            return RunOutcome::Usage {
+                detail: e.to_string(),
+            };
+        }
+    }
+
     if let Some(first_task) = tasks.first() {
         render::out(format_args!("id={}", first_task.id));
     }

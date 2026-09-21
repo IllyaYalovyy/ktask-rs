@@ -1403,7 +1403,8 @@ impl Runner {
         tasks: &[Task],
         _from: Option<crate::TaskId>,
     ) -> Result<RunOutcome> {
-        let journal = crate::Journal::open_for(&self.project)?;
+        let mut journal = crate::Journal::open_for(&self.project)?;
+        journal.rebuild_state()?;
 
         loop {
             let states = journal.all_states()?;
