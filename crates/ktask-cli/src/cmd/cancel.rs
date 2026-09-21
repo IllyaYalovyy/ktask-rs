@@ -77,8 +77,7 @@ pub(crate) fn run(project: Option<ktask_core::Project>, task: &str) -> RunOutcom
                 .map_or("Unknown".to_string(), |t| t.title().to_string());
 
             render::out(format_args!(
-                "id={} title={} state=cancelled",
-                task_id, task_title
+                "id={task_id} title={task_title} state=cancelled"
             ));
             RunOutcome::Drained
         }

@@ -63,8 +63,7 @@ pub(crate) fn run(project: Option<ktask_core::Project>) -> RunOutcome {
                 .map_or("Unknown".to_string(), |t| t.title().to_string());
 
             render::out(format_args!(
-                "id={} title={} action=interrupted",
-                task_id, task_title
+                "id={task_id} title={task_title} action=interrupted"
             ));
             RunOutcome::Drained
         }
