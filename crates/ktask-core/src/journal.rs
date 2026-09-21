@@ -2861,10 +2861,7 @@ mod tests {
             .unwrap();
 
         journal
-            .append(
-                Some(task_id),
-                &EventKind::VerifyPassed { attempt },
-            )
+            .append(Some(task_id), &EventKind::VerifyPassed { attempt })
             .unwrap();
 
         journal
@@ -2948,7 +2945,8 @@ mod tests {
 
         let state = journal.get_state(task_id).unwrap();
         assert_eq!(
-            state, Some(TaskState::Queued),
+            state,
+            Some(TaskState::Queued),
             "State should still be Queued after invalid append"
         );
 
