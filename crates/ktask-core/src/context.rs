@@ -9,7 +9,9 @@
 //! template come from the private prompt library (VISION.md §11), the task body
 //! comes from the queue, and the ADRs are the one input a caller may have read
 //! from inside the repository — because a recorded decision is the one
-//! operational document VISION.md §3 lets live there.
+//! operational document VISION.md §3 lets live there. [`collect_adrs`] does that
+//! reading and [`build_prompt`] is where the four inputs meet, so a runner holds a
+//! prompt without having to know where any of its parts live.
 //!
 //! The result belongs to the attempt it was assembled for.
 //! [`crate::write_evidence`] files it as that attempt's `context.md`, which is
@@ -25,19 +27,22 @@
 //! make, including what the header can name as the report path when no project is
 //! in scope to say where its state lives.
 //!
-//! [`ensure_defaults`] and [`load_template`] are the other half, and they do touch
-//! the filesystem, because a prompt has to come from somewhere before it can be
-//! assembled. VISION.md §11 is where they send an operator: the global, private
-//! prompt library below `$XDG_CONFIG_HOME`, and a project's own override below its
-//! state directory — never the working copy, which VISION.md §3's invariant 6
-//! keeps clear of the supervisor's files. Both rules are mechanical here rather
-//! than advisory: a template is read from one of those two places or the call
-//! refuses, and a path reached through a symbolic link is refused rather than
-//! followed, because a link is the one way an override could point back inside the
-//! repository. These two read the environment to find the library, so like
-//! `paths`, `config` and `project` they take it through an accessor and keep the
-//! environment-blind answer in [`assemble`]: see `docs/DESIGN.md` Conventions.
+//! [`ensure_defaults`], [`load_template`] and [`collect_adrs`] are the other half,
+//! and they do touch the filesystem, because a prompt has to come from somewhere
+//! before it can be assembled. VISION.md §11 is where the first two send an
+//! operator: the global, private prompt library below `$XDG_CONFIG_HOME`, and a
+//! project's own override below its state directory — never the working copy, which
+//! VISION.md §3's invariant 6 keeps clear of the supervisor's files. Both rules are
+//! mechanical here rather than advisory: a template is read from one of those two
+//! places or the call refuses, and a path reached through a symbolic link is refused
+//! rather than followed, because a link is the one way an override could point back
+//! inside the repository. [`collect_adrs`] reads the one thing invariant 6 excepts:
+//! the decisions below the repository's `docs/adr`. The first two read the
+//! environment to find the library, so like `paths`, `config` and `project` they
+//! take it through an accessor and keep the environment-blind answer in
+//! [`assemble`]: see `docs/DESIGN.md` Conventions.
 
+use std::ffi::OsStr;
 use std::fs::{self, DirBuilder, OpenOptions, Permissions};
 use std::io::{self, Write as _};
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
@@ -96,6 +101,23 @@ const CONTEXT_NAME: &str = "context.md";
 /// `prompts/task.md` out of the library, edit the copy, and put it in the
 /// project's `prompts/`.
 const OVERRIDE_DIR: &str = "prompts";
+
+/// The directory below a repository's root where its recorded decisions live.
+///
+/// `docs/PROCESS.md` fixes the path. It is also the single deliberate exception to
+/// VISION.md §3's invariant 6 — a recorded decision is project documentation as
+/// much as it is operational state — which is why this is the one path below a
+/// project's working copy this module reads, and why it reads nothing else there.
+const ADR_DIR: &str = "docs/adr";
+
+/// The record every repository starts with and that no session is ever sent.
+///
+/// It is a shape, not a decision anybody made, and a prompt that carried it would
+/// teach a session the format of a decision in place of the decision.
+const ADR_TEMPLATE: &str = "0000-template.md";
+
+/// The extension a recorded decision is written in.
+const ADR_SUFFIX: &str = "md";
 
 /// The mode of the prompt library and of a project's override directory: the
 /// prompts of every project one machine supervises belong to one operator.
@@ -366,6 +388,71 @@ fn load_template_with(env: &dyn Fn(&str) -> Option<String>, project: &Project) -
     read_document(&source)
 }
 
+/// The prompt one attempt of one project's task is handed, read from where its
+/// documents live.
+///
+/// Every standing input of [`assemble`] has a home, and this is where they are
+/// looked up: the context document from the private prompt library, the template
+/// through [`load_template`] (which prefers this project's own override), and the
+/// recorded decisions from [`collect_adrs`] below the project's root. This is the
+/// reading half of the split ADR-0075 made — `assemble` stays the half that reads
+/// nothing — so a runner calls it once at the start of an attempt, files what comes
+/// back as that attempt's own `context.md` through [`crate::write_evidence`], and can
+/// reproduce the exact words the session was given from that file rather than from a
+/// second read of two directories that have moved on since.
+///
+/// The library is ensured before anything is read from it, exactly as
+/// [`load_template`] ensures it, so a first run gets a prompt rather than a missing
+/// file. Reading it twice on one call is the cheap half of that guarantee (ADR-0077:
+/// two lookups and a permission set once the library exists) and is worth being
+/// explicit about: the rule is "the library exists before any of its documents are
+/// opened", not "the last function to run made it so".
+///
+/// # What is never read
+///
+/// A prompt document from inside the working copy. Only decisions are read there, and
+/// only below `docs/adr`. The context document is the library's even for a project
+/// that wrote an override template: ADR-0077 declined a per-project `load_context`
+/// because nothing called it, and §11 names an override for the template alone.
+///
+/// # Errors
+///
+/// As [`load_template`], plus the errors of [`collect_adrs`]. A prompt is not built
+/// from a decision archive in the wrong shape: a session handed a prompt with
+/// decisions quietly missing from it is a session that will re-decide something
+/// already settled, and it will look like the supervisor forgot.
+pub fn build_prompt(
+    project: &Project,
+    task: &Task,
+    attempt: AttemptId,
+    total: usize,
+) -> Result<String> {
+    build_prompt_with(&process_env, project, task, attempt, total)
+}
+
+/// [`build_prompt`] with the environment supplied by the caller. See
+/// [`ensure_defaults_with`] for why the accessor is threaded this far.
+fn build_prompt_with(
+    env: &dyn Fn(&str) -> Option<String>,
+    project: &Project,
+    task: &Task,
+    attempt: AttemptId,
+    total: usize,
+) -> Result<String> {
+    ensure_defaults_with(env)?;
+    let context_doc = read_document(&prompt_library_with(env)?.join(CONTEXT_NAME))?;
+    let template = load_template_with(env, project)?;
+    let adrs = collect_adrs(&project.root)?;
+    Ok(assemble(
+        task,
+        &context_doc,
+        &adrs,
+        &template,
+        attempt,
+        total,
+    ))
+}
+
 /// The project's own template, when it wrote one.
 ///
 /// `Ok(None)` is the ordinary answer for a project that never wrote one, including
@@ -389,6 +476,94 @@ fn project_override(project: &Project) -> Result<Option<PathBuf>> {
         Presence::Directory => Err(unusable(&path, "a file")),
         Presence::Absent => Ok(None),
     }
+}
+
+/// Every decision this repository has recorded, oldest first, each as its own text.
+///
+/// VISION.md §3's invariant 8 makes a recorded decision available to the tasks that
+/// come after it, and `ktask-rs resolve` is what records one: it writes
+/// `docs/adr/NNNN-short-title.md` into the working copy. This is where those words
+/// come back out, and it is the only place in this module that reads below a
+/// project's root — the one exception invariant 6 grants, and therefore the only
+/// place a prompt is assembled out of text this module did not write and cannot vouch
+/// for beyond its own shape.
+///
+/// ## The order is the filename, and the filename is the number
+///
+/// `read_dir` hands entries back in whatever order the filesystem keeps them, which
+/// is nobody's idea of an order, so the names are sorted. `docs/PROCESS.md` fixes the
+/// name as `NNNN-short-title.md` with a four-digit number, so filename order *is*
+/// decision order, and a session reads its project's history the way it was decided:
+/// a later ADR supersedes an earlier one by number, so handing the two over the other
+/// way round hands a session the answer that was replaced. The padding is
+/// load-bearing — past 9999 records, `10000-…` sorts before `9999-…` — and a project
+/// that gets that far revisits this rule rather than discovering it.
+///
+/// ## What is not a decision
+///
+/// `0000-template.md` is skipped by name: it is the shape every repository copies,
+/// not something anybody decided. Anything that is not a `.md` document sitting
+/// directly in `docs/adr` is skipped too, because that directory collects the
+/// neighbours a `docs/` directory always grows — an editor's `0003-real.md.bak`, a
+/// `README`, a `drafts/` folder, and a directory whose name happens to end in `.md`.
+/// A symbolic link is refused rather than followed, as a prompt document is
+/// (ADR-0077): where a link points is undecidable from here, and a decision read
+/// through one is a decision whose number and author the filename does not describe.
+///
+/// ## No directory at all is the ordinary answer
+///
+/// A project on its first task has decided nothing and never ran `resolve`, so an
+/// empty list is a fact about the project rather than a defect in it. [`assemble`]
+/// renders the empty list as "None recorded yet." instead of leaving a hole where the
+/// decisions belong.
+///
+/// # Errors
+///
+/// [`Error::Policy`] when `docs/adr` is occupied by something that is not a
+/// directory, or when the directory or one of its documents is reached through a
+/// symbolic link; [`Error::Corrupt`] when a record is not UTF-8 text; [`Error::Io`]
+/// when the directory is there and cannot be listed.
+pub fn collect_adrs(repo_root: &Path) -> Result<Vec<String>> {
+    let directory = repo_root.join(ADR_DIR);
+    match presence(&directory)? {
+        Presence::Absent => return Ok(Vec::new()),
+        Presence::Directory => {}
+        Presence::File => return Err(unusable(&directory, "a directory")),
+        Presence::Link => return Err(reached_by_link(&directory)),
+    }
+    let mut documents: Vec<PathBuf> = Vec::new();
+    for entry in fs::read_dir(&directory)? {
+        let path = entry?.path();
+        if !is_decision_document(&path) {
+            continue;
+        }
+        match presence(&path)? {
+            Presence::File => documents.push(path),
+            // A directory named like a record, and a record deleted while the
+            // listing was in progress, are both reasons to move on. A link is a
+            // reason to stop: see the rule above.
+            Presence::Directory | Presence::Absent => {}
+            Presence::Link => return Err(reached_by_link(&path)),
+        }
+    }
+    // Every path here shares one parent, so sorting the paths sorts the filenames,
+    // and the filenames are the order the numbers were chosen to be read in.
+    documents.sort();
+    documents.iter().map(|path| read_document(path)).collect()
+}
+
+/// Whether `path` names a decision record rather than one of the shapes that gather
+/// beside them.
+///
+/// The template is answered first because it is the one `.md` file in the directory
+/// that must never reach a session, and the extension is asked of the name rather
+/// than matched as a substring, so `0003-real.md.bak` is read as what it is — a
+/// backup somebody left behind.
+fn is_decision_document(path: &Path) -> bool {
+    let Some(name) = path.file_name() else {
+        return false;
+    };
+    name != ADR_TEMPLATE && Path::new(name).extension() == Some(OsStr::new(ADR_SUFFIX))
 }
 
 /// Make `path` exist as a directory only its owner can read.
@@ -544,8 +719,8 @@ fn reached_by_link(path: &Path) -> Error {
 mod tests {
     use super::{
         DEFAULT_TEMPLATE, DOCUMENT_MODE, LIBRARY_DIR_MODE, TASK_PLACEHOLDER, assemble,
-        created_by_another_run, ensure_defaults, ensure_defaults_with, load_template,
-        load_template_with, write_default,
+        build_prompt, build_prompt_with, collect_adrs, created_by_another_run, ensure_defaults,
+        ensure_defaults_with, load_template, load_template_with, write_default,
     };
     use crate::{
         AttemptId, AttemptRecord, Error, Project, Task, TaskId, TaskStatus, Usage, evidence_dir,
@@ -1569,8 +1744,293 @@ mod tests {
         assert!(problem.to_string().contains("task.md"), "{problem}");
     }
 
+    /// The directory a project's recorded decisions live in, spelled out here
+    /// rather than reached through the constant under test: an expectation computed
+    /// with the code under test would accept that directory quietly moving.
+    fn adr_directory(repository: &Path) -> PathBuf {
+        repository.join("docs").join("adr")
+    }
+
+    /// Record a decision the way `resolve` records one — the next number, a title
+    /// slug, the answer as the body — and hand back the path it landed on.
+    fn record_adr(repository: &Path, name: &str, text: &str) -> PathBuf {
+        let path = adr_directory(repository).join(name);
+        write_document(&path, text);
+        path
+    }
+
+    /// The prompt one task of `home`'s project is handed, built from the documents
+    /// where they actually live rather than from arguments.
+    fn built_prompt(home: &Scratch, task: &Task, attempt: u32) -> String {
+        build_prompt_with(
+            &home.env(),
+            &home.project(),
+            task,
+            AttemptId::new(attempt),
+            TOTAL,
+        )
+        .expect("a prompt is buildable from the documents the library and the project hold")
+    }
+
     #[test]
-    fn neither_document_reports_a_configuration_error_when_nothing_names_a_home() {
+    fn decisions_are_collected_in_filename_order_not_the_order_they_were_written() {
+        let repository = tempdir().expect("a scratch repository to hold decisions");
+        // Written newest-number-first, and with the tenth below a gap in the
+        // numbering, so a collection that trusted the order the filesystem handed
+        // its entries back in, or one that sorted by the text inside, comes back in
+        // an order other than the one the numbers say.
+        record_adr(repository.path(), "0010-tenth.md", "tenth decision\n");
+        record_adr(repository.path(), "0002-second.md", "second decision\n");
+        record_adr(repository.path(), "0001-first.md", "first decision\n");
+
+        let collected = collect_adrs(repository.path()).expect("a repository of decisions reads");
+
+        assert_eq!(
+            collected,
+            ["first decision\n", "second decision\n", "tenth decision\n"],
+            "a decision that supersedes an earlier one has to arrive after it, or a \
+             session reads its project's history upside down"
+        );
+    }
+
+    #[test]
+    fn the_template_every_repository_copies_is_never_handed_over_as_a_decision() {
+        let repository = tempdir().expect("a scratch repository to hold decisions");
+        record_adr(
+            repository.path(),
+            "0000-template.md",
+            "# NNNN. Short title\n\n- **Status:** proposed\n",
+        );
+        record_adr(repository.path(), "0001-real.md", "a real decision\n");
+
+        let collected = collect_adrs(repository.path())
+            .expect("a repository whose only record is the template reads");
+
+        assert_eq!(
+            collected,
+            ["a real decision\n"],
+            "the blank shape every repository starts with is not a decision anybody made, \
+             and handing it over teaches a session a shape rather than a choice"
+        );
+    }
+
+    #[test]
+    fn a_repository_with_no_decision_directory_has_no_decisions_and_no_error() {
+        let repository = tempdir().expect("a scratch repository with nothing in it");
+
+        let collected = collect_adrs(repository.path())
+            .expect("a project that has decided nothing yet is not a broken project");
+
+        assert!(collected.is_empty(), "{collected:?}");
+
+        // A `docs` directory that holds no ADR directory is the same answer: the
+        // question is about `docs/adr`, and a project on its first task has written
+        // no decisions there yet.
+        write_document(
+            &repository.path().join("docs").join("README.md"),
+            "# Docs\n",
+        );
+        let again = collect_adrs(repository.path())
+            .expect("a docs directory that holds no decisions is not an error either");
+        assert!(again.is_empty(), "{again:?}");
+    }
+
+    #[test]
+    fn only_the_markdown_documents_directly_in_the_decision_directory_are_collected() {
+        let repository = tempdir().expect("a scratch repository to hold decisions");
+        let root = repository.path();
+        record_adr(root, "0001-real.md", "a real decision\n");
+        record_adr(root, "0002-notes.txt", "not markdown\n");
+        record_adr(root, "0003-real.md.bak", "markdown that was renamed away\n");
+        record_adr(root, "README", "a document with no extension\n");
+        // A directory whose name ends in `.md` is not a document, and a decision
+        // filed below a directory is not one this function was asked for.
+        write_document(
+            &adr_directory(root).join("drafts.md").join("0009-inside.md"),
+            "a directory is not a decision\n",
+        );
+        write_document(
+            &adr_directory(root).join("drafts").join("0008-nested.md"),
+            "a nested decision is not a decision yet\n",
+        );
+
+        let collected =
+            collect_adrs(root).expect("the shapes around the records do not break the read");
+
+        assert_eq!(collected, ["a real decision\n"], "{collected:?}");
+    }
+
+    #[test]
+    fn a_decision_that_is_not_text_is_refused_by_name() {
+        let repository = tempdir().expect("a scratch repository to hold decisions");
+        record_adr(repository.path(), "0001-real.md", "a real decision\n");
+        let broken = record_adr(repository.path(), "0004-broken.md", "");
+        fs::write(&broken, [0xff_u8, 0xfe, 0x00, 0x01]).expect("bytes that are not text");
+
+        let problem = collect_adrs(repository.path())
+            .expect_err("a prompt is never assembled out of bytes that are not text");
+
+        assert!(matches!(problem, Error::Corrupt { .. }), "{problem}");
+        assert!(problem.to_string().contains("0004-broken.md"), "{problem}");
+    }
+
+    #[test]
+    fn a_link_among_the_decisions_is_refused_rather_than_followed() {
+        // Where a link points is exactly what cannot be checked from here: targets
+        // move and chain, so a decision read through one is a decision whose author
+        // and number the filename does not describe.
+        let repository = tempdir().expect("a scratch repository to hold decisions");
+        let elsewhere = tempdir().expect("a directory outside the repository");
+        let target = elsewhere.path().join("somebody-elses-notes.md");
+        write_document(&target, "not a decision of this project\n");
+        let directory = adr_directory(repository.path());
+        fs::create_dir_all(&directory).expect("a decision directory to hold a link");
+        let link = directory.join("0005-linked.md");
+        symlink(&target, &link).expect("a link stands among the decisions");
+
+        let problem = collect_adrs(repository.path())
+            .expect_err("a link is not a decision record this module may read");
+
+        assert!(
+            matches!(&problem, Error::Policy { paths, .. } if paths == &vec![link.clone()]),
+            "{problem}"
+        );
+        assert!(problem.to_string().contains("link"), "{problem}");
+        assert_eq!(document(&target), "not a decision of this project\n");
+    }
+
+    #[test]
+    fn a_file_where_the_decision_directory_belongs_is_refused_by_name() {
+        let repository = tempdir().expect("a scratch repository to hold decisions");
+        let occupied = adr_directory(repository.path());
+        write_document(&occupied, "not a directory\n");
+
+        let problem = collect_adrs(repository.path())
+            .expect_err("a file where the decisions belong is not a decision archive");
+
+        assert!(
+            matches!(&problem, Error::Policy { paths, .. } if paths == &vec![occupied.clone()]),
+            "{problem}"
+        );
+    }
+
+    #[test]
+    fn a_decision_recorded_by_resolve_reaches_the_next_tasks_prompt() {
+        let home = Scratch::new();
+        let resolved = Task {
+            id: TaskId::new(7),
+            ..task()
+        };
+        let successor = Task {
+            id: TaskId::new(8),
+            ..task()
+        };
+
+        // The task that paused for a decision is handed a prompt that says nothing
+        // is on record; the answer then arrives as an ADR written into the
+        // repository, which is the only operational document VISION.md §3 lets live
+        // there.
+        let before = built_prompt(&home, &resolved, 1);
+        assert!(
+            before.contains("# Decisions on record (0)\n\nNone recorded yet."),
+            "a first prompt does not say that nothing is on record yet:\n{before}"
+        );
+        record_adr(
+            &home.repository,
+            "0078-redaction-runs-inside-the-write-path.md",
+            "# 0078. Redaction runs inside the write path\n\nEvery line is redacted by the \
+             table at the point it is written, and nothing else formats a line on its way to \
+             disk.\n",
+        );
+
+        // A different task, a different prompt, assembled after the decision: the
+        // decision is what has moved.
+        let after = built_prompt(&home, &successor, 1);
+        assert!(
+            after.contains("# 0078. Redaction runs inside the write path"),
+            "the decision a human recorded did not reach the task that came after it:\n{after}"
+        );
+        assert!(
+            after.contains("# Decisions on record (1)\n\n## 1 of 1"),
+            "the recorded decision is not counted and numbered where it stands:\n{after}"
+        );
+    }
+
+    #[test]
+    fn the_prompt_is_the_library_document_the_decisions_then_the_template() {
+        let home = Scratch::new();
+        write_document(&library_under(&home.config).join("context.md"), CONTEXT);
+        write_document(&home.override_dir().join("task.md"), TEMPLATE);
+        record_adr(&home.repository, "0001-first.md", "first decision\n");
+        record_adr(&home.repository, "0002-second.md", "second decision\n");
+        // A template inside the working copy is not an override, whatever it says:
+        // it is the supervisor's own file leaking into the repository an agent can
+        // edit, which VISION.md §3's invariant 6 forbids and this path does not
+        // negotiate with.
+        write_document(
+            &home.repository.join("prompts").join("task.md"),
+            "the repository's own prompt\n",
+        );
+
+        let prompt = built_prompt(&home, &task(), 1);
+
+        let context = prompt
+            .find("# Project context")
+            .expect("the library's context document is missing");
+        let decisions = prompt
+            .find("# Decisions on record (2)")
+            .expect("the repository's decisions are missing");
+        let template = prompt
+            .find("# Prompt template")
+            .expect("the project's own template is missing");
+        assert!(
+            context < decisions && decisions < template,
+            "the parts of the prompt arrived out of order:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("first decision") && prompt.contains("second decision"),
+            "a recorded decision went missing:\n{prompt}"
+        );
+        assert!(
+            prompt.contains(task().body.trim_end()),
+            "the task went missing:\n{prompt}"
+        );
+        assert!(
+            !prompt.contains("the repository's own prompt"),
+            "a prompt document inside the working copy won over the one outside it:\n{prompt}"
+        );
+    }
+
+    #[test]
+    fn a_first_prompt_is_built_from_the_defaults_a_machine_started_with() {
+        let home = Scratch::new();
+        assert!(
+            !home.config.exists(),
+            "the fixture must start with no configuration base"
+        );
+
+        let prompt = built_prompt(&home, &task(), 1);
+
+        let library = library_under(&home.config);
+        assert_eq!(
+            names(&library),
+            ["context.md".to_owned(), "task.md".to_owned()],
+            "building the first prompt of a machine left this behind instead of the two \
+             default documents: {}",
+            library.display()
+        );
+        assert!(
+            prompt.contains("# Project context"),
+            "the standing half of the prompt is not the library's context document:\n{prompt}"
+        );
+        assert!(
+            prompt.contains(task().body.trim_end()) && !prompt.contains(TASK_PLACEHOLDER),
+            "the default template did not carry the task it was built for:\n{prompt}"
+        );
+    }
+
+    #[test]
+    fn no_prompt_can_be_built_when_nothing_names_a_home() {
         let home = Scratch::new();
         let nothing = environment(Vec::new());
 
@@ -1578,6 +2038,8 @@ mod tests {
             ensure_defaults_with(&nothing).expect_err("nothing says where prompts go"),
             load_template_with(&nothing, &home.project())
                 .expect_err("nothing says where prompts go"),
+            build_prompt_with(&nothing, &home.project(), &task(), AttemptId::new(1), TOTAL)
+                .expect_err("nothing says where the standing half of a prompt comes from"),
         ] {
             assert!(
                 matches!(&problem, Error::Config { key, .. } if key == "HOME"),
@@ -1723,6 +2185,30 @@ mod tests {
             load_template(&project).expect("a project's own template can be read"),
             "the project's own words\n",
             "the library default won over the override this project wrote"
+        );
+
+        // And the whole prompt, reached through the entry point a runner calls. The
+        // project's working copy holds no decisions and is never created, which the
+        // parent asserts on after this child has finished.
+        let prompt = build_prompt(&project, &task(), AttemptId::new(3), TOTAL)
+            .expect("the child's own environment is enough to build a prompt");
+        assert!(
+            prompt.contains(document(&library.join("context.md")).trim_end()),
+            "the prompt built by the public entry point is not built from the library's \
+             context document:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("the project's own words"),
+            "the prompt built by the public entry point ignored this project's override:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("# Decisions on record (0)"),
+            "a repository with no decisions of its own is not a repository with a broken \
+             decision archive:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("attempt 3"),
+            "the header does not name the attempt the prompt was built for:\n{prompt}"
         );
     }
 }

@@ -37,7 +37,7 @@ pub use classify::{
     FailureClass, TddException, WaitPlan, classify, limit_message, parse_reset, wait_plan,
 };
 pub use config::Config;
-pub use context::{assemble, ensure_defaults, load_template};
+pub use context::{assemble, build_prompt, collect_adrs, ensure_defaults, load_template};
 pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use events::{Bus, Recorder, Subscription};
