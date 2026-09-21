@@ -113,16 +113,38 @@
 //! redacts them where the bundle's inputs were read; that gap is reported rather
 //! than quietly closed here, because closing it would mean widening a signature
 //! another task is already written against.
+//!
+//! # What an attempt may not touch
+//!
+//! VISION.md §3's invariant 5 and §2's "no self-modification of policy" say one
+//! thing from two directions: a recovery cannot weaken the rules it is judged
+//! by, and neither can the attempt that came before it. A prompt asking the
+//! agent not to edit `clippy.toml` is a request. [`check_no_policy_edit`] is the
+//! check — run against the paths `git` says changed, never against the diff the
+//! agent describes, and asked of **every** attempt rather than only of a
+//! remediation. That is not a quirk of the wording: the attempt that exists
+//! because a gate refused is the attempt most motivated to edit that gate, but
+//! the first attempt that edits the lint configuration has broken the identical
+//! rule, and an attempt that had to edit `scripts/quality.sh` to get past it
+//! would have proven nothing by getting past it. The signature carries no
+//! attempt number, which is what makes the rule unable to care about one.
+//!
+//! [`policy_edit_event`] is the journal record the refusal leaves, so a run that
+//! stopped on a protected path says so — with the paths — in the same
+//! append-only file every other decision is in.
 
 use regex::Regex;
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::fmt;
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 use time::Duration;
 
 use crate::{
-    AttemptRecord, EventKind, FailureClass, GateResult, Task, Usage, parse_cargo, redact::redact,
+    AttemptRecord, Error, EventKind, FailureClass, GateResult, Result, Task, Usage, parse_cargo,
+    redact::redact,
 };
 
 /// How many hexadecimal characters a signature carries.
@@ -897,16 +919,233 @@ pub fn should_continue(bounds: &Bounds, attempts: u32, elapsed: Duration, tokens
     Decision::Continue
 }
 
+/// The sentence a refusal quotes when a diff touched a path it was judged by.
+const PROTECTED_RULE: &str = "an attempt may not edit the rules it is judged by";
+
+/// The sentence a refusal quotes when a diff path cannot be placed inside the
+/// repository, which is the one case this check cannot judge and so is refused
+/// rather than passed. See [`check_no_policy_edit`].
+const UNLOCATABLE_RULE: &str =
+    "a diff path that cannot be located inside the repository is refused rather than trusted";
+
+/// How far one [`Protected`] entry reaches into a diff.
+#[derive(Debug, Clone, Copy)]
+enum ProtectedKind {
+    /// The named directory, the directory itself included, and every path below
+    /// it. Guarded at the repository root: `crates/foo/scripts/` is a module,
+    /// not this repository's `scripts/`, and a boundary that could not tell the
+    /// two apart would be one a task routed around by renaming where it worked.
+    Directory,
+    /// The named file, wherever it sits. Guarded by name at any depth, because
+    /// `clippy` and `rustfmt` read the nearest configuration walking *up* from
+    /// the file they are checking: a `clippy.toml` inside one crate is what that
+    /// crate's lint gate reads, so a guard fixed to the repository root would
+    /// guard half of what it names.
+    File,
+}
+
+/// One entry of the set no attempt may touch.
+#[derive(Debug)]
+struct Protected {
+    /// The path as the repository writes it: a directory name, or a file name.
+    name: &'static str,
+    /// How far the entry reaches.
+    kind: ProtectedKind,
+}
+
+impl Protected {
+    /// A directory and everything below it.
+    const fn directory(name: &'static str) -> Self {
+        Self {
+            name,
+            kind: ProtectedKind::Directory,
+        }
+    }
+
+    /// A file, at any depth.
+    const fn file(name: &'static str) -> Self {
+        Self {
+            name,
+            kind: ProtectedKind::File,
+        }
+    }
+
+    /// Whether the lexical components of a diff path fall inside this entry.
+    fn covers(&self, parts: &[&OsStr]) -> bool {
+        match self.kind {
+            ProtectedKind::Directory => parts
+                .first()
+                .is_some_and(|first| *first == OsStr::new(self.name)),
+            ProtectedKind::File => parts
+                .last()
+                .is_some_and(|last| *last == OsStr::new(self.name)),
+        }
+    }
+}
+
+/// The paths an attempt may not touch, because they are what it is judged by.
+///
+/// The gate commands themselves live under `scripts/` and the project's own
+/// configuration, including the verification profile the runner executes, under
+/// `.ktask/` — VISION.md §8 makes both runner-owned rather than agent-owned.
+/// The six file names are the configuration the gates in `docs/QUALITY.md` read:
+/// lints, format and spelling — each in both spellings its tool accepts — and
+/// dependency bans. The set is a table rather than a matched sentence because
+/// the rule it encodes has no gradation: an entry is guarded or it is not, and a
+/// test walks it entry by entry.
+static PROTECTED_PATHS: [Protected; 8] = [
+    Protected::directory("scripts"),
+    Protected::directory(".ktask"),
+    Protected::file("clippy.toml"),
+    Protected::file("rustfmt.toml"),
+    Protected::file(".rustfmt.toml"),
+    Protected::file("deny.toml"),
+    Protected::file("_typos.toml"),
+    Protected::file("typos.toml"),
+];
+
+/// The components a diff path arrives with, and whether it can be placed inside
+/// the repository at all.
+///
+/// `.` components go, and every `..` cancels the component before it, because a
+/// path is compared with the protected set by what it points at and not by how
+/// it was spelled: `scripts/inner/../quality.sh` is `scripts/quality.sh`, and a
+/// check that compared raw strings would let an agent edit the gate script
+/// through a spelling of its own choosing.
+///
+/// The second half is `false` for the three paths this function cannot locate:
+/// one that arrives absolute, one that climbs above the root the protected set
+/// is rooted at, and one that names no component at all — `""` and `.` are the
+/// repository, and the repository contains `scripts/`. Nothing here touches the
+/// filesystem, so a path that resolves through a symlink is the caller's to
+/// judge, which is why the paths that reach this function come from `git`.
+fn lexical(path: &Path) -> (Vec<&OsStr>, bool) {
+    let mut parts: Vec<&OsStr> = Vec::new();
+    let mut inside = true;
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => parts.push(part),
+            Component::ParentDir => {
+                if parts.pop().is_none() {
+                    inside = false;
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => inside = false,
+        }
+    }
+    let placed = inside && !parts.is_empty();
+    (parts, placed)
+}
+
+/// The protected entry a path's components fall inside, if any.
+fn protected_for(parts: &[&OsStr]) -> Option<&'static Protected> {
+    PROTECTED_PATHS.iter().find(|entry| entry.covers(parts))
+}
+
+/// Refuse an attempt whose diff touched the rules it is judged by.
+///
+/// `diff_paths` is what the repository says changed — the paths
+/// [`crate::git`] reads out of `git diff`, repository-relative and unattributed
+/// to anybody's account of the work. VISION.md §3's invariant 5 says self-healing
+/// cannot weaken checks or change policy, and §7 repeats it as "never edits gate
+/// definitions"; the sentence is only worth what the check behind it is, and an
+/// agent that can edit `clippy.toml`, `scripts/quality.sh` or `.ktask/` has
+/// rewritten the examination rather than answered it. So does an agent on its
+/// first attempt, which is why this is called for every attempt and why it takes
+/// no attempt number: the rule is one predicate, and an attempt that had to move
+/// a gate to pass it has proven nothing by passing.
+///
+/// # Paths, not contents
+///
+/// The check is about which file changed, not what changed in it. A protected
+/// path is guarded in full — a one-character edit to `clippy.toml` is as much a
+/// rewrite of the lint gate as a deletion is, and so is a deletion, which is why
+/// a protected path is refused wherever a diff lists it, added, modified,
+/// renamed or deleted alike. `Cargo.toml` is deliberately *not* guarded: it is
+/// where `[workspace.lints]` lives (ADR-0067), and it is also the file every
+/// dependency change has to edit, which AGENTS.md then requires be committed in
+/// the same commit as the lockfile.
+///
+/// A path this check cannot place inside the repository — absolute, climbing
+/// above the root, or naming nothing — is refused too, under its own sentence.
+/// The alternative is a boundary that passes whatever it could not read, which
+/// is the shape of the hole this whole module exists to close.
+///
+/// # Errors
+///
+/// [`Error::Policy`] naming every offending path, in the order the diff listed
+/// them, with the rule sentence (or both, when a path breaks two) as the detail.
+/// The class is `policy_failure` by the taxonomy of VISION.md §7 — "forbidden
+/// file, dirty tree, attempted gate bypass" — and `classify` reaches the same
+/// class for the same error, remediation or not.
+pub fn check_no_policy_edit(diff_paths: &[PathBuf]) -> Result<()> {
+    let mut offenders = Vec::new();
+    let mut protected = false;
+    let mut unlocatable = false;
+    for path in diff_paths {
+        let (parts, placed) = lexical(path);
+        let touched = protected_for(&parts).is_some();
+        if !placed || touched {
+            offenders.push(path.clone());
+            protected |= touched;
+            unlocatable |= !placed;
+        }
+    }
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    let mut rules = Vec::new();
+    if protected {
+        rules.push(PROTECTED_RULE);
+    }
+    if unlocatable {
+        rules.push(UNLOCATABLE_RULE);
+    }
+    Err(Error::Policy {
+        detail: rules.join("; "),
+        paths: offenders,
+    })
+}
+
+/// The journal record a protected-path refusal leaves behind.
+///
+/// [`trip_event`] has the same shape and for the same reason: a refusal that
+/// lets a task carry on is not a refusal, and `TaskFailed` is the catalog entry
+/// that ends it, from `Running` and from `Remediating` alike (ADR-0022). The
+/// class is not a parameter, unlike the trip's: VISION.md §7 names
+/// [`FailureClass::PolicyFailure`] for a forbidden file or an attempted gate
+/// bypass, and the response that class selects has to be the same whether the
+/// attempt that touched the path was the first one or the remediation of it.
+///
+/// `offending_paths` is the list the refusal named — the `paths` of
+/// [`check_no_policy_edit`]'s error, not the whole diff — so the record sends a
+/// human to the files that broke the rule and to no others.
+#[must_use]
+pub fn policy_edit_event(offending_paths: &[PathBuf]) -> EventKind {
+    let named: Vec<String> = offending_paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    EventKind::TaskFailed {
+        class: FailureClass::PolicyFailure,
+        detail: format!("{PROTECTED_RULE}: {}", named.join(", ")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::RULES;
     use super::{Bound, Bounds, Decision, should_continue};
     use super::{Breaker, BreakerState, bundle, signature, trip_event};
+    use super::{PROTECTED_PATHS, ProtectedKind, check_no_policy_edit, policy_edit_event};
     use crate::{
-        AttemptId, AttemptRecord, EventKind, FailureClass, GateKind, GateResult, Journal, Phase,
-        Task, TaskId, TaskState, TaskStatus, Usage, UsageSource, apply, journal_path, redact::MASK,
+        AttemptId, AttemptRecord, Error, EventKind, FailureClass, GateKind, GateResult, Journal,
+        Phase, Task, TaskId, TaskState, TaskStatus, Usage, UsageSource, apply, journal_path,
+        redact::MASK,
     };
     use proptest::prelude::*;
+    use std::path::PathBuf;
     use tempfile::{TempDir, tempdir};
     use time::Duration;
     use time::macros::datetime;
@@ -2213,6 +2452,322 @@ mod tests {
                 elapsed: 90,
                 max: 60
             })
+        );
+    }
+
+    /// A diff path list spelled the way `git diff --name-only` spells it:
+    /// repository-relative, one path per changed file.
+    fn diff(paths: &[&str]) -> Vec<PathBuf> {
+        paths.iter().copied().map(PathBuf::from).collect()
+    }
+
+    /// The refusal `check_no_policy_edit` handed back for `paths`, as the rule
+    /// sentence it carries and the offending paths it named.
+    fn refusal(paths: &[&str]) -> (String, Vec<PathBuf>) {
+        let error = check_no_policy_edit(&diff(paths))
+            .expect_err("a change to the rules the attempt is judged by is refused");
+        match error {
+            Error::Policy { detail, paths } => (detail, paths),
+            other => panic!("the refusal is a policy violation, not `{other}`"),
+        }
+    }
+
+    /// The journal record a refusal for `paths` leaves behind, read back out of a
+    /// real journal: a refusal that exists only as a return value has stopped
+    /// nothing a later reader can see.
+    fn journalled(paths: &[&str]) -> (FailureClass, String) {
+        let dir = scratch();
+        let state_dir = dir.path().join("state-72");
+        std::fs::create_dir(&state_dir).expect("a state directory the journal may live in");
+        let task = TaskId::new(72);
+        let mut journal = Journal::open(&journal_path(&state_dir)).expect("a journal opens in it");
+        let (_, offenders) = refusal(paths);
+        journal
+            .append(Some(task), &policy_edit_event(&offenders))
+            .expect("a refusal is journalled before anything else happens");
+
+        let rows = journal.events_for(task).expect("the journal reads back");
+        assert_eq!(rows.len(), 1, "one refusal is one record");
+        assert_eq!(rows[0].kind.discriminant(), "TaskFailed");
+        let EventKind::TaskFailed { class, detail } = &rows[0].kind else {
+            panic!(
+                "a refusal is journalled as the task's failure: {:?}",
+                rows[0].kind
+            );
+        };
+        (*class, detail.clone())
+    }
+
+    /// The boundary is about the rules, not about the work: an ordinary change
+    /// to source, to a test, to a documentation record and to the manifest all
+    /// pass, because a task that could not do those could not do anything.
+    #[test]
+    fn an_ordinary_change_to_the_project_passes_the_boundary() {
+        check_no_policy_edit(&diff(&[
+            "crates/ktask-core/src/remediate.rs",
+            "crates/ktask-core/tests/durability.rs",
+            "docs/adr/0067-a-self-healing-boundary-is-a-path-set.md",
+            "README.md",
+        ]))
+        .expect("ordinary work is what every attempt is for");
+    }
+
+    /// An empty diff touches nothing, so it cannot touch a protected path. This
+    /// is the state of an attempt that changed no file at all, which the gates
+    /// refuse as an empty commit (ADR-0045) but which is no policy violation.
+    #[test]
+    fn an_empty_diff_touches_nothing_protected() {
+        check_no_policy_edit(&[]).expect("no changed path is no protected path");
+    }
+
+    /// `Cargo.toml` holds this workspace's `[workspace.lints]`, and is still not
+    /// a protected path: AGENTS.md requires a task that adds a dependency to
+    /// commit the manifest and `Cargo.lock` with it, so guarding the manifest
+    /// would refuse ordinary work. The half of the lint set that lives there is
+    /// a named gap in the boundary, reported rather than quietly closed.
+    #[test]
+    fn the_manifest_that_carries_the_lint_set_is_not_a_protected_path() {
+        check_no_policy_edit(&diff(&["Cargo.toml", "Cargo.lock"]))
+            .expect("a dependency change is ordinary work, not a policy violation");
+    }
+
+    /// A guard is a path, not a substring. `scripts-extra/` is not `scripts/`,
+    /// `clippy.toml.bak` is not `clippy.toml`, and a directory named `scripts`
+    /// below `crates/` is not the repository's `scripts/` — a boundary that
+    /// refused these would be a boundary a task learned to route around by
+    /// renaming the directory it worked in.
+    #[test]
+    fn a_name_that_only_looks_like_a_protected_path_passes() {
+        for near in [
+            "scripts.rs",
+            "scripts-extra/gate.sh",
+            "crates/ktask-core/src/scripts/paths.rs",
+            "clippy.toml.bak",
+            "deny.toml.orig",
+            ".ktask-worktrees/main/task-72/report.md",
+        ] {
+            check_no_policy_edit(&diff(&[near]))
+                .unwrap_or_else(|error| panic!("`{near}` is not a protected path: {error}"));
+        }
+    }
+
+    /// The headline case, and the reason the boundary exists at all: the lint
+    /// configuration is the rule the `clippy` gate judges the attempt by, so an
+    /// attempt that edits it has just rewritten its own marks.
+    #[test]
+    fn an_attempt_editing_the_lint_configuration_is_refused() {
+        let (detail, paths) = refusal(&["clippy.toml"]);
+        assert_eq!(paths, diff(&["clippy.toml"]));
+        assert!(
+            detail.contains("judged by"),
+            "the refusal has to say which rule was broken, not merely that one was: {detail}",
+        );
+    }
+
+    /// Editing the script the gates run is the same violation as editing a
+    /// configuration file they read, and is refused with the same sentence: a
+    /// task that could move the goalposts one way and not the other would learn
+    /// to prefer the way that was left open.
+    #[test]
+    fn editing_the_gate_script_and_the_gate_configuration_refuse_identically() {
+        let (script, _) = refusal(&["scripts/quality.sh"]);
+        let (configuration, _) = refusal(&["rustfmt.toml"]);
+        assert_eq!(
+            script, configuration,
+            "one rule about the rules needs one sentence, whichever protected path was touched"
+        );
+    }
+
+    /// Every entry of the protected set is exercised, at its own name and below
+    /// it, so no entry survives a mutation that drops it. A directory is
+    /// guarded at the repository root and a file by its name at any depth,
+    /// because `clippy` and `rustfmt` read the nearest configuration walking up
+    /// from the file they are checking — a `clippy.toml` inside a crate is read
+    /// by that crate's lint gate.
+    #[test]
+    fn every_protected_entry_refuses_its_own_path_and_everything_below_it() {
+        for entry in &PROTECTED_PATHS {
+            let name = entry.name;
+            refusal(&[name]);
+            match entry.kind {
+                ProtectedKind::Directory => {
+                    refusal(&[&format!("{name}/inner/gate.sh")]);
+                    check_no_policy_edit(&diff(&[&format!("outer/{name}/gate.sh")]))
+                        .unwrap_or_else(|error| panic!("`outer/{name}` is not `{name}`: {error}"));
+                }
+                ProtectedKind::File => {
+                    refusal(&[&format!("crates/ktask-core/{name}")]);
+                    check_no_policy_edit(&diff(&[&format!("{name}.bak")]))
+                        .unwrap_or_else(|error| panic!("`{name}.bak` is not `{name}`: {error}"));
+                }
+            }
+        }
+    }
+
+    /// The set itself, pinned. `every_protected_entry_…` walks the table, so
+    /// deleting an entry would shorten that test rather than fail it — which is
+    /// exactly how a protected path stops being protected without anybody's
+    /// attention. The order is asserted with the names because a set that has to
+    /// be read in one order every time is a set worth reading in one order.
+    #[test]
+    fn the_protected_set_is_exactly_the_paths_the_rule_names() {
+        let names: Vec<&str> = PROTECTED_PATHS.iter().map(|entry| entry.name).collect();
+        assert_eq!(
+            names,
+            [
+                "scripts",
+                ".ktask",
+                "clippy.toml",
+                "rustfmt.toml",
+                ".rustfmt.toml",
+                "deny.toml",
+                "_typos.toml",
+                "typos.toml",
+            ]
+        );
+    }
+
+    /// The spelling is not the point. A path that walks back out of a directory
+    /// it never left, or that arrives with the `./` a shell completes, is still
+    /// the protected file, and is refused before anything is written. The reason
+    /// is asserted too: a refusal that reached the right answer by giving up on
+    /// the path is the wrong answer arrived at by the wrong road.
+    #[test]
+    fn a_spelling_that_walks_backwards_still_refuses_the_same_file() {
+        for spelling in [
+            "./scripts/quality.sh",
+            "scripts/inner/../quality.sh",
+            "scripts/./quality.sh",
+            ".ktask/./config.toml",
+        ] {
+            let (detail, paths) = refusal(&[spelling]);
+            assert_eq!(
+                paths,
+                diff(&[spelling]),
+                "the refusal quotes the path as it arrived"
+            );
+            assert!(
+                detail.contains("judged by"),
+                "`{spelling}` is refused because it is the gate script, not because \
+                 the check could not read it: {detail}",
+            );
+        }
+    }
+
+    /// A refusal names every path that broke the rule, not the first one it
+    /// found, and leaves the ordinary paths out of the list: a human reading the
+    /// record has to be sent to each file that was touched, and not to the ones
+    /// that were not.
+    #[test]
+    fn every_offending_path_is_named_and_the_ordinary_ones_are_left_out() {
+        let (_, paths) = refusal(&[
+            "crates/ktask-core/src/remediate.rs",
+            "clippy.toml",
+            "scripts/quality.sh",
+            "docs/adr/0067-a-self-healing-boundary-is-a-path-set.md",
+            ".ktask/config.toml",
+        ]);
+        assert_eq!(
+            paths,
+            diff(&["clippy.toml", "scripts/quality.sh", ".ktask/config.toml"])
+        );
+    }
+
+    /// A path this check cannot place inside the repository is refused rather
+    /// than trusted: an absolute path, or one that climbs out of the checkout,
+    /// cannot be compared with the protected set, and the attempt that hands one
+    /// over is the attempt that is about to edit something the check cannot see.
+    #[test]
+    fn a_path_that_cannot_be_located_in_the_repository_is_refused() {
+        for escaped in [
+            "/home/agent/checkout/scripts/quality.sh",
+            "../other-repo/scripts/quality.sh",
+            ".",
+            "./",
+        ] {
+            let (detail, paths) = refusal(&[escaped]);
+            assert_eq!(paths, diff(&[escaped]));
+            assert!(
+                detail.contains("cannot be located"),
+                "the refusal says why a path it cannot place is refused: {detail}",
+            );
+        }
+    }
+
+    /// The two refusals an unlocatable path can carry arrive together rather than
+    /// one hiding the other: `../repo/clippy.toml` climbs out of the checkout and
+    /// names a protected file, and a human reading one line needs both facts.
+    #[test]
+    fn a_path_outside_the_repository_that_names_a_protected_file_says_both() {
+        let (detail, paths) = refusal(&["../repo/clippy.toml"]);
+        assert!(detail.contains("cannot be located"), "{detail}");
+        assert!(detail.contains("judged by"), "{detail}");
+        assert_eq!(paths, diff(&["../repo/clippy.toml"]));
+    }
+
+    /// The first attempt, before anything has failed and so before anything
+    /// could be called a remediation: the refusal is journalled as the task's
+    /// failure, classed the way VISION.md §7 classes a forbidden file, and the
+    /// projection lands on `Failed` rather than on a phase that carries on.
+    #[test]
+    fn a_first_attempt_touching_a_protected_path_is_refused_and_journaled() {
+        let (class, detail) = journalled(&["clippy.toml"]);
+        assert_eq!(class, FailureClass::PolicyFailure);
+        assert!(
+            detail.contains("clippy.toml"),
+            "the record has to name what was touched: {detail}",
+        );
+
+        let projected = apply(
+            &TaskState::Running {
+                attempt: AttemptId::new(1),
+                phase: Phase::Implement,
+            },
+            &policy_edit_event(&diff(&["clippy.toml"])),
+        )
+        .expect("a first attempt can be refused for what it touched");
+        assert!(
+            matches!(
+                projected,
+                TaskState::Failed {
+                    class: FailureClass::PolicyFailure,
+                    ..
+                }
+            ),
+            "a refusal ends the task rather than moving it to its next phase: {projected:?}",
+        );
+    }
+
+    /// A remediation touching the same kind of path is refused the same way and
+    /// journalled the same way, which is the whole point of the boundary: the
+    /// attempt that exists because a gate refused is the attempt most motivated
+    /// to edit that gate, and it is judged by the identical rule.
+    #[test]
+    fn a_remediation_touching_a_protected_path_is_refused_and_journaled() {
+        let (class, detail) = journalled(&["scripts/quality.sh"]);
+        assert_eq!(class, FailureClass::PolicyFailure);
+        assert!(
+            detail.contains("scripts/quality.sh"),
+            "the record has to name what was touched: {detail}",
+        );
+
+        let projected = apply(
+            &TaskState::Remediating {
+                attempt: AttemptId::new(2),
+                phase: Phase::Red,
+            },
+            &policy_edit_event(&diff(&["scripts/quality.sh"])),
+        )
+        .expect("a remediation can be refused for what it touched");
+        assert!(
+            matches!(
+                projected,
+                TaskState::Failed {
+                    class: FailureClass::PolicyFailure,
+                    ..
+                }
+            ),
+            "a refusal ends a remediation on the spot: {projected:?}",
         );
     }
 }
