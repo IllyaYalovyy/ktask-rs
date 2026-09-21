@@ -101,7 +101,7 @@ fn filter_tasks(
 mod tests {
     use super::*;
     use ktask_core::testing::ScratchRepo;
-    use ktask_core::{Journal, EventKind, ids::TaskId, ids::AttemptId};
+    use ktask_core::{EventKind, Journal, ids::AttemptId, ids::TaskId};
 
     #[test]
     fn cli_run_drains_the_queue() {
