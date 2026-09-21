@@ -116,10 +116,13 @@ impl Profile {
 }
 
 fn kill_process_group(child_pid: u32) {
-    let pgid = Pid::from_raw(i32::try_from(child_pid).unwrap_or(1));
-    let _ = kill(pgid, Signal::SIGTERM);
-    thread::sleep(Duration::from_millis(100));
-    let _ = kill(pgid, Signal::SIGKILL);
+    if let Ok(pid_i32) = i32::try_from(child_pid) {
+        // Use negative PID to kill the process group (Unix convention)
+        let pgid = Pid::from_raw(-pid_i32);
+        let _ = kill(pgid, Signal::SIGTERM);
+        thread::sleep(Duration::from_millis(100));
+        let _ = kill(pgid, Signal::SIGKILL);
+    }
 }
 
 /// Execute a gate command and capture its output.
