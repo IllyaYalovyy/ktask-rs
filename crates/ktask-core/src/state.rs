@@ -423,6 +423,7 @@ fn from_running(
             resume_to: Box::new(TaskState::Running { attempt, phase }),
         }),
         EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
+        EventKind::RecoveryDecision { .. } => Ok(TaskState::Running { attempt, phase }),
         EventKind::TaskQueued { .. }
         | EventKind::PreflightStarted
         | EventKind::PreflightPassed { .. }
@@ -432,7 +433,6 @@ fn from_running(
         | EventKind::PublishVerified { .. }
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
-        | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::DecisionResolved { .. } => Err(Error::InvalidTransition {
@@ -562,6 +562,7 @@ fn from_remediating(
             resume_to: Box::new(TaskState::Remediating { attempt, phase }),
         }),
         EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
+        EventKind::RecoveryDecision { .. } => Ok(TaskState::Remediating { attempt, phase }),
         EventKind::TaskQueued { .. }
         | EventKind::PreflightStarted
         | EventKind::PreflightPassed { .. }
@@ -570,7 +571,6 @@ fn from_remediating(
         | EventKind::PublishVerified { .. }
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
-        | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::DecisionResolved { .. } => Err(Error::InvalidTransition {
@@ -636,6 +636,7 @@ fn from_verifying(attempt: AttemptId, event: &crate::event::EventKind) -> Result
             resume_to: Box::new(TaskState::Verifying { attempt }),
         }),
         EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
+        EventKind::RecoveryDecision { .. } => Ok(TaskState::Verifying { attempt }),
         EventKind::TaskQueued { .. }
         | EventKind::PreflightStarted
         | EventKind::PreflightPassed { .. }
@@ -647,7 +648,6 @@ fn from_verifying(attempt: AttemptId, event: &crate::event::EventKind) -> Result
         | EventKind::PublishVerified { .. }
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
-        | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::TddExceptionUsed { .. }
@@ -701,6 +701,7 @@ fn from_publishing(attempt: AttemptId, event: &crate::event::EventKind) -> Resul
             resume_to: Box::new(TaskState::Publishing { attempt }),
         }),
         EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
+        EventKind::RecoveryDecision { .. } => Ok(TaskState::Publishing { attempt }),
         EventKind::TaskQueued { .. }
         | EventKind::PreflightStarted
         | EventKind::PreflightPassed { .. }
@@ -712,7 +713,6 @@ fn from_publishing(attempt: AttemptId, event: &crate::event::EventKind) -> Resul
         | EventKind::VerifyFailed { .. }
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
-        | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::TddExceptionUsed { .. }
