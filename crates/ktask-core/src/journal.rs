@@ -67,11 +67,17 @@ impl Journal {
     /// the payload as JSON. The timestamp is automatically set to the current
     /// time in UTC. The insert is wrapped in a transaction to ensure atomicity.
     ///
+    /// If the event has a task_id, also updates the task_state table in the same
+    /// transaction. Events without a task_id do not update task_state.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the event cannot be serialized, inserted, or if
-    /// the transaction cannot be committed.
+    /// Returns an error if the event cannot be serialized, inserted, if the
+    /// transaction cannot be committed, or if the event is invalid for the
+    /// task's current state.
     pub fn append(&mut self, task_id: Option<TaskId>, kind: &EventKind) -> Result<EventSeq> {
+        use crate::state;
+
         // Serialize the payload
         let mut payload = serde_json::to_string(kind)?;
 
@@ -95,6 +101,33 @@ impl Journal {
 
         // Insert in a transaction
         let tx = self.conn.transaction()?;
+
+        // If this event has a task_id, validate the state transition and update task_state
+        if let Some(tid) = task_id {
+            // Read current state (default to Queued)
+            let current_state = match tx.query_row(
+                "SELECT state_json FROM task_state WHERE task_id = ?1",
+                rusqlite::params![i64::from(tid.get())],
+                |row| row.get::<_, String>(0),
+            ) {
+                Ok(state_json) => serde_json::from_str(&state_json)?,
+                Err(rusqlite::Error::QueryReturnedNoRows) => TaskState::Queued,
+                Err(e) => return Err(Error::Database(e)),
+            };
+
+            // Apply the event to get new state, converting InvalidTransition to propagate it
+            let new_state = state::apply(&current_state, kind)?;
+
+            // Serialize the new state
+            let new_state_json = serde_json::to_string(&new_state)?;
+
+            // Update task_state in the same transaction
+            tx.execute(
+                "INSERT OR REPLACE INTO task_state (task_id, state_json, updated_at)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![i64::from(tid.get()), new_state_json, ts_str],
+            )?;
+        }
 
         // Insert the event
         tx.execute(
@@ -2771,5 +2804,211 @@ mod tests {
                 drop(journal);
             }
         }
+    }
+
+    #[test]
+    fn append_updates_task_state_without_rebuild() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(1);
+        let attempt = crate::ids::AttemptId::new(1);
+
+        // Append events that will transition a task to Done
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .unwrap();
+
+        journal
+            .append(Some(task_id), &EventKind::PreflightStarted)
+            .unwrap();
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::AttemptStarted {
+                    attempt,
+                    protocol: "direct".to_string(),
+                    pid: 1234,
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap();
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PhaseEntered {
+                    attempt,
+                    phase: crate::state::Phase::Implement,
+                },
+            )
+            .unwrap();
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::VerifyPassed { attempt },
+            )
+            .unwrap();
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PublishStarted {
+                    attempt,
+                    candidate_sha: "def456".to_string(),
+                },
+            )
+            .unwrap();
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::PublishVerified {
+                    commit: "def456".to_string(),
+                    remote_sha: "def456".to_string(),
+                },
+            )
+            .unwrap();
+
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskDone {
+                    commit: "def456".to_string(),
+                },
+            )
+            .unwrap();
+
+        // Check that all_states() reports Done WITHOUT calling rebuild_state()
+        let states = journal.all_states().unwrap();
+        assert_eq!(
+            states.get(&task_id),
+            Some(&TaskState::Done),
+            "State should be Done after appending TaskDone event"
+        );
+
+        drop(journal);
+    }
+
+    #[test]
+    fn append_rejects_invalid_transition() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let mut journal = Journal::open(&journal_path).unwrap();
+        let task_id = TaskId::new(1);
+
+        // Append a TaskQueued event (task is now Queued)
+        journal
+            .append(
+                Some(task_id),
+                &EventKind::TaskQueued {
+                    title: "Test task".to_string(),
+                },
+            )
+            .unwrap();
+
+        // Try to append TaskDone directly from Queued - this should fail
+        let result = journal.append(
+            Some(task_id),
+            &EventKind::TaskDone {
+                commit: "abc123".to_string(),
+            },
+        );
+
+        assert!(
+            result.is_err(),
+            "Appending invalid transition should return error"
+        );
+
+        // Verify that neither events nor task_state were modified
+        let events = journal.events().unwrap();
+        assert_eq!(
+            events.len(),
+            1,
+            "Only the original TaskQueued event should exist"
+        );
+
+        let state = journal.get_state(task_id).unwrap();
+        assert_eq!(
+            state, Some(TaskState::Queued),
+            "State should still be Queued after invalid append"
+        );
+
+        drop(journal);
+    }
+
+    #[test]
+    fn incremental_state_equals_rebuild() {
+        let temp = TempDir::new().unwrap();
+        let journal_path = temp.path().join("journal.db");
+
+        let task_id = TaskId::new(1);
+
+        // First session: append events incrementally
+        {
+            let mut journal = Journal::open(&journal_path).unwrap();
+
+            journal
+                .append(
+                    Some(task_id),
+                    &EventKind::TaskQueued {
+                        title: "Test task".to_string(),
+                    },
+                )
+                .unwrap();
+
+            journal
+                .append(Some(task_id), &EventKind::PreflightStarted)
+                .unwrap();
+
+            journal
+                .append(
+                    Some(task_id),
+                    &EventKind::PreflightPassed {
+                        base_sha: "abc123".to_string(),
+                    },
+                )
+                .unwrap();
+
+            drop(journal);
+        }
+
+        // Second session: get state from incremental updates
+        let incremental_state = {
+            let journal = Journal::open(&journal_path).unwrap();
+            journal.get_state(task_id).unwrap()
+        };
+
+        // Third session: clear state and rebuild, then compare
+        let rebuilt_state = {
+            let mut journal = Journal::open(&journal_path).unwrap();
+            journal.rebuild_state().unwrap();
+            journal.get_state(task_id).unwrap()
+        };
+
+        assert_eq!(
+            incremental_state, rebuilt_state,
+            "Incrementally maintained state should equal rebuilt state"
+        );
+
+        drop(temp);
     }
 }

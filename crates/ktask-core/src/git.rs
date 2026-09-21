@@ -240,7 +240,7 @@ pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {
         }
         // Any non-space character in the status means there's a change
         let x = line.chars().next().unwrap_or(' ');
-        let y = line.chars().nth(1).unwrap_or(' ');
+        let _y = line.chars().nth(1).unwrap_or(' ');
         // Skip ignored files
         !(x == '!' || x == '.')
     });

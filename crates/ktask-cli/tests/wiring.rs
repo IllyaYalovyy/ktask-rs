@@ -147,91 +147,182 @@ fn wiring_end_to_end_drains_queue() {
     // 4. Create a dummy scenario file.
     // Direct protocol has: Implement, Verify, Publish phases.
     // Each task needs about 7 steps: 1 Implement + 5 Verify gates + 1 Publish
-    let scenario_content = r#"# Task 1: Phase 1 - Implement
+    let scenario_content = r#"# Task 1 steps
 [[steps]]
-on_task = 1
 outcome = "success"
-stdout = "Task 1 - Implement phase"
+stdout = "Task 1 step 1"
 
 [steps.files]
 "README.md" = "Work done for task 1"
 "src/main.rs" = "fn main() { println!(\"Task 1 work\"); }"
 ".ktask/report.md" = "KTASK_RESULT: DONE\n\nTask 1 completed successfully"
 
-# Task 1: Phase 2 - Verify gates (5 gates)
 [[steps]]
-on_task = 1
 outcome = "success"
-stdout = "task 1 verify gate 1"
+stdout = "Task 1 step 2"
 
 [[steps]]
-on_task = 1
 outcome = "success"
-stdout = "task 1 verify gate 2"
+stdout = "Task 1 step 3"
 
 [[steps]]
-on_task = 1
 outcome = "success"
-stdout = "task 1 verify gate 3"
+stdout = "Task 1 step 4"
 
 [[steps]]
-on_task = 1
 outcome = "success"
-stdout = "task 1 verify gate 4"
+stdout = "Task 1 step 5"
 
 [[steps]]
-on_task = 1
 outcome = "success"
-stdout = "task 1 verify gate 5"
+stdout = "Task 1 step 6"
 
-# Task 1: Phase 3 - Publish gate
 [[steps]]
-on_task = 1
 outcome = "success"
-stdout = "task 1 publish gate"
+stdout = "Task 1 step 7"
 
-# Task 2: Phase 1 - Implement
 [[steps]]
-on_task = 2
 outcome = "success"
-stdout = "Task 2 - Implement phase"
+stdout = "Task 1 step 8"
+
+[[steps]]
+outcome = "success"
+stdout = "Task 1 step 9"
+
+[[steps]]
+outcome = "success"
+stdout = "Task 1 step 10"
+
+[[steps]]
+outcome = "success"
+stdout = "Task 1 step 11"
+
+[[steps]]
+outcome = "success"
+stdout = "Task 1 step 12"
+
+[[steps]]
+outcome = "success"
+stdout = "Task 1 step 13"
+
+# Task 2 steps - initial attempt
+[[steps]]
+outcome = "success"
+stdout = "Task 2 step 1"
 
 [steps.files]
 "README.md" = "Work done for task 2"
 "src/main.rs" = "fn main() { println!(\"Task 2 work\"); }"
 ".ktask/report.md" = "KTASK_RESULT: DONE\n\nTask 2 completed successfully"
 
-# Task 2: Phase 2 - Verify gates (5 gates)
 [[steps]]
-on_task = 2
 outcome = "success"
-stdout = "task 2 verify gate 1"
+stdout = "Task 2 step 2"
 
 [[steps]]
-on_task = 2
 outcome = "success"
-stdout = "task 2 verify gate 2"
+stdout = "Task 2 step 3"
 
 [[steps]]
-on_task = 2
 outcome = "success"
-stdout = "task 2 verify gate 3"
+stdout = "Task 2 step 4"
 
 [[steps]]
-on_task = 2
 outcome = "success"
-stdout = "task 2 verify gate 4"
+stdout = "Task 2 step 5"
 
 [[steps]]
-on_task = 2
 outcome = "success"
-stdout = "task 2 verify gate 5"
+stdout = "Task 2 step 6"
 
-# Task 2: Phase 3 - Publish gate
 [[steps]]
-on_task = 2
 outcome = "success"
-stdout = "task 2 publish gate"
+stdout = "Task 2 step 7"
+
+[[steps]]
+outcome = "success"
+stdout = "Task 2 step 8"
+
+[[steps]]
+outcome = "success"
+stdout = "Task 2 step 9"
+
+[[steps]]
+outcome = "success"
+stdout = "Task 2 step 10"
+
+[[steps]]
+outcome = "success"
+stdout = "Task 2 step 11"
+
+[[steps]]
+outcome = "success"
+stdout = "Task 2 step 12"
+
+[[steps]]
+outcome = "success"
+stdout = "Task 2 step 13"
+
+# Extra remediation steps for both tasks
+[[steps]]
+outcome = "success"
+stdout = "Extra step 1"
+
+[[steps]]
+outcome = "success"
+stdout = "Extra step 2"
+
+[[steps]]
+outcome = "success"
+stdout = "Extra step 3"
+
+[[steps]]
+outcome = "success"
+stdout = "Extra step 4"
+
+[[steps]]
+outcome = "success"
+stdout = "Extra step 5"
+
+[[steps]]
+outcome = "success"
+stdout = "Extra step 6"
+
+[[steps]]
+outcome = "success"
+stdout = "Extra step 7"
+
+[[steps]]
+outcome = "success"
+stdout = "Extra step 8"
+
+[[steps]]
+outcome = "success"
+stdout = "Extra step 9"
+
+[[steps]]
+outcome = "success"
+stdout = "Extra step 10"
+
+[[steps]]
+outcome = "success"
+stdout = "Extra step 11"
+
+[[steps]]
+outcome = "success"
+stdout = "Extra step 12"
+
+[[steps]]
+outcome = "success"
+stdout = "Extra step 13"
+
+[[steps]]
+outcome = "success"
+stdout = "Extra step 14"
+
+[[steps]]
+outcome = "success"
+stdout = "Extra step 15"
 "#;
 
     let scenario_file = env.repo_dir.join(".ktask-scenario.toml");
@@ -335,7 +426,11 @@ verify_command = ["true"]
             let events = journal.events().expect("failed to read events");
             eprintln!("Total events: {}", events.len());
             for event in &events {
-                eprintln!("Event: task={:?}, kind={:?}", event.task_id, event.kind.discriminant());
+                eprintln!(
+                    "Event: task={:?}, kind={:?}",
+                    event.task_id,
+                    event.kind.discriminant()
+                );
                 match &event.kind {
                     ktask_core::EventKind::PreflightFailed { detail, class } => {
                         eprintln!("  PreflightFailed: class={:?}, detail={}", class, detail);
