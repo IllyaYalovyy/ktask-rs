@@ -46,6 +46,18 @@
 //! journal record a trip leaves behind, so the run that stopped says so in the
 //! same append-only file every other decision is in.
 
+//! # What bounds the attempts
+//!
+//! §7 bounds self-healing three ways at once — attempts, wall-clock time and
+//! tokens — and a breaker counts none of them. [`Breaker`] answers the
+//! failure-shaped half of that bound; [`should_continue`] holds the arithmetic
+//! half, because the two catch different loops: a remediation that repeats
+//! itself trips a breaker, and one that fails differently every time only ever
+//! stops on a figure. Given how many attempts have been refused, what the
+//! remediation has cost and what it has spent, it returns the bound that says
+//! stop and names it, so a stopped run reads back as *why* it stopped rather
+//! than merely that it did.
+//!
 //! # What a bundle is
 //!
 //! VISION.md §7 requires that every remediation launch a *fresh* provider
@@ -105,7 +117,9 @@
 use regex::Regex;
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::sync::OnceLock;
+use time::Duration;
 
 use crate::{
     AttemptRecord, EventKind, FailureClass, GateResult, Task, Usage, parse_cargo, redact::redact,
@@ -760,9 +774,133 @@ fn hashed(text: &str) -> String {
         .collect()
 }
 
+/// What one task's remediation is allowed to spend before it stops.
+///
+/// VISION.md §7 bounds self-healing with three figures — attempts, wall-clock
+/// time and tokens — and [`Breaker`] counts none of them: it counts failure
+/// signatures. The two bounds are needed because they catch different loops. A
+/// remediation that keeps producing the *same* failure trips a breaker; one
+/// that invents a new failure every attempt never reaches a threshold at all,
+/// so nothing but a figure would ever stop it. The three are independent, so
+/// each is checked on its own and each names itself when it stops the work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bounds {
+    /// Attempts that have already been tried and refused. Each remediation
+    /// attempt launches a fresh provider session, so this is the ceiling on how
+    /// many of those launches one task's failure may still pay for.
+    pub max_attempts: u32,
+    /// Wall-clock time the remediation has cost so far. It bounds elapsed time
+    /// rather than the attempt count because one attempt can hang: a ceiling on
+    /// attempts alone still has to wait out every session that never answers.
+    pub max_elapsed: Duration,
+    /// Tokens the remediation has spent, or [`None`] when nothing bounds them.
+    /// The bound is optional because a token figure is a provider's answer, not
+    /// a fact about the work: every [`crate::Usage`] field is an `Option` for
+    /// the providers that report nothing, and a bound that cannot be measured
+    /// must not stop anything.
+    pub max_tokens: Option<u64>,
+}
+
+/// The bound that stopped a remediation, carrying the figures that spent it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bound {
+    /// `attempts` attempts were already refused against a ceiling of `max`.
+    Attempts {
+        /// Attempts the remediation had already made.
+        attempts: u32,
+        /// The ceiling [`Bounds::max_attempts`] set.
+        max: u32,
+    },
+    /// `elapsed` seconds had passed against a ceiling of `max` seconds.
+    Elapsed {
+        /// Seconds the remediation had already cost. Whole seconds, because
+        /// [`time::Duration`] is signed and a bound read as a count of seconds
+        /// must be able to say so rather than refuse the figure.
+        elapsed: i64,
+        /// The ceiling [`Bounds::max_elapsed`] set, in whole seconds.
+        max: i64,
+    },
+    /// `tokens` had been spent against a ceiling of `max`.
+    Tokens {
+        /// Tokens the remediation had already spent.
+        tokens: u64,
+        /// The ceiling [`Bounds::max_tokens`] set.
+        max: u64,
+    },
+}
+
+impl fmt::Display for Bound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Attempts { attempts, max } => {
+                write!(f, "attempts {attempts} past the {max} bound")
+            }
+            Self::Elapsed { elapsed, max } => {
+                write!(f, "elapsed {elapsed}s past the {max}s bound")
+            }
+            Self::Tokens { tokens, max } => write!(f, "tokens {tokens} past the {max} bound"),
+        }
+    }
+}
+
+/// What [`should_continue`] decided: another session, or the bound that ended it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// No bound is spent, so the remediation may launch another session.
+    Continue,
+    /// A bound is spent, and [`Bound`] says which one spent it.
+    Stop(Bound),
+}
+
+impl fmt::Display for Decision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Continue => f.write_str("no remediation bound is spent"),
+            Self::Stop(bound) => bound.fmt(f),
+        }
+    }
+}
+
+/// Whether a remediation may launch another attempt, and which bound says not.
+///
+/// `attempts` counts the attempts already tried and refused, `elapsed` is what
+/// the remediation has cost so far, and `tokens` what it has spent — a figure
+/// that stays `0` for as long as no provider has reported one, which is the same
+/// reading [`crate::Usage`] gives an unreported figure and so can never trip the
+/// bound it would otherwise be checked against.
+///
+/// A bound that is exactly met has not been exceeded: a remediation sitting on
+/// its ceiling still runs, and the stop lands on the figure that went past it.
+/// Attempts are asked first, then time, then tokens, so the reason a stopped
+/// remediation leaves in the journal is the same one every reader of the same
+/// three figures reaches. A ceiling of zero stops at the first refusal, which is
+/// how a project that allows no retries at all says so.
+#[must_use]
+pub fn should_continue(bounds: &Bounds, attempts: u32, elapsed: Duration, tokens: u64) -> Decision {
+    if attempts > bounds.max_attempts {
+        return Decision::Stop(Bound::Attempts {
+            attempts,
+            max: bounds.max_attempts,
+        });
+    }
+    if elapsed > bounds.max_elapsed {
+        return Decision::Stop(Bound::Elapsed {
+            elapsed: elapsed.whole_seconds(),
+            max: bounds.max_elapsed.whole_seconds(),
+        });
+    }
+    if let Some(max) = bounds.max_tokens
+        && tokens > max
+    {
+        return Decision::Stop(Bound::Tokens { tokens, max });
+    }
+    Decision::Continue
+}
+
 #[cfg(test)]
 mod tests {
     use super::RULES;
+    use super::{Bound, Bounds, Decision, should_continue};
     use super::{Breaker, BreakerState, bundle, signature, trip_event};
     use crate::{
         AttemptId, AttemptRecord, EventKind, FailureClass, GateKind, GateResult, Journal, Phase,
@@ -770,6 +908,7 @@ mod tests {
     };
     use proptest::prelude::*;
     use tempfile::{TempDir, tempdir};
+    use time::Duration;
     use time::macros::datetime;
 
     /// The signature's documented shape: this many lowercase hex characters.
@@ -1916,5 +2055,164 @@ mod tests {
             );
             prop_assert_eq!(once, twice);
         }
+    }
+
+    /// The bounds every test below varies one figure of: three attempts, a
+    /// minute of wall clock, and a token ceiling.
+    fn bounds() -> Bounds {
+        Bounds {
+            max_attempts: 3,
+            max_elapsed: Duration::seconds(60),
+            max_tokens: Some(1_000),
+        }
+    }
+
+    /// Nothing is spent yet, so nothing can stop the remediation.
+    #[test]
+    fn an_unspent_budget_continues() {
+        assert_eq!(
+            should_continue(&bounds(), 0, Duration::ZERO, 0),
+            Decision::Continue
+        );
+    }
+
+    /// An attempt ceiling of three means three failures were paid for and a
+    /// fourth is not. The reason says attempts, and carries both the count it
+    /// stopped at and the ceiling.
+    #[test]
+    fn the_attempt_bound_stops_and_says_so() {
+        let stop = should_continue(&bounds(), 4, Duration::seconds(10), 500);
+        assert_eq!(
+            stop,
+            Decision::Stop(Bound::Attempts {
+                attempts: 4,
+                max: 3
+            })
+        );
+        assert_eq!(stop.to_string(), "attempts 4 past the 3 bound");
+    }
+
+    /// Time alone stops the remediation while attempts and tokens sit inside
+    /// their ceilings: one session that hung for two minutes costs more wall
+    /// clock than three short ones, and the attempt count would never notice.
+    ///
+    /// The reason says elapsed — not attempts, which a reader would otherwise
+    /// go on to raise.
+    #[test]
+    fn the_elapsed_bound_stops_and_says_so() {
+        let stop = should_continue(&bounds(), 1, Duration::seconds(90), 500);
+        assert_eq!(
+            stop,
+            Decision::Stop(Bound::Elapsed {
+                elapsed: 90,
+                max: 60
+            })
+        );
+        assert_eq!(stop.to_string(), "elapsed 90s past the 60s bound");
+    }
+
+    /// A token ceiling spent while the other two bounds sit untouched stops the
+    /// remediation on its own, and says tokens.
+    #[test]
+    fn the_token_bound_stops_and_says_so() {
+        let stop = should_continue(&bounds(), 1, Duration::seconds(10), 1_001);
+        assert_eq!(
+            stop,
+            Decision::Stop(Bound::Tokens {
+                tokens: 1_001,
+                max: 1_000
+            })
+        );
+        assert_eq!(stop.to_string(), "tokens 1001 past the 1000 bound");
+    }
+
+    /// Each bound stops the work while the other two are still inside their
+    /// ceilings, so a stop is never reported against the wrong figure.
+    #[test]
+    fn one_bound_stops_without_the_others() {
+        let spare = bounds();
+        assert!(matches!(
+            should_continue(&spare, 4, Duration::ZERO, 0),
+            Decision::Stop(Bound::Attempts { .. })
+        ));
+        assert!(matches!(
+            should_continue(&spare, 0, Duration::seconds(61), 0),
+            Decision::Stop(Bound::Elapsed { .. })
+        ));
+        assert!(matches!(
+            should_continue(&spare, 0, Duration::ZERO, 1_001),
+            Decision::Stop(Bound::Tokens { .. })
+        ));
+    }
+
+    /// A bound at its exact ceiling has not been exceeded, and all three at
+    /// their ceilings still continue. This is the difference between a bound
+    /// and an off-by-one, and it is what makes a stop about the figure that
+    /// actually went past its ceiling rather than one that merely reached it.
+    #[test]
+    fn a_bound_exactly_met_has_not_been_spent() {
+        assert_eq!(
+            should_continue(&bounds(), 3, Duration::seconds(60), 1_000),
+            Decision::Continue
+        );
+    }
+
+    /// An unmeasurable bound stops nothing. A provider that reports no token
+    /// figure leaves the count at zero forever, so a loop bounded only by
+    /// tokens would run unbounded; `None` is how a caller says no ceiling on
+    /// tokens exists at all, and it holds at any spend.
+    #[test]
+    fn a_bound_that_is_none_stops_nothing() {
+        let unbounded = Bounds {
+            max_tokens: None,
+            ..bounds()
+        };
+        assert_eq!(
+            should_continue(&unbounded, 0, Duration::ZERO, u64::MAX),
+            Decision::Continue
+        );
+    }
+
+    /// An attempt ceiling of zero bounds the loop to nothing: the first
+    /// failure already spent it, so a remediation that was allowed no retries
+    /// stops before it launches a second session.
+    #[test]
+    fn an_attempt_ceiling_of_zero_stops_at_the_first_failure() {
+        let none_left = Bounds {
+            max_attempts: 0,
+            ..bounds()
+        };
+        assert_eq!(
+            should_continue(&none_left, 1, Duration::ZERO, 0),
+            Decision::Stop(Bound::Attempts {
+                attempts: 1,
+                max: 0
+            })
+        );
+    }
+
+    /// The first bound past its ceiling is the one reported, in the order
+    /// attempts, then time, then tokens — so the reason a stopped remediation
+    /// leaves in the journal is the same one every reader of the same three
+    /// figures reaches.
+    #[test]
+    fn the_first_spent_bound_is_the_one_reported() {
+        let spent = should_continue(&bounds(), 4, Duration::seconds(90), 2_000);
+        assert_eq!(
+            spent,
+            Decision::Stop(Bound::Attempts {
+                attempts: 4,
+                max: 3
+            })
+        );
+
+        let timed_and_billed = should_continue(&bounds(), 1, Duration::seconds(90), 2_000);
+        assert_eq!(
+            timed_and_billed,
+            Decision::Stop(Bound::Elapsed {
+                elapsed: 90,
+                max: 60
+            })
+        );
     }
 }
