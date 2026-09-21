@@ -1321,12 +1321,23 @@ mod tests {
         let task1 = TaskId::new(1);
         let task2 = TaskId::new(2);
 
-        // Interleave events from different tasks
-        journal.append(Some(task1), &kind1).unwrap(); // seq 1
-        journal.append(Some(task2), &kind2).unwrap(); // seq 2
-        journal.append(Some(task1), &kind2).unwrap(); // seq 3
-        journal.append(Some(task2), &kind1).unwrap(); // seq 4
-        journal.append(Some(task1), &kind1).unwrap(); // seq 5
+        // Interleave events from different tasks - valid sequences only
+        journal.append(Some(task1), &kind1).unwrap(); // seq 1, task1: Queued
+        journal.append(Some(task2), &kind1).unwrap(); // seq 2, task2: Queued
+        journal.append(
+            Some(task2),
+            &EventKind::PreflightStarted,
+        )
+        .unwrap(); // seq 3, task2: Queued -> Preflight
+        journal.append(Some(task1), &kind2).unwrap(); // seq 4, task1: Queued -> Preflight
+        journal
+            .append(
+                Some(task1),
+                &EventKind::PreflightPassed {
+                    base_sha: "abc123".to_string(),
+                },
+            )
+            .unwrap(); // seq 5, task1: Preflight -> Preflight
 
         let events_task1 = journal.events_for(task1).unwrap();
         let events_task2 = journal.events_for(task2).unwrap();
@@ -1334,14 +1345,14 @@ mod tests {
         assert_eq!(events_task1.len(), 3);
         assert_eq!(events_task2.len(), 2);
 
-        // Verify ordering for task1
+        // Verify ordering for task1 (sequences 1, 4, 5 in interleaved execution)
         assert_eq!(events_task1[0].seq, EventSeq::new(1));
-        assert_eq!(events_task1[1].seq, EventSeq::new(3));
+        assert_eq!(events_task1[1].seq, EventSeq::new(4));
         assert_eq!(events_task1[2].seq, EventSeq::new(5));
 
-        // Verify ordering for task2
+        // Verify ordering for task2 (sequences 2, 3 in interleaved execution)
         assert_eq!(events_task2[0].seq, EventSeq::new(2));
-        assert_eq!(events_task2[1].seq, EventSeq::new(4));
+        assert_eq!(events_task2[1].seq, EventSeq::new(3));
 
         drop(journal);
     }
