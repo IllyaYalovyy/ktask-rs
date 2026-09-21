@@ -182,6 +182,13 @@ pub enum EventKind {
         /// The parsed decision request.
         request: DecisionRequest,
     },
+    /// Decision resolved and recorded as an ADR.
+    DecisionResolved {
+        /// Path to the recorded ADR file.
+        adr_path: std::path::PathBuf,
+        /// The recorded answer.
+        answer: String,
+    },
     /// Self-healing report emitted after remediation concludes.
     SelfHealingReport {
         /// Attempt identifier.
@@ -224,6 +231,7 @@ impl EventKind {
             EventKind::GateStarted { .. } => "GateStarted",
             EventKind::GateFinished { .. } => "GateFinished",
             EventKind::DecisionRaised { .. } => "DecisionRaised",
+            EventKind::DecisionResolved { .. } => "DecisionResolved",
             EventKind::SelfHealingReport { .. } => "SelfHealingReport",
         }
     }
