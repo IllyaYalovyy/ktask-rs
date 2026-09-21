@@ -820,32 +820,22 @@ impl Runner {
     pub fn run_task(&mut self, task: &Task) -> Result<crate::TaskState> {
         use crate::state::TaskState;
 
-        // Begin the attempt
-        let attempt = self.begin_attempt(task)?;
-
         // Prepare: run preflight and create worktree
+        // This must be called before begin_attempt() because PreflightStarted must come before AttemptStarted
         let prepared = match self.prepare(task) {
             Ok(p) => p,
-            Err(e) => {
-                let class = match e {
-                    Error::Policy { .. } => FailureClass::PolicyFailure,
-                    Error::Git { .. } => FailureClass::GitConflict,
-                    Error::Gate { .. } => FailureClass::VerificationFailure,
-                    _ => FailureClass::EnvironmentFailure,
-                };
-
-                let detail = format!("{e:?}");
-                self.recorder.record(
-                    Some(task.id),
-                    crate::EventKind::TaskFailed {
-                        class,
-                        detail: detail.clone(),
-                    },
-                )?;
-
-                return Ok(TaskState::Failed { class, detail });
+            Err(_e) => {
+                // prepare() already recorded PreflightFailed event, which transitioned to Failed state
+                // Return Failed with the error details
+                return Ok(TaskState::Failed {
+                    class: FailureClass::EnvironmentFailure,
+                    detail: "Preflight check failed".to_string(),
+                });
             }
         };
+
+        // Begin the attempt (after preflight, so AttemptStarted comes after PreflightPassed)
+        let attempt = self.begin_attempt(task)?;
 
         // Execute the task with guaranteed cleanup of worktree and lock
         let result = self.run_task_with_prepared(task, attempt, &prepared);
