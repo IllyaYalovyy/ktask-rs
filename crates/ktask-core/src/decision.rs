@@ -642,6 +642,39 @@ mod tests {
         );
     }
 
+    /// A `Question:` quoted inside a fenced block is read as the report's own,
+    /// fence markers and all, and the copy written under it is dropped.
+    ///
+    /// This is the trade ADR-0079 records rather than an oversight: skipping
+    /// fenced text needs the scanner a Markdown document is read by, and the
+    /// failure it prevents — a quoted template read as an ask — costs a pause a
+    /// human can read and either answer or cancel, while the failure it causes —
+    /// an unbalanced fence hiding the question below it — costs a wait that never
+    /// opens and a report filed as if nothing was asked.
+    #[test]
+    fn a_question_quoted_before_the_real_one_is_the_one_that_is_read() {
+        let text = REQUEST.replace(
+            "Summary: stopped at a fork the task did not decide.\n",
+            concat!("```\n", "Question: what is being asked here?\n", "```\n",),
+        );
+        let request = asked(&text);
+        assert!(
+            request.question.starts_with("what is being asked here?"),
+            "a quoted copy of the format, written first, is read as the ask: {:?}",
+            request.question
+        );
+        assert!(
+            request.question.contains("```"),
+            "the fence is text like any other, because nothing skips it: {:?}",
+            request.question
+        );
+        assert!(
+            !request.question.contains("rowid"),
+            "the question written below the quoted one is the second copy, and the second              copy is dropped: {:?}",
+            request.question
+        );
+    }
+
     #[test]
     fn the_header_is_never_part_of_a_field() {
         let request = asked(REQUEST);
