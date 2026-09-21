@@ -124,6 +124,38 @@
 //! run's own passing count can say the run was too small to have confirmed
 //! anything. [`verify_green`] reads that count as a floor for exactly that
 //! reason, and says in the open what the floor does not reach.
+//!
+//! # How a red phase is skipped, and what skipping it costs
+//!
+//! §9's last paragraph names the four circumstances in which writing a failing
+//! test first is the wrong instruction — documentation, pure refactoring, build
+//! configuration, and a bug a failing test already reproduces — and the point of
+//! naming them is that the override is *declared and recorded* rather than
+//! assumed. [`TddException`] is that closed list: ADR-0010 records where its four
+//! categories came from, and ADR-0074 why one type spells them. What this module
+//! owns is the word a task writes to claim one — an optional
+//! `**Tdd-exception:**` section whose first line names the category and whose
+//! remaining lines give the reason — read by the scanner a plan is read by, so a
+//! declaration lives in the body a queue row already holds rather than in a
+//! column `docs/DESIGN.md` never gave it (ADR-0019).
+//!
+//! A declaration does two things, both at the door of the attempt rather than
+//! halfway through it. [`for_task`] hands such a task a protocol with
+//! [`Phase::Red`] taken out of its phases and its name left alone, so the runner
+//! walks the order it always walks and finds one fewer phase to enforce; and
+//! [`claim`] turns the declaration into the [`EventKind::TddExceptionUsed`] a run
+//! journals beside the attempt, carrying the category and its reason together.
+//!
+//! Neither is reachable without the declaration. A section that names no
+//! category is refused, a category with no reason beside it is refused, a bold
+//! label this module does not read declares nothing, and a category claimed
+//! against [`direct`] — which has no red phase to skip — is refused. And the
+//! claim is not a get-out clause: [`claim`] re-runs [`check_scope`] against the
+//! paths the repository says the phase changed, so a phase that already wrote
+//! outside its scope has no exception left to claim, and [`crate::apply`] admits
+//! the event only where an agent is working. What §9's "explicit exception
+//! categories (recorded in task history)" is worth is worth only while no other
+//! route reaches the skip.
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -131,9 +163,12 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::event::EventKind;
 use crate::gate::{GateKind, TestSummary};
 use crate::state::Phase;
 use crate::task::Task;
+
+pub use crate::classify::TddException;
 
 /// Which paths of the task worktree an agent may modify while a phase is in
 /// force.
@@ -359,6 +394,11 @@ pub(crate) fn refusal(name: &str) -> String {
 /// [`crate::validate`] when the task is added; a blank reaching here is a row
 /// assembled in memory, which is answered the same way an unset default is.
 ///
+/// A declared exception to test-first changes the phases and not this chain: the
+/// word is resolved exactly as it would be without one, and [`Phase::Red`] then
+/// leaves the answer — see `skip_red` for what the removal refuses, and
+/// [`claim`] for the event a run journals with the reason beside it.
+///
 /// # Errors
 ///
 /// [`Error::Config`] keyed `protocol` when the task's own word names no protocol
@@ -367,7 +407,29 @@ pub(crate) fn refusal(name: &str) -> String {
 /// have been refused when the task was added ([`crate::validate`] asks it of
 /// every row); reaching here with one means the row was written by something that
 /// did not ask, and the attempt is refused rather than quietly worked `direct`.
+///
+/// [`Error::Config`] keyed `tdd_exception` when the task declares an exception
+/// this module cannot honour — a section that names no category, a category with
+/// no reason beside it, or a category claimed against a protocol with no red
+/// phase to skip. Refused here, when the protocol is chosen, for the reason
+/// ADR-0070 gives a bad protocol word: a task that cannot be worked should cost
+/// its attempt nothing.
 pub fn for_task(task: &Task, config: &Config) -> Result<Protocol> {
+    let chosen = chosen_protocol(task, config)?;
+    match declaration_of(task)? {
+        None => Ok(chosen),
+        Some(declaration) => skip_red(chosen, declaration.exception),
+    }
+}
+
+/// The protocol word `task` is worked under, before any exception is read.
+///
+/// The three rungs [`for_task`] documents, in that order, and nothing else. The
+/// exception to test-first is a fact about a task's phases rather than about
+/// which protocol it is worked with, so the two questions are answered one after
+/// the other rather than tangled into one chain that could skip a red phase
+/// while refusing the word that names it.
+fn chosen_protocol(task: &Task, config: &Config) -> Result<Protocol> {
     if let Some(name) = task
         .protocol
         .as_deref()
@@ -387,6 +449,209 @@ pub fn for_task(task: &Task, config: &Config) -> Result<Protocol> {
         key: "default_protocol".to_owned(),
         detail: refusal(default),
     })
+}
+
+/// The four categories, each under the word a task's section holds.
+///
+/// The one place those words are spelled here, the way [`PROTOCOLS`] spells the
+/// two protocol names: the parse, the sentence that refuses a word, and the
+/// event's payload all read this list, so a claim cannot be honoured under one
+/// spelling and journalled under another. The words are the variant names
+/// `classify.rs` gives the type, which are also its JSON encoding: one
+/// vocabulary, one spelling, from a task file to a journal row (ADR-0074).
+const EXCEPTIONS: [(&str, TddException); 4] = [
+    ("Documentation", TddException::Documentation),
+    ("PureRefactoring", TddException::PureRefactoring),
+    ("BuildConfiguration", TddException::BuildConfiguration),
+    ("ExistingFailingTest", TddException::ExistingFailingTest),
+];
+
+/// The label whose optional section declares an exception to test-first.
+const EXCEPTION_SECTION: &str = "Tdd-exception";
+
+/// The [`crate::Error::Config`] key a declaration is refused under — the
+/// section's own name, lower-cased and underscored, the way `protocol` keys the
+/// section that names a protocol.
+const EXCEPTION_KEY: &str = "tdd_exception";
+
+/// What a declaration names, and why its author said it applies.
+///
+/// Private on purpose: the two questions a declaration answers — which phases a
+/// task works, and which event a run journals — both start from the task, so
+/// nothing outside this module needs a half-validated claim of its own to hold.
+struct Declaration {
+    /// Which of §9's four categories was claimed.
+    exception: TddException,
+    /// The reason written under the category, never empty: [`declaration_of`]
+    /// refuses a declaration without one.
+    reason: String,
+}
+
+/// The categories quoted and joined by `separator`, for a sentence that offers
+/// them — the sibling of [`alternatives`], which does the same for the two
+/// protocol words.
+fn categories(separator: &str) -> String {
+    EXCEPTIONS
+        .iter()
+        .map(|(word, _category)| format!("`{word}`"))
+        .collect::<Vec<_>>()
+        .join(separator)
+}
+
+/// The exception `task` declared in its `**Tdd-exception:**` section, if it
+/// declared one.
+///
+/// The section is optional and its absence is the ordinary case: [`None`] means
+/// the task works the red phase like every other `tdd` task, which is what makes
+/// the skip a declaration rather than a default. It is read out of [`Task::body`]
+/// by the same scanner [`crate::parse_plan`] reads a document by, because
+/// `docs/DESIGN.md` gives the queue's `tasks` table no column for it and ADR-0019
+/// fixes the body as the home such a fact has: a row read back out of the
+/// database recovers the declaration its plan file says, and a
+/// `**Tdd-exception:**` inside a fenced code block declares nothing.
+///
+/// The category is the section's first line, matched exactly — no folding, no
+/// trimming, no prefix, as with a protocol word — because a word that had to be
+/// repaired to match is a word the author wrote wrong, and honouring it would
+/// put a second spelling of one category between a task file and the journal.
+/// Everything written after that line is the reason.
+///
+/// # Errors
+///
+/// [`Error::Config`] keyed `tdd_exception` naming the section, the task and the
+/// four categories, when the section names none of them or has nothing written
+/// under it, and when a category is claimed with no reason under it.
+fn declaration_of(task: &Task) -> Result<Option<Declaration>> {
+    let subject = format!("task {}", task.id);
+    let Some(written) = crate::task::section_of(&task.body, EXCEPTION_SECTION) else {
+        return Ok(None);
+    };
+    if written.trim().is_empty() {
+        return Err(Error::Config {
+            key: EXCEPTION_KEY.to_owned(),
+            detail: format!(
+                "the `**{EXCEPTION_SECTION}:**` section of {subject} has nothing written under \
+                 it, which names no exception: write {} or leave the section out to work the red \
+                 phase",
+                categories(" or "),
+            ),
+        });
+    }
+    let (word, reason) = match written.split_once('\n') {
+        Some((first, rest)) => (first, rest.trim()),
+        None => (written.as_str(), ""),
+    };
+    let Some((name, exception)) = EXCEPTIONS
+        .iter()
+        .find(|(candidate, _category)| *candidate == word)
+        .copied()
+    else {
+        return Err(Error::Config {
+            key: EXCEPTION_KEY.to_owned(),
+            detail: format!(
+                "`{word}` is not an exception to test-first in {subject}; the four VISION.md §9 \
+                 allows are {} — name one on the section's first line and write the reason under \
+                 it",
+                categories(" and "),
+            ),
+        });
+    };
+    if reason.is_empty() {
+        return Err(Error::Config {
+            key: EXCEPTION_KEY.to_owned(),
+            detail: format!(
+                "`{name}` is claimed against {subject} with no reason written under it, which \
+                 records an override nobody can audit: write the reason on the line below the \
+                 category",
+            ),
+        });
+    }
+    Ok(Some(Declaration {
+        exception,
+        reason: reason.to_owned(),
+    }))
+}
+
+/// `protocol` with its red phase removed, for a task that declared an exception.
+///
+/// The removal is the whole of the mechanism, and it is worth naming what it
+/// does not touch. [`Protocol::name`] is the word [`EventKind::AttemptStarted`]
+/// journals, and an attempt that reported another protocol because a phase was
+/// skipped could not be replayed as the protocol it ran under. The ending is
+/// untouched too: `assemble` appended it, so what this removes is a phase of a
+/// body and never one of the two gates §9 makes unremovable.
+///
+/// # Errors
+///
+/// [`Error::Config`] keyed `tdd_exception` when `protocol` holds no red phase to
+/// remove. A declaration against [`direct`] is that case, and it is refused
+/// rather than honoured: §9's exception is an exception to *test-first order*, so
+/// a protocol with no red phase has no order to be excepted from, and honouring
+/// the claim would turn a meaningless section into a phase nobody enforces.
+fn skip_red(protocol: Protocol, exception: TddException) -> Result<Protocol> {
+    let Protocol { name, mut phases } = protocol;
+    let worked = phases.len();
+    phases.retain(|spec| spec.phase != Phase::Red);
+    if phases.len() == worked {
+        return Err(Error::Config {
+            key: EXCEPTION_KEY.to_owned(),
+            detail: format!(
+                "`{name}` declares no red phase for `{exception:?}` to skip; only `tdd` has one, \
+                 so the section claims a phase this protocol never works",
+            ),
+        });
+    }
+    Ok(Protocol { name, phases })
+}
+
+/// The event that records `task`'s declared exception, or the refusal of it.
+///
+/// §9 records an exception in task history; this is that record. It carries the
+/// category and the reason the author wrote, because the override is worth what
+/// the reason is worth: a journal row saying only that an exception was used is
+/// an override described in the words of the party that used it, and §3's
+/// invariant 4 is a refusal to take that party's word.
+///
+/// # A claim, not a pardon
+///
+/// The event describes a phase that has begun working, so that phase's write
+/// scope still binds it, and `check_scope` is re-run on the paths the repository
+/// says changed before anything is journalled. That ordering is the whole of the
+/// answer to the obvious abuse — a phase writes production code during what
+/// should have been red, then reaches for an exception to explain the missing
+/// failing test — and it is why the answer is read from `changed`, the list
+/// [`crate::git::changed_paths`] takes out of `git`, rather than from anyone's
+/// account of whether the exception still applies. `scope` and `test_globs` are
+/// the same two arguments [`check_scope`] is given for the phase, so a claim and
+/// the phase's own gate cannot disagree about what was allowed to be written.
+///
+/// Like the rest of this module this holds no I/O, no clock and no repository:
+/// `changed` is what a caller read out of `git`, and the event is returned for
+/// that caller to journal before the phase's next side effect.
+///
+/// # Errors
+///
+/// [`Error::Config`] keyed `tdd_exception` for a declaration that names no
+/// category or names one with no reason — the refusal `declaration_of` gives —
+/// and [`Error::Policy`] quoting `SCOPE_RULE` or `UNLOCATABLE_RULE` with every
+/// offending path, when the phase already wrote outside its scope. `classify`
+/// lands a policy error as
+/// [`FailureClass::PolicyFailure`](crate::FailureClass::PolicyFailure), which
+/// earns no retry: an exception is not a repair for what was already written.
+pub fn claim(
+    task: &Task,
+    scope: WriteScope,
+    changed: &[PathBuf],
+    test_globs: &[String],
+) -> Result<Option<EventKind>> {
+    let Some(declaration) = declaration_of(task)? else {
+        return Ok(None);
+    };
+    check_scope(scope, changed, test_globs)?;
+    Ok(Some(EventKind::TddExceptionUsed {
+        exception: declaration.exception,
+        reason: declaration.reason,
+    }))
 }
 
 /// The sentence a refusal quotes when a phase wrote a path its scope did not
@@ -1257,6 +1522,426 @@ mod tests {
                 .expect("a blank names nothing, so the default answers"),
             tdd(),
         );
+    }
+
+    /// The four §9 categories under the words a task's section holds them,
+    /// spelled out a second time so a rename in one module cannot match itself.
+    const CATEGORIES: [&str; 4] = [
+        "Documentation",
+        "PureRefactoring",
+        "BuildConfiguration",
+        "ExistingFailingTest",
+    ];
+
+    /// [`task_declaring`]'s row with a `**Tdd-exception:**` section holding
+    /// `written`.
+    ///
+    /// Appended to the body a plan was parsed into rather than set as a field,
+    /// because the declaration is a fact about a queue row and `docs/DESIGN.md`
+    /// gave the row no column for it: what a run reads back out of the database
+    /// is this body, and the section has to be readable from it (ADR-0019). An
+    /// empty `written` is the label with nothing under it — a section an author
+    /// opened and left blank.
+    fn task_claiming(protocol: Option<&str>, written: &str) -> Task {
+        let mut task = task_declaring(protocol);
+        task.body.push_str("**Tdd-exception:**");
+        if !written.is_empty() {
+            task.body.push(' ');
+            task.body.push_str(written);
+        }
+        task.body.push('\n');
+        task
+    }
+
+    /// `task`'s claim on its phase, against a phase that changed `changed` and
+    /// a project that counts tests by its own globs.
+    fn claimed(task: &Task, scope: WriteScope, changed: &[&str]) -> Result<Option<EventKind>> {
+        claim(task, scope, &diff(changed), &rust_globs())
+    }
+
+    /// What a claim journalled: the category and the reason beside it, both of
+    /// which have to be there for the row to be worth reading.
+    fn journalled(result: Result<Option<EventKind>>) -> (TddException, String) {
+        match result.expect("a declared exception over an in-scope diff is claimable") {
+            Some(EventKind::TddExceptionUsed { exception, reason }) => (exception, reason),
+            other => panic!("a claim journals `TddExceptionUsed`, not {other:?}"),
+        }
+    }
+
+    /// The refusal `for_task` gave a task whose declaration it cannot honour, as
+    /// the configuration key it was filed under and the sentence it quoted.
+    fn refused_declaration(task: &Task) -> (String, String) {
+        match for_task(task, &Config::default()) {
+            Err(Error::Config { key, detail }) => (key, detail),
+            other => {
+                panic!("a declaration that cannot be honoured is refused, not worked: {other:?}")
+            }
+        }
+    }
+
+    /// The exception is an exception to the red phase, and that is the whole of
+    /// what it skips. The protocol keeps the name `AttemptStarted` journals —
+    /// an attempt that reported a different protocol because a phase was missing
+    /// could not be replayed as the protocol it ran under — and the completion
+    /// pair §9 makes unremovable stays where `assemble` put it.
+    #[test]
+    fn a_declared_exception_skips_the_red_phase_and_nothing_else() {
+        let task = task_claiming(Some("tdd"), "Documentation\nOnly prose moved.");
+        let worked = for_task(&task, &Config::default())
+            .expect("a declared exception is honoured, not refused");
+        assert_eq!(worked.name, "tdd", "the skip does not rename the protocol");
+        assert_eq!(
+            sequence(&worked),
+            [Phase::Green, Phase::Refactor, Phase::Verify, Phase::Publish,],
+            "one red phase left the body and nothing else moved",
+        );
+    }
+
+    /// Every category skips the same phase. The four differ in what the reason
+    /// says, not in how much the machine lets a task out of — which is why the
+    /// category is worth journalling rather than a bare "an exception was used".
+    #[test]
+    fn every_exception_category_skips_the_same_red_phase() {
+        for category in CATEGORIES {
+            let task = task_claiming(Some("tdd"), &format!("{category}\nThe reason."));
+            let worked = for_task(&task, &Config::default())
+                .expect("each of §9's four categories is claimable");
+            let phases = sequence(&worked);
+            assert!(
+                !phases.contains(&Phase::Red),
+                "`{category}` left a red phase for the task to work: {phases:?}",
+            );
+            assert_eq!(
+                &phases[phases.len() - 2..],
+                [Phase::Verify, Phase::Publish],
+                "`{category}` skipped a phase of the body and reached the gates anyway",
+            );
+        }
+    }
+
+    /// A declaration is a fact about the task, so it applies to whichever
+    /// protocol the task is worked under — including the project's default,
+    /// which the task never names.
+    #[test]
+    fn a_project_that_defaults_to_tdd_honours_a_declared_exception() {
+        let task = task_claiming(None, "BuildConfiguration\nOnly the build script moved.");
+        let worked =
+            for_task(&task, &configured("tdd")).expect("the default is a protocol this build runs");
+        assert_eq!(worked.name, "tdd");
+        assert!(
+            !sequence(&worked).contains(&Phase::Red),
+            "the default's red phase outran the task's declaration",
+        );
+    }
+
+    /// The ordinary case, stated because the skip is worth nothing if it is the
+    /// default: a task that writes no section works the red phase, and a run
+    /// over it journals no exception.
+    #[test]
+    fn a_task_that_declares_nothing_works_the_red_phase_and_claims_nothing() {
+        let task = task_declaring(Some("tdd"));
+        assert!(
+            !task.body.contains(EXCEPTION_SECTION),
+            "the task this test is about declares an exception",
+        );
+        let worked = for_task(&task, &Config::default())
+            .expect("no section is no declaration, and nothing is refused");
+        assert!(
+            sequence(&worked).contains(&Phase::Red),
+            "a task that declared nothing skipped its red phase",
+        );
+        assert_eq!(
+            claimed(&task, WriteScope::TestsOnly, &[])
+                .expect("nothing was declared, so there is nothing to refuse"),
+            None,
+            "a run with no declaration journalled an exception anyway",
+        );
+    }
+
+    /// The done-when, second half: using an exception is journalled *with the
+    /// reason*. A row that said only which category was used would be an
+    /// override described in the words of the party that used it, and §3's
+    /// invariant 4 is a refusal to take that party's word.
+    #[test]
+    fn a_claim_journals_the_category_and_the_reason_the_author_wrote() {
+        let reason = "Pure refactoring: no behaviour changed, and the coverage that exists holds.";
+        let task = task_claiming(Some("tdd"), &format!("PureRefactoring\n{reason}"));
+        let (exception, written) = journalled(claimed(&task, WriteScope::All, &[]));
+        assert_eq!(exception, TddException::PureRefactoring);
+        assert_eq!(
+            written, reason,
+            "the reason is journalled as it was written"
+        );
+    }
+
+    /// The reason is everything written under the category, blank lines and
+    /// later paragraphs included, with the padding the scanner trims already
+    /// gone. A reason cut short at the first newline would drop the half an
+    /// operator has to judge.
+    #[test]
+    fn the_reason_runs_from_the_category_line_to_the_end_of_the_section() {
+        let task = task_claiming(
+            Some("tdd"),
+            "Documentation\n\nThe ADR text moved; nothing a test could pin changed.\n\n\
+             The plan file's wording is what changed, in two places.\n",
+        );
+        let (_, reason) = journalled(claimed(&task, WriteScope::All, &[]));
+        assert_eq!(
+            reason,
+            "The ADR text moved; nothing a test could pin changed.\n\n\
+             The plan file's wording is what changed, in two places.",
+        );
+    }
+
+    /// The done-when, first half. A phase edits production code during what
+    /// should have been red and then reaches for the exception to explain the
+    /// missing failing test; `claim` re-runs the phase's own [`check_scope`] on
+    /// the paths the repository named, so the claim is refused with the rule the
+    /// phase broke and the paths that broke it — not with the author's account of
+    /// why the exception still applies.
+    #[test]
+    fn an_exception_cannot_be_claimed_after_the_phase_wrote_outside_its_scope() {
+        let task = task_claiming(
+            Some("tdd"),
+            "ExistingFailingTest\nThe bug report shipped a failing test.",
+        );
+        let production = "crates/ktask-core/src/protocol.rs";
+        let error = claimed(&task, WriteScope::TestsOnly, &[production])
+            .expect_err("an out-of-scope diff refuses the claim, whatever was declared");
+        match error {
+            Error::Policy { detail, paths } => {
+                assert!(
+                    detail.contains(SCOPE_RULE),
+                    "the refusal must quote the rule the phase broke: {detail}"
+                );
+                assert_eq!(paths, diff(&[production]), "the refusal must name the path");
+            }
+            other => panic!("a write-scope violation is a policy failure, not {other}"),
+        }
+    }
+
+    /// The same claim, on the same task, succeeds while the scope still holds.
+    /// Without this half the refusal above would only prove that claiming always
+    /// fails, which is not the rule anyone wanted.
+    #[test]
+    fn a_claim_is_journalled_while_the_same_scope_still_holds() {
+        let task = task_claiming(
+            Some("tdd"),
+            "ExistingFailingTest\nThe bug report shipped a failing test.",
+        );
+        let (exception, _) = journalled(claimed(
+            &task,
+            WriteScope::TestsOnly,
+            &["crates/ktask-core/tests/exceptions.rs"],
+        ));
+        assert_eq!(exception, TddException::ExistingFailingTest);
+    }
+
+    /// A path that cannot be placed inside the worktree cannot be placed inside
+    /// the scope either, whatever the scope is: `All` grants the tree, not the
+    /// filesystem above it. A claim carrying such a path is refused as the policy
+    /// violation it is rather than journalled.
+    #[test]
+    fn a_claim_refuses_a_path_it_cannot_place_inside_the_worktree() {
+        let task = task_claiming(Some("tdd"), "Documentation\nOnly prose moved.");
+        let outside = "../outside/notes.md";
+        let error = claimed(&task, WriteScope::All, &[outside])
+            .expect_err("a path above the worktree is refused with the exception undeclared");
+        match error {
+            Error::Policy { detail, paths } => {
+                assert!(detail.contains(UNLOCATABLE_RULE), "{detail}");
+                assert_eq!(paths, diff(&[outside]));
+            }
+            other => panic!("an unlocatable path is a policy violation, not {other}"),
+        }
+    }
+
+    /// A section that names a word outside the four is refused where the
+    /// protocol is chosen, before an attempt is started and paid for, and the
+    /// refusal offers all four categories so the author has something to fix.
+    #[test]
+    fn a_declaration_naming_no_category_is_refused_when_the_protocol_is_chosen() {
+        let (key, detail) =
+            refused_declaration(&task_claiming(Some("tdd"), "DocsOnly\nOnly prose moved."));
+        assert_eq!(key, EXCEPTION_KEY);
+        assert!(
+            detail.contains("`DocsOnly`"),
+            "the refusal names the word it refused: {detail}"
+        );
+        for category in CATEGORIES {
+            assert!(
+                detail.contains(category),
+                "the refusal omits `{category}`, so the author cannot fix it: {detail}",
+            );
+        }
+    }
+
+    /// The category is matched exactly, the way a protocol word is. The shorter
+    /// spellings a task brief might reach for are refused rather than folded
+    /// into the ones the journal encodes: honouring a second spelling would put
+    /// it between a task file and the row a reader trusts (ADR-0074), and a word
+    /// that had to be repaired to match is a word the author wrote wrong.
+    #[test]
+    fn a_category_is_matched_on_the_journeys_spelling_and_no_other() {
+        for misspelt in [
+            "PureRefactor",
+            "BuildConfig",
+            "documentation",
+            "Documentation ",
+            "Documentation-ish",
+            "Refactoring",
+        ] {
+            let (key, detail) = refused_declaration(&task_claiming(
+                Some("tdd"),
+                &format!("{misspelt}\nThe reason."),
+            ));
+            assert_eq!(
+                key, EXCEPTION_KEY,
+                "`{misspelt}` was refused under another key"
+            );
+            assert!(
+                detail.contains("is not an exception to test-first"),
+                "`{misspelt}` was refused for the wrong reason: {detail}",
+            );
+        }
+    }
+
+    /// A category with no reason under it records an override nobody can audit,
+    /// which is the shape §9's exception exists to prevent. The category alone is
+    /// refused, not accepted with an empty reason for a screen to render blank.
+    #[test]
+    fn a_declaration_with_no_reason_written_is_refused() {
+        let (key, detail) = refused_declaration(&task_claiming(Some("tdd"), "Documentation"));
+        assert_eq!(key, EXCEPTION_KEY);
+        assert!(detail.contains("no reason written"), "{detail}");
+    }
+
+    /// A label with nothing under it names no exception, and is refused rather
+    /// than read as the absence of one: an author who wrote the section meant
+    /// something by it, and silently working the red phase would hide the
+    /// section that never took effect.
+    #[test]
+    fn a_declaration_with_nothing_written_in_it_is_refused() {
+        let (key, detail) = refused_declaration(&task_claiming(Some("tdd"), ""));
+        assert_eq!(key, EXCEPTION_KEY);
+        assert!(detail.contains("has nothing written under it"), "{detail}");
+    }
+
+    /// Only this label declares. A bold label this module does not read opens a
+    /// section nothing reads, so the task keeps its red phase: the way a
+    /// `**Protocol:**` misspelt is no protocol word, the skip has exactly one
+    /// door and a near miss is not half a skip.
+    #[test]
+    fn a_declaration_under_another_label_declares_nothing() {
+        for label in [
+            "**TDD-Exception:**",
+            "**Tdd exception:**",
+            "**Tdd-exception**:",
+            "**Exception:**",
+        ] {
+            let mut task = task_declaring(Some("tdd"));
+            task.body.push_str(label);
+            task.body.push_str(" Documentation\nOnly prose moved.\n");
+            let worked = for_task(&task, &Config::default())
+                .expect("an unknown label declares nothing, so nothing is refused");
+            assert!(
+                sequence(&worked).contains(&Phase::Red),
+                "`{label}` was read as a declaration and skipped the red phase",
+            );
+            assert_eq!(
+                claimed(&task, WriteScope::TestsOnly, &[]).expect("an unknown label is no claim"),
+                None,
+                "`{label}` journalled an exception",
+            );
+        }
+    }
+
+    /// A declaration inside a fenced block is an example, not a claim — the same
+    /// rule that keeps a `**Gate:**` in a code sample from parking a run, and
+    /// the reason the section is read by the scanner a plan is read by rather
+    /// than by searching the body for the word.
+    #[test]
+    fn a_declaration_inside_a_code_fence_declares_nothing() {
+        let mut task = task_declaring(Some("tdd"));
+        task.body
+            .push_str("```md\n**Tdd-exception:** Documentation\nOnly prose moved.\n```\n");
+        let worked = for_task(&task, &Config::default())
+            .expect("an example inside a fence is not a declaration");
+        assert!(
+            sequence(&worked).contains(&Phase::Red),
+            "a fenced example skipped the task's red phase",
+        );
+        assert_eq!(
+            claimed(&task, WriteScope::TestsOnly, &[]).expect("an example is no claim"),
+            None,
+            "a fenced example journalled an exception",
+        );
+    }
+
+    /// §9's exception is an exception to *test-first order*. A protocol with no
+    /// red phase has no order to be excepted from, so a section claimed against
+    /// `direct` is refused rather than honoured: honouring it would turn a
+    /// meaningless section into a phase nobody then enforces, and the task would
+    /// be worked by a rule its own body never declared.
+    #[test]
+    fn an_exception_against_a_protocol_with_no_red_phase_is_refused() {
+        let (key, detail) = refused_declaration(&task_claiming(
+            Some("direct"),
+            "Documentation\nOnly prose moved.",
+        ));
+        assert_eq!(key, EXCEPTION_KEY);
+        assert!(
+            detail.contains("`direct`"),
+            "the refusal names the protocol that has no red phase: {detail}",
+        );
+    }
+
+    /// A claim starts from the declaration, so a task with nothing honourable to
+    /// claim is refused for that reason and not for the diff it happened to
+    /// carry. The two refusals quote different rules and mean different things to
+    /// whoever reads them: one is a task that was written wrong, the other is a
+    /// phase that wrote where it should not have.
+    #[test]
+    fn a_claim_refuses_a_declaration_that_named_no_category_before_it_reads_the_diff() {
+        let task = task_claiming(Some("tdd"), "DocsOnly\nOnly prose moved.");
+        let error = claimed(
+            &task,
+            WriteScope::TestsOnly,
+            &["crates/ktask-core/src/protocol.rs"],
+        )
+        .expect_err("a word naming no category is refused");
+        match error {
+            Error::Config { key, detail } => {
+                assert_eq!(key, EXCEPTION_KEY);
+                assert!(detail.contains("`DocsOnly`"), "{detail}");
+            }
+            other => panic!("an unhonourable declaration is a configuration refusal, not {other}"),
+        }
+    }
+
+    /// The two questions are answered one after the other rather than tangled
+    /// together: the word a task is worked under is settled before its phases are
+    /// shortened, so a row that gets both wrong is refused for the first — the
+    /// second has nothing to shorten yet, and a sentence about both would send
+    /// the author to fix the wrong section.
+    #[test]
+    fn a_bad_protocol_word_is_refused_before_the_declaration_is_read() {
+        let mut task = task_holding("spec-first");
+        task.body
+            .push_str("**Tdd-exception:** DocsOnly\nOnly prose moved.\n");
+        match for_task(&task, &Config::default()) {
+            Err(Error::Config { key, detail }) => {
+                assert_eq!(
+                    key, "protocol",
+                    "the protocol word is settled first: {detail}"
+                );
+                assert!(
+                    !detail.contains("DocsOnly"),
+                    "the refusal mixes two refusals: {detail}"
+                );
+            }
+            other => panic!("an unrunnable protocol word is refused, got {other:?}"),
+        }
     }
 
     /// The paths a Rust project's `test_globs` name, as `Config` ships them.

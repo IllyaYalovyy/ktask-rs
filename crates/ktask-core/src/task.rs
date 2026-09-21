@@ -299,9 +299,25 @@ fn check_protocol(written: Option<&str>, subject: &str) -> Result<()> {
 /// paths: a `**Gate:**` inside a fenced code block marks nothing, and a label
 /// written twice keeps the text written under it first.
 pub(crate) fn gate_of(body: &str) -> Option<String> {
-    labelled_sections(&scan_lines(body))
-        .get(GATE_SECTION)
-        .cloned()
+    section_of(body, GATE_SECTION)
+}
+
+/// The text of the `**Label:**` section `body` carries under `label`, if any.
+///
+/// The one reader of a block's labelled sections, so that every fact the
+/// supervisor recovers out of a body — the gate [`gate_of`] recovers, and the
+/// exception to test-first [`crate::protocol`] reads — is read by the scanner
+/// [`parse_plan`] reads a document by. The two rules a block and a row must
+/// never disagree about therefore hold on every path: a `**Label:**` inside a
+/// fenced code block marks nothing, and a label written twice keeps the text
+/// written under it first.
+///
+/// A label the body does not carry answers [`None`] — the absence a caller
+/// distinguishes from a section that was written and left empty. An empty
+/// section is a thing an author wrote, and is answered by whichever rule owns
+/// that label, not by this one.
+pub(crate) fn section_of(body: &str, label: &str) -> Option<String> {
+    labelled_sections(&scan_lines(body)).get(label).cloned()
 }
 
 /// The id of the task at `index` in document order, counted from one.
