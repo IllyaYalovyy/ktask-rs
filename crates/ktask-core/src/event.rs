@@ -32,17 +32,17 @@
 //!
 //! # Catalog entries that are not here yet
 //!
-//! `docs/DESIGN.md` lists 28 entries; 20 are defined below. The other 8 are
+//! `docs/DESIGN.md` lists 28 entries; 21 are defined below. The other 7 are
 //! absent, and a test asserts their absence rather than trusting it:
 //!
-//! - Seven are deferred by the plan — `GateFinished` (`result: GateResult`),
+//! - Six are deferred by the plan — `GateFinished` (`result: GateResult`),
 //!   `AttemptFinished` (`usage: Option<Usage>`), `ProviderDetected`
 //!   (`capabilities: Capabilities`), `DecisionRaised` (`request:
-//!   DecisionRequest`), `DecisionResolved`, `SelfHealingReport` and
-//!   `TddExceptionUsed`. Each arrives with the task that emits it and gives it
-//!   an `apply` arm, so nothing can journal an event whose effect on state no
-//!   task has written yet. `AttemptRecorded` left this list for T068, which
-//!   defined the type its payload names and the arm that answers it.
+//!   DecisionRequest`), `DecisionResolved` and `SelfHealingReport`. Each
+//!   arrives with the task that emits it and gives it an `apply` arm, so
+//!   nothing can journal an event whose effect on state no task has written
+//!   yet. `AttemptRecorded` left this list for T068 and `TddExceptionUsed` for
+//!   T079, which wrote the arm §9's exception is answered by.
 //! - `GateStarted` (`kind: GateKind`) cannot be defined at all: `GateKind` is
 //!   `gate.rs`, which no earlier task has written, and a payload naming it
 //!   would not compile — which is the point of this catalog being a compile
@@ -56,7 +56,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::attempt::AttemptRecord;
-use crate::classify::FailureClass;
+use crate::classify::{FailureClass, TddException};
 use crate::ids::{AttemptId, EventSeq, TaskId};
 use crate::state::{PauseReason, Phase, Recovery, Stream};
 
@@ -189,6 +189,28 @@ pub enum EventKind {
         /// The evidence it concluded it from.
         detail: String,
     },
+    /// A task used a declared exception to test-first, and did not write its
+    /// tests first.
+    ///
+    /// The record VISION.md §9 exists to make possible. Test-first order cannot
+    /// be proved after the fact, so a task that genuinely does not fit applies
+    /// for one of the four categories instead of writing a failing test — and
+    /// the override is worth nothing unless the run says which category it used
+    /// and why, in the journal, beside the attempt that skipped the red phase.
+    /// ADR-0010 records where the four categories came from; ADR-0074 records
+    /// why one type spells them.
+    ///
+    /// It moves a task nowhere: like [`EventKind::AttemptRecorded`] it says what
+    /// was, and [`crate::apply`] answers it with the state it was asked from —
+    /// refused everywhere but where an agent is working, which is what makes §9's
+    /// exception unusable as a route around a scope violation.
+    TddExceptionUsed {
+        /// Which of §9's four categories was claimed.
+        exception: TddException,
+        /// Why its author said it applied, kept because an override nobody can
+        /// audit is an override nobody will admit to having used.
+        reason: String,
+    },
     /// A human acknowledged a gate that had stopped the run.
     GateAcknowledged {
         /// Who acknowledged it.
@@ -249,6 +271,7 @@ impl EventKind {
             Self::Resumed { .. } => "Resumed",
             Self::Interrupted { .. } => "Interrupted",
             Self::RecoveryDecision { .. } => "RecoveryDecision",
+            Self::TddExceptionUsed { .. } => "TddExceptionUsed",
             Self::GateAcknowledged { .. } => "GateAcknowledged",
             Self::AttemptRecorded { .. } => "AttemptRecorded",
         }
@@ -341,7 +364,7 @@ mod rfc3339_utc {
 mod tests {
     use super::{Event, EventKind};
     use crate::attempt::AttemptRecord;
-    use crate::classify::FailureClass;
+    use crate::classify::{FailureClass, TddException};
     use crate::ids::{AttemptId, EventSeq, TaskId};
     use crate::state::{PauseReason, Phase, Recovery, Stream};
     use serde_json::Value;
@@ -352,7 +375,7 @@ mod tests {
     /// encode is visible rather than mistaken for a placeholder.
     const SHA: &str = "0b78d3f1c2a4";
 
-    /// The 20 entries `docs/DESIGN.md` documents whose payload types exist
+    /// The 21 entries `docs/DESIGN.md` documents whose payload types exist
     /// today, each with the payload field names the table lists for it.
     ///
     /// Spelled out a second time, on purpose: names checked only against the
@@ -380,11 +403,12 @@ mod tests {
         ("Resumed", &[]),
         ("Interrupted", &["phase"]),
         ("RecoveryDecision", &["decision", "detail"]),
+        ("TddExceptionUsed", &["exception", "reason"]),
         ("GateAcknowledged", &["by", "at"]),
         ("AttemptRecorded", &["record"]),
     ];
 
-    /// The eight entries this catalog does not define yet.
+    /// The seven entries this catalog does not define yet.
     ///
     /// Their absence is asserted, not assumed: an entry added ahead of its
     /// producer would start decoding, and the journal would begin accepting
@@ -411,10 +435,6 @@ mod tests {
         (
             "ProviderDetected",
             r#""provider":"codex","capabilities":{},"version":"0.1.0""#,
-        ),
-        (
-            "TddExceptionUsed",
-            r#""exception":"Documentation","reason":"docs only""#,
         ),
         (
             "DecisionRaised",
@@ -500,6 +520,10 @@ mod tests {
             EventKind::RecoveryDecision {
                 decision: Recovery::Resume,
                 detail: "journal ends mid-phase; nothing was published".to_string(),
+            },
+            EventKind::TddExceptionUsed {
+                exception: TddException::Documentation,
+                reason: "documentation only; no behaviour to pin".to_string(),
             },
             EventKind::GateAcknowledged {
                 by: "operators.name".to_string(),

@@ -413,6 +413,7 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::Resumed
         | EventKind::Interrupted { .. }
         | EventKind::GateAcknowledged { .. }
+        | EventKind::TddExceptionUsed { .. }
         | EventKind::RecoveryDecision {
             decision: Recovery::MarkInterrupted,
             ..
@@ -465,6 +466,7 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
         | EventKind::Resumed
         | EventKind::Interrupted { .. }
         | EventKind::GateAcknowledged { .. }
+        | EventKind::TddExceptionUsed { .. }
         | EventKind::RecoveryDecision {
             decision: Recovery::MarkInterrupted,
             ..
@@ -489,6 +491,15 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
 /// transition. It names the attempt the state is holding and moves nothing, so
 /// filing it leaves the run where it was — which is also what makes a replay of
 /// a journal that already holds the record change nothing.
+///
+/// A declared exception to test-first (§9) is that third kind too, and this is
+/// one of the two states allowed to answer it. It names no attempt because the
+/// state holds exactly one, and it moves nothing: the run keeps working the
+/// phase it was in, one phase shorter than the protocol would otherwise have
+/// enforced. Everywhere else the claim is refused, which is what makes §9's
+/// exception unusable as an answer to a phase that wrote outside its scope —
+/// by the time anyone reaches for the excuse, that phase has left this state
+/// (ADR-0074).
 fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<TaskState> {
     const FROM: &str = "Running";
     match event {
@@ -534,6 +545,7 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
             FROM,
             event,
         ),
+        EventKind::TddExceptionUsed { .. } => Ok(TaskState::Running { attempt, phase }),
         EventKind::VerifyPassed { attempt: mine } => refuse_unless(
             *mine == attempt,
             TaskState::Publishing { attempt },
@@ -588,6 +600,10 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
 /// that has begun remediating cannot present itself as working again; which
 /// attempt the machine is still allowed to start is the runner's count, not
 /// this function's, exactly as it is in `Running`.
+///
+/// That includes `Running`'s evidence. A remediation works phases like any other
+/// attempt, so a task that declared an exception to test-first claims it here
+/// too, and the claim again says what was rather than where the task may go.
 fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<TaskState> {
     const FROM: &str = "Remediating";
     match event {
@@ -629,6 +645,7 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
             FROM,
             event,
         ),
+        EventKind::TddExceptionUsed { .. } => Ok(TaskState::Remediating { attempt, phase }),
         EventKind::VerifyPassed { attempt: mine } => refuse_unless(
             *mine == attempt,
             TaskState::Publishing { attempt },
@@ -758,6 +775,7 @@ fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::PublishVerified { .. }
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
+        | EventKind::TddExceptionUsed { .. }
         | EventKind::GateAcknowledged { .. } => Err(refused(FROM, event)),
     }
 }
@@ -851,6 +869,7 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::VerifyFailed { .. }
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
+        | EventKind::TddExceptionUsed { .. }
         | EventKind::GateAcknowledged { .. } => Err(refused(FROM, event)),
     }
 }
@@ -911,6 +930,7 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::TaskCancelled { .. }
         | EventKind::Resumed
         | EventKind::Interrupted { .. }
+        | EventKind::TddExceptionUsed { .. }
         | EventKind::GateAcknowledged { .. } => Err(refused(FROM, event)),
     }
 }
@@ -981,7 +1001,8 @@ fn from_paused(
         | EventKind::TaskDone { .. }
         | EventKind::TaskFailed { .. }
         | EventKind::Paused { .. }
-        | EventKind::Interrupted { .. } => Err(refused(FROM, event)),
+        | EventKind::Interrupted { .. }
+        | EventKind::TddExceptionUsed { .. } => Err(refused(FROM, event)),
     }
 }
 
@@ -1154,7 +1175,7 @@ mod tests {
         PauseReason, Phase, PhaseEntry, Recovery, Stream, TaskState, apply, check_one_active,
         check_predecessor, phase_entry,
     };
-    use crate::{AttemptId, AttemptRecord, Error, EventKind, FailureClass, TaskId};
+    use crate::{AttemptId, AttemptRecord, Error, EventKind, FailureClass, TaskId, TddException};
     use serde::de::DeserializeOwned;
     use std::collections::BTreeMap;
     use std::fmt::Debug;
@@ -1813,11 +1834,22 @@ mod tests {
         }
     }
 
+    /// A used exception to test-first, with the reason its author wrote. It
+    /// names no attempt on purpose: `docs/DESIGN.md` gives the entry a category
+    /// and a reason only, so the state that was asked is the one that owns the
+    /// phase the exception describes.
+    fn exception_used() -> EventKind {
+        EventKind::TddExceptionUsed {
+            exception: TddException::Documentation,
+            reason: "documentation only; no behaviour for a test to pin".to_owned(),
+        }
+    }
+
     /// Every catalog entry a journal can hold, carrying what a run would carry.
     /// Written out by hand rather than generated because the point of the list
     /// is that a person named each entry — and because a sweep over it is what
     /// proves no state stays quiet about an event.
-    fn every_event() -> [EventKind; 20] {
+    fn every_event() -> [EventKind; 21] {
         [
             queued(),
             EventKind::PreflightStarted,
@@ -1837,6 +1869,7 @@ mod tests {
             EventKind::Resumed,
             interrupted(Phase::Implement),
             recovered(Recovery::Resume),
+            exception_used(),
             acknowledged(),
             attempt_recorded(1),
         ]
@@ -2180,6 +2213,65 @@ mod tests {
             &attempt_recorded(2),
             &remediating(2, Phase::Red),
         );
+    }
+
+    /// §9's exception is evidence about a phase, not a way out of one. It is
+    /// answered with the state that was asked, in each of the two states an agent
+    /// works in, and it leaves the phase alone: the run goes on with the phases
+    /// `crate::protocol::for_task` already shortened.
+    #[test]
+    fn a_claimed_exception_moves_nothing_and_keeps_the_phase_it_was_asked_from() {
+        for phase in [Phase::Red, Phase::Implement, Phase::Green] {
+            moves(&working(1, phase), &exception_used(), &working(1, phase));
+            moves(
+                &remediating(2, phase),
+                &exception_used(),
+                &remediating(2, phase),
+            );
+        }
+    }
+
+    /// The skip is reachable only where a phase is being worked. Every other
+    /// state refuses it, so a journal cannot acquire an exception once the
+    /// attempt stopped working — §9's "recorded in task history" is worth
+    /// nothing while any route reaches the skip after the fact.
+    #[test]
+    fn an_exception_is_admitted_only_in_the_states_where_an_agent_works() {
+        for state in one_state_per_variant() {
+            let works = matches!(
+                state,
+                TaskState::Running { .. } | TaskState::Remediating { .. }
+            );
+            if works {
+                moves(&state, &exception_used(), &state);
+            } else {
+                refuses(&state, &exception_used());
+            }
+        }
+    }
+
+    /// The done-when read off the machine. A phase that wrote outside its write
+    /// scope is a policy failure, which leaves `Running`; from there the claim
+    /// that would have skipped the red phase is refused, so an exception can
+    /// never become the answer to what a phase already wrote. `Paused` is the
+    /// other way a violation stops a run — a human holds the tree — and it
+    /// refuses the claim for the same reason.
+    #[test]
+    fn an_exception_cannot_be_claimed_after_a_scope_violation_stopped_the_run() {
+        let wrote_outside_scope = EventKind::TaskFailed {
+            class: FailureClass::PolicyFailure,
+            detail: "a phase may not write outside the paths its write scope declares: \
+                crates/ktask-core/src/state.rs"
+                .to_owned(),
+        };
+        let stopped = apply(&working(1, Phase::Red), &wrote_outside_scope)
+            .expect("a policy failure fails the attempt that committed it");
+        assert_eq!(stopped.name(), "Failed", "a policy failure ends the run");
+        refuses(&stopped, &exception_used());
+
+        let held = apply(&working(1, Phase::Red), &pause(PauseReason::Blocked))
+            .expect("a blocked phase parks the run");
+        refuses(&held, &exception_used());
     }
 
     /// The other half of the same rule. A record cannot be about an attempt the
@@ -2642,12 +2734,16 @@ mod tests {
     /// the attempt a remediation holds — is
     /// `an_attempt_record_says_what_was_and_moves_the_attempt_it_names`.
     ///
+    /// `TddExceptionUsed` is the answer to that payload problem: §9's skip names
+    /// no attempt, no commit and no phase, so it keeps a row in each of the two
+    /// states an agent works in and has none in any other state.
+    ///
     /// The length is part of the declaration: a pair leaves this table only on
     /// a written decision that the machine no longer makes the move, and one
     /// pair has left it. `("Paused", "Paused", "Paused")` was a nested pause,
     /// which T028 decided is a mistake rather than a second wait — the refusal
     /// is asserted in `a_pause_above_a_pause_is_refused`, and ADR-0026 is why.
-    const LEGAL: [(&str, &str, &str); 52] = [
+    const LEGAL: [(&str, &str, &str); 54] = [
         ("Queued", "TaskQueued", "Queued"),
         ("Queued", "PreflightStarted", "Preflight"),
         ("Queued", "Paused", "Paused"),
@@ -2664,6 +2760,7 @@ mod tests {
         ("Running", "PhaseEntered", "Running"),
         ("Running", "AgentOutput", "Running"),
         ("Running", "AttemptRecorded", "Running"),
+        ("Running", "TddExceptionUsed", "Running"),
         ("Running", "VerifyPassed", "Publishing"),
         ("Running", "VerifyFailed", "Running"),
         ("Running", "TaskFailed", "Failed"),
@@ -2671,6 +2768,7 @@ mod tests {
         ("Running", "Paused", "Paused"),
         ("Running", "Interrupted", "Paused"),
         ("Running", "RecoveryDecision", "Running"),
+        ("Remediating", "TddExceptionUsed", "Remediating"),
         ("Remediating", "TaskFailed", "Failed"),
         ("Remediating", "TaskCancelled", "Cancelled"),
         ("Remediating", "Paused", "Paused"),
@@ -2710,7 +2808,7 @@ mod tests {
     /// and a refused pair is refused through `Error::InvalidTransition` naming
     /// both of them. So the sweep fails on a legal move nobody declared, on a
     /// declared move that was withdrawn or retargeted, and on a refusal that
-    /// stopped naming what it refused — and passes for the 240 pairs on nothing
+    /// stopped naming what it refused — and passes for the 252 pairs on nothing
     /// but the table.
     #[test]
     fn every_move_is_a_declared_one_or_a_refusal() {
