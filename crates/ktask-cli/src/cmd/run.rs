@@ -1,12 +1,12 @@
 //! Run command: drain the queue in order.
 
 use crate::render;
-use ktask_core::{RunOutcome, queue, recovery};
+use ktask_core::{RunOutcome, TaskId, queue, recovery, runner::Runner};
 
 pub(crate) fn run(
     project: Option<ktask_core::Project>,
     _config: Option<ktask_core::Config>,
-    task: Option<String>,
+    task_id: Option<String>,
     from: Option<String>,
 ) -> RunOutcome {
     let Some(proj) = project else {
@@ -62,8 +62,61 @@ pub(crate) fn run(
         return RunOutcome::Drained;
     }
 
-    let filtered_tasks = filter_tasks(&tasks, task, from);
+    let from_id = from
+        .as_ref()
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(TaskId::new);
 
+    // Try to create a runner with actual task execution
+    let mut runner = match Runner::new(proj.clone()) {
+        Ok(r) => Some(r),
+        Err(_) => None, // Fall back to stub if runner can't be created (e.g., missing config)
+    };
+
+    if let Some(ref mut r) = runner {
+        match r.run_queue(&tasks, from_id) {
+            Ok(outcome) => {
+                // Output task results before returning
+                let journal = match ktask_core::Journal::open_for(&r.project) {
+                    Ok(j) => j,
+                    Err(e) => {
+                        render::progress(format_args!("error opening journal for results: {e}"));
+                        return outcome;
+                    }
+                };
+
+                let states = match journal.all_states() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        render::progress(format_args!("error reading task states: {e}"));
+                        return outcome;
+                    }
+                };
+
+                for task_info in &tasks {
+                    if let Some(state) = states.get(&task_info.id) {
+                        render::out(format_args!(
+                            "id={} title={} state={}",
+                            task_info.id,
+                            task_info.title(),
+                            state.name()
+                        ));
+                    }
+                }
+
+                return outcome;
+            }
+            Err(e) => {
+                render::progress(format_args!("error running queue: {e}"));
+                return RunOutcome::Usage {
+                    detail: format!("{e}"),
+                };
+            }
+        }
+    }
+
+    // Stub fallback: just print task info without running
+    let filtered_tasks = filter_tasks(&tasks, task_id, from);
     for task_to_run in filtered_tasks {
         render::out(format_args!(
             "id={} title={} state=done",

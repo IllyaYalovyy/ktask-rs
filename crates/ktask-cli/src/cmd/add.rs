@@ -17,7 +17,7 @@ pub(crate) fn run(project: Option<Project>, file: Option<PathBuf>) -> RunOutcome
         }
     };
 
-    let tasks = match parse_plan(&content) {
+    let mut tasks = match parse_plan(&content) {
         Ok(t) => t,
         Err(e) => {
             render::progress(format_args!("error: {e}"));
@@ -27,18 +27,20 @@ pub(crate) fn run(project: Option<Project>, file: Option<PathBuf>) -> RunOutcome
         }
     };
 
-    let Some(mut task) = tasks.into_iter().next() else {
+    if tasks.is_empty() {
         render::progress(format_args!("error: no task found in content"));
         return RunOutcome::Usage {
             detail: "no task found".to_string(),
         };
-    };
+    }
 
-    if let Err(e) = task.validate() {
-        render::progress(format_args!("error: {e}"));
-        return RunOutcome::Usage {
-            detail: e.to_string(),
-        };
+    for task in &tasks {
+        if let Err(e) = task.validate() {
+            render::progress(format_args!("error: {e}"));
+            return RunOutcome::Usage {
+                detail: e.to_string(),
+            };
+        }
     }
 
     let mut journal = match Journal::open_for(&proj) {
@@ -67,16 +69,20 @@ pub(crate) fn run(project: Option<Project>, file: Option<PathBuf>) -> RunOutcome
         existing_tasks.iter().map(|t| t.id.get()).max().unwrap_or(0) + 1
     };
 
-    task.id = TaskId::new(next_id);
+    for (i, task) in tasks.iter_mut().enumerate() {
+        task.id = TaskId::new(next_id + i as u32);
+    }
 
-    if let Err(e) = journal.put_tasks(&[task.clone()]) {
+    if let Err(e) = journal.put_tasks(&tasks) {
         render::progress(format_args!("error: {e}"));
         return RunOutcome::Usage {
             detail: e.to_string(),
         };
     }
 
-    render::out(format_args!("id={}", task.id));
+    if let Some(first_task) = tasks.first() {
+        render::out(format_args!("id={}", first_task.id));
+    }
     RunOutcome::Drained
 }
 
