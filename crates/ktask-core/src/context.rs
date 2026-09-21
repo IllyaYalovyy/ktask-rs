@@ -543,8 +543,9 @@ fn reached_by_link(path: &Path) -> Error {
 #[cfg(test)]
 mod tests {
     use super::{
-        DOCUMENT_MODE, LIBRARY_DIR_MODE, TASK_PLACEHOLDER, assemble, created_by_another_run,
-        ensure_defaults, ensure_defaults_with, load_template, load_template_with,
+        DEFAULT_TEMPLATE, DOCUMENT_MODE, LIBRARY_DIR_MODE, TASK_PLACEHOLDER, assemble,
+        created_by_another_run, ensure_defaults, ensure_defaults_with, load_template,
+        load_template_with, write_default,
     };
     use crate::{
         AttemptId, AttemptRecord, Error, Project, Task, TaskId, TaskStatus, Usage, evidence_dir,
@@ -1300,6 +1301,36 @@ mod tests {
                  had written the document"
             );
         }
+    }
+
+    #[test]
+    fn a_creation_the_filesystem_refuses_for_a_reason_of_its_own_is_reported() {
+        // One refusal is forgiven and this is the other kind: the directory will not
+        // accept a new file, so no document exists and nothing was written. Blurring
+        // the two is how a library that could not be written at all starts answering
+        // with defaults it never wrote. The look that comes first is allowed here —
+        // the directory stays readable — which is what leaves the create, and only
+        // the create, as the call that fails.
+        let home = Scratch::new();
+        let library = library_under(&home.config);
+        fs::create_dir_all(&library).expect("a library directory to take writing away from");
+        fs::set_permissions(&library, Permissions::from_mode(0o500))
+            .expect("a library directory that may not gain a file");
+
+        let refused = write_default(&library.join("task.md"), DEFAULT_TEMPLATE);
+        fs::set_permissions(&library, Permissions::from_mode(0o700))
+            .expect("the library is writable again so the scratch directory can go");
+
+        let problem = refused
+            .expect_err("a document that could not be created is not a document that exists");
+        assert!(
+            matches!(&problem, Error::Io(why) if why.kind() == io::ErrorKind::PermissionDenied),
+            "{problem}"
+        );
+        assert!(
+            !library.join("task.md").exists(),
+            "a creation the filesystem refused still left a document behind"
+        );
     }
 
     #[test]
