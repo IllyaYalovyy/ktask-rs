@@ -1,7 +1,7 @@
 //! Pause command: pause the running queue.
 
 use crate::render;
-use ktask_core::{RunOutcome, Journal, queue, control};
+use ktask_core::{Journal, RunOutcome, control, queue};
 use std::collections::BTreeMap;
 
 pub(crate) fn run(project: Option<ktask_core::Project>) -> RunOutcome {
@@ -62,7 +62,10 @@ pub(crate) fn run(project: Option<ktask_core::Project>) -> RunOutcome {
                 .find(|t| t.id == task_id)
                 .map_or("Unknown".to_string(), |t| t.title().to_string());
 
-            render::out(format_args!("id={} title={} action=paused", task_id, task_title));
+            render::out(format_args!(
+                "id={} title={} action=paused",
+                task_id, task_title
+            ));
             RunOutcome::Drained
         }
         None => RunOutcome::Usage {
@@ -71,7 +74,9 @@ pub(crate) fn run(project: Option<ktask_core::Project>) -> RunOutcome {
     }
 }
 
-fn find_active_task(states: &BTreeMap<ktask_core::TaskId, ktask_core::TaskState>) -> Option<ktask_core::TaskId> {
+fn find_active_task(
+    states: &BTreeMap<ktask_core::TaskId, ktask_core::TaskState>,
+) -> Option<ktask_core::TaskId> {
     for (id, state) in states {
         // A task is active if it's not terminal and not paused
         if !state.is_terminal() && !state.is_paused() {

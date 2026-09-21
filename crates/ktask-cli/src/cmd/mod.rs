@@ -42,7 +42,7 @@ pub(crate) fn dispatch(
         Command::Ack { task } => ack::run(project, task),
         Command::Pause => pause::run(project),
         Command::Interrupt => interrupt::run(project),
-        Command::Cancel { task } => cancel::run(project, task),
+        Command::Cancel { task } => cancel::run(project, &task),
         Command::RerunGate { task, gate } => rerun_gate::run(project, config, task, gate, json),
         Command::Tui => tui::run(project, config),
     }

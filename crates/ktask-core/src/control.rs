@@ -6,6 +6,10 @@ use std::path::PathBuf;
 /// Check if a pause signal has been written to the project state directory.
 ///
 /// Returns true if the pause signal file exists.
+///
+/// # Errors
+///
+/// This function cannot currently fail and always returns Ok.
 pub fn check_pause(project: &Project) -> Result<bool> {
     let signal_path = pause_signal_path(project);
     Ok(signal_path.exists())
@@ -14,6 +18,10 @@ pub fn check_pause(project: &Project) -> Result<bool> {
 /// Check if an interrupt signal has been written to the project state directory.
 ///
 /// Returns true if the interrupt signal file exists.
+///
+/// # Errors
+///
+/// This function cannot currently fail and always returns Ok.
 pub fn check_interrupt(project: &Project) -> Result<bool> {
     let signal_path = interrupt_signal_path(project);
     Ok(signal_path.exists())
@@ -23,6 +31,10 @@ pub fn check_interrupt(project: &Project) -> Result<bool> {
 ///
 /// The pause signal tells the runner to pause after the current task
 /// reaches a safe boundary (between phases).
+///
+/// # Errors
+///
+/// Returns an error if the signal file cannot be written to the state directory.
 pub fn write_pause(project: &Project) -> Result<()> {
     let signal_path = pause_signal_path(project);
     std::fs::write(&signal_path, b"pause")?;
@@ -33,6 +45,10 @@ pub fn write_pause(project: &Project) -> Result<()> {
 ///
 /// The interrupt signal tells the runner to terminate the current attempt
 /// immediately, leaving durable resumable state.
+///
+/// # Errors
+///
+/// Returns an error if the signal file cannot be written to the state directory.
 pub fn write_interrupt(project: &Project) -> Result<()> {
     let signal_path = interrupt_signal_path(project);
     std::fs::write(&signal_path, b"interrupt")?;
@@ -40,6 +56,10 @@ pub fn write_interrupt(project: &Project) -> Result<()> {
 }
 
 /// Clear the pause signal file.
+///
+/// # Errors
+///
+/// Returns an error if the signal file cannot be removed from the state directory.
 pub fn clear_pause(project: &Project) -> Result<()> {
     let signal_path = pause_signal_path(project);
     if signal_path.exists() {
@@ -49,6 +69,10 @@ pub fn clear_pause(project: &Project) -> Result<()> {
 }
 
 /// Clear the interrupt signal file.
+///
+/// # Errors
+///
+/// Returns an error if the signal file cannot be removed from the state directory.
 pub fn clear_interrupt(project: &Project) -> Result<()> {
     let signal_path = interrupt_signal_path(project);
     if signal_path.exists() {

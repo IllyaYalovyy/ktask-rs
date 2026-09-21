@@ -1,9 +1,9 @@
 //! Cancel command: mark a task cancelled.
 
 use crate::render;
-use ktask_core::{RunOutcome, Journal, queue, ids::TaskId};
+use ktask_core::{Journal, RunOutcome, ids::TaskId, queue};
 
-pub(crate) fn run(project: Option<ktask_core::Project>, task: String) -> RunOutcome {
+pub(crate) fn run(project: Option<ktask_core::Project>, task: &str) -> RunOutcome {
     let Some(proj) = project else {
         return RunOutcome::Usage {
             detail: "no project found".to_string(),
@@ -54,11 +54,9 @@ pub(crate) fn run(project: Option<ktask_core::Project>, task: String) -> RunOutc
 
     // Check if task exists and is in a cancellable state
     match states.get(&task_id) {
-        Some(state) if state.is_terminal() => {
-            return RunOutcome::Usage {
-                detail: format!("task {task_id} is already in a terminal state"),
-            };
-        }
+        Some(state) if state.is_terminal() => RunOutcome::Usage {
+            detail: format!("task {task_id} is already in a terminal state"),
+        },
         Some(_) => {
             // Task is in a non-terminal state, we can cancel it
             let event = ktask_core::EventKind::TaskCancelled {
@@ -78,7 +76,10 @@ pub(crate) fn run(project: Option<ktask_core::Project>, task: String) -> RunOutc
                 .find(|t| t.id == task_id)
                 .map_or("Unknown".to_string(), |t| t.title().to_string());
 
-            render::out(format_args!("id={} title={} state=cancelled", task_id, task_title));
+            render::out(format_args!(
+                "id={} title={} state=cancelled",
+                task_id, task_title
+            ));
             RunOutcome::Drained
         }
         None => RunOutcome::Usage {
@@ -97,7 +98,7 @@ mod tests {
         let repo = ScratchRepo::new().expect("Failed to create test repo");
         let project = ktask_core::register(repo.path()).expect("Failed to register project");
 
-        let outcome = run(Some(project), "999".to_string());
+        let outcome = run(Some(project), "999");
         match outcome {
             RunOutcome::Usage { .. } => {}
             _ => panic!("Expected Usage (exit 2), got {outcome:?}"),
