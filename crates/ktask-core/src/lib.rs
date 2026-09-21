@@ -16,6 +16,7 @@ pub mod journal;
 pub mod lock;
 mod paths;
 mod project;
+pub mod protocol;
 pub mod provider;
 mod queue;
 pub mod redact;
@@ -44,6 +45,7 @@ pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::{Journal, journal_path};
 pub use paths::{config_file, project_id, state_root};
 pub use project::{Project, discover, project_config_path, register};
+pub use protocol::{PhaseSpec, Protocol, WriteScope};
 pub use provider::{Capabilities, Invocation, Outcome, Provider, Usage, UsageSource};
 pub use queue::{load, next_runnable};
 pub use remediate::{
