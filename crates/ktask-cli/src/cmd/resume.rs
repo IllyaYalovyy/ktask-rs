@@ -1,7 +1,7 @@
 //! Resume command: continue from the first incomplete task.
 
 use crate::render;
-use ktask_core::{Journal, RunOutcome, queue};
+use ktask_core::{Journal, RunOutcome, queue, recovery};
 
 pub(crate) fn run(
     project: Option<ktask_core::Project>,
@@ -12,6 +12,39 @@ pub(crate) fn run(
             detail: "no project found".to_string(),
         };
     };
+
+    // Reconcile any interrupted tasks before selecting a task
+    let mut journal = match Journal::open_for(&proj) {
+        Ok(j) => j,
+        Err(e) => {
+            render::progress(format_args!("error opening journal: {e}"));
+            return RunOutcome::Usage {
+                detail: format!("{e}"),
+            };
+        }
+    };
+
+    match recovery::reconcile(&mut journal, &proj) {
+        Ok(decisions) => {
+            for decision in decisions {
+                render::out(format_args!(
+                    "recovery: task {} {}",
+                    decision.task_id,
+                    match decision.decision {
+                        ktask_core::Recovery::Resume => "resume",
+                        ktask_core::Recovery::MarkInterrupted => "mark_interrupted",
+                        ktask_core::Recovery::AlreadyApplied => "already_applied",
+                    }
+                ));
+            }
+        }
+        Err(e) => {
+            render::progress(format_args!("error reconciling: {e}"));
+            return RunOutcome::Usage {
+                detail: format!("{e}"),
+            };
+        }
+    }
 
     let tasks = match queue::load(&proj) {
         Ok(t) => t,
@@ -28,16 +61,6 @@ pub(crate) fn run(
             detail: "queue is drained".to_string(),
         };
     }
-
-    let journal = match Journal::open_for(&proj) {
-        Ok(j) => j,
-        Err(e) => {
-            render::progress(format_args!("error opening journal: {e}"));
-            return RunOutcome::Usage {
-                detail: format!("{e}"),
-            };
-        }
-    };
 
     let states = match journal.all_states() {
         Ok(s) => s,
