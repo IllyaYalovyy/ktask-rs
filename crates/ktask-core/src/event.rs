@@ -4,17 +4,19 @@
 //! listed here, `#[serde(tag = "kind")]` so a stored event's `kind` column
 //! names its variant. Nothing may emit an event this enum does not contain.
 //!
-//! Eight variants are deliberately absent because their payload names a type
+//! Seven variants are deliberately absent because their payload names a type
 //! no earlier task has defined: `GateFinished`, `AttemptFinished`,
-//! `AttemptRecorded`, `ProviderDetected`, `TddExceptionUsed`,
-//! `DecisionRaised`, `DecisionResolved` and `SelfHealingReport`. A ninth,
-//! `GateStarted`, is absent for the same reason: its `kind: GateKind` field
-//! names a type `gate.rs` has not yet introduced, matching the precedent set
-//! by [`crate::Error::Gate`], whose `kind` field is a `String` today rather
+//! `ProviderDetected`, `TddExceptionUsed`, `DecisionRaised`,
+//! `DecisionResolved` and `SelfHealingReport`. An eighth, `GateStarted`, is
+//! absent for the same reason: its `kind: GateKind` field names a type
+//! `gate.rs` has not yet introduced, matching the precedent set by
+//! [`crate::Error::Gate`], whose `kind` field is a `String` today rather
 //! than `GateKind`. Each is added by the task that defines its payload type,
 //! which also adds its arm to the transition function.
 
-use crate::{AttemptId, EventSeq, FailureClass, PauseReason, Phase, Recovery, Stream, TaskId};
+use crate::{
+    AttemptId, AttemptRecord, EventSeq, FailureClass, PauseReason, Phase, Recovery, Stream, TaskId,
+};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -161,6 +163,15 @@ pub enum EventKind {
         /// When the gate was acknowledged.
         at: OffsetDateTime,
     },
+    /// An attempt's durable evidence was recorded: `VISION.md` §6, "every
+    /// attempt is preserved separately." Boxed: an [`AttemptRecord`] carries
+    /// a gate history and usage figures, and would otherwise make it the
+    /// largest variant by a wide margin, bloating every [`EventKind`] value
+    /// regardless of which variant it holds.
+    AttemptRecorded {
+        /// The evidence recorded.
+        record: Box<AttemptRecord>,
+    },
 }
 
 impl EventKind {
@@ -188,6 +199,7 @@ impl EventKind {
             EventKind::Interrupted { .. } => "Interrupted",
             EventKind::RecoveryDecision { .. } => "RecoveryDecision",
             EventKind::GateAcknowledged { .. } => "GateAcknowledged",
+            EventKind::AttemptRecorded { .. } => "AttemptRecorded",
         }
     }
 }
@@ -303,13 +315,29 @@ mod tests {
                 by: "yalovoy".to_string(),
                 at: OffsetDateTime::UNIX_EPOCH,
             },
+            EventKind::AttemptRecorded {
+                record: Box::new(AttemptRecord {
+                    id: AttemptId::new(1),
+                    task: TaskId::new(1),
+                    started: OffsetDateTime::UNIX_EPOCH,
+                    ended: None,
+                    model_configured: Some("claude-opus-4".to_string()),
+                    model_reported: None,
+                    session_id: None,
+                    exit_reason: "completed".to_string(),
+                    gates: Vec::new(),
+                    usage: None,
+                    base_sha: "abc123".to_string(),
+                    candidate_sha: None,
+                }),
+            },
         ]
     }
 
     #[test]
-    fn event_kind_has_exactly_nineteen_variants() {
+    fn event_kind_has_exactly_twenty_variants() {
         let variants = all_events();
-        assert_eq!(variants.len(), 19);
+        assert_eq!(variants.len(), 20);
 
         // Exhaustive, wildcard-free match: a variant added to `EventKind`
         // without being listed here fails to compile instead of silently
@@ -334,7 +362,8 @@ mod tests {
                 | EventKind::Resumed
                 | EventKind::Interrupted { .. }
                 | EventKind::RecoveryDecision { .. }
-                | EventKind::GateAcknowledged { .. } => {}
+                | EventKind::GateAcknowledged { .. }
+                | EventKind::AttemptRecorded { .. } => {}
             }
         }
     }
@@ -371,6 +400,7 @@ mod tests {
             "Interrupted",
             "RecoveryDecision",
             "GateAcknowledged",
+            "AttemptRecorded",
         ]
     }
 

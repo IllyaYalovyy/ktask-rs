@@ -290,7 +290,8 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::Resumed
         | EventKind::Interrupted { .. }
         | EventKind::RecoveryDecision { .. }
-        | EventKind::GateAcknowledged { .. } => Err(invalid("Queued", event)),
+        | EventKind::GateAcknowledged { .. }
+        | EventKind::AttemptRecorded { .. } => Err(invalid("Queued", event)),
     }
 }
 
@@ -327,7 +328,8 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
         | EventKind::TaskFailed { .. }
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
-        | EventKind::GateAcknowledged { .. } => Err(invalid("Preflight", event)),
+        | EventKind::GateAcknowledged { .. }
+        | EventKind::AttemptRecorded { .. } => Err(invalid("Preflight", event)),
     }
 }
 
@@ -346,7 +348,9 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
             attempt,
             phase: *phase,
         }),
-        EventKind::AgentOutput { .. } => Ok(TaskState::Running { attempt, phase }),
+        EventKind::AgentOutput { .. } | EventKind::AttemptRecorded { .. } => {
+            Ok(TaskState::Running { attempt, phase })
+        }
         EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
             class: *class,
             detail: detail.clone(),
@@ -395,7 +399,9 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
             attempt,
             phase: *phase,
         }),
-        EventKind::AgentOutput { .. } => Ok(TaskState::Remediating { attempt, phase }),
+        EventKind::AgentOutput { .. } | EventKind::AttemptRecorded { .. } => {
+            Ok(TaskState::Remediating { attempt, phase })
+        }
         EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
             class: *class,
             detail: detail.clone(),
@@ -432,7 +438,9 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
 /// completion gates against `attempt`'s result.
 fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
     match event {
-        EventKind::VerifyPassed { .. } => Ok(TaskState::Verifying { attempt }),
+        EventKind::VerifyPassed { .. } | EventKind::AttemptRecorded { .. } => {
+            Ok(TaskState::Verifying { attempt })
+        }
         EventKind::VerifyFailed { .. } => Ok(TaskState::Remediating {
             attempt,
             phase: Phase::Implement,
@@ -475,6 +483,7 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         EventKind::PublishVerified { commit, .. } => Ok(TaskState::PublishedVerified {
             commit: commit.clone(),
         }),
+        EventKind::AttemptRecorded { .. } => Ok(TaskState::Publishing { attempt }),
         EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
             class: *class,
             detail: detail.clone(),
@@ -534,7 +543,8 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::Resumed
         | EventKind::Interrupted { .. }
         | EventKind::RecoveryDecision { .. }
-        | EventKind::GateAcknowledged { .. } => {
+        | EventKind::GateAcknowledged { .. }
+        | EventKind::AttemptRecorded { .. } => {
             Err(invalid(&format!("PublishedVerified({commit})"), event))
         }
     }
@@ -603,7 +613,8 @@ fn from_paused(
         | EventKind::TaskDone { .. }
         | EventKind::TaskFailed { .. }
         | EventKind::Paused { .. }
-        | EventKind::Interrupted { .. } => Err(invalid("Paused", event)),
+        | EventKind::Interrupted { .. }
+        | EventKind::AttemptRecorded { .. } => Err(invalid("Paused", event)),
     }
 }
 
@@ -980,6 +991,25 @@ mod tests {
         assert_eq!(TaskState::Cancelled.name(), "Cancelled");
     }
 
+    fn attempt_recorded(attempt: AttemptId) -> EventKind {
+        EventKind::AttemptRecorded {
+            record: Box::new(crate::AttemptRecord {
+                id: attempt,
+                task: TaskId::new(1),
+                started: OffsetDateTime::UNIX_EPOCH,
+                ended: None,
+                model_configured: None,
+                model_reported: None,
+                session_id: None,
+                exit_reason: "completed".to_string(),
+                gates: Vec::new(),
+                usage: None,
+                base_sha: "base".to_string(),
+                candidate_sha: None,
+            }),
+        }
+    }
+
     fn attempt_started(attempt: AttemptId) -> EventKind {
         EventKind::AttemptStarted {
             attempt,
@@ -1337,6 +1367,17 @@ mod tests {
     }
 
     #[test]
+    fn from_running_accepts_attempt_recorded_without_changing_phase() {
+        let attempt = AttemptId::new(1);
+        let running = TaskState::Running {
+            attempt,
+            phase: Phase::Green,
+        };
+        let state = apply(&running, &attempt_recorded(attempt)).expect("legal");
+        assert_eq!(state, running);
+    }
+
+    #[test]
     fn from_running_accepts_task_failed() {
         let attempt = AttemptId::new(1);
         let running = TaskState::Running {
@@ -1479,6 +1520,17 @@ mod tests {
     }
 
     #[test]
+    fn from_remediating_accepts_attempt_recorded_without_changing_phase() {
+        let attempt = AttemptId::new(2);
+        let remediating = TaskState::Remediating {
+            attempt,
+            phase: Phase::Harden,
+        };
+        let state = apply(&remediating, &attempt_recorded(attempt)).expect("legal");
+        assert_eq!(state, remediating);
+    }
+
+    #[test]
     fn from_remediating_accepts_task_failed_when_the_bound_is_exhausted() {
         let attempt = AttemptId::new(2);
         let remediating = TaskState::Remediating {
@@ -1616,6 +1668,17 @@ mod tests {
     }
 
     #[test]
+    fn from_verifying_accepts_attempt_recorded_and_stays_verifying() {
+        let attempt = AttemptId::new(1);
+        let state = apply(
+            &TaskState::Verifying { attempt },
+            &attempt_recorded(attempt),
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Verifying { attempt });
+    }
+
+    #[test]
     fn from_verifying_accepts_interrupted_ignoring_its_phase_field() {
         let attempt = AttemptId::new(1);
         let state = apply(
@@ -1683,6 +1746,17 @@ mod tests {
                 commit: "def456".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn from_publishing_accepts_attempt_recorded_and_stays_publishing() {
+        let attempt = AttemptId::new(1);
+        let state = apply(
+            &TaskState::Publishing { attempt },
+            &attempt_recorded(attempt),
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Publishing { attempt });
     }
 
     #[test]
@@ -1792,6 +1866,24 @@ mod tests {
             Error::InvalidTransition { from, event } => {
                 assert_eq!(from, "PublishedVerified(def456)");
                 assert_eq!(event, "TaskCancelled");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_published_verified_rejects_attempt_recorded() {
+        let err = apply(
+            &TaskState::PublishedVerified {
+                commit: "def456".to_string(),
+            },
+            &attempt_recorded(AttemptId::new(1)),
+        )
+        .expect_err("illegal");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "PublishedVerified(def456)");
+                assert_eq!(event, "AttemptRecorded");
             }
             other => panic!("expected InvalidTransition, got {other:?}"),
         }
@@ -2146,6 +2238,7 @@ mod tests {
                 by: "x".to_string(),
                 at: OffsetDateTime::UNIX_EPOCH,
             },
+            attempt_recorded(attempt),
         ]
     }
 
@@ -2168,12 +2261,14 @@ mod tests {
             ("Preflight", "TaskCancelled"),
             ("Running", "PhaseEntered"),
             ("Running", "AgentOutput"),
+            ("Running", "AttemptRecorded"),
             ("Running", "TaskFailed"),
             ("Running", "Paused"),
             ("Running", "Interrupted"),
             ("Running", "TaskCancelled"),
             ("Remediating", "PhaseEntered"),
             ("Remediating", "AgentOutput"),
+            ("Remediating", "AttemptRecorded"),
             ("Remediating", "TaskFailed"),
             ("Remediating", "Paused"),
             ("Remediating", "Interrupted"),
@@ -2181,10 +2276,12 @@ mod tests {
             ("Verifying", "VerifyPassed"),
             ("Verifying", "VerifyFailed"),
             ("Verifying", "PublishStarted"),
+            ("Verifying", "AttemptRecorded"),
             ("Verifying", "Paused"),
             ("Verifying", "Interrupted"),
             ("Verifying", "TaskCancelled"),
             ("Publishing", "PublishVerified"),
+            ("Publishing", "AttemptRecorded"),
             ("Publishing", "TaskFailed"),
             ("Publishing", "Paused"),
             ("Publishing", "Interrupted"),
@@ -2207,7 +2304,7 @@ mod tests {
         let states = representative_states();
         let events = representative_events();
         assert_eq!(states.len(), 16, "expected one row per distinguished state");
-        assert_eq!(events.len(), 19, "expected one row per distinguished event");
+        assert_eq!(events.len(), 20, "expected one row per distinguished event");
 
         let mut checked = 0;
         for (state_label, state) in &states {
@@ -2235,7 +2332,7 @@ mod tests {
         assert_eq!(checked, states.len() * events.len());
         assert_eq!(
             ALLOWED.len(),
-            44,
+            48,
             "the allowed list itself changed size; update this guard deliberately"
         );
     }
