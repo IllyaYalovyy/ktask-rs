@@ -10,9 +10,9 @@
 //! adapter as arguments is that a run assembled from what its caller happened to
 //! carry is a run whose gates and journal somebody else chose.
 //!
-//! Its three jobs so far are [`Runner::prepare`], [`Runner::begin_attempt`], and the
-//! round trip an attempt's report makes. The first takes a queued task as far as the
-//! ground it stands on; the second is the
+//! Its four jobs so far are [`Runner::prepare`], [`Runner::begin_attempt`],
+//! [`Runner::run_phase`] and the round trip an attempt's report makes. The first takes a
+//! queued task as far as the ground it stands on; the second is the
 //! transition that spends a token, and three things about it are not free to
 //! change:
 //!
@@ -39,11 +39,34 @@
 //! already, because both ends of it are promises the run makes rather than things
 //! it observes: [`Runner::prepare_report`] makes the directory the prompt names
 //! before a provider is started, and [`Runner::read_report`] is the reading done
-//! after one exits. In between sits a session this module does not drive yet —
-//! phases, the gates, publication and remediation belong to the tasks after this
-//! one — and the reason the two ends are here without the middle is that a report
-//! the run cannot locate is indistinguishable from an agent that wrote nothing,
-//! which is a failure the run owns whatever the session did.
+//! after one exits. They stay steps of their own because a report the run cannot
+//! locate is indistinguishable from an agent that wrote nothing, which is a failure
+//! the run owns whatever the session did — and [`Runner::run_phase`] calls them
+//! around a session rather than folding them into it.
+//!
+//! [`Runner::run_phase`] is the middle those two ends bracket: one phase of a task's
+//! protocol, from the row that marks it to the check on what its session was allowed to
+//! touch. Four things about it are not free to change:
+//!
+//! - [`crate::EventKind::PhaseEntered`] is appended before the session starts, so an
+//!   interrupted run resolves to a phase that was entered and never finished rather
+//!   than to one that never began (VISION.md §3's third invariant).
+//! - [`crate::provider::check_model`] is asked before one word of the session's
+//!   output is journaled, so an attempt that ran on a model nobody chose leaves no
+//!   rows attributed to a run the run has already refused (VISION.md §12).
+//! - What the session touched is measured by [`protocol::check_scope`] over
+//!   [`git::changed_paths`] from [`Prepared::base_sha`] — tracked edits and files
+//!   nobody staged, because an untracked file is what a session that ignored its
+//!   scope leaves. A violation is [`Error::Policy`] naming every path, and it
+//!   outranks whatever the agent claimed.
+//! - The agent's own account comes back as [`PhaseOutcome`], class included: a
+//!   session that left no report is a classified failure and never an assumed
+//!   success, and the class is the one [`crate::ReportClaim::Missing`] reported
+//!   rather than one re-derived from an error (ADR-0057, ADR-0087).
+//!
+//! What happens after a phase — its gate, the state its verdict moves, publication,
+//! remediation — belongs to the tasks after this one, and this module starts no state
+//! transition of its own.
 //!
 //! # Preflight: the checks that prove the world is sane before a token is spent
 //!
@@ -102,9 +125,9 @@
 //! with the whole report's evidence in its `detail`, so a refusal that reaches
 //! the journal is readable from the journal alone.
 //!
-//! # What this module deliberately does not do
+//! # What preflight deliberately does not do
 //!
-//! - It starts no provider session. "Provider available" is answered from what a
+//! - The provider check starts no session. "Provider available" is answered from what a
 //!   `&dyn Provider` can say without being invoked; what that buys, and what it
 //!   cannot, is recorded with `check_provider` below and in ADR-0082. It is a gap
 //!   in the trait rather than a check that was skipped.
@@ -130,9 +153,11 @@ use crate::protocol;
 use crate::provider;
 use crate::{
     AttemptId, AttemptRecord, Bus, Capabilities, Config, Error, EventKind, FailureClass, Gate,
-    GateKind, GateResult, Journal, Profile, Project, Provider, Recorder, ReportClaim, Result,
-    Subscription, Task, TaskId, profile_from, run_gate, write_evidence,
+    GateKind, GateResult, Invocation, Journal, Phase, PhaseSpec, Profile, Project, Provider,
+    Recorder, ReportClaim, ReportResult, Result, Stream, Subscription, Task, TaskId, profile_from,
+    run_gate, write_evidence,
 };
+use crate::{context, queue};
 
 /// The parts one run is made of, gathered once from the project it works.
 ///
@@ -417,6 +442,210 @@ impl Runner {
         crate::report::read_report(&self.project, task, attempt)
     }
 
+    /// Work one phase of `task`'s protocol: run its session, and check what the
+    /// session was allowed to touch.
+    ///
+    /// VISION.md §9 makes a protocol a list of phases and gives each phase a write
+    /// scope, and §3's third invariant makes the row that marks a step come before
+    /// the side effect it describes. This is the one step where both can be held at
+    /// once — the phase, the prompt handed over, the checkout the session wrote
+    /// into, and the account it left — which is why the check on what it touched
+    /// lives here rather than in whatever reads the answer afterwards.
+    ///
+    /// The order of what is written is the behaviour, not the shape of a function:
+    ///
+    /// 1. [`crate::EventKind::PhaseEntered`] is appended before anything else, so a
+    ///    run that dies during a session is read as a phase that was entered and
+    ///    never finished — a state recovery knows how to resolve — and never as a
+    ///    phase that never started.
+    /// 2. The prompt is assembled from the documents where they live:
+    ///    [`crate::build_prompt`]'s text, built over this project's own template and
+    ///    the context document beside it, and [`crate::collect_adrs`] the decisions
+    ///    below the repository's `docs/adr`. A session started without the decisions
+    ///    on record would re-decide something already settled, and look like the
+    ///    supervisor had forgotten — so a prompt that cannot be read refuses the
+    ///    phase before a token is spent. The queue length the header prints is
+    ///    [`queue::load`]'s,
+    ///    read here rather than passed in: it is a fact about the journal, and a
+    ///    caller that supplied it could supply a different one from the one the
+    ///    queue holds.
+    /// 3. The report's directory is made before the provider starts, because the
+    ///    header names the file inside it (ADR-0085).
+    /// 4. The session runs in `prep.worktree` — the task's own checkout — and never
+    ///    in the repository the run supervises (VISION.md §10). [`Invocation`] holds
+    ///    the prompt, the configured model id unchanged, and that directory: the
+    ///    three things an adapter is allowed to know.
+    /// 5. [`provider::check_model`] is asked *before* anything the session said is
+    ///    written down. An attempt that ran on a model nobody chose is refused
+    ///    rather than recorded (VISION.md §12), and refusing it first is what keeps
+    ///    a refusal from leaving a session's output behind under an attribution the
+    ///    run has already rejected.
+    /// 6. One [`crate::EventKind::AgentOutput`] row per line the session printed —
+    ///    stdout first, then stderr, because the difference between the two is
+    ///    unrecoverable once merged and is what a classification reads first — and
+    ///    then [`crate::EventKind::AttemptFinished`] with the four things only that
+    ///    session knew. Nothing is filled in where the session said nothing
+    ///    (ADR-0049, ADR-0057), and the configured model id is never copied into the
+    ///    field that means *what the session reported*.
+    /// 7. The report is read back as [`Runner::read_report`] reads it, and only then
+    ///    is the checkout compared against the phase's scope with
+    ///    [`protocol::check_scope`] over [`git::changed_paths`] from
+    ///    `prep.base_sha` — tracked edits and files nobody staged, because an
+    ///    untracked file is exactly what a session that ignored its scope leaves.
+    ///
+    /// # Why a scope violation is an error and a missing report is not
+    ///
+    /// A violation is the run's own check refusing, so it arrives as
+    /// [`Error::Policy`] naming every path that broke the rule — the shape
+    /// [`crate::classify()`] answers with `policy_failure`, the class VISION.md §7
+    /// refuses to retry. A missing report is the *agent's* failure to account for
+    /// itself, which [`crate::ReportClaim::Missing`] already carries as a class and
+    /// a path: it comes back as [`PhaseOutcome::Unreported`] so the recovery policy
+    /// reads the class it was given instead of one re-derived from an error
+    /// (ADR-0057). Both arrived after the session's rows were written, because what
+    /// a session did is a fact whoever ends it.
+    ///
+    /// The order of the last two rules is deliberate: a phase that wrote outside its
+    /// scope *and* stayed silent is refused for the write. The scope is the rule the
+    /// phase exists to hold, and an agent's silence beside a broken rule is the
+    /// smaller finding — which is also why the check runs whatever the claim said,
+    /// including a claim of `DONE`.
+    ///
+    /// # What this step does not do
+    ///
+    /// It moves no state: no [`crate::apply`], so a task still reads as the journal
+    /// says it does, which is the phase's gate's work and the task after this one's
+    /// (ADR-0086 is why a session's end is not it either). It runs no gate, and
+    /// publishes nothing. It re-files no evidence: `begin_attempt` filed the
+    /// attempt's `context.md`, and one attempt writes one record. And it hands the
+    /// adapter no live view — see ADR-0087 for why the session is invoked unwatched
+    /// and what that costs until a later task gives the recorder a bus to lend.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Database`] and [`crate::Error::Serde`] as [`Recorder::record`];
+    /// the refusals of [`crate::build_prompt`] and [`crate::collect_adrs`] —
+    /// [`crate::Error::Policy`] for a prompt library or a decision archive in the
+    /// wrong shape, [`crate::Error::Config`] for a home neither environment nor
+    /// configuration names — all before the session starts;
+    /// [`crate::Error::Provider`] as [`Provider::invoke`] gives it, for a CLI that
+    /// never ran; [`crate::Error::Config`] keyed `model` for the mismatch
+    /// [`provider::check_model`] refuses; [`crate::Error::Corrupt`] as
+    /// [`Runner::read_report`] gives it for a report whose header cannot be trusted;
+    /// [`crate::Error::Git`] as [`git::changed_paths`] gives it; and
+    /// [`crate::Error::Policy`] for the scope itself, naming every offending path.
+    /// A phase refused at 1 or 2 has journaled its entry and nothing else; one
+    /// refused at 5 has journaled nothing but that entry, and one refused at 7 has
+    /// journaled the whole session.
+    pub fn run_phase(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+        spec: &PhaseSpec,
+    ) -> Result<PhaseOutcome> {
+        self.run_phase_with(&crate::paths::process_env, prep, task, attempt, spec)
+    }
+
+    /// [`Runner::run_phase`] with the environment the prompt's documents are read
+    /// from supplied by the caller.
+    ///
+    /// Crate-visible rather than private to this module for the reason
+    /// [`crate::paths::state_root_with`] is: `docs/DESIGN.md` Conventions keeps a test
+    /// out of the process environment and out of the operator's real configuration,
+    /// and the only way a phase's prompt can be read from a scratch directory is for
+    /// the accessor to be handed to it. The same reason `context::ensure_defaults_with`
+    /// is threaded out of its own module.
+    fn run_phase_with(
+        &mut self,
+        env: &dyn Fn(&str) -> Option<String>,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+        spec: &PhaseSpec,
+    ) -> Result<PhaseOutcome> {
+        let work = Some(task.id);
+        self.recorder.record(
+            work,
+            EventKind::PhaseEntered {
+                attempt,
+                phase: spec.phase,
+            },
+        )?;
+        let prompt = context::build_prompt_with(
+            env,
+            &self.project,
+            task,
+            attempt,
+            queue::load(&self.project)?.len(),
+        )?;
+        self.prepare_report(task.id, attempt)?;
+        let outcome = self.provider.invoke(
+            &Invocation {
+                prompt,
+                model: self.config.model.clone(),
+                working_dir: prep.worktree.clone(),
+            },
+            None,
+        )?;
+        provider::check_model(
+            self.config.model.as_deref(),
+            outcome.model_reported.as_deref(),
+        )?;
+        for (stream, printed) in [
+            (Stream::Stdout, outcome.stdout.as_str()),
+            (Stream::Stderr, outcome.stderr.as_str()),
+        ] {
+            for text in session_lines(printed) {
+                self.recorder.record(
+                    work,
+                    EventKind::AgentOutput {
+                        attempt,
+                        stream,
+                        text,
+                    },
+                )?;
+            }
+        }
+        self.recorder.record(
+            work,
+            EventKind::AttemptFinished {
+                attempt,
+                exit_code: outcome.exit_code,
+                usage: outcome.usage,
+                session_id: outcome.session_id,
+                model_reported: outcome.model_reported,
+            },
+        )?;
+        let claim = self.read_report(task.id, attempt)?;
+        let changed = git::changed_paths(&prep.worktree, &prep.base_sha)?;
+        protocol::check_scope(spec.write_scope, &changed, &self.config.test_globs)?;
+        Ok(match claim {
+            ReportClaim::Claimed {
+                result: report,
+                text,
+                ..
+            } => PhaseOutcome::Claimed {
+                phase: spec.phase,
+                attempt,
+                report,
+                text,
+                changed,
+            },
+            ReportClaim::Missing {
+                class,
+                path,
+                detail,
+            } => PhaseOutcome::Unreported {
+                phase: spec.phase,
+                attempt,
+                class,
+                path,
+                detail,
+            },
+        })
+    }
+
     /// What an attempt looks like at the instant it started: everything that was
     /// decided before the agent was called, and nothing that was observed after.
     fn opened(&self, attempt: AttemptId, task: TaskId, pid: u32, base_sha: &str) -> AttemptRecord {
@@ -489,6 +718,64 @@ impl Prepared {
     }
 }
 
+/// What one phase's session left behind: its own account of itself, and the work
+/// it actually made.
+///
+/// Two answers, because after a provider exits the file the prompt named is either
+/// there or not there, and a third answer — assume it went well — is what VISION.md
+/// §3's invariant 4 forbids. [`Runner::run_phase`] holds both halves at once, which
+/// is the point of the type: an outcome that carried only the agent's claim would
+/// describe what was *said*, and the one thing a supervisor is built to know is what
+/// changed. `changed` is therefore the checkout's own diff against the base the
+/// preflight recorded — tracked edits and never-staged files together — and it is
+/// measured before either arm is built, so the list a scope refusal quotes
+/// ([`Error::Policy`], naming every path that broke the rule) and the list this arm
+/// carries are one measurement rather than two.
+///
+/// Nothing here is a verdict. The gates, the push and the fetched remote outrank the
+/// claim (VISION.md §3's invariants 4 and 7), and no arm of this enum can be
+/// constructed from a phase that has not run: a phase that was refused on the way
+/// arrives as an [`Error`], not as an outcome with a `DONE` in it.
+#[derive(Debug)]
+pub enum PhaseOutcome {
+    /// The session wrote the report the prompt named, and this is what it said —
+    /// read by [`crate::parse_report`], so the header is one of the three claims and
+    /// nothing else the file held has been interpreted.
+    Claimed {
+        /// Which phase of the protocol was worked, as the declaration named it.
+        phase: Phase,
+        /// Which run of the task worked it: the same id the session's rows carry.
+        attempt: AttemptId,
+        /// What the agent said it achieved. A claim, never a verdict.
+        report: ReportResult,
+        /// The whole text of the report. A `NEEDS_INPUT` body is what
+        /// [`crate::decision_request`] reads, and opening the file again for it would
+        /// be a second read of a file a fast session may have replaced.
+        text: String,
+        /// Every path the session left changed below its checkout, measured against
+        /// [`Prepared::base_sha`] and already known to lie inside the phase's scope —
+        /// [`Runner::run_phase`] refuses before this arm can be built otherwise.
+        changed: Vec<PathBuf>,
+    },
+    /// The session ended and left no report. A failure the run acts on, reported with
+    /// the class and the path it was found to be missing from.
+    Unreported {
+        /// Which phase was worked, so whoever reads the failure knows what stopped.
+        phase: Phase,
+        /// Which run of the task left it unwritten.
+        attempt: AttemptId,
+        /// The class VISION.md §7's recovery policy is read from, as
+        /// [`crate::ReportClaim::Missing`] gave it: reported, never re-derived from
+        /// the absence (ADR-0057).
+        class: FailureClass,
+        /// The path the prompt told the agent to write to. A refusal nobody can
+        /// locate is a refusal nobody can act on.
+        path: PathBuf,
+        /// The one-line account of the refusal, naming `path`.
+        detail: String,
+    },
+}
+
 /// The name the repository registers `task`'s checkout under.
 ///
 /// One name per task rather than one per attempt: VISION.md §7 requires a
@@ -499,6 +786,16 @@ impl Prepared {
 /// [`crate::git::create_worktree`] accepts.
 fn worktree_name(task: TaskId) -> String {
     format!("task-{task}")
+}
+
+/// The lines a session printed, one per row: a break ends a line rather than
+/// opening another, so text that printed one thing and finished leaves one row and
+/// never a second empty one, while a blank line an agent wrote on purpose is kept.
+fn session_lines(printed: &str) -> Vec<String> {
+    printed
+        .split_inclusive('\n')
+        .map(|line| line.trim_end_matches('\n').to_owned())
+        .collect()
 }
 
 /// How an attempt's record says it is running, before it has an ending.
@@ -3169,6 +3466,677 @@ mod report {
             path.file_name().and_then(|name| name.to_str()),
             Some("agent-report.md"),
             "and the two keep different names: {path:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod run_phase {
+    //! One phase of a protocol, worked: the row that marks it, the prompt the
+    //! session is handed, what the session was allowed to touch, and the account
+    //! it left of itself.
+    //!
+    //! Named after the method it tests, the way `mod new`, `mod prepare` and
+    //! `mod report` are named after theirs, because the task that asked for this
+    //! step fixed `test(/runner::run_phase/)` as its Verify command.
+    //!
+    //! Every session here is the `dummy` adapter replaying a scenario file, which
+    //! is what VISION.md §15 makes the deterministic way to drive the runner. The
+    //! write the lifecycle rule turns on is a file a reviewer can read in the
+    //! script — `forbidden.md` in a phase scoped to tests — rather than a claim
+    //! this file makes about a session that never ran.
+
+    use super::{PhaseOutcome, Runner};
+    use crate::testing::{ScratchRepo, scratch_repo};
+    use crate::{
+        AttemptId, Error, EventKind, FailureClass, Journal, Phase, PhaseSpec, Prepared, Project,
+        ReportResult, Task, TaskId, WriteScope, parse_plan, project_config_path,
+    };
+    use std::fmt::Write;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    /// The identity every fixture gives its registered project.
+    const PROJECT_ID: &str = "0123456789abcdef";
+
+    /// The queue position [`parse_plan`] gives the one-row plan below, and so the
+    /// task every phase here is worked for. Asserted in [`task`], because a
+    /// fixture that scripted a session for one task and worked a phase for another
+    /// would be testing the refusal rather than the phase.
+    const TASK: u32 = 1;
+
+    /// What a session that finished leaves in the report the prompt named.
+    const DONE: &str = "KTASK_RESULT: DONE\nSummary: the phase is worked.\n";
+
+    /// The words a session prints, as one scenario declares them: two lines, so a
+    /// row per line is observable rather than assumed.
+    const LINES: &str = "reading the code\nwriting the tests\n";
+
+    /// The settings a phase runs under: the scripted adapter, its own scenario
+    /// file, the mandatory gate, and a disk floor no test machine breaches.
+    fn settings(scenario: &Path, extra: &str) -> String {
+        format!(
+            "provider = \"dummy\"\n\
+             dummy_scenario_path = \"{}\"\n\
+             verify_command = [\"/bin/sh\", \"-c\", \"exit 0\"]\n\
+             min_free_disk_bytes = 1\n\
+             {extra}",
+            scenario.display()
+        )
+    }
+
+    /// A scenario document's string, with the breaks an agent's text is full of
+    /// spelled the way TOML wants them: the file a reviewer reads has to be the file
+    /// the adapter loads, so a fixture cannot leave the escaping to chance.
+    fn toml_text(text: &str) -> String {
+        text.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+    }
+
+    /// The scenario document for one session that succeeds, prints `stdout`, and
+    /// leaves `files` in the directory it runs in.
+    fn scenario(files: &[(&str, &str)], stdout: &str) -> String {
+        let mut document = format!(
+            "[[steps]]\non_task = {TASK}\noutcome = \"success\"\nstdout = \"{printed}\"\n",
+            printed = toml_text(stdout)
+        );
+        if !files.is_empty() {
+            document.push_str("\n[steps.files]\n");
+            for (path, contents) in files {
+                writeln!(document, "\"{path}\" = \"{}\"", toml_text(contents))
+                    .expect("a String always has room for what is written into it");
+            }
+        }
+        document
+    }
+
+    /// A registered project, the scenario file its adapter reads, and the config
+    /// home its prompt library is read from.
+    struct Fixture {
+        repo: ScratchRepo,
+        project: Project,
+        scenario: PathBuf,
+        config_home: PathBuf,
+    }
+
+    impl Fixture {
+        /// A project pointed at the scenario file [`Fixture::script`] will write,
+        /// and at a configuration home of its own.
+        fn new() -> Self {
+            Self::with_settings("")
+        }
+
+        /// As [`Fixture::new`], with `extra` appended to the settings document —
+        /// how one test configures a model id and the rest do not.
+        fn with_settings(extra: &str) -> Self {
+            let repo = scratch_repo().expect("a scratch repository is buildable");
+            let state_dir = repo.path().join("state").join(PROJECT_ID);
+            let project = Project {
+                root: repo.work().to_path_buf(),
+                id: PROJECT_ID.to_owned(),
+                state_dir,
+            };
+            let scenario = repo.path().join("scenario.toml");
+            let config_home = repo.path().join("config-home");
+            fs::create_dir_all(&project.state_dir).expect("a state directory is creatable");
+            fs::write(project_config_path(&project), settings(&scenario, extra))
+                .expect("a project settings document is writable");
+            Self {
+                repo,
+                project,
+                scenario,
+                config_home,
+            }
+        }
+
+        /// The script the adapter replays, written before the run is opened:
+        /// [`crate::provider::build`] reads the file, so a scenario written after
+        /// the run would be a scenario the run never saw.
+        fn script(&self, document: &str) {
+            fs::write(&self.scenario, document).expect("a scenario document is writable");
+        }
+
+        /// The run this project is configured to have.
+        fn run(&self) -> Runner {
+            Runner::new(self.project.clone()).expect("a registered, configured project opens a run")
+        }
+
+        /// The environment a phase's prompt is read from: a configuration home of
+        /// the fixture's own, so no test aims the prompt library at the machine
+        /// running it. `docs/DESIGN.md` Conventions keeps a test out of setting
+        /// variables, and out of the operator's real configuration, by handing the
+        /// accessor over instead.
+        fn env(&self) -> impl Fn(&str) -> Option<String> {
+            let home = self.config_home.clone();
+            move |key: &str| (key == "XDG_CONFIG_HOME").then(|| home.display().to_string())
+        }
+
+        /// Where one attempt's report is spelled to live, written out of the state
+        /// directory by hand rather than through the function under test — the way
+        /// `mod report` spells it, for the same reason.
+        fn report_of(&self, attempt: u32) -> PathBuf {
+            self.project
+                .state_dir
+                .join("attempts")
+                .join(TASK.to_string())
+                .join(attempt.to_string())
+                .join("agent-report.md")
+        }
+
+        /// Leave `words` at the path the prompt names, as a session that reported
+        /// would have.
+        fn report(&self, attempt: u32, words: &str) {
+            let path = self.report_of(attempt);
+            fs::create_dir_all(
+                path.parent()
+                    .expect("a report is spelled below an attempt directory"),
+            )
+            .expect("an attempt's report directory is creatable");
+            fs::write(&path, words).expect("a report is writable");
+        }
+
+        /// The repository's own checkout, which a session has no business writing.
+        fn checkout(&self) -> PathBuf {
+            self.repo.work().to_path_buf()
+        }
+    }
+
+    /// The queue's one task.
+    fn task() -> Task {
+        let document = "\
+## T091 Runner step: run one protocol phase
+
+**Outcome:** a phase runs the agent and checks what it was allowed to touch.
+**Done-when:** a write outside the scope is a policy failure naming the paths.
+**Verify:** `cargo nextest run -p ktask-core -E 'test(/runner::run_phase/)'`
+**Refs:** VISION.md section 9
+";
+        let parsed = parse_plan(document)
+            .expect("a task block with the four mandatory sections is a parseable plan");
+        let row = parsed
+            .into_iter()
+            .next()
+            .expect("the fixture plan holds one row");
+        assert_eq!(row.id, TaskId::new(TASK), "every fixture works task {TASK}");
+        row
+    }
+
+    /// The phase under test, hand-spelled rather than read out of
+    /// [`crate::protocol::direct`]: what a phase is allowed to write is the
+    /// argument whose refusal these tests are about, and a fixture that took it
+    /// from the declaration under test would agree with it whatever it said.
+    fn phase(write_scope: WriteScope) -> PhaseSpec {
+        PhaseSpec {
+            phase: Phase::Implement,
+            write_scope,
+            gate: None,
+            records_evidence: false,
+        }
+    }
+
+    /// Take a task as far as an attempt can start, so a phase has a checkout and a
+    /// base to be measured against.
+    fn prepared(run: &mut Runner) -> Prepared {
+        run.prepare(&task())
+            .expect("nothing in this fixture gives preflight a reason to refuse")
+    }
+
+    /// Work one phase of the queue's task, with the prompt read from the fixture's
+    /// own configuration home.
+    fn work(
+        fixture: &Fixture,
+        run: &mut Runner,
+        attempt: u32,
+        write_scope: WriteScope,
+    ) -> crate::Result<PhaseOutcome> {
+        let ready = prepared(run);
+        run.run_phase_with(
+            &fixture.env(),
+            &ready,
+            &task(),
+            AttemptId::new(attempt),
+            &phase(write_scope),
+        )
+    }
+
+    /// The kinds the journal holds for the queue's task, oldest first, read on a
+    /// second connection — the way the TUI and a recovery walk read them.
+    fn kinds(project: &Project) -> Vec<&'static str> {
+        Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events_for(TaskId::new(TASK))
+            .expect("the rows this run wrote are readable")
+            .iter()
+            .map(|row| row.kind.discriminant())
+            .collect()
+    }
+
+    /// The one `AttemptFinished` row the journal holds, refused when there is not
+    /// exactly one.
+    fn finished(
+        project: &Project,
+    ) -> (
+        AttemptId,
+        i32,
+        Option<crate::Usage>,
+        Option<String>,
+        Option<String>,
+    ) {
+        let rows = Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events_for(TaskId::new(TASK))
+            .expect("the rows this run wrote are readable");
+        let mut found: Vec<_> = Vec::new();
+        for row in rows {
+            if let EventKind::AttemptFinished {
+                attempt,
+                exit_code,
+                usage,
+                session_id,
+                model_reported,
+            } = row.kind
+            {
+                found.push((attempt, exit_code, usage, session_id, model_reported));
+            }
+        }
+        assert_eq!(
+            found.len(),
+            1,
+            "one session ends in exactly one row saying so, not one per line it printed"
+        );
+        found.remove(0)
+    }
+
+    /// The four answers of a [`PhaseOutcome::Claimed`], refused for anything else.
+    fn claimed(outcome: &PhaseOutcome) -> (Phase, AttemptId, ReportResult, &str, &[PathBuf]) {
+        match outcome {
+            PhaseOutcome::Claimed {
+                phase,
+                attempt,
+                report,
+                text,
+                changed,
+            } => (*phase, *attempt, *report, text, changed),
+            other @ PhaseOutcome::Unreported { .. } => {
+                panic!("expected a report read back as a claim, got {other:?}")
+            }
+        }
+    }
+
+    /// The four answers of a [`PhaseOutcome::Unreported`], refused for anything
+    /// else.
+    fn unreported(outcome: &PhaseOutcome) -> (Phase, AttemptId, FailureClass, &Path, &str) {
+        match outcome {
+            PhaseOutcome::Unreported {
+                phase,
+                attempt,
+                class,
+                path,
+                detail,
+            } => (*phase, *attempt, *class, path, detail),
+            other @ PhaseOutcome::Claimed { .. } => {
+                panic!("expected a phase that left no report, got {other:?}")
+            }
+        }
+    }
+
+    /// The `Error::Policy`'s words and paths, refused for anything else.
+    fn policy(outcome: &crate::Result<PhaseOutcome>) -> (String, Vec<PathBuf>) {
+        match outcome {
+            Err(Error::Policy { detail, paths }) => (detail.clone(), paths.clone()),
+            Err(other) => panic!("expected a policy failure, got {other}"),
+            Ok(claimed) => {
+                panic!("expected a policy failure, got a phase that returned {claimed:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn a_phase_that_writes_outside_its_scope_is_refused_naming_the_path() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(
+            &[("forbidden.md", "touched by the session\n")],
+            LINES,
+        ));
+        fixture.report(1, DONE);
+        let mut run = fixture.run();
+
+        let outcome = work(&fixture, &mut run, 1, WriteScope::TestsOnly);
+
+        let (detail, paths) = policy(&outcome);
+        assert!(
+            paths.contains(&PathBuf::from("forbidden.md")),
+            "the refusal has to name what it refused, and it named {paths:?}"
+        );
+        assert!(
+            detail.contains("write scope"),
+            "the words say which rule was broken, so a reader is not left to guess: {detail}"
+        );
+        assert!(
+            kinds(&fixture.project).ends_with(&[
+                "PhaseEntered",
+                "AgentOutput",
+                "AgentOutput",
+                "AttemptFinished"
+            ]),
+            "the session really ran and ended — the refusal is about what it touched, \
+             not about a call that never happened: {:?}",
+            kinds(&fixture.project)
+        );
+    }
+
+    #[test]
+    fn a_phase_that_writes_only_where_its_scope_allows_is_not_refused() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[("tests/new_test.rs", "a test\n")], LINES));
+        fixture.report(1, DONE);
+        let mut run = fixture.run();
+
+        let outcome = work(&fixture, &mut run, 1, WriteScope::TestsOnly);
+
+        let (phase, attempt, report, text, changed) = claimed(
+            outcome
+                .as_ref()
+                .expect("a write the scope grants is not a refusal"),
+        );
+        assert_eq!(phase, Phase::Implement);
+        assert_eq!(attempt, AttemptId::new(1));
+        assert_eq!(report, ReportResult::Done);
+        assert_eq!(text, DONE);
+        assert!(
+            changed.contains(&PathBuf::from("tests/new_test.rs")),
+            "the outcome says what the phase changed, and it said {changed:?}"
+        );
+    }
+
+    #[test]
+    fn a_phase_that_left_no_report_is_a_classified_failure_and_never_a_claim() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[], LINES));
+        let mut run = fixture.run();
+
+        let outcome = work(&fixture, &mut run, 1, WriteScope::All);
+
+        let (phase, attempt, class, path, detail) = unreported(
+            outcome
+                .as_ref()
+                .expect("a session that wrote no report is an outcome, not an error"),
+        );
+        assert_eq!(phase, Phase::Implement);
+        assert_eq!(attempt, AttemptId::new(1));
+        assert_eq!(
+            class,
+            FailureClass::AgentFailure,
+            "the class the recovery policy is read from is reported, not re-derived"
+        );
+        assert_eq!(
+            path,
+            fixture.report_of(1),
+            "the refusal names the path the prompt told the agent to write"
+        );
+        assert!(
+            detail.contains("agent-report.md"),
+            "and says so in its own words: {detail}"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            [
+                "PreflightStarted",
+                "PreflightPassed",
+                "PhaseEntered",
+                "AgentOutput",
+                "AgentOutput",
+                "AttemptFinished",
+            ],
+            "a silent session leaves the session's rows and no claim of completion"
+        );
+    }
+
+    #[test]
+    fn a_phase_hands_the_journal_its_entry_then_its_lines_then_its_session_end() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[], LINES));
+        fixture.report(1, DONE);
+        let mut run = fixture.run();
+
+        let outcome = work(&fixture, &mut run, 1, WriteScope::All);
+
+        let (phase, attempt, report, _, changed) = claimed(
+            outcome
+                .as_ref()
+                .expect("a reported phase hands back what the agent wrote"),
+        );
+        assert_eq!(
+            (phase, attempt, report),
+            (Phase::Implement, AttemptId::new(1), ReportResult::Done)
+        );
+        assert!(
+            changed.is_empty(),
+            "the session touched nothing: {changed:?}"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            [
+                "PreflightStarted",
+                "PreflightPassed",
+                "PhaseEntered",
+                "AgentOutput",
+                "AgentOutput",
+                "AttemptFinished",
+            ],
+            "the phase is marked before the session, its lines stand one per row, and \
+             its end closes the row set"
+        );
+
+        let rows = Journal::open_for(&fixture.project)
+            .expect("a registered project's journal is openable")
+            .events_for(TaskId::new(TASK))
+            .expect("the rows this run wrote are readable");
+        let lines: Vec<(u32, String)> = rows
+            .iter()
+            .filter_map(|row| match &row.kind {
+                EventKind::AgentOutput { attempt, text, .. } => Some((attempt.get(), text.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                (1, "reading the code".to_owned()),
+                (1, "writing the tests".to_owned()),
+            ],
+            "one row per line the session printed, each attributed to the attempt that \
+             printed it, and no row for the empty text after the last break"
+        );
+        for row in &rows {
+            assert_eq!(
+                row.task_id,
+                Some(TaskId::new(TASK)),
+                "every row of a phase is \
+             the task's own: {:?}",
+                row.kind
+            );
+        }
+    }
+
+    #[test]
+    fn a_session_that_reported_nothing_leaves_nothing_in_the_row_that_records_its_end() {
+        let fixture = Fixture::with_settings("model = \"gpt-5.6-sol\"\n");
+        fixture.script(&scenario(&[], "worked\n"));
+        fixture.report(1, DONE);
+        let mut run = fixture.run();
+
+        let outcome = work(&fixture, &mut run, 1, WriteScope::All);
+
+        assert!(
+            outcome.is_ok(),
+            "a session that reported no model contradicts nothing: {:?}",
+            outcome.as_ref().err()
+        );
+        let (attempt, exit_code, usage, session_id, model_reported) = finished(&fixture.project);
+        assert_eq!(attempt, AttemptId::new(1));
+        assert_eq!(exit_code, 0, "the status the session's own process left");
+        assert!(usage.is_none(), "nothing measured this session");
+        assert!(session_id.is_none(), "the session disclosed no identifier");
+        assert_eq!(
+            model_reported, None,
+            "the configured id is never copied into the field that means \
+             'what the session said it ran on'"
+        );
+    }
+
+    #[test]
+    fn a_scope_violation_and_a_missing_report_together_are_answered_as_the_violation() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(
+            &[("forbidden.md", "touched by the session\n")],
+            LINES,
+        ));
+        let mut run = fixture.run();
+
+        let outcome = work(&fixture, &mut run, 1, WriteScope::TestsOnly);
+
+        let (detail, paths) = policy(&outcome);
+        assert!(
+            paths.contains(&PathBuf::from("forbidden.md")),
+            "a phase that both wrote outside its scope and stayed silent is refused for \
+             the write: {paths:?}"
+        );
+        assert!(detail.contains("write scope"), "{detail}");
+    }
+
+    #[test]
+    fn a_phase_whose_prompt_cannot_be_read_starts_no_session() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[("written.md", "by the session\n")], "worked\n"));
+        fs::create_dir_all(fixture.config_home.join("ktask-rs"))
+            .expect("the configuration home is creatable");
+        fs::write(
+            fixture.config_home.join("ktask-rs/prompts"),
+            "not a directory\n",
+        )
+        .expect("the library path is occupiable by a file");
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+
+        let outcome = run.run_phase_with(
+            &fixture.env(),
+            &ready,
+            &task(),
+            AttemptId::new(1),
+            &phase(WriteScope::All),
+        );
+
+        assert!(
+            matches!(outcome, Err(Error::Policy { .. })),
+            "a prompt library that is not a private directory is a refusal, got \
+             {outcome:?}"
+        );
+        assert!(
+            !ready.worktree.join("written.md").exists(),
+            "a phase with no prompt starts no session, so the scenario's file is \
+             nowhere to be found"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            ["PreflightStarted", "PreflightPassed", "PhaseEntered"],
+            "the phase is marked, and nothing after it was written"
+        );
+    }
+
+    #[test]
+    fn a_phase_that_cannot_read_its_decisions_starts_no_session() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[("written.md", "by the session\n")], "worked\n"));
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fs::create_dir_all(fixture.checkout().join("docs"))
+            .expect("the repository's docs directory is creatable");
+        fs::write(fixture.checkout().join("docs/adr"), "not a directory\n")
+            .expect("the decisions path is occupiable by a file");
+
+        let outcome = run.run_phase_with(
+            &fixture.env(),
+            &ready,
+            &task(),
+            AttemptId::new(1),
+            &phase(WriteScope::All),
+        );
+
+        assert!(
+            matches!(outcome, Err(Error::Policy { .. })),
+            "a decision archive in the wrong shape refuses the prompt rather than \
+             handing out one with decisions missing: {outcome:?}"
+        );
+        assert!(
+            !ready.worktree.join("written.md").exists(),
+            "and it refuses before a token is spent"
+        );
+    }
+
+    #[test]
+    fn a_phase_runs_its_session_in_the_tasks_checkout_and_not_the_repository() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[("written.md", "by the session\n")], "worked\n"));
+        fixture.report(1, DONE);
+        let mut run = fixture.run();
+
+        let ready = prepared(&mut run);
+        let outcome = run.run_phase_with(
+            &fixture.env(),
+            &ready,
+            &task(),
+            AttemptId::new(1),
+            &phase(WriteScope::All),
+        );
+
+        let (_, _, _, _, changed) = claimed(
+            outcome
+                .as_ref()
+                .expect("an implement phase may write anywhere in its own checkout"),
+        );
+        assert!(
+            changed.contains(&PathBuf::from("written.md")),
+            "the write is what the phase's scope is measured against: {changed:?}"
+        );
+        assert!(
+            ready.worktree.join("written.md").is_file(),
+            "the session ran in the task's checkout, where the attempt is worked: {}",
+            ready.worktree.display()
+        );
+        assert!(
+            !fixture.checkout().join("written.md").exists(),
+            "and never in the repository the run supervises, whose checkout the \
+             scenario's file would have dirtied"
+        );
+    }
+
+    #[test]
+    fn a_phase_is_worked_for_the_attempt_it_was_given() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[], LINES));
+        fixture.report(2, DONE);
+        let mut run = fixture.run();
+
+        let outcome = work(&fixture, &mut run, 2, WriteScope::All);
+
+        let (_, attempt, report, _, _) = claimed(
+            outcome
+                .as_ref()
+                .expect("a retry is worked as the attempt it was given"),
+        );
+        assert_eq!(attempt, AttemptId::new(2));
+        assert_eq!(report, ReportResult::Done);
+        assert_eq!(
+            finished(&fixture.project).0,
+            AttemptId::new(2),
+            "the row that ends a session names the attempt that ended"
+        );
+        assert!(
+            !fixture.report_of(1).exists(),
+            "the report read back is the one attempt 2 was told to write, and attempt 1 \
+             left none for this phase to mistake for it"
         );
     }
 }

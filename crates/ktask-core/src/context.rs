@@ -411,7 +411,12 @@ pub fn build_prompt(
 
 /// [`build_prompt`] with the environment supplied by the caller. See
 /// [`ensure_defaults_with`] for why the accessor is threaded this far.
-fn build_prompt_with(
+///
+/// Crate-visible rather than private to this module for the reason
+/// [`crate::paths::state_root_with`] is: the runner assembles a phase's prompt at
+/// the moment it starts the session, and a test of that step can only keep out of
+/// the operator's real prompt library by handing the accessor over.
+pub(crate) fn build_prompt_with(
     env: &dyn Fn(&str) -> Option<String>,
     project: &Project,
     task: &Task,
