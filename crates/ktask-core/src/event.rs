@@ -32,15 +32,15 @@
 //!
 //! # Catalog entries that are not here yet
 //!
-//! `docs/DESIGN.md` lists 28 entries; 24 are defined below. The other 4 are
+//! `docs/DESIGN.md` lists 28 entries; 25 are defined below. The other 3 are
 //! absent, and a test asserts their absence rather than trusting it:
 //!
-//! - Four are deferred by the plan — `AttemptFinished`
-//!   (`usage: Option<Usage>`), `ProviderDetected` (`capabilities: Capabilities`),
-//!   `DecisionResolved` and `SelfHealingReport`. Each arrives with the task that
-//!   emits it and gives it
-//!   an `apply` arm, so nothing can journal an event whose effect on state no
-//!   task has written yet. `AttemptRecorded` left this list for T068,
+//! - Three are deferred by the plan — `ProviderDetected`
+//!   (`capabilities: Capabilities`), `DecisionResolved` and `SelfHealingReport`.
+//!   Each arrives with the task that emits it and gives it an `apply` arm, so
+//!   nothing can journal an event whose effect on state no task has written yet.
+//!   `AttemptRecorded` left this list for T068, `AttemptFinished` for T091, which
+//!   runs the session whose end it records,
 //!   `TddExceptionUsed` for T079, which wrote the arm §9's exception is
 //!   answered by, and `DecisionRaised` for T084, which wrote the arm §6's wait
 //!   for a decision is answered by.
@@ -60,6 +60,7 @@ use crate::classify::{FailureClass, TddException};
 use crate::decision::DecisionRequest;
 use crate::gate::{GateKind, GateResult};
 use crate::ids::{AttemptId, EventSeq, TaskId};
+use crate::provider::Usage;
 use crate::state::{PauseReason, Phase, Recovery, Stream};
 
 /// Something that happened — to the queue, to a task, or to one run of a task.
@@ -124,6 +125,50 @@ pub enum EventKind {
         stream: Stream,
         /// The line, after secret redaction.
         text: String,
+    },
+    /// One agent session stopped, and these are the five things only it knew.
+    ///
+    /// How it stopped, what it spent, which session it was, and which model it
+    /// said it ran on: each is a fact the session carried to its last moment and
+    /// nobody else was holding, which is why the row is written when the session
+    /// ends rather than assembled afterwards from what the run happened to keep.
+    ///
+    /// It moves a task nowhere, like [`EventKind::AttemptRecorded`], and for the
+    /// same reason plus one more: §3's invariant 4 forbids a task being done on an
+    /// agent's exit code or statement, so the way out of `running` is a phase's
+    /// gate and not a session's exit. [`crate::apply`] therefore answers it with
+    /// the state it was asked from, in every state that holds the attempt it names
+    /// — ADR-0086 records those four, and why the entry that ends an attempt is not
+    /// the entry that closes a task.
+    ///
+    /// Nor is it the attempt's record, which [`EventKind::AttemptRecorded`] files
+    /// as one row per attempt with its gates, its SHAs and its task beside them.
+    /// These are the five fields `docs/DESIGN.md` lists for this entry and nothing
+    /// else, so a retry of a task adds a session's account instead of rewriting an
+    /// attempt's evidence, and ADR-0057 is why [`Self::AttemptFinished::model_reported`]
+    /// stays `None` rather than being filled in with the configured id.
+    AttemptFinished {
+        /// Which run of the task ended. It is the row's attribution, and the reason
+        /// a state holding another attempt refuses it.
+        attempt: AttemptId,
+        /// The status the session's own process stopped with. It is evidence of how
+        /// the session ended and nothing more: a scenario is free to contradict its
+        /// own report with this number, which is what invariant 4 looks like in a
+        /// test.
+        exit_code: i32,
+        /// What the session said it spent, or `None` when nobody asked it. No
+        /// figure is written where an unmeasured one belongs (ADR-0049).
+        usage: Option<Usage>,
+        /// The session's own identifier, when it disclosed one. No correctness path
+        /// depends on resuming a session (VISION.md §12), so an adapter that never
+        /// reveals one has cost nothing.
+        session_id: Option<String>,
+        /// The model the session said it ran on, or `None` when it said nothing.
+        /// [`check_model`](crate::provider::check_model) compares this with the
+        /// configured id *before* this row is written, so a mismatch is refused as
+        /// a configuration failure and what reaches the journal is a confirmed id
+        /// or an honest absence.
+        model_reported: Option<String>,
     },
     /// One mechanical gate began running: the runner's own command, not an
     /// agent's claim about it.
@@ -294,6 +339,7 @@ impl EventKind {
             Self::AttemptStarted { .. } => "AttemptStarted",
             Self::PhaseEntered { .. } => "PhaseEntered",
             Self::AgentOutput { .. } => "AgentOutput",
+            Self::AttemptFinished { .. } => "AttemptFinished",
             Self::GateStarted { .. } => "GateStarted",
             Self::GateFinished { .. } => "GateFinished",
             Self::VerifyPassed { .. } => "VerifyPassed",
@@ -405,6 +451,7 @@ mod tests {
     use crate::decision::DecisionRequest;
     use crate::gate::{GateKind, GateResult};
     use crate::ids::{AttemptId, EventSeq, TaskId};
+    use crate::provider::{Usage, UsageSource};
     use crate::state::{PauseReason, Phase, Recovery, Stream};
     use serde_json::Value;
     use time::macros::datetime;
@@ -414,7 +461,7 @@ mod tests {
     /// encode is visible rather than mistaken for a placeholder.
     const SHA: &str = "0b78d3f1c2a4";
 
-    /// The 24 entries `docs/DESIGN.md` documents whose payload types exist
+    /// The 25 entries `docs/DESIGN.md` documents whose payload types exist
     /// today, each with the payload field names the table lists for it.
     ///
     /// Spelled out a second time, on purpose: names checked only against the
@@ -431,6 +478,16 @@ mod tests {
         ),
         ("PhaseEntered", &["attempt", "phase"]),
         ("AgentOutput", &["attempt", "stream", "text"]),
+        (
+            "AttemptFinished",
+            &[
+                "attempt",
+                "exit_code",
+                "usage",
+                "session_id",
+                "model_reported",
+            ],
+        ),
         ("GateStarted", &["gate"]),
         ("GateFinished", &["result"]),
         ("VerifyPassed", &["attempt"]),
@@ -450,7 +507,7 @@ mod tests {
         ("AttemptRecorded", &["record"]),
     ];
 
-    /// The four entries this catalog does not define yet.
+    /// The three entries this catalog does not define yet.
     ///
     /// Their absence is asserted, not assumed: an entry added ahead of its
     /// producer would start decoding, and the journal would begin accepting
@@ -463,13 +520,6 @@ mod tests {
     /// refused for its missing fields whether or not the entry exists, so a
     /// bare name would prove nothing either way.
     const DEFERRED_PAYLOADS: &[(&str, &str)] = &[
-        (
-            "AttemptFinished",
-            concat!(
-                r#""attempt":2,"exit_code":0,"usage":null,"#,
-                r#""session_id":null,"model_reported":null"#,
-            ),
-        ),
         (
             "ProviderDetected",
             r#""provider":"codex","capabilities":{},"version":"0.1.0""#,
@@ -516,6 +566,19 @@ mod tests {
                 attempt,
                 stream: Stream::Stderr,
                 text: "panicked at 'index out of bounds'".to_string(),
+            },
+            EventKind::AttemptFinished {
+                attempt,
+                exit_code: 0,
+                usage: Some(Usage {
+                    input_tokens: Some(8_120),
+                    output_tokens: Some(1_944),
+                    cached_tokens: Some(6_400),
+                    cost_usd: Some(0.42),
+                    source: UsageSource::Provider,
+                }),
+                session_id: Some("sess_01HQZK".to_string()),
+                model_reported: Some("gpt-5.6-sol".to_string()),
             },
             EventKind::GateStarted {
                 gate: GateKind::Lint,

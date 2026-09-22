@@ -407,6 +407,7 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::AttemptStarted { .. }
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
@@ -472,6 +473,7 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
         EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
         EventKind::TaskQueued { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
@@ -564,6 +566,7 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
             PhaseEntry::Publication => Err(refused(FROM, event)),
         },
         EventKind::AgentOutput { attempt: mine, .. }
+        | EventKind::AttemptFinished { attempt: mine, .. }
         | EventKind::VerifyFailed { attempt: mine, .. } => refuse_unless(
             *mine == attempt,
             TaskState::Running { attempt, phase },
@@ -682,6 +685,7 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
             PhaseEntry::Publication => Err(refused(FROM, event)),
         },
         EventKind::AgentOutput { attempt: mine, .. }
+        | EventKind::AttemptFinished { attempt: mine, .. }
         | EventKind::VerifyFailed { attempt: mine, .. } => refuse_unless(
             *mine == attempt,
             TaskState::Remediating { attempt, phase },
@@ -836,6 +840,7 @@ fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::PreflightPassed { .. }
         | EventKind::PreflightFailed { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::PublishStarted { .. }
         | EventKind::PublishVerified { .. }
         | EventKind::TaskDone { .. }
@@ -941,6 +946,7 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::PreflightPassed { .. }
         | EventKind::PreflightFailed { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
@@ -1002,6 +1008,7 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::AttemptStarted { .. }
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
@@ -1080,6 +1087,7 @@ fn from_paused(
         | EventKind::AttemptStarted { .. }
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
@@ -1268,7 +1276,7 @@ mod tests {
     use crate::gate::{GateKind, GateResult};
     use crate::{
         AttemptId, AttemptRecord, DecisionRequest, Error, EventKind, FailureClass, TaskId,
-        TddException,
+        TddException, Usage, UsageSource,
     };
     use serde::de::DeserializeOwned;
     use std::collections::BTreeMap;
@@ -1830,6 +1838,27 @@ mod tests {
         }
     }
 
+    /// The end of `attempt`'s session, reported by the session: a zero status, the
+    /// figures it gave, and the two identifiers it disclosed. Every field is filled
+    /// because this is the entry's ordinary case — what a session that reported
+    /// nothing carries is the same entry with `None`s, which
+    /// `an_attempt_finish_moves_nothing_and_names_the_attempt_it_ends` also asks.
+    fn finished(attempt: u32) -> EventKind {
+        EventKind::AttemptFinished {
+            attempt: AttemptId::new(attempt),
+            exit_code: 0,
+            usage: Some(Usage {
+                input_tokens: Some(8_120),
+                output_tokens: Some(1_944),
+                cached_tokens: Some(6_400),
+                cost_usd: Some(0.42),
+                source: UsageSource::Provider,
+            }),
+            session_id: Some("sess_01HQZK".to_owned()),
+            model_reported: Some("gpt-5.6-sol".to_owned()),
+        }
+    }
+
     fn verify_passed(attempt: u32) -> EventKind {
         EventKind::VerifyPassed {
             attempt: AttemptId::new(attempt),
@@ -1989,7 +2018,7 @@ mod tests {
     /// Written out by hand rather than generated because the point of the list
     /// is that a person named each entry — and because a sweep over it is what
     /// proves no state stays quiet about an event.
-    fn every_event() -> [EventKind; 24] {
+    fn every_event() -> [EventKind; 25] {
         [
             queued(),
             EventKind::PreflightStarted,
@@ -1998,6 +2027,7 @@ mod tests {
             started(1),
             entered(1, Phase::Implement),
             output(1),
+            finished(1),
             gate_started(GateKind::Baseline),
             gate_finished(GateKind::Baseline, false),
             verify_passed(1),
@@ -2372,6 +2402,56 @@ mod tests {
                 &remediating(2, phase),
             );
         }
+    }
+
+    /// A session's end is evidence about the attempt that ended, so it moves
+    /// nothing. §3's invariant 4 gives a phase's gate the way out of `running` and
+    /// forbids reading one out of how a session stopped, and the entry's `None`
+    /// fields make that concrete: a session that reported no figures, no session id
+    /// and no model still ended, and ends in the same place one that reported all
+    /// three. Two other things decide it. It is answered only where an agent works,
+    /// because only there is a session open to end — the same rule that refuses
+    /// `AgentOutput` above `Verifying` and `Publishing`, which read a filed
+    /// [`EventKind::AttemptRecorded`] very differently. And it is answered only for
+    /// the attempt it names: the row is one session's account, not the task's.
+    #[test]
+    fn an_attempt_finish_moves_nothing_and_names_the_attempt_it_ends() {
+        moves(
+            &working(1, Phase::Green),
+            &finished(1),
+            &working(1, Phase::Green),
+        );
+        moves(
+            &remediating(2, Phase::Red),
+            &finished(2),
+            &remediating(2, Phase::Red),
+        );
+
+        let unreported = EventKind::AttemptFinished {
+            attempt: AttemptId::new(1),
+            exit_code: 137,
+            usage: None,
+            session_id: None,
+            model_reported: None,
+        };
+        moves(
+            &working(1, Phase::Green),
+            &unreported,
+            &working(1, Phase::Green),
+        );
+
+        for state in [
+            TaskState::Queued,
+            TaskState::Preflight,
+            verifying(1),
+            publishing(1),
+            published(CANDIDATE),
+            parked(working(1, Phase::Green), PauseReason::Input),
+        ] {
+            refuses(&state, &finished(1));
+        }
+        refuses(&working(1, Phase::Green), &finished(2));
+        refuses(&remediating(2, Phase::Red), &finished(1));
     }
 
     /// The skip is reachable only where a phase is being worked. Every other
@@ -2989,6 +3069,19 @@ mod tests {
     /// the attempt a remediation holds — is
     /// `an_attempt_record_says_what_was_and_moves_the_attempt_it_names`.
     ///
+    /// `AttemptFinished` keeps the one row of its own that the sweep can show, and
+    /// holds the same relation to the same payload problem as `AgentOutput` beside
+    /// it: both are a session's own facts, so both are answered only in the two
+    /// states an agent is working in, and only for the attempt it names. The table's
+    /// remediation holds attempt 2 while the sweep's session ended attempt 1, so
+    /// `("Remediating", "AttemptFinished", …)` is a refusal here rather than a row.
+    /// The moves it does make are
+    /// `an_attempt_finish_moves_nothing_and_names_the_attempt_it_ends`, which also
+    /// holds the refusals equality makes — a row naming another attempt — and the
+    /// refusals of the states that have no session open to end. ADR-0086 records why
+    /// an entry that ends a session moves nothing anywhere, and why `Verifying` and
+    /// `Publishing` refuse it while both accept `AttemptRecorded`.
+    ///
     /// `TddExceptionUsed` is the answer to that payload problem: §9's skip names
     /// no attempt, no commit and no phase, so it keeps a row in each of the two
     /// states an agent works in and has none in any other state.
@@ -3016,7 +3109,7 @@ mod tests {
     /// an attempt, so no row is conditional on one: the pair says what ran, and
     /// the state asked owns the claim, exactly as `TddExceptionUsed`'s does.
     /// ADR-0080 records the ten rows and what each state's is for.
-    const LEGAL: [(&str, &str, &str); 66] = [
+    const LEGAL: [(&str, &str, &str); 67] = [
         ("Queued", "TaskQueued", "Queued"),
         ("Queued", "PreflightStarted", "Preflight"),
         ("Queued", "Paused", "Paused"),
@@ -3034,6 +3127,7 @@ mod tests {
         ("Preflight", "RecoveryDecision", "Preflight"),
         ("Running", "PhaseEntered", "Running"),
         ("Running", "AgentOutput", "Running"),
+        ("Running", "AttemptFinished", "Running"),
         ("Running", "AttemptRecorded", "Running"),
         ("Running", "TddExceptionUsed", "Running"),
         ("Running", "GateStarted", "Running"),
@@ -3093,7 +3187,7 @@ mod tests {
     /// and a refused pair is refused through `Error::InvalidTransition` naming
     /// both of them. So the sweep fails on a legal move nobody declared, on a
     /// declared move that was withdrawn or retargeted, and on a refusal that
-    /// stopped naming what it refused — and passes for the 288 pairs on nothing
+    /// stopped naming what it refused — and passes for the 300 pairs on nothing
     /// but the table.
     #[test]
     fn every_move_is_a_declared_one_or_a_refusal() {

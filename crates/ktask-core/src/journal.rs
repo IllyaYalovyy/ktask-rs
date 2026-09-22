@@ -5587,10 +5587,10 @@ mod tests {
     #[test]
     fn a_payload_naming_an_entry_the_catalog_does_not_hold_is_damage() {
         let mut row = a_sound_row();
-        row.kind = "AttemptFinished".to_owned();
+        row.kind = "ProviderDetected".to_owned();
         row.payload = concat!(
-            r#"{"kind":"AttemptFinished","attempt":2,"exit_code":0,"usage":null,"#,
-            r#""session_id":null,"model_reported":null}"#,
+            r#"{"kind":"ProviderDetected","provider":"codex","#,
+            r#""capabilities":{},"version":"0.1.0"}"#,
         )
         .to_owned();
 
@@ -5602,7 +5602,7 @@ mod tests {
             "the refusal is a value carrying the record's location: {error}"
         );
         assert!(
-            error.to_string().contains("GateFinished"),
+            error.to_string().contains("ProviderDetected"),
             "the report names the entry nobody defined: {error}"
         );
     }

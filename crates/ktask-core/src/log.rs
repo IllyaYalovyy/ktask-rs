@@ -534,7 +534,8 @@ fn level_of(kind: &EventKind) -> Level {
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::GateAcknowledged { .. }
-        | EventKind::AttemptRecorded { .. } => Level::Info,
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::AttemptFinished { .. } => Level::Info,
     }
 }
 
@@ -544,6 +545,7 @@ fn carried_attempt(kind: &EventKind) -> Option<AttemptId> {
         EventKind::AttemptStarted { attempt, .. }
         | EventKind::PhaseEntered { attempt, .. }
         | EventKind::AgentOutput { attempt, .. }
+        | EventKind::AttemptFinished { attempt, .. }
         | EventKind::VerifyPassed { attempt }
         | EventKind::VerifyFailed { attempt, .. }
         | EventKind::PublishStarted { attempt, .. } => Some(*attempt),
@@ -590,6 +592,15 @@ fn message_of(kind: &EventKind) -> Result<String> {
             ..
         } => format!("protocol={protocol} pid={pid} base={base_sha}"),
         EventKind::AgentOutput { stream, text, .. } => format!("stream={stream:?} text={text}"),
+        EventKind::AttemptFinished {
+            exit_code,
+            usage,
+            session_id,
+            model_reported,
+            ..
+        } => format!(
+            "exit={exit_code} usage={usage:?} session={session_id:?} model={model_reported:?}"
+        ),
         EventKind::GateStarted { gate } => format!("gate={gate}"),
         EventKind::GateFinished { result } => format!(
             "gate={} passed={} exit={:?} signal={:?} ms={} timed_out={}",
@@ -759,7 +770,7 @@ mod tests {
     use crate::{
         AttemptId, AttemptRecord, Bus, DecisionRequest, Error, Event, EventKind, EventSeq,
         FailureClass, GateKind, GateResult, Journal, PauseReason, Phase, Recorder, Recovery,
-        Stream, TaskId, TddException,
+        Stream, TaskId, TddException, Usage, UsageSource,
     };
     use proptest::prelude::*;
     use serde_json::Value;
@@ -1237,8 +1248,8 @@ mod tests {
         names.dedup();
         assert_eq!(
             names.len(),
-            24,
-            "the catalog holds 24 entries and this table places every one, so an \
+            25,
+            "the catalog holds 25 entries and this table places every one, so an \
              entry a later task adds has to be placed here as well"
         );
 
@@ -1355,6 +1366,19 @@ mod tests {
             EventKind::PhaseEntered {
                 attempt: AttemptId::new(3),
                 phase: Phase::Red,
+            },
+            EventKind::AttemptFinished {
+                attempt: AttemptId::new(3),
+                exit_code: 0,
+                usage: Some(Usage {
+                    input_tokens: Some(8_120),
+                    output_tokens: Some(1_944),
+                    cached_tokens: Some(6_400),
+                    cost_usd: Some(0.42),
+                    source: UsageSource::Provider,
+                }),
+                session_id: Some("sess_01HQZK".to_owned()),
+                model_reported: Some("gpt-5.6-sol".to_owned()),
             },
             EventKind::GateStarted {
                 gate: GateKind::Verify,
