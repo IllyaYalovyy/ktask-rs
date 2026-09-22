@@ -21,9 +21,11 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 mod claude;
+mod codex;
 mod dummy;
 mod process;
 pub use claude::Claude;
+pub use codex::Codex;
 pub use dummy::{Dummy, Scenario, ScenarioFile, Step, StepOutcome};
 pub use process::run_streaming;
 
