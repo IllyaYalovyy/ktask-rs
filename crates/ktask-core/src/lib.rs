@@ -29,7 +29,10 @@ pub use events::{Bus, Recorder, Subscription};
 pub use gate::{
     Gate, GateKind, GateResult, Profile, TestSummary, parse_cargo, profile_from, run_gate,
 };
-pub use git::{current_branch, fetch, git, head_sha, is_clean, remote_url, status_porcelain};
+pub use git::{
+    Worktree, create_worktree, current_branch, fetch, git, head_sha, is_clean, list_worktrees,
+    remote_url, remove_worktree, status_porcelain,
+};
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::{Journal, journal_path};
 pub use paths::{config_file, project_id, state_root};

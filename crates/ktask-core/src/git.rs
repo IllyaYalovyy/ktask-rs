@@ -6,7 +6,7 @@
 //! building its own [`std::process::Command`], so there is exactly one place
 //! that can get shell-quoting or error handling wrong.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::{Error, Result};
@@ -121,6 +121,144 @@ pub fn is_clean(root: &Path) -> Result<bool> {
 /// Returns [`Error::Git`] if `remote` is not configured or unreachable.
 pub fn fetch(root: &Path, remote: &str) -> Result<()> {
     git(root, &["fetch", remote]).map(|_| ())
+}
+
+/// One entry from [`list_worktrees`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Worktree {
+    /// The worktree's checkout directory.
+    pub path: PathBuf,
+    /// The full SHA the worktree's `HEAD` points at.
+    pub head: String,
+    /// The branch checked out in the worktree, `None` when detached.
+    pub branch: Option<String>,
+    /// Whether git considers this entry prunable: its administrative data
+    /// survives in `root`'s `.git` directory, but the checkout it names is
+    /// gone (removed by hand, or never finished by an interrupted run).
+    pub prunable: bool,
+}
+
+/// Creates (or reclaims) an isolated task worktree checked out at `base_sha`,
+/// and returns its path.
+///
+/// The worktree lives under this project's private state directory, keyed by
+/// `name`, never inside `root` or beside it: the caller's own checkout is
+/// never touched (VISION.md §10). It is created from `base_sha` directly —
+/// never from whatever `root` currently has checked out — so the candidate a
+/// task works from is exactly the commit the caller named.
+///
+/// Calling this again with the same `root` and `name` reuses the existing
+/// worktree as-is rather than failing or recreating it, so a task resuming
+/// after a restart gets back the worktree (and any work already committed in
+/// it) it left behind. A *prunable* leftover — git's administrative record
+/// for a worktree whose directory is gone — is reclaimed instead: removed,
+/// then recreated fresh at `base_sha`.
+///
+/// # Errors
+///
+/// Returns [`Error::Git`] if `base_sha` does not exist in `root` or the
+/// worktree cannot be created, [`Error::Io`] if the state directory cannot
+/// be created, and [`Error::Config`] naming `HOME` if neither
+/// `XDG_STATE_HOME` nor `HOME` is set.
+pub fn create_worktree(root: &Path, name: &str, base_sha: &str) -> Result<PathBuf> {
+    create_worktree_with(root, name, base_sha, &|key| std::env::var(key).ok())
+}
+
+fn create_worktree_with(
+    root: &Path,
+    name: &str,
+    base_sha: &str,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<PathBuf> {
+    let dest = worktree_path(root, name, env)?;
+
+    match list_worktrees(root)?.into_iter().find(|w| w.path == dest) {
+        Some(existing) if existing.prunable => remove_worktree(root, &dest)?,
+        Some(_) => return Ok(dest),
+        None => {}
+    }
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let dest_arg = dest.to_string_lossy();
+    git(
+        root,
+        &["worktree", "add", "--detach", dest_arg.as_ref(), base_sha],
+    )?;
+    Ok(dest)
+}
+
+/// The path `create_worktree` uses for `name`: under this project's private
+/// state directory (never inside or beside `root`), namespaced by
+/// [`crate::paths::project_id`] so distinct projects never collide.
+fn worktree_path(root: &Path, name: &str, env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
+    let id = crate::paths::project_id(root, None);
+    let state = crate::paths::state_root_with(env)?;
+    Ok(state.join(id).join("worktrees").join(name))
+}
+
+/// Removes the worktree at `path` from `root`, discarding any uncommitted
+/// changes in it.
+///
+/// Also reclaims a *prunable* entry — one whose directory is already gone —
+/// by dropping its administrative record from `root`'s `.git` directory.
+/// Succeeds whether or not `path` currently exists on disk, so it is safe to
+/// call on a worktree a previous run left behind in either state.
+///
+/// # Errors
+///
+/// Returns [`Error::Git`] if `root` has no worktree registered at `path`.
+pub fn remove_worktree(root: &Path, path: &Path) -> Result<()> {
+    let path_arg = path.to_string_lossy();
+    git(root, &["worktree", "remove", "--force", path_arg.as_ref()])?;
+    Ok(())
+}
+
+/// Lists every worktree `root` knows about, including its own primary
+/// checkout and any prunable leftover from an interrupted run.
+///
+/// # Errors
+///
+/// Returns [`Error::Git`] if `root` is not a git repository.
+pub fn list_worktrees(root: &Path) -> Result<Vec<Worktree>> {
+    let output = git(root, &["worktree", "list", "--porcelain"])?;
+    Ok(parse_worktree_list(&output))
+}
+
+/// Parses `git worktree list --porcelain` output into [`Worktree`] entries.
+///
+/// Entries are blank-line-separated blocks of `key value` lines; unrecognized
+/// keys (`locked`, bare `detached`, lock/prune reasons) are ignored, since
+/// only path, head and branch are needed by callers today.
+fn parse_worktree_list(output: &str) -> Vec<Worktree> {
+    output
+        .split("\n\n")
+        .filter(|block| !block.trim().is_empty())
+        .map(|block| {
+            let mut path = PathBuf::new();
+            let mut head = String::new();
+            let mut branch = None;
+            let mut prunable = false;
+            for line in block.lines() {
+                if let Some(rest) = line.strip_prefix("worktree ") {
+                    path = PathBuf::from(rest);
+                } else if let Some(rest) = line.strip_prefix("HEAD ") {
+                    head = rest.to_string();
+                } else if let Some(rest) = line.strip_prefix("branch ") {
+                    branch = Some(rest.to_string());
+                } else if line == "prunable" || line.starts_with("prunable ") {
+                    prunable = true;
+                }
+            }
+            Worktree {
+                path,
+                head,
+                branch,
+                prunable,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -349,5 +487,140 @@ mod tests {
         let err = fetch(dir.path(), "origin").expect_err("must fail: no such remote");
 
         assert!(matches!(err, Error::Git { .. }));
+    }
+
+    fn env_with_state_home(dir: &tempfile::TempDir) -> impl Fn(&str) -> Option<String> {
+        let home = dir.path().join("state").to_string_lossy().to_string();
+        move |key| (key == "XDG_STATE_HOME").then(|| home.clone())
+    }
+
+    #[test]
+    fn parse_worktree_list_reads_path_head_and_branch() {
+        let output = "worktree /repo\nHEAD abc123\nbranch refs/heads/main\n\n\
+                       worktree /repo/.worktrees/task-1\nHEAD def456\ndetached";
+
+        let entries = parse_worktree_list(output);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].path, Path::new("/repo"));
+        assert_eq!(entries[0].head, "abc123");
+        assert_eq!(entries[0].branch.as_deref(), Some("refs/heads/main"));
+        assert!(!entries[0].prunable);
+        assert_eq!(entries[1].path, Path::new("/repo/.worktrees/task-1"));
+        assert_eq!(entries[1].branch, None);
+        assert!(!entries[1].prunable);
+    }
+
+    #[test]
+    fn parse_worktree_list_flags_a_prunable_entry() {
+        let output = "worktree /repo/.worktrees/gone\nHEAD abc123\ndetached\n\
+                       prunable gitdir file points to non-existent location";
+
+        let entries = parse_worktree_list(output);
+
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].prunable);
+    }
+
+    #[test]
+    fn create_worktree_checks_out_base_sha_not_the_current_checkout() {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+        let base_sha = repo.seed_sha.clone();
+        repo.commit("later.txt", "later\n").expect("advance HEAD");
+        let state = tempfile::tempdir().expect("state dir");
+        let env = env_with_state_home(&state);
+
+        let dest =
+            create_worktree_with(&repo.path, "task-1", &base_sha, &env).expect("create_worktree");
+
+        assert!(dest.join("SEED.md").is_file());
+        assert!(
+            !dest.join("later.txt").exists(),
+            "worktree must be built from base_sha, not root's current checkout"
+        );
+        assert_eq!(head_sha(&dest).expect("head_sha"), base_sha);
+        assert_eq!(
+            current_branch(&dest).expect("current_branch"),
+            "HEAD",
+            "checkout must be detached at base_sha, not on a branch"
+        );
+    }
+
+    #[test]
+    fn create_worktree_reuses_an_existing_worktree_for_the_same_name() {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+        let state = tempfile::tempdir().expect("state dir");
+        let env = env_with_state_home(&state);
+
+        let first = create_worktree_with(&repo.path, "task-1", &repo.seed_sha, &env)
+            .expect("first create_worktree");
+        std::fs::write(first.join("scratch.txt"), "keep me\n").expect("write marker file");
+
+        let second = create_worktree_with(&repo.path, "task-1", &repo.seed_sha, &env)
+            .expect("second create_worktree");
+
+        assert_eq!(first, second);
+        assert!(
+            second.join("scratch.txt").is_file(),
+            "reusing an existing worktree must not recreate it"
+        );
+        let entries = list_worktrees(&repo.path).expect("list_worktrees");
+        assert_eq!(entries.iter().filter(|w| w.path == first).count(), 1);
+    }
+
+    #[test]
+    fn remove_worktree_drops_it_from_list_worktrees_and_from_disk() {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+        let state = tempfile::tempdir().expect("state dir");
+        let env = env_with_state_home(&state);
+        let dest = create_worktree_with(&repo.path, "task-1", &repo.seed_sha, &env)
+            .expect("create_worktree");
+
+        remove_worktree(&repo.path, &dest).expect("remove_worktree");
+
+        assert!(!dest.exists());
+        let entries = list_worktrees(&repo.path).expect("list_worktrees");
+        assert!(!entries.iter().any(|w| w.path == dest));
+    }
+
+    #[test]
+    fn list_worktrees_flags_a_leftover_directory_as_prunable() {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+        let state = tempfile::tempdir().expect("state dir");
+        let env = env_with_state_home(&state);
+        let dest = create_worktree_with(&repo.path, "task-1", &repo.seed_sha, &env)
+            .expect("create_worktree");
+        std::fs::remove_dir_all(&dest)
+            .expect("simulate a crash: directory gone, admin record left behind");
+
+        let entries = list_worktrees(&repo.path).expect("list_worktrees");
+
+        let leftover = entries
+            .iter()
+            .find(|w| w.path == dest)
+            .expect("leftover worktree is still listed");
+        assert!(leftover.prunable);
+    }
+
+    #[test]
+    fn create_worktree_reclaims_a_prunable_leftover_from_a_previous_run() {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+        let state = tempfile::tempdir().expect("state dir");
+        let env = env_with_state_home(&state);
+        let dest = create_worktree_with(&repo.path, "task-1", &repo.seed_sha, &env)
+            .expect("first create_worktree");
+        std::fs::remove_dir_all(&dest).expect("simulate a crash");
+
+        let reclaimed = create_worktree_with(&repo.path, "task-1", &repo.seed_sha, &env)
+            .expect("create_worktree must reclaim the prunable leftover");
+
+        assert_eq!(reclaimed, dest);
+        assert!(
+            dest.join("SEED.md").is_file(),
+            "reclaimed worktree must be a real checkout again"
+        );
+        let entries = list_worktrees(&repo.path).expect("list_worktrees");
+        assert_eq!(entries.iter().filter(|w| w.path == dest).count(), 1);
+        assert!(!entries.iter().any(|w| w.path == dest && w.prunable));
     }
 }
