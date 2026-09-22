@@ -12,7 +12,7 @@
 //! journal is the caller's job, using the existing [`crate::EventKind`]
 //! catalog — this module only supplies the signature and the count.
 
-use crate::{FailureClass, GateResult, parse_cargo};
+use crate::{AttemptRecord, FailureClass, GateResult, Task, parse_cargo, redact};
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -174,6 +174,159 @@ impl Breaker {
             BreakerState::Closed { count: *count }
         }
     }
+}
+
+/// How much of one failing gate's captured output [`bundle`] keeps before
+/// its overall `budget_bytes` is applied — bounds a single huge transcript
+/// independent of how tight the caller's budget is.
+const GATE_TAIL_BYTES: usize = 4_096;
+
+/// Returns the longest suffix of `text` that is at most `max_bytes` long and
+/// still valid UTF-8 (never splits a multi-byte character).
+fn tail_bytes(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut start = text.len() - max_bytes;
+    while start < text.len() && !text.is_char_boundary(start) {
+        start += 1;
+    }
+    &text[start..]
+}
+
+/// Returns the longest prefix of `text` that is at most `max_bytes` long and
+/// still valid UTF-8.
+fn truncate_bytes(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
+}
+
+/// Formats the part of a [`bundle`] that always matters most: the task's
+/// identity, its failure classification, the tail of every failing gate's
+/// captured output, and the diff summary.
+fn format_essential(
+    task: &Task,
+    class: FailureClass,
+    gates: &[GateResult],
+    diff_summary: &str,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "Task {}: {}", task.id, task.title());
+    let _ = writeln!(out, "Classification: {class:?}");
+
+    let failing: Vec<&GateResult> = gates.iter().filter(|gate| !gate.passed).collect();
+    out.push_str("\nFailing gates:\n");
+    if failing.is_empty() {
+        out.push_str("(none)\n");
+    }
+    for gate in failing {
+        let _ = writeln!(
+            out,
+            "- {:?} (exit_code={:?}, signal={:?}, timed_out={})",
+            gate.kind, gate.exit_code, gate.signal, gate.timed_out
+        );
+        let combined = format!("{}{}", gate.stdout, gate.stderr);
+        let text = tail_bytes(&combined, GATE_TAIL_BYTES).trim();
+        if !text.is_empty() {
+            out.push_str(text);
+            out.push('\n');
+        }
+    }
+
+    out.push_str("\nDiff summary:\n");
+    out.push_str(diff_summary.trim());
+    out.push('\n');
+    out
+}
+
+/// Formats one prior attempt's outcome for [`bundle`]'s history section:
+/// its id, why it ended, and each gate it ran with a pass/fail verdict —
+/// never the gates' raw output, which belongs to the current failure only.
+fn format_prior_attempt(record: &AttemptRecord) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Prior attempt {}: exit_reason={}",
+        record.id, record.exit_reason
+    );
+    for gate in &record.gates {
+        let _ = writeln!(
+            out,
+            "  - {:?}: {}",
+            gate.kind,
+            if gate.passed { "passed" } else { "failed" }
+        );
+    }
+    out
+}
+
+/// Joins `essential` with every entry of `history`, in order, each separated
+/// by a blank line.
+fn join_bundle(essential: &str, history: &[String]) -> String {
+    let mut out = essential.to_string();
+    for entry in history {
+        out.push('\n');
+        out.push_str(entry);
+    }
+    out
+}
+
+/// Assembles the compact, deterministic context a fresh remediation session
+/// starts from (`VISION.md` §7: "a compact failure bundle (classification,
+/// gate output, diff summary, prior attempt evidence)"). Every remediation
+/// attempt starts a fresh session rather than resuming one, so this bundle —
+/// not conversation history — is the only context a retry gets.
+///
+/// The result always holds, in order: the task's identity and failure
+/// [`FailureClass`], the tail of every currently failing gate's captured
+/// output, the diff summary, and as much of `prior`'s attempt history as
+/// fits, oldest first.
+///
+/// When the assembled text would exceed `budget_bytes`, whole prior-attempt
+/// entries are dropped starting with the oldest (`prior[0]`, then
+/// `prior[1]`, ...) until it fits. If even the classification, gate tails
+/// and diff summary alone exceed the budget, the result is cut to
+/// `budget_bytes` bytes at the nearest character boundary — the bundle never
+/// exceeds its budget, whatever it costs to enforce that.
+///
+/// Every piece is passed through [`redact()`] before it is measured or
+/// truncated, so a secret is never split by truncation into a still-partly-
+/// readable fragment.
+///
+/// This function reads no clock, no environment and no random source, and
+/// preserves the order `gates` and `prior` were given in without sorting —
+/// two calls with identical arguments always produce a byte-identical
+/// result.
+#[must_use]
+pub fn bundle(
+    task: &Task,
+    class: FailureClass,
+    gates: &[GateResult],
+    diff_summary: &str,
+    prior: &[AttemptRecord],
+    budget_bytes: usize,
+) -> String {
+    let essential = redact(&format_essential(task, class, gates, diff_summary), &[]);
+    let history: Vec<String> = prior
+        .iter()
+        .map(|record| redact(&format_prior_attempt(record), &[]))
+        .collect();
+
+    for drop in 0..=history.len() {
+        let remaining = history.get(drop..).unwrap_or_default();
+        let candidate = join_bundle(&essential, remaining);
+        if candidate.len() <= budget_bytes {
+            return candidate;
+        }
+    }
+
+    truncate_bytes(&essential, budget_bytes)
 }
 
 #[cfg(test)]
@@ -363,5 +516,287 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].seq, seq);
         assert_eq!(stored[0].kind, kind);
+    }
+
+    mod bundle_tests {
+        use super::*;
+        use crate::{AttemptId, Task, TaskStatus, Usage, UsageSource};
+        use time::macros::datetime;
+
+        fn sample_task() -> Task {
+            Task {
+                id: TaskId::new(1),
+                status: TaskStatus::Pending,
+                body: "## Do the thing\n".to_string(),
+                outcome: "it happens".to_string(),
+                done_when: "it happened".to_string(),
+                verify: "cargo test".to_string(),
+                refs: "VISION.md".to_string(),
+            }
+        }
+
+        fn passing_gate() -> GateResult {
+            GateResult {
+                kind: GateKind::Lint,
+                passed: true,
+                exit_code: Some(0),
+                signal: None,
+                duration_ms: 10,
+                stdout: "clean".to_string(),
+                stderr: String::new(),
+                timed_out: false,
+            }
+        }
+
+        fn failing_gate(stdout: &str) -> GateResult {
+            GateResult {
+                kind: GateKind::Verify,
+                passed: false,
+                exit_code: Some(101),
+                signal: None,
+                duration_ms: 500,
+                stdout: stdout.to_string(),
+                stderr: String::new(),
+                timed_out: false,
+            }
+        }
+
+        fn prior_attempt(id: u32, exit_reason: &str) -> AttemptRecord {
+            AttemptRecord {
+                id: AttemptId::new(id),
+                task: TaskId::new(1),
+                started: datetime!(2024-01-15 10:00:00 UTC),
+                ended: Some(datetime!(2024-01-15 10:05:00 UTC)),
+                model_configured: Some("claude-opus-4".to_string()),
+                model_reported: None,
+                session_id: None,
+                exit_reason: exit_reason.to_string(),
+                gates: vec![failing_gate("boom")],
+                usage: Some(Usage {
+                    input_tokens: Some(10),
+                    output_tokens: Some(5),
+                    cached_tokens: None,
+                    cost_usd: None,
+                    source: UsageSource::Provider,
+                }),
+                base_sha: "base".to_string(),
+                candidate_sha: None,
+            }
+        }
+
+        #[test]
+        fn identical_inputs_produce_a_byte_identical_bundle() {
+            let task = sample_task();
+            let gates = vec![failing_gate("assertion failed at line 12")];
+            let prior = vec![prior_attempt(1, "verification_failure")];
+
+            let first = bundle(
+                &task,
+                FailureClass::VerificationFailure,
+                &gates,
+                "3 files changed",
+                &prior,
+                8_192,
+            );
+            let second = bundle(
+                &task,
+                FailureClass::VerificationFailure,
+                &gates,
+                "3 files changed",
+                &prior,
+                8_192,
+            );
+
+            assert_eq!(first, second, "identical inputs must yield identical bytes");
+        }
+
+        #[test]
+        fn the_bundle_includes_classification_gate_tail_diff_summary_and_prior_outcomes() {
+            let task = sample_task();
+            let gates = vec![passing_gate(), failing_gate("assertion failed at line 12")];
+            let prior = vec![prior_attempt(1, "provider_transient")];
+
+            let text = bundle(
+                &task,
+                FailureClass::VerificationFailure,
+                &gates,
+                "diff: +10/-2 across 2 files",
+                &prior,
+                8_192,
+            );
+
+            assert!(text.contains("VerificationFailure"));
+            assert!(text.contains("assertion failed at line 12"));
+            assert!(text.contains("diff: +10/-2 across 2 files"));
+            assert!(text.contains("provider_transient"));
+        }
+
+        #[test]
+        fn a_passing_gates_output_never_appears() {
+            let task = sample_task();
+            let gates = vec![passing_gate()];
+
+            let text = bundle(
+                &task,
+                FailureClass::AgentFailure,
+                &gates,
+                "no diff",
+                &[],
+                8_192,
+            );
+
+            assert!(!text.contains("clean"), "a passing gate's stdout leaked in");
+        }
+
+        #[test]
+        fn the_bundle_never_exceeds_its_budget_even_with_a_huge_gate_and_deep_history() {
+            let task = sample_task();
+            let gates = vec![failing_gate(&"x".repeat(50_000))];
+            let prior: Vec<AttemptRecord> = (1..=20)
+                .map(|id| prior_attempt(id, "verification_failure"))
+                .collect();
+
+            for budget in [0, 1, 50, 500, 4_000, 100_000] {
+                let text = bundle(
+                    &task,
+                    FailureClass::VerificationFailure,
+                    &gates,
+                    "a modest diff",
+                    &prior,
+                    budget,
+                );
+                assert!(
+                    text.len() <= budget,
+                    "budget {budget} exceeded: got {} bytes",
+                    text.len()
+                );
+            }
+        }
+
+        #[test]
+        fn truncation_drops_the_oldest_prior_attempts_first() {
+            let task = sample_task();
+            let gates = vec![failing_gate("short failure")];
+            let prior = vec![
+                prior_attempt(1, "oldest-attempt-marker"),
+                prior_attempt(2, "newest-attempt-marker"),
+            ];
+
+            // A budget that comfortably fits the essential section and one
+            // history entry, but not both prior attempts.
+            let essential_only = bundle(
+                &task,
+                FailureClass::VerificationFailure,
+                &gates,
+                "a modest diff",
+                &[],
+                8_192,
+            );
+            let budget = essential_only.len() + 80;
+
+            let text = bundle(
+                &task,
+                FailureClass::VerificationFailure,
+                &gates,
+                "a modest diff",
+                &prior,
+                budget,
+            );
+
+            assert!(
+                text.contains("newest-attempt-marker"),
+                "the most recent attempt must survive truncation: {text}"
+            );
+            assert!(
+                !text.contains("oldest-attempt-marker"),
+                "the oldest attempt must be dropped first: {text}"
+            );
+        }
+
+        #[test]
+        fn a_secret_in_gate_output_does_not_survive() {
+            let task = sample_task();
+            let secret = "sk-abcdefghijklmnopqrstuvwxyz0123456789";
+            let gates = vec![failing_gate(&format!("leaked credential: {secret}"))];
+
+            let text = bundle(
+                &task,
+                FailureClass::VerificationFailure,
+                &gates,
+                "no diff",
+                &[],
+                8_192,
+            );
+
+            assert!(!text.contains(secret));
+            assert!(text.contains("[redacted]"));
+        }
+
+        #[test]
+        fn a_secret_in_prior_attempt_data_does_not_survive() {
+            let task = sample_task();
+            let gates = vec![failing_gate("clean failure")];
+            let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789AB";
+            let prior = vec![prior_attempt(1, &format!("crashed on token {secret}"))];
+
+            let text = bundle(
+                &task,
+                FailureClass::VerificationFailure,
+                &gates,
+                "no diff",
+                &prior,
+                8_192,
+            );
+
+            assert!(!text.contains(secret));
+        }
+
+        #[test]
+        fn a_secret_never_survives_even_when_truncation_cuts_through_it() {
+            let task = sample_task();
+            // A generous budget for the header, but far too small to fit
+            // this gate's full output, so hard truncation must engage after
+            // redaction has already removed the secret.
+            let secret = "sk-abcdefghijklmnopqrstuvwxyz0123456789";
+            let padding = "y".repeat(200);
+            let gates = vec![failing_gate(&format!(
+                "{padding} leaked credential: {secret} {padding}"
+            ))];
+
+            let text = bundle(
+                &task,
+                FailureClass::VerificationFailure,
+                &gates,
+                "no diff",
+                &[],
+                120,
+            );
+
+            assert!(text.len() <= 120);
+            assert!(!text.contains(secret));
+            assert!(!text.contains(&secret[..10]));
+        }
+
+        #[test]
+        fn only_the_tail_of_a_huge_gate_output_is_kept() {
+            let task = sample_task();
+            let huge = format!("{}END-OF-OUTPUT", "a".repeat(20_000));
+            let gates = vec![failing_gate(&huge)];
+
+            let text = bundle(
+                &task,
+                FailureClass::VerificationFailure,
+                &gates,
+                "no diff",
+                &[],
+                1_000_000,
+            );
+
+            assert!(text.contains("END-OF-OUTPUT"));
+            assert!(
+                text.len() < huge.len(),
+                "the gate's full 20000-byte output must not all be kept"
+            );
+        }
     }
 }
