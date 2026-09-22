@@ -64,7 +64,7 @@ pub use remediate::{
     should_continue, signature, trip_event,
 };
 pub use report::{ReportResult, parse_report};
-pub use runner::{CheckOutcome, PreflightCheck, PreflightReport, Runner, preflight};
+pub use runner::{CheckOutcome, PreflightCheck, PreflightReport, Prepared, Runner, preflight};
 pub use state::{
     PauseReason, Phase, Recovery, Stream, TaskState, apply, check_one_active, check_predecessor,
 };

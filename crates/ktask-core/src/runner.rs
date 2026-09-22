@@ -10,8 +10,10 @@
 //! adapter as arguments is that a run assembled from what its caller happened to
 //! carry is a run whose gates and journal somebody else chose.
 //!
-//! Its one job so far is [`Runner::begin_attempt`], the transition that spends a
-//! token, and three things about it are not free to change:
+//! Its two jobs so far are [`Runner::prepare`] and [`Runner::begin_attempt`]. The
+//! first takes a queued task as far as the ground it stands on; the second is the
+//! transition that spends a token, and three things about it are not free to
+//! change:
 //!
 //! - The [`crate::EventKind::AttemptStarted`] row is appended before the attempt's
 //!   evidence is filed, because VISION.md §3's third invariant makes the journal the
@@ -24,6 +26,13 @@
 //! - The evidence directory is written at the start rather than only at the end,
 //!   because the run that dies mid-attempt is the case recovery is built for, and
 //!   it has to find something to read.
+//!
+//! [`Runner::prepare`] is the step in front of that one, and its shape carries the
+//! decisions behind it: the verdict of [`preflight`] is journaled here rather than
+//! by the checks that earned it, the repository lock is taken after that verdict
+//! and held by the [`Prepared`] value the step hands back, and the task's checkout
+//! is cut from the fetched tip rather than from wherever `HEAD` stands
+//! (VISION.md §10, ADR-0043).
 //!
 //! What a run does once an attempt is open — phases, the agent session, the gates,
 //! publication, remediation — belongs to the tasks after this one.
@@ -100,7 +109,7 @@
 //!   (ADR-0046) instead of being refused here.
 
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use nix::sys::statvfs;
@@ -214,6 +223,91 @@ impl Runner {
         self.recorder.subscribe()
     }
 
+    /// Take `task` from the queue to the point where an agent could start.
+    ///
+    /// VISION.md §6 puts exactly one state between `queued` and `running` and gives
+    /// it one job — prove the world sane before a token is spent — and this is the
+    /// step that walks it: the five checks are asked, the verdict they earned is
+    /// journaled, the repository lock is taken, and the task's own checkout is cut
+    /// from the commit the fetch brought back. What comes back is [`Prepared`],
+    /// which holds what the next step needs and starts nothing of its own.
+    ///
+    /// **The start is journaled before the checks are asked.** VISION.md §3's third
+    /// invariant makes the journal the account of what happened rather than a
+    /// summary of what finished, and a preflight that dies halfway — a baseline
+    /// command that outlived its budget, a machine that lost power — has to leave
+    /// [`crate::EventKind::PreflightStarted`] behind. The alternative is a task that
+    /// still reads as `queued` while its own journal holds a gate's rows, which is
+    /// the ambiguity recovery exists to make impossible.
+    ///
+    /// **The verdict is written here, not by [`preflight`].** ADR-0082 hands the
+    /// verdict row to whoever journaled the start, and
+    /// [`crate::EventKind::PreflightFailed`] is the row that ends a task: a second
+    /// writer would append the same decision twice. The row is
+    /// [`PreflightReport::event()`] unchanged, so the class the refusing check named
+    /// is the class the journal holds. Nothing here re-derives it, and
+    /// [`crate::classify()`] is never asked to guess what a check already said
+    /// (ADR-0057).
+    ///
+    /// **The lock is taken after the verdict, with no wait, and then held.** After
+    /// the verdict because a refusal has no business holding a lock nobody is about
+    /// to need: VISION.md §6 lists the lock among the five checks, and that check's
+    /// own answer is "taken and given back" (ADR-0082), so a step that kept it past
+    /// a refusal would report the machine busy on behalf of a task it had just
+    /// refused. With no wait because nothing is configured to wait for —
+    /// [`crate::Config`] holds no lock timeout — and because waiting is recovery's
+    /// decision, made from the class this step has already journaled. Held, rather
+    /// than taken and given back, because VISION.md §10's step 5 publishes under
+    /// this lock: what makes "the checkout was cut from the fetched tip" still true
+    /// when the candidate is pushed is the lock.
+    ///
+    /// **The checkout is cut from the base the report named, never from `HEAD`.**
+    /// [`crate::git::create_worktree`] is handed the report's own base — the tip
+    /// `<remote>/<branch>` had when the fetch moved it — because a task started from
+    /// wherever the user's checkout happened to stand would be verified against a
+    /// commit nobody fetched (VISION.md §10's step 2). The name is one per task, so
+    /// the second time this step runs for a task it hands back the checkout that
+    /// stopped — which is what VISION.md §7 requires a remediation to find.
+    ///
+    /// # Errors
+    ///
+    /// As [`preflight`] for anything that stopped the checks from being asked at all:
+    /// [`Error::Database`] for a state directory that is not there and for a gate row
+    /// that was refused, [`Error::Config`] for a configuration that describes no
+    /// runnable profile. [`Error::NotFound`] when the checks *did* answer and refused:
+    /// the prepared task this signature promises does not exist, exactly as
+    /// `recorded_base` refuses a task no `PreflightPassed` ever gave a base, and the
+    /// message carries the check that refused, the class it named, and every line of
+    /// evidence the report holds. [`Error::NotFound`], [`Error::Io`] and
+    /// [`Error::Policy`] as [`crate::lock::acquire`], and [`Error::Git`] and
+    /// [`Error::Policy`] as [`crate::git::create_worktree`]. Those two come after the
+    /// verdict has been journaled, which is the order VISION.md §3 asks for: whatever
+    /// the side effect did next, the row is there for recovery to read.
+    pub fn prepare(&mut self, task: &Task) -> Result<Prepared> {
+        self.recorder
+            .record(Some(task.id), EventKind::PreflightStarted)?;
+        let report = preflight(&self.project, &self.config, self.provider.as_ref())?;
+        self.recorder.record(Some(task.id), report.event())?;
+        if let Some(&CheckOutcome::Refused { check, class, .. }) = report.refusal() {
+            return Err(Error::NotFound {
+                what: format!(
+                    "task {id}'s checkout: preflight refused `{check}` as {class:?} — {evidence}",
+                    id = task.id,
+                    evidence = report.evidence()
+                ),
+            });
+        }
+        let base_sha = report.base_sha.clone();
+        let held = lock::acquire(&self.project.state_dir, Duration::ZERO)?;
+        let worktree =
+            git::create_worktree(&self.project.root, &worktree_name(task.id), &base_sha)?;
+        Ok(Prepared {
+            worktree,
+            base_sha,
+            lock: held,
+        })
+    }
+
     /// Open one attempt of `task`, and return the id it was given.
     ///
     /// This is the door between `preflight` and `running`, and the last step that
@@ -299,6 +393,61 @@ impl Runner {
             .map(|gate| gate.kind.to_string())
             .collect()
     }
+}
+
+/// A task that has been proved worth starting, and the ground it starts on.
+///
+/// Three things, none of which the next step can settle for itself: which checkout
+/// the work happens in, which commit every later measurement of that work is taken
+/// against, and which lock keeps another run from publishing underneath either.
+///
+/// It is handed back rather than kept by the [`Runner`], because VISION.md §3 makes
+/// the journal — not a struct — the account of what state a task is in. The
+/// lifetime is the point of holding it here at all: [`crate::lock::RepoLock`] gives
+/// the lock back when this is dropped, so "this task's work happened under the
+/// repository lock" is a fact about a value's scope rather than about a call
+/// somebody remembered to make at the end.
+#[derive(Debug)]
+pub struct Prepared {
+    /// The task's own checkout: one entry in the repository's managed task
+    /// directory, named after the task, detached at [`Prepared::base_sha`].
+    pub worktree: PathBuf,
+    /// The tip `<remote>/<branch>` had when the preflight's fetch moved it, which
+    /// is what [`crate::git::changed_paths`], the privacy gate and the final
+    /// comparison against the remote are all measured against.
+    pub base_sha: String,
+    /// The project's repository lock, held since before this checkout was cut.
+    ///
+    /// Private, and with no getter: [`crate::lock::RepoLock::release`] consumes the
+    /// lock, and a public field would let a caller move it out or drop it early
+    /// while this run was still publishing under it.
+    lock: lock::RepoLock,
+}
+
+impl Prepared {
+    /// The abandoned lock this preparation took over, if it took one over.
+    ///
+    /// A lock left by a holder that has provably gone is taken without waiting, and
+    /// [`crate::lock`] is explicit that a takeover is never silent: the reason a
+    /// lock is left behind is usually the reason the work before it did not finish,
+    /// which is what the attempt's evidence and whoever reads it back need to see.
+    /// [`None`] is the ordinary answer — this run waited behind nobody.
+    #[must_use]
+    pub fn reclaimed(&self) -> Option<&lock::Reclaimed> {
+        self.lock.reclaimed()
+    }
+}
+
+/// The name the repository registers `task`'s checkout under.
+///
+/// One name per task rather than one per attempt: VISION.md §7 requires a
+/// remediation to keep the worktree it stopped in, and [`crate::git`] makes one
+/// name one directory, so a name carrying an attempt number would orphan the
+/// checkout whose evidence the next attempt is told to read. `task-7` is the shape
+/// ADR-0043 anticipates, and it is one path component, which is all
+/// [`crate::git::create_worktree`] accepts.
+fn worktree_name(task: TaskId) -> String {
+    format!("task-{task}")
 }
 
 /// How an attempt's record says it is running, before it has an ending.
@@ -2195,5 +2344,370 @@ mod new {
         assert_eq!(filed.len(), 3, "three attempts, three records");
         let numbers: Vec<u32> = filed.iter().map(|record| record.id.get()).collect();
         assert_eq!(numbers, vec![1, 2, 3], "each numbered once, in order");
+    }
+}
+
+#[cfg(test)]
+mod prepare {
+    //! The step between `queued` and `running`: the checks, the verdict they earn,
+    //! the lock that is then taken, and the checkout an attempt is worked in.
+    //!
+    //! Named after the method it tests, the way `mod new` is named after `new`,
+    //! because the task that asked for this step fixed `test(/runner::prepare/)` as
+    //! its Verify command.
+
+    use super::{Prepared, Runner};
+    use crate::testing::{ScratchRepo, scratch_repo};
+    use crate::{
+        EventKind, FailureClass, Journal, Project, Task, TaskId, git, lock, parse_plan,
+        project_config_path,
+    };
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    /// The identity every fixture gives its registered project.
+    const PROJECT_ID: &str = "0123456789abcdef";
+
+    /// The settings a run is buildable from and a preflight has no reason to refuse.
+    ///
+    /// `verify_command` is mandatory (VISION.md §8) and `provider` names an adapter
+    /// this build has, so every run under test here is an ordinary one. The disk
+    /// floor is one byte: a test that cleared the 2 GiB default would be reporting
+    /// how full the machine running it happens to be. No `baseline_command` is set,
+    /// because the baseline check answers that as "nothing configured, nothing to
+    /// prove" — these tests are about the verdict, the lock and the checkout, and
+    /// the gate itself is [`crate::gate`]'s own coverage.
+    const BASE: &str = concat!(
+        "provider = \"claude\"\n",
+        "verify_command = [\"/bin/sh\", \"-c\", \"exit 0\"]\n",
+        "min_free_disk_bytes = 1\n",
+    );
+
+    /// A registered project: a repository of its own to fetch and to cut a
+    /// checkout out of, and a state directory of its own to hold the lock.
+    struct Fixture {
+        repo: ScratchRepo,
+        project: Project,
+    }
+
+    impl Fixture {
+        /// A project holding `BASE` as its own settings document.
+        fn new() -> Self {
+            let repo = scratch_repo().expect("a scratch repository is buildable");
+            let state_dir = repo.path().join("state").join(PROJECT_ID);
+            let project = Project {
+                root: repo.work().to_path_buf(),
+                id: PROJECT_ID.to_owned(),
+                state_dir,
+            };
+            fs::create_dir_all(&project.state_dir).expect("a state directory is creatable");
+            fs::write(project_config_path(&project), BASE)
+                .expect("a project settings document is writable");
+            Self { repo, project }
+        }
+
+        /// The run this project is configured to have.
+        fn run(&self) -> Runner {
+            Runner::new(self.project.clone()).expect("a registered, configured project opens a run")
+        }
+
+        /// The file a run holds when it holds the repository lock.
+        fn lock_file(&self) -> PathBuf {
+            lock::lock_path(&self.project.state_dir)
+        }
+
+        /// Every checkout the repository has registered, the user's included.
+        fn checkouts(&self) -> Vec<git::Worktree> {
+            git::list_worktrees(&self.project.root).expect("the repository answers what it holds")
+        }
+    }
+
+    /// The queue's one task: a block with the four mandatory sections.
+    fn task() -> Task {
+        let document = "\
+## T001 Runner step: preflight and worktree
+
+**Outcome:** a task reaches the point where an agent could start.
+**Done-when:** the lock is held and the checkout is the fetched commit.
+**Verify:** `cargo nextest run -p ktask-core -E 'test(/runner::prepare/)'`
+**Refs:** VISION.md sections 6 and 10
+";
+        parse_plan(document)
+            .expect("a task block with the four mandatory sections is a parseable plan")
+            .remove(0)
+    }
+
+    /// The kinds the journal holds for `work`, oldest first.
+    ///
+    /// Read on a second connection, because that is who asks this question in real
+    /// life: the TUI, `ktask-rs status`, and the process that comes after a run that
+    /// died.
+    fn kinds(project: &Project, work: TaskId) -> Vec<&'static str> {
+        Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events_for(work)
+            .expect("the rows this run wrote are readable")
+            .iter()
+            .map(|row| row.kind.discriminant())
+            .collect()
+    }
+
+    /// The base the `PreflightPassed` row recorded, or a failing test.
+    fn recorded_base(project: &Project, work: TaskId) -> String {
+        for row in Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events_for(work)
+            .expect("the rows this run wrote are readable")
+        {
+            if let EventKind::PreflightPassed { base_sha } = row.kind {
+                return base_sha;
+            }
+        }
+        panic!("a passing preflight records the base the work is cut from");
+    }
+
+    /// The class and evidence of the `PreflightFailed` row a refusal left.
+    fn refusal(project: &Project, work: TaskId) -> (FailureClass, String) {
+        for row in Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events_for(work)
+            .expect("the rows this run wrote are readable")
+        {
+            if let EventKind::PreflightFailed { class, detail } = row.kind {
+                return (class, detail);
+            }
+        }
+        panic!("a refused preflight leaves the row that ends the task");
+    }
+
+    /// The commit `checkout` stands at.
+    fn head_at(checkout: &Path) -> String {
+        git::head_sha(checkout).expect("a task checkout answers where it stands")
+    }
+
+    /// Take the project's lock from a test, as an outsider would, and give it back.
+    fn lock_is_free(project: &Project) -> bool {
+        let taken = lock::acquire(&project.state_dir, Duration::ZERO);
+        match taken {
+            Ok(held) => {
+                held.release().expect("a lock this test took is given back");
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Ask `run` to prepare the queue's task, and insist it answers.
+    fn prepared(run: &mut Runner) -> Prepared {
+        run.prepare(&task())
+            .expect("nothing in this fixture gives preflight a reason to refuse")
+    }
+
+    #[test]
+    fn a_prepared_task_journals_the_start_then_the_verdict_and_nothing_else() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let work = task();
+
+        let ready = run
+            .prepare(&work)
+            .expect("a clean fetched project prepares");
+
+        assert_eq!(
+            kinds(&fixture.project, work.id),
+            ["PreflightStarted", "PreflightPassed"],
+            "the start is journaled before the checks are asked and the verdict after \
+             them; opening an attempt is the step after this one, and an agent session \
+             after that"
+        );
+        assert_eq!(
+            recorded_base(&fixture.project, work.id),
+            fixture.repo.seed_sha(),
+            "the base the row names is the tip of the fetched mainline"
+        );
+        assert_eq!(
+            recorded_base(&fixture.project, work.id),
+            ready.base_sha,
+            "what the run hands the attempt is the base the journal recorded, not a \
+             second opinion of it"
+        );
+    }
+
+    #[test]
+    fn the_checkout_is_cut_from_the_fetched_tip_and_not_from_where_head_stands() {
+        let fixture = Fixture::new();
+        let drift = fixture.repo.diverge("main").expect(
+            "the working repository and its origin can each hold a commit the \
+                      other has never seen",
+        );
+        let mut run = fixture.run();
+
+        let ready = prepared(&mut run);
+
+        assert_eq!(
+            ready.base_sha, drift.remote,
+            "the base is `<remote>/<branch>`'s tip after the fetch, which is the commit \
+             every later gate measures the candidate against"
+        );
+        assert_eq!(
+            head_at(&ready.worktree),
+            drift.remote,
+            "the checkout stands on the commit the fetch brought back"
+        );
+        assert_ne!(
+            head_at(&ready.worktree),
+            drift.local,
+            "and not on wherever the user's checkout happens to have moved to: a task \
+             cut from there would be verified against a commit nobody fetched"
+        );
+        let ours = fixture
+            .checkouts()
+            .into_iter()
+            .find(|entry| entry.path == ready.worktree)
+            .expect("git has this checkout registered, so another run can see it");
+        assert_eq!(ours.head, drift.remote, "as the same commit");
+        assert_eq!(
+            ours.branch, None,
+            "a task checkout is detached: a SHA, not somebody's branch"
+        );
+        assert_eq!(
+            head_at(&fixture.project.root),
+            drift.local,
+            "the user's own checkout is untouched by any of it (VISION.md §10)"
+        );
+    }
+
+    #[test]
+    fn the_checkout_lives_outside_the_repository_it_was_cut_from() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+
+        let ready = prepared(&mut run);
+
+        assert!(
+            !ready.worktree.starts_with(&fixture.project.root),
+            "a task checkout inside the tree would be caught by the privacy scan and by \
+             `is_clean` as untracked work: {} is not below {}",
+            ready.worktree.display(),
+            fixture.project.root.display()
+        );
+        assert!(
+            ready.worktree.join("seed.txt").is_file(),
+            "the checkout is a real checkout of the base commit, not an empty directory"
+        );
+    }
+
+    #[test]
+    fn a_prepared_task_holds_the_repository_lock_until_the_task_is_handed_back() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+
+        let ready = prepared(&mut run);
+
+        assert_eq!(
+            ready.lock.path(),
+            fixture.lock_file(),
+            "what is held is this project's own repository lock, in its state directory"
+        );
+        assert!(fixture.lock_file().is_file(), "the lock file is there");
+        assert!(
+            ready.reclaimed().is_none(),
+            "the lock was free, so this is a taking rather than a takeover: {ready:?}"
+        );
+        let refused = lock::acquire(&fixture.project.state_dir, Duration::ZERO)
+            .expect_err("one repository is not run twice at once");
+        assert!(
+            refused
+                .to_string()
+                .contains(&std::process::id().to_string()),
+            "the refusal waits behind this very process, which is the run that took it: \
+             {refused}"
+        );
+
+        drop(ready);
+
+        assert!(
+            lock_is_free(&fixture.project),
+            "the lock leaves with the task it was taken for"
+        );
+    }
+
+    #[test]
+    fn a_refused_preflight_ends_the_task_and_leaves_the_lock_free() {
+        let fixture = Fixture::new();
+        fs::write(fixture.repo.work().join("loose.rs"), "uncommitted\n")
+            .expect("a file is writable in the work tree");
+        let mut run = fixture.run();
+        let work = task();
+
+        let refused = run
+            .prepare(&work)
+            .expect_err("a dirty checkout is not a world that has been proved sane");
+
+        assert_eq!(
+            kinds(&fixture.project, work.id),
+            ["PreflightStarted", "PreflightFailed"],
+            "the refusal is journaled as the end of this task, and it ends the run of \
+             checks rather than appending a pass behind it"
+        );
+        let (class, evidence) = refusal(&fixture.project, work.id);
+        assert_eq!(
+            class,
+            FailureClass::PolicyFailure,
+            "the class the check named is the class the journal holds"
+        );
+        assert!(evidence.contains("loose.rs"), "{evidence}");
+        assert!(
+            refused.to_string().contains("mainline")
+                && refused.to_string().contains("PolicyFailure"),
+            "the caller is told which check refused and what it was classified as: \
+             {refused}"
+        );
+        assert!(
+            !fixture.lock_file().exists(),
+            "a task that was refused leaves no lock file behind"
+        );
+        assert!(
+            lock_is_free(&fixture.project),
+            "and the lock is free for whoever the refusal sends the task to"
+        );
+        assert_eq!(
+            fixture.checkouts().len(),
+            1,
+            "no checkout is cut for a task that was refused: {:?}",
+            fixture.checkouts()
+        );
+    }
+
+    #[test]
+    fn a_task_asked_for_twice_gets_the_checkout_it_already_had() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+
+        let first = prepared(&mut run);
+        let evidence = first.worktree.join("attempt-work.txt");
+        fs::write(&evidence, "the attempt that stopped\n").expect("a checkout is writable");
+        let cut = first.worktree.clone();
+        drop(first);
+
+        let again = prepared(&mut run);
+
+        assert_eq!(
+            again.worktree, cut,
+            "one task is one checkout: a remediation continues in the directory that \
+             stopped (VISION.md §7) instead of orphaning it"
+        );
+        assert_eq!(
+            fs::read_to_string(&evidence).expect("the work is still there"),
+            "the attempt that stopped\n",
+            "asking again changes nothing in a checkout that holds work"
+        );
+        assert_eq!(
+            fixture.checkouts().len(),
+            2,
+            "the user's checkout and this task's, not one per attempt: {:?}",
+            fixture.checkouts()
+        );
     }
 }
