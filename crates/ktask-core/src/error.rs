@@ -101,6 +101,18 @@ pub enum Error {
         /// What was found to be corrupt.
         detail: String,
     },
+
+    /// [`crate::acquire`] could not create the lock file before its
+    /// timeout elapsed; another live process still holds it.
+    #[error("lock at {path} not acquired within {timeout_secs}s: held by pid {holder_pid}")]
+    LockTimeout {
+        /// The lock file that could not be acquired.
+        path: PathBuf,
+        /// The timeout, in whole seconds, that elapsed while waiting.
+        timeout_secs: u64,
+        /// The pid recorded in the lock file at the moment of timeout.
+        holder_pid: u32,
+    },
 }
 
 /// Convenience alias for `Result<T, Error>`, used throughout ktask-core.
@@ -163,6 +175,19 @@ mod tests {
         let serde_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
         let err: Error = serde_err.into();
         assert!(matches!(err, Error::Serde(_)));
+    }
+
+    #[test]
+    fn lock_timeout_names_the_path_and_holder() {
+        let err = Error::LockTimeout {
+            path: PathBuf::from("/state/repo.lock"),
+            timeout_secs: 5,
+            holder_pid: 4242,
+        };
+        let message = err.to_string();
+        assert!(message.contains("/state/repo.lock"));
+        assert!(message.contains("5s"));
+        assert!(message.contains("4242"));
     }
 
     #[test]
