@@ -9,6 +9,9 @@
 use crate::{Result, Task, TaskId, TaskState, check_one_active, check_predecessor};
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+use crate::{EventKind, apply};
+
 /// Picks the next task the runner should start, or `Ok(None)` if nothing is
 /// runnable right now.
 ///
@@ -186,5 +189,63 @@ mod tests {
     #[test]
     fn an_empty_queue_has_nothing_runnable() {
         assert_eq!(next_runnable(&[], &BTreeMap::new()).unwrap(), None);
+    }
+
+    #[test]
+    fn a_gate_stops_the_queue_until_acknowledged_then_the_rest_run() {
+        let tasks = vec![task(1), task(2), task(3)];
+        let mut states = BTreeMap::from([
+            (TaskId::new(1), TaskState::Queued),
+            (TaskId::new(2), TaskState::Queued),
+            (TaskId::new(3), TaskState::Queued),
+        ]);
+
+        // Task 1 has no gate: it runs to completion normally.
+        assert_eq!(
+            next_runnable(&tasks, &states).unwrap(),
+            Some(TaskId::new(1))
+        );
+        states.insert(TaskId::new(1), TaskState::Done);
+
+        // Task 2 is a human gate: it goes straight to `Paused`, never to
+        // `Running` — a gate entry is never handed to a provider.
+        assert_eq!(
+            next_runnable(&tasks, &states).unwrap(),
+            Some(TaskId::new(2))
+        );
+        states.insert(
+            TaskId::new(2),
+            TaskState::Paused {
+                reason: PauseReason::HumanGate,
+                resume_to: Box::new(TaskState::Queued),
+            },
+        );
+
+        // The queue stops: task 3 is blocked behind the unacknowledged gate.
+        assert_eq!(next_runnable(&tasks, &states).unwrap(), None);
+
+        // `ack` resolves the gate to `Acknowledged`.
+        let acknowledged = apply(
+            &states[&TaskId::new(2)],
+            &EventKind::GateAcknowledged {
+                by: "alice".to_string(),
+                at: time::OffsetDateTime::UNIX_EPOCH,
+            },
+        )
+        .expect("a HumanGate pause accepts GateAcknowledged");
+        assert_eq!(
+            acknowledged,
+            TaskState::Acknowledged {
+                by: "alice".to_string(),
+                at: time::OffsetDateTime::UNIX_EPOCH,
+            }
+        );
+        states.insert(TaskId::new(2), acknowledged);
+
+        // With the gate acknowledged, task 3 becomes runnable.
+        assert_eq!(
+            next_runnable(&tasks, &states).unwrap(),
+            Some(TaskId::new(3))
+        );
     }
 }

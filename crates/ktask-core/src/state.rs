@@ -197,9 +197,11 @@ pub fn check_one_active(states: &BTreeMap<TaskId, TaskState>) -> Result<()> {
 
 /// Enforces `VISION.md` §3 invariant 2: `next` cannot start until every task
 /// ahead of it in the queue has reached a settled state — `Done`,
-/// `Cancelled`, or `PublishedVerified` (already confirmed present on
-/// mainline, so a successor may safely build on it without waiting for the
-/// bookkeeping `TaskDone` event that follows).
+/// `Cancelled`, `PublishedVerified` (already confirmed present on mainline,
+/// so a successor may safely build on it without waiting for the bookkeeping
+/// `TaskDone` event that follows), or `Acknowledged` (a human gate's own
+/// terminal success — it never publishes anything, so `Acknowledged` is as
+/// settled as a gate entry gets).
 ///
 /// # Errors
 ///
@@ -209,7 +211,10 @@ pub fn check_predecessor(states: &BTreeMap<TaskId, TaskState>, next: TaskId) -> 
     for (id, state) in states.range(..next) {
         let settled = matches!(
             state,
-            TaskState::Done | TaskState::Cancelled | TaskState::PublishedVerified { .. }
+            TaskState::Done
+                | TaskState::Cancelled
+                | TaskState::PublishedVerified { .. }
+                | TaskState::Acknowledged { .. }
         );
         if !settled {
             return Err(Error::Policy {
@@ -2339,6 +2344,21 @@ mod tests {
 
         check_predecessor(&states, TaskId::new(4))
             .expect("done, cancelled and published-verified predecessors are all settled");
+    }
+
+    #[test]
+    fn check_predecessor_allows_an_acknowledged_gate_predecessor() {
+        let mut states = BTreeMap::new();
+        states.insert(
+            TaskId::new(1),
+            TaskState::Acknowledged {
+                by: "alice".to_string(),
+                at: OffsetDateTime::UNIX_EPOCH,
+            },
+        );
+
+        check_predecessor(&states, TaskId::new(2))
+            .expect("an acknowledged gate is settled, like Done or PublishedVerified");
     }
 
     #[test]
