@@ -52,6 +52,7 @@ use crate::attempt::EVIDENCE_ROOT;
 use crate::ids::{AttemptId, TaskId};
 use crate::paths::{process_env, prompt_library_with};
 use crate::project::Project;
+use crate::report::AGENT_REPORT_FILE;
 use crate::task::Task;
 use crate::{Error, Result};
 
@@ -69,16 +70,6 @@ const TASK_PLACEHOLDER: &str = "{{TASK}}";
 /// error, where a bare relative path would quietly write a run's report into the
 /// repository, which is what VISION.md §3's invariant 6 forbids.
 const STATE_DIR: &str = "<state_dir>";
-
-/// The file an attempt's own report is written to, inside that attempt's evidence
-/// directory.
-///
-/// Distinct from the `report.md` that [`crate::write_evidence`] generates from an
-/// [`crate::AttemptRecord`]: one is what the runner concluded from the gates and
-/// SHAs it watched, the other is what the agent said in its own words, and
-/// VISION.md §3's invariant 4 keeps those two apart rather than letting the
-/// second stand in for the first.
-const AGENT_REPORT_FILE: &str = "agent-report.md";
 
 /// The heading a template that never named [`TASK_PLACEHOLDER`] gets the task
 /// under, so that a prompt is never handed over without the task it is about.
