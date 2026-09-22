@@ -290,6 +290,41 @@ pub fn evidence_dir(project: &Project, task: TaskId, attempt: AttemptId) -> Path
         .join(attempt.to_string())
 }
 
+/// Make one attempt's evidence directory exist, and own its own mode, without
+/// filing anything in it.
+///
+/// [`write_evidence`] creates the same levels on its way to writing a record, and
+/// this is the same guarantee asked for on its own: the run has to be able to say
+/// *the directory named in the prompt is there* before a provider is started, so
+/// that a session told to write `<dir>/agent-report.md` meets a directory rather
+/// than an error. A report that could not be written is indistinguishable from an
+/// agent that wrote none, which is why the promise is made before the session
+/// rather than discovered after it.
+///
+/// Only the attempt's own two levels are made, and nothing is removed or
+/// re-written: unlike [`write_evidence`] there is no torn record to notice here,
+/// and an attempt's directory may already hold a record, gate logs and a report
+/// this call has no business disturbing.
+///
+/// # Errors
+///
+/// [`Error::NotFound`] when the project has no state directory — registration
+/// makes that directory and sets its mode, and an evidence writer does not invent
+/// one. [`Error::Policy`] when a level of the layout is there and is not a
+/// directory, or is reached through a symbolic link. [`Error::Io`] when the
+/// filesystem refused to make or permission a level.
+pub(crate) fn ensure_evidence_dir(
+    project: &Project,
+    task: TaskId,
+    attempt: AttemptId,
+) -> Result<()> {
+    ensure_state_directory(project)?;
+    for level in levels_below(&evidence_dir(project, task, attempt), &project.state_dir) {
+        private_dir(&level)?;
+    }
+    Ok(())
+}
+
 /// File one attempt's evidence below its project's state directory.
 ///
 /// The directory is [`evidence_dir`]'s layout, holding `report.md` (the record in

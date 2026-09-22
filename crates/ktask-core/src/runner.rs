@@ -10,8 +10,9 @@
 //! adapter as arguments is that a run assembled from what its caller happened to
 //! carry is a run whose gates and journal somebody else chose.
 //!
-//! Its two jobs so far are [`Runner::prepare`] and [`Runner::begin_attempt`]. The
-//! first takes a queued task as far as the ground it stands on; the second is the
+//! Its three jobs so far are [`Runner::prepare`], [`Runner::begin_attempt`], and the
+//! round trip an attempt's report makes. The first takes a queued task as far as the
+//! ground it stands on; the second is the
 //! transition that spends a token, and three things about it are not free to
 //! change:
 //!
@@ -34,8 +35,15 @@
 //! is cut from the fetched tip rather than from wherever `HEAD` stands
 //! (VISION.md §10, ADR-0043).
 //!
-//! What a run does once an attempt is open — phases, the agent session, the gates,
-//! publication, remediation — belongs to the tasks after this one.
+//! The report round trip is the one part of a session's handling that is here
+//! already, because both ends of it are promises the run makes rather than things
+//! it observes: [`Runner::prepare_report`] makes the directory the prompt names
+//! before a provider is started, and [`Runner::read_report`] is the reading done
+//! after one exits. In between sits a session this module does not drive yet —
+//! phases, the gates, publication and remediation belong to the tasks after this
+//! one — and the reason the two ends are here without the middle is that a report
+//! the run cannot locate is indistinguishable from an agent that wrote nothing,
+//! which is a failure the run owns whatever the session did.
 //!
 //! # Preflight: the checks that prove the world is sane before a token is spent
 //!
@@ -122,8 +130,8 @@ use crate::protocol;
 use crate::provider;
 use crate::{
     AttemptId, AttemptRecord, Bus, Capabilities, Config, Error, EventKind, FailureClass, Gate,
-    GateKind, GateResult, Journal, Profile, Project, Provider, Recorder, Result, Subscription,
-    Task, TaskId, profile_from, run_gate, write_evidence,
+    GateKind, GateResult, Journal, Profile, Project, Provider, Recorder, ReportClaim, Result,
+    Subscription, Task, TaskId, profile_from, run_gate, write_evidence,
 };
 
 /// The parts one run is made of, gathered once from the project it works.
@@ -364,6 +372,49 @@ impl Runner {
             CONTEXT_AT_START,
         )?;
         Ok(attempt)
+    }
+
+    /// Make the directory an attempt's report will be written into, and hand back
+    /// the file inside it that the report is.
+    ///
+    /// Called after the prompt is assembled and before the provider is started,
+    /// because the prompt names [`crate::report_path`]'s path as where the report
+    /// goes: a session told to write `<dir>/agent-report.md` into a directory that
+    /// was never made meets an error, and the run cannot then tell an agent that
+    /// refused to report from one that could not. Making the directory is the only
+    /// way the promise in the prompt is the run's rather than the agent's.
+    ///
+    /// The path returned is *the* path — the one the header of the prompt prints
+    /// and the one [`Runner::read_report`] reads — so a caller cannot hand a
+    /// provider a directory and read back a different one.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when this project has no state directory, and
+    /// [`Error::Policy`] or [`Error::Io`] when a level of the evidence layout is
+    /// occupied or the filesystem refused it. Nothing is journaled here, so a
+    /// refusal leaves the attempt exactly as it stood.
+    pub fn prepare_report(&self, task: TaskId, attempt: AttemptId) -> Result<PathBuf> {
+        crate::attempt::ensure_evidence_dir(&self.project, task, attempt)?;
+        Ok(crate::report::report_path(&self.project, task, attempt))
+    }
+
+    /// Read what an attempt said about itself, once its provider has exited.
+    ///
+    /// A claim, never a verdict: what comes back is what the agent wrote, and the
+    /// gates, the push and the fetched remote outrank it (VISION.md §3's invariants
+    /// 4 and 7). What it can do is refuse — an attempt that left no report is
+    /// [`crate::ReportClaim::Missing`], carrying the class the run records and the
+    /// path the prompt named, and nothing about it is assumed.
+    ///
+    /// # Errors
+    ///
+    /// As [`crate::read_report`]: [`Error::Io`] when the filesystem refused the
+    /// read for a reason other than absence, and [`Error::Corrupt`] when a report
+    /// is there and its header cannot be trusted. Both are refusals of the read,
+    /// and neither is a claim of completion.
+    pub fn read_report(&self, task: TaskId, attempt: AttemptId) -> Result<ReportClaim> {
+        crate::report::read_report(&self.project, task, attempt)
     }
 
     /// What an attempt looks like at the instant it started: everything that was
@@ -2708,6 +2759,416 @@ mod prepare {
             2,
             "the user's checkout and this task's, not one per attempt: {:?}",
             fixture.checkouts()
+        );
+    }
+}
+
+#[cfg(test)]
+mod report {
+    //! The round trip one attempt's report makes: the path the prompt names, the
+    //! directory that exists before the provider is started, and the reading done
+    //! after it exits.
+    //!
+    //! Named after the two methods it tests — [`Runner::prepare_report`] and
+    //! [`Runner::read_report`] — the way `mod new` and `mod prepare` are named
+    //! after the methods they test, and because the task that asked for this pair
+    //! fixed `test(/report::/)` as its Verify command.
+
+    use super::Runner;
+    use crate::testing::{ScratchRepo, scratch_repo};
+    use crate::{
+        AttemptId, EventKind, FailureClass, Project, ReportClaim, ReportResult, Task, TaskId,
+        assemble, parse_plan, project_config_path,
+    };
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::{Path, PathBuf};
+
+    /// The identity every fixture gives its registered project.
+    const PROJECT_ID: &str = "0123456789abcdef";
+
+    /// The settings a run is buildable from: the mandatory gate, an adapter this
+    /// build has, and a disk floor no test machine can breach.
+    const BASE: &str = concat!(
+        "provider = \"claude\"\n",
+        "verify_command = [\"/bin/sh\", \"-c\", \"exit 0\"]\n",
+        "min_free_disk_bytes = 1\n",
+    );
+
+    /// The queue position [`parse_plan`] gives the one-row plan below, and so the
+    /// task every attempt of these fixtures is opened for. Asserted in [`task`],
+    /// because a fixture that journalled a base for one task and opened an attempt
+    /// on another would be testing the refusal rather than the round trip.
+    const TASK: u32 = 1;
+
+    /// The queue length the fixtures hand the header, so the prompt under test
+    /// names a queue rather than a single task.
+    const TOTAL: usize = 161;
+
+    /// What a session that finished leaves in its report.
+    const DONE: &str = "KTASK_RESULT: DONE\nSummary: written where the header said.\n";
+
+    /// What a session that stopped short leaves in its report.
+    const FAILED: &str = "KTASK_RESULT: FAILED\nSummary: the gate still refuses.\n";
+
+    /// The context document and template the fixtures assemble with. Neither is
+    /// read from anywhere: [`assemble`] is the half that reads nothing, so the
+    /// path in the header is the only thing in these prompts that comes from
+    /// outside the strings below.
+    const CONTEXT: &str = "# Project context\n\nRead VISION.md first.";
+    const TEMPLATE: &str = "# Task\n\n{{TASK}}\n\nWrite your report to the path the header names.";
+
+    /// The queue row both attempts are opened for.
+    fn task() -> Task {
+        let document = "\
+## T090 Report path and round-trip
+
+**Outcome:** the agent's report is written where the prompt says and read back.
+**Done-when:** a missing report is a classified failure naming the expected path.
+**Verify:** `cargo nextest run -p ktask-core -E 'test(/report::/)'`
+**Refs:** VISION.md section 3 invariant 4
+";
+        let parsed = parse_plan(document)
+            .expect("a task block with the four mandatory sections is a parseable plan");
+        let row = parsed
+            .into_iter()
+            .next()
+            .expect("the fixture plan holds one row");
+        assert_eq!(
+            row.id,
+            TaskId::new(TASK),
+            "the fixtures journal a base and name paths for task {TASK}",
+        );
+        row
+    }
+
+    /// A registered project: a repository of its own, and a state directory of its
+    /// own to hold a journal, a lock and an attempt's evidence.
+    struct Fixture {
+        repo: ScratchRepo,
+        project: Project,
+    }
+
+    impl Fixture {
+        /// A project holding `BASE` as its own settings document, with the state
+        /// directory a registration would have made.
+        fn new() -> Self {
+            let repo = scratch_repo().expect("a scratch repository is buildable");
+            let state_dir = repo.path().join("state").join(PROJECT_ID);
+            let project = Project {
+                root: repo.work().to_path_buf(),
+                id: PROJECT_ID.to_owned(),
+                state_dir,
+            };
+            fs::create_dir_all(&project.state_dir).expect("a state directory is creatable");
+            fs::write(project_config_path(&project), BASE)
+                .expect("a project settings document is writable");
+            Self { repo, project }
+        }
+
+        /// The commit a preflight would have handed this run.
+        fn base(&self) -> String {
+            self.repo.seed_sha().to_owned()
+        }
+
+        /// The run this project is configured to have.
+        fn run(&self) -> Runner {
+            Runner::new(self.project.clone()).expect("a registered, configured project opens a run")
+        }
+
+        /// Journal what preflight journals, so an attempt has a base to open on.
+        ///
+        /// Written by the run's own recorder because that is who records a preflight
+        /// verdict in the lifecycle; see `mod new` for the same fixture step.
+        fn give_base(&self, run: &mut Runner) {
+            run.recorder
+                .record(
+                    Some(TaskId::new(TASK)),
+                    EventKind::PreflightPassed {
+                        base_sha: self.base(),
+                    },
+                )
+                .expect("a preflight verdict is journalable");
+        }
+
+        /// Where one attempt's report is spelled to live, written out of the state
+        /// directory by hand rather than through the function under test — a
+        /// fixture that called `report_path` would agree with the code whatever it
+        /// did.
+        fn report_of(&self, task: u32, attempt: u32) -> PathBuf {
+            self.project
+                .state_dir
+                .join("attempts")
+                .join(task.to_string())
+                .join(attempt.to_string())
+                .join("agent-report.md")
+        }
+
+        /// The prompt one attempt of this project's task is handed.
+        fn prompt(&self, attempt: u32) -> String {
+            assemble(
+                &self.project,
+                &task(),
+                CONTEXT,
+                &[],
+                TEMPLATE,
+                AttemptId::new(attempt),
+                TOTAL,
+            )
+        }
+    }
+
+    /// What a session leaves at the path it was told to write to.
+    ///
+    /// It writes and nothing else: making the parent directory is the run's job, and
+    /// doing it here would let a test pass over an attempt whose report directory was
+    /// never created.
+    fn agent_writes(path: &Path, words: &str) {
+        fs::write(path, words).unwrap_or_else(|why| panic!("`{}`: {why}", path.display()));
+    }
+
+    /// The three answers of a [`ReportClaim::Claimed`], refused for anything else.
+    fn claim(reading: &ReportClaim) -> (&Path, ReportResult, &str) {
+        match reading {
+            ReportClaim::Claimed { path, result, text } => (path, *result, text),
+            other @ ReportClaim::Missing { .. } => {
+                panic!("expected a claim about a report, got {other:?}")
+            }
+        }
+    }
+
+    /// The path, class and words of a [`ReportClaim::Missing`], refused for
+    /// anything else.
+    fn refusal(reading: &ReportClaim) -> (&Path, FailureClass, &str) {
+        match reading {
+            ReportClaim::Missing {
+                path,
+                class,
+                detail,
+            } => (path, *class, detail),
+            other @ ReportClaim::Claimed { .. } => {
+                panic!("expected a refusal to find a report, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn the_report_directory_is_made_before_the_provider_that_writes_it_starts() {
+        let fixture = Fixture::new();
+        let run = fixture.run();
+        let attempt = AttemptId::new(7);
+
+        let path = run
+            .prepare_report(TaskId::new(TASK), attempt)
+            .expect("preparing a report is a directory being made");
+        let directory = path.parent().expect("a report sits in a directory");
+
+        assert_eq!(
+            path.strip_prefix(&fixture.project.state_dir).ok(),
+            Some(Path::new("attempts/1/7/agent-report.md")),
+            "the path the run hands the provider step is the attempt's own report below the \
+             state directory, in the layout the evidence uses: {path:?}"
+        );
+        assert!(
+            directory.is_dir(),
+            "`{}` has to exist before a session is started, because the prompt tells that \
+             session to write a file into it and the filesystem does not make a parent out \
+             of an agent's good intentions",
+            directory.display(),
+        );
+        assert_eq!(
+            fs::metadata(directory)
+                .unwrap_or_else(|why| panic!("`{}`: {why}", directory.display()))
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "an attempt's report is the least shareable thing it produces, so its directory \
+             is owner-only whatever the machine's umask was: {}",
+            directory.display(),
+        );
+    }
+
+    #[test]
+    fn the_prepared_path_is_the_path_the_prompt_names() {
+        let fixture = Fixture::new();
+        let run = fixture.run();
+
+        let path = run
+            .prepare_report(TaskId::new(TASK), AttemptId::new(2))
+            .expect("a registered project has a report path");
+        let prompt = fixture.prompt(2);
+
+        assert!(
+            prompt.contains(&format!("Report: `{}`", path.display())),
+            "the prompt an agent is handed and the path the run will read back have to be \
+             one path, or a report written exactly where it was told is a report nobody \
+             reads: {prompt}"
+        );
+    }
+
+    #[test]
+    fn a_report_written_where_the_prompt_told_the_agent_is_read_back_as_its_claim() {
+        let fixture = Fixture::new();
+        let run = fixture.run();
+        let task = TaskId::new(TASK);
+        let attempt = AttemptId::new(1);
+
+        let path = run
+            .prepare_report(task, attempt)
+            .expect("the directory the prompt names is made before the provider runs");
+        assert!(
+            fixture.prompt(1).contains(&format!("`{}`", path.display())),
+            "the round trip starts at the path the agent was told: {}",
+            path.display(),
+        );
+        agent_writes(&path, DONE);
+
+        let reading = run
+            .read_report(task, attempt)
+            .expect("a report that is there is readable");
+
+        let (read, result, text) = claim(&reading);
+        assert_eq!(result, ReportResult::Done, "the header says what it says");
+        assert_eq!(read, path, "the claim was read from the prepared path");
+        assert_eq!(
+            text, DONE,
+            "the whole report comes back, because the body of a `NEEDS_INPUT` report is what \
+             the pause is built out of"
+        );
+    }
+
+    #[test]
+    fn an_attempt_with_no_report_is_a_failure_naming_the_path_the_prompt_named() {
+        let fixture = Fixture::new();
+        let run = fixture.run();
+        let task = TaskId::new(TASK);
+
+        let path = run
+            .prepare_report(task, AttemptId::new(1))
+            .expect("the directory is made even for an attempt that writes nothing");
+
+        let reading = run
+            .read_report(task, AttemptId::new(1))
+            .expect("an absent report is an answer, not a failed read");
+
+        let (expected, class, detail) = refusal(&reading);
+        assert_eq!(
+            expected, path,
+            "the refusal has to name the very path the prompt named, which is the only \
+             starting point a remediation has"
+        );
+        assert_eq!(
+            expected,
+            fixture.report_of(TASK, 1).as_path(),
+            "and it is the attempt's own report file, not somewhere else the run chose"
+        );
+        assert_eq!(
+            class,
+            FailureClass::AgentFailure,
+            "a session that ran and left no account of itself did not complete the work \
+             (VISION.md §7); it is not a policy breach, a refused gate, or a question"
+        );
+        assert!(
+            detail.contains(&expected.display().to_string()),
+            "the words of the refusal carry the path too, because a class alone is not \
+             something an operator can act on: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_retry_is_read_as_its_own_report_and_never_the_one_its_predecessor_left() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        fixture.give_base(&mut run);
+        let task = task();
+
+        let first = run
+            .begin_attempt(&task)
+            .expect("an attempt opens on the base the journal named");
+        let second = run
+            .begin_attempt(&task)
+            .expect("a retry opens after the attempt it remediates");
+        assert_eq!(
+            (first, second),
+            (AttemptId::new(1), AttemptId::new(2)),
+            "two attempts of one task are two attempts, numbered in the order they were opened"
+        );
+
+        let first_report = run
+            .prepare_report(TaskId::new(TASK), first)
+            .expect("the first attempt's report directory is made");
+        let second_report = run
+            .prepare_report(TaskId::new(TASK), second)
+            .expect("the retry's report directory is made");
+        assert_ne!(
+            first_report, second_report,
+            "one attempt never writes into the other's directory"
+        );
+        agent_writes(&first_report, DONE);
+
+        let retry = run
+            .read_report(TaskId::new(TASK), second)
+            .expect("an attempt that wrote nothing is answered, not assumed");
+        let (expected, class, _) = refusal(&retry);
+        assert_eq!(
+            expected, second_report,
+            "the retry's own path is the one named — reading the previous attempt's report \
+             here would report a DONE the retry never claimed"
+        );
+        assert_eq!(class, FailureClass::AgentFailure);
+
+        agent_writes(&second_report, FAILED);
+        let retry = run
+            .read_report(TaskId::new(TASK), second)
+            .expect("the retry's own report is there now");
+        assert_eq!(
+            claim(&retry).1,
+            ReportResult::Failed,
+            "the retry is read as what the retry said"
+        );
+        let earlier = run
+            .read_report(TaskId::new(TASK), first)
+            .expect("the first attempt's report is still on disk");
+        assert_eq!(
+            claim(&earlier).1,
+            ReportResult::Done,
+            "and a later attempt neither replaces nor erases the account of the one before it"
+        );
+    }
+
+    #[test]
+    fn preparing_a_report_directory_leaves_what_the_attempt_already_filed_alone() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        fixture.give_base(&mut run);
+        let task = task();
+        let attempt = run
+            .begin_attempt(&task)
+            .expect("an attempt files its evidence as it opens");
+
+        let filed = fixture
+            .report_of(TASK, attempt.get())
+            .parent()
+            .expect("a report sits in a directory")
+            .join("report.md");
+        let before =
+            fs::read_to_string(&filed).unwrap_or_else(|why| panic!("`{}`: {why}", filed.display()));
+
+        let path = run
+            .prepare_report(TaskId::new(TASK), attempt)
+            .expect("preparing the agent's report directory is not a re-write of the attempt");
+
+        assert_eq!(
+            fs::read_to_string(&filed).unwrap_or_else(|why| panic!("`{}`: {why}", filed.display())),
+            before,
+            "an attempt's generated record and the agent's account of itself are two files \
+             in one directory, and making room for the second cannot touch the first"
+        );
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("agent-report.md"),
+            "and the two keep different names: {path:?}"
         );
     }
 }
