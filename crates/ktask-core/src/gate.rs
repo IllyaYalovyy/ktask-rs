@@ -11,7 +11,10 @@
 //! [`run_gate`] executes one gate as a subprocess: never through a shell,
 //! stdin closed, both output pipes read on their own threads so a gate that
 //! fills one cannot stall on the other, and [`Gate::timeout_secs`] enforced
-//! as a budget rather than advice.
+//! as a budget rather than advice. The child runs as the leader of its own
+//! process group, so a timeout signals every descendant it spawned —
+//! `SIGTERM`, then `SIGKILL` after a grace period — not just the immediate
+//! child.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
@@ -183,13 +186,10 @@ pub fn profile_from(config: &Config) -> Result<Profile> {
 /// seconds — four orders of magnitude coarser than this.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
-/// How long a killed gate's pipes are still read before the run gives up on
-/// them and reports what it has.
-///
-/// Killing the immediate child does not close a pipe a descendant of it
-/// still holds open; reaping every descendant is `T042`'s process-group
-/// kill. Until that lands, this bounds the wait so a lingering grandchild
-/// can never hang the run.
+/// How long a timed-out gate's process group is given to exit after
+/// `SIGTERM` before this escalates to `SIGKILL`, and how long a killed
+/// gate's pipes are still read before the run gives up on them and reports
+/// what it has.
 const KILL_GRACE: Duration = Duration::from_secs(2);
 
 /// This gate's kind, formatted the way [`Error::Gate`] names it.
@@ -256,6 +256,65 @@ fn terminating_signal(_status: ExitStatus) -> Option<i32> {
     None
 }
 
+/// Puts the spawned child in a new process group led by itself, so that
+/// every descendant it forks — a shell's pipeline, a backgrounded worker —
+/// shares one group id and can be signalled together at timeout.
+///
+/// `process_group(0)` is the safe replacement for the `pre_exec` +
+/// `setpgid` pattern this would otherwise need: it runs `setpgid(0, 0)` in
+/// the child after `fork` and before `exec` without any `unsafe` in this
+/// crate, which `unsafe_code = "forbid"` does not allow lifting.
+#[cfg(unix)]
+fn new_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt as _;
+    command.process_group(0);
+}
+
+/// No process groups outside Unix; the child is signalled alone.
+#[cfg(not(unix))]
+fn new_process_group(_command: &mut Command) {}
+
+/// Which signal [`kill_group`] should send.
+#[derive(Debug, Clone, Copy)]
+enum GroupSignal {
+    /// Ask the group to exit; a well-behaved process can catch this and
+    /// clean up.
+    Terminate,
+    /// End the group unconditionally, for a process that ignored or
+    /// outlived [`GroupSignal::Terminate`].
+    Kill,
+}
+
+/// Signals every process in `child`'s process group — not just `child`
+/// itself — since [`new_process_group`] made `child`'s pid its own group
+/// id. A gate that spawned a grandchild (a shell pipeline, a backgrounded
+/// worker) has no other process reachable from here that can reap it.
+///
+/// Outside Unix there is no process group to reach, and this is a no-op:
+/// `Child::kill` needs `&mut Child`, unavailable through this shared
+/// reference, so [`run_gate`] cannot fall back to killing just the
+/// immediate child from here either.
+fn kill_group(child: &std::process::Child, signal: GroupSignal) {
+    #[cfg(unix)]
+    {
+        use nix::sys::signal::{self, Signal};
+        use nix::unistd::Pid;
+
+        let pgid = Pid::from_raw(i32::try_from(child.id()).unwrap_or(i32::MAX));
+        let signal = match signal {
+            GroupSignal::Terminate => Signal::SIGTERM,
+            GroupSignal::Kill => Signal::SIGKILL,
+        };
+        // Best-effort: the group may already be gone, which is the goal,
+        // not an error.
+        let _ = signal::killpg(pgid, signal);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (child, signal);
+    }
+}
+
 /// Runs `gate`'s command as a subprocess rooted at `root`, enforcing its
 /// [`Gate::timeout_secs`] and returning a record of what happened.
 ///
@@ -288,18 +347,19 @@ pub fn run_gate(gate: &Gate, root: &Path, bus: Option<&Bus>) -> Result<GateResul
     })?;
     let dir = working_dir(gate, root);
 
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .current_dir(&dir)
         .envs(&gate.env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| Error::Gate {
-            kind: gate_name(gate.kind),
-            detail: format!("could not start `{program}` in `{}`: {err}", dir.display()),
-        })?;
+        .stderr(Stdio::piped());
+    new_process_group(&mut command);
+    let mut child = command.spawn().map_err(|err| Error::Gate {
+        kind: gate_name(gate.kind),
+        detail: format!("could not start `{program}` in `{}`: {err}", dir.display()),
+    })?;
     let started = Instant::now();
 
     let stdout = child.stdout.take().ok_or_else(|| Error::Gate {
@@ -334,13 +394,16 @@ pub fn run_gate(gate: &Gate, root: &Path, bus: Option<&Bus>) -> Result<GateResul
         }
         if !timed_out && started.elapsed() >= budget {
             timed_out = true;
-            // Best-effort: the process may have exited in the instant
+            // Best-effort: the group may have exited in the instant
             // between the deadline and this signal, which `wait` below
             // reports on its own terms either way.
-            let _ = child.kill();
+            kill_group(&child, GroupSignal::Terminate);
             kill_deadline = Some(Instant::now() + KILL_GRACE);
         }
         if kill_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            // The group ignored or outlived the grace period; end it
+            // unconditionally.
+            kill_group(&child, GroupSignal::Kill);
             break;
         }
     }
@@ -772,15 +835,75 @@ mod tests {
 
         #[cfg(unix)]
         #[test]
-        fn a_timed_out_gate_is_killed_with_sigkill() {
+        fn a_timed_out_gate_is_killed_with_sigterm_first() {
             let root = tempfile::tempdir().expect("tempdir");
             let gate = shell_gate(GateKind::Verify, "sleep 5", 1);
 
+            let clock = Instant::now();
+            let result = run_gate(&gate, root.path(), None).expect("run");
+
+            assert!(result.timed_out);
+            assert_eq!(
+                result.signal,
+                Some(15),
+                "expected SIGTERM, not escalation to SIGKILL"
+            );
+            assert_eq!(result.exit_code, None);
+            assert!(
+                clock.elapsed() < Duration::from_secs(1) + KILL_GRACE,
+                "a process that dies on SIGTERM should not wait out the SIGKILL grace \
+                 period: {:?}",
+                clock.elapsed()
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn a_timed_out_gate_that_ignores_sigterm_is_killed_with_sigkill_after_the_grace_period() {
+            let root = tempfile::tempdir().expect("tempdir");
+            let gate = shell_gate(GateKind::Verify, "trap '' TERM; sleep 5", 1);
+
+            let clock = Instant::now();
             let result = run_gate(&gate, root.path(), None).expect("run");
 
             assert!(result.timed_out);
             assert_eq!(result.signal, Some(9));
             assert_eq!(result.exit_code, None);
+            assert!(
+                clock.elapsed() >= Duration::from_secs(1) + KILL_GRACE,
+                "SIGKILL should only follow once the grace period after SIGTERM has \
+                 elapsed: {:?}",
+                clock.elapsed()
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn a_timed_out_gate_kills_a_grandchild_in_its_process_group() {
+            let root = tempfile::tempdir().expect("tempdir");
+            let pid_file = root.path().join("grandchild.pid");
+            let gate = shell_gate(
+                GateKind::Verify,
+                &format!("sleep 30 & echo $! > {} ; wait", pid_file.display()),
+                1,
+            );
+
+            let result = run_gate(&gate, root.path(), None).expect("run");
+
+            assert!(result.timed_out);
+            let pid_text =
+                fs::read_to_string(&pid_file).expect("grandchild pid was written before timeout");
+            let grandchild_pid: u32 = pid_text.trim().parse().expect("pid file holds a pid");
+
+            let alive = |pid: u32| Path::new(&format!("/proc/{pid}")).exists();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while alive(grandchild_pid) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(20));
+            }
+            assert!(
+                !alive(grandchild_pid),
+                "grandchild pid {grandchild_pid} outlived the gate that spawned it"
+            );
         }
 
         #[test]
