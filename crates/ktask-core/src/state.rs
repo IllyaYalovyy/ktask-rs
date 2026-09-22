@@ -387,6 +387,10 @@ pub fn apply(state: &TaskState, event: &EventKind) -> Result<TaskState> {
 /// Nothing else has happened yet — the checks have not begun, so no attempt,
 /// phase, verdict or commit can be named — and there are exactly three ways
 /// out: preflight starts, the run waits, or a human drops the task.
+///
+/// A gate's start and finish are refused here because they belong to that
+/// "nothing else": a queued task has no check running to have started one
+/// (T087 starts the first gate, the baseline check, in `Preflight`).
 fn from_queued(event: &EventKind) -> Result<TaskState> {
     const FROM: &str = "Queued";
     match event {
@@ -415,6 +419,8 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::GateAcknowledged { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::RecoveryDecision {
             decision: Recovery::MarkInterrupted,
             ..
@@ -431,12 +437,21 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
 /// recovery verdict, which cannot resume work that has not started. Only the
 /// two things a state can express end it: a refusal, and an attempt entering a
 /// phase.
+///
+/// A gate's rows are exactly that kind of finding here: T087's first check is
+/// the `GateKind::Baseline` gate, and which gates ran is a list the journal
+/// keeps rather than a field `Preflight` has no room for. Like
+/// [`EventKind::TddExceptionUsed`] the pair names no attempt, so nothing here
+/// can check an equality it does not hold: the state that was asked is the one
+/// that owns the claim.
 fn from_preflight(event: &EventKind) -> Result<TaskState> {
     const FROM: &str = "Preflight";
     match event {
         EventKind::PreflightStarted
         | EventKind::PreflightPassed { .. }
         | EventKind::AttemptStarted { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::RecoveryDecision {
             decision: Recovery::Resume | Recovery::AlreadyApplied,
             ..
@@ -509,6 +524,13 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
 /// exception unusable as an answer to a phase that wrote outside its scope —
 /// by the time anyone reaches for the excuse, that phase has left this state
 /// (ADR-0074).
+///
+/// A gate's start and finish are that third kind as well, and an attempt at
+/// work is where §9's phase gates run: T092 opens a pair around the command
+/// that decides whether a red phase produced its failing test. What that run
+/// decides belongs to the phase and arrives as its own event — a refusal as
+/// [`EventKind::VerifyFailed`], the next phase as [`EventKind::PhaseEntered`] —
+/// so the gate's rows are filed and the attempt keeps working.
 fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<TaskState> {
     const FROM: &str = "Running";
     match event {
@@ -555,6 +577,9 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
             event,
         ),
         EventKind::TddExceptionUsed { .. } => Ok(TaskState::Running { attempt, phase }),
+        EventKind::GateStarted { .. } | EventKind::GateFinished { .. } => {
+            Ok(TaskState::Running { attempt, phase })
+        }
         EventKind::DecisionRaised { .. } => Ok(parked(
             TaskState::Running { attempt, phase },
             PauseReason::Input,
@@ -623,6 +648,11 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
 /// A declared exception to test-first (§9) is that third kind too, so a task that
 /// declared one claims it here as well, and the claim again says what was rather
 /// than where the task may go.
+///
+/// So is a gate's pair of rows: §7's "after any remediation, every completion
+/// gate reruns from scratch" means the repair is proved by gates run again in
+/// this state, and each of those runs is a start and a finish that leaves the
+/// remediation where it was.
 fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<TaskState> {
     const FROM: &str = "Remediating";
     match event {
@@ -665,6 +695,9 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
             event,
         ),
         EventKind::TddExceptionUsed { .. } => Ok(TaskState::Remediating { attempt, phase }),
+        EventKind::GateStarted { .. } | EventKind::GateFinished { .. } => {
+            Ok(TaskState::Remediating { attempt, phase })
+        }
         EventKind::DecisionRaised { .. } => Ok(parked(
             TaskState::Remediating { attempt, phase },
             PauseReason::Input,
@@ -722,6 +755,12 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
 /// died, not a fact this state can contradict. An agent's output is refused
 /// outright — by definition the attempt finished before the gates opened, so
 /// output arriving now belongs to no attempt this task is running.
+///
+/// A gate's rows are what this state is for: the completion set T085 runs is
+/// five gates and ten rows, and the verdict a caller acts on is the
+/// [`EventKind::VerifyPassed`] or [`EventKind::VerifyFailed`] the set adds after
+/// them. Filing a row moves nothing, which is what lets a replay of a run that
+/// died mid-set stop at the same gate the journal names.
 fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
     const FROM: &str = "Verifying";
     match event {
@@ -770,6 +809,9 @@ fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
             FROM,
             event,
         ),
+        EventKind::GateStarted { .. } | EventKind::GateFinished { .. } => {
+            Ok(TaskState::Verifying { attempt })
+        }
         EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
             class: *class,
             detail: detail.clone(),
@@ -812,6 +854,12 @@ fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
 /// two fields name the same commit. A push that is not yet proved by a fetched
 /// remote is a push that has not happened, which is invariant 2 in the one
 /// place it is easiest to break.
+///
+/// A gate's rows are accepted for the same reason `VerifyPassed` is: a rejected
+/// push is answered by a rebase and a completion set rerun from scratch (T093),
+/// and that rerun happens here, above the commit it is proving again. Rows
+/// filed for it say which gates were run again; only a remote that has the
+/// commit moves this state.
 fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
     const FROM: &str = "Publishing";
     match event {
@@ -855,6 +903,9 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
             FROM,
             event,
         ),
+        EventKind::GateStarted { .. } | EventKind::GateFinished { .. } => {
+            Ok(TaskState::Publishing { attempt })
+        }
         EventKind::PublishVerified {
             commit: proved,
             remote_sha,
@@ -911,6 +962,10 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
 /// An attempt's record belongs to the attempt that produced it, and by here
 /// that attempt is filed and finished: `Publishing` is where its evidence
 /// belongs, and this state holds no attempt to name one against.
+///
+/// A gate's rows are refused for the same reason — the remote has been read
+/// back holding the commit, so a command started after that reading is a gate
+/// about somebody else's work.
 fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState> {
     const FROM: &str = "PublishedVerified";
     match event {
@@ -953,6 +1008,8 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::PublishStarted { .. }
         | EventKind::TaskFailed { .. }
         | EventKind::TaskCancelled { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::Resumed
         | EventKind::Interrupted { .. }
         | EventKind::TddExceptionUsed { .. }
@@ -985,6 +1042,10 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
 /// be about. The attempt a pause resumes into is the one that files its own
 /// record, which is why filing is done while an attempt is still held rather
 /// than whenever a run happens to get round to it.
+///
+/// A gate's rows are refused for the same reason: a parked run starts no
+/// command, and a gate that began while the task waited would be one no attempt
+/// of this task was running.
 fn from_paused(
     reason: &PauseReason,
     resume_to: &TaskState,
@@ -1028,6 +1089,8 @@ fn from_paused(
         | EventKind::TaskFailed { .. }
         | EventKind::Paused { .. }
         | EventKind::Interrupted { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. } => Err(refused(FROM, event)),
     }
@@ -1202,6 +1265,7 @@ mod tests {
         PauseReason, Phase, PhaseEntry, Recovery, Stream, TaskState, apply, check_one_active,
         check_predecessor, phase_entry,
     };
+    use crate::gate::{GateKind, GateResult};
     use crate::{
         AttemptId, AttemptRecord, DecisionRequest, Error, EventKind, FailureClass, TaskId,
         TddException,
@@ -1891,11 +1955,41 @@ mod tests {
         }
     }
 
+    /// One gate having begun. The payload names a gate and no attempt, so — like
+    /// [`exception_used`] — the state that was asked is the one that owns the
+    /// claim, and nothing here can compare an attempt number the entry does not
+    /// carry.
+    fn gate_started(kind: GateKind) -> EventKind {
+        EventKind::GateStarted { gate: kind }
+    }
+
+    /// That gate's finish, holding the record its run left. `passed` decides the
+    /// verdict and the status that goes with it, so a refusal is a record rather
+    /// than an absence.
+    fn gate_finished(kind: GateKind, passed: bool) -> EventKind {
+        EventKind::GateFinished {
+            result: GateResult {
+                kind,
+                passed,
+                exit_code: Some(i32::from(!passed)),
+                signal: None,
+                duration_ms: 61_402,
+                stdout: String::new(),
+                stderr: if passed {
+                    String::new()
+                } else {
+                    "1 gate refused".to_owned()
+                },
+                timed_out: false,
+            },
+        }
+    }
+
     /// Every catalog entry a journal can hold, carrying what a run would carry.
     /// Written out by hand rather than generated because the point of the list
     /// is that a person named each entry — and because a sweep over it is what
     /// proves no state stays quiet about an event.
-    fn every_event() -> [EventKind; 22] {
+    fn every_event() -> [EventKind; 24] {
         [
             queued(),
             EventKind::PreflightStarted,
@@ -1904,6 +1998,8 @@ mod tests {
             started(1),
             entered(1, Phase::Implement),
             output(1),
+            gate_started(GateKind::Baseline),
+            gate_finished(GateKind::Baseline, false),
             verify_passed(1),
             verify_failed(1),
             publish_started(1),
@@ -2400,6 +2496,69 @@ mod tests {
         }
     }
 
+    /// A gate's rows are evidence about a run rather than a way out of one, so
+    /// the state a gate was running in answers them with itself. Those are the
+    /// five a run reaches with a command open: `Preflight` holds T087's baseline
+    /// check, `Running` and `Remediating` hold §9's phase gates and §7's reruns,
+    /// and `Verifying` holds the completion set — whose rerun after a rebased
+    /// push happens above `Publishing`, the same reason `VerifyPassed` keeps a
+    /// row there.
+    #[test]
+    fn a_gate_row_says_what_ran_and_moves_the_state_that_ran_it() {
+        for state in [
+            TaskState::Preflight,
+            working(1, Phase::Green),
+            remediating(2, Phase::Red),
+            verifying(1),
+            publishing(1),
+        ] {
+            moves(&state, &gate_started(GateKind::Verify), &state);
+            moves(&state, &gate_finished(GateKind::Verify, false), &state);
+            moves(&state, &gate_finished(GateKind::Verify, true), &state);
+        }
+    }
+
+    /// The other side of the same line, written as a predicate over every state
+    /// rather than over the five: a queued task has started no check, a published
+    /// commit has already been read back off the remote, and a pause is a wait
+    /// rather than a run. A journal that acquired a gate row in one of them
+    /// would say a gate was proving a task no gate was running.
+    #[test]
+    fn a_gate_row_is_refused_where_no_gate_is_running() {
+        for state in one_state_per_variant() {
+            let open = matches!(
+                state,
+                TaskState::Preflight
+                    | TaskState::Running { .. }
+                    | TaskState::Remediating { .. }
+                    | TaskState::Verifying { .. }
+                    | TaskState::Publishing { .. }
+            );
+            if open {
+                moves(&state, &gate_started(GateKind::Privacy), &state);
+                moves(&state, &gate_finished(GateKind::Privacy, true), &state);
+            } else {
+                refuses(&state, &gate_started(GateKind::Privacy));
+                refuses(&state, &gate_finished(GateKind::Privacy, true));
+            }
+        }
+    }
+
+    /// What the pair cannot say. Neither row carries an attempt, so the state
+    /// asked owns the claim instead of matching a number: the seventh attempt's
+    /// row is answered by the seventh attempt's state, and a row that named a
+    /// different attempt is a thing the catalog makes unspellable rather than a
+    /// thing this function can refuse.
+    #[test]
+    fn a_gate_row_is_answered_by_the_state_asked_because_it_names_no_attempt() {
+        let seventh = working(7, Phase::Green);
+        moves(&seventh, &gate_finished(GateKind::Verify, true), &seventh);
+
+        let held =
+            apply(&seventh, &pause(PauseReason::Interrupted)).expect("a signal parks the attempt");
+        refuses(&held, &gate_started(GateKind::Verify));
+    }
+
     #[test]
     fn a_later_attempt_starts_where_a_working_state_can_hold_it() {
         for state in [
@@ -2847,7 +3006,17 @@ mod tests {
     /// pair has left it. `("Paused", "Paused", "Paused")` was a nested pause,
     /// which T028 decided is a mistake rather than a second wait — the refusal
     /// is asserted in `a_pause_above_a_pause_is_refused`, and ADR-0026 is why.
-    const LEGAL: [(&str, &str, &str); 56] = [
+    /// `GateStarted` and `GateFinished` keep a row in each of the five states a
+    /// run can have a command open in — `Preflight`, `Running`, `Remediating`,
+    /// `Verifying` and `Publishing` — and none in the other three that are not
+    /// terminal. `Publishing` is on that list because T093 answers a rejected
+    /// push with a rebase and a completion set rerun from scratch, above the
+    /// commit it is proving again — the same fact that gives `VerifyPassed` its
+    /// row there. Neither payload carries
+    /// an attempt, so no row is conditional on one: the pair says what ran, and
+    /// the state asked owns the claim, exactly as `TddExceptionUsed`'s does.
+    /// ADR-0080 records the ten rows and what each state's is for.
+    const LEGAL: [(&str, &str, &str); 66] = [
         ("Queued", "TaskQueued", "Queued"),
         ("Queued", "PreflightStarted", "Preflight"),
         ("Queued", "Paused", "Paused"),
@@ -2857,6 +3026,8 @@ mod tests {
         ("Preflight", "PreflightPassed", "Preflight"),
         ("Preflight", "PreflightFailed", "Failed"),
         ("Preflight", "AttemptStarted", "Preflight"),
+        ("Preflight", "GateStarted", "Preflight"),
+        ("Preflight", "GateFinished", "Preflight"),
         ("Preflight", "PhaseEntered", "Running"),
         ("Preflight", "Paused", "Paused"),
         ("Preflight", "TaskCancelled", "Cancelled"),
@@ -2865,6 +3036,8 @@ mod tests {
         ("Running", "AgentOutput", "Running"),
         ("Running", "AttemptRecorded", "Running"),
         ("Running", "TddExceptionUsed", "Running"),
+        ("Running", "GateStarted", "Running"),
+        ("Running", "GateFinished", "Running"),
         ("Running", "DecisionRaised", "Paused"),
         ("Running", "VerifyPassed", "Publishing"),
         ("Running", "VerifyFailed", "Running"),
@@ -2874,6 +3047,8 @@ mod tests {
         ("Running", "Interrupted", "Paused"),
         ("Running", "RecoveryDecision", "Running"),
         ("Remediating", "TddExceptionUsed", "Remediating"),
+        ("Remediating", "GateStarted", "Remediating"),
+        ("Remediating", "GateFinished", "Remediating"),
         ("Remediating", "DecisionRaised", "Paused"),
         ("Remediating", "TaskFailed", "Failed"),
         ("Remediating", "TaskCancelled", "Cancelled"),
@@ -2882,6 +3057,8 @@ mod tests {
         ("Verifying", "VerifyPassed", "Publishing"),
         ("Verifying", "VerifyFailed", "Verifying"),
         ("Verifying", "AttemptRecorded", "Verifying"),
+        ("Verifying", "GateStarted", "Verifying"),
+        ("Verifying", "GateFinished", "Verifying"),
         ("Verifying", "TaskFailed", "Failed"),
         ("Verifying", "TaskCancelled", "Cancelled"),
         ("Verifying", "Paused", "Paused"),
@@ -2891,6 +3068,8 @@ mod tests {
         ("Publishing", "PublishStarted", "Publishing"),
         ("Publishing", "PublishVerified", "PublishedVerified"),
         ("Publishing", "AttemptRecorded", "Publishing"),
+        ("Publishing", "GateStarted", "Publishing"),
+        ("Publishing", "GateFinished", "Publishing"),
         ("Publishing", "TaskFailed", "Failed"),
         ("Publishing", "TaskCancelled", "Cancelled"),
         ("Publishing", "Paused", "Paused"),
@@ -2914,7 +3093,7 @@ mod tests {
     /// and a refused pair is refused through `Error::InvalidTransition` naming
     /// both of them. So the sweep fails on a legal move nobody declared, on a
     /// declared move that was withdrawn or retargeted, and on a refusal that
-    /// stopped naming what it refused — and passes for the 264 pairs on nothing
+    /// stopped naming what it refused — and passes for the 288 pairs on nothing
     /// but the table.
     #[test]
     fn every_move_is_a_declared_one_or_a_refusal() {

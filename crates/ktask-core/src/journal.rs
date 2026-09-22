@@ -5587,8 +5587,12 @@ mod tests {
     #[test]
     fn a_payload_naming_an_entry_the_catalog_does_not_hold_is_damage() {
         let mut row = a_sound_row();
-        row.kind = "GateFinished".to_owned();
-        row.payload = r#"{"kind":"GateFinished","result":"Passed"}"#.to_owned();
+        row.kind = "AttemptFinished".to_owned();
+        row.payload = concat!(
+            r#"{"kind":"AttemptFinished","attempt":2,"exit_code":0,"usage":null,"#,
+            r#""session_id":null,"model_reported":null}"#,
+        )
+        .to_owned();
 
         let error = decode_event(row)
             .expect_err("an entry the catalog does not define has no fields this build can read");

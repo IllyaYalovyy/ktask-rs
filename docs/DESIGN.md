@@ -223,7 +223,7 @@ may be added without extending `state::apply` in the same task.
 | `PhaseEntered` | `attempt: AttemptId, phase: Phase` |
 | `AgentOutput` | `attempt: AttemptId, stream: Stream, text: String` |
 | `AttemptFinished` | `attempt: AttemptId, exit_code: i32, usage: Option<Usage>, session_id: Option<String>, model_reported: Option<String>` |
-| `GateStarted` | `kind: GateKind` |
+| `GateStarted` | `gate: GateKind` |
 | `GateFinished` | `result: GateResult` |
 | `VerifyPassed` | `attempt: AttemptId` |
 | `VerifyFailed` | `attempt: AttemptId, class: FailureClass, detail: String` |

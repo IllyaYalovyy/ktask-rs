@@ -32,26 +32,25 @@
 //!
 //! # Catalog entries that are not here yet
 //!
-//! `docs/DESIGN.md` lists 28 entries; 22 are defined below. The other 6 are
+//! `docs/DESIGN.md` lists 28 entries; 24 are defined below. The other 4 are
 //! absent, and a test asserts their absence rather than trusting it:
 //!
-//! - Five are deferred by the plan — `GateFinished` (`result: GateResult`),
-//!   `AttemptFinished` (`usage: Option<Usage>`), `ProviderDetected`
-//!   (`capabilities: Capabilities`), `DecisionResolved` and
-//!   `SelfHealingReport`. Each arrives with the task that emits it and gives it
+//! - Four are deferred by the plan — `AttemptFinished`
+//!   (`usage: Option<Usage>`), `ProviderDetected` (`capabilities: Capabilities`),
+//!   `DecisionResolved` and `SelfHealingReport`. Each arrives with the task that
+//!   emits it and gives it
 //!   an `apply` arm, so nothing can journal an event whose effect on state no
 //!   task has written yet. `AttemptRecorded` left this list for T068,
 //!   `TddExceptionUsed` for T079, which wrote the arm §9's exception is
 //!   answered by, and `DecisionRaised` for T084, which wrote the arm §6's wait
 //!   for a decision is answered by.
-//! - `GateStarted` (`kind: GateKind`) cannot be defined at all: `GateKind` is
-//!   `gate.rs`, which no earlier task has written, and a payload naming it
-//!   would not compile — which is the point of this catalog being a compile
-//!   check. `Error::Gate` waits on the same type for the same reason
-//!   (ADR-0001). It has a second problem waiting for T038: its documented
-//!   field is also called `kind`, the key `#[serde(tag = "kind")]` already
-//!   owns, so the derive refuses it until the field is renamed
-//!   (ADR-0011 records the measurement).
+//! - None is deferred for a missing payload type any more. `GateStarted` and
+//!   `GateFinished` were the two entries waiting on `gate.rs`, and both landed
+//!   with T085, the task that emits them and writes their `apply` arms.
+//!   `GateStarted`'s payload is `gate: GateKind` rather than the `kind`
+//!   `docs/DESIGN.md` first spelled it: the tag owns that key, so the entry was
+//!   unwritable until its field was renamed (ADR-0011 measured it, ADR-0080
+//!   records the rename and the document correction).
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -59,6 +58,7 @@ use time::OffsetDateTime;
 use crate::attempt::AttemptRecord;
 use crate::classify::{FailureClass, TddException};
 use crate::decision::DecisionRequest;
+use crate::gate::{GateKind, GateResult};
 use crate::ids::{AttemptId, EventSeq, TaskId};
 use crate::state::{PauseReason, Phase, Recovery, Stream};
 
@@ -124,6 +124,24 @@ pub enum EventKind {
         stream: Stream,
         /// The line, after secret redaction.
         text: String,
+    },
+    /// One mechanical gate began running: the runner's own command, not an
+    /// agent's claim about it.
+    GateStarted {
+        /// Which gate it was, since a gate is identified by its kind and not by
+        /// its command.
+        ///
+        /// `gate` rather than the `kind` `docs/DESIGN.md` first spelled it,
+        /// because `kind` is the key the payload's own tag already owns
+        /// (ADR-0080).
+        gate: GateKind,
+    },
+    /// One mechanical gate finished, and this is what its run produced.
+    GateFinished {
+        /// The record the run left behind: verdict, status, output. The gate's
+        /// kind is inside it, which is why this payload nests rather than
+        /// naming the kind beside the verdict (ADR-0036).
+        result: GateResult,
     },
     /// The mandatory verification gates passed.
     VerifyPassed {
@@ -276,6 +294,8 @@ impl EventKind {
             Self::AttemptStarted { .. } => "AttemptStarted",
             Self::PhaseEntered { .. } => "PhaseEntered",
             Self::AgentOutput { .. } => "AgentOutput",
+            Self::GateStarted { .. } => "GateStarted",
+            Self::GateFinished { .. } => "GateFinished",
             Self::VerifyPassed { .. } => "VerifyPassed",
             Self::VerifyFailed { .. } => "VerifyFailed",
             Self::PublishStarted { .. } => "PublishStarted",
@@ -383,6 +403,7 @@ mod tests {
     use crate::attempt::AttemptRecord;
     use crate::classify::{FailureClass, TddException};
     use crate::decision::DecisionRequest;
+    use crate::gate::{GateKind, GateResult};
     use crate::ids::{AttemptId, EventSeq, TaskId};
     use crate::state::{PauseReason, Phase, Recovery, Stream};
     use serde_json::Value;
@@ -393,7 +414,7 @@ mod tests {
     /// encode is visible rather than mistaken for a placeholder.
     const SHA: &str = "0b78d3f1c2a4";
 
-    /// The 22 entries `docs/DESIGN.md` documents whose payload types exist
+    /// The 24 entries `docs/DESIGN.md` documents whose payload types exist
     /// today, each with the payload field names the table lists for it.
     ///
     /// Spelled out a second time, on purpose: names checked only against the
@@ -410,6 +431,8 @@ mod tests {
         ),
         ("PhaseEntered", &["attempt", "phase"]),
         ("AgentOutput", &["attempt", "stream", "text"]),
+        ("GateStarted", &["gate"]),
+        ("GateFinished", &["result"]),
         ("VerifyPassed", &["attempt"]),
         ("VerifyFailed", &["attempt", "class", "detail"]),
         ("PublishStarted", &["attempt", "candidate_sha"]),
@@ -427,7 +450,7 @@ mod tests {
         ("AttemptRecorded", &["record"]),
     ];
 
-    /// The six entries this catalog does not define yet.
+    /// The four entries this catalog does not define yet.
     ///
     /// Their absence is asserted, not assumed: an entry added ahead of its
     /// producer would start decoding, and the journal would begin accepting
@@ -436,14 +459,10 @@ mod tests {
     ///
     /// The second half of each pair is the payload `docs/DESIGN.md` documents
     /// for the entry, minus the tag the test adds. The populated payload is
-    /// what makes the refusal an assertion: `{"kind":"GateFinished"}` is
-    /// refused for its missing field whether or not the entry exists, so a
-    /// bare name would prove nothing either way. `GateStarted` is the one
-    /// sample that renames a field, because its documented one is `kind` and
-    /// the tag owns that key (ADR-0011).
+    /// what makes the refusal an assertion: `{"kind":"DecisionResolved"}` is
+    /// refused for its missing fields whether or not the entry exists, so a
+    /// bare name would prove nothing either way.
     const DEFERRED_PAYLOADS: &[(&str, &str)] = &[
-        ("GateStarted", r#""gate":"Verify""#),
-        ("GateFinished", r#""result":"Passed""#),
         (
             "AttemptFinished",
             concat!(
@@ -497,6 +516,12 @@ mod tests {
                 attempt,
                 stream: Stream::Stderr,
                 text: "panicked at 'index out of bounds'".to_string(),
+            },
+            EventKind::GateStarted {
+                gate: GateKind::Lint,
+            },
+            EventKind::GateFinished {
+                result: gate_result(GateKind::Lint),
             },
             EventKind::VerifyPassed { attempt },
             EventKind::VerifyFailed {
@@ -574,6 +599,23 @@ mod tests {
             usage: None,
             base_sha: SHA.to_string(),
             candidate_sha: Some("b7d1f3a9e5c2".to_string()),
+        }
+    }
+
+    /// One gate's record, as a run that refused would leave it. Both halves of
+    /// the exit status are exercised by the catalog's own round trip: a status
+    /// the command returned and no signal, which is the pair a refusal that
+    /// outlived its budget never makes.
+    fn gate_result(kind: GateKind) -> GateResult {
+        GateResult {
+            kind,
+            passed: false,
+            exit_code: Some(1),
+            signal: None,
+            duration_ms: 4_812,
+            stdout: String::new(),
+            stderr: "clippy::redundant_clone: 2 found\n".to_string(),
+            timed_out: false,
         }
     }
 
