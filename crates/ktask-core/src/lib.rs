@@ -9,6 +9,7 @@ mod error;
 mod event;
 mod events;
 mod gate;
+mod git;
 mod ids;
 mod journal;
 mod paths;
@@ -26,6 +27,7 @@ pub use events::{Bus, Recorder, Subscription};
 pub use gate::{
     Gate, GateKind, GateResult, Profile, TestSummary, parse_cargo, profile_from, run_gate,
 };
+pub use git::git;
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::{Journal, journal_path};
 pub use paths::{config_file, project_id, state_root};
