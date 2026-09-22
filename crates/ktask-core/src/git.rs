@@ -274,6 +274,61 @@ pub fn publish(worktree: &Path, remote: &str, branch: &str, candidate: &str) -> 
     Ok(())
 }
 
+/// The result of [`rebase_onto_remote`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RebaseOutcome {
+    /// The rebase completed cleanly. `new_sha` is the candidate's new tip,
+    /// replayed on top of the fetched remote branch.
+    Applied {
+        /// The full SHA of the rebased candidate's new `HEAD`.
+        new_sha: String,
+    },
+    /// The rebase hit a conflict and was aborted; `worktree` is back exactly
+    /// as it was before this call.
+    Conflict {
+        /// Every path git reported as conflicted (`UU` in `git status`),
+        /// not merely a count.
+        paths: Vec<PathBuf>,
+    },
+}
+
+/// Fetches `remote` into `worktree`, then replays `worktree`'s `HEAD` onto
+/// the freshly fetched tip of `branch` — the mechanical repair for a
+/// rejected push caused by branch drift (`VISION.md` §7, `git_conflict`).
+///
+/// A clean divergence — changes that touch disjoint paths on each side —
+/// fast-replays without touching a human or an agent; a conflicting one
+/// aborts the rebase immediately, leaving `worktree` exactly as it was
+/// before this call, and reports every conflicted path so a caller can
+/// decide what happens next.
+///
+/// # Errors
+///
+/// Returns [`Error::Git`] if `remote` cannot be fetched, or if `git rebase`
+/// fails for a reason other than a conflict (for example, `worktree` itself
+/// is dirty going in) — that failure is not [`RebaseOutcome::Conflict`],
+/// since no conflicted path exists to report.
+pub fn rebase_onto_remote(worktree: &Path, remote: &str, branch: &str) -> Result<RebaseOutcome> {
+    fetch(worktree, remote)?;
+    let remote_ref = format!("refs/remotes/{remote}/{branch}");
+
+    if let Err(err) = git(worktree, &["rebase", &remote_ref]) {
+        let conflicted = name_only_paths(worktree, &["diff", "--name-only", "--diff-filter=U"])?;
+        // `git rebase --abort` only runs while a rebase is actually in
+        // progress; running it unconditionally on an unrelated failure would
+        // itself fail and mask the real error.
+        if conflicted.is_empty() {
+            return Err(err);
+        }
+        git(worktree, &["rebase", "--abort"])?;
+        return Ok(RebaseOutcome::Conflict { paths: conflicted });
+    }
+
+    Ok(RebaseOutcome::Applied {
+        new_sha: head_sha(worktree)?,
+    })
+}
+
 /// One entry from [`list_worktrees`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Worktree {
@@ -1001,6 +1056,88 @@ mod tests {
         assert!(
             stderr.contains(&stale_sha),
             "stderr must name the freshly fetched sha, got {stderr:?}"
+        );
+    }
+
+    #[test]
+    fn rebase_onto_remote_applies_a_clean_divergence_and_reports_the_new_sha() {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+        let diverged = repo.diverge().expect("diverge");
+
+        let outcome = rebase_onto_remote(&repo.path, "origin", "main").expect("rebase_onto_remote");
+
+        let RebaseOutcome::Applied { new_sha } = outcome else {
+            panic!("expected Applied, got {outcome:?}");
+        };
+        assert_ne!(
+            new_sha, diverged.local_sha,
+            "a rebase replaying onto a new base must produce a new commit"
+        );
+        assert_eq!(head_sha(&repo.path).expect("head_sha"), new_sha);
+        let parent = git(&repo.path, &["rev-parse", &format!("{new_sha}^")])
+            .expect("rev-parse rebased commit's parent");
+        assert_eq!(
+            parent, diverged.origin_sha,
+            "the rebased commit must sit on top of the fetched remote tip"
+        );
+        assert!(repo.path.join("local-only.txt").is_file());
+        assert!(repo.path.join("origin-only.txt").is_file());
+    }
+
+    #[test]
+    fn rebase_onto_remote_reports_conflicting_paths_and_leaves_no_rebase_in_progress() {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+        repo.commit("shared.txt", "base\n")
+            .expect("commit shared.txt");
+        git(
+            &repo.path,
+            &["push", "--quiet", "origin", "HEAD:refs/heads/main"],
+        )
+        .expect("push shared.txt to origin");
+
+        std::fs::write(repo.path.join("shared.txt"), "local change\n").expect("write file");
+        git(&repo.path, &["add", "shared.txt"]).expect("git add");
+        git(&repo.path, &["commit", "--quiet", "-m", "local edit"]).expect("git commit");
+        let local_sha = head_sha(&repo.path).expect("head_sha before rebase");
+
+        let shadow = tempfile::tempdir().expect("shadow tempdir");
+        git(
+            shadow.path(),
+            &["clone", "--quiet", &repo.origin.to_string_lossy(), "."],
+        )
+        .expect("clone shadow");
+        std::fs::write(shadow.path().join("shared.txt"), "origin change\n").expect("write file");
+        git(shadow.path(), &["add", "shared.txt"]).expect("git add");
+        git(shadow.path(), &["commit", "--quiet", "-m", "origin edit"]).expect("git commit");
+        git(
+            shadow.path(),
+            &["push", "--quiet", "origin", "HEAD:refs/heads/main"],
+        )
+        .expect("push origin edit");
+
+        let outcome = rebase_onto_remote(&repo.path, "origin", "main").expect("rebase_onto_remote");
+
+        let RebaseOutcome::Conflict { paths } = outcome else {
+            panic!("expected Conflict, got {outcome:?}");
+        };
+        assert_eq!(paths, vec![PathBuf::from("shared.txt")]);
+        assert!(
+            !repo.path.join(".git").join("rebase-merge").exists(),
+            "rebase must be aborted, not left in progress"
+        );
+        assert!(
+            !repo.path.join(".git").join("rebase-apply").exists(),
+            "rebase must be aborted, not left in progress"
+        );
+        assert_eq!(
+            head_sha(&repo.path).expect("head_sha after abort"),
+            local_sha,
+            "the worktree must be exactly as it was before the rebase was attempted"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path.join("shared.txt")).expect("read shared.txt"),
+            "local change\n",
+            "the working tree content must be restored, not left mid-conflict"
         );
     }
 
