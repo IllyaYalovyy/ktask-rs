@@ -16,9 +16,10 @@
 //! through [`Provider::capabilities`] and [`Provider::invoke`] alone, which
 //! is what keeps adding a provider from touching supervisor logic.
 
-use crate::{Bus, Error, Result};
+use crate::{Bus, Config, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::Duration;
 
 mod claude;
 mod codex;
@@ -207,6 +208,147 @@ mod model_check {
     #[test]
     fn neither_configured_nor_reported_is_allowed() {
         check_model(None, None).expect("no model information at all is not a mismatch");
+    }
+}
+
+/// Constructs the [`Provider`] named by `config.provider` (`VISION.md` §12).
+///
+/// This is the one place in the crate allowed to name a concrete adapter
+/// type: every other caller receives a `Box<dyn Provider>` and drives it
+/// through the trait alone.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] when `config.provider` is not `"dummy"`,
+/// `"claude"` or `"codex"`, naming the offending value and listing the valid
+/// ones; when `config.provider` is `"dummy"` but `config.dummy_scenario_path`
+/// is unset; or when the scenario file it names cannot be read or parsed
+/// (see [`Scenario::load`]).
+pub fn build(config: &Config) -> Result<Box<dyn Provider>> {
+    match config.provider.as_str() {
+        "dummy" => {
+            let path = config
+                .dummy_scenario_path
+                .as_deref()
+                .ok_or_else(|| Error::Config {
+                    key: "dummy_scenario_path".to_string(),
+                    detail: "the dummy provider requires dummy_scenario_path to be set".to_string(),
+                })?;
+            let scenario = Scenario::load(path)?;
+            Ok(Box::new(Dummy::new(scenario)))
+        }
+        "claude" => Ok(Box::new(Claude::new(
+            vec!["claude".to_string()],
+            Duration::from_secs(config.idle_timeout_secs),
+            Duration::from_secs(config.attempt_timeout_secs),
+        ))),
+        "codex" => Ok(Box::new(Codex::new(
+            vec!["codex".to_string()],
+            Duration::from_secs(config.idle_timeout_secs),
+            Duration::from_secs(config.attempt_timeout_secs),
+        ))),
+        other => Err(Error::Config {
+            key: "provider".to_string(),
+            detail: format!(
+                "unknown provider {other:?}; valid providers are \"dummy\", \"claude\", \"codex\""
+            ),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod build {
+    use super::*;
+
+    fn config_with_provider(provider: &str) -> Config {
+        let mut config = Config::default();
+        config.provider = provider.to_string();
+        config
+    }
+
+    #[test]
+    fn dummy_is_reachable_by_name_and_reads_its_scenario_from_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("scenario.toml");
+        std::fs::write(
+            &path,
+            r#"
+            [[steps]]
+            outcome = "success"
+            stdout = "built it"
+            exit_code = 0
+            "#,
+        )
+        .expect("write scenario");
+
+        let mut config = config_with_provider("dummy");
+        config.dummy_scenario_path = Some(path);
+
+        let provider = build(&config).expect("dummy must build");
+        assert_eq!(provider.name(), "dummy");
+
+        let outcome = provider
+            .invoke(
+                &Invocation {
+                    prompt: "go".to_string(),
+                    model: None,
+                    working_dir: dir.path().to_path_buf(),
+                },
+                None,
+            )
+            .expect("invoke");
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(outcome.stdout, "built it");
+    }
+
+    #[test]
+    fn dummy_without_a_configured_scenario_path_is_rejected() {
+        let config = config_with_provider("dummy");
+
+        let Err(err) = build(&config) else {
+            panic!("dummy needs a scenario path");
+        };
+        let Error::Config { key, detail } = &err else {
+            panic!("expected Error::Config, got {err:?}");
+        };
+        assert_eq!(key, "dummy_scenario_path");
+        assert!(!detail.is_empty());
+    }
+
+    #[test]
+    fn claude_is_reachable_by_name() {
+        let config = config_with_provider("claude");
+
+        let provider = build(&config).expect("claude must build");
+        assert_eq!(provider.name(), "claude");
+    }
+
+    #[test]
+    fn codex_is_reachable_by_name() {
+        let config = config_with_provider("codex");
+
+        let provider = build(&config).expect("codex must build");
+        assert_eq!(provider.name(), "codex");
+    }
+
+    #[test]
+    fn an_unknown_provider_name_is_rejected_and_lists_the_valid_ones() {
+        let config = config_with_provider("not-a-real-provider");
+
+        let Err(err) = build(&config) else {
+            panic!("unknown provider must be rejected");
+        };
+        let Error::Config { key, detail } = &err else {
+            panic!("expected Error::Config, got {err:?}");
+        };
+        assert_eq!(key, "provider");
+        assert!(
+            detail.contains("not-a-real-provider"),
+            "detail was: {detail}"
+        );
+        assert!(detail.contains("dummy"), "detail was: {detail}");
+        assert!(detail.contains("claude"), "detail was: {detail}");
+        assert!(detail.contains("codex"), "detail was: {detail}");
     }
 }
 
