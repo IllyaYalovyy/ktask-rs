@@ -27,8 +27,9 @@ use crate::Result;
 use crate::classify::{FailureClass, Recovery};
 use crate::error::Error;
 use crate::event::EventKind;
-use crate::ids::AttemptId;
+use crate::ids::{AttemptId, TaskId};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use time::OffsetDateTime;
 
 /// Where a task stands in the supervisor's custody of it.
@@ -124,6 +125,23 @@ impl TaskState {
         matches!(self, TaskState::Paused { .. })
     }
 
+    /// Whether an attempt is actively in flight for this task: past
+    /// `Queued` (waiting for its turn is not activity), not paused, and not
+    /// terminal. `VISION.md` §3 invariant 1 permits at most one task in the
+    /// whole queue to report `true` here.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        matches!(
+            self,
+            TaskState::Preflight
+                | TaskState::Running { .. }
+                | TaskState::Remediating { .. }
+                | TaskState::Verifying { .. }
+                | TaskState::Publishing { .. }
+                | TaskState::PublishedVerified { .. }
+        )
+    }
+
     /// The variant's name, stable for logging, display and error messages.
     #[must_use]
     pub fn name(&self) -> &'static str {
@@ -142,6 +160,39 @@ impl TaskState {
             TaskState::Cancelled => "Cancelled",
         }
     }
+}
+
+/// Enforces `VISION.md` §3 invariant 1: exactly one task is active at a
+/// time; parallel execution does not exist in v1.
+///
+/// `Queued` and `Paused` do not count as active: a queue full of tasks
+/// waiting for their turn, or parked pending a human or a limit, is the
+/// normal resting state. Only [`TaskState::is_active`] states — an attempt
+/// genuinely in flight — are counted.
+///
+/// # Errors
+///
+/// Returns [`Error::Policy`] naming every active task's id if more than one
+/// task in `states` is active.
+pub fn check_one_active(states: &BTreeMap<TaskId, TaskState>) -> Result<()> {
+    let active: Vec<TaskId> = states
+        .iter()
+        .filter(|(_, state)| state.is_active())
+        .map(|(id, _)| *id)
+        .collect();
+
+    if active.len() > 1 {
+        let names = active
+            .iter()
+            .map(TaskId::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(Error::Policy {
+            detail: format!("more than one task is active: {names}"),
+            paths: Vec::new(),
+        });
+    }
+    Ok(())
 }
 
 /// Builds the standard "this event does not apply here" error, naming the
@@ -2122,6 +2173,77 @@ mod tests {
             44,
             "the allowed list itself changed size; update this guard deliberately"
         );
+    }
+
+    #[test]
+    fn check_one_active_rejects_two_active_tasks_naming_both() {
+        let mut states = BTreeMap::new();
+        states.insert(
+            TaskId::new(1),
+            TaskState::Running {
+                attempt: AttemptId::new(1),
+                phase: Phase::Implement,
+            },
+        );
+        states.insert(
+            TaskId::new(2),
+            TaskState::Verifying {
+                attempt: AttemptId::new(1),
+            },
+        );
+
+        let err = check_one_active(&states).expect_err("two active tasks must be rejected");
+        match err {
+            Error::Policy { detail, .. } => {
+                assert!(detail.contains('1'), "detail should name task 1: {detail}");
+                assert!(detail.contains('2'), "detail should name task 2: {detail}");
+            }
+            other => panic!("expected Policy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_one_active_allows_one_active_task_alongside_several_paused() {
+        let mut states = BTreeMap::new();
+        states.insert(
+            TaskId::new(1),
+            TaskState::Running {
+                attempt: AttemptId::new(1),
+                phase: Phase::Implement,
+            },
+        );
+        states.insert(
+            TaskId::new(2),
+            TaskState::Paused {
+                reason: PauseReason::Blocked,
+                resume_to: Box::new(TaskState::Queued),
+            },
+        );
+        states.insert(
+            TaskId::new(3),
+            TaskState::Paused {
+                reason: PauseReason::Limit { until: None },
+                resume_to: Box::new(TaskState::Preflight),
+            },
+        );
+        states.insert(TaskId::new(4), TaskState::Queued);
+
+        check_one_active(&states).expect("one active task with several paused/queued is fine");
+    }
+
+    #[test]
+    fn check_one_active_allows_zero_active_tasks() {
+        let mut states = BTreeMap::new();
+        states.insert(TaskId::new(1), TaskState::Queued);
+        states.insert(
+            TaskId::new(2),
+            TaskState::Paused {
+                reason: PauseReason::Blocked,
+                resume_to: Box::new(TaskState::Queued),
+            },
+        );
+
+        check_one_active(&states).expect("no active tasks at all is fine");
     }
 
     #[test]
