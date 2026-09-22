@@ -11,7 +11,9 @@
 //! layout it does not recognize.
 
 use crate::task::status_from_body;
-use crate::{Error, Event, EventKind, EventSeq, Project, Result, Task, TaskId, TaskState, apply};
+use crate::{
+    Error, Event, EventKind, EventSeq, Project, Result, Task, TaskId, TaskState, apply, redact,
+};
 use rusqlite::{Connection, OptionalExtension, Params, params};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -125,8 +127,11 @@ impl Journal {
     /// to it.
     ///
     /// The timestamp is stamped as the current UTC instant inside this
-    /// function, and `kind` is serialized to JSON before anything is
-    /// written. The insert runs inside a transaction, so a failure partway
+    /// function, and `kind` is serialized to JSON and passed through
+    /// [`redact()`] before anything is written, so a value that looks
+    /// like a credential never reaches the database (VISION.md section 11)
+    /// even when it arrived embedded in a free-text field such as a failure
+    /// detail. The insert runs inside a transaction, so a failure partway
     /// through — serializing the payload, or the insert itself — leaves the
     /// journal completely unchanged: a sequence number is only ever handed
     /// out for an event that is durably recorded. Sequence numbers are
@@ -140,7 +145,7 @@ impl Journal {
     /// [`Error::Time`] if the current instant cannot be formatted, and
     /// [`Error::Database`] if the insert fails.
     pub fn append(&mut self, task_id: Option<TaskId>, kind: &EventKind) -> Result<EventSeq> {
-        let payload = serde_json::to_string(kind)?;
+        let payload = redact(&serde_json::to_string(kind)?, &[]);
         let ts = OffsetDateTime::now_utc().format(&Rfc3339)?;
 
         let tx = self.conn.transaction()?;
@@ -1132,6 +1137,53 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
             .expect("count events");
         assert_eq!(count, 0, "a failed insert must not leave a partial row");
+    }
+
+    #[test]
+    fn append_redacts_known_secret_shapes_before_they_reach_the_journal_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        let secrets = [
+            "Bearer abcDEF123456ghijKLMNOPqrstuvwxYZ0123456789",
+            "sk-abcdefghijklmnopqrstuvwxyz0123456789",
+            "ghp_abcdefghijklmnopqrstuvwxyz0123456789AB",
+            "AKIAABCDEFGHIJKLMNOP",
+        ];
+
+        for secret in secrets {
+            journal
+                .append(
+                    None,
+                    &EventKind::TaskCancelled {
+                        reason: format!("leaked credential: {secret}"),
+                    },
+                )
+                .expect("append");
+        }
+
+        // Force everything out of the WAL and into the main database file,
+        // then read the file back from disk directly (not through any query
+        // this crate controls) so redaction happening only in a getter
+        // could not make this test pass.
+        journal
+            .conn
+            .execute_batch("PRAGMA wal_checkpoint(FULL);")
+            .expect("checkpoint");
+        let raw = std::fs::read(&path).expect("read journal file");
+        let raw = String::from_utf8_lossy(&raw);
+
+        for secret in secrets {
+            assert!(
+                !raw.contains(secret),
+                "{secret:?} must not reach the journal file"
+            );
+        }
+        assert!(
+            raw.contains("[redacted]"),
+            "the redaction marker must be present in the secrets' place"
+        );
     }
 
     #[test]

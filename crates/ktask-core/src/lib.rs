@@ -13,6 +13,7 @@ mod journal;
 mod paths;
 mod project;
 mod queue;
+mod redact;
 mod state;
 mod task;
 
@@ -26,5 +27,6 @@ pub use journal::{Journal, journal_path};
 pub use paths::{config_file, project_id, state_root};
 pub use project::Project;
 pub use queue::next_runnable;
+pub use redact::redact;
 pub use state::{PauseReason, Phase, TaskState, apply, check_one_active, check_predecessor};
 pub use task::{Task, TaskStatus, parse_plan, validate};
