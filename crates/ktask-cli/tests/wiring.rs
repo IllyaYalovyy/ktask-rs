@@ -145,140 +145,95 @@ fn wiring_end_to_end_drains_queue() {
     assert!(status.success());
 
     // 4. Create a dummy scenario file.
-    // Simple scenario: create a report file in each Implement step (steps 0, 3).
-    // These are called in sequence for task 1 and task 2.
-    let scenario_content = r#"# Scenario with sufficient steps for both tasks
+    // Simplified scenario: first step does work, rest are no-ops.
+    // Both tasks should succeed without remediation.
+    let scenario_content = r#"# Simple scenario: both tasks succeed without remediation
+# All steps use generic dummy provider output, minimal file modifications
+
 [[steps]]
 outcome = "success"
-stdout = "step 1"
+stdout = "dummy step 1"
 
 [steps.files]
+"README.md" = "Task work"
+"src/main.rs" = "fn main(){}"
 ".ktask/report.md" = "KTASK_RESULT: DONE"
 
 [[steps]]
 outcome = "success"
-stdout = "step 2"
+stdout = "dummy step 2"
 
 [[steps]]
 outcome = "success"
-stdout = "step 3"
+stdout = "dummy step 3"
 
 [[steps]]
 outcome = "success"
-stdout = "step 4"
-
-[steps.files]
-".ktask/report.md" = "KTASK_RESULT: DONE"
+stdout = "dummy step 4"
 
 [[steps]]
 outcome = "success"
-stdout = "step 5"
-
-[steps.files]
-".ktask/report.md" = "KTASK_RESULT: DONE"
+stdout = "dummy step 5"
 
 [[steps]]
 outcome = "success"
-stdout = "step 6"
-
-[steps.files]
-".ktask/report.md" = "KTASK_RESULT: DONE"
+stdout = "dummy step 6"
 
 [[steps]]
 outcome = "success"
-stdout = "task attempt step 7"
+stdout = "dummy step 7"
 
 [[steps]]
 outcome = "success"
-stdout = "task attempt step 8"
+stdout = "dummy step 8"
 
 [[steps]]
 outcome = "success"
-stdout = "task attempt step 9"
+stdout = "dummy step 9"
 
 [[steps]]
 outcome = "success"
-stdout = "task attempt step 10"
+stdout = "dummy step 10"
 
 [[steps]]
 outcome = "success"
-stdout = "task attempt step 11"
+stdout = "dummy step 11"
 
 [[steps]]
 outcome = "success"
-stdout = "task attempt step 12"
+stdout = "dummy step 12"
 
 [[steps]]
 outcome = "success"
-stdout = "task attempt step 13"
+stdout = "dummy step 13"
 
 [[steps]]
 outcome = "success"
-stdout = "task attempt step 14"
+stdout = "dummy step 14"
 
 [[steps]]
 outcome = "success"
-stdout = "task attempt step 15"
+stdout = "dummy step 15"
 
 [[steps]]
 outcome = "success"
-stdout = "task attempt step 16"
+stdout = "dummy step 16"
 
 [[steps]]
 outcome = "success"
-stdout = "task attempt step 17"
+stdout = "dummy step 17"
 
 [[steps]]
 outcome = "success"
-stdout = "task attempt step 18"
+stdout = "dummy step 18"
 
 [[steps]]
 outcome = "success"
-stdout = "task attempt step 19"
+stdout = "dummy step 19"
 
 [[steps]]
 outcome = "success"
-stdout = "task attempt step 20"
-
-[[steps]]
-outcome = "success"
-stdout = "task attempt step 21"
-
-[[steps]]
-outcome = "success"
-stdout = "task attempt step 22"
-
-[[steps]]
-outcome = "success"
-stdout = "task attempt step 23"
-
-[[steps]]
-outcome = "success"
-stdout = "task attempt step 24"
-
-[[steps]]
-outcome = "success"
-stdout = "task attempt step 25"
-
-[[steps]]
-outcome = "success"
-stdout = "task attempt step 26"
-
-[[steps]]
-outcome = "success"
-stdout = "task attempt step 27"
-
-[[steps]]
-outcome = "success"
-stdout = "task attempt step 28"
-
-[[steps]]
-outcome = "success"
-stdout = "task attempt step 29"
-
-[[steps]]
-outcome = "success"
-stdout = "task attempt step 30"
+stdout = "dummy step 20"
 "#;
 
     let scenario_file = env.repo_dir.join(".ktask-scenario.toml");
