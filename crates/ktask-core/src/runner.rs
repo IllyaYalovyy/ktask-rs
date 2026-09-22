@@ -4767,6 +4767,7 @@ mod gate_phase {
     use serde_json::Value;
     use std::fmt::Write as _;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt as _;
     use std::path::{Path, PathBuf};
 
     /// The identity every fixture gives its registered project.
@@ -5146,6 +5147,32 @@ mod gate_phase {
         fs::write(&full, text).expect("a checkout file is writable");
     }
 
+    /// A checkout file whose mode was taken away, put back when dropped.
+    struct Unreadable {
+        path: PathBuf,
+    }
+
+    impl Drop for Unreadable {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(0o644));
+        }
+    }
+
+    /// Make `path` unreadable even to its owner, until the returned guard is dropped.
+    ///
+    /// The filesystem's own `PermissionDenied` is the one refusal a fixture cannot be
+    /// handed: a phase that cannot read a changed path has to say so rather than hash
+    /// it as absent, and nothing shorter than taking the mode away asks that question.
+    /// The same trick `attempt.rs` plays on a state directory it cannot look inside.
+    fn unreadable(path: &Path) -> Unreadable {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap_or_else(|why| {
+            panic!("`{}` should take mode 000: {why}", path.display());
+        });
+        Unreadable {
+            path: path.to_path_buf(),
+        }
+    }
+
     #[test]
     fn a_red_phase_that_newly_fails_is_told_the_failure_it_asked_for() {
         let fixture = Fixture::new();
@@ -5506,6 +5533,140 @@ mod gate_phase {
         assert_ne!(
             before, after,
             "the tree green left holds a file red left no trace of"
+        );
+    }
+
+    /// The hash a phase files has to move when the bytes behind a path move, not only
+    /// when the list of paths does. A hash over the names alone would file the same
+    /// evidence for a test and for its opposite, which is the whole point of keeping
+    /// §9's evidence at all.
+    #[test]
+    fn the_tree_hash_reads_what_the_changed_path_held() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        write_in(
+            &ready,
+            "tests/a_new_test.rs",
+            "#[test] fn a_new_test() {}\n",
+        );
+        fixture.report(&report(1, &["tests::a_new_refusal"]));
+        gate(&mut run, &ready, &red(), Some(&summary(2, &[])))
+            .expect("the new failure is what red asked for");
+        write_in(&ready, "tests/a_new_test.rs", "// the opposite story\n");
+        fixture.report(&report(2, &[]));
+        gate(
+            &mut run,
+            &ready,
+            &green(),
+            Some(&summary(1, &["tests::a_new_refusal"])),
+        )
+        .expect("the named test passes now");
+        let held = fixture.filed("red");
+        let overwritten = fixture.filed("green");
+        let before = held[0]["tree_sha"].as_str().expect("red filed a tree hash");
+        let after = overwritten[0]["tree_sha"]
+            .as_str()
+            .expect("green filed a tree hash");
+        assert_ne!(
+            before, after,
+            "the same path holding other bytes is another tree, and the hash has to say \
+             so: {before}"
+        );
+    }
+
+    /// A path git listed because it is gone is read as gone, not refused: its absence
+    /// is the change the phase is being gated over.
+    #[test]
+    fn a_phase_that_deleted_a_path_hashes_the_absence_and_files_it() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        let seed = ready.worktree.join("seed.txt");
+        let held = fs::read(&seed).expect("the base commit's seed file is in the checkout");
+        fs::remove_file(&seed).expect("a tracked file is removable");
+        fixture.report(&report(1, &["tests::a_new_refusal"]));
+        gate(&mut run, &ready, &red(), Some(&summary(2, &[])))
+            .expect("a deletion is a change a phase can be gated over");
+        let gone = fixture.filed("red");
+        let deleted = gone[0]["tree_sha"]
+            .as_str()
+            .expect("the deleting phase filed a tree hash");
+        fs::write(&seed, held).expect("the seed file is restorable");
+        fixture.report(&report(2, &[]));
+        gate(
+            &mut run,
+            &ready,
+            &green(),
+            Some(&summary(1, &["tests::a_new_refusal"])),
+        )
+        .expect("the named test passes now");
+        let back = fixture.filed("green");
+        let restored = back[0]["tree_sha"]
+            .as_str()
+            .expect("green filed a tree hash");
+        assert_ne!(
+            deleted, restored,
+            "a path that is gone and that same path holding its bytes are not one tree: \
+             {deleted}"
+        );
+    }
+
+    /// A changed path the filesystem will not let this run read is the run's own
+    /// failure to answer, and not a tree in which that path happens to be missing.
+    #[test]
+    fn a_changed_path_that_cannot_be_read_is_refused_rather_than_hashed_as_absent() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        write_in(
+            &ready,
+            "tests/a_new_test.rs",
+            "#[test] fn a_new_test() {}\n",
+        );
+        let _sealed = unreadable(&ready.worktree.join("tests/a_new_test.rs"));
+        fixture.report(&report(1, &["tests::a_new_refusal"]));
+        let refusal = gate(&mut run, &ready, &red(), Some(&summary(2, &[])))
+            .expect_err("a path that cannot be read says nothing about the tree");
+        assert!(
+            matches!(&refusal, Error::Io(why) if why.kind() == std::io::ErrorKind::PermissionDenied),
+            "the filesystem's own refusal is the answer, never a hash over a file that \
+             is merely unreadable: {refusal:?}"
+        );
+    }
+
+    /// A level of the evidence layout that is there and is not a directory is refused
+    /// as the rule it broke, rather than written through or cleared out of the way.
+    #[test]
+    fn a_phases_level_occupied_by_a_file_is_refused_naming_the_level() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        let phases = fixture
+            .evidence_of("red")
+            .parent()
+            .expect("an evidence file lives inside a directory")
+            .to_path_buf();
+        fs::create_dir_all(
+            phases
+                .parent()
+                .expect("the directory holding a phase's files has a parent"),
+        )
+        .expect("the attempt's evidence directory is creatable");
+        fs::write(&phases, "not a directory\n")
+            .expect("a file sits where the phases directory belongs");
+        fixture.report(&report(1, &["tests::a_new_refusal"]));
+        let refusal = gate(&mut run, &ready, &red(), Some(&summary(2, &[])))
+            .expect_err("a directory is not made by deleting what someone left there");
+        assert!(
+            matches!(&refusal, Error::Policy { detail, paths }
+                if paths.contains(&phases) && detail.contains("is not a directory")),
+            "the refusal names the level that is in the way: {refusal:?}"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            GATED,
+            "the gate ran and was journalled before the filing refused"
         );
     }
 
