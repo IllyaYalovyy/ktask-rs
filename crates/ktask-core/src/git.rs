@@ -114,6 +114,77 @@ pub fn is_clean(root: &Path) -> Result<bool> {
     Ok(status_porcelain(root)?.is_empty())
 }
 
+/// Fails if `worktree`'s working tree or index differs from `HEAD`: a dirty
+/// tree at verification time is a policy failure (`VISION.md` §10).
+///
+/// Ignored files never trigger this, since `git ls-files --others
+/// --exclude-standard` omits them.
+///
+/// Deliberately uses `git diff --cached`, `git diff` and `git ls-files
+/// --others` rather than parsing `status_porcelain`'s output: porcelain's
+/// leading status column can itself be a space (an unstaged-only change
+/// reads as `" M path"`), and [`git`] trims the subprocess's stdout, which
+/// would eat exactly that leading space when it opens the very first line —
+/// misreading an unstaged modification as staged.
+///
+/// # Errors
+///
+/// Returns [`Error::Policy`] if `worktree` is not clean. `detail` groups the
+/// offending paths by how they are dirty — staged, modified or untracked, a
+/// path appearing under more than one when it is both staged and further
+/// modified — and `paths` names every offending path, not merely a count.
+/// Returns [`Error::Git`] if `worktree` is not a git repository.
+pub fn require_clean(worktree: &Path) -> Result<()> {
+    let staged = name_only_paths(worktree, &["diff", "--cached", "--name-only"])?;
+    let modified = name_only_paths(worktree, &["diff", "--name-only"])?;
+    let untracked = name_only_paths(worktree, &["ls-files", "--others", "--exclude-standard"])?;
+
+    if staged.is_empty() && modified.is_empty() && untracked.is_empty() {
+        return Ok(());
+    }
+
+    let mut sections = Vec::new();
+    if !staged.is_empty() {
+        sections.push(format!("staged: {}", format_paths(&staged)));
+    }
+    if !modified.is_empty() {
+        sections.push(format!("modified: {}", format_paths(&modified)));
+    }
+    if !untracked.is_empty() {
+        sections.push(format!("untracked: {}", format_paths(&untracked)));
+    }
+
+    let mut paths: Vec<PathBuf> = staged
+        .into_iter()
+        .chain(modified)
+        .chain(untracked)
+        .collect();
+    paths.sort();
+    paths.dedup();
+
+    Err(Error::Policy {
+        detail: format!("dirty working tree: {}", sections.join("; ")),
+        paths,
+    })
+}
+
+/// Runs `git` with `args` in `worktree` and splits its trimmed stdout into
+/// one [`PathBuf`] per line, the shape `--name-only` and `ls-files` output
+/// share. Empty stdout (nothing to report) yields an empty `Vec`.
+fn name_only_paths(worktree: &Path, args: &[&str]) -> Result<Vec<PathBuf>> {
+    let output = git(worktree, args)?;
+    Ok(output.lines().map(PathBuf::from).collect())
+}
+
+/// Renders `paths` as a comma-separated list for [`require_clean`]'s error detail.
+fn format_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Fetches `remote` into `root`, updating its remote-tracking refs.
 ///
 /// # Errors
@@ -453,6 +524,124 @@ mod tests {
             is_clean(dir.path()).expect("is_clean"),
             "an ignored file must not count as dirty"
         );
+    }
+
+    #[test]
+    fn require_clean_passes_for_a_freshly_committed_tree() {
+        let dir = init_repo();
+        commit_file(dir.path(), "file.txt", "hello\n");
+
+        require_clean(dir.path()).expect("require_clean");
+    }
+
+    #[test]
+    fn require_clean_ignores_files_matched_by_gitignore() {
+        let dir = init_repo();
+        commit_file(dir.path(), ".gitignore", "ignored.txt\n");
+        std::fs::write(dir.path().join("ignored.txt"), "should not count\n").expect("write file");
+
+        require_clean(dir.path()).expect("an ignored file must never trigger require_clean");
+    }
+
+    #[test]
+    fn require_clean_names_an_untracked_path_as_untracked() {
+        let dir = init_repo();
+        commit_file(dir.path(), "file.txt", "hello\n");
+        std::fs::write(dir.path().join("new.txt"), "new\n").expect("write file");
+
+        let err = require_clean(dir.path()).expect_err("must fail: untracked file");
+
+        let Error::Policy { detail, paths } = &err else {
+            panic!("expected Error::Policy, got {err:?}");
+        };
+        assert_eq!(paths, &[PathBuf::from("new.txt")]);
+        assert!(
+            detail.contains("untracked"),
+            "detail must name the untracked category, got {detail:?}"
+        );
+        assert!(
+            detail.contains("new.txt"),
+            "detail must name the path, got {detail:?}"
+        );
+    }
+
+    #[test]
+    fn require_clean_names_a_modified_tracked_path_as_modified() {
+        let dir = init_repo();
+        commit_file(dir.path(), "file.txt", "hello\n");
+        std::fs::write(dir.path().join("file.txt"), "changed\n").expect("write file");
+
+        let err = require_clean(dir.path()).expect_err("must fail: unstaged modification");
+
+        let Error::Policy { detail, paths } = &err else {
+            panic!("expected Error::Policy, got {err:?}");
+        };
+        assert_eq!(paths, &[PathBuf::from("file.txt")]);
+        assert!(
+            detail.contains("modified") && !detail.contains("untracked"),
+            "detail must name the modified category, got {detail:?}"
+        );
+    }
+
+    #[test]
+    fn require_clean_names_a_staged_path_as_staged() {
+        let dir = init_repo();
+        commit_file(dir.path(), "file.txt", "hello\n");
+        std::fs::write(dir.path().join("file.txt"), "changed\n").expect("write file");
+        git(dir.path(), &["add", "file.txt"]).expect("git add");
+
+        let err = require_clean(dir.path()).expect_err("must fail: staged modification");
+
+        let Error::Policy { detail, paths } = &err else {
+            panic!("expected Error::Policy, got {err:?}");
+        };
+        assert_eq!(paths, &[PathBuf::from("file.txt")]);
+        assert!(
+            detail.contains("staged") && !detail.contains("modified:"),
+            "detail must name the staged category, not the modified one, got {detail:?}"
+        );
+    }
+
+    #[test]
+    fn require_clean_distinguishes_staged_from_further_modified_in_the_same_path() {
+        let dir = init_repo();
+        commit_file(dir.path(), "file.txt", "hello\n");
+        std::fs::write(dir.path().join("file.txt"), "staged change\n").expect("write file");
+        git(dir.path(), &["add", "file.txt"]).expect("git add");
+        std::fs::write(dir.path().join("file.txt"), "further unstaged change\n")
+            .expect("write file");
+
+        let err = require_clean(dir.path()).expect_err("must fail: staged and modified");
+
+        let Error::Policy { detail, paths } = &err else {
+            panic!("expected Error::Policy, got {err:?}");
+        };
+        assert_eq!(paths, &[PathBuf::from("file.txt")]);
+        assert!(detail.contains("staged"), "got {detail:?}");
+        assert!(detail.contains("modified"), "got {detail:?}");
+    }
+
+    #[test]
+    fn require_clean_names_every_offending_path_not_just_the_count() {
+        let dir = init_repo();
+        commit_file(dir.path(), "file.txt", "hello\n");
+        std::fs::write(dir.path().join("file.txt"), "changed\n").expect("write file");
+        std::fs::write(dir.path().join("new.txt"), "new\n").expect("write file");
+        std::fs::write(dir.path().join("also-new.txt"), "also new\n").expect("write file");
+
+        let err = require_clean(dir.path()).expect_err("must fail: three dirty paths");
+
+        let Error::Policy { paths, .. } = &err else {
+            panic!("expected Error::Policy, got {err:?}");
+        };
+        assert_eq!(
+            paths.len(),
+            3,
+            "expected all three paths named, got {paths:?}"
+        );
+        assert!(paths.contains(&PathBuf::from("file.txt")));
+        assert!(paths.contains(&PathBuf::from("new.txt")));
+        assert!(paths.contains(&PathBuf::from("also-new.txt")));
     }
 
     #[test]
