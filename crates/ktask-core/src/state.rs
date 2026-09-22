@@ -195,6 +195,35 @@ pub fn check_one_active(states: &BTreeMap<TaskId, TaskState>) -> Result<()> {
     Ok(())
 }
 
+/// Enforces `VISION.md` §3 invariant 2: `next` cannot start until every task
+/// ahead of it in the queue has reached a settled state — `Done`,
+/// `Cancelled`, or `PublishedVerified` (already confirmed present on
+/// mainline, so a successor may safely build on it without waiting for the
+/// bookkeeping `TaskDone` event that follows).
+///
+/// # Errors
+///
+/// Returns [`Error::Policy`] naming the lowest-id predecessor of `next` that
+/// has not reached one of those states.
+pub fn check_predecessor(states: &BTreeMap<TaskId, TaskState>, next: TaskId) -> Result<()> {
+    for (id, state) in states.range(..next) {
+        let settled = matches!(
+            state,
+            TaskState::Done | TaskState::Cancelled | TaskState::PublishedVerified { .. }
+        );
+        if !settled {
+            return Err(Error::Policy {
+                detail: format!(
+                    "task {next} cannot start: predecessor {id} is not published (state: {})",
+                    state.name()
+                ),
+                paths: Vec::new(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Builds the standard "this event does not apply here" error, naming the
 /// state by [`TaskState::name`] and the event by its discriminant.
 fn invalid(from: &str, event: &EventKind) -> Error {
@@ -2244,6 +2273,57 @@ mod tests {
         );
 
         check_one_active(&states).expect("no active tasks at all is fine");
+    }
+
+    #[test]
+    fn check_predecessor_blocks_on_a_pending_predecessor_and_names_it() {
+        let mut states = BTreeMap::new();
+        states.insert(TaskId::new(1), TaskState::Done);
+        states.insert(TaskId::new(2), TaskState::Queued);
+
+        let err =
+            check_predecessor(&states, TaskId::new(3)).expect_err("task 2 has not been published");
+        match err {
+            Error::Policy { detail, .. } => {
+                assert!(
+                    detail.contains('2'),
+                    "detail should name the blocking predecessor: {detail}"
+                );
+            }
+            other => panic!("expected Error::Policy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_predecessor_allows_done_cancelled_and_published_verified_predecessors() {
+        let mut states = BTreeMap::new();
+        states.insert(TaskId::new(1), TaskState::Done);
+        states.insert(TaskId::new(2), TaskState::Cancelled);
+        states.insert(
+            TaskId::new(3),
+            TaskState::PublishedVerified {
+                commit: "abc123".to_string(),
+            },
+        );
+
+        check_predecessor(&states, TaskId::new(4))
+            .expect("done, cancelled and published-verified predecessors are all settled");
+    }
+
+    #[test]
+    fn check_predecessor_ignores_tasks_at_or_after_next() {
+        let mut states = BTreeMap::new();
+        states.insert(TaskId::new(1), TaskState::Done);
+        states.insert(TaskId::new(2), TaskState::Queued);
+
+        check_predecessor(&states, TaskId::new(2))
+            .expect("a task is not its own predecessor, and later tasks don't block it either");
+    }
+
+    #[test]
+    fn check_predecessor_allows_a_task_with_no_predecessors() {
+        let states: BTreeMap<TaskId, TaskState> = BTreeMap::new();
+        check_predecessor(&states, TaskId::new(1)).expect("no predecessors, nothing to block on");
     }
 
     #[test]
