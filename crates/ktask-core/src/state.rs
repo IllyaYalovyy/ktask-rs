@@ -1878,6 +1878,252 @@ mod tests {
         }
     }
 
+    /// One representative [`TaskState`] per state the machine distinguishes
+    /// for transition purposes, labeled for use in the cross-product test
+    /// below. `Paused` is split by [`PauseReason`] because legality of
+    /// `Resumed`, `GateAcknowledged` and `RecoveryDecision` depends on it.
+    fn representative_states() -> Vec<(&'static str, TaskState)> {
+        let attempt = AttemptId::new(1);
+        vec![
+            ("Queued", TaskState::Queued),
+            ("Preflight", TaskState::Preflight),
+            (
+                "Running",
+                TaskState::Running {
+                    attempt,
+                    phase: Phase::Implement,
+                },
+            ),
+            (
+                "Remediating",
+                TaskState::Remediating {
+                    attempt,
+                    phase: Phase::Implement,
+                },
+            ),
+            ("Verifying", TaskState::Verifying { attempt }),
+            ("Publishing", TaskState::Publishing { attempt }),
+            (
+                "PublishedVerified",
+                TaskState::PublishedVerified {
+                    commit: "abc123".to_string(),
+                },
+            ),
+            ("Done", TaskState::Done),
+            (
+                "Acknowledged",
+                TaskState::Acknowledged {
+                    by: "alice".to_string(),
+                    at: OffsetDateTime::UNIX_EPOCH,
+                },
+            ),
+            (
+                "Paused/Limit",
+                TaskState::Paused {
+                    reason: PauseReason::Limit { until: None },
+                    resume_to: Box::new(TaskState::Queued),
+                },
+            ),
+            (
+                "Paused/Input",
+                TaskState::Paused {
+                    reason: PauseReason::Input,
+                    resume_to: Box::new(TaskState::Queued),
+                },
+            ),
+            (
+                "Paused/HumanGate",
+                TaskState::Paused {
+                    reason: PauseReason::HumanGate,
+                    resume_to: Box::new(TaskState::Queued),
+                },
+            ),
+            (
+                "Paused/Interrupted",
+                TaskState::Paused {
+                    reason: PauseReason::Interrupted,
+                    resume_to: Box::new(TaskState::Preflight),
+                },
+            ),
+            (
+                "Paused/Blocked",
+                TaskState::Paused {
+                    reason: PauseReason::Blocked,
+                    resume_to: Box::new(TaskState::Queued),
+                },
+            ),
+            (
+                "Failed",
+                TaskState::Failed {
+                    class: FailureClass::AgentFailure,
+                    detail: "boom".to_string(),
+                },
+            ),
+            ("Cancelled", TaskState::Cancelled),
+        ]
+    }
+
+    /// One representative [`EventKind`] per variant the machine
+    /// distinguishes for transition purposes. Field values are arbitrary:
+    /// `apply` never inspects a payload to decide legality, only the event's
+    /// discriminant and (for `Paused`) the current state's `PauseReason`.
+    fn representative_events() -> Vec<EventKind> {
+        let attempt = AttemptId::new(1);
+        vec![
+            EventKind::TaskQueued {
+                title: "t".to_string(),
+            },
+            EventKind::PreflightStarted,
+            EventKind::PreflightPassed {
+                base_sha: "abc".to_string(),
+            },
+            EventKind::PreflightFailed {
+                class: FailureClass::EnvironmentFailure,
+                detail: "disk full".to_string(),
+            },
+            attempt_started(attempt),
+            EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Implement,
+            },
+            EventKind::AgentOutput {
+                attempt,
+                stream: Stream::Stdout,
+                text: "x".to_string(),
+            },
+            EventKind::VerifyPassed { attempt },
+            EventKind::VerifyFailed {
+                attempt,
+                class: FailureClass::VerificationFailure,
+                detail: "x".to_string(),
+            },
+            EventKind::PublishStarted {
+                attempt,
+                candidate_sha: "def".to_string(),
+            },
+            EventKind::PublishVerified {
+                commit: "def".to_string(),
+                remote_sha: "def".to_string(),
+            },
+            EventKind::TaskDone {
+                commit: "def".to_string(),
+            },
+            EventKind::TaskFailed {
+                class: FailureClass::AgentFailure,
+                detail: "x".to_string(),
+            },
+            EventKind::TaskCancelled {
+                reason: "x".to_string(),
+            },
+            EventKind::Paused {
+                reason: PauseReason::Blocked,
+            },
+            EventKind::Resumed,
+            EventKind::Interrupted {
+                phase: Phase::Implement,
+            },
+            EventKind::RecoveryDecision {
+                decision: Recovery::Resume,
+                detail: "x".to_string(),
+            },
+            EventKind::GateAcknowledged {
+                by: "x".to_string(),
+                at: OffsetDateTime::UNIX_EPOCH,
+            },
+        ]
+    }
+
+    #[test]
+    fn every_state_event_pair_is_either_allowed_or_rejected_as_invalid_transition() {
+        // The complete list of legal (state, event) pairs, by label. Any
+        // pair not listed here must make `apply` return
+        // `Error::InvalidTransition`: adding a new legal transition means
+        // deliberately adding a line here, not just an arm in `apply`.
+        const ALLOWED: &[(&str, &str)] = &[
+            ("Queued", "TaskQueued"),
+            ("Queued", "PreflightStarted"),
+            ("Queued", "Paused"),
+            ("Queued", "TaskCancelled"),
+            ("Preflight", "PreflightPassed"),
+            ("Preflight", "PreflightFailed"),
+            ("Preflight", "AttemptStarted"),
+            ("Preflight", "Paused"),
+            ("Preflight", "Interrupted"),
+            ("Preflight", "TaskCancelled"),
+            ("Running", "PhaseEntered"),
+            ("Running", "AgentOutput"),
+            ("Running", "TaskFailed"),
+            ("Running", "Paused"),
+            ("Running", "Interrupted"),
+            ("Running", "TaskCancelled"),
+            ("Remediating", "PhaseEntered"),
+            ("Remediating", "AgentOutput"),
+            ("Remediating", "TaskFailed"),
+            ("Remediating", "Paused"),
+            ("Remediating", "Interrupted"),
+            ("Remediating", "TaskCancelled"),
+            ("Verifying", "VerifyPassed"),
+            ("Verifying", "VerifyFailed"),
+            ("Verifying", "PublishStarted"),
+            ("Verifying", "Paused"),
+            ("Verifying", "Interrupted"),
+            ("Verifying", "TaskCancelled"),
+            ("Publishing", "PublishVerified"),
+            ("Publishing", "TaskFailed"),
+            ("Publishing", "Paused"),
+            ("Publishing", "Interrupted"),
+            ("PublishedVerified", "TaskDone"),
+            ("Paused/Limit", "Resumed"),
+            ("Paused/Limit", "TaskCancelled"),
+            ("Paused/Input", "Resumed"),
+            ("Paused/Input", "TaskCancelled"),
+            ("Paused/HumanGate", "GateAcknowledged"),
+            ("Paused/HumanGate", "TaskCancelled"),
+            ("Paused/Interrupted", "Resumed"),
+            ("Paused/Interrupted", "RecoveryDecision"),
+            ("Paused/Interrupted", "TaskCancelled"),
+            ("Paused/Blocked", "Resumed"),
+            ("Paused/Blocked", "TaskCancelled"),
+            // Done, Acknowledged, Failed and Cancelled are terminal: no
+            // event is legal against them, so they contribute no rows.
+        ];
+
+        let states = representative_states();
+        let events = representative_events();
+        assert_eq!(states.len(), 16, "expected one row per distinguished state");
+        assert_eq!(events.len(), 19, "expected one row per distinguished event");
+
+        let mut checked = 0;
+        for (state_label, state) in &states {
+            for event in &events {
+                let event_label = event.discriminant();
+                let allowed = ALLOWED.contains(&(*state_label, event_label));
+                let result = apply(state, event);
+                if allowed {
+                    assert!(
+                        result.is_ok(),
+                        "expected {state_label} to accept {event_label}, got {result:?}"
+                    );
+                } else {
+                    match result {
+                        Err(Error::InvalidTransition { .. }) => {}
+                        other => panic!(
+                            "expected {state_label} to reject {event_label} with \
+                             InvalidTransition, got {other:?}"
+                        ),
+                    }
+                }
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, states.len() * events.len());
+        assert_eq!(
+            ALLOWED.len(),
+            44,
+            "the allowed list itself changed size; update this guard deliberately"
+        );
+    }
+
     #[test]
     fn apply_rejects_every_event_against_every_terminal_state() {
         let terminals = vec![
