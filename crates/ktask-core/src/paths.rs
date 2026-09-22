@@ -34,7 +34,7 @@ pub fn config_file() -> Result<PathBuf> {
     config_file_with(&|key| std::env::var(key).ok())
 }
 
-fn state_root_with(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
+pub(crate) fn state_root_with(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
     if let Some(xdg_state_home) = env("XDG_STATE_HOME") {
         return Ok(PathBuf::from(xdg_state_home).join("ktask-rs"));
     }
