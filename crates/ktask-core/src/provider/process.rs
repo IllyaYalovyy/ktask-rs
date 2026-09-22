@@ -395,47 +395,47 @@ mod tests {
     }
 
     #[test]
-    fn the_idle_timer_resets_on_every_chunk_so_regular_output_is_not_cut_off() {
-        // Each tick arrives well inside the idle timeout, but the total
-        // run comfortably exceeds it; only a reset on every chunk explains
-        // this completing instead of being killed.
+    fn idle_watchdog_survives_a_session_that_keeps_talking() {
+        // Each tick arrives well inside the idle timeout, but the run as a
+        // whole comfortably outlasts it; only a reset on every chunk
+        // explains this completing instead of being killed.
+        let idle_timeout = Duration::from_millis(300);
         let mut cmd = sh(
-            "i=0; while [ $i -lt 4 ]; do printf 'tick%d\\n' \"$i\"; sleep 0.1; \
+            "i=0; while [ $i -lt 5 ]; do printf 'tick%d\\n' \"$i\"; sleep 0.1; \
              i=$((i + 1)); done",
         );
 
-        let outcome = run_streaming(
-            &mut cmd,
-            None,
-            Duration::from_millis(300),
-            Duration::from_secs(5),
-            None,
-        )
-        .expect("run did not idle out despite the run taking longer than idle_timeout");
+        let outcome = run_streaming(&mut cmd, None, idle_timeout, Duration::from_secs(5), None)
+            .expect("a session that keeps talking before every idle deadline is not killed");
 
         assert_eq!(outcome.exit_code, 0);
-        assert_eq!(outcome.stdout, "tick0\ntick1\ntick2\ntick3\n");
+        assert_eq!(outcome.stdout, "tick0\ntick1\ntick2\ntick3\ntick4\n");
     }
 
     #[test]
-    fn a_command_that_produces_no_further_output_is_killed_at_the_idle_timeout() {
+    fn idle_watchdog_kills_a_silent_session() {
+        let idle_timeout = Duration::from_millis(150);
         let mut cmd = sh("printf 'once\\n'; sleep 30");
 
         let started = Instant::now();
-        let err = run_streaming(
-            &mut cmd,
-            None,
-            Duration::from_millis(150),
-            Duration::from_secs(30),
-            None,
-        )
-        .expect_err("must be killed for going idle");
+        let err = run_streaming(&mut cmd, None, idle_timeout, Duration::from_secs(30), None)
+            .expect_err("a session that goes silent past the idle timeout must be killed");
+        let elapsed = started.elapsed();
 
         assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "killed promptly"
+            elapsed >= idle_timeout,
+            "not killed before the session had actually been silent for the idle timeout: {elapsed:?}"
         );
-        assert!(err.to_string().contains("idle timeout"), "{err}");
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "killed promptly rather than left to run to the hard timeout: {elapsed:?}"
+        );
+        let message = err.to_string();
+        assert!(message.contains("idle timeout"), "{message}");
+        assert!(
+            message.contains(&format!("{idle_timeout:?}")),
+            "error reports the silence duration that was exceeded: {message}"
+        );
     }
 
     #[test]
