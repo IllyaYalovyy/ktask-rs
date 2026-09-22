@@ -22,6 +22,10 @@ pub enum Error {
     #[error("serde error: {0}")]
     Serde(#[from] serde_json::Error),
 
+    /// Formatting a timestamp failed.
+    #[error("time formatting error: {0}")]
+    Time(#[from] time::error::Format),
+
     /// A configuration value was missing or could not be parsed.
     #[error("config error for {key}: {detail}")]
     Config {

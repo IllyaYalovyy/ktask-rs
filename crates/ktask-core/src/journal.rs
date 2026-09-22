@@ -10,9 +10,11 @@
 //! understands is a typed [`Error::Corrupt`], not a best-effort read of a
 //! layout it does not recognize.
 
-use crate::{Error, Project, Result};
-use rusqlite::{Connection, OptionalExtension};
+use crate::{Error, EventKind, EventSeq, Project, Result, TaskId};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 /// The schema version this build creates and understands.
 ///
@@ -100,6 +102,47 @@ impl Journal {
     /// See [`Journal::open`].
     pub fn open_for(project: &Project) -> Result<Journal> {
         Journal::open(&journal_path(&project.state_dir))
+    }
+
+    /// Appends `kind` to the journal, returning the sequence number assigned
+    /// to it.
+    ///
+    /// The timestamp is stamped as the current UTC instant inside this
+    /// function, and `kind` is serialized to JSON before anything is
+    /// written. The insert runs inside a transaction, so a failure partway
+    /// through — serializing the payload, or the insert itself — leaves the
+    /// journal completely unchanged: a sequence number is only ever handed
+    /// out for an event that is durably recorded. Sequence numbers are
+    /// strictly increasing, both within a session and across the journal
+    /// being closed and reopened, because they come from SQLite's
+    /// `AUTOINCREMENT`, which never reuses a value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Serde`] if `kind` cannot be serialized to JSON,
+    /// [`Error::Time`] if the current instant cannot be formatted, and
+    /// [`Error::Database`] if the insert fails.
+    pub fn append(&mut self, task_id: Option<TaskId>, kind: &EventKind) -> Result<EventSeq> {
+        let payload = serde_json::to_string(kind)?;
+        let ts = OffsetDateTime::now_utc().format(&Rfc3339)?;
+
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO events (ts, task_id, kind, payload) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                ts,
+                task_id.map(|id| i64::from(id.get())),
+                kind.discriminant(),
+                payload,
+            ],
+        )?;
+        let seq = tx.last_insert_rowid();
+        tx.commit()?;
+
+        let seq = u64::try_from(seq).map_err(|_| Error::Corrupt {
+            detail: format!("journal produced a negative event sequence number: {seq}"),
+        })?;
+        Ok(EventSeq::new(seq))
     }
 
     /// Reads this journal's recorded `schema_version`, stamping one for a
@@ -340,5 +383,115 @@ mod tests {
         let _journal = Journal::open_for(&project).expect("open_for");
 
         assert!(journal_path(&project.state_dir).is_file());
+    }
+
+    #[test]
+    fn append_returns_strictly_increasing_sequence_numbers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        let first = journal.append(None, &EventKind::Resumed).expect("append 1");
+        let second = journal.append(None, &EventKind::Resumed).expect("append 2");
+        let third = journal.append(None, &EventKind::Resumed).expect("append 3");
+
+        assert!(first.get() < second.get(), "{first} !< {second}");
+        assert!(second.get() < third.get(), "{second} !< {third}");
+    }
+
+    #[test]
+    fn append_sequence_numbers_stay_monotonic_across_a_reopen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+
+        let last_before_close = {
+            let mut journal = Journal::open(&path).expect("first open");
+            journal.append(None, &EventKind::Resumed).expect("append 1");
+            journal.append(None, &EventKind::Resumed).expect("append 2")
+        };
+
+        let mut journal = Journal::open(&path).expect("reopen");
+        let after_reopen = journal
+            .append(None, &EventKind::Resumed)
+            .expect("append after reopen");
+
+        assert!(
+            after_reopen.get() > last_before_close.get(),
+            "{after_reopen} !> {last_before_close}"
+        );
+    }
+
+    #[test]
+    fn append_writes_the_row_with_the_discriminant_and_a_json_payload() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        let event = EventKind::TaskQueued {
+            title: "Add widget".to_string(),
+        };
+        let seq = journal
+            .append(Some(TaskId::new(7)), &event)
+            .expect("append");
+
+        let (kind, payload, task_id): (String, String, Option<i64>) = journal
+            .conn
+            .query_row(
+                "SELECT kind, payload, task_id FROM events WHERE seq = ?1",
+                [i64::try_from(seq.get()).expect("seq fits in i64")],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read back the inserted row");
+
+        assert_eq!(kind, event.discriminant());
+        assert_eq!(task_id, Some(7));
+        let decoded: EventKind = serde_json::from_str(&payload).expect("payload is valid JSON");
+        assert_eq!(decoded, event);
+    }
+
+    #[test]
+    fn append_with_no_task_stores_a_null_task_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        let seq = journal.append(None, &EventKind::Resumed).expect("append");
+
+        let task_id: Option<i64> = journal
+            .conn
+            .query_row(
+                "SELECT task_id FROM events WHERE seq = ?1",
+                [i64::try_from(seq.get()).expect("seq fits in i64")],
+                |row| row.get(0),
+            )
+            .expect("read back the inserted row");
+
+        assert_eq!(task_id, None);
+    }
+
+    #[test]
+    fn append_leaves_nothing_written_when_the_insert_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        // Break the schema so the transaction's INSERT fails after the
+        // payload has already been serialized, proving the transaction
+        // wrapper rolls the row back rather than leaving a partial write.
+        journal
+            .conn
+            .execute_batch("ALTER TABLE events RENAME COLUMN kind TO kind_renamed")
+            .expect("break the schema");
+
+        let err = journal
+            .append(None, &EventKind::Resumed)
+            .expect_err("insert must fail once the schema no longer matches");
+        assert!(matches!(err, Error::Database(_)));
+
+        let count: i64 = journal
+            .conn
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .expect("count events");
+        assert_eq!(count, 0, "a failed insert must not leave a partial row");
     }
 }
