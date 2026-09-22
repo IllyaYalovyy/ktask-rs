@@ -1625,3 +1625,505 @@ mod tests {
         );
     }
 }
+
+/// Property test: [`Journal::rebuild_state`]'s replay always reproduces
+/// exactly what incremental [`Journal::put_state`] calls produced, for any
+/// event sequence a single task's state machine could legally have gone
+/// through (VISION.md section 15's persistence invariant).
+///
+/// The generators below mirror `state.rs`'s `apply` transition table one
+/// arm at a time: each `arb_step_from_*` function enumerates precisely the
+/// events [`apply`] accepts from that state, paired with the state that
+/// results, so every generated sequence is legal by construction rather
+/// than by filtering. `journal::tests::rebuild_state_on_an_invalid_transition_names_the_offending_sequence_number`
+/// above covers the illegal side: an event that does not apply to the
+/// state it followed.
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use crate::{AttemptId, FailureClass, PauseReason, Phase, Recovery, Stream, TaskState};
+    use proptest::prelude::*;
+    use time::Duration;
+
+    fn arb_short_string() -> BoxedStrategy<String> {
+        "[a-z]{0,8}".boxed()
+    }
+
+    fn arb_pid() -> BoxedStrategy<u32> {
+        (1_u32..100_000).boxed()
+    }
+
+    fn arb_attempt_id() -> BoxedStrategy<AttemptId> {
+        (1_u32..4).prop_map(AttemptId::new).boxed()
+    }
+
+    fn arb_failure_class() -> BoxedStrategy<FailureClass> {
+        prop_oneof![
+            Just(FailureClass::AgentFailure),
+            Just(FailureClass::VerificationFailure),
+            Just(FailureClass::ProviderLimit),
+            Just(FailureClass::ProviderTransient),
+            Just(FailureClass::ProviderConfiguration),
+            Just(FailureClass::GitConflict),
+            Just(FailureClass::EnvironmentFailure),
+            Just(FailureClass::PolicyFailure),
+            Just(FailureClass::NeedsInput),
+        ]
+        .boxed()
+    }
+
+    fn arb_stream() -> BoxedStrategy<Stream> {
+        prop_oneof![Just(Stream::Stdout), Just(Stream::Stderr)].boxed()
+    }
+
+    fn arb_phase() -> BoxedStrategy<Phase> {
+        prop_oneof![
+            Just(Phase::Goal),
+            Just(Phase::Scope),
+            Just(Phase::AcceptanceTests),
+            Just(Phase::Implement),
+            Just(Phase::Red),
+            Just(Phase::Green),
+            Just(Phase::Refactor),
+            Just(Phase::Review),
+            Just(Phase::Harden),
+            Just(Phase::DoneCheck),
+            Just(Phase::Verify),
+            Just(Phase::Publish),
+        ]
+        .boxed()
+    }
+
+    /// Every [`Phase`] except `Verify`: `PhaseEntered` treats `Verify`
+    /// specially (it is what reaches [`TaskState::Verifying`]), so the
+    /// "stay in the same running-like state" arm must not generate it —
+    /// that arm would otherwise overlap with the dedicated `Verify` arm.
+    fn arb_non_verify_phase() -> BoxedStrategy<Phase> {
+        prop_oneof![
+            Just(Phase::Goal),
+            Just(Phase::Scope),
+            Just(Phase::AcceptanceTests),
+            Just(Phase::Implement),
+            Just(Phase::Red),
+            Just(Phase::Green),
+            Just(Phase::Refactor),
+            Just(Phase::Review),
+            Just(Phase::Harden),
+            Just(Phase::DoneCheck),
+            Just(Phase::Publish),
+        ]
+        .boxed()
+    }
+
+    fn arb_pause_reason() -> BoxedStrategy<PauseReason> {
+        prop_oneof![
+            Just(PauseReason::Limit { until: None }),
+            Just(PauseReason::Input),
+            Just(PauseReason::HumanGate),
+            Just(PauseReason::Interrupted),
+            Just(PauseReason::Blocked),
+        ]
+        .boxed()
+    }
+
+    fn arb_gate_ack() -> BoxedStrategy<(String, OffsetDateTime)> {
+        (arb_short_string(), 0_i64..1_000_000)
+            .prop_map(|(by, secs)| (by, OffsetDateTime::UNIX_EPOCH + Duration::seconds(secs)))
+            .boxed()
+    }
+
+    /// One legal (event, resulting state) pair from [`TaskState::Queued`],
+    /// mirroring `state.rs`'s `from_queued`.
+    fn arb_step_from_queued() -> BoxedStrategy<(EventKind, TaskState)> {
+        prop_oneof![
+            arb_short_string()
+                .prop_map(|title| (EventKind::TaskQueued { title }, TaskState::Queued)),
+            Just((EventKind::PreflightStarted, TaskState::Preflight)),
+            arb_pause_reason().prop_map(|reason| {
+                let state = TaskState::Paused {
+                    reason: reason.clone(),
+                    resume_to: Box::new(TaskState::Queued),
+                };
+                (EventKind::Paused { reason }, state)
+            }),
+            arb_short_string()
+                .prop_map(|reason| (EventKind::TaskCancelled { reason }, TaskState::Cancelled)),
+        ]
+        .boxed()
+    }
+
+    /// Mirrors `state.rs`'s `from_preflight`.
+    fn arb_step_from_preflight() -> BoxedStrategy<(EventKind, TaskState)> {
+        prop_oneof![
+            arb_short_string().prop_map(|base_sha| (
+                EventKind::PreflightPassed { base_sha },
+                TaskState::Preflight
+            )),
+            (arb_failure_class(), arb_short_string()).prop_map(|(class, detail)| {
+                let event = EventKind::PreflightFailed {
+                    class,
+                    detail: detail.clone(),
+                };
+                (event, TaskState::Failed { class, detail })
+            }),
+            (
+                arb_attempt_id(),
+                arb_short_string(),
+                arb_pid(),
+                arb_short_string()
+            )
+                .prop_map(|(attempt, protocol, pid, base_sha)| {
+                    let event = EventKind::AttemptStarted {
+                        attempt,
+                        protocol,
+                        pid,
+                        base_sha,
+                    };
+                    let state = TaskState::Running {
+                        attempt,
+                        phase: Phase::Implement,
+                    };
+                    (event, state)
+                }),
+            arb_pause_reason().prop_map(|reason| {
+                let state = TaskState::Paused {
+                    reason: reason.clone(),
+                    resume_to: Box::new(TaskState::Preflight),
+                };
+                (EventKind::Paused { reason }, state)
+            }),
+            arb_phase().prop_map(|phase| {
+                let state = TaskState::Paused {
+                    reason: PauseReason::Interrupted,
+                    resume_to: Box::new(TaskState::Preflight),
+                };
+                (EventKind::Interrupted { phase }, state)
+            }),
+            arb_short_string()
+                .prop_map(|reason| (EventKind::TaskCancelled { reason }, TaskState::Cancelled)),
+        ]
+        .boxed()
+    }
+
+    /// Shared body of `from_running` and `from_remediating`, which accept
+    /// exactly the same events and differ only in which variant they stay
+    /// in or pause back into; `make` picks the variant.
+    fn arb_step_from_running_like(
+        attempt: AttemptId,
+        phase: Phase,
+        make: fn(AttemptId, Phase) -> TaskState,
+    ) -> BoxedStrategy<(EventKind, TaskState)> {
+        prop_oneof![
+            arb_non_verify_phase().prop_map(move |new_phase| {
+                let event = EventKind::PhaseEntered {
+                    attempt,
+                    phase: new_phase,
+                };
+                (event, make(attempt, new_phase))
+            }),
+            Just((
+                EventKind::PhaseEntered {
+                    attempt,
+                    phase: Phase::Verify,
+                },
+                TaskState::Verifying { attempt },
+            )),
+            (arb_stream(), arb_short_string()).prop_map(move |(stream, text)| {
+                let event = EventKind::AgentOutput {
+                    attempt,
+                    stream,
+                    text,
+                };
+                (event, make(attempt, phase))
+            }),
+            (arb_failure_class(), arb_short_string()).prop_map(|(class, detail)| {
+                let event = EventKind::TaskFailed {
+                    class,
+                    detail: detail.clone(),
+                };
+                (event, TaskState::Failed { class, detail })
+            }),
+            arb_pause_reason().prop_map(move |reason| {
+                let state = TaskState::Paused {
+                    reason: reason.clone(),
+                    resume_to: Box::new(make(attempt, phase)),
+                };
+                (EventKind::Paused { reason }, state)
+            }),
+            arb_phase().prop_map(move |phase| {
+                let state = TaskState::Paused {
+                    reason: PauseReason::Interrupted,
+                    resume_to: Box::new(make(attempt, phase)),
+                };
+                (EventKind::Interrupted { phase }, state)
+            }),
+            arb_short_string()
+                .prop_map(|reason| (EventKind::TaskCancelled { reason }, TaskState::Cancelled)),
+        ]
+        .boxed()
+    }
+
+    /// Mirrors `state.rs`'s `from_running`.
+    fn arb_step_from_running(
+        attempt: AttemptId,
+        phase: Phase,
+    ) -> BoxedStrategy<(EventKind, TaskState)> {
+        arb_step_from_running_like(attempt, phase, |attempt, phase| TaskState::Running {
+            attempt,
+            phase,
+        })
+    }
+
+    /// Mirrors `state.rs`'s `from_remediating`.
+    fn arb_step_from_remediating(
+        attempt: AttemptId,
+        phase: Phase,
+    ) -> BoxedStrategy<(EventKind, TaskState)> {
+        arb_step_from_running_like(attempt, phase, |attempt, phase| TaskState::Remediating {
+            attempt,
+            phase,
+        })
+    }
+
+    /// Mirrors `state.rs`'s `from_verifying`.
+    fn arb_step_from_verifying(attempt: AttemptId) -> BoxedStrategy<(EventKind, TaskState)> {
+        prop_oneof![
+            Just((
+                EventKind::VerifyPassed { attempt },
+                TaskState::Verifying { attempt },
+            )),
+            (arb_failure_class(), arb_short_string()).prop_map(move |(class, detail)| {
+                let event = EventKind::VerifyFailed {
+                    attempt,
+                    class,
+                    detail,
+                };
+                let state = TaskState::Remediating {
+                    attempt,
+                    phase: Phase::Implement,
+                };
+                (event, state)
+            }),
+            arb_short_string().prop_map(move |candidate_sha| {
+                let event = EventKind::PublishStarted {
+                    attempt,
+                    candidate_sha,
+                };
+                (event, TaskState::Publishing { attempt })
+            }),
+            arb_pause_reason().prop_map(move |reason| {
+                let state = TaskState::Paused {
+                    reason: reason.clone(),
+                    resume_to: Box::new(TaskState::Verifying { attempt }),
+                };
+                (EventKind::Paused { reason }, state)
+            }),
+            arb_phase().prop_map(move |phase| {
+                let state = TaskState::Paused {
+                    reason: PauseReason::Interrupted,
+                    resume_to: Box::new(TaskState::Verifying { attempt }),
+                };
+                (EventKind::Interrupted { phase }, state)
+            }),
+            arb_short_string()
+                .prop_map(|reason| (EventKind::TaskCancelled { reason }, TaskState::Cancelled)),
+        ]
+        .boxed()
+    }
+
+    /// Mirrors `state.rs`'s `from_publishing`: no `TaskCancelled` arm,
+    /// because that state accepts none.
+    fn arb_step_from_publishing(attempt: AttemptId) -> BoxedStrategy<(EventKind, TaskState)> {
+        prop_oneof![
+            (arb_short_string(), arb_short_string()).prop_map(|(commit, remote_sha)| {
+                let event = EventKind::PublishVerified {
+                    commit: commit.clone(),
+                    remote_sha,
+                };
+                (event, TaskState::PublishedVerified { commit })
+            }),
+            (arb_failure_class(), arb_short_string()).prop_map(|(class, detail)| {
+                let event = EventKind::TaskFailed {
+                    class,
+                    detail: detail.clone(),
+                };
+                (event, TaskState::Failed { class, detail })
+            }),
+            arb_pause_reason().prop_map(move |reason| {
+                let state = TaskState::Paused {
+                    reason: reason.clone(),
+                    resume_to: Box::new(TaskState::Publishing { attempt }),
+                };
+                (EventKind::Paused { reason }, state)
+            }),
+            arb_phase().prop_map(move |phase| {
+                let state = TaskState::Paused {
+                    reason: PauseReason::Interrupted,
+                    resume_to: Box::new(TaskState::Publishing { attempt }),
+                };
+                (EventKind::Interrupted { phase }, state)
+            }),
+        ]
+        .boxed()
+    }
+
+    /// Mirrors `state.rs`'s `from_published_verified`: `TaskDone` is the
+    /// only legal event.
+    fn arb_step_from_published_verified(commit: String) -> BoxedStrategy<(EventKind, TaskState)> {
+        Just((EventKind::TaskDone { commit }, TaskState::Done)).boxed()
+    }
+
+    /// Mirrors `state.rs`'s `from_paused`, whose legal events depend on
+    /// `reason`: only a `HumanGate` pause accepts `GateAcknowledged`, only
+    /// an `Interrupted` pause accepts `RecoveryDecision`, and every reason
+    /// except `HumanGate` accepts `Resumed`.
+    fn arb_step_from_paused(
+        reason: &PauseReason,
+        resume_to: TaskState,
+    ) -> BoxedStrategy<(EventKind, TaskState)> {
+        match reason {
+            PauseReason::HumanGate => prop_oneof![
+                arb_gate_ack().prop_map(|(by, at)| {
+                    let event = EventKind::GateAcknowledged { by: by.clone(), at };
+                    (event, TaskState::Acknowledged { by, at })
+                }),
+                arb_short_string().prop_map(|reason| {
+                    (EventKind::TaskCancelled { reason }, TaskState::Cancelled)
+                }),
+            ]
+            .boxed(),
+            PauseReason::Interrupted => {
+                let resume_via_resumed = resume_to.clone();
+                let recovery_resume_to = resume_to.clone();
+                let recovery_already_applied_to = resume_to.clone();
+                let mark_interrupted_to = resume_to;
+                prop_oneof![
+                    Just((EventKind::Resumed, resume_via_resumed.clone())),
+                    arb_short_string().prop_map(move |detail| {
+                        let event = EventKind::RecoveryDecision {
+                            decision: Recovery::Resume,
+                            detail,
+                        };
+                        (event, recovery_resume_to.clone())
+                    }),
+                    arb_short_string().prop_map(move |detail| {
+                        let event = EventKind::RecoveryDecision {
+                            decision: Recovery::AlreadyApplied,
+                            detail,
+                        };
+                        (event, recovery_already_applied_to.clone())
+                    }),
+                    arb_short_string().prop_map(move |detail| {
+                        let event = EventKind::RecoveryDecision {
+                            decision: Recovery::MarkInterrupted,
+                            detail,
+                        };
+                        let state = TaskState::Paused {
+                            reason: PauseReason::Interrupted,
+                            resume_to: Box::new(mark_interrupted_to.clone()),
+                        };
+                        (event, state)
+                    }),
+                    arb_short_string().prop_map(|reason| {
+                        (EventKind::TaskCancelled { reason }, TaskState::Cancelled)
+                    }),
+                ]
+                .boxed()
+            }
+            PauseReason::Limit { .. } | PauseReason::Input | PauseReason::Blocked => prop_oneof![
+                Just((EventKind::Resumed, resume_to.clone())),
+                arb_short_string().prop_map(|reason| {
+                    (EventKind::TaskCancelled { reason }, TaskState::Cancelled)
+                }),
+            ]
+            .boxed(),
+        }
+    }
+
+    /// Dispatches to the `arb_step_from_*` generator matching `state`'s
+    /// variant. Never called on a terminal state: [`arb_legal_sequence`]
+    /// stops recursing before reaching one.
+    fn arb_legal_step(state: TaskState) -> BoxedStrategy<(EventKind, TaskState)> {
+        match state {
+            TaskState::Queued => arb_step_from_queued(),
+            TaskState::Preflight => arb_step_from_preflight(),
+            TaskState::Running { attempt, phase } => arb_step_from_running(attempt, phase),
+            TaskState::Remediating { attempt, phase } => arb_step_from_remediating(attempt, phase),
+            TaskState::Verifying { attempt } => arb_step_from_verifying(attempt),
+            TaskState::Publishing { attempt } => arb_step_from_publishing(attempt),
+            TaskState::PublishedVerified { commit } => arb_step_from_published_verified(commit),
+            TaskState::Paused { reason, resume_to } => arb_step_from_paused(&reason, *resume_to),
+            TaskState::Done
+            | TaskState::Acknowledged { .. }
+            | TaskState::Failed { .. }
+            | TaskState::Cancelled => {
+                unreachable!("arb_legal_step must not be called on a terminal state")
+            }
+        }
+    }
+
+    /// Builds a legal event sequence for a single task, starting from
+    /// `state` and stopping either once `remaining` steps are exhausted, a
+    /// terminal state is reached, or (with some probability, so short
+    /// sequences are generated too) early.
+    fn arb_legal_sequence(state: TaskState, remaining: u32) -> BoxedStrategy<Vec<EventKind>> {
+        if remaining == 0 || state.is_terminal() {
+            return Just(Vec::new()).boxed();
+        }
+
+        let continue_strategy = arb_legal_step(state).prop_flat_map(move |(event, next_state)| {
+            arb_legal_sequence(next_state, remaining - 1).prop_map(move |mut rest| {
+                let mut events = Vec::with_capacity(rest.len() + 1);
+                events.push(event.clone());
+                events.append(&mut rest);
+                events
+            })
+        });
+
+        prop_oneof![
+            1 => Just(Vec::new()),
+            4 => continue_strategy,
+        ]
+        .boxed()
+    }
+
+    /// A legal event sequence for one task, starting from
+    /// [`TaskState::Queued`] (every task's actual starting state).
+    fn arb_legal_event_sequence() -> BoxedStrategy<Vec<EventKind>> {
+        arb_legal_sequence(TaskState::Queued, 16).boxed()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// The central persistence invariant (VISION.md section 15):
+        /// replaying a legal event sequence through [`Journal::rebuild_state`]
+        /// always reproduces exactly what incrementally applying and storing
+        /// each event via [`Journal::put_state`] produced, no matter which
+        /// legal path the task's state machine took to get there.
+        #[test]
+        fn rebuild_state_matches_incremental_state_for_any_legal_sequence(
+            events in arb_legal_event_sequence()
+        ) {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("journal.db");
+            let mut journal = Journal::open(&path).expect("open");
+
+            let task = TaskId::new(1);
+            let mut state = TaskState::Queued;
+            for event in &events {
+                journal.append(Some(task), event).expect("append");
+                state = apply(&state, event)
+                    .expect("the generator only produces events legal for the current state");
+                journal.put_state(task, &state).expect("put_state");
+            }
+
+            let incremental = journal.get_state(task).expect("get_state (incremental)");
+
+            journal.rebuild_state().expect("rebuild_state");
+            let rebuilt = journal.get_state(task).expect("get_state (rebuilt)");
+
+            prop_assert_eq!(incremental, rebuilt);
+        }
+    }
+}
