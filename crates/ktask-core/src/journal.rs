@@ -11,7 +11,7 @@
 //! layout it does not recognize.
 
 use crate::task::status_from_body;
-use crate::{Error, Event, EventKind, EventSeq, Project, Result, Task, TaskId, TaskState};
+use crate::{Error, Event, EventKind, EventSeq, Project, Result, Task, TaskId, TaskState, apply};
 use rusqlite::{Connection, OptionalExtension, Params, params};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -337,6 +337,53 @@ impl Journal {
         Ok(states)
     }
 
+    /// Drops and rebuilds `task_state` by replaying every event in the
+    /// journal through [`apply`].
+    ///
+    /// Each task's events (its `task_id` is not `NULL`) are replayed in
+    /// `seq` order starting from [`TaskState::Queued`], mirroring exactly
+    /// what incrementally calling [`Journal::put_state`] after every event
+    /// would have produced (`docs/DESIGN.md`: `task_state` is a projection
+    /// and may be dropped and rebuilt by replay). Queue-level events, whose
+    /// `task_id` is `NULL`, do not belong to any task's state machine and
+    /// are skipped.
+    ///
+    /// The whole replay runs in memory before `task_state` is touched: if
+    /// any event fails to apply, the existing projection is left exactly as
+    /// it was, rather than partially rewritten.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Database`] if reading or writing the database
+    /// fails, [`Error::Serde`] if a stored payload is not valid JSON, and
+    /// [`Error::Corrupt`] if a stored `seq`, `ts` or `task_id` is not a
+    /// value this build can represent, or if replay hits an event that does
+    /// not apply to the state it followed — naming the offending sequence
+    /// number rather than stopping silently.
+    pub fn rebuild_state(&mut self) -> Result<()> {
+        let events = self.events()?;
+
+        let mut states: BTreeMap<TaskId, TaskState> = BTreeMap::new();
+        for event in &events {
+            let Some(task_id) = event.task_id else {
+                continue;
+            };
+            let current = states.entry(task_id).or_insert(TaskState::Queued);
+            *current = apply(current, &event.kind).map_err(|source| Error::Corrupt {
+                detail: format!(
+                    "journal replay hit an invalid transition at event seq {}: {source}",
+                    event.seq
+                ),
+            })?;
+        }
+
+        self.conn.execute("DELETE FROM task_state", [])?;
+        for (task_id, state) in &states {
+            self.put_state(*task_id, state)?;
+        }
+        Ok(())
+    }
+
     /// Returns every event in the journal, ordered by `seq` ascending.
     ///
     /// # Errors
@@ -531,7 +578,7 @@ fn decode_event(row: &rusqlite::Row<'_>) -> Result<Event> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::FailureClass;
+    use crate::{AttemptId, FailureClass, Phase};
 
     #[test]
     fn open_creates_all_tables_and_the_index() {
@@ -1218,6 +1265,218 @@ mod tests {
         assert_eq!(states[&TaskId::new(1)], TaskState::Queued);
         assert_eq!(states[&TaskId::new(2)], TaskState::Preflight);
         assert_eq!(states[&TaskId::new(3)], TaskState::Done);
+    }
+
+    #[test]
+    fn rebuild_state_matches_incremental_writes_for_a_multi_task_journal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        let task_a = TaskId::new(1);
+        let task_b = TaskId::new(2);
+
+        // Task A: queued all the way through to Done, writing state
+        // incrementally the way a runner would.
+        let mut state_a = TaskState::Queued;
+        for kind in [
+            EventKind::TaskQueued {
+                title: "A".to_string(),
+            },
+            EventKind::PreflightStarted,
+            EventKind::PreflightPassed {
+                base_sha: "base".to_string(),
+            },
+            EventKind::AttemptStarted {
+                attempt: AttemptId::new(1),
+                protocol: "direct".to_string(),
+                pid: 123,
+                base_sha: "base".to_string(),
+            },
+            EventKind::PhaseEntered {
+                attempt: AttemptId::new(1),
+                phase: Phase::Verify,
+            },
+            EventKind::VerifyPassed {
+                attempt: AttemptId::new(1),
+            },
+            EventKind::PublishStarted {
+                attempt: AttemptId::new(1),
+                candidate_sha: "cand".to_string(),
+            },
+            EventKind::PublishVerified {
+                commit: "cand".to_string(),
+                remote_sha: "cand".to_string(),
+            },
+            EventKind::TaskDone {
+                commit: "cand".to_string(),
+            },
+        ] {
+            journal
+                .append(Some(task_a), &kind)
+                .expect("append task a event");
+            state_a = apply(&state_a, &kind).expect("apply task a event");
+            journal
+                .put_state(task_a, &state_a)
+                .expect("put_state task a");
+        }
+
+        // Task B: queued, then fails preflight.
+        let mut state_b = TaskState::Queued;
+        for kind in [
+            EventKind::TaskQueued {
+                title: "B".to_string(),
+            },
+            EventKind::PreflightStarted,
+            EventKind::PreflightFailed {
+                class: FailureClass::EnvironmentFailure,
+                detail: "disk full".to_string(),
+            },
+        ] {
+            journal
+                .append(Some(task_b), &kind)
+                .expect("append task b event");
+            state_b = apply(&state_b, &kind).expect("apply task b event");
+            journal
+                .put_state(task_b, &state_b)
+                .expect("put_state task b");
+        }
+
+        let expected = journal.all_states().expect("incremental all_states");
+        assert_eq!(expected[&task_a], TaskState::Done, "sanity: task a is Done");
+        assert!(
+            matches!(expected[&task_b], TaskState::Failed { .. }),
+            "sanity: task b is Failed"
+        );
+
+        journal.rebuild_state().expect("rebuild_state");
+
+        assert_eq!(
+            journal.all_states().expect("rebuilt all_states"),
+            expected,
+            "rebuilding from events must reproduce what incremental put_state calls produced"
+        );
+    }
+
+    #[test]
+    fn rebuild_state_clears_stale_state_for_a_task_no_longer_backed_by_events() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        // No events at all: this row has nothing in the journal to justify it.
+        journal
+            .put_state(
+                TaskId::new(99),
+                &TaskState::Running {
+                    attempt: AttemptId::new(1),
+                    phase: Phase::Implement,
+                },
+            )
+            .expect("put_state stale");
+
+        journal.rebuild_state().expect("rebuild_state");
+
+        assert_eq!(
+            journal.get_state(TaskId::new(99)).expect("get_state"),
+            None,
+            "a projection row with no backing events must not survive a rebuild"
+        );
+    }
+
+    #[test]
+    fn rebuild_state_ignores_queue_level_events_with_no_task_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        journal
+            .append(None, &EventKind::Resumed)
+            .expect("append queue-level event");
+
+        journal
+            .rebuild_state()
+            .expect("rebuild_state must not choke on a task-less event");
+
+        assert_eq!(journal.all_states().expect("all_states"), BTreeMap::new());
+    }
+
+    #[test]
+    fn rebuild_state_on_an_invalid_transition_names_the_offending_sequence_number() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        let task = TaskId::new(1);
+        journal
+            .append(
+                Some(task),
+                &EventKind::TaskQueued {
+                    title: "A".to_string(),
+                },
+            )
+            .expect("append 1");
+        // A Queued task has never had an AttemptStarted, so VerifyPassed does
+        // not apply here: this is the offending event.
+        let bad_seq = journal
+            .append(
+                Some(task),
+                &EventKind::VerifyPassed {
+                    attempt: AttemptId::new(1),
+                },
+            )
+            .expect("append 2");
+
+        let err = journal
+            .rebuild_state()
+            .expect_err("must reject the invalid transition instead of stopping silently");
+
+        let message = err.to_string();
+        assert!(
+            message.contains(&bad_seq.to_string()),
+            "expected the error to name the offending seq {bad_seq}, got {message:?}"
+        );
+        assert!(matches!(err, Error::Corrupt { .. }));
+    }
+
+    #[test]
+    fn rebuild_state_leaves_existing_projection_untouched_when_replay_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        let good_task = TaskId::new(1);
+        journal
+            .put_state(good_task, &TaskState::Preflight)
+            .expect("seed good_task state");
+
+        let bad_task = TaskId::new(2);
+        journal
+            .append(
+                Some(bad_task),
+                &EventKind::TaskQueued {
+                    title: "B".to_string(),
+                },
+            )
+            .expect("append 1");
+        journal
+            .append(
+                Some(bad_task),
+                &EventKind::VerifyPassed {
+                    attempt: AttemptId::new(1),
+                },
+            )
+            .expect("append 2");
+
+        journal
+            .rebuild_state()
+            .expect_err("replay must fail on the invalid transition");
+
+        assert_eq!(
+            journal.get_state(good_task).expect("get_state"),
+            Some(TaskState::Preflight),
+            "a failed rebuild must not clear or partially rewrite the existing projection"
+        );
     }
 
     #[test]
