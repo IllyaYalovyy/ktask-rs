@@ -11,8 +11,9 @@
 //! layout it does not recognize.
 
 use crate::task::status_from_body;
-use crate::{Error, Event, EventKind, EventSeq, Project, Result, Task, TaskId};
+use crate::{Error, Event, EventKind, EventSeq, Project, Result, Task, TaskId, TaskState};
 use rusqlite::{Connection, OptionalExtension, Params, params};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -257,6 +258,83 @@ impl Journal {
             });
         }
         Ok(tasks)
+    }
+
+    /// Writes `state` as `task`'s current materialized state, overwriting
+    /// whatever was previously stored for it rather than duplicating a row.
+    ///
+    /// `task_state` is a projection (`docs/DESIGN.md` Database schema): it
+    /// may be dropped and rebuilt by replaying `events`, so this only ever
+    /// needs to hold one row per task.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Serde`] if `state` cannot be serialized to JSON,
+    /// [`Error::Time`] if the current instant cannot be formatted, and
+    /// [`Error::Database`] if the write fails.
+    pub fn put_state(&mut self, task: TaskId, state: &TaskState) -> Result<()> {
+        let state_json = serde_json::to_string(state)?;
+        let updated_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
+
+        self.conn.execute(
+            "INSERT INTO task_state (task_id, state_json, updated_at) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(task_id) DO UPDATE SET \
+               state_json = excluded.state_json, updated_at = excluded.updated_at",
+            params![i64::from(task.get()), state_json, updated_at],
+        )?;
+        Ok(())
+    }
+
+    /// Returns `task`'s materialized state, or `None` if [`Journal::put_state`]
+    /// has never been called for it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Database`] if the query fails, and [`Error::Serde`]
+    /// if the stored `state_json` is not valid JSON for [`TaskState`].
+    pub fn get_state(&self, task: TaskId) -> Result<Option<TaskState>> {
+        let state_json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT state_json FROM task_state WHERE task_id = ?1",
+                params![i64::from(task.get())],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        state_json
+            .map(|json| Ok(serde_json::from_str(&json)?))
+            .transpose()
+    }
+
+    /// Returns every task's materialized state, keyed by [`TaskId`] in id
+    /// order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Database`] if the query fails, [`Error::Serde`] if a
+    /// stored `state_json` is not valid JSON for [`TaskState`], and
+    /// [`Error::Corrupt`] if a stored `task_id` does not fit a [`TaskId`].
+    pub fn all_states(&self) -> Result<BTreeMap<TaskId, TaskState>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT task_id, state_json FROM task_state ORDER BY task_id ASC")?;
+        let rows = stmt.query_map([], |row| {
+            let task_id: i64 = row.get(0)?;
+            let state_json: String = row.get(1)?;
+            Ok((task_id, state_json))
+        })?;
+
+        let mut states = BTreeMap::new();
+        for row in rows {
+            let (task_id, state_json) = row?;
+            let task_id = u32::try_from(task_id).map_err(|_| Error::Corrupt {
+                detail: format!("task_state table has an invalid task_id: {task_id}"),
+            })?;
+            let state: TaskState = serde_json::from_str(&state_json)?;
+            states.insert(TaskId::new(task_id), state);
+        }
+        Ok(states)
     }
 
     /// Returns every event in the journal, ordered by `seq` ascending.
@@ -1054,6 +1132,92 @@ mod tests {
 
         let read_back = journal.tasks().expect("tasks");
         assert_eq!(read_back, parsed);
+    }
+
+    #[test]
+    fn get_state_for_a_task_with_no_stored_state_returns_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let journal = Journal::open(&path).expect("open");
+
+        assert_eq!(journal.get_state(TaskId::new(1)).expect("get_state"), None);
+    }
+
+    #[test]
+    fn put_state_then_get_state_round_trips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        journal
+            .put_state(TaskId::new(1), &TaskState::Preflight)
+            .expect("put_state");
+
+        assert_eq!(
+            journal.get_state(TaskId::new(1)).expect("get_state"),
+            Some(TaskState::Preflight)
+        );
+    }
+
+    #[test]
+    fn put_state_twice_overwrites_rather_than_duplicating() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        journal
+            .put_state(TaskId::new(1), &TaskState::Queued)
+            .expect("first put_state");
+        journal
+            .put_state(TaskId::new(1), &TaskState::Preflight)
+            .expect("second put_state");
+
+        let count: i64 = journal
+            .conn
+            .query_row("SELECT COUNT(*) FROM task_state", [], |row| row.get(0))
+            .expect("count rows");
+        assert_eq!(count, 1, "overwriting must not duplicate the row");
+
+        assert_eq!(
+            journal.get_state(TaskId::new(1)).expect("get_state"),
+            Some(TaskState::Preflight),
+            "the last write must win"
+        );
+    }
+
+    #[test]
+    fn all_states_on_an_empty_table_returns_an_empty_map() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let journal = Journal::open(&path).expect("open");
+
+        assert_eq!(journal.all_states().expect("all_states"), BTreeMap::new());
+    }
+
+    #[test]
+    fn all_states_returns_every_tasks_state_in_id_order() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        // Written out of id order, to prove `all_states` sorts rather than
+        // returning insertion order.
+        journal
+            .put_state(TaskId::new(3), &TaskState::Done)
+            .expect("put_state 3");
+        journal
+            .put_state(TaskId::new(1), &TaskState::Queued)
+            .expect("put_state 1");
+        journal
+            .put_state(TaskId::new(2), &TaskState::Preflight)
+            .expect("put_state 2");
+
+        let states = journal.all_states().expect("all_states");
+        let ids: Vec<TaskId> = states.keys().copied().collect();
+        assert_eq!(ids, vec![TaskId::new(1), TaskId::new(2), TaskId::new(3)]);
+        assert_eq!(states[&TaskId::new(1)], TaskState::Queued);
+        assert_eq!(states[&TaskId::new(2)], TaskState::Preflight);
+        assert_eq!(states[&TaskId::new(3)], TaskState::Done);
     }
 
     #[test]
