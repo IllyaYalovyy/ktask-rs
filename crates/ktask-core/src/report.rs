@@ -102,27 +102,20 @@ fn header_line(text: &str) -> Option<&str> {
 /// report are read out of by [`mod@crate::decision`]. A report that held only
 /// its header has an empty body, which is an answer rather than a refusal here:
 /// deciding whether an empty body is enough is what reads the body.
-pub(crate) fn body_after_header(text: &str) -> &str {
-    let mut past_header = text;
-    while let Some(line) = rest_of_first_line(past_header) {
-        if line.trim().is_empty() {
-            let consumed = line.len();
-            past_header = slice_after(past_header, consumed);
-            continue;
-        }
-        past_header = slice_after(past_header, line.len());
-        break;
-    }
-    past_header
-}
-
-/// The first line of `text`, with the newline that ends it kept, or nothing once
-/// the text is gone.
 ///
-/// The newline is kept so the length handed to [`slice_after`] moves the reader
-/// past the line rather than to its last character.
-fn rest_of_first_line(text: &str) -> Option<&str> {
-    text.split_inclusive('\n').next()
+/// The reader counts bytes and slices once, rather than re-reading the first
+/// line of whatever is left each time. A walker that advanced by what it had
+/// just read would sit still on a read that came back empty, and a supervisor
+/// that never finishes reading a report is worse than one that reads it wrong.
+pub(crate) fn body_after_header(text: &str) -> &str {
+    let mut past_header = 0;
+    for line in text.split_inclusive('\n') {
+        past_header += line.len();
+        if !line.trim().is_empty() {
+            break;
+        }
+    }
+    slice_after(text, past_header)
 }
 
 /// `text` from `bytes` onward, which is every length this module computes.
@@ -295,6 +288,50 @@ mod tests {
             names_every_expectation(&message),
             "whitespace is not a header, however many lines of it there are: {message}"
         );
+    }
+
+    /// What is left of a report once its header is read is what a decision is
+    /// read out of, so its shape is a contract in its own right: everything
+    /// below the header line, none of the header line, and nothing invented.
+    ///
+    /// Asserted here as well as through [`crate::decision_request`], because a
+    /// header line can never open one of a decision's five sections — so a body
+    /// that still held the header, or had lost a few of its bytes, would read
+    /// exactly like one that did not. Only this comparison tells the three
+    /// apart, and the two surviving mutants `scripts/review-tests.sh` reported
+    /// for the first version of this function are exactly that difference.
+    #[test]
+    fn the_body_is_everything_below_the_header_line() {
+        const BODIES: [(&str, &str, &str); 5] = [
+            (
+                "KTASK_RESULT: DONE\n",
+                "",
+                "a report of nothing but its header holds no body",
+            ),
+            (
+                "KTASK_RESULT: DONE",
+                "",
+                "a header with no line ending after it holds no body",
+            ),
+            (
+                "KTASK_RESULT: DONE\nSummary: all gates passed.\n",
+                "Summary: all gates passed.\n",
+                "the body is what the agent wrote, newline included",
+            ),
+            (
+                "\n   \nKTASK_RESULT: NEEDS_INPUT\nQuestion: which?\n",
+                "Question: which?\n",
+                "blank lines above the header are not the header",
+            ),
+            (
+                "KTASK_RESULT: NEEDS_INPUT\r\nImpact: every replay.\r\n",
+                "Impact: every replay.\r\n",
+                "a Windows line ending ends the header, not the body",
+            ),
+        ];
+        for (report, body, why) in BODIES {
+            assert_eq!(super::body_after_header(report), body, "{why}: {report:?}");
+        }
     }
 
     #[test]
