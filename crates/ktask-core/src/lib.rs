@@ -41,7 +41,10 @@ pub use journal::{Journal, journal_path};
 pub use lock::{Holder, RepoLock, acquire};
 pub use paths::{config_file, project_id, state_root};
 pub use project::{Project, project_config_path};
-pub use provider::{Capabilities, Invocation, Outcome, Provider, Usage, UsageSource};
+pub use provider::{
+    Capabilities, Invocation, Outcome, Provider, Scenario, ScenarioFile, Step, StepOutcome, Usage,
+    UsageSource,
+};
 pub use queue::{load, next_runnable};
 pub use redact::redact;
 pub use state::{PauseReason, Phase, TaskState, apply, check_one_active, check_predecessor};

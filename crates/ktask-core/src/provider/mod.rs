@@ -20,6 +20,9 @@ use crate::{Bus, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+mod dummy;
+pub use dummy::{Scenario, ScenarioFile, Step, StepOutcome};
+
 /// Token and cost usage for one attempt, as reported by (or recovered for) a
 /// provider. Every field is independently optional: a provider may report
 /// tokens but not cost, or cost but not cached tokens.
