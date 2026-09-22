@@ -12,11 +12,12 @@
 //! journal is the caller's job, using the existing [`crate::EventKind`]
 //! catalog — this module only supplies the signature and the count.
 
-use crate::{AttemptRecord, FailureClass, GateResult, Task, parse_cargo, redact};
+use crate::{AttemptRecord, Error, FailureClass, GateResult, Result, Task, parse_cargo, redact};
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -428,6 +429,71 @@ pub fn should_continue(bounds: &Bounds, attempts: u32, elapsed: Duration, tokens
         return Decision::Stop(StopReason::Tokens { tokens, max_tokens });
     }
     Decision::Continue
+}
+
+/// Repository-root-relative directories no attempt's diff may touch:
+/// `VISION.md` §2 ("no self-modification of policy") and §3 invariant 5
+/// ("self-healing cannot weaken checks, change policy, ... or conceal
+/// failures"). Matched component-wise against the start of each path, so a
+/// sibling like `scripts-vendor/` does not collide with `scripts/`.
+const PROTECTED_DIRS: [&str; 2] = ["scripts", ".ktask"];
+
+/// Gate-configuration file names no attempt's diff may touch, wherever in
+/// the tree they appear: `VISION.md` §7's `policy_failure` class names
+/// "attempted gate bypass" explicitly, and these three files are exactly
+/// what `scripts/quality.sh`'s `fmt`, `clippy` and `deny` gates are
+/// configured by.
+const PROTECTED_FILES: [&str; 3] = ["deny.toml", "clippy.toml", "rustfmt.toml"];
+
+/// Returns whether `path` is one this project's gates are configured by, or
+/// lives under a directory the runner itself relies on.
+fn is_protected(path: &Path) -> bool {
+    if let Some(name) = path.file_name().and_then(|name| name.to_str())
+        && PROTECTED_FILES.contains(&name)
+    {
+        return true;
+    }
+    PROTECTED_DIRS
+        .iter()
+        .any(|dir| path.starts_with(Path::new(dir)))
+}
+
+/// Fails if any path in `diff_paths` touches gate configuration
+/// (`deny.toml`, `clippy.toml`, `rustfmt.toml`), `scripts/`, or `.ktask/` —
+/// the files and directories that define what a task is judged by
+/// (`VISION.md` §2: "no self-modification of policy"; §3 invariant 5:
+/// "self-healing cannot weaken checks, change policy, ... or conceal
+/// failures").
+///
+/// Called against the real diff for **every** attempt, not only a
+/// remediation: an ordinary first attempt that edits `clippy.toml` is the
+/// same violation as a remediation attempt doing the same thing, and both
+/// are rejected identically — nothing here distinguishes the two.
+///
+/// `diff_paths` is expected in the same repository-root-relative form
+/// [`crate::status_porcelain`] and [`crate::require_clean`] use (as
+/// produced by `git diff --name-only` and friends); an absolute path never
+/// matches a protected directory prefix.
+///
+/// # Errors
+///
+/// Returns [`Error::Policy`] naming every offending path, not merely the
+/// first, when at least one path in `diff_paths` is protected.
+pub fn check_no_policy_edit(diff_paths: &[PathBuf]) -> Result<()> {
+    let offending: Vec<PathBuf> = diff_paths
+        .iter()
+        .filter(|path| is_protected(path))
+        .cloned()
+        .collect();
+
+    if offending.is_empty() {
+        return Ok(());
+    }
+
+    Err(Error::Policy {
+        detail: "diff touches protected gate configuration".to_string(),
+        paths: offending,
+    })
 }
 
 #[cfg(test)]
@@ -1058,6 +1124,153 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
                     max_attempts: 0,
                 })
             );
+        }
+    }
+
+    mod policy_tests {
+        use super::*;
+
+        fn paths(names: &[&str]) -> Vec<PathBuf> {
+            names.iter().map(PathBuf::from).collect()
+        }
+
+        #[test]
+        fn ordinary_source_changes_pass() {
+            let diff = paths(&[
+                "crates/ktask-core/src/remediate.rs",
+                "crates/ktask-cli/src/main.rs",
+                "Cargo.toml",
+                "Cargo.lock",
+                "docs/adr/0001-example.md",
+            ]);
+            assert!(check_no_policy_edit(&diff).is_ok());
+        }
+
+        #[test]
+        fn a_first_attempt_touching_scripts_is_rejected() {
+            // "First attempt" here means: nothing about this call marks it
+            // as remediation. The function takes no such flag, which is
+            // exactly the point — an ordinary attempt is checked the same
+            // way a remediation attempt is.
+            let diff = paths(&["scripts/quality.sh"]);
+            let err = check_no_policy_edit(&diff).expect_err("must reject");
+            assert!(
+                matches!(&err, Error::Policy { paths, .. } if paths == &[PathBuf::from("scripts/quality.sh")])
+            );
+        }
+
+        #[test]
+        fn a_remediation_diff_touching_scripts_is_rejected_identically() {
+            let diff = paths(&["scripts/quality.sh"]);
+            let first_attempt = check_no_policy_edit(&diff);
+            let remediation = check_no_policy_edit(&diff);
+            assert_eq!(
+                first_attempt.is_err(),
+                remediation.is_err(),
+                "the check must not distinguish remediation from a first attempt"
+            );
+            assert!(remediation.is_err());
+        }
+
+        #[test]
+        fn a_diff_touching_dot_ktask_is_rejected() {
+            let diff = paths(&[".ktask/config.toml"]);
+            let err = check_no_policy_edit(&diff).expect_err("must reject");
+            assert!(matches!(err, Error::Policy { .. }));
+        }
+
+        #[test]
+        fn a_nested_file_under_a_protected_directory_is_rejected() {
+            let diff = paths(&[".ktask/queue/report-1.md"]);
+            let err = check_no_policy_edit(&diff).expect_err("must reject");
+            assert!(matches!(err, Error::Policy { .. }));
+        }
+
+        #[test]
+        fn each_named_gate_configuration_file_is_rejected() {
+            for name in ["deny.toml", "clippy.toml", "rustfmt.toml"] {
+                let diff = paths(&[name]);
+                assert!(
+                    check_no_policy_edit(&diff).is_err(),
+                    "{name} must be rejected"
+                );
+            }
+        }
+
+        #[test]
+        fn a_gate_configuration_file_nested_under_another_directory_is_still_rejected() {
+            // A task cannot dodge the check by relocating the file the
+            // gate actually reads elsewhere in the tree.
+            let diff = paths(&["some/nested/dir/clippy.toml"]);
+            assert!(check_no_policy_edit(&diff).is_err());
+        }
+
+        #[test]
+        fn a_similarly_named_sibling_directory_is_not_protected() {
+            // `scripts-vendor/` and `.ktasks/` share a prefix with a
+            // protected directory but are not the directory itself.
+            let diff = paths(&["scripts-vendor/tool.sh", ".ktasks/notes.md"]);
+            assert!(check_no_policy_edit(&diff).is_ok());
+        }
+
+        #[test]
+        fn every_offending_path_is_named_not_only_the_first() {
+            let diff = paths(&[
+                "src/lib.rs",
+                "scripts/quality.sh",
+                ".ktask/config.toml",
+                "deny.toml",
+            ]);
+            let err = check_no_policy_edit(&diff).expect_err("must reject");
+            let Error::Policy { paths, .. } = &err else {
+                panic!("expected Error::Policy, got {err:?}");
+            };
+            assert_eq!(paths.len(), 3, "the one clean path must not be reported");
+            assert!(paths.contains(&PathBuf::from("scripts/quality.sh")));
+            assert!(paths.contains(&PathBuf::from(".ktask/config.toml")));
+            assert!(paths.contains(&PathBuf::from("deny.toml")));
+        }
+
+        #[test]
+        fn an_empty_diff_passes() {
+            assert!(check_no_policy_edit(&[]).is_ok());
+        }
+
+        #[test]
+        fn a_rejected_diff_is_durably_journaled_as_a_policy_failure() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("journal.db");
+            let mut journal = Journal::open(&path).expect("open journal");
+
+            let diff = paths(&["scripts/quality.sh"]);
+            let err = check_no_policy_edit(&diff).expect_err("must reject");
+            let Error::Policy { detail, paths } = &err else {
+                panic!("expected Error::Policy, got {err:?}");
+            };
+
+            let task = TaskId::new(1);
+            let kind = EventKind::VerifyFailed {
+                attempt: crate::AttemptId::new(1),
+                class: FailureClass::PolicyFailure,
+                detail: format!("{detail} ({paths:?})"),
+            };
+            let seq = journal.append(Some(task), &kind).expect("append");
+
+            // Reopen independently of the writing handle, so this proves
+            // the rejection actually landed on disk rather than only in an
+            // in-memory connection.
+            let reopened = Journal::open(&path).expect("reopen journal");
+            let stored = reopened.events_for(task).expect("events_for");
+            assert_eq!(stored.len(), 1);
+            assert_eq!(stored[0].seq, seq);
+            assert_eq!(stored[0].kind, kind);
+            assert!(matches!(
+                &stored[0].kind,
+                EventKind::VerifyFailed {
+                    class: FailureClass::PolicyFailure,
+                    ..
+                }
+            ));
         }
     }
 }
