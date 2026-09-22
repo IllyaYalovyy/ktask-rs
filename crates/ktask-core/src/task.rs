@@ -6,10 +6,14 @@
 //! `**Done-when:**`, `**Verify:**` and `**Refs:**` sections of a task, while
 //! `body` holds the task's full Markdown text.
 
-use crate::{Result, TaskId};
+use crate::{Error, Result, TaskId};
 
 /// The maximum number of characters kept in a task's [`Task::title`].
 const TITLE_MAX_CHARS: usize = 80;
+
+/// The bold section labels every task must carry, in the order
+/// [`validate`] reports them.
+const REQUIRED_SECTIONS: [&str; 4] = ["Outcome", "Done-when", "Verify", "Refs"];
 
 /// Where a task stands in its lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -58,6 +62,35 @@ impl Task {
             Some((byte_index, _)) => &first_line[..byte_index],
             None => first_line,
         }
+    }
+}
+
+/// Checks that `task` carries every required section: `Outcome`,
+/// `Done-when`, `Verify` and `Refs`.
+///
+/// # Errors
+///
+/// Returns [`Error::Policy`] naming every missing section (not just the
+/// first) if one or more of the four required fields is empty.
+pub fn validate(task: &Task) -> Result<()> {
+    let fields = [&task.outcome, &task.done_when, &task.verify, &task.refs];
+    let missing: Vec<&str> = REQUIRED_SECTIONS
+        .into_iter()
+        .zip(fields)
+        .filter(|(_, content)| content.trim().is_empty())
+        .map(|(label, _)| label)
+        .collect();
+
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::Policy {
+            detail: format!(
+                "task is missing required section(s): {}",
+                missing.join(", ")
+            ),
+            paths: Vec::new(),
+        })
     }
 }
 
@@ -141,15 +174,61 @@ fn build_task(id: u32, lines: &[&str]) -> Task {
     } else {
         TaskStatus::Pending
     };
+    let sections = extract_sections(lines.get(1..).unwrap_or_default());
+    let section = |label: &str| {
+        sections
+            .iter()
+            .find(|(found, _)| found == label)
+            .map_or_else(String::new, |(_, content)| content.clone())
+    };
     Task {
         id: TaskId::new(id),
         status,
         body: lines.join("\n"),
-        outcome: String::new(),
-        done_when: String::new(),
-        verify: String::new(),
-        refs: String::new(),
+        outcome: section("Outcome"),
+        done_when: section("Done-when"),
+        verify: section("Verify"),
+        refs: section("Refs"),
     }
+}
+
+/// Parses every `**Label:** ...` section out of a task's body lines, in
+/// document order.
+///
+/// A section starts at a bold label and runs until the next bold label or
+/// the end of the block, so both the four required sections and any extra,
+/// unrecognized ones are captured; [`build_task`] picks the four it needs by
+/// name and leaves the rest unused (`body` already holds the untouched
+/// original text, so nothing is lost).
+fn extract_sections(lines: &[&str]) -> Vec<(String, String)> {
+    let mut sections: Vec<(String, Vec<String>)> = Vec::new();
+
+    for line in lines {
+        if let Some((label, rest)) = bold_label(line) {
+            sections.push((label.to_string(), vec![rest.to_string()]));
+        } else if let Some((_, content)) = sections.last_mut() {
+            content.push((*line).to_string());
+        }
+    }
+
+    sections
+        .into_iter()
+        .map(|(label, content)| (label, content.join("\n").trim().to_string()))
+        .collect()
+}
+
+/// Recognizes a line that opens with a bold section label, such as
+/// `**Outcome:** the rest of the line`.
+///
+/// Returns the label and whatever follows it on the same line. The label
+/// must sit at the very start of the (trimmed) line, so a bold, colon-ended
+/// phrase in the middle of a sentence is not mistaken for a section.
+fn bold_label(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim_start();
+    let after_open = trimmed.strip_prefix("**")?;
+    let close = after_open.find(":**")?;
+    let label = &after_open[..close];
+    (!label.is_empty()).then(|| (label, after_open[close + 3..].trim_start()))
 }
 
 #[cfg(test)]
@@ -327,5 +406,119 @@ Some prose with no level-two heading.
     #[test]
     fn an_empty_document_is_an_empty_list() {
         assert!(parse_plan("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn parsing_extracts_the_four_required_sections_into_their_fields() {
+        let plan = "\
+## Do the thing
+
+**Outcome:** it happens.
+
+**Done-when:** it happened.
+
+**Verify:** `true`
+
+**Refs:** none
+";
+        let tasks = parse_plan(plan).unwrap();
+        assert_eq!(tasks[0].outcome, "it happens.");
+        assert_eq!(tasks[0].done_when, "it happened.");
+        assert_eq!(tasks[0].verify, "`true`");
+        assert_eq!(tasks[0].refs, "none");
+    }
+
+    #[test]
+    fn a_section_runs_until_the_next_bold_label_including_extra_lines() {
+        let plan = "\
+## Multi-line sections
+
+**Outcome:** the first line
+and a second line of outcome.
+
+**Done-when:** done.
+**Verify:** `cargo test`
+**Refs:** VISION.md
+";
+        let tasks = parse_plan(plan).unwrap();
+        assert_eq!(
+            tasks[0].outcome,
+            "the first line\nand a second line of outcome."
+        );
+        assert_eq!(tasks[0].done_when, "done.");
+        assert_eq!(tasks[0].verify, "`cargo test`");
+        assert_eq!(tasks[0].refs, "VISION.md");
+    }
+
+    #[test]
+    fn an_unknown_section_is_preserved_in_body_and_does_not_shadow_required_ones() {
+        let plan = "\
+## Task with an extra section
+
+**Outcome:** it happens.
+
+**Files:** src/lib.rs
+
+**Done-when:** it happened.
+
+**Verify:** `true`
+
+**Refs:** none
+";
+        let tasks = parse_plan(plan).unwrap();
+        assert_eq!(tasks[0].outcome, "it happens.");
+        assert_eq!(tasks[0].done_when, "it happened.");
+        assert!(tasks[0].body.contains("**Files:** src/lib.rs"));
+        assert!(validate(&tasks[0]).is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_a_task_with_all_four_required_sections() {
+        let plan = "\
+## Complete task
+
+**Outcome:** it happens.
+
+**Done-when:** it happened.
+
+**Verify:** `true`
+
+**Refs:** none
+";
+        let tasks = parse_plan(plan).unwrap();
+        assert!(validate(&tasks[0]).is_ok());
+    }
+
+    #[test]
+    fn validate_names_every_missing_section_not_just_the_first() {
+        let plan = "\
+## Incomplete task
+
+**Outcome:** it happens.
+
+**Verify:** `true`
+";
+        let tasks = parse_plan(plan).unwrap();
+        let err = validate(&tasks[0]).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Done-when"));
+        assert!(message.contains("Refs"));
+        assert!(!message.contains("Outcome"));
+        assert!(!message.contains("Verify"));
+    }
+
+    #[test]
+    fn validate_rejects_a_task_missing_every_section() {
+        let plan = "\
+## Bare task
+
+Nothing but prose here.
+";
+        let tasks = parse_plan(plan).unwrap();
+        let err = validate(&tasks[0]).unwrap_err();
+        let message = err.to_string();
+        for label in ["Outcome", "Done-when", "Verify", "Refs"] {
+            assert!(message.contains(label), "expected {label} in {message}");
+        }
     }
 }
