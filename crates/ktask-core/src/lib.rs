@@ -23,7 +23,7 @@ mod task;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
-pub use classify::{FailureClass, Recovery, Stream, TddException};
+pub use classify::{FailureClass, Recovery, Stream, TddException, classify, limit_message};
 pub use config::{Config, Resolved, Source, load_for};
 pub use error::{Error, Result};
 pub use event::{Event, EventKind};
