@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 /// A wall-clock duration token such as `3.2s`, `500ms` or `12m`, always
 /// stripped from a failing test name before it contributes to a
@@ -327,6 +328,106 @@ pub fn bundle(
     }
 
     truncate_bytes(&essential, budget_bytes)
+}
+
+/// The hard limits `VISION.md` §7 requires remediation to respect: "Bound
+/// remediation by attempts, elapsed time, and token budget." Checked by
+/// [`should_continue`] on every remediation attempt, before a fresh provider
+/// session is launched.
+///
+/// `max_tokens` is `None` when no token budget applies (a provider that does
+/// not report usage, or a caller that has not configured one) — attempts and
+/// elapsed time still bound the loop in that case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bounds {
+    /// The most remediation attempts to make for one task, including the
+    /// one that just failed.
+    pub max_attempts: u32,
+    /// The longest wall-clock time remediation may spend on one task, timed
+    /// from the first attempt.
+    pub max_elapsed: Duration,
+    /// The most tokens remediation may spend on one task, summed across all
+    /// its attempts, or `None` if unbounded.
+    pub max_tokens: Option<u64>,
+}
+
+/// Names which of [`Bounds`]' three limits [`should_continue`] found
+/// exceeded, and the values that tripped it — carried by
+/// [`Decision::Stop`] so a caller can journal and report exactly why
+/// remediation stopped rather than just that it did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    /// `attempts` has reached or passed [`Bounds::max_attempts`].
+    Attempts {
+        /// The attempt count that tripped the bound.
+        attempts: u32,
+        /// The [`Bounds::max_attempts`] value it reached or passed.
+        max_attempts: u32,
+    },
+    /// `elapsed` has reached or passed [`Bounds::max_elapsed`].
+    Elapsed {
+        /// The elapsed time that tripped the bound.
+        elapsed: Duration,
+        /// The [`Bounds::max_elapsed`] value it reached or passed.
+        max_elapsed: Duration,
+    },
+    /// `tokens` has reached or passed [`Bounds::max_tokens`] (only possible
+    /// when that bound is `Some`).
+    Tokens {
+        /// The token count that tripped the bound.
+        tokens: u64,
+        /// The [`Bounds::max_tokens`] value it reached or passed.
+        max_tokens: u64,
+    },
+}
+
+/// Whether another remediation attempt may be launched, returned by
+/// [`should_continue`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// Every bound is still within budget: a fresh remediation session may
+    /// be launched.
+    Continue,
+    /// At least one bound in [`Bounds`] has been reached or exceeded,
+    /// naming which one via [`StopReason`]. No further automatic
+    /// remediation should be attempted.
+    Stop(StopReason),
+}
+
+/// Checks `attempts`, `elapsed` and `tokens` so far against `bounds`, per
+/// `VISION.md` §7: "Bound remediation by attempts, elapsed time, and token
+/// budget."
+///
+/// Bounds are checked in a fixed order — attempts, then elapsed time, then
+/// tokens — and the first one reached or exceeded is reported; the caller
+/// does not need to know that order to get a correct answer, since only one
+/// [`StopReason`] is ever returned regardless of how many bounds are
+/// simultaneously exceeded.
+///
+/// A bound is tripped once its counter reaches or exceeds the configured
+/// limit, not only once it strictly exceeds it — an `attempts` count equal
+/// to `max_attempts` has already spent the whole budget, with nothing left
+/// for one more try.
+#[must_use]
+pub fn should_continue(bounds: &Bounds, attempts: u32, elapsed: Duration, tokens: u64) -> Decision {
+    if attempts >= bounds.max_attempts {
+        return Decision::Stop(StopReason::Attempts {
+            attempts,
+            max_attempts: bounds.max_attempts,
+        });
+    }
+    if elapsed >= bounds.max_elapsed {
+        return Decision::Stop(StopReason::Elapsed {
+            elapsed,
+            max_elapsed: bounds.max_elapsed,
+        });
+    }
+    if let Some(max_tokens) = bounds.max_tokens
+        && tokens >= max_tokens
+    {
+        return Decision::Stop(StopReason::Tokens { tokens, max_tokens });
+    }
+    Decision::Continue
 }
 
 #[cfg(test)]
@@ -796,6 +897,166 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
             assert!(
                 text.len() < huge.len(),
                 "the gate's full 20000-byte output must not all be kept"
+            );
+        }
+    }
+
+    mod bounds_tests {
+        use super::*;
+
+        fn generous_bounds() -> Bounds {
+            Bounds {
+                max_attempts: 100,
+                max_elapsed: Duration::from_secs(3_600),
+                max_tokens: Some(1_000_000),
+            }
+        }
+
+        #[test]
+        fn within_every_bound_continues() {
+            let bounds = generous_bounds();
+            assert_eq!(
+                should_continue(&bounds, 1, Duration::from_secs(1), 10),
+                Decision::Continue
+            );
+        }
+
+        #[test]
+        fn reaching_max_attempts_alone_stops_and_names_attempts() {
+            let bounds = generous_bounds();
+            let decision = should_continue(&bounds, bounds.max_attempts, Duration::ZERO, 0);
+
+            assert_eq!(
+                decision,
+                Decision::Stop(StopReason::Attempts {
+                    attempts: bounds.max_attempts,
+                    max_attempts: bounds.max_attempts,
+                })
+            );
+        }
+
+        #[test]
+        fn exceeding_max_attempts_alone_stops_and_names_attempts() {
+            let bounds = generous_bounds();
+            let decision = should_continue(&bounds, bounds.max_attempts + 5, Duration::ZERO, 0);
+
+            assert_eq!(
+                decision,
+                Decision::Stop(StopReason::Attempts {
+                    attempts: bounds.max_attempts + 5,
+                    max_attempts: bounds.max_attempts,
+                })
+            );
+        }
+
+        #[test]
+        fn reaching_max_elapsed_alone_stops_and_names_elapsed() {
+            let bounds = generous_bounds();
+            let decision = should_continue(&bounds, 0, bounds.max_elapsed, 0);
+
+            assert_eq!(
+                decision,
+                Decision::Stop(StopReason::Elapsed {
+                    elapsed: bounds.max_elapsed,
+                    max_elapsed: bounds.max_elapsed,
+                })
+            );
+        }
+
+        #[test]
+        fn exceeding_max_elapsed_alone_stops_and_names_elapsed() {
+            let bounds = generous_bounds();
+            let over = bounds.max_elapsed + Duration::from_secs(1);
+            let decision = should_continue(&bounds, 0, over, 0);
+
+            assert_eq!(
+                decision,
+                Decision::Stop(StopReason::Elapsed {
+                    elapsed: over,
+                    max_elapsed: bounds.max_elapsed,
+                })
+            );
+        }
+
+        #[test]
+        fn reaching_max_tokens_alone_stops_and_names_tokens() {
+            let bounds = generous_bounds();
+            let max_tokens = bounds.max_tokens.expect("bound configured");
+            let decision = should_continue(&bounds, 0, Duration::ZERO, max_tokens);
+
+            assert_eq!(
+                decision,
+                Decision::Stop(StopReason::Tokens {
+                    tokens: max_tokens,
+                    max_tokens,
+                })
+            );
+        }
+
+        #[test]
+        fn exceeding_max_tokens_alone_stops_and_names_tokens() {
+            let bounds = generous_bounds();
+            let max_tokens = bounds.max_tokens.expect("bound configured");
+            let decision = should_continue(&bounds, 0, Duration::ZERO, max_tokens + 1);
+
+            assert_eq!(
+                decision,
+                Decision::Stop(StopReason::Tokens {
+                    tokens: max_tokens + 1,
+                    max_tokens,
+                })
+            );
+        }
+
+        #[test]
+        fn no_token_bound_never_stops_on_tokens_however_high() {
+            let bounds = Bounds {
+                max_attempts: 100,
+                max_elapsed: Duration::from_secs(3_600),
+                max_tokens: None,
+            };
+
+            assert_eq!(
+                should_continue(&bounds, 0, Duration::ZERO, u64::MAX),
+                Decision::Continue,
+                "an unset token bound must never trip, no matter how many tokens were spent"
+            );
+        }
+
+        #[test]
+        fn attempts_is_checked_before_elapsed_or_tokens_when_several_bounds_trip_together() {
+            let bounds = Bounds {
+                max_attempts: 3,
+                max_elapsed: Duration::from_secs(10),
+                max_tokens: Some(100),
+            };
+
+            let decision = should_continue(&bounds, 3, Duration::from_secs(999), 999);
+
+            assert_eq!(
+                decision,
+                Decision::Stop(StopReason::Attempts {
+                    attempts: 3,
+                    max_attempts: 3,
+                }),
+                "with several bounds tripped at once, attempts must be the reported reason"
+            );
+        }
+
+        #[test]
+        fn zero_max_attempts_stops_before_the_very_first_attempt() {
+            let bounds = Bounds {
+                max_attempts: 0,
+                max_elapsed: Duration::from_secs(3_600),
+                max_tokens: None,
+            };
+
+            assert_eq!(
+                should_continue(&bounds, 0, Duration::ZERO, 0),
+                Decision::Stop(StopReason::Attempts {
+                    attempts: 0,
+                    max_attempts: 0,
+                })
             );
         }
     }

@@ -53,6 +53,8 @@ pub use provider::{
 };
 pub use queue::{load, next_runnable};
 pub use redact::redact;
-pub use remediate::{Breaker, BreakerState, bundle, signature};
+pub use remediate::{
+    Bounds, Breaker, BreakerState, Decision, StopReason, bundle, should_continue, signature,
+};
 pub use state::{PauseReason, Phase, TaskState, apply, check_one_active, check_predecessor};
 pub use task::{Task, TaskStatus, parse_plan, validate};
