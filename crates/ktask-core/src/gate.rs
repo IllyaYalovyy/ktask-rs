@@ -92,6 +92,33 @@ impl Profile {
     }
 }
 
+/// The outcome of running one [`Gate`], matching `docs/DESIGN.md`'s
+/// `GateFinished` event payload (`result: GateResult`).
+///
+/// `exit_code` and `signal` are independent of `timed_out`: a gate the
+/// runner killed for exceeding [`Gate::timeout_secs`] sets `timed_out` and
+/// still records whatever exit status the killed process reported, so a
+/// timeout is never confused with an ordinary non-zero exit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GateResult {
+    /// Which gate produced this result.
+    pub kind: GateKind,
+    /// Whether the gate's command exited successfully.
+    pub passed: bool,
+    /// The command's exit code, if it exited normally.
+    pub exit_code: Option<i32>,
+    /// The signal that terminated the command, if it was killed by one.
+    pub signal: Option<i32>,
+    /// Wall-clock time the gate took to run, in milliseconds.
+    pub duration_ms: u64,
+    /// The command's captured standard output.
+    pub stdout: String,
+    /// The command's captured standard error.
+    pub stderr: String,
+    /// Whether the runner killed the command for exceeding its timeout.
+    pub timed_out: bool,
+}
+
 /// Builds a [`Profile`] from `config`'s gate command fields (VISION.md §8):
 /// each `Some` `*_command` field becomes a [`Gate`] of the corresponding
 /// kind, sharing `config.gate_timeout_secs` as its timeout and running at
@@ -331,5 +358,92 @@ mod tests {
 
         assert_eq!(profile.gates.len(), 1);
         assert_eq!(profile.gates[0].kind, GateKind::Verify);
+    }
+
+    fn passing_result() -> GateResult {
+        GateResult {
+            kind: GateKind::Verify,
+            passed: true,
+            exit_code: Some(0),
+            signal: None,
+            duration_ms: 1_234,
+            stdout: "all tests passed".to_string(),
+            stderr: String::new(),
+            timed_out: false,
+        }
+    }
+
+    #[test]
+    fn gate_result_round_trips_through_json_as_an_event_payload() {
+        let result = passing_result();
+
+        let json = serde_json::to_string(&result).expect("serialize");
+        let back: GateResult = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(back, result);
+    }
+
+    #[test]
+    fn gate_result_serializes_with_the_documented_fields() {
+        let result = passing_result();
+
+        let value = serde_json::to_value(&result).expect("serialize to value");
+        assert_eq!(value["kind"], "Verify");
+        assert_eq!(value["passed"], true);
+        assert_eq!(value["exit_code"], 0);
+        assert_eq!(value["signal"], serde_json::Value::Null);
+        assert_eq!(value["duration_ms"], 1_234);
+        assert_eq!(value["stdout"], "all tests passed");
+        assert_eq!(value["stderr"], "");
+        assert_eq!(value["timed_out"], false);
+    }
+
+    #[test]
+    fn a_timed_out_gate_is_distinguishable_from_an_ordinary_failing_exit() {
+        let failed = GateResult {
+            kind: GateKind::Verify,
+            passed: false,
+            exit_code: Some(1),
+            signal: None,
+            duration_ms: 500,
+            stdout: String::new(),
+            stderr: "assertion failed".to_string(),
+            timed_out: false,
+        };
+        let timed_out = GateResult {
+            kind: GateKind::Verify,
+            passed: false,
+            exit_code: Some(1),
+            signal: None,
+            duration_ms: 500,
+            stdout: String::new(),
+            stderr: "assertion failed".to_string(),
+            timed_out: true,
+        };
+
+        // Same exit code, same everything else — only `timed_out` differs,
+        // and that alone must make the two results unequal and separately
+        // identifiable.
+        assert_ne!(failed, timed_out);
+        assert!(!failed.timed_out);
+        assert!(timed_out.timed_out);
+    }
+
+    #[test]
+    fn a_gate_killed_by_a_signal_has_no_exit_code() {
+        let result = GateResult {
+            kind: GateKind::Verify,
+            passed: false,
+            exit_code: None,
+            signal: Some(9),
+            duration_ms: 100,
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: true,
+        };
+
+        assert_eq!(result.exit_code, None);
+        assert_eq!(result.signal, Some(9));
+        assert!(result.timed_out);
     }
 }
