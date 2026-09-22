@@ -8,7 +8,9 @@
 #   model    = "<provider model id>"
 #
 # Changing anything else changes the experiment. Do not edit per run.
-
+executor = "claude"
+model = "claude-sonnet-5"
+mainline_branch = "ktask-rs-sonnet"
 project_dir = "."
 
 # --- Executor commands -------------------------------------------------------
