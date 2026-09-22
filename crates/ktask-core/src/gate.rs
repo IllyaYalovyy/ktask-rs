@@ -43,9 +43,16 @@
 //! own `kind` out of the object the payload tag already owns (ADR-0011 measured
 //! that collision), and a run that ran out of its budget carries its own flag
 //! rather than a borrowed exit code (ADR-0036). The catalog entry itself is not
-//! this module's to add: `docs/DESIGN.md` admits an entry only alongside the
-//! `state::apply` arms that answer it, and those belong to the task that emits
-//! the event.
+//! this module's to define — that is [`crate::EventKind`]'s file — but the two
+//! gate entries landed with T085, the task that emits them, alongside the
+//! `state::apply` arms that answer them.
+//!
+//! [`run_completion_set`] is the whole of what decides a task is done: five
+//! gates in an order the set owns rather than the order a project wrote them
+//! in, a refusal that stops the rest, and the mandatory suite that never is.
+//! Every gate is journaled as it starts and as it finishes, because "done" has
+//! to be a fact readable off the journal rather than a claim this function
+//! happened to return (VISION.md §3).
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -62,7 +69,7 @@ use nix::unistd::Pid;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Bus, Config, Error, Result, Stream};
+use crate::{Bus, Config, Error, EventKind, Recorder, Result, Stream};
 
 /// Which mechanical check a gate performs.
 ///
@@ -432,6 +439,132 @@ pub fn profile_from(config: &Config) -> Result<Profile> {
         });
     }
     Ok(Profile { gates })
+}
+
+/// The five gates that decide whether a task is done, in the order they run.
+///
+/// This is the set VISION.md §8 calls a verification profile and §3 refuses to
+/// let anybody shorten. The order is the set's own and not [`Profile`]'s,
+/// because two runs of one task have to be comparable line by line: the cheap
+/// checks first buy the most when the tree is broken anywhere, and the one gate
+/// that cannot be skipped runs whatever came before it.
+const COMPLETION_SET: [GateKind; 5] = [
+    GateKind::Format,
+    GateKind::Lint,
+    GateKind::Build,
+    GateKind::Verify,
+    GateKind::Privacy,
+];
+
+/// The variable that carries the run's base commit to the one gate that needs it.
+///
+/// Named like every other variable this tool sets for a gate — see the
+/// `KTASK_*` list in [`crate::Config`] — and set for exactly one gate, so that
+/// no other command can act on a range it was never asked to read.
+const BASE_SHA_ENV: &str = "KTASK_BASE_SHA";
+
+/// Run the completion set and return what each gate had to say.
+///
+/// The order is `COMPLETION_SET`'s, never the order the profile's gates were
+/// written in, so the same tree produces the same sequence of runs and the same
+/// sequence of journal rows. A gate the profile configures nothing for is not
+/// run and is not reported: a gate nobody configured has no command to execute,
+/// and inventing a default would prove a thing nobody asked to prove.
+///
+/// The first refusal ends the set — every gate's timeout is a budget worth
+/// spending on a tree that might be green — with one exception.
+/// [`GateKind::Verify`] always runs, whatever refused before it, because §3's
+/// first invariant is that nothing is done on an agent's say-so and a task
+/// cannot be called done over a test suite that was never read. It is also the
+/// last gate the set stops at: a suite that refused is the answer, and the
+/// privacy scan behind it has nothing left to clear. §7's rerun after a
+/// remediation is the same call to this function, from scratch.
+///
+/// `base_sha` is handed to the [`GateKind::Privacy`] gate alone, as
+/// `KTASK_BASE_SHA` laid over that gate's own [`Gate::env`]. A privacy scan
+/// reads the outgoing commit range, and the range is the one fact about the run
+/// the scan cannot recover afterwards. A value the gate was configured with is
+/// overwritten rather than preferred: a project's settings must not be able to
+/// point the scan at an empty range, which is how a scan is made to pass.
+///
+/// `recorder` is where the run writes itself down. Each gate gets a
+/// [`EventKind::GateStarted`] before its command is spawned and a
+/// [`EventKind::GateFinished`] holding that gate's [`GateResult`] after it, so a
+/// reader of a journal left by a run that died mid-set can tell a gate that
+/// refused from one that never came back, and recovery knows which gate to
+/// rerun. A [`Recorder`] rather than a [`Bus`] is taken because the journal is
+/// the only door into the bus (ADR-0030) and because a record whose sequence its
+/// emitter chose is what ADR-0016 forbids; ADR-0080 records the difference from
+/// the signature the plan sketched. `None` runs the set and writes nothing,
+/// which is what a caller checking a tree outside any task is asking for. The
+/// rows carry no task: this function is not told which task it runs for, and a
+/// row naming one it was never given would attribute work to the wrong run.
+///
+/// A refusal is a returned [`GateResult`], not an error: a gate that ran and
+/// said no has answered, and the caller decides what the answer means —
+/// [`crate::FailureClass`] is chosen from the status this function hands back.
+///
+/// # Errors
+///
+/// [`Error::Config`] when the profile is not runnable as a completion set: no
+/// [`GateKind::Verify`] gate, which [`Profile::validate`] refuses before a
+/// single gate spends its timeout. [`Error::Gate`] when a gate could not be
+/// started at all — no command words, or a program or working directory that
+/// would not spawn. That last case leaves a `GateStarted` with no
+/// `GateFinished` behind, which is the pair that says this gate never completed.
+pub fn run_completion_set(
+    profile: &Profile,
+    root: &Path,
+    base_sha: &str,
+    mut recorder: Option<&mut Recorder>,
+) -> Result<Vec<GateResult>> {
+    profile.validate()?;
+    let mut results = Vec::with_capacity(COMPLETION_SET.len());
+    let mut refused = false;
+
+    for kind in COMPLETION_SET {
+        if refused && kind != GateKind::Verify {
+            continue;
+        }
+        let Some(configured) = profile.get(kind) else {
+            continue;
+        };
+        let gate = if kind == GateKind::Privacy {
+            scan_for_range(configured, base_sha)
+        } else {
+            configured.clone()
+        };
+
+        if let Some(journal) = recorder.as_deref_mut() {
+            journal.record(None, EventKind::GateStarted { gate: kind })?;
+        }
+        let result = run_gate(&gate, root, None)?;
+        if let Some(journal) = recorder.as_deref_mut() {
+            journal.record(
+                None,
+                EventKind::GateFinished {
+                    result: result.clone(),
+                },
+            )?;
+        }
+
+        refused = refused || !result.passed;
+        results.push(result);
+    }
+
+    Ok(results)
+}
+
+/// The privacy gate as this run's copy, told which commit the range starts at.
+///
+/// Cloned rather than moved because a [`Profile`] is what it is: the gates one
+/// project configured, which a run reads and does not edit. The run's own value
+/// is inserted last so it wins over anything the gate was configured with.
+fn scan_for_range(gate: &Gate, base_sha: &str) -> Gate {
+    let mut scan = gate.clone();
+    scan.env
+        .insert(BASE_SHA_ENV.to_owned(), base_sha.to_owned());
+    scan
 }
 
 /// How long the collector waits for the next chunk before it looks at the clock.
@@ -1098,9 +1231,9 @@ fn cargo_count(field: &str, label: &str) -> Option<u32> {
 mod tests {
     use super::{
         Gate, GateKind, GateResult, Pid, Profile, Signal, TestSummary, parse_cargo, profile_from,
-        run_gate, run_gate_streaming,
+        run_completion_set, run_gate, run_gate_streaming,
     };
-    use crate::{Bus, Config, Error, Stream};
+    use crate::{Bus, Config, Error, Event, EventKind, Journal, Recorder, Stream};
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
@@ -3070,6 +3203,579 @@ error: test run failed
              opening; a line that says the words without one is somebody else's chatter, and \
              chatter must not be able to refuse a run that answered in full, which is the same \
              reason a quoted result line is read as nothing rather than as a count"
+        );
+    }
+
+    // Running the completion set: the gates that decide whether a task is done,
+    // the order they run in, and what each one leaves in the journal.
+
+    /// The commit every completion-set run below is handed as its base.
+    const BASE_SHA: &str = "0b78d3f1c2a4";
+
+    /// The five kinds the completion set is made of, in the order it runs them.
+    const COMPLETION: [GateKind; 5] = [
+        GateKind::Format,
+        GateKind::Lint,
+        GateKind::Build,
+        GateKind::Verify,
+        GateKind::Privacy,
+    ];
+
+    /// One gate of a completion set, running `script` under the fixture shell.
+    fn completion_gate(kind: GateKind, script: &str) -> Gate {
+        Gate {
+            kind,
+            command: vec![SHELL.to_owned(), "-c".to_owned(), script.to_owned()],
+            timeout_secs: 30,
+            working_dir: None,
+            env: BTreeMap::new(),
+        }
+    }
+
+    /// A gate that writes its own kind to `order` and passes.
+    fn passing_gate(kind: GateKind, order: &Path) -> Gate {
+        completion_gate(kind, &format!("echo {kind} >> '{}'", order.display()))
+    }
+
+    /// A gate that writes its own kind to `order` and refuses with status 3.
+    fn refusing_gate(kind: GateKind, order: &Path) -> Gate {
+        completion_gate(
+            kind,
+            &format!("echo {kind} >> '{}'; exit 3", order.display()),
+        )
+    }
+
+    /// The five gates, each passing, written in `written`'s order.
+    fn passing_in(written: &[GateKind], order: &Path) -> Vec<Gate> {
+        written
+            .iter()
+            .map(|kind| passing_gate(*kind, order))
+            .collect()
+    }
+
+    /// The five gates with the gate named `failing` refusing instead of passing.
+    fn with_one_refusing(failing: GateKind, order: &Path) -> Vec<Gate> {
+        COMPLETION
+            .iter()
+            .map(|kind| {
+                if *kind == failing {
+                    refusing_gate(*kind, order)
+                } else {
+                    passing_gate(*kind, order)
+                }
+            })
+            .collect()
+    }
+
+    /// The words the gates that ran wrote, oldest first. A file nobody wrote
+    /// means no gate ran, which is what every "did not run" answer below reads.
+    fn ran_in(order: &Path) -> Vec<String> {
+        std::fs::read_to_string(order)
+            .map(|written| written.lines().map(str::to_owned).collect())
+            .unwrap_or_default()
+    }
+
+    /// The catalog entry names of `events`, in the order they were recorded.
+    fn recorded(events: &[Event]) -> Vec<&'static str> {
+        events
+            .iter()
+            .map(|event| event.kind.discriminant())
+            .collect()
+    }
+
+    /// A journal at `path`, for the tests that read a run's records back.
+    ///
+    /// The path is passed in rather than the journal being held, because the
+    /// recorder under test owns its own connection: a test reads a finished run
+    /// through a second connection to the same file, which is how every other
+    /// reader of a live journal reads it.
+    fn journal_at(path: &Path) -> Journal {
+        Journal::open(path).unwrap_or_else(|error| {
+            panic!("a journal opens at `{}`: {error}", path.display());
+        })
+    }
+
+    #[test]
+    fn the_completion_set_runs_format_lint_build_verify_and_privacy_in_that_order() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        let order = scratch.path().join("order");
+        let profile = assembled(passing_in(&COMPLETION, &order));
+
+        let results = run_completion_set(&profile, scratch.path(), BASE_SHA, None)
+            .expect("five gates that pass are a set that ran");
+
+        assert_eq!(
+            ran_in(&order),
+            ["format", "lint", "build", "verify", "privacy"],
+            "the order the set runs in is the order its own definition gives, not the order \
+             a project happened to write its gates in: {:?} ran",
+            ran_in(&order)
+        );
+        let kinds: Vec<GateKind> = results.iter().map(|result| result.kind).collect();
+        assert_eq!(
+            kinds, COMPLETION,
+            "the results come back in the order their gates ran, so a caller reads a failure \
+             out of the sequence rather than out of a lookup: {kinds:?}"
+        );
+        assert!(
+            results.iter().all(|result| result.passed),
+            "every one of these gates was written to pass, so a set that reports otherwise \
+             read a status wrong: {results:?}"
+        );
+    }
+
+    #[test]
+    fn the_order_is_the_sets_own_and_not_the_order_the_profile_wrote_its_gates() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        let order = scratch.path().join("order");
+        let written: Vec<GateKind> = COMPLETION.iter().rev().copied().collect();
+        let profile = assembled(passing_in(&written, &order));
+
+        run_completion_set(&profile, scratch.path(), BASE_SHA, None)
+            .expect("the same five gates pass however they were written down");
+
+        assert_eq!(
+            ran_in(&order),
+            ["format", "lint", "build", "verify", "privacy"],
+            "a profile written back to front still runs the set front to back, because the \
+             order is what makes two runs of one task comparable: {:?} ran",
+            ran_in(&order)
+        );
+    }
+
+    #[test]
+    fn a_refusing_gate_stops_every_gate_after_it_except_the_mandatory_one() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        let order = scratch.path().join("order");
+        let profile = assembled(with_one_refusing(GateKind::Lint, &order));
+
+        let results = run_completion_set(&profile, scratch.path(), BASE_SHA, None)
+            .expect("a gate that refuses is an answer, not a failure to answer");
+
+        assert_eq!(
+            ran_in(&order),
+            ["format", "lint", "verify"],
+            "one refusal ends the set, and the mandatory gate is the one it may not skip: \
+             {:?} ran",
+            ran_in(&order)
+        );
+        let kinds: Vec<GateKind> = results.iter().map(|result| result.kind).collect();
+        assert_eq!(
+            kinds,
+            [GateKind::Format, GateKind::Lint, GateKind::Verify],
+            "what came back is what ran — build and privacy are absent because they were \
+             never started, not because their results were dropped: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn the_mandatory_verify_gate_runs_even_when_the_first_gate_refused() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        let order = scratch.path().join("order");
+        let profile = assembled(with_one_refusing(GateKind::Format, &order));
+
+        let results = run_completion_set(&profile, scratch.path(), BASE_SHA, None)
+            .expect("a refusal at the front of the set still answers");
+
+        assert_eq!(
+            ran_in(&order),
+            ["format", "verify"],
+            "a task is never called done on an unread test suite, so a refusal ahead of the \
+             suite cannot be a reason to skip it: {:?} ran",
+            ran_in(&order)
+        );
+        assert_eq!(
+            results.iter().map(|result| result.kind).collect::<Vec<_>>(),
+            [GateKind::Format, GateKind::Verify],
+            "both runs are reported, the refusal and the mandatory gate behind it"
+        );
+    }
+
+    #[test]
+    fn a_refusing_verify_gate_ends_the_set_before_the_privacy_scan() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        let order = scratch.path().join("order");
+        let profile = assembled(with_one_refusing(GateKind::Verify, &order));
+
+        let results = run_completion_set(&profile, scratch.path(), BASE_SHA, None)
+            .expect("the suite refusing is the set's answer, not an error reading it");
+
+        assert_eq!(
+            ran_in(&order),
+            ["format", "lint", "build", "verify"],
+            "the suite itself refused, so nothing after it runs: {:?} ran",
+            ran_in(&order)
+        );
+        let last = results.last().expect("the refusing run is reported");
+        assert_eq!(
+            (last.kind, last.passed, last.exit_code),
+            (GateKind::Verify, false, Some(3)),
+            "the refusing gate's own status is what the caller is handed, so the class chosen \
+             from it is chosen from what the command said: {last:?}"
+        );
+    }
+
+    #[test]
+    fn a_refusing_gate_is_returned_as_a_result_rather_than_as_an_error() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        let order = scratch.path().join("order");
+        let profile = assembled(with_one_refusing(GateKind::Build, &order));
+
+        let results = run_completion_set(&profile, scratch.path(), BASE_SHA, None)
+            .expect("a gate that ran and refused is an answer, and answers are returned");
+
+        let refused = results
+            .iter()
+            .find(|result| !result.passed)
+            .expect("the set reports the gate that refused rather than hiding it");
+        assert_eq!(
+            refused.kind,
+            GateKind::Build,
+            "the refusal belongs to the gate that produced it: {refused:?}"
+        );
+        assert_eq!(
+            refused.exit_code,
+            Some(3),
+            "the status the command exited with is kept, because it is the first thing a \
+             failure bundle quotes: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_gate_the_profile_configures_nothing_for_is_not_run() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        let order = scratch.path().join("order");
+        let profile = assembled(vec![passing_gate(GateKind::Verify, &order)]);
+
+        let results = run_completion_set(&profile, scratch.path(), BASE_SHA, None)
+            .expect("a profile holding only the mandatory gate is a set of one");
+
+        assert_eq!(
+            ran_in(&order),
+            ["verify"],
+            "a gate nobody configured is not run from an invented default, and it is not \
+             reported as having failed either: {:?} ran",
+            ran_in(&order)
+        );
+        assert_eq!(
+            results.len(),
+            1,
+            "one gate ran, so one result comes back: {results:?}"
+        );
+    }
+
+    #[test]
+    fn a_profile_with_no_verify_gate_is_refused_before_any_gate_runs() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        let order = scratch.path().join("order");
+        // Assembled rather than loaded: a loaded profile cannot hold this hole,
+        // and the set is the second door in front of it.
+        let profile = assembled(vec![passing_gate(GateKind::Format, &order)]);
+
+        let error = run_completion_set(&profile, scratch.path(), BASE_SHA, None)
+            .expect_err("a set that could not have verified is not a set that verified");
+
+        assert!(
+            matches!(error, Error::Config { ref key, ref detail }
+                if key == "gates" && detail.contains("verify")),
+            "the refusal names the missing mandatory gate, which is the one thing an operator \
+             can act on: {error}"
+        );
+        assert!(
+            ran_in(&order).is_empty(),
+            "nothing ran: a set refused up front spends no gate's timeout on work whose \
+             answer it will not use: {:?} ran",
+            ran_in(&order)
+        );
+    }
+
+    #[test]
+    fn each_gate_is_journaled_as_it_starts_and_as_it_finishes() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        let order = scratch.path().join("order");
+        let profile = assembled(vec![
+            passing_gate(GateKind::Format, &order),
+            passing_gate(GateKind::Verify, &order),
+        ]);
+        let database = scratch.path().join("journal.db");
+        let mut recorder = Recorder::new(journal_at(&database));
+        let mut watching = recorder.subscribe();
+
+        let results = run_completion_set(&profile, scratch.path(), BASE_SHA, Some(&mut recorder))
+            .expect("two gates that pass are a set that ran");
+
+        let held = journal_at(&database)
+            .events()
+            .expect("the journal the run wrote reads back");
+        assert_eq!(
+            recorded(&held),
+            ["GateStarted", "GateFinished", "GateStarted", "GateFinished"],
+            "a gate's start is one record and its finish the next, so a replay can tell a \
+             gate that refused from one that never came back: {:?}",
+            recorded(&held)
+        );
+        let started: Vec<&'static str> = held
+            .iter()
+            .filter(|event| event.kind.discriminant() == "GateStarted")
+            .map(|event| match event.kind {
+                EventKind::GateStarted { gate } => gate.as_str(),
+                ref other => panic!("a start row names a gate, it holds {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            started,
+            ["format", "verify"],
+            "each start names the gate whose command then ran, in the order they ran"
+        );
+        let finished: Vec<GateResult> = held
+            .iter()
+            .filter_map(|event| match &event.kind {
+                EventKind::GateFinished { result } => Some(result.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            finished, results,
+            "what the journal holds is the record the caller was handed, byte for byte — a \
+             second copy of a verdict is two chances to get it wrong"
+        );
+        assert!(
+            held.iter().all(|event| event.task_id.is_none()),
+            "the set is not told which task it runs for, and a row claiming a task it was \
+             never given would attribute work to the wrong run"
+        );
+
+        let (published, dropped) = watching.drain();
+        assert_eq!(
+            published, held,
+            "a live view is told exactly the records the journal holds, in the same order, \
+             or a screen and a replay disagree about what a run did"
+        );
+        assert_eq!(dropped, 0, "four records fit in a ring of any useful size");
+    }
+
+    #[test]
+    fn a_gate_that_cannot_be_started_leaves_a_start_and_no_finish() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        // The program is the gate's own first word, not something a shell is
+        // asked to fail to find: a shell that starts and reports 127 is a gate
+        // that ran and refused, which is a verdict rather than a missing one.
+        let unspawnable = Gate {
+            command: vec!["/this/program/is/not/here/nope".to_owned()],
+            ..completion_gate(GateKind::Verify, "true")
+        };
+        let profile = assembled(vec![unspawnable]);
+        let database = scratch.path().join("journal.db");
+        let mut recorder = Recorder::new(journal_at(&database));
+
+        let error = run_completion_set(&profile, scratch.path(), BASE_SHA, Some(&mut recorder))
+            .expect_err("a gate that cannot start has no verdict to report");
+
+        assert!(
+            matches!(error, Error::Gate { ref kind, .. } if kind == "verify"),
+            "the refusal names the gate that could not start, which is what a human is asked \
+             to acknowledge or fix: {error}"
+        );
+        let held = journal_at(&database)
+            .events()
+            .expect("the journal the run wrote reads back");
+        assert_eq!(
+            recorded(&held),
+            ["GateStarted"],
+            "the start is there and the finish is not: that pair is how a reader tells that \
+             this gate never completed, rather than that it completed quietly: {:?}",
+            recorded(&held)
+        );
+    }
+
+    #[test]
+    fn the_start_is_journaled_before_the_gate_it_names_runs() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        let order = scratch.path().join("order");
+        let unblock = scratch.path().join("unblock");
+        // The gate waits for a file, so the run is verifiably still inside the
+        // gate while the other half of this test reads what was recorded. It is
+        // the mandatory gate rather than the formatting check, because a profile
+        // the set refuses to run at all journals nothing whatever it contains.
+        let profile = assembled(vec![completion_gate(
+            GateKind::Verify,
+            &format!(
+                "while [ ! -f '{}' ]; do sleep 0.05; done; echo verify >> '{}'",
+                unblock.display(),
+                order.display()
+            ),
+        )]);
+        let database = scratch.path().join("journal.db");
+        let mut recorder = Recorder::new(journal_at(&database));
+        let mut watching = recorder.subscribe();
+        let root = scratch.path().to_path_buf();
+
+        let outcome = std::thread::scope(|scope| {
+            let running =
+                scope.spawn(|| run_completion_set(&profile, &root, BASE_SHA, Some(&mut recorder)));
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                let (seen, _) = watching.drain();
+                if !seen.is_empty() {
+                    assert_eq!(
+                        recorded(&seen),
+                        ["GateStarted"],
+                        "the first record a run of a gate produces is the gate having started, \
+                         and it is produced while the gate is still running"
+                    );
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "the gate is waiting on a file nothing writes until a record appears, and \
+                     no record appeared: the set journals a start after the run rather than \
+                     before it"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert_eq!(
+                ran_in(&order),
+                Vec::<String>::new(),
+                "the gate had already started by the time its start was recorded — it is \
+                 still waiting for the file that lets it finish"
+            );
+            std::fs::write(&unblock, b"").expect("the file that lets the gate finish is written");
+            running
+                .join()
+                .expect("the run finishes")
+                .expect("one gate that passes is a set that ran")
+        });
+
+        assert_eq!(outcome.len(), 1, "the set holds the one gate it ran");
+        assert_eq!(
+            recorded(
+                &journal_at(&database)
+                    .events()
+                    .expect("the journal reads back")
+            ),
+            ["GateStarted", "GateFinished"],
+            "and the records the live view was told are the records the file holds"
+        );
+    }
+
+    #[test]
+    fn a_set_run_without_a_recorder_journals_nothing() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        let order = scratch.path().join("order");
+        let profile = assembled(passing_in(&COMPLETION, &order));
+        let journal = journal_at(&scratch.path().join("journal.db"));
+
+        let results = run_completion_set(&profile, scratch.path(), BASE_SHA, None)
+            .expect("a completion set runs for a caller that journals nothing");
+
+        assert_eq!(
+            results.len(),
+            COMPLETION.len(),
+            "the same five gates run whether or not anybody is recording them"
+        );
+        assert!(
+            journal.events().expect("the journal reads back").is_empty(),
+            "no recorder was handed the run, so nothing was written down: a completion set \
+             that opened a journal of its own would write records no run agreed to"
+        );
+    }
+
+    #[test]
+    fn the_privacy_gate_is_told_which_commit_the_work_starts_from() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        let order = scratch.path().join("order");
+        let mut profile = assembled(passing_in(&COMPLETION, &order));
+        // The scan's own words stand in for the real one: what this proves is
+        // that the commit the range starts at reaches the command.
+        profile.gates.iter_mut().for_each(|gate| {
+            if gate.kind == GateKind::Privacy {
+                gate.command = vec![
+                    SHELL.to_owned(),
+                    "-c".to_owned(),
+                    r#"echo "range=$KTASK_BASE_SHA""#.to_owned(),
+                ];
+            }
+        });
+
+        let results = run_completion_set(&profile, scratch.path(), BASE_SHA, None)
+            .expect("the set runs to the scan");
+        let privacy = results
+            .iter()
+            .find(|result| result.kind == GateKind::Privacy)
+            .expect("the scan ran, and its result is among those handed back");
+
+        assert_eq!(
+            privacy.stdout,
+            format!("range={BASE_SHA}\n"),
+            "the outgoing commit range is the half of a privacy scan that cannot be found \
+             again afterwards, so the base commit is handed to the gate that reads it"
+        );
+    }
+
+    #[test]
+    fn only_the_privacy_gate_is_handed_the_base_commit() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        let order = scratch.path().join("order");
+        let profile = assembled(
+            COMPLETION
+                .iter()
+                .filter(|kind| **kind != GateKind::Privacy)
+                .map(|kind| {
+                    completion_gate(
+                        *kind,
+                        &format!(
+                            "echo {kind} >> '{}'; echo \"base=${{KTASK_BASE_SHA:-none}}\"",
+                            order.display()
+                        ),
+                    )
+                })
+                .collect(),
+        );
+
+        let results = run_completion_set(&profile, scratch.path(), BASE_SHA, None)
+            .expect("the four gates before the scan run without it");
+
+        for result in &results {
+            assert_eq!(
+                result.stdout, "base=none\n",
+                "`{}` is not a gate that was given the commit range, and handing it a \
+                 variable it was not given invites it to decide something it has no business \
+                 deciding: {result:?}",
+                result.kind
+            );
+        }
+    }
+
+    #[test]
+    fn the_runs_own_base_commit_wins_over_one_a_gate_was_configured_with() {
+        let scratch = tempfile::tempdir().expect("a scratch directory for the gates to run in");
+        let order = scratch.path().join("order");
+        let mut profile = assembled(vec![
+            passing_gate(GateKind::Verify, &order),
+            completion_gate(GateKind::Privacy, r#"echo "range=$KTASK_BASE_SHA""#),
+        ]);
+        let mut configured = BTreeMap::new();
+        configured.insert("KTASK_BASE_SHA".to_owned(), "ffffffff".to_owned());
+        profile
+            .gates
+            .iter_mut()
+            .find(|gate| gate.kind == GateKind::Privacy)
+            .expect("the scan is in the profile")
+            .env = configured;
+
+        let results = run_completion_set(&profile, scratch.path(), BASE_SHA, None)
+            .expect("the set runs the scan");
+        let privacy = results
+            .iter()
+            .find(|result| result.kind == GateKind::Privacy)
+            .expect("the scan ran");
+
+        assert_eq!(
+            privacy.stdout,
+            format!("range={BASE_SHA}\n"),
+            "a project's own settings cannot move the commit range the scan is told to read, \
+             because that is how a scan is made to look at nothing: {}",
+            privacy.stdout
         );
     }
 }

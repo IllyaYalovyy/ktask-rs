@@ -44,7 +44,8 @@ pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use events::{Bus, Recorder, Subscription};
 pub use gate::{
-    Gate, GateKind, GateResult, Profile, TestSummary, parse_cargo, profile_from, run_gate,
+    Gate, GateKind, GateResult, Profile, TestSummary, parse_cargo, profile_from,
+    run_completion_set, run_gate,
 };
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::{Journal, journal_path};
