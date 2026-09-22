@@ -24,6 +24,7 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -130,6 +131,97 @@ pub struct GateResult {
     pub stderr: String,
     /// Whether the runner killed the command for exceeding its timeout.
     pub timed_out: bool,
+}
+
+/// A cargo test run's outcome, parsed from its human-readable console output
+/// by [`parse_cargo`] (VISION.md §8: "Common test output formats ... are
+/// parsed into structured results while raw output is retained").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TestSummary {
+    /// Tests that passed, summed across every `test result:` line in the
+    /// output — a multi-binary run (unit tests plus doc-tests, or a
+    /// workspace of crates) emits more than one.
+    pub passed: u32,
+    /// Tests that failed, summed the same way.
+    pub failed: u32,
+    /// Tests skipped with `#[ignore]`, summed the same way.
+    pub ignored: u32,
+    /// The names of the failing tests, read from the `failures:` summary
+    /// list cargo prints just above the final `test result:` line.
+    pub failures: Vec<String>,
+}
+
+/// The literal line cargo prints to introduce the final `failures:` summary
+/// list, just above the `test result:` line — distinct from the `failures:`
+/// line that introduces the per-test `---- name stdout ----` output dump
+/// earlier in the same run, which [`parse_failures`] must not mistake for
+/// it.
+const FAILURES_HEADER: &str = "\nfailures:\n";
+
+/// Parses `output` — the combined stdout/stderr of a `cargo test` (or
+/// `cargo nextest run`) invocation — into a [`TestSummary`].
+///
+/// Every `test result:` line contributes its passed/failed/ignored counts;
+/// they are summed rather than taken from the first or last, since a single
+/// invocation commonly prints more than one (unit tests plus doc-tests, or
+/// one line per crate in a workspace). The failing test names come from the
+/// summary `failures:` list cargo prints immediately before the last
+/// `test result:` line — not the earlier `failures:` line that introduces
+/// each failing test's captured output, which has no fixed-indent name list
+/// directly beneath it.
+///
+/// Returns `None` when `output` contains no `test result:` line at all —
+/// a compile error, an empty string, or any other output this function does
+/// not recognize — rather than guess at a summary from a run that never
+/// produced one.
+#[must_use]
+pub fn parse_cargo(output: &str) -> Option<TestSummary> {
+    // Matches one `test result: ok. 2 passed; 0 failed; 1 ignored; ...` (or
+    // `FAILED.`) line. Cargo prints one per test binary it ran, so a run
+    // with doc-tests or a workspace of crates emits several, each captured
+    // and summed below. Compiled fresh per call rather than cached, since
+    // this pattern is not on any hot path — a gate runs once, not once per
+    // line.
+    let test_result_line =
+        Regex::new(r"(?m)^test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;")
+            .ok()?;
+
+    let mut passed = 0u32;
+    let mut failed = 0u32;
+    let mut ignored = 0u32;
+    let mut found_any = false;
+
+    for caps in test_result_line.captures_iter(output) {
+        found_any = true;
+        passed += caps.get(1)?.as_str().parse::<u32>().ok()?;
+        failed += caps.get(2)?.as_str().parse::<u32>().ok()?;
+        ignored += caps.get(3)?.as_str().parse::<u32>().ok()?;
+    }
+
+    if !found_any {
+        return None;
+    }
+
+    Some(TestSummary {
+        passed,
+        failed,
+        ignored,
+        failures: parse_failures(output),
+    })
+}
+
+/// Reads the failing test names out of the last `failures:` summary list in
+/// `output`, or an empty vec when there is none (a run with no failures).
+fn parse_failures(output: &str) -> Vec<String> {
+    let Some(start) = output.rfind(FAILURES_HEADER) else {
+        return Vec::new();
+    };
+    output[start + FAILURES_HEADER.len()..]
+        .lines()
+        .take_while(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .map(str::to_string)
+        .collect()
 }
 
 /// Builds a [`Profile`] from `config`'s gate command fields (VISION.md §8):
@@ -702,6 +794,138 @@ mod tests {
         assert_eq!(result.exit_code, None);
         assert_eq!(result.signal, Some(9));
         assert!(result.timed_out);
+    }
+
+    mod parse_cargo_tests {
+        use super::*;
+
+        /// `cargo test` on a passing crate with one ignored test and an
+        /// empty doc-tests binary: two `test result:` lines, both `ok.`.
+        const PASSING: &str = "\
+   Compiling cargoscratch v0.1.0 (/tmp/cargoscratch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running unittests src/lib.rs (target/debug/deps/cargoscratch-0c2759547569d219)
+
+running 3 tests
+test tests::skipped ... ignored
+test tests::another_pass ... ok
+test tests::it_adds ... ok
+
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cargoscratch
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+";
+
+        /// `cargo test` on a crate with two failing tests: the per-test
+        /// `---- name stdout ----` dump (itself introduced by a `failures:`
+        /// line) followed by the summary `failures:` list this function
+        /// must read instead.
+        const FAILING: &str = "\
+   Compiling cargoscratch v0.1.0 (/tmp/cargoscratch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running unittests src/lib.rs (target/debug/deps/cargoscratch-0c2759547569d219)
+
+running 3 tests
+test tests::another_pass ... ok
+test tests::it_fails_too ... FAILED
+test tests::it_adds ... FAILED
+
+failures:
+
+---- tests::it_fails_too stdout ----
+
+thread 'tests::it_fails_too' (3779725) panicked at src/lib.rs:19:9:
+assertion `left == right` failed
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::it_adds stdout ----
+
+thread 'tests::it_adds' (3779724) panicked at src/lib.rs:9:9:
+assertion `left == right` failed
+  left: 4
+ right: 5
+
+
+failures:
+    tests::it_adds
+    tests::it_fails_too
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+";
+
+        /// `cargo test` on a crate that fails to compile: no test binary
+        /// ever ran, so there is no `test result:` line at all.
+        const COMPILE_ERROR: &str = "\
+   Compiling cargoscratch v0.1.0 (/tmp/cargoscratch)
+error: expected one of `!` or `::`, found `is`
+ --> src/lib.rs:1:6
+  |
+1 | this is not valid rust at all !!!
+  |      ^^ expected one of `!` or `::`
+
+error: could not compile `cargoscratch` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `cargoscratch` (lib test) due to 1 previous error
+";
+
+        #[test]
+        fn a_passing_run_sums_passed_across_every_test_result_line() {
+            let summary = parse_cargo(PASSING).expect("recognized cargo output");
+
+            assert_eq!(summary.passed, 2);
+            assert_eq!(summary.failed, 0);
+            assert_eq!(summary.ignored, 1);
+            assert!(summary.failures.is_empty());
+        }
+
+        #[test]
+        fn a_failing_run_reports_counts_and_the_failing_test_names() {
+            let summary = parse_cargo(FAILING).expect("recognized cargo output");
+
+            assert_eq!(summary.passed, 1);
+            assert_eq!(summary.failed, 2);
+            assert_eq!(summary.ignored, 0);
+            assert_eq!(
+                summary.failures,
+                vec![
+                    "tests::it_adds".to_string(),
+                    "tests::it_fails_too".to_string()
+                ]
+            );
+        }
+
+        #[test]
+        fn a_failing_run_does_not_mistake_the_stdout_dump_header_for_the_summary() {
+            let summary = parse_cargo(FAILING).expect("recognized cargo output");
+
+            // The dump's `failures:` line is followed by a blank line, not
+            // test names — if that header were parsed instead of the real
+            // summary, the failures list would come out empty.
+            assert_eq!(summary.failures.len(), 2);
+        }
+
+        #[test]
+        fn empty_output_is_not_recognized() {
+            assert!(parse_cargo("").is_none());
+        }
+
+        #[test]
+        fn output_with_no_test_result_line_is_not_recognized() {
+            assert!(parse_cargo(COMPILE_ERROR).is_none());
+        }
+
+        #[test]
+        fn unrelated_text_containing_the_word_failures_is_not_recognized() {
+            assert!(parse_cargo("failures:\n    something\n\nnot cargo output").is_none());
+        }
     }
 
     mod run_gate {
