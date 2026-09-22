@@ -68,6 +68,29 @@ pub struct Config {
     /// The minimum free disk space required to start an attempt, in bytes.
     pub min_free_disk_bytes: u64,
 
+    /// The command proving the project was green before the task started.
+    /// `None` means the gate is not configured.
+    pub baseline_command: Option<Vec<String>>,
+    /// The command for fast edit-loop verification during the run.
+    pub targeted_test_command: Option<Vec<String>>,
+    /// The mandatory, complete local suite. Not optional, not skippable by
+    /// config in strict mode; [`crate::gate::profile_from`] rejects a
+    /// configuration that omits it.
+    pub verify_command: Option<Vec<String>>,
+    /// The static analysis / linting command.
+    pub lint_command: Option<Vec<String>>,
+    /// The source formatting check command.
+    pub format_command: Option<Vec<String>>,
+    /// The command that compiles or builds the project.
+    pub build_command: Option<Vec<String>>,
+    /// The command that scans staged files, tracked files and the outgoing
+    /// commit range for forbidden paths and content patterns.
+    pub privacy_command: Option<Vec<String>>,
+    /// The command for repeated or randomized execution of affected tests.
+    /// Not yet wired into a `GateKind`: VISION.md §14 places flaky-test
+    /// investigation in v0.2/backlog scope.
+    pub flake_command: Option<Vec<String>>,
+
     /// Which layer resolved each key, populated by [`Config::load`].
     ///
     /// Empty on a `Config` built any other way (`Config::default`, or
@@ -131,6 +154,14 @@ impl Default for Config {
             flake_runs: 5,
             retention_days: 90,
             min_free_disk_bytes: 2_147_483_648,
+            baseline_command: None,
+            targeted_test_command: None,
+            verify_command: None,
+            lint_command: None,
+            format_command: None,
+            build_command: None,
+            privacy_command: None,
+            flake_command: None,
             provenance: HashMap::new(),
         }
     }
@@ -234,15 +265,36 @@ fn default_table() -> toml::Table {
     }
 }
 
+/// `Config`'s `Option<Vec<String>>` fields: the gate commands. Their `None`
+/// default has no TOML representation, same as `model` and
+/// `dummy_scenario_path` below, but [`merge_env`] must still treat a raw
+/// override for one of these as comma-separated rather than a single
+/// string, so they are tracked separately from the string-valued optionals.
+const COMMAND_FIELDS: [&str; 8] = [
+    "baseline_command",
+    "targeted_test_command",
+    "verify_command",
+    "lint_command",
+    "format_command",
+    "build_command",
+    "privacy_command",
+    "flake_command",
+];
+
 /// Every configurable key, independent of whether its default is present in
 /// [`default_table`].
 ///
-/// `model` and `dummy_scenario_path` are `Config`'s only `Option<T>` fields;
-/// their `None` default has no TOML representation, so they are named here
-/// explicitly. A new `Option<T>` field must be added to this list too.
+/// `model` and `dummy_scenario_path` are `Config`'s only string-valued
+/// `Option<T>` fields; [`COMMAND_FIELDS`] are its `Option<Vec<String>>`
+/// fields. None of these have a TOML representation for their `None`
+/// default, so they are named here explicitly. A new `Option<T>` field must
+/// be added to one of these lists too.
 fn all_field_names() -> Vec<String> {
     let mut names: Vec<String> = default_table().keys().cloned().collect();
-    for optional in ["model", "dummy_scenario_path"] {
+    for optional in ["model", "dummy_scenario_path"]
+        .into_iter()
+        .chain(COMMAND_FIELDS)
+    {
         if !names.iter().any(|name| name == optional) {
             names.push(optional.to_string());
         }
@@ -283,7 +335,8 @@ fn merge_env(
     for key in all_field_names() {
         let var = format!("KTASK_{}", key.to_uppercase());
         let Some(raw) = env(&var) else { continue };
-        let value = parse_env_value(merged.get(&key), &raw)
+        let current = merged.get(&key).cloned().or_else(|| type_hint(&key));
+        let value = parse_env_value(current.as_ref(), &raw)
             .map_err(|detail| Error::Config { key: var, detail })?;
         merged.insert(key.clone(), value);
         sources.insert(key, Source::Env);
@@ -291,10 +344,21 @@ fn merge_env(
     Ok(())
 }
 
+/// A type hint for a key with no entry in `merged`, standing in for
+/// `current` in [`parse_env_value`]. Only [`COMMAND_FIELDS`] need this:
+/// their `None` default leaves no entry to infer a type from, but an
+/// environment override must still be split as an array, not read as one
+/// string the way `model` or `dummy_scenario_path` are.
+fn type_hint(key: &str) -> Option<toml::Value> {
+    COMMAND_FIELDS
+        .contains(&key)
+        .then(|| toml::Value::Array(Vec::new()))
+}
+
 /// Parses a raw environment string into the TOML type of `current`, the
-/// field's existing value. A field absent from `current` (only possible for
-/// `Config`'s `Option<T>` fields, whose `None` default has no TOML
-/// representation) is treated as a string, since both are string-based.
+/// field's existing value (or, for a field with no entry in `merged`, its
+/// [`type_hint`]). A field with neither is treated as a string, since both
+/// are string-based.
 ///
 /// Only the TOML types `Config`'s fields actually use are handled: integers
 /// (the `u32`/`u64` fields), arrays (the `Vec<String>` fields, taken as
@@ -374,6 +438,29 @@ mod tests {
         assert_eq!(config.flake_runs, 5);
         assert_eq!(config.retention_days, 90);
         assert_eq!(config.min_free_disk_bytes, 2_147_483_648);
+        assert_eq!(config.baseline_command, None);
+        assert_eq!(config.targeted_test_command, None);
+        assert_eq!(config.verify_command, None);
+        assert_eq!(config.lint_command, None);
+        assert_eq!(config.format_command, None);
+        assert_eq!(config.build_command, None);
+        assert_eq!(config.privacy_command, None);
+        assert_eq!(config.flake_command, None);
+    }
+
+    #[test]
+    fn a_gate_command_set_in_a_toml_file_deserializes_as_an_argv() {
+        let config: Config =
+            toml::from_str(r#"verify_command = ["cargo", "nextest", "run"]"#).expect("deserialize");
+        assert_eq!(
+            config.verify_command,
+            Some(vec![
+                "cargo".to_string(),
+                "nextest".to_string(),
+                "run".to_string()
+            ])
+        );
+        assert_eq!(config.lint_command, None);
     }
 
     fn no_env(_: &str) -> Option<String> {
@@ -478,6 +565,22 @@ mod tests {
         let config = Config::load(None, None, &env).expect("load");
         assert_eq!(config.test_globs, vec!["a/**", "b/**"]);
         assert_eq!(source_of(&config, "test_globs"), Some(Source::Env));
+    }
+
+    #[test]
+    fn env_overrides_a_gate_command_field_as_a_comma_separated_list() {
+        let env =
+            |key: &str| (key == "KTASK_VERIFY_COMMAND").then(|| "cargo, nextest, run".to_string());
+        let config = Config::load(None, None, &env).expect("load");
+        assert_eq!(
+            config.verify_command,
+            Some(vec![
+                "cargo".to_string(),
+                "nextest".to_string(),
+                "run".to_string()
+            ])
+        );
+        assert_eq!(source_of(&config, "verify_command"), Some(Source::Env));
     }
 
     #[test]
