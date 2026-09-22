@@ -6,6 +6,7 @@
 mod classify;
 mod config;
 mod error;
+mod event;
 mod ids;
 mod paths;
 mod state;
@@ -14,6 +15,7 @@ mod task;
 pub use classify::{FailureClass, Recovery, Stream, TddException};
 pub use config::{Config, Resolved, Source};
 pub use error::{Error, Result};
+pub use event::EventKind;
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use paths::{config_file, project_id, state_root};
 pub use state::{PauseReason, Phase};
