@@ -71,6 +71,14 @@ pub enum Error {
         paths: Vec<PathBuf>,
     },
 
+    /// `commit_all` was asked to commit a worktree with no tracked changes
+    /// staged, which would otherwise silently produce an empty commit.
+    #[error("nothing to commit in {worktree}")]
+    NothingToCommit {
+        /// The worktree that had nothing staged.
+        worktree: PathBuf,
+    },
+
     /// An event could not be applied to the current state.
     #[error("invalid transition from {from} on event {event}")]
     InvalidTransition {

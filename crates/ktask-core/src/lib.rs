@@ -30,8 +30,8 @@ pub use gate::{
     Gate, GateKind, GateResult, Profile, TestSummary, parse_cargo, profile_from, run_gate,
 };
 pub use git::{
-    Worktree, create_worktree, current_branch, fetch, git, head_sha, is_clean, list_worktrees,
-    remote_url, remove_worktree, require_clean, status_porcelain,
+    Worktree, commit_all, create_worktree, current_branch, fetch, git, head_sha, is_clean,
+    list_worktrees, remote_url, remove_worktree, require_clean, status_porcelain,
 };
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::{Journal, journal_path};

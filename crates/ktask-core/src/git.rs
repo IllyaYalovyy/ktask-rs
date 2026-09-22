@@ -185,6 +185,36 @@ fn format_paths(paths: &[PathBuf]) -> String {
         .join(", ")
 }
 
+/// Stages every tracked change in `worktree` and commits it with `message`,
+/// returning the new commit's SHA (`HEAD` after the commit, matching
+/// [`head_sha`]).
+///
+/// Only tracked changes are staged (`git add -u`); an untracked file on its
+/// own is not swept in and, with nothing else staged, produces
+/// [`Error::NothingToCommit`] rather than a surprise commit.
+///
+/// # Errors
+///
+/// Returns [`Error::NothingToCommit`] if `worktree` has nothing staged after
+/// tracked changes are added — calling this again right after a successful
+/// commit, with nothing further changed, is this error rather than an empty
+/// commit.
+///
+/// Returns [`Error::Git`] if `worktree` is not a git repository or the
+/// commit itself fails.
+pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {
+    git(worktree, &["add", "-u"])?;
+
+    if name_only_paths(worktree, &["diff", "--cached", "--name-only"])?.is_empty() {
+        return Err(Error::NothingToCommit {
+            worktree: worktree.to_path_buf(),
+        });
+    }
+
+    git(worktree, &["commit", "-m", message])?;
+    head_sha(worktree)
+}
+
 /// Fetches `remote` into `root`, updating its remote-tracking refs.
 ///
 /// # Errors
@@ -709,6 +739,57 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert!(entries[0].prunable);
+    }
+
+    #[test]
+    fn commit_all_stages_tracked_changes_and_returns_the_new_head_sha() {
+        let dir = init_repo();
+        commit_file(dir.path(), "file.txt", "hello\n");
+        std::fs::write(dir.path().join("file.txt"), "changed\n").expect("write file");
+
+        let sha = commit_all(dir.path(), "update file").expect("commit_all");
+
+        assert_eq!(sha, head_sha(dir.path()).expect("head_sha"));
+        assert_eq!(
+            git(dir.path(), &["log", "--format=%s", "-1"]).expect("git log"),
+            "update file"
+        );
+    }
+
+    #[test]
+    fn commit_all_twice_with_no_changes_is_an_error_not_an_empty_commit() {
+        let dir = init_repo();
+        commit_file(dir.path(), "file.txt", "hello\n");
+        std::fs::write(dir.path().join("file.txt"), "changed\n").expect("write file");
+        commit_all(dir.path(), "first commit").expect("commit_all");
+        let sha_after_first = head_sha(dir.path()).expect("head_sha");
+
+        let err = commit_all(dir.path(), "second commit").expect_err("must fail: nothing staged");
+
+        assert!(matches!(err, Error::NothingToCommit { .. }));
+        assert_eq!(
+            head_sha(dir.path()).expect("head_sha"),
+            sha_after_first,
+            "HEAD must not move when there is nothing to commit"
+        );
+    }
+
+    #[test]
+    fn commit_all_does_not_stage_untracked_files() {
+        let dir = init_repo();
+        commit_file(dir.path(), "file.txt", "hello\n");
+        std::fs::write(dir.path().join("new.txt"), "new\n").expect("write file");
+
+        let err =
+            commit_all(dir.path(), "should fail").expect_err("must fail: only untracked changes");
+
+        assert!(matches!(err, Error::NothingToCommit { .. }));
+        assert!(
+            !status_porcelain(dir.path())
+                .expect("status_porcelain")
+                .is_empty(),
+            "untracked file must remain untouched, not silently committed"
+        );
     }
 
     #[test]
