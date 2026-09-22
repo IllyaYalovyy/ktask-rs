@@ -502,10 +502,17 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
 
 /// Transitions from [`TaskState::PublishedVerified`]: published and
 /// confirmed present on the remote at `commit`.
+///
+/// `VISION.md` §3 invariants 4 and 7: a task is never done on say-so, and
+/// completion requires the recorded, verified publication. `TaskDone` is
+/// therefore only reachable from here, and only when its own `commit`
+/// payload matches the one this state already carries — the one `apply`
+/// itself set from `PublishVerified`, not whatever the caller now claims.
 fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState> {
     match event {
-        EventKind::TaskDone { .. } => Ok(TaskState::Done),
-        EventKind::TaskQueued { .. }
+        EventKind::TaskDone { commit: done } if done == commit => Ok(TaskState::Done),
+        EventKind::TaskDone { .. }
+        | EventKind::TaskQueued { .. }
         | EventKind::PreflightStarted
         | EventKind::PreflightPassed { .. }
         | EventKind::PreflightFailed { .. }
@@ -1746,6 +1753,26 @@ mod tests {
     }
 
     #[test]
+    fn from_published_verified_rejects_task_done_with_a_mismatched_commit() {
+        let err = apply(
+            &TaskState::PublishedVerified {
+                commit: "def456".to_string(),
+            },
+            &EventKind::TaskDone {
+                commit: "wrongcommit".to_string(),
+            },
+        )
+        .expect_err("illegal: TaskDone's commit must match the published commit");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "PublishedVerified(def456)");
+                assert_eq!(event, "TaskDone");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn from_published_verified_rejects_task_cancelled() {
         let err = apply(
             &TaskState::PublishedVerified {
@@ -2085,8 +2112,12 @@ mod tests {
                 commit: "def".to_string(),
                 remote_sha: "def".to_string(),
             },
+            // Matches the commit `representative_states` gives
+            // `PublishedVerified`, so the one legal (state, event) pair for
+            // `TaskDone` in `ALLOWED` below stays legal now that
+            // `from_published_verified` checks the payload commit.
             EventKind::TaskDone {
-                commit: "def".to_string(),
+                commit: "abc123".to_string(),
             },
             EventKind::TaskFailed {
                 class: FailureClass::AgentFailure,
