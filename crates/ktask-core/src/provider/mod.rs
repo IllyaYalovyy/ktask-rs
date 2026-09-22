@@ -16,7 +16,7 @@
 //! through [`Provider::capabilities`] and [`Provider::invoke`] alone, which
 //! is what keeps adding a provider from touching supervisor logic.
 
-use crate::{Bus, Result};
+use crate::{Bus, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -140,6 +140,74 @@ pub trait Provider {
     /// could not be obtained at all; a failure the provider itself reports
     /// (a nonzero exit, a refusal) is a successful `Outcome`, not an `Err`.
     fn invoke(&self, inv: &Invocation, bus: Option<&Bus>) -> Result<Outcome>;
+}
+
+/// Checks a provider's reported model against what was configured
+/// (`VISION.md` §12: "Configured vs provider-reported model IDs are both
+/// recorded; unexpected mismatches are rejected").
+///
+/// Both values are optional because either may be unknown: `configured` is
+/// absent when the invocation did not request a specific model, and
+/// `reported` is absent when the provider does not surface which model it
+/// actually ran. Neither absence is a mismatch — a missing report is
+/// allowed, not rejected, since there is nothing to compare against. Only
+/// two values that are both present and unequal are rejected, before the
+/// attempt they describe is accepted.
+///
+/// # Errors
+///
+/// Returns [`Error::Provider`] naming both models when `configured` and
+/// `reported` are both present and differ; `classify()` (`docs/DESIGN.md`,
+/// not yet implemented) is what will map this to
+/// [`crate::FailureClass::ProviderConfiguration`].
+pub fn check_model(configured: Option<&str>, reported: Option<&str>) -> Result<()> {
+    match (configured, reported) {
+        (Some(configured), Some(reported)) if configured != reported => Err(Error::Provider {
+            provider: "model".to_string(),
+            detail: format!(
+                "configured model {configured:?} does not match reported model {reported:?}"
+            ),
+        }),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod model_check {
+    use super::*;
+
+    #[test]
+    fn matching_models_are_accepted() {
+        check_model(Some("claude-opus-5"), Some("claude-opus-5")).expect("matching models");
+    }
+
+    #[test]
+    fn differing_models_are_rejected_before_the_attempt_is_accepted() {
+        let err = check_model(Some("claude-opus-5"), Some("claude-sonnet-5"))
+            .expect_err("differing models must be rejected");
+
+        let Error::Provider { detail, .. } = &err else {
+            panic!("expected Error::Provider, got {err:?}");
+        };
+        assert!(detail.contains("claude-opus-5"), "detail was: {detail}");
+        assert!(detail.contains("claude-sonnet-5"), "detail was: {detail}");
+    }
+
+    #[test]
+    fn a_missing_report_is_allowed() {
+        check_model(Some("claude-opus-5"), None).expect("a missing report must be allowed");
+    }
+
+    #[test]
+    fn a_missing_configuration_is_allowed() {
+        check_model(None, Some("claude-opus-5"))
+            .expect("no configured model means nothing to compare against");
+    }
+
+    #[test]
+    fn neither_configured_nor_reported_is_allowed() {
+        check_model(None, None).expect("no model information at all is not a mismatch");
+    }
 }
 
 #[cfg(test)]
