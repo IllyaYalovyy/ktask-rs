@@ -16,11 +16,17 @@
 //! [`FailureClass`], in the fixed priority `VISION.md` §7 lists, with
 //! [`FailureClass::AgentFailure`] as the explicit fallback rather than a
 //! wildcard that could quietly swallow a case nobody thought of.
+//!
+//! [`parse_reset`] and [`wait_plan`] implement the other half of `VISION.md`
+//! §7's `provider_limit` handling: reading a reset time out of provider
+//! output, then turning it -- or its absence -- into a wait strategy that is
+//! never unbounded.
 
 use crate::{Error, GateResult, Outcome};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
+use time::{Duration, OffsetDateTime, Time, Weekday};
 
 /// Why an attempt or a gate failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -266,6 +272,154 @@ pub fn classify(
     }
 
     FailureClass::AgentFailure
+}
+
+/// A relative reset like "try again in 20s" or "resets in 5 minutes": the
+/// literal word "in", a count, and a unit. Unit alternatives are ordered
+/// longest-name-first so a wrong alternative never has to be backtracked out
+/// of before the trailing `\b` is checked.
+///
+/// `None` only if the static pattern itself fails to compile, which the
+/// fixtures in this module's tests would catch; [`parse_reset`] treats that
+/// the same as "this pattern did not match" rather than panicking (mirrors
+/// [`DEFAULT_LIMIT_PATTERNS`]).
+static RELATIVE_RESET: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bin\s+(\d+)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\b")
+        .ok()
+});
+
+/// An absolute clock-time reset like "resets 3pm", "reset at 12am", or
+/// "resets Thursday at 12am": an optional weekday name, an hour, an optional
+/// `:MM`, and an am/pm marker. See [`RELATIVE_RESET`] for why this is an
+/// `Option`.
+static ABSOLUTE_RESET: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(?:(sunday|monday|tuesday|wednesday|thursday|friday|saturday)[a-z]*\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)\b",
+    )
+    .ok()
+});
+
+fn parse_weekday(name: &str) -> Option<Weekday> {
+    match name.to_ascii_lowercase().as_str() {
+        "sunday" => Some(Weekday::Sunday),
+        "monday" => Some(Weekday::Monday),
+        "tuesday" => Some(Weekday::Tuesday),
+        "wednesday" => Some(Weekday::Wednesday),
+        "thursday" => Some(Weekday::Thursday),
+        "friday" => Some(Weekday::Friday),
+        "saturday" => Some(Weekday::Saturday),
+        _ => None,
+    }
+}
+
+/// Parses a known reset time out of a line of provider output: a relative
+/// duration ("try again in 20s") or an absolute wall-clock time ("resets
+/// 3pm", "resets Thursday at 12am"), read against the offset carried by
+/// `now`.
+///
+/// A bare or weekday-qualified clock time that has already passed rolls
+/// forward -- to the same time tomorrow, or to the next occurrence of the
+/// named weekday -- rather than resolving into the past. This is what makes
+/// a reset reported just before midnight land on the following calendar day:
+/// "resets 12am" parsed at 23:59:30 is thirty seconds away, not almost a
+/// full day in the past.
+///
+/// Returns `None` when `text` contains no reset expression this function
+/// recognizes. [`wait_plan`] turns that into a bounded backoff rather than
+/// an unbounded wait, per `VISION.md` §7.
+#[must_use]
+pub fn parse_reset(text: &str, now: OffsetDateTime) -> Option<OffsetDateTime> {
+    if let Some(caps) = RELATIVE_RESET.as_ref().and_then(|re| re.captures(text)) {
+        let count: i64 = caps.get(1)?.as_str().parse().ok()?;
+        let unit = caps.get(2)?.as_str();
+        let delta = match unit.chars().next()?.to_ascii_lowercase() {
+            'h' => Duration::hours(count),
+            'm' => Duration::minutes(count),
+            'd' => Duration::days(count),
+            _ => Duration::seconds(count),
+        };
+        return Some(now + delta);
+    }
+
+    let caps = ABSOLUTE_RESET.as_ref()?.captures(text)?;
+
+    let hour: u8 = caps.get(2)?.as_str().parse().ok()?;
+    if !(1..=12).contains(&hour) {
+        return None;
+    }
+    let minute: u8 = match caps.get(3) {
+        Some(m) => m.as_str().parse().ok()?,
+        None => 0,
+    };
+    if minute > 59 {
+        return None;
+    }
+    let is_pm = caps.get(4)?.as_str().eq_ignore_ascii_case("pm");
+    let hour24 = match (hour, is_pm) {
+        (12, false) => 0,
+        (12, true) => 12,
+        (h, false) => h,
+        (h, true) => h + 12,
+    };
+    let clock = Time::from_hms(hour24, minute, 0).ok()?;
+
+    let weekday = caps.get(1);
+    let target_date = match weekday {
+        Some(name) => {
+            let target = parse_weekday(name.as_str())?;
+            let forward = (i64::from(target.number_days_from_monday())
+                - i64::from(now.weekday().number_days_from_monday()))
+            .rem_euclid(7);
+            now.date() + Duration::days(forward)
+        }
+        None => now.date(),
+    };
+
+    let mut candidate = target_date.with_time(clock).assume_offset(now.offset());
+    if candidate <= now {
+        candidate += Duration::days(if weekday.is_some() { 7 } else { 1 });
+    }
+    Some(candidate)
+}
+
+/// What to do while a [`FailureClass::ProviderLimit`] is outstanding:
+/// returned by [`wait_plan`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitPlan {
+    /// Wait until this exact instant -- the parsed reset plus margin.
+    Deadline(OffsetDateTime),
+    /// No usable reset time: wait this long, bounded by `max`, then
+    /// re-check.
+    Backoff(Duration),
+}
+
+/// Turns a possibly-known reset time into a wait strategy, per `VISION.md`
+/// §7: "`provider_limit` with a known reset waits until the exact reset
+/// time, with margin ...; unknown resets use bounded backoff."
+///
+/// `reset` is normally [`parse_reset`]'s output. When it names an instant
+/// still ahead of `now`, the plan is [`WaitPlan::Deadline`] at `reset +
+/// margin` -- the margin absorbs clock skew between this host and the
+/// provider so an attempt does not resume a moment before the provider
+/// actually lifts the limit. Anything else -- no reset recognized, or one
+/// that has already passed `now` (clock skew the other way, or a limit that
+/// lifted between the check and this call) -- is [`WaitPlan::Backoff`]
+/// capped at `max`, never an unbounded wait.
+///
+/// This function takes no jitter parameter: it is pure and deterministic, so
+/// retries stay reproducible in tests. A caller wanting the jitter `VISION.md`
+/// §7 also asks for layers it onto the returned deadline or backoff.
+#[must_use]
+pub fn wait_plan(
+    reset: Option<OffsetDateTime>,
+    now: OffsetDateTime,
+    margin: Duration,
+    max: Duration,
+) -> WaitPlan {
+    match reset {
+        Some(at) if at > now => WaitPlan::Deadline(at + margin),
+        _ => WaitPlan::Backoff(max),
+    }
 }
 
 #[cfg(test)]
@@ -702,6 +856,168 @@ mod classify_tests {
         assert_eq!(
             limit_message(text, &["(unclosed".to_string()]),
             Some(text.to_string())
+        );
+    }
+}
+
+#[cfg(test)]
+mod reset_tests {
+    use super::*;
+    use time::macros::datetime;
+
+    #[test]
+    fn parse_reset_reads_a_relative_duration_in_seconds() {
+        let now = datetime!(2024-01-01 12:00:00 UTC);
+        let text = "Rate limit reached for gpt-5-codex ... Please try again in 20s.";
+        assert_eq!(parse_reset(text, now), Some(now + Duration::seconds(20)));
+    }
+
+    #[test]
+    fn parse_reset_reads_a_relative_duration_in_minutes() {
+        let now = datetime!(2024-01-01 12:00:00 UTC);
+        let text = "rate limited, retry after resets in 5 minutes";
+        assert_eq!(parse_reset(text, now), Some(now + Duration::minutes(5)));
+    }
+
+    #[test]
+    fn parse_reset_reads_an_absolute_clock_time_still_ahead_today() {
+        let now = datetime!(2024-01-01 14:00:00 UTC);
+        let text = "5-hour limit reached \u{2219} resets 3pm";
+        assert_eq!(
+            parse_reset(text, now),
+            Some(datetime!(2024-01-01 15:00:00 UTC))
+        );
+    }
+
+    #[test]
+    fn parse_reset_reads_an_absolute_clock_time_with_a_timezone_annotation() {
+        let now = datetime!(2024-01-01 09:00:00 UTC);
+        let text =
+            "Claude AI usage limit reached. Your limit will reset at 3pm (America/Los_Angeles).";
+        assert_eq!(
+            parse_reset(text, now),
+            Some(datetime!(2024-01-01 15:00:00 UTC))
+        );
+    }
+
+    /// The day-boundary case: a clock time that has already passed today
+    /// must roll forward across midnight to the same time tomorrow, not
+    /// resolve to a moment already in the past.
+    #[test]
+    fn parse_reset_rolls_an_already_passed_clock_time_across_midnight() {
+        let now = datetime!(2024-01-01 23:50:00 UTC);
+        let text = "5-hour limit reached \u{2219} resets 3pm";
+        assert_eq!(
+            parse_reset(text, now),
+            Some(datetime!(2024-01-02 15:00:00 UTC))
+        );
+    }
+
+    /// Exactly at the day boundary: "resets 12am" parsed thirty seconds
+    /// before midnight resolves thirty seconds into the next calendar day,
+    /// not almost a full day in the past.
+    #[test]
+    fn parse_reset_at_the_day_boundary_resolves_to_the_next_calendar_day() {
+        let now = datetime!(2024-01-01 23:59:30 UTC);
+        let text = "resets 12am";
+        assert_eq!(
+            parse_reset(text, now),
+            Some(datetime!(2024-01-02 00:00:00 UTC))
+        );
+    }
+
+    #[test]
+    fn parse_reset_reads_noon_as_twelve_pm() {
+        let now = datetime!(2024-01-01 09:00:00 UTC);
+        let text = "resets 12pm";
+        assert_eq!(
+            parse_reset(text, now),
+            Some(datetime!(2024-01-01 12:00:00 UTC))
+        );
+    }
+
+    /// 2024-01-04 is a Thursday. The weekly limit's reset already passed
+    /// today (it's 1am, past midnight), so this rolls to *next* Thursday,
+    /// crossing a full week, not just a day.
+    #[test]
+    fn parse_reset_weekday_reset_already_passed_today_rolls_to_next_week() {
+        let now = datetime!(2024-01-04 01:00:00 UTC);
+        let text = "Weekly limit reached \u{2219} resets Thursday at 12am";
+        assert_eq!(
+            parse_reset(text, now),
+            Some(datetime!(2024-01-11 00:00:00 UTC))
+        );
+    }
+
+    /// 2024-01-01 is a Monday; the named weekday (Thursday) is still ahead
+    /// in the same week, so no rollover is needed.
+    #[test]
+    fn parse_reset_weekday_still_ahead_in_the_same_week() {
+        let now = datetime!(2024-01-01 09:00:00 UTC);
+        let text = "resets Thursday at 12am";
+        assert_eq!(
+            parse_reset(text, now),
+            Some(datetime!(2024-01-04 00:00:00 UTC))
+        );
+    }
+
+    #[test]
+    fn parse_reset_returns_none_for_text_without_a_reset_expression() {
+        let now = datetime!(2024-01-01 12:00:00 UTC);
+        let text = "panicked at src/main.rs:12: index out of bounds";
+        assert_eq!(parse_reset(text, now), None);
+    }
+
+    #[test]
+    fn parse_reset_rejects_an_out_of_range_hour() {
+        let now = datetime!(2024-01-01 12:00:00 UTC);
+        assert_eq!(parse_reset("resets 13pm", now), None);
+    }
+
+    #[test]
+    fn wait_plan_waits_for_the_exact_reset_plus_margin_when_the_reset_is_known_and_ahead() {
+        let now = datetime!(2024-01-01 12:00:00 UTC);
+        let reset = datetime!(2024-01-01 15:00:00 UTC);
+        let margin = Duration::seconds(60);
+        let max = Duration::hours(24);
+        assert_eq!(
+            wait_plan(Some(reset), now, margin, max),
+            WaitPlan::Deadline(reset + margin)
+        );
+    }
+
+    #[test]
+    fn wait_plan_backs_off_bounded_by_max_when_no_reset_was_recognized() {
+        let now = datetime!(2024-01-01 12:00:00 UTC);
+        let max = Duration::hours(24);
+        assert_eq!(
+            wait_plan(None, now, Duration::seconds(60), max),
+            WaitPlan::Backoff(max)
+        );
+    }
+
+    /// A reset that has already elapsed by `now` -- clock skew, or a limit
+    /// that lifted between the check and this call -- must never produce a
+    /// deadline in the past; it falls back to the same bounded backoff as an
+    /// unrecognized reset.
+    #[test]
+    fn wait_plan_backs_off_rather_than_waiting_on_a_reset_already_in_the_past() {
+        let now = datetime!(2024-01-01 12:00:00 UTC);
+        let reset = datetime!(2024-01-01 11:00:00 UTC);
+        let max = Duration::hours(24);
+        assert_eq!(
+            wait_plan(Some(reset), now, Duration::seconds(60), max),
+            WaitPlan::Backoff(max)
+        );
+    }
+
+    #[test]
+    fn wait_plan_treats_a_reset_exactly_at_now_as_already_past() {
+        let now = datetime!(2024-01-01 12:00:00 UTC);
+        let max = Duration::hours(24);
+        assert_eq!(
+            wait_plan(Some(now), now, Duration::seconds(60), max),
+            WaitPlan::Backoff(max)
         );
     }
 }
