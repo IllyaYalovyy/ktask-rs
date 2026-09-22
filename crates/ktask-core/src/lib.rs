@@ -25,6 +25,7 @@ mod queue;
 pub mod redact;
 mod remediate;
 mod report;
+mod runner;
 mod state;
 mod task;
 
@@ -63,6 +64,7 @@ pub use remediate::{
     should_continue, signature, trip_event,
 };
 pub use report::{ReportResult, parse_report};
+pub use runner::{CheckOutcome, PreflightCheck, PreflightReport, preflight};
 pub use state::{
     PauseReason, Phase, Recovery, Stream, TaskState, apply, check_one_active, check_predecessor,
 };
