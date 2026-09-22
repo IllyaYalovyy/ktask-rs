@@ -18,7 +18,9 @@
 //! wildcard that could quietly swallow a case nobody thought of.
 
 use crate::{Error, GateResult, Outcome};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 /// Why an attempt or a gate failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,35 +83,71 @@ pub enum TddException {
     PreExistingFailingTest,
 }
 
-/// Case-insensitive substrings that mark a line of provider output as
-/// reporting a usage limit rather than an ordinary failure: Claude's and
-/// Codex's own limit messages, and the generic HTTP shape a provider that
-/// proxies through an API commonly falls back to.
-const LIMIT_MARKERS: [&str; 6] = [
-    "usage limit",
-    "rate limit",
-    "quota exceeded",
-    "limit reached",
-    "try again later",
-    "429",
-];
+/// Regular expressions recognizing a provider usage-limit report without any
+/// configuration: Claude's session and weekly limit messages, Codex's (and
+/// other OpenAI-compatible providers') rate-limit and quota messages, and the
+/// generic HTTP shape a provider that proxies through an API commonly falls
+/// back to.
+///
+/// Compiled once and reused, since compiling a regex is too expensive to
+/// repeat on every call to [`limit_message`]. Every entry here has a fixture
+/// in this module's tests, matching a realistic line of provider output.
+static DEFAULT_LIMIT_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    [
+        // Claude's generic usage-limit message, e.g. "Claude AI usage limit
+        // reached. Your limit will reset at 3pm (America/Los_Angeles)."
+        r"(?i)usage limit",
+        // Claude Code's session limit, e.g. "5-hour limit reached ∙ resets 3pm".
+        r"(?i)\b5-hour limit\b",
+        // Claude Code's weekly limit, e.g. "Weekly limit reached ∙ resets
+        // Thursday at 12am".
+        r"(?i)\bweekly limit\b",
+        // Codex's (and any OpenAI-compatible API's) rate-limit message, e.g.
+        // "Rate limit reached for gpt-5-codex ... Please try again in 20s."
+        r"(?i)rate limit",
+        // Codex's (and any OpenAI-compatible API's) quota message, e.g. "You
+        // exceeded your current quota, please check your plan and billing
+        // details."
+        r"(?i)exceeded your current quota",
+        // A generic backoff instruction providers fall back to when they do
+        // not name the limit explicitly.
+        r"(?i)try again later",
+        // The generic HTTP status a provider that proxies through an API
+        // commonly falls back to.
+        r"\b429\b",
+    ]
+    .iter()
+    // Every pattern here is exercised by this module's tests, so a broken
+    // one would fail a test rather than surface here; skipping instead of
+    // panicking keeps a typo in one default from taking down every other
+    // default (this crate treats errors as values, never as a reason for a
+    // supervisor process to panic).
+    .filter_map(|pattern| Regex::new(pattern).ok())
+    .collect()
+});
 
-/// Scans `outcome`'s stdout, then its stderr, line by line for one
-/// reporting a provider usage limit, returning that line when found.
+/// Scans `text` line by line for one matching a default limit pattern or any
+/// of `patterns` (additional regular expressions, e.g. from
+/// [`crate::Config`]), returning the first matching line when found.
+///
+/// An entry in `patterns` that fails to compile as a regex is skipped rather
+/// than aborting the scan, since a single malformed configured pattern must
+/// not defeat the built-in detection (mirrors [`crate::redact()`]).
 ///
 /// Checked by [`classify`] ahead of [`FailureClass::ProviderTransient`]: a
 /// limit is not a malfunction worth an immediate retry, it is a wait --
 /// sometimes with a known reset time -- so it must not be folded into the
-/// generic transient bucket (`VISION.md` §7).
+/// generic transient bucket, and it must never be classified as
+/// [`FailureClass::AgentFailure`] (`VISION.md` §7).
 #[must_use]
-pub fn limit_message(outcome: &Outcome) -> Option<&str> {
-    [outcome.stdout.as_str(), outcome.stderr.as_str()]
-        .into_iter()
-        .flat_map(str::lines)
+pub fn limit_message(text: &str, patterns: &[String]) -> Option<String> {
+    let extra: Vec<Regex> = patterns.iter().filter_map(|p| Regex::new(p).ok()).collect();
+    text.lines()
         .find(|line| {
-            let lower = line.to_lowercase();
-            LIMIT_MARKERS.iter().any(|marker| lower.contains(marker))
+            DEFAULT_LIMIT_PATTERNS.iter().any(|re| re.is_match(line))
+                || extra.iter().any(|re| re.is_match(line))
         })
+        .map(str::to_string)
 }
 
 /// Case-insensitive substrings that mark a line of agent output as the
@@ -196,7 +234,10 @@ pub fn classify(
         return FailureClass::ProviderConfiguration;
     }
 
-    if limit_message(outcome).is_some() {
+    if limit_message(&outcome.stdout, &[])
+        .or_else(|| limit_message(&outcome.stderr, &[]))
+        .is_some()
+    {
         return FailureClass::ProviderLimit;
     }
 
@@ -557,18 +598,110 @@ mod classify_tests {
 
     #[test]
     fn limit_message_finds_a_rate_limit_line_in_stderr() {
-        let mut outcome = empty_outcome();
-        outcome.stderr = "warming up\nrate limited, retry after 30m\n".to_string();
+        let outcome_stderr = "warming up\nrate limited, retry after 30m\n";
         assert_eq!(
-            limit_message(&outcome),
-            Some("rate limited, retry after 30m")
+            limit_message(outcome_stderr, &[]),
+            Some("rate limited, retry after 30m".to_string())
         );
     }
 
     #[test]
     fn limit_message_returns_none_for_an_ordinary_failure() {
-        let mut outcome = empty_outcome();
-        outcome.stderr = "panicked at src/main.rs:12: index out of bounds".to_string();
-        assert_eq!(limit_message(&outcome), None);
+        let text = "panicked at src/main.rs:12: index out of bounds";
+        assert_eq!(limit_message(text, &[]), None);
+    }
+
+    /// One fixture per entry in `DEFAULT_LIMIT_PATTERNS`, each drawn from a
+    /// realistic line of Claude or Codex provider output. Failing to match
+    /// any of these must never happen silently: a regression here is exactly
+    /// the "limit classified as agent failure" bug this function exists to
+    /// prevent.
+    fn default_limit_fixtures() -> Vec<(&'static str, &'static str)> {
+        vec![
+            (
+                "claude usage limit",
+                "Claude AI usage limit reached. Your limit will reset at 3pm \
+                 (America/Los_Angeles).",
+            ),
+            (
+                "claude 5-hour session limit",
+                "5-hour limit reached \u{2219} resets 3pm",
+            ),
+            (
+                "claude weekly limit",
+                "Weekly limit reached \u{2219} resets Thursday at 12am",
+            ),
+            (
+                "codex rate limit",
+                "Rate limit reached for gpt-5-codex in organization org-abc123 \
+                 on requests per min (RPM): Limit 3, Used 3, Requested 1. \
+                 Please try again in 20s.",
+            ),
+            (
+                "codex quota exceeded",
+                "You exceeded your current quota, please check your plan and \
+                 billing details.",
+            ),
+            (
+                "generic try-again-later backoff",
+                "Service unavailable, please try again later.",
+            ),
+            (
+                "generic HTTP 429 fallback",
+                "request failed with status 429",
+            ),
+        ]
+    }
+
+    #[test]
+    fn every_default_limit_pattern_matches_its_fixture() {
+        for (name, fixture) in default_limit_fixtures() {
+            assert_eq!(
+                limit_message(fixture, &[]),
+                Some(fixture.to_string()),
+                "expected default patterns to match the {name} fixture: {fixture:?}"
+            );
+        }
+    }
+
+    /// The other half of "a limit is never classified as an agent failure":
+    /// every default fixture, handed to the full classifier as the agent's
+    /// stdout with nothing else going wrong, must land on
+    /// [`FailureClass::ProviderLimit`], never [`FailureClass::AgentFailure`].
+    #[test]
+    fn every_default_limit_fixture_classifies_as_provider_limit() {
+        for (name, fixture) in default_limit_fixtures() {
+            let mut outcome = empty_outcome();
+            outcome.stdout = fixture.to_string();
+            assert_eq!(
+                classify(&outcome, &[], None),
+                FailureClass::ProviderLimit,
+                "expected the {name} fixture to classify as a provider limit: {fixture:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn limit_message_matches_a_configured_extra_pattern() {
+        let text = "internal-provider: session budget exhausted for account acme-42";
+        assert_eq!(
+            limit_message(text, &["budget exhausted".to_string()]),
+            Some(text.to_string())
+        );
+    }
+
+    #[test]
+    fn an_invalid_configured_pattern_is_skipped_without_panicking() {
+        let text = "value that is not itself limit shaped";
+        assert_eq!(limit_message(text, &["(unclosed".to_string()]), None);
+    }
+
+    #[test]
+    fn default_patterns_still_apply_when_a_configured_pattern_is_invalid() {
+        let text = "usage limit reached, try again tomorrow";
+        assert_eq!(
+            limit_message(text, &["(unclosed".to_string()]),
+            Some(text.to_string())
+        );
     }
 }
