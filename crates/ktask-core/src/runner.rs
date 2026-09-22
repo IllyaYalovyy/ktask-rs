@@ -1,4 +1,34 @@
-//! Preflight: the checks that prove the world is sane before a token is spent.
+//! The runner: what one run is made of, gathered once, and the attempt it opens.
+//!
+//! A run needs five things and no more: the project it works, the configuration
+//! that project was registered with, the gates that configuration configures, the
+//! adapter the work is handed to, and the recorder every transition comes through.
+//! [`Runner`] holds exactly those five, builds them from nothing but a
+//! [`Project`], and refuses before anything is written when the settings describe a
+//! run this build cannot have — a profile with no mandatory gate, an adapter no
+//! adapter answers to. The reason it takes no configuration, no profile and no
+//! adapter as arguments is that a run assembled from what its caller happened to
+//! carry is a run whose gates and journal somebody else chose.
+//!
+//! Its one job so far is [`Runner::begin_attempt`], the transition that spends a
+//! token, and three things about it are not free to change:
+//!
+//! - The [`crate::EventKind::AttemptStarted`] row is appended before the attempt's
+//!   evidence is filed, because VISION.md §3's third invariant makes the journal the
+//!   account of what happened and evidence an after-effect of it.
+//! - The base the row names is the one [`crate::EventKind::PreflightPassed`]
+//!   recorded for that task, not wherever `HEAD` happens to stand. An attempt based
+//!   on a tree nothing proved is what the `preflight` state exists to prevent, so a
+//!   task with no recorded base is refused rather than based on a guess
+//!   (ADR-0083).
+//! - The evidence directory is written at the start rather than only at the end,
+//!   because the run that dies mid-attempt is the case recovery is built for, and
+//!   it has to find something to read.
+//!
+//! What a run does once an attempt is open — phases, the agent session, the gates,
+//! publication, remediation — belongs to the tasks after this one.
+//!
+//! # Preflight: the checks that prove the world is sane before a token is spent
 //!
 //! VISION.md §6 puts one state between a queued task and a running one, and it
 //! gives that state exactly one job — *"proves the world is sane before spending
@@ -74,13 +104,287 @@ use std::path::Path;
 use std::time::Duration;
 
 use nix::sys::statvfs;
+use time::OffsetDateTime;
 
+use crate::config;
 use crate::git;
 use crate::lock;
+use crate::protocol;
+use crate::provider;
 use crate::{
-    Capabilities, Config, EventKind, FailureClass, Gate, GateKind, GateResult, Journal, Project,
-    Provider, Recorder, Result, profile_from, run_gate,
+    AttemptId, AttemptRecord, Bus, Capabilities, Config, Error, EventKind, FailureClass, Gate,
+    GateKind, GateResult, Journal, Profile, Project, Provider, Recorder, Result, Subscription,
+    Task, TaskId, profile_from, run_gate, write_evidence,
 };
+
+/// The parts one run is made of, gathered once from the project it works.
+///
+/// Five fields, and each of them answers a question a run would otherwise have to
+/// ask again — and could ask differently — at every transition:
+///
+/// - `project`: which repository, and where its journal, its lock and its
+///   evidence live.
+/// - `config`: what the project's own settings document, the machine's document
+///   and the environment said, with the layers already resolved.
+/// - `profile`: the gates that configuration configures, in the order a run
+///   executes them, with the mandatory gate already proved present.
+/// - `recorder`: the one door a transition comes through, so nothing can be
+///   published without being journaled and nothing journaled without being told
+///   (ADR-0016).
+/// - `provider`: the adapter the configured word named, built once so no two
+///   attempts of one run can be handed to different CLIs.
+///
+/// A run is *not* a piece of state: it holds no phase, no task and no attempt,
+/// because those are the projection of the journal and the journal is the source
+/// of truth (VISION.md §3). What it holds is everything the journal needs a caller
+/// to already have settled.
+pub struct Runner {
+    /// The registered repository the run works, and the state directory its
+    /// durable data is written into.
+    project: Project,
+    /// The configuration this project runs on, read through the layers
+    /// [`config::load_for`] resolves.
+    config: Config,
+    /// The gates [`crate::profile_from`] built from that configuration, already
+    /// validated, in the order a run runs them.
+    profile: Profile,
+    /// The journal-and-bus pair every transition of this run comes through.
+    recorder: Recorder,
+    /// The adapter [`provider::build`] made from the configured word.
+    provider: Box<dyn Provider>,
+}
+
+impl Runner {
+    /// Open the run one registered project is configured to have.
+    ///
+    /// A project is the only argument, which is the point: the settings, the
+    /// gates, the adapter and the journal are all consequences of it, so a caller
+    /// cannot assemble a run from a configuration it did not read. The four are
+    /// resolved in the order their refusals get cheaper, and nothing at all is
+    /// written before all four have agreed:
+    ///
+    /// 1. [`config::load_for`] reads what this project is configured to be.
+    /// 2. [`profile_from`] builds the gates from it, refusing a project with no
+    ///    complete local suite — VISION.md §8's mandatory gate.
+    /// 3. [`provider::build`] makes the adapter the configured word names.
+    /// 4. [`Journal::open_for`] opens the journal, and [`Recorder::with_bus`]
+    ///    gives it the bus whose rings are the configured `output_ring_lines`,
+    ///    because a run's screens are sized by its own settings and not by the
+    ///    compiled-in default.
+    ///
+    /// A refusal at 1, 2 or 3 therefore leaves no journal behind: a run that never
+    /// began has no transitions to record, and an empty database file is the
+    /// impression that somebody else had started work here.
+    ///
+    /// The live view a frontend follows comes from [`Runner::subscribe`] rather
+    /// than from a sixth field: a run that held its own view would be a subscriber
+    /// that never reads, whose ring overflows and counts a loss for every event of
+    /// its own run.
+    ///
+    /// # Errors
+    ///
+    /// As the four calls above: [`Error::Config`] for a key whose value cannot be
+    /// read, for a missing `verify_command`, and for an adapter word this build has
+    /// no adapter for; [`Error::Io`] for a settings document that is there and
+    /// cannot be read; [`Error::Database`] for a project whose state directory is
+    /// not there — registration owns that directory, so this refuses rather than
+    /// conjuring one — and [`Error::Corrupt`] on an unreadable journal.
+    pub fn new(project: Project) -> Result<Self> {
+        let config = config::load_for(&project)?;
+        let profile = profile_from(&config)?;
+        let provider = provider::build(&config)?;
+        let journal = Journal::open_for(&project)?;
+        Ok(Self {
+            recorder: Recorder::with_bus(journal, Bus::with_capacity(config.output_ring_lines)),
+            project,
+            config,
+            profile,
+            provider,
+        })
+    }
+
+    /// A view of this run, for whoever is watching it: the TUI's event stream, the
+    /// CLI's `--follow` output, the log's own reader.
+    ///
+    /// What was recorded before the call is not replayed — the journal is where
+    /// the past is read — and a view that comes and goes costs one ring, so a
+    /// screen that closes mid-run neither loses the run nor blocks it.
+    #[must_use]
+    pub fn subscribe(&self) -> Subscription {
+        self.recorder.subscribe()
+    }
+
+    /// Open one attempt of `task`, and return the id it was given.
+    ///
+    /// This is the door between `preflight` and `running`, and the last step that
+    /// costs nothing. Three facts go into the row, none of them guessed at: the
+    /// protocol [`protocol::for_task`] resolved from the task's own word, the
+    /// project's default and `direct` in that order; the process id recovery would
+    /// go looking for to tell a dead run from a live one; and the base
+    /// `recorded_base` found in the journal rather than read off `HEAD`.
+    /// The attempt number continues from the highest one already journaled for the
+    /// task, so a supervisor that started again numbers a retry after the attempts
+    /// it no longer remembers.
+    ///
+    /// The order of the two writes is the invariant, not an implementation detail:
+    /// [`crate::EventKind::AttemptStarted`] is appended first, and only then is the
+    /// [`AttemptRecord`] filed with [`write_evidence`]. A reader who arrives after
+    /// a crash between the two finds a journaled attempt with no evidence — the
+    /// shape recovery already treats as "this attempt never completed" — never an
+    /// evidence directory for an attempt the journal has never heard of.
+    ///
+    /// The record filed at the start says what the attempt *is*: its task, its
+    /// base, the model its configuration asked for, and that it is running as this
+    /// pid. Everything about what it did — its session, its gates, its cost, the
+    /// commit it produced, its end — is absent, and stays absent until the attempt
+    /// has an answer to give. The context document beside it is empty: assembling
+    /// the context is the runner's next step, not this one's.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] keyed `protocol`, `default_protocol` or `tdd_exception`
+    /// when [`protocol::for_task`] cannot name a protocol this build runs;
+    /// [`Error::NotFound`] when no [`crate::EventKind::PreflightPassed`] row gives
+    /// this task a base; [`Error::Database`] and [`Error::Serde`] as
+    /// [`Recorder::record`]; [`Error::Io`], [`Error::Policy`] or [`Error::Serde`]
+    /// as [`write_evidence`]. A refusal before the append writes nothing at all.
+    pub fn begin_attempt(&mut self, task: &Task) -> Result<AttemptId> {
+        let protocol = protocol::for_task(task, &self.config)?;
+        let journal = Journal::open_for(&self.project)?;
+        let (base_sha, last) = recorded_base(&journal, task.id)?;
+        let attempt = AttemptId::new(last + 1);
+        let pid = std::process::id();
+
+        self.recorder.record(
+            Some(task.id),
+            EventKind::AttemptStarted {
+                attempt,
+                protocol: protocol.name.to_owned(),
+                pid,
+                base_sha: base_sha.clone(),
+            },
+        )?;
+        write_evidence(
+            &self.project,
+            &self.opened(attempt, task.id, pid, &base_sha),
+            CONTEXT_AT_START,
+        )?;
+        Ok(attempt)
+    }
+
+    /// What an attempt looks like at the instant it started: everything that was
+    /// decided before the agent was called, and nothing that was observed after.
+    fn opened(&self, attempt: AttemptId, task: TaskId, pid: u32, base_sha: &str) -> AttemptRecord {
+        AttemptRecord {
+            id: attempt,
+            task,
+            started: OffsetDateTime::now_utc(),
+            ended: None,
+            model_configured: self.config.model.clone(),
+            model_reported: None,
+            session_id: None,
+            exit_reason: format!("{EXIT_AT_START}{pid}"),
+            gates: Vec::new(),
+            usage: None,
+            base_sha: base_sha.to_owned(),
+            candidate_sha: None,
+        }
+    }
+
+    /// The gates the profile holds, as the words an operator reads them in.
+    fn gate_words(&self) -> Vec<String> {
+        self.profile
+            .gates
+            .iter()
+            .map(|gate| gate.kind.to_string())
+            .collect()
+    }
+}
+
+/// How an attempt's record says it is running, before it has an ending.
+///
+/// [`AttemptRecord::exit_reason`] is not optional and an attempt that is merely
+/// running has not exited, so the one true sentence available is the one that
+/// says who is running it: this const beside the same pid the journal row
+/// carries, which is what a recovery reader cross-checks first.
+const EXIT_AT_START: &str = "started as pid ";
+
+/// What an attempt is told at the moment it starts: nothing.
+///
+/// Assembling the context document is the step after this one (VISION.md §6).
+/// Filing an empty one now is deliberate — the artifact is part of the directory
+/// that says "this attempt existed", and a later step writes over it with the
+/// document it assembled rather than inventing the directory after the fact.
+const CONTEXT_AT_START: &str = "";
+
+/// The base `task` was given to start from, and the highest attempt number it has.
+///
+/// Both come from one pass over the task's own rows, because both are facts about
+/// what this project has already durably said rather than about what the process
+/// holding this [`Runner`] remembers:
+///
+/// - The base is the last [`EventKind::PreflightPassed`] the task has, which is
+///   what [`AttemptRecord::base_sha`] means by "the one `PreflightPassed`
+///   recorded". Reading `git::head_sha` instead would let an attempt name a tree
+///   no check ever proved green, and the pair of them would then disagree in the
+///   journal — the exact contradiction VISION.md §3's third invariant exists to
+///   make impossible. A task with no such row is refused.
+/// - The attempt number is the highest `AttemptStarted` number the task has, so a
+///   retry continues the task's numbering instead of restarting it, whoever the
+///   process asking happens to be.
+///
+/// A row that is neither of those two kinds is not a fact about a task's opening
+/// and is passed over.
+///
+/// # Errors
+///
+/// [`Error::Database`] and [`Error::Corrupt`] as [`Journal::events_for`], and
+/// [`Error::NotFound`] when the task has no recorded base.
+fn recorded_base(journal: &Journal, task: TaskId) -> Result<(String, u32)> {
+    let mut base: Option<String> = None;
+    let mut last = 0;
+    for row in journal.events_for(task)? {
+        match row.kind {
+            EventKind::PreflightPassed { base_sha } => base = Some(base_sha),
+            EventKind::AttemptStarted { attempt, .. } => {
+                last = std::cmp::max(last, attempt.get());
+            }
+            _ => {}
+        }
+    }
+    base.map(|base_sha| (base_sha, last))
+        .ok_or_else(|| Error::NotFound {
+            what: format!(
+                "task {task}'s base: no `PreflightPassed` row recorded one, so this \
+                 task has no commit an attempt may be based on"
+            ),
+        })
+}
+
+impl fmt::Debug for Runner {
+    /// The run as an operator needs it in a panic report and a log line: which
+    /// project, which adapter, and which gates.
+    ///
+    /// Written by hand because `Box<dyn Provider>` has no [`fmt::Debug`] to
+    /// forward to, and it shows what an operator acts on rather than everything
+    /// the run happens to hold. `adapter` is the built adapter's own name and
+    /// `configured` is the word that selected it; the two are printed apart
+    /// because their disagreeing is the fault worth seeing. The gates are the
+    /// words a report line begins with, in the order the profile runs them.
+    ///
+    /// The rest is deliberately left out, and the trailing `..` says so: the
+    /// whole [`Config`] is sixty settings a reader can read from the project's own
+    /// document, and a live journal connection and a bus of rings have no answer
+    /// to print. Nothing here is where a repair looks; the journal is.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Runner")
+            .field("project", &self.project.id)
+            .field("configured", &self.config.provider)
+            .field("adapter", &self.provider.name())
+            .field("gates", &self.gate_words())
+            .finish_non_exhaustive()
+    }
+}
 
 /// Which of VISION.md §6's five checks a finding belongs to.
 ///
@@ -1336,5 +1640,560 @@ mod tests {
              disk: refused (EnvironmentFailure) — 1 byte free"
         );
         assert_eq!(PreflightCheck::Mainline.to_string(), "mainline");
+    }
+}
+
+#[cfg(test)]
+mod new {
+    //! The construction of a [`Runner`] and the one attempt it opens.
+    //!
+    //! The module is named after the call it tests because the task that asked
+    //! for the runner fixed `test(/runner::new/)` as its Verify command, and a
+    //! module named `tests` would make that command select nothing.
+    //! `journal.rs` names its test modules the same way (`replay`, `streaming`,
+    //! `projection`), so this is the house shape, not an exception made for one
+    //! filter.
+
+    use super::Runner;
+    use crate::testing::{ScratchRepo, scratch_repo};
+    use crate::{
+        AttemptId, Error, Event, EventKind, Journal, Project, Task, TaskId, evidence_dir,
+        journal_path, parse_plan, project_config_path, read_evidence,
+    };
+    use std::fs;
+
+    /// The identity every fixture gives its registered project.
+    const PROJECT_ID: &str = "0123456789abcdef";
+
+    /// The settings a run needs in order to be constructible at all.
+    ///
+    /// Both keys are load-bearing. `verify_command` is mandatory: no profile can
+    /// be built without it, so a fixture that omitted it would be testing the
+    /// refusal rather than a run. `provider` names `claude` rather than leaving
+    /// the configured default `dummy` because the `dummy` adapter replays a
+    /// scenario file and refuses to be built without one — so a run that opens on
+    /// these settings is proof that the project's own word reached the adapter,
+    /// which the default word could not have done.
+    const BASE: &str =
+        "provider = \"claude\"\nverify_command = [\"/bin/sh\", \"-c\", \"exit 0\"]\n";
+
+    /// `BASE` with `extra` written below it, one settings key per line.
+    fn settings(extra: &[&str]) -> String {
+        let mut document = BASE.to_owned();
+        for line in extra {
+            document.push_str(line);
+            document.push('\n');
+        }
+        document
+    }
+
+    /// A registered project: a repository of its own, a state directory outside
+    /// the worktree, and one settings document saying what a run here is for.
+    struct Fixture {
+        repo: ScratchRepo,
+        project: Project,
+    }
+
+    impl Fixture {
+        /// A project whose own settings document holds `document` verbatim.
+        fn with_settings(document: &str) -> Self {
+            let repo = scratch_repo().expect("a scratch repository is buildable");
+            let state_dir = repo.path().join("state").join(PROJECT_ID);
+            let project = Project {
+                root: repo.work().to_path_buf(),
+                id: PROJECT_ID.to_owned(),
+                state_dir,
+            };
+            fs::create_dir_all(&project.state_dir).expect("a state directory is creatable");
+            fs::write(project_config_path(&project), document)
+                .expect("a project settings document is writable");
+            Self { repo, project }
+        }
+
+        /// The commit a preflight would have handed the run: the one the scratch
+        /// origin holds and the worktree was cut from.
+        fn base(&self) -> String {
+            self.repo.seed_sha().to_owned()
+        }
+    }
+
+    /// Every row the journal holds, read on a second connection: the way an
+    /// operator, or a process that came after the run, reads it.
+    fn rows(project: &Project) -> Vec<Event> {
+        Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events()
+            .expect("a journal of rows is readable")
+    }
+
+    /// The rows that opened an attempt, which is what "exactly one event" is
+    /// counted over.
+    fn started(project: &Project) -> Vec<Event> {
+        rows(project)
+            .into_iter()
+            .filter(|row| row.kind.discriminant() == "AttemptStarted")
+            .collect()
+    }
+
+    /// A queue row worked under `protocol` when it names one, and under nothing
+    /// when `None` leaves the project's word to answer.
+    fn task(protocol: Option<&str>) -> Task {
+        let mut document = "\
+## T088 Runner scaffolding and the attempt record
+
+**Outcome:** the runner type exists and can open one attempt.
+**Done-when:** one attempt journals exactly one row.
+**Verify:** `cargo nextest run -p ktask-core -E 'test(/runner::new/)'`
+**Refs:** VISION.md section 6
+"
+        .to_owned();
+        if let Some(word) = protocol {
+            document.push_str("**Protocol:** ");
+            document.push_str(word);
+            document.push('\n');
+        }
+        let mut queue = parse_plan(&document)
+            .expect("a task block with the four mandatory sections is a parseable plan");
+        queue.remove(0)
+    }
+
+    /// Journal what preflight journals, so an attempt has a base to start from.
+    ///
+    /// It is written by the run's own recorder because that is who writes a
+    /// preflight verdict in the lifecycle; a base handed in through some other
+    /// door is a shape a run never meets.
+    fn give_base(run: &mut Runner, task: TaskId, base_sha: &str) {
+        run.recorder
+            .record(
+                Some(task),
+                EventKind::PreflightPassed {
+                    base_sha: base_sha.to_owned(),
+                },
+            )
+            .expect("a preflight verdict is journalable");
+    }
+
+    /// The four facts of one `AttemptStarted` row, refused for any other kind.
+    fn facts(event: &Event) -> (AttemptId, String, u32, String) {
+        match &event.kind {
+            EventKind::AttemptStarted {
+                attempt,
+                protocol,
+                pid,
+                base_sha,
+            } => (*attempt, protocol.clone(), *pid, base_sha.clone()),
+            other => panic!(
+                "expected the facts of an attempt, got a row of kind `{}`",
+                other.discriminant()
+            ),
+        }
+    }
+
+    #[test]
+    fn a_run_is_opened_from_a_registered_project_and_nothing_else() {
+        let fixture = Fixture::with_settings(BASE);
+
+        let run = Runner::new(fixture.project.clone())
+            .expect("a registered project, and nothing besides it, opens a run");
+
+        assert_eq!(
+            run.project, fixture.project,
+            "a run works the project it was handed"
+        );
+        assert!(
+            journal_path(&fixture.project.state_dir).is_file(),
+            "opening a run opens the journal its transitions are persisted into"
+        );
+        let shown = format!("{run:?}");
+        assert!(
+            shown.starts_with(&format!("Runner {{ project: {PROJECT_ID:?}")),
+            "a run says what it is and which project it is working: {shown}"
+        );
+        assert!(
+            shown.contains(&format!("project: {PROJECT_ID:?}")),
+            "and names the project by its registered id: {shown}"
+        );
+    }
+
+    #[test]
+    fn a_run_works_with_the_adapter_its_project_named() {
+        let fixture = Fixture::with_settings(BASE);
+
+        let run = Runner::new(fixture.project.clone())
+            .expect("a project naming an adapter this build has is a runnable project");
+
+        let shown = format!("{run:?}");
+        assert!(
+            shown.contains("configured: \"claude\""),
+            "the project's own word is what the run was configured with: {shown}"
+        );
+        assert!(
+            shown.contains("adapter: \"claude\""),
+            "and the adapter built from it is the claude adapter: {shown}"
+        );
+        assert!(
+            !shown.contains("dummy"),
+            "the configured default is not left standing where the project said \
+             something else: {shown}"
+        );
+    }
+
+    #[test]
+    fn a_run_holds_the_gates_its_project_configured_in_the_order_a_run_runs_them() {
+        let fixture = Fixture::with_settings(&settings(&[
+            "build_command = [\"/bin/sh\", \"-c\", \"exit 0\"]",
+            "lint_command = [\"/bin/sh\", \"-c\", \"exit 0\"]",
+        ]));
+
+        let run = Runner::new(fixture.project.clone())
+            .expect("a project configuring its gates is a runnable project");
+
+        let shown = format!("{run:?}");
+        assert!(
+            shown.contains("gates: [\"verify\", \"lint\", \"build\"]"),
+            "the three configured gates in the order a run executes them, not the \
+             order the document wrote them in: {shown}"
+        );
+        assert!(
+            !shown.contains("flake"),
+            "a gate nobody configured is not in the profile: {shown}"
+        );
+    }
+
+    #[test]
+    fn a_project_that_configured_no_verify_command_refuses_the_run() {
+        let fixture = Fixture::with_settings(
+            "provider = \"claude\"\nlint_command = [\"/bin/sh\", \"-c\", \"exit 0\"]\n",
+        );
+
+        let refused = Runner::new(fixture.project.clone())
+            .expect_err("a project with no complete local suite cannot be run");
+
+        match refused {
+            Error::Config { key, detail } => {
+                assert_eq!(
+                    key, "verify_command",
+                    "the refusal names the key to write: {detail}"
+                );
+                assert!(
+                    detail.contains("mandatory"),
+                    "and the rule it refused to bend: {detail}"
+                );
+            }
+            other => panic!("a missing gate is a configuration refusal, got: {other}"),
+        }
+        assert!(
+            !journal_path(&fixture.project.state_dir).is_file(),
+            "a run that was refused before it began opened no journal"
+        );
+    }
+
+    #[test]
+    fn a_project_that_named_an_adapter_nobody_has_refuses_the_run() {
+        let fixture = Fixture::with_settings(
+            "provider = \"claude-code\"\nverify_command = [\"/bin/sh\", \"-c\", \"exit 0\"]\n",
+        );
+
+        let refused = Runner::new(fixture.project.clone())
+            .expect_err("a project naming an adapter this build lacks cannot be run");
+
+        match refused {
+            Error::Config { key, detail } => {
+                assert_eq!(
+                    key, "provider",
+                    "the refusal names the key to fix: {detail}"
+                );
+                assert!(
+                    detail.contains("claude-code"),
+                    "and quotes the word it could not honour: {detail}"
+                );
+            }
+            other => panic!("an unknown adapter is a configuration refusal, got: {other}"),
+        }
+        assert!(
+            !journal_path(&fixture.project.state_dir).is_file(),
+            "a run that was refused before it began opened no journal"
+        );
+    }
+
+    #[test]
+    fn opening_an_attempt_adds_one_row_naming_the_process_and_the_base() {
+        let fixture = Fixture::with_settings(BASE);
+        let work = task(None);
+        let mut run =
+            Runner::new(fixture.project.clone()).expect("the fixture project is runnable");
+        give_base(&mut run, work.id, &fixture.base());
+        let moved = fixture
+            .repo
+            .commit("late.md", "a commit no preflight ever proved")
+            .expect("a scratch commit is committable");
+        let before = rows(&fixture.project).len();
+
+        let attempt = run
+            .begin_attempt(&work)
+            .expect("a task preflight gave a base to can be attempted");
+
+        assert_eq!(
+            attempt,
+            AttemptId::new(1),
+            "the first attempt of a task is number 1"
+        );
+        assert_eq!(
+            rows(&fixture.project).len(),
+            before + 1,
+            "opening an attempt writes exactly one row and no other"
+        );
+        let opened = started(&fixture.project);
+        assert_eq!(opened.len(), 1, "one row of kind `AttemptStarted`");
+        let row = &opened[0];
+        assert_eq!(row.task_id, Some(work.id), "the row belongs to the task");
+        let (number, protocol, pid, base_sha) = facts(row);
+        assert_eq!(number, AttemptId::new(1));
+        assert_eq!(
+            protocol, "direct",
+            "a task naming no protocol and a project naming none is worked direct"
+        );
+        assert_eq!(
+            pid,
+            std::process::id(),
+            "the pid is the process recovery would go looking for"
+        );
+        assert_eq!(
+            base_sha,
+            fixture.base(),
+            "the base is the commit preflight recorded, not wherever HEAD happens to be"
+        );
+        assert_ne!(
+            base_sha, moved,
+            "and a commit that appeared after preflight is not the base of an attempt"
+        );
+    }
+
+    #[test]
+    fn a_view_of_the_run_is_told_what_an_attempt_recorded() {
+        let fixture = Fixture::with_settings(BASE);
+        let work = task(None);
+        let mut run =
+            Runner::new(fixture.project.clone()).expect("the fixture project is runnable");
+        give_base(&mut run, work.id, &fixture.base());
+
+        let mut view = run.subscribe();
+        run.begin_attempt(&work)
+            .expect("a task with a base can be attempted");
+
+        let (seen, lost) = view.drain();
+        assert_eq!(seen.len(), 1, "the view was told one event");
+        assert_eq!(lost, 0, "and lost none of it");
+        assert_eq!(
+            seen[0].kind.discriminant(),
+            "AttemptStarted",
+            "the view follows the run it was opened on"
+        );
+        assert_eq!(seen[0].task_id, Some(work.id));
+    }
+
+    #[test]
+    fn an_attempt_is_worked_under_the_protocol_its_task_named() {
+        let fixture = Fixture::with_settings(&settings(&["default_protocol = \"direct\""]));
+        let work = task(Some("tdd"));
+        let mut run =
+            Runner::new(fixture.project.clone()).expect("the fixture project is runnable");
+        give_base(&mut run, work.id, &fixture.base());
+
+        run.begin_attempt(&work)
+            .expect("a task naming a protocol this build runs can be attempted");
+
+        let opened = started(&fixture.project);
+        let (_, protocol, _, _) = facts(&opened[0]);
+        assert_eq!(
+            protocol, "tdd",
+            "a task's own word outranks the project's, which here said otherwise"
+        );
+    }
+
+    #[test]
+    fn an_attempt_with_no_word_of_its_own_uses_the_protocol_its_project_named() {
+        let fixture = Fixture::with_settings(&settings(&["default_protocol = \"tdd\""]));
+        let work = task(None);
+        let mut run =
+            Runner::new(fixture.project.clone()).expect("the fixture project is runnable");
+        give_base(&mut run, work.id, &fixture.base());
+
+        run.begin_attempt(&work)
+            .expect("a task that names no protocol is worked under the project's");
+
+        let opened = started(&fixture.project);
+        let (_, protocol, _, _) = facts(&opened[0]);
+        assert_eq!(
+            protocol, "tdd",
+            "the project's word answers when the task's is absent"
+        );
+    }
+
+    #[test]
+    fn an_attempt_has_evidence_from_the_moment_it_starts() {
+        let fixture = Fixture::with_settings(&settings(&["model = \"the-configured-model\""]));
+        let work = task(None);
+        let mut run =
+            Runner::new(fixture.project.clone()).expect("the fixture project is runnable");
+        give_base(&mut run, work.id, &fixture.base());
+
+        let attempt = run
+            .begin_attempt(&work)
+            .expect("a task with a base can be attempted");
+
+        let filed = read_evidence(&fixture.project, work.id)
+            .expect("an evidence directory that is not there reads back empty, not broken");
+        assert_eq!(filed.len(), 1, "starting an attempt files its record");
+        let record = &filed[0];
+        assert_eq!(record.id, attempt, "filed under the attempt that opened");
+        assert_eq!(record.task, work.id, "and under the task that ran");
+        assert_eq!(
+            record.base_sha,
+            fixture.base(),
+            "naming the tree it started from"
+        );
+        assert_eq!(
+            record.exit_reason,
+            format!("started as pid {}", std::process::id()),
+            "saying what the attempt is doing, since it has not stopped"
+        );
+        assert!(
+            record.ended.is_none(),
+            "an attempt that has not stopped reports no end"
+        );
+        assert!(
+            record.gates.is_empty(),
+            "no gate has run yet, and an empty list is the evidence of that"
+        );
+        assert!(
+            record.usage.is_none(),
+            "there was no session to report a cost"
+        );
+        assert!(
+            record.model_configured.as_deref() == Some("the-configured-model"),
+            "the model the configuration asked for is known before the session starts"
+        );
+        assert!(
+            record.model_reported.is_none(),
+            "nothing has been reported yet"
+        );
+        assert!(record.session_id.is_none(), "no session has been opened");
+        assert!(
+            record.candidate_sha.is_none(),
+            "an attempt that only started has produced no commit"
+        );
+
+        let dir = evidence_dir(&fixture.project, work.id, attempt);
+        assert_eq!(
+            fs::read_to_string(dir.join("context.md")).expect("the context file is there"),
+            String::new(),
+            "an attempt starts knowing nothing: the context is assembled after it"
+        );
+        for artifact in ["record.json", "report.md", "context.md"] {
+            assert!(
+                dir.join(artifact).is_file(),
+                "an attempt's evidence directory holds `{artifact}` from its first moment"
+            );
+        }
+        assert!(
+            rows(&fixture.project)
+                .iter()
+                .all(|row| row.kind.discriminant() != "AttemptRecorded"),
+            "filing evidence at the start is a file, not a second journal row"
+        );
+    }
+
+    #[test]
+    fn an_attempt_for_a_task_no_preflight_gave_a_base_is_refused() {
+        let fixture = Fixture::with_settings(BASE);
+        let work = task(None);
+        let mut run =
+            Runner::new(fixture.project.clone()).expect("the fixture project is runnable");
+
+        let refused = run
+            .begin_attempt(&work)
+            .expect_err("an attempt needs the base preflight established");
+
+        match refused {
+            Error::NotFound { what } => assert!(
+                what.contains(&work.id.to_string()),
+                "the refusal names the task that has no base: {what}"
+            ),
+            other => panic!("an absent base is a not-found, got: {other}"),
+        }
+        assert!(
+            rows(&fixture.project).is_empty(),
+            "a refused attempt is not a transition, so nothing was journaled"
+        );
+        assert!(
+            read_evidence(&fixture.project, work.id)
+                .expect("no evidence directory reads back empty")
+                .is_empty(),
+            "and no evidence was filed for an attempt that never started"
+        );
+    }
+
+    #[test]
+    fn a_base_journaled_for_another_task_is_not_a_base() {
+        let fixture = Fixture::with_settings(BASE);
+        let work = task(None);
+        let mut run =
+            Runner::new(fixture.project.clone()).expect("the fixture project is runnable");
+        give_base(&mut run, TaskId::new(7), &fixture.base());
+
+        let refused = run
+            .begin_attempt(&work)
+            .expect_err("another task's base says nothing about this one");
+
+        assert!(
+            matches!(refused, Error::NotFound { .. }),
+            "a base belongs to the task preflight checked: {refused}"
+        );
+        assert!(
+            started(&fixture.project).is_empty(),
+            "and it opens no attempt"
+        );
+    }
+
+    #[test]
+    fn each_attempt_a_task_makes_numbers_itself_after_the_last() {
+        let fixture = Fixture::with_settings(BASE);
+        let work = task(None);
+        let mut run =
+            Runner::new(fixture.project.clone()).expect("the fixture project is runnable");
+        give_base(&mut run, work.id, &fixture.base());
+
+        let first = run
+            .begin_attempt(&work)
+            .expect("a task with a base can be attempted");
+        let second = run
+            .begin_attempt(&work)
+            .expect("a task can be attempted again after its first attempt");
+        assert_eq!(first, AttemptId::new(1));
+        assert_eq!(
+            second,
+            AttemptId::new(2),
+            "a retry is a new attempt of its own"
+        );
+        drop(run);
+
+        let mut reopened = Runner::new(fixture.project.clone())
+            .expect("a project with a journal is still a runnable project");
+        let third = reopened
+            .begin_attempt(&work)
+            .expect("a supervisor that started again can attempt the task again");
+
+        assert_eq!(
+            third,
+            AttemptId::new(3),
+            "numbering comes from what was journaled, so a restart continues it"
+        );
+        assert_eq!(started(&fixture.project).len(), 3, "one row per attempt");
+        let filed = read_evidence(&fixture.project, work.id)
+            .expect("each attempt files evidence of its own");
+        assert_eq!(filed.len(), 3, "three attempts, three records");
+        let numbers: Vec<u32> = filed.iter().map(|record| record.id.get()).collect();
+        assert_eq!(numbers, vec![1, 2, 3], "each numbered once, in order");
     }
 }
