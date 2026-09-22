@@ -1,12 +1,32 @@
 //! `TaskState`, `Phase` and `PauseReason`: the supervisor's lifecycle
 //! vocabulary — what state a task is in, where an attempt stands within a
-//! protocol, and why a task is currently paused.
+//! protocol, and why a task is currently paused. `apply` is the single
+//! function through which a `TaskState` may change, per `VISION.md` §6.
 //!
-//! All three are plain data, defined exactly as `docs/DESIGN.md` states them
-//! under "Core types" and "Phases and screens": no logic, no I/O. The
-//! `apply` function that transitions `TaskState` belongs to a later task.
+//! The pipeline mirrors `docs/DESIGN.md`'s event catalog ordering, which
+//! lists each stage's `*Started` event before its `*Passed`/`*Failed` event
+//! before the next stage's `*Started` event. `apply` follows that ordering
+//! literally: entering a stage and recording that stage's own success both
+//! happen without moving further, and only the *next* stage's `Started`-like
+//! event advances custody. So `PreflightPassed` leaves the state at
+//! `Preflight` (it has nowhere else to put `base_sha`); `AttemptStarted` is
+//! what moves it to `Running`. The same pattern holds for `Verifying`:
+//! `VerifyPassed` leaves it at `Verifying`, and `PublishStarted` is what
+//! moves it to `Publishing`. `Running`/`Remediating` reach `Verifying` not
+//! through a distinct event but by entering the shared `Phase::Verify`,
+//! since a work protocol's mandatory completion gates are just its last
+//! phase.
+//!
+//! `AttemptStarted` does not carry a phase (that is `PhaseEntered`'s job), so
+//! it seeds `Running` with `Phase::Implement` — correct for `direct`, and
+//! immediately corrected for other protocols by the `PhaseEntered` event the
+//! runner always emits before doing any protocol-specific work. The same
+//! reasoning seeds `Remediating` on `VerifyFailed`.
 
-use crate::classify::FailureClass;
+use crate::Result;
+use crate::classify::{FailureClass, Recovery};
+use crate::error::Error;
+use crate::event::EventKind;
 use crate::ids::AttemptId;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -124,6 +144,377 @@ impl TaskState {
     }
 }
 
+/// Builds the standard "this event does not apply here" error, naming the
+/// state by [`TaskState::name`] and the event by its discriminant.
+fn invalid(from: &str, event: &EventKind) -> Error {
+    Error::InvalidTransition {
+        from: from.to_string(),
+        event: event.discriminant().to_string(),
+    }
+}
+
+/// Applies `event` to `state`, returning the state that results.
+///
+/// The only way a [`TaskState`] changes. Pure: no I/O, no clock, no
+/// randomness. Terminal states (`Done`, `Acknowledged`, `Failed`,
+/// `Cancelled`) accept no event at all; every other state delegates to one
+/// helper below, which matches `event` exhaustively.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidTransition`] if `event` does not apply to
+/// `state`, including every event given to a terminal state.
+pub fn apply(state: &TaskState, event: &EventKind) -> Result<TaskState> {
+    match state {
+        TaskState::Queued => from_queued(event),
+        TaskState::Preflight => from_preflight(event),
+        TaskState::Running { attempt, phase } => from_running(*attempt, *phase, event),
+        TaskState::Remediating { attempt, phase } => from_remediating(*attempt, *phase, event),
+        TaskState::Verifying { attempt } => from_verifying(*attempt, event),
+        TaskState::Publishing { attempt } => from_publishing(*attempt, event),
+        TaskState::PublishedVerified { commit } => from_published_verified(commit, event),
+        TaskState::Paused { reason, resume_to } => from_paused(reason, resume_to, event),
+        TaskState::Done
+        | TaskState::Acknowledged { .. }
+        | TaskState::Failed { .. }
+        | TaskState::Cancelled => Err(invalid(state.name(), event)),
+    }
+}
+
+/// Transitions from [`TaskState::Queued`]: waiting for its turn.
+fn from_queued(event: &EventKind) -> Result<TaskState> {
+    match event {
+        EventKind::TaskQueued { .. } => Ok(TaskState::Queued),
+        EventKind::PreflightStarted => Ok(TaskState::Preflight),
+        EventKind::Paused { reason } => Ok(TaskState::Paused {
+            reason: reason.clone(),
+            resume_to: Box::new(TaskState::Queued),
+        }),
+        EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
+        EventKind::PreflightPassed { .. }
+        | EventKind::PreflightFailed { .. }
+        | EventKind::AttemptStarted { .. }
+        | EventKind::PhaseEntered { .. }
+        | EventKind::AgentOutput { .. }
+        | EventKind::VerifyPassed { .. }
+        | EventKind::VerifyFailed { .. }
+        | EventKind::PublishStarted { .. }
+        | EventKind::PublishVerified { .. }
+        | EventKind::TaskDone { .. }
+        | EventKind::TaskFailed { .. }
+        | EventKind::Resumed
+        | EventKind::Interrupted { .. }
+        | EventKind::RecoveryDecision { .. }
+        | EventKind::GateAcknowledged { .. } => Err(invalid("Queued", event)),
+    }
+}
+
+/// Transitions from [`TaskState::Preflight`]: proving the world is sane.
+fn from_preflight(event: &EventKind) -> Result<TaskState> {
+    match event {
+        EventKind::PreflightPassed { .. } => Ok(TaskState::Preflight),
+        EventKind::PreflightFailed { class, detail } => Ok(TaskState::Failed {
+            class: *class,
+            detail: detail.clone(),
+        }),
+        EventKind::AttemptStarted { attempt, .. } => Ok(TaskState::Running {
+            attempt: *attempt,
+            phase: Phase::Implement,
+        }),
+        EventKind::Paused { reason } => Ok(TaskState::Paused {
+            reason: reason.clone(),
+            resume_to: Box::new(TaskState::Preflight),
+        }),
+        EventKind::Interrupted { .. } => Ok(TaskState::Paused {
+            reason: PauseReason::Interrupted,
+            resume_to: Box::new(TaskState::Preflight),
+        }),
+        EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
+        EventKind::TaskQueued { .. }
+        | EventKind::PreflightStarted
+        | EventKind::PhaseEntered { .. }
+        | EventKind::AgentOutput { .. }
+        | EventKind::VerifyPassed { .. }
+        | EventKind::VerifyFailed { .. }
+        | EventKind::PublishStarted { .. }
+        | EventKind::PublishVerified { .. }
+        | EventKind::TaskDone { .. }
+        | EventKind::TaskFailed { .. }
+        | EventKind::Resumed
+        | EventKind::RecoveryDecision { .. }
+        | EventKind::GateAcknowledged { .. } => Err(invalid("Preflight", event)),
+    }
+}
+
+/// Transitions from [`TaskState::Running`]: an attempt executing `phase`.
+///
+/// Entering `Phase::Verify` is how `Running` reaches [`TaskState::Verifying`]:
+/// the mandatory completion gates are just a work protocol's last phase, not
+/// a separately-triggered event.
+fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<TaskState> {
+    match event {
+        EventKind::PhaseEntered {
+            phase: Phase::Verify,
+            ..
+        } => Ok(TaskState::Verifying { attempt }),
+        EventKind::PhaseEntered { phase, .. } => Ok(TaskState::Running {
+            attempt,
+            phase: *phase,
+        }),
+        EventKind::AgentOutput { .. } => Ok(TaskState::Running { attempt, phase }),
+        EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
+            class: *class,
+            detail: detail.clone(),
+        }),
+        EventKind::Paused { reason } => Ok(TaskState::Paused {
+            reason: reason.clone(),
+            resume_to: Box::new(TaskState::Running { attempt, phase }),
+        }),
+        EventKind::Interrupted { phase } => Ok(TaskState::Paused {
+            reason: PauseReason::Interrupted,
+            resume_to: Box::new(TaskState::Running {
+                attempt,
+                phase: *phase,
+            }),
+        }),
+        EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
+        EventKind::TaskQueued { .. }
+        | EventKind::PreflightStarted
+        | EventKind::PreflightPassed { .. }
+        | EventKind::PreflightFailed { .. }
+        | EventKind::AttemptStarted { .. }
+        | EventKind::VerifyPassed { .. }
+        | EventKind::VerifyFailed { .. }
+        | EventKind::PublishStarted { .. }
+        | EventKind::PublishVerified { .. }
+        | EventKind::TaskDone { .. }
+        | EventKind::Resumed
+        | EventKind::RecoveryDecision { .. }
+        | EventKind::GateAcknowledged { .. } => Err(invalid("Running", event)),
+    }
+}
+
+/// Transitions from [`TaskState::Remediating`]: a bounded retry executing
+/// `phase`, entered only from [`TaskState::Verifying`] on `VerifyFailed`.
+///
+/// Mirrors [`from_running`]: whether another remediation attempt is even
+/// allowed is a bound the runner checks before emitting the next event, not
+/// something this pure function can know.
+fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<TaskState> {
+    match event {
+        EventKind::PhaseEntered {
+            phase: Phase::Verify,
+            ..
+        } => Ok(TaskState::Verifying { attempt }),
+        EventKind::PhaseEntered { phase, .. } => Ok(TaskState::Remediating {
+            attempt,
+            phase: *phase,
+        }),
+        EventKind::AgentOutput { .. } => Ok(TaskState::Remediating { attempt, phase }),
+        EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
+            class: *class,
+            detail: detail.clone(),
+        }),
+        EventKind::Paused { reason } => Ok(TaskState::Paused {
+            reason: reason.clone(),
+            resume_to: Box::new(TaskState::Remediating { attempt, phase }),
+        }),
+        EventKind::Interrupted { phase } => Ok(TaskState::Paused {
+            reason: PauseReason::Interrupted,
+            resume_to: Box::new(TaskState::Remediating {
+                attempt,
+                phase: *phase,
+            }),
+        }),
+        EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
+        EventKind::TaskQueued { .. }
+        | EventKind::PreflightStarted
+        | EventKind::PreflightPassed { .. }
+        | EventKind::PreflightFailed { .. }
+        | EventKind::AttemptStarted { .. }
+        | EventKind::VerifyPassed { .. }
+        | EventKind::VerifyFailed { .. }
+        | EventKind::PublishStarted { .. }
+        | EventKind::PublishVerified { .. }
+        | EventKind::TaskDone { .. }
+        | EventKind::Resumed
+        | EventKind::RecoveryDecision { .. }
+        | EventKind::GateAcknowledged { .. } => Err(invalid("Remediating", event)),
+    }
+}
+
+/// Transitions from [`TaskState::Verifying`]: running the mandatory
+/// completion gates against `attempt`'s result.
+fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
+    match event {
+        EventKind::VerifyPassed { .. } => Ok(TaskState::Verifying { attempt }),
+        EventKind::VerifyFailed { .. } => Ok(TaskState::Remediating {
+            attempt,
+            phase: Phase::Implement,
+        }),
+        EventKind::PublishStarted { .. } => Ok(TaskState::Publishing { attempt }),
+        EventKind::Paused { reason } => Ok(TaskState::Paused {
+            reason: reason.clone(),
+            resume_to: Box::new(TaskState::Verifying { attempt }),
+        }),
+        EventKind::Interrupted { .. } => Ok(TaskState::Paused {
+            reason: PauseReason::Interrupted,
+            resume_to: Box::new(TaskState::Verifying { attempt }),
+        }),
+        EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
+        EventKind::TaskQueued { .. }
+        | EventKind::PreflightStarted
+        | EventKind::PreflightPassed { .. }
+        | EventKind::PreflightFailed { .. }
+        | EventKind::AttemptStarted { .. }
+        | EventKind::PhaseEntered { .. }
+        | EventKind::AgentOutput { .. }
+        | EventKind::PublishVerified { .. }
+        | EventKind::TaskDone { .. }
+        | EventKind::TaskFailed { .. }
+        | EventKind::Resumed
+        | EventKind::RecoveryDecision { .. }
+        | EventKind::GateAcknowledged { .. } => Err(invalid("Verifying", event)),
+    }
+}
+
+/// Transitions from [`TaskState::Publishing`]: publishing `attempt`'s
+/// verified result to mainline.
+///
+/// No `TaskCancelled` arm: once publication has started, a commit-and-push
+/// against mainline may already be underway, and cancelling mid-flight would
+/// leave custody of a live git operation nowhere. `docs/CONTRACT.md`'s
+/// `cancel` is for a task the queue can safely skip past, which this is not.
+fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
+    match event {
+        EventKind::PublishVerified { commit, .. } => Ok(TaskState::PublishedVerified {
+            commit: commit.clone(),
+        }),
+        EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
+            class: *class,
+            detail: detail.clone(),
+        }),
+        EventKind::Paused { reason } => Ok(TaskState::Paused {
+            reason: reason.clone(),
+            resume_to: Box::new(TaskState::Publishing { attempt }),
+        }),
+        EventKind::Interrupted { .. } => Ok(TaskState::Paused {
+            reason: PauseReason::Interrupted,
+            resume_to: Box::new(TaskState::Publishing { attempt }),
+        }),
+        EventKind::TaskQueued { .. }
+        | EventKind::PreflightStarted
+        | EventKind::PreflightPassed { .. }
+        | EventKind::PreflightFailed { .. }
+        | EventKind::AttemptStarted { .. }
+        | EventKind::PhaseEntered { .. }
+        | EventKind::AgentOutput { .. }
+        | EventKind::VerifyPassed { .. }
+        | EventKind::VerifyFailed { .. }
+        | EventKind::PublishStarted { .. }
+        | EventKind::TaskDone { .. }
+        | EventKind::TaskCancelled { .. }
+        | EventKind::Resumed
+        | EventKind::RecoveryDecision { .. }
+        | EventKind::GateAcknowledged { .. } => Err(invalid("Publishing", event)),
+    }
+}
+
+/// Transitions from [`TaskState::PublishedVerified`]: published and
+/// confirmed present on the remote at `commit`.
+fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState> {
+    match event {
+        EventKind::TaskDone { .. } => Ok(TaskState::Done),
+        EventKind::TaskQueued { .. }
+        | EventKind::PreflightStarted
+        | EventKind::PreflightPassed { .. }
+        | EventKind::PreflightFailed { .. }
+        | EventKind::AttemptStarted { .. }
+        | EventKind::PhaseEntered { .. }
+        | EventKind::AgentOutput { .. }
+        | EventKind::VerifyPassed { .. }
+        | EventKind::VerifyFailed { .. }
+        | EventKind::PublishStarted { .. }
+        | EventKind::PublishVerified { .. }
+        | EventKind::TaskFailed { .. }
+        | EventKind::TaskCancelled { .. }
+        | EventKind::Paused { .. }
+        | EventKind::Resumed
+        | EventKind::Interrupted { .. }
+        | EventKind::RecoveryDecision { .. }
+        | EventKind::GateAcknowledged { .. } => {
+            Err(invalid(&format!("PublishedVerified({commit})"), event))
+        }
+    }
+}
+
+/// Transitions from [`TaskState::Paused`]: suspended for `reason`,
+/// remembering `resume_to`.
+///
+/// `Resumed` and `GateAcknowledged` are mutually exclusive by design: a
+/// `HumanGate` pause leaves through `GateAcknowledged` alone (matching
+/// `docs/CONTRACT.md`'s `ack`, and `VISION.md` §6's "a gate ... reaches
+/// `acknowledged` through `ktask-rs ack` rather than through publication");
+/// every other pause reason leaves through `Resumed` alone. `RecoveryDecision`
+/// only applies to an `Interrupted` pause: `Resume` and `AlreadyApplied` both
+/// hand custody back to `resume_to` (nothing left to redo in either case, per
+/// `VISION.md` §6), while `MarkInterrupted` leaves the task parked exactly
+/// where it was, now with that decision on the record.
+fn from_paused(
+    reason: &PauseReason,
+    resume_to: &TaskState,
+    event: &EventKind,
+) -> Result<TaskState> {
+    match event {
+        EventKind::Resumed => match reason {
+            PauseReason::HumanGate => Err(invalid("Paused", event)),
+            PauseReason::Limit { .. }
+            | PauseReason::Input
+            | PauseReason::Interrupted
+            | PauseReason::Blocked => Ok(resume_to.clone()),
+        },
+        EventKind::GateAcknowledged { by, at } => match reason {
+            PauseReason::HumanGate => Ok(TaskState::Acknowledged {
+                by: by.clone(),
+                at: *at,
+            }),
+            PauseReason::Limit { .. }
+            | PauseReason::Input
+            | PauseReason::Interrupted
+            | PauseReason::Blocked => Err(invalid("Paused", event)),
+        },
+        EventKind::RecoveryDecision { decision, .. } => match reason {
+            PauseReason::Interrupted => match decision {
+                Recovery::Resume | Recovery::AlreadyApplied => Ok(resume_to.clone()),
+                Recovery::MarkInterrupted => Ok(TaskState::Paused {
+                    reason: reason.clone(),
+                    resume_to: Box::new(resume_to.clone()),
+                }),
+            },
+            PauseReason::Limit { .. }
+            | PauseReason::Input
+            | PauseReason::HumanGate
+            | PauseReason::Blocked => Err(invalid("Paused", event)),
+        },
+        EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
+        EventKind::TaskQueued { .. }
+        | EventKind::PreflightStarted
+        | EventKind::PreflightPassed { .. }
+        | EventKind::PreflightFailed { .. }
+        | EventKind::AttemptStarted { .. }
+        | EventKind::PhaseEntered { .. }
+        | EventKind::AgentOutput { .. }
+        | EventKind::VerifyPassed { .. }
+        | EventKind::VerifyFailed { .. }
+        | EventKind::PublishStarted { .. }
+        | EventKind::PublishVerified { .. }
+        | EventKind::TaskDone { .. }
+        | EventKind::TaskFailed { .. }
+        | EventKind::Paused { .. }
+        | EventKind::Interrupted { .. } => Err(invalid("Paused", event)),
+    }
+}
+
 /// A step within a protocol's execution of an attempt.
 ///
 /// Carries every phase any protocol needs — including `spec-first`'s
@@ -178,6 +569,7 @@ pub enum PauseReason {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::classify::Stream;
 
     fn all_phases() -> Vec<Phase> {
         vec![
@@ -494,5 +886,1023 @@ mod tests {
             "Failed"
         );
         assert_eq!(TaskState::Cancelled.name(), "Cancelled");
+    }
+
+    fn attempt_started(attempt: AttemptId) -> EventKind {
+        EventKind::AttemptStarted {
+            attempt,
+            protocol: "direct".to_string(),
+            pid: 4242,
+            base_sha: "base".to_string(),
+        }
+    }
+
+    #[test]
+    fn the_direct_protocol_happy_path_reaches_done_event_by_event() {
+        let attempt = AttemptId::new(1);
+
+        let state = TaskState::Queued;
+        let state = apply(
+            &state,
+            &EventKind::TaskQueued {
+                title: "Add widget".to_string(),
+            },
+        )
+        .expect("TaskQueued");
+        assert_eq!(state, TaskState::Queued);
+
+        let state = apply(&state, &EventKind::PreflightStarted).expect("PreflightStarted");
+        assert_eq!(state, TaskState::Preflight);
+
+        let state = apply(
+            &state,
+            &EventKind::PreflightPassed {
+                base_sha: "abc123".to_string(),
+            },
+        )
+        .expect("PreflightPassed");
+        assert_eq!(state, TaskState::Preflight);
+
+        let state = apply(&state, &attempt_started(attempt)).expect("AttemptStarted");
+        assert_eq!(
+            state,
+            TaskState::Running {
+                attempt,
+                phase: Phase::Implement,
+            }
+        );
+
+        let state = apply(
+            &state,
+            &EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Verify,
+            },
+        )
+        .expect("PhaseEntered(Verify)");
+        assert_eq!(state, TaskState::Verifying { attempt });
+
+        let state = apply(&state, &EventKind::VerifyPassed { attempt }).expect("VerifyPassed");
+        assert_eq!(state, TaskState::Verifying { attempt });
+
+        let state = apply(
+            &state,
+            &EventKind::PublishStarted {
+                attempt,
+                candidate_sha: "def456".to_string(),
+            },
+        )
+        .expect("PublishStarted");
+        assert_eq!(state, TaskState::Publishing { attempt });
+
+        let state = apply(
+            &state,
+            &EventKind::PublishVerified {
+                commit: "def456".to_string(),
+                remote_sha: "def456".to_string(),
+            },
+        )
+        .expect("PublishVerified");
+        assert_eq!(
+            state,
+            TaskState::PublishedVerified {
+                commit: "def456".to_string(),
+            }
+        );
+
+        let state = apply(
+            &state,
+            &EventKind::TaskDone {
+                commit: "def456".to_string(),
+            },
+        )
+        .expect("TaskDone");
+        assert_eq!(state, TaskState::Done);
+    }
+
+    #[test]
+    fn a_verification_failure_loops_through_remediating_back_to_verifying() {
+        let attempt = AttemptId::new(1);
+        let state = TaskState::Verifying { attempt };
+
+        let state = apply(
+            &state,
+            &EventKind::VerifyFailed {
+                attempt,
+                class: FailureClass::VerificationFailure,
+                detail: "clippy failed".to_string(),
+            },
+        )
+        .expect("VerifyFailed");
+        assert_eq!(
+            state,
+            TaskState::Remediating {
+                attempt,
+                phase: Phase::Implement,
+            }
+        );
+
+        let state = apply(
+            &state,
+            &EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Refactor,
+            },
+        )
+        .expect("PhaseEntered(Refactor)");
+        assert_eq!(
+            state,
+            TaskState::Remediating {
+                attempt,
+                phase: Phase::Refactor,
+            }
+        );
+
+        let state = apply(
+            &state,
+            &EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Verify,
+            },
+        )
+        .expect("PhaseEntered(Verify)");
+        assert_eq!(state, TaskState::Verifying { attempt });
+    }
+
+    #[test]
+    fn from_queued_accepts_task_queued_and_stays_queued() {
+        let state = apply(
+            &TaskState::Queued,
+            &EventKind::TaskQueued {
+                title: "t".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Queued);
+    }
+
+    #[test]
+    fn from_queued_accepts_preflight_started() {
+        let state = apply(&TaskState::Queued, &EventKind::PreflightStarted).expect("legal");
+        assert_eq!(state, TaskState::Preflight);
+    }
+
+    #[test]
+    fn from_queued_accepts_pause_and_remembers_queued_as_resume_to() {
+        let state = apply(
+            &TaskState::Queued,
+            &EventKind::Paused {
+                reason: PauseReason::Blocked,
+            },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::Blocked,
+                resume_to: Box::new(TaskState::Queued),
+            }
+        );
+    }
+
+    #[test]
+    fn from_queued_accepts_task_cancelled() {
+        let state = apply(
+            &TaskState::Queued,
+            &EventKind::TaskCancelled {
+                reason: "superseded".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Cancelled);
+    }
+
+    #[test]
+    fn from_queued_rejects_verify_passed() {
+        let attempt = AttemptId::new(1);
+        let err =
+            apply(&TaskState::Queued, &EventKind::VerifyPassed { attempt }).expect_err("illegal");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "Queued");
+                assert_eq!(event, "VerifyPassed");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_preflight_accepts_preflight_passed_and_stays_preflight() {
+        let state = apply(
+            &TaskState::Preflight,
+            &EventKind::PreflightPassed {
+                base_sha: "abc".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Preflight);
+    }
+
+    #[test]
+    fn from_preflight_accepts_preflight_failed_and_fails_terminally() {
+        let state = apply(
+            &TaskState::Preflight,
+            &EventKind::PreflightFailed {
+                class: FailureClass::EnvironmentFailure,
+                detail: "disk full".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Failed {
+                class: FailureClass::EnvironmentFailure,
+                detail: "disk full".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn from_preflight_accepts_attempt_started_and_seeds_the_implement_phase() {
+        let attempt = AttemptId::new(1);
+        let state = apply(&TaskState::Preflight, &attempt_started(attempt)).expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Running {
+                attempt,
+                phase: Phase::Implement,
+            }
+        );
+    }
+
+    #[test]
+    fn from_preflight_accepts_interrupted_and_pauses_remembering_preflight() {
+        let state = apply(
+            &TaskState::Preflight,
+            &EventKind::Interrupted { phase: Phase::Goal },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::Interrupted,
+                resume_to: Box::new(TaskState::Preflight),
+            }
+        );
+    }
+
+    #[test]
+    fn from_preflight_accepts_task_cancelled() {
+        let state = apply(
+            &TaskState::Preflight,
+            &EventKind::TaskCancelled {
+                reason: "superseded".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Cancelled);
+    }
+
+    #[test]
+    fn from_preflight_rejects_phase_entered() {
+        let attempt = AttemptId::new(1);
+        let err = apply(
+            &TaskState::Preflight,
+            &EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Implement,
+            },
+        )
+        .expect_err("illegal");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "Preflight");
+                assert_eq!(event, "PhaseEntered");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_running_accepts_phase_entered_and_moves_phase() {
+        let attempt = AttemptId::new(1);
+        let running = TaskState::Running {
+            attempt,
+            phase: Phase::Red,
+        };
+        let state = apply(
+            &running,
+            &EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Green,
+            },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Running {
+                attempt,
+                phase: Phase::Green,
+            }
+        );
+    }
+
+    #[test]
+    fn from_running_entering_verify_phase_reaches_verifying() {
+        let attempt = AttemptId::new(1);
+        let running = TaskState::Running {
+            attempt,
+            phase: Phase::Refactor,
+        };
+        let state = apply(
+            &running,
+            &EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Verify,
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Verifying { attempt });
+    }
+
+    #[test]
+    fn from_running_accepts_agent_output_without_changing_phase() {
+        let attempt = AttemptId::new(1);
+        let running = TaskState::Running {
+            attempt,
+            phase: Phase::Green,
+        };
+        let state = apply(
+            &running,
+            &EventKind::AgentOutput {
+                attempt,
+                stream: Stream::Stdout,
+                text: "running tests".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, running);
+    }
+
+    #[test]
+    fn from_running_accepts_task_failed() {
+        let attempt = AttemptId::new(1);
+        let running = TaskState::Running {
+            attempt,
+            phase: Phase::Implement,
+        };
+        let state = apply(
+            &running,
+            &EventKind::TaskFailed {
+                class: FailureClass::AgentFailure,
+                detail: "agent crashed".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Failed {
+                class: FailureClass::AgentFailure,
+                detail: "agent crashed".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn from_running_accepts_interrupted_and_pauses_at_the_events_phase() {
+        let attempt = AttemptId::new(1);
+        // The stored phase is the placeholder `Implement` seeded by
+        // `AttemptStarted`; the interruption is authoritative about the real
+        // phase in flight, which `resume_to` must reflect.
+        let running = TaskState::Running {
+            attempt,
+            phase: Phase::Implement,
+        };
+        let state = apply(&running, &EventKind::Interrupted { phase: Phase::Red }).expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::Interrupted,
+                resume_to: Box::new(TaskState::Running {
+                    attempt,
+                    phase: Phase::Red,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn from_running_accepts_task_cancelled() {
+        let attempt = AttemptId::new(1);
+        let running = TaskState::Running {
+            attempt,
+            phase: Phase::Implement,
+        };
+        let state = apply(
+            &running,
+            &EventKind::TaskCancelled {
+                reason: "superseded".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Cancelled);
+    }
+
+    #[test]
+    fn from_running_rejects_attempt_started() {
+        let attempt = AttemptId::new(1);
+        let running = TaskState::Running {
+            attempt,
+            phase: Phase::Implement,
+        };
+        let err = apply(&running, &attempt_started(attempt)).expect_err("illegal");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "Running");
+                assert_eq!(event, "AttemptStarted");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_remediating_accepts_phase_entered_and_moves_phase() {
+        let attempt = AttemptId::new(2);
+        let remediating = TaskState::Remediating {
+            attempt,
+            phase: Phase::Implement,
+        };
+        let state = apply(
+            &remediating,
+            &EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Harden,
+            },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Remediating {
+                attempt,
+                phase: Phase::Harden,
+            }
+        );
+    }
+
+    #[test]
+    fn from_remediating_entering_verify_phase_reaches_verifying() {
+        let attempt = AttemptId::new(2);
+        let remediating = TaskState::Remediating {
+            attempt,
+            phase: Phase::Harden,
+        };
+        let state = apply(
+            &remediating,
+            &EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Verify,
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Verifying { attempt });
+    }
+
+    #[test]
+    fn from_remediating_accepts_agent_output_without_changing_phase() {
+        let attempt = AttemptId::new(2);
+        let remediating = TaskState::Remediating {
+            attempt,
+            phase: Phase::Harden,
+        };
+        let state = apply(
+            &remediating,
+            &EventKind::AgentOutput {
+                attempt,
+                stream: Stream::Stderr,
+                text: "warning".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, remediating);
+    }
+
+    #[test]
+    fn from_remediating_accepts_task_failed_when_the_bound_is_exhausted() {
+        let attempt = AttemptId::new(2);
+        let remediating = TaskState::Remediating {
+            attempt,
+            phase: Phase::Implement,
+        };
+        let state = apply(
+            &remediating,
+            &EventKind::TaskFailed {
+                class: FailureClass::VerificationFailure,
+                detail: "remediation attempts exhausted".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Failed {
+                class: FailureClass::VerificationFailure,
+                detail: "remediation attempts exhausted".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn from_remediating_accepts_interrupted_and_pauses_at_the_events_phase() {
+        let attempt = AttemptId::new(2);
+        let remediating = TaskState::Remediating {
+            attempt,
+            phase: Phase::Implement,
+        };
+        let state = apply(
+            &remediating,
+            &EventKind::Interrupted {
+                phase: Phase::Harden,
+            },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::Interrupted,
+                resume_to: Box::new(TaskState::Remediating {
+                    attempt,
+                    phase: Phase::Harden,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn from_remediating_accepts_task_cancelled() {
+        let attempt = AttemptId::new(2);
+        let remediating = TaskState::Remediating {
+            attempt,
+            phase: Phase::Implement,
+        };
+        let state = apply(
+            &remediating,
+            &EventKind::TaskCancelled {
+                reason: "superseded".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Cancelled);
+    }
+
+    #[test]
+    fn from_remediating_rejects_publish_started() {
+        let attempt = AttemptId::new(2);
+        let remediating = TaskState::Remediating {
+            attempt,
+            phase: Phase::Implement,
+        };
+        let err = apply(
+            &remediating,
+            &EventKind::PublishStarted {
+                attempt,
+                candidate_sha: "sha".to_string(),
+            },
+        )
+        .expect_err("illegal");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "Remediating");
+                assert_eq!(event, "PublishStarted");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_verifying_accepts_verify_passed_and_stays_verifying() {
+        let attempt = AttemptId::new(1);
+        let state = apply(
+            &TaskState::Verifying { attempt },
+            &EventKind::VerifyPassed { attempt },
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Verifying { attempt });
+    }
+
+    #[test]
+    fn from_verifying_accepts_verify_failed_and_enters_remediation() {
+        let attempt = AttemptId::new(1);
+        let state = apply(
+            &TaskState::Verifying { attempt },
+            &EventKind::VerifyFailed {
+                attempt,
+                class: FailureClass::VerificationFailure,
+                detail: "tests failed".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Remediating {
+                attempt,
+                phase: Phase::Implement,
+            }
+        );
+    }
+
+    #[test]
+    fn from_verifying_accepts_publish_started() {
+        let attempt = AttemptId::new(1);
+        let state = apply(
+            &TaskState::Verifying { attempt },
+            &EventKind::PublishStarted {
+                attempt,
+                candidate_sha: "sha".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Publishing { attempt });
+    }
+
+    #[test]
+    fn from_verifying_accepts_interrupted_ignoring_its_phase_field() {
+        let attempt = AttemptId::new(1);
+        let state = apply(
+            &TaskState::Verifying { attempt },
+            &EventKind::Interrupted {
+                phase: Phase::Verify,
+            },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::Interrupted,
+                resume_to: Box::new(TaskState::Verifying { attempt }),
+            }
+        );
+    }
+
+    #[test]
+    fn from_verifying_accepts_task_cancelled() {
+        let attempt = AttemptId::new(1);
+        let state = apply(
+            &TaskState::Verifying { attempt },
+            &EventKind::TaskCancelled {
+                reason: "superseded".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Cancelled);
+    }
+
+    #[test]
+    fn from_verifying_rejects_task_done() {
+        let attempt = AttemptId::new(1);
+        let err = apply(
+            &TaskState::Verifying { attempt },
+            &EventKind::TaskDone {
+                commit: "sha".to_string(),
+            },
+        )
+        .expect_err("illegal");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "Verifying");
+                assert_eq!(event, "TaskDone");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_publishing_accepts_publish_verified() {
+        let attempt = AttemptId::new(1);
+        let state = apply(
+            &TaskState::Publishing { attempt },
+            &EventKind::PublishVerified {
+                commit: "def456".to_string(),
+                remote_sha: "def456".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::PublishedVerified {
+                commit: "def456".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn from_publishing_accepts_task_failed_on_git_conflict() {
+        let attempt = AttemptId::new(1);
+        let state = apply(
+            &TaskState::Publishing { attempt },
+            &EventKind::TaskFailed {
+                class: FailureClass::GitConflict,
+                detail: "non-fast-forward".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Failed {
+                class: FailureClass::GitConflict,
+                detail: "non-fast-forward".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn from_publishing_accepts_interrupted() {
+        let attempt = AttemptId::new(1);
+        let state = apply(
+            &TaskState::Publishing { attempt },
+            &EventKind::Interrupted {
+                phase: Phase::Publish,
+            },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::Interrupted,
+                resume_to: Box::new(TaskState::Publishing { attempt }),
+            }
+        );
+    }
+
+    #[test]
+    fn from_publishing_rejects_task_cancelled_mid_flight() {
+        let attempt = AttemptId::new(1);
+        let err = apply(
+            &TaskState::Publishing { attempt },
+            &EventKind::TaskCancelled {
+                reason: "changed my mind".to_string(),
+            },
+        )
+        .expect_err("illegal: publication may already be underway");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "Publishing");
+                assert_eq!(event, "TaskCancelled");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_published_verified_accepts_task_done() {
+        let state = apply(
+            &TaskState::PublishedVerified {
+                commit: "def456".to_string(),
+            },
+            &EventKind::TaskDone {
+                commit: "def456".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Done);
+    }
+
+    #[test]
+    fn from_published_verified_rejects_task_cancelled() {
+        let err = apply(
+            &TaskState::PublishedVerified {
+                commit: "def456".to_string(),
+            },
+            &EventKind::TaskCancelled {
+                reason: "too late".to_string(),
+            },
+        )
+        .expect_err("illegal");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "PublishedVerified(def456)");
+                assert_eq!(event, "TaskCancelled");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_paused_accepts_resumed_and_returns_to_resume_to() {
+        let paused = TaskState::Paused {
+            reason: PauseReason::Blocked,
+            resume_to: Box::new(TaskState::Verifying {
+                attempt: AttemptId::new(1),
+            }),
+        };
+        let state = apply(&paused, &EventKind::Resumed).expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Verifying {
+                attempt: AttemptId::new(1)
+            }
+        );
+    }
+
+    #[test]
+    fn from_paused_rejects_resumed_when_the_reason_is_human_gate() {
+        let paused = TaskState::Paused {
+            reason: PauseReason::HumanGate,
+            resume_to: Box::new(TaskState::Queued),
+        };
+        let err = apply(&paused, &EventKind::Resumed).expect_err("illegal: must ack instead");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "Paused");
+                assert_eq!(event, "Resumed");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_paused_accepts_gate_acknowledged_when_the_reason_is_human_gate() {
+        let paused = TaskState::Paused {
+            reason: PauseReason::HumanGate,
+            resume_to: Box::new(TaskState::Queued),
+        };
+        let at = OffsetDateTime::UNIX_EPOCH;
+        let state = apply(
+            &paused,
+            &EventKind::GateAcknowledged {
+                by: "yalovoy".to_string(),
+                at,
+            },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Acknowledged {
+                by: "yalovoy".to_string(),
+                at,
+            }
+        );
+    }
+
+    #[test]
+    fn from_paused_rejects_gate_acknowledged_when_the_reason_is_not_human_gate() {
+        let paused = TaskState::Paused {
+            reason: PauseReason::Blocked,
+            resume_to: Box::new(TaskState::Queued),
+        };
+        let err = apply(
+            &paused,
+            &EventKind::GateAcknowledged {
+                by: "yalovoy".to_string(),
+                at: OffsetDateTime::UNIX_EPOCH,
+            },
+        )
+        .expect_err("illegal: nothing to acknowledge here");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "Paused");
+                assert_eq!(event, "GateAcknowledged");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_paused_recovery_decision_resume_returns_to_resume_to() {
+        let paused = TaskState::Paused {
+            reason: PauseReason::Interrupted,
+            resume_to: Box::new(TaskState::Preflight),
+        };
+        let state = apply(
+            &paused,
+            &EventKind::RecoveryDecision {
+                decision: Recovery::Resume,
+                detail: "journal complete through phase".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Preflight);
+    }
+
+    #[test]
+    fn from_paused_recovery_decision_already_applied_returns_to_resume_to() {
+        let paused = TaskState::Paused {
+            reason: PauseReason::Interrupted,
+            resume_to: Box::new(TaskState::Publishing {
+                attempt: AttemptId::new(1),
+            }),
+        };
+        let state = apply(
+            &paused,
+            &EventKind::RecoveryDecision {
+                decision: Recovery::AlreadyApplied,
+                detail: "push already landed on the remote".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Publishing {
+                attempt: AttemptId::new(1)
+            }
+        );
+    }
+
+    #[test]
+    fn from_paused_recovery_decision_mark_interrupted_stays_paused() {
+        let paused = TaskState::Paused {
+            reason: PauseReason::Interrupted,
+            resume_to: Box::new(TaskState::Preflight),
+        };
+        let state = apply(
+            &paused,
+            &EventKind::RecoveryDecision {
+                decision: Recovery::MarkInterrupted,
+                detail: "worktree cannot be trusted".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, paused);
+    }
+
+    #[test]
+    fn from_paused_rejects_recovery_decision_when_the_reason_is_not_interrupted() {
+        let paused = TaskState::Paused {
+            reason: PauseReason::Limit { until: None },
+            resume_to: Box::new(TaskState::Preflight),
+        };
+        let err = apply(
+            &paused,
+            &EventKind::RecoveryDecision {
+                decision: Recovery::Resume,
+                detail: "n/a".to_string(),
+            },
+        )
+        .expect_err("illegal: recovery only follows an interruption");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "Paused");
+                assert_eq!(event, "RecoveryDecision");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_paused_accepts_task_cancelled() {
+        let paused = TaskState::Paused {
+            reason: PauseReason::Input,
+            resume_to: Box::new(TaskState::Queued),
+        };
+        let state = apply(
+            &paused,
+            &EventKind::TaskCancelled {
+                reason: "no longer needed".to_string(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(state, TaskState::Cancelled);
+    }
+
+    #[test]
+    fn from_paused_rejects_preflight_started() {
+        let paused = TaskState::Paused {
+            reason: PauseReason::Input,
+            resume_to: Box::new(TaskState::Queued),
+        };
+        let err = apply(&paused, &EventKind::PreflightStarted).expect_err("illegal");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "Paused");
+                assert_eq!(event, "PreflightStarted");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_rejects_every_event_against_every_terminal_state() {
+        let terminals = vec![
+            TaskState::Done,
+            TaskState::Acknowledged {
+                by: "alice".to_string(),
+                at: OffsetDateTime::UNIX_EPOCH,
+            },
+            TaskState::Failed {
+                class: FailureClass::AgentFailure,
+                detail: "crashed".to_string(),
+            },
+            TaskState::Cancelled,
+        ];
+
+        for state in terminals {
+            let err =
+                apply(&state, &EventKind::Resumed).expect_err("terminal states accept nothing");
+            match err {
+                Error::InvalidTransition { from, event } => {
+                    assert_eq!(from, state.name());
+                    assert_eq!(event, "Resumed");
+                }
+                other => panic!("expected InvalidTransition, got {other:?}"),
+            }
+        }
     }
 }
