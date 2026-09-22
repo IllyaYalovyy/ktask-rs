@@ -10,7 +10,8 @@
 //! understands is a typed [`Error::Corrupt`], not a best-effort read of a
 //! layout it does not recognize.
 
-use crate::{Error, Event, EventKind, EventSeq, Project, Result, TaskId};
+use crate::task::status_from_body;
+use crate::{Error, Event, EventKind, EventSeq, Project, Result, Task, TaskId};
 use rusqlite::{Connection, OptionalExtension, Params, params};
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
@@ -158,6 +159,104 @@ impl Journal {
             detail: format!("journal produced a negative event sequence number: {seq}"),
         })?;
         Ok(EventSeq::new(seq))
+    }
+
+    /// Imports `tasks` into the queue, in document order.
+    ///
+    /// This is a one-time import, not a merge: a plan file is an input
+    /// format only, and once its blocks are in the database the file has no
+    /// further hold over the run. A task's status is not written here — it
+    /// is derived from the journal, so status has exactly one home;
+    /// [`Journal::tasks`] recovers the same value back from the stored body
+    /// instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Policy`] naming the existing task count if the queue
+    /// is not empty: there is no merge and no in-place edit. Returns
+    /// [`Error::Time`] if the current instant cannot be formatted, and
+    /// [`Error::Database`] if the insert fails.
+    pub fn put_tasks(&mut self, tasks: &[Task]) -> Result<()> {
+        let existing: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))?;
+        if existing > 0 {
+            return Err(Error::Policy {
+                detail: format!(
+                    "queue already has {existing} task(s); import does not merge or edit in place"
+                ),
+                paths: Vec::new(),
+            });
+        }
+
+        let added_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
+
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO tasks (id, title, outcome, done_when, verify, refs, protocol, body, added_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            )?;
+            for task in tasks {
+                stmt.execute(params![
+                    i64::from(task.id.get()),
+                    task.title(),
+                    task.outcome,
+                    task.done_when,
+                    task.verify,
+                    task.refs,
+                    Option::<String>::None,
+                    task.body,
+                    added_at,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Returns every task in the queue, ordered by id.
+    ///
+    /// A task's status is not a stored column: it is recomputed from the
+    /// stored `body` with the same rule [`crate::task::parse_plan`] applies
+    /// while building a task, so a task read back here is identical to the
+    /// one that was written by [`Journal::put_tasks`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Database`] if the query fails, and
+    /// [`Error::Corrupt`] if a stored `id` does not fit a [`TaskId`].
+    pub fn tasks(&self) -> Result<Vec<Task>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, outcome, done_when, verify, refs, body FROM tasks ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let outcome: String = row.get(1)?;
+            let done_when: String = row.get(2)?;
+            let verify: String = row.get(3)?;
+            let refs: String = row.get(4)?;
+            let body: String = row.get(5)?;
+            Ok((id, outcome, done_when, verify, refs, body))
+        })?;
+
+        let mut tasks = Vec::new();
+        for row in rows {
+            let (id, outcome, done_when, verify, refs, body) = row?;
+            let id = u32::try_from(id).map_err(|_| Error::Corrupt {
+                detail: format!("tasks table has an invalid id: {id}"),
+            })?;
+            tasks.push(Task {
+                id: TaskId::new(id),
+                status: status_from_body(&body),
+                body,
+                outcome,
+                done_when,
+                verify,
+                refs,
+            });
+        }
+        Ok(tasks)
     }
 
     /// Returns every event in the journal, ordered by `seq` ascending.
@@ -864,5 +963,104 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
             .expect("count events");
         assert_eq!(count, 0, "a failed insert must not leave a partial row");
+    }
+
+    #[test]
+    fn tasks_on_an_empty_queue_returns_an_empty_vec() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let journal = Journal::open(&path).expect("open");
+
+        assert_eq!(journal.tasks().expect("tasks"), Vec::new());
+    }
+
+    #[test]
+    fn put_tasks_then_tasks_round_trips_a_parsed_plan_unchanged_and_in_order() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        let plan = "\
+## First task
+
+**Outcome:** the first thing happens.
+
+**Done-when:** it happened.
+
+**Verify:** `true`
+
+**Refs:** none
+
+## Second task
+
+**Gate:** a human must approve before this proceeds.
+
+**Outcome:** the second thing happens.
+
+**Done-when:** it happened too.
+
+**Verify:** `false`
+
+**Refs:** VISION.md
+";
+        let parsed = crate::parse_plan(plan).expect("parse_plan");
+        assert_eq!(parsed.len(), 2, "sanity: the plan has two tasks");
+
+        journal.put_tasks(&parsed).expect("put_tasks");
+
+        let read_back = journal.tasks().expect("tasks");
+        assert_eq!(read_back, parsed);
+    }
+
+    #[test]
+    fn put_tasks_into_a_non_empty_queue_is_refused_naming_the_existing_count() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        let first_plan = crate::parse_plan(
+            "\
+## Already queued
+
+**Outcome:** it happens.
+
+**Done-when:** it happened.
+
+**Verify:** `true`
+
+**Refs:** none
+",
+        )
+        .expect("parse_plan");
+        journal.put_tasks(&first_plan).expect("first put_tasks");
+
+        let second_plan = crate::parse_plan(
+            "\
+## A different plan
+
+**Outcome:** something else.
+
+**Done-when:** something else happened.
+
+**Verify:** `true`
+
+**Refs:** none
+",
+        )
+        .expect("parse_plan");
+        let err = journal
+            .put_tasks(&second_plan)
+            .expect_err("importing into a non-empty queue must be refused");
+
+        assert!(
+            matches!(&err, Error::Policy { detail, .. } if detail.contains('1')),
+            "expected a Policy error naming the existing count of 1, got {err:?}"
+        );
+
+        let unchanged = journal.tasks().expect("tasks");
+        assert_eq!(
+            unchanged, first_plan,
+            "a refused import must not touch the existing queue"
+        );
     }
 }

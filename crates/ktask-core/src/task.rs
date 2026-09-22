@@ -167,14 +167,8 @@ fn fence_delimiter(line: &str) -> Option<(char, usize)> {
 /// Builds a `Task` from a heading block: `lines[0]` is the title (already
 /// stripped of `## `), and the rest is the task's body content, in order.
 fn build_task(id: u32, lines: &[&str]) -> Task {
-    let status = if lines
-        .iter()
-        .any(|line| line.trim_start().starts_with("**Gate:**"))
-    {
-        TaskStatus::HumanGate
-    } else {
-        TaskStatus::Pending
-    };
+    let body = lines.join("\n");
+    let status = status_from_body(&body);
     let sections = extract_sections(lines.get(1..).unwrap_or_default());
     let section = |label: &str| {
         sections
@@ -185,11 +179,30 @@ fn build_task(id: u32, lines: &[&str]) -> Task {
     Task {
         id: TaskId::new(id),
         status,
-        body: lines.join("\n"),
+        body,
         outcome: section("Outcome"),
         done_when: section("Done-when"),
         verify: section("Verify"),
         refs: section("Refs"),
+    }
+}
+
+/// Derives a task's status from its body alone: a `**Gate:**` section
+/// anywhere in the body marks it a human gate, otherwise it is pending.
+///
+/// This is the same rule [`build_task`] applies while parsing a plan,
+/// exposed so that a task read back from storage — which does not persist
+/// status; see `docs/DESIGN.md`'s database schema — can be reconstructed
+/// identically from its stored `body`.
+#[must_use]
+pub(crate) fn status_from_body(body: &str) -> TaskStatus {
+    if body
+        .lines()
+        .any(|line| line.trim_start().starts_with("**Gate:**"))
+    {
+        TaskStatus::HumanGate
+    } else {
+        TaskStatus::Pending
     }
 }
 
