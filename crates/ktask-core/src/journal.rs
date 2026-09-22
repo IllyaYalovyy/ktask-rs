@@ -30,6 +30,11 @@ const SCHEMA_VERSION: i64 = 1;
 /// database only fills in whatever tables or indexes are still missing.
 /// Journal mode is set to WAL and `synchronous` to `FULL`: losing the last
 /// committed event is exactly the failure this design exists to prevent.
+///
+/// `events` is append-only in fact, not only by convention (VISION.md
+/// section 3, invariant 3): triggers reject any `UPDATE` or `DELETE`
+/// against it, turning a mutation attempt into a SQLite error instead of a
+/// silently rewritten history.
 const SCHEMA_SQL: &str = "
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = FULL;
@@ -41,6 +46,16 @@ CREATE TABLE IF NOT EXISTS events (
   payload  TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, seq);
+CREATE TRIGGER IF NOT EXISTS trg_events_no_update
+BEFORE UPDATE ON events
+BEGIN
+  SELECT RAISE(ABORT, 'events is append-only: UPDATE is not permitted');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_events_no_delete
+BEFORE DELETE ON events
+BEGIN
+  SELECT RAISE(ABORT, 'events is append-only: DELETE is not permitted');
+END;
 CREATE TABLE IF NOT EXISTS tasks (
   id         INTEGER PRIMARY KEY,
   title      TEXT    NOT NULL,
@@ -213,6 +228,28 @@ mod tests {
         names.sort();
 
         for expected in ["events", "idx_events_task", "meta", "task_state", "tasks"] {
+            assert!(names.iter().any(|n| n == expected), "missing {expected}");
+        }
+    }
+
+    #[test]
+    fn open_creates_the_append_only_triggers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+
+        let journal = Journal::open(&path).expect("open");
+
+        let mut names: Vec<String> = journal
+            .conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name")
+            .expect("prepare")
+            .query_map([], |row| row.get(0))
+            .expect("query")
+            .collect::<rusqlite::Result<_>>()
+            .expect("collect");
+        names.sort();
+
+        for expected in ["trg_events_no_delete", "trg_events_no_update"] {
             assert!(names.iter().any(|n| n == expected), "missing {expected}");
         }
     }
@@ -467,6 +504,72 @@ mod tests {
             .expect("read back the inserted row");
 
         assert_eq!(task_id, None);
+    }
+
+    #[test]
+    fn updating_an_event_row_is_rejected_and_leaves_it_unchanged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        let seq = journal.append(None, &EventKind::Resumed).expect("append");
+
+        let err = journal
+            .conn
+            .execute(
+                "UPDATE events SET kind = 'TaskQueued' WHERE seq = ?1",
+                [i64::try_from(seq.get()).expect("seq fits in i64")],
+            )
+            .expect_err("UPDATE against events must be rejected");
+        assert!(
+            err.to_string().contains("append-only"),
+            "expected an append-only error, got {err}"
+        );
+
+        let kind: String = journal
+            .conn
+            .query_row(
+                "SELECT kind FROM events WHERE seq = ?1",
+                [i64::try_from(seq.get()).expect("seq fits in i64")],
+                |row| row.get(0),
+            )
+            .expect("read back the row");
+        assert_eq!(
+            kind,
+            EventKind::Resumed.discriminant(),
+            "row must be unchanged"
+        );
+    }
+
+    #[test]
+    fn deleting_an_event_row_is_rejected_and_leaves_it_present() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        let seq = journal.append(None, &EventKind::Resumed).expect("append");
+
+        let err = journal
+            .conn
+            .execute(
+                "DELETE FROM events WHERE seq = ?1",
+                [i64::try_from(seq.get()).expect("seq fits in i64")],
+            )
+            .expect_err("DELETE against events must be rejected");
+        assert!(
+            err.to_string().contains("append-only"),
+            "expected an append-only error, got {err}"
+        );
+
+        let count: i64 = journal
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE seq = ?1",
+                [i64::try_from(seq.get()).expect("seq fits in i64")],
+                |row| row.get(0),
+            )
+            .expect("count matching rows");
+        assert_eq!(count, 1, "row must still be present");
     }
 
     #[test]
