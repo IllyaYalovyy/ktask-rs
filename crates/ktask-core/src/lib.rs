@@ -31,7 +31,7 @@ pub use gate::{
 };
 pub use git::{
     Worktree, commit_all, create_worktree, current_branch, fetch, git, head_sha, is_clean,
-    list_worktrees, remote_url, remove_worktree, require_clean, status_porcelain,
+    list_worktrees, publish, remote_url, remove_worktree, require_clean, status_porcelain,
 };
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::{Journal, journal_path};

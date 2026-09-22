@@ -224,6 +224,56 @@ pub fn fetch(root: &Path, remote: &str) -> Result<()> {
     git(root, &["fetch", remote]).map(|_| ())
 }
 
+/// Pushes `candidate` to `branch` on `remote` from `worktree`, then fetches
+/// `remote` again and requires the freshly fetched tip of `branch` to equal
+/// `candidate` — proving publication landed rather than merely attempting it
+/// (VISION.md §10).
+///
+/// Pushes `candidate:refs/heads/branch` rather than `HEAD:refs/heads/branch`,
+/// so this works from a worktree whose `HEAD` is detached at `candidate`
+/// (the shape [`create_worktree`] leaves it in).
+///
+/// The post-push check re-fetches rather than trusting the push command's
+/// own exit status: it re-reads `refs/remotes/{remote}/{branch}` only after
+/// a fresh [`fetch`], never a remote-tracking ref left over from an earlier
+/// call, so a tip moved by another actor between the push and this check is
+/// still caught.
+///
+/// # Errors
+///
+/// Returns [`Error::Git`] if the push itself is rejected by `remote` —
+/// `args[0]` is `"push"` and `stderr` carries `git`'s own rejection message,
+/// unedited.
+///
+/// Returns [`Error::Git`] if the push is accepted but the freshly fetched
+/// tip of `branch` does not equal `candidate`: `args[0]` is `"publish"`, and
+/// `stderr` names both `candidate` and the fetched SHA, so this is
+/// distinguishable from a rejected push both by `args` and by message.
+pub fn publish(worktree: &Path, remote: &str, branch: &str, candidate: &str) -> Result<()> {
+    let refspec = format!("{candidate}:refs/heads/{branch}");
+    git(worktree, &["push", remote, &refspec])?;
+
+    fetch(worktree, remote)?;
+    let remote_ref = format!("refs/remotes/{remote}/{branch}");
+    let fetched = git(worktree, &["rev-parse", &remote_ref])?;
+
+    if fetched != candidate {
+        return Err(Error::Git {
+            args: vec![
+                "publish".to_string(),
+                "compare".to_string(),
+                remote.to_string(),
+                branch.to_string(),
+            ],
+            stderr: format!(
+                "published tip mismatch on {remote}/{branch}: candidate {candidate} but freshly fetched remote tip is {fetched}"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 /// One entry from [`list_worktrees`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Worktree {
@@ -870,6 +920,88 @@ mod tests {
             .find(|w| w.path == dest)
             .expect("leftover worktree is still listed");
         assert!(leftover.prunable);
+    }
+
+    #[test]
+    fn publish_succeeds_when_the_fetched_remote_tip_matches_the_candidate() {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+        let candidate = repo.commit("file.txt", "hello\n").expect("commit");
+
+        publish(&repo.path, "origin", "main", &candidate).expect("publish");
+
+        let remote_tip =
+            git(&repo.origin, &["rev-parse", "main"]).expect("rev-parse on bare origin");
+        assert_eq!(remote_tip, candidate);
+    }
+
+    #[test]
+    fn publish_surfaces_a_rejected_push_distinctly_from_a_mismatch() {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+        let diverged = repo
+            .diverge()
+            .expect("diverge: local and origin now disagree");
+
+        let err = publish(&repo.path, "origin", "main", &diverged.local_sha)
+            .expect_err("must fail: non-fast-forward push");
+
+        let Error::Git { args, stderr } = &err else {
+            panic!("expected Error::Git, got {err:?}");
+        };
+        assert_eq!(
+            args[0], "push",
+            "a rejected push must surface git's own push failure verbatim, not our comparison"
+        );
+        assert!(
+            !stderr.contains("mismatch"),
+            "a rejected push must not be worded like a fetched-tip mismatch, got {stderr:?}"
+        );
+    }
+
+    #[test]
+    fn publish_detects_a_remote_tip_moved_between_push_and_a_fresh_fetch() {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+        let stale_sha = repo.seed_sha.clone();
+
+        // A post-receive hook on the bare origin resets `main` back to its
+        // pre-push tip the instant the push is accepted — standing in for
+        // another actor racing in between the push landing and this
+        // function's own re-fetch. `publish` must catch this because it
+        // re-fetches rather than trusting the push's own success.
+        let hook_path = repo.origin.join("hooks").join("post-receive");
+        std::fs::write(
+            &hook_path,
+            format!("#!/bin/sh\ngit update-ref refs/heads/main {stale_sha}\n"),
+        )
+        .expect("write post-receive hook");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&hook_path)
+                .expect("hook metadata")
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&hook_path, perms).expect("chmod hook");
+        }
+
+        let candidate = repo.commit("advance.txt", "advance\n").expect("commit");
+
+        let err =
+            publish(&repo.path, "origin", "main", &candidate).expect_err("must fail: mismatch");
+
+        let Error::Git { args, stderr } = &err else {
+            panic!("expected Error::Git, got {err:?}");
+        };
+        assert_eq!(
+            args[0], "publish",
+            "a fetched-tip mismatch must not be reported as a push failure"
+        );
+        assert!(
+            stderr.contains(&candidate),
+            "stderr must name the candidate sha, got {stderr:?}"
+        );
+        assert!(
+            stderr.contains(&stale_sha),
+            "stderr must name the freshly fetched sha, got {stderr:?}"
+        );
     }
 
     #[test]
