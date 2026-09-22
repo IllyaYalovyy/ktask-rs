@@ -13,6 +13,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::Config;
 use crate::{Error, Result};
 
 /// Which mechanical quality gate a [`Gate`] configures.
@@ -89,6 +90,55 @@ impl Profile {
         }
         Ok(profile)
     }
+}
+
+/// Builds a [`Profile`] from `config`'s gate command fields (VISION.md §8):
+/// each `Some` `*_command` field becomes a [`Gate`] of the corresponding
+/// kind, sharing `config.gate_timeout_secs` as its timeout and running at
+/// the project root with no extra environment. A `None` field is simply
+/// absent from the profile.
+///
+/// `config.flake_command` has no corresponding `GateKind` yet — VISION.md
+/// §14 places flaky-test wiring in v0.2/backlog scope — so it is not turned
+/// into a gate here.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if `config.verify_command` is `None`: VISION.md
+/// §8 makes the Verify gate mandatory, so its absence is a configuration
+/// error caught here rather than a profile that silently never verifies.
+pub fn profile_from(config: &Config) -> Result<Profile> {
+    let commands: [(GateKind, &Option<Vec<String>>); 7] = [
+        (GateKind::Baseline, &config.baseline_command),
+        (GateKind::Targeted, &config.targeted_test_command),
+        (GateKind::Verify, &config.verify_command),
+        (GateKind::Lint, &config.lint_command),
+        (GateKind::Format, &config.format_command),
+        (GateKind::Build, &config.build_command),
+        (GateKind::Privacy, &config.privacy_command),
+    ];
+
+    let gates = commands
+        .into_iter()
+        .filter_map(|(kind, command)| {
+            command.as_ref().map(|command| Gate {
+                kind,
+                command: command.clone(),
+                timeout_secs: config.gate_timeout_secs,
+                working_dir: None,
+                env: BTreeMap::new(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let profile = Profile { gates };
+    if profile.get(GateKind::Verify).is_none() {
+        return Err(Error::Config {
+            key: "verify_command".to_string(),
+            detail: "a verification profile must define the mandatory verify_command".to_string(),
+        });
+    }
+    Ok(profile)
 }
 
 #[cfg(test)]
@@ -198,5 +248,88 @@ mod tests {
         let text = toml::to_string(&profile).expect("serialize");
         let round_tripped = Profile::load(&text).expect("load");
         assert_eq!(round_tripped, profile);
+    }
+
+    fn cmd(word: &str) -> Vec<String> {
+        vec![word.to_string()]
+    }
+
+    #[test]
+    fn profile_from_builds_a_gate_for_every_configured_command() {
+        let mut config = Config::default();
+        config.baseline_command = Some(cmd("baseline"));
+        config.targeted_test_command = Some(cmd("targeted"));
+        config.verify_command = Some(cmd("verify"));
+        config.lint_command = Some(cmd("lint"));
+        config.format_command = Some(cmd("format"));
+        config.build_command = Some(cmd("build"));
+        config.privacy_command = Some(cmd("privacy"));
+
+        let profile = profile_from(&config).expect("profile");
+
+        let kinds: Vec<GateKind> = profile.gates.iter().map(|gate| gate.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                GateKind::Baseline,
+                GateKind::Targeted,
+                GateKind::Verify,
+                GateKind::Lint,
+                GateKind::Format,
+                GateKind::Build,
+                GateKind::Privacy,
+            ]
+        );
+        assert_eq!(profile.get(GateKind::Lint).unwrap().command, cmd("lint"));
+    }
+
+    #[test]
+    fn profile_from_omits_gates_for_unconfigured_commands() {
+        let mut config = Config::default();
+        config.verify_command = Some(cmd("verify"));
+
+        let profile = profile_from(&config).expect("profile");
+
+        assert_eq!(profile.gates.len(), 1);
+        assert_eq!(profile.gates[0].kind, GateKind::Verify);
+    }
+
+    #[test]
+    fn profile_from_without_verify_command_is_a_configuration_error() {
+        let mut config = Config::default();
+        config.lint_command = Some(cmd("lint"));
+
+        let err = profile_from(&config).expect_err("must fail without verify_command");
+        assert!(matches!(&err, Error::Config { key, .. } if key == "verify_command"));
+        assert!(err.to_string().contains("verify_command"));
+    }
+
+    #[test]
+    fn profile_from_an_empty_config_is_a_configuration_error() {
+        let err = profile_from(&Config::default()).expect_err("must fail");
+        assert!(matches!(&err, Error::Config { key, .. } if key == "verify_command"));
+    }
+
+    #[test]
+    fn profile_from_uses_gate_timeout_secs_from_config() {
+        let mut config = Config::default();
+        config.verify_command = Some(cmd("verify"));
+        config.gate_timeout_secs = 42;
+
+        let profile = profile_from(&config).expect("profile");
+
+        assert_eq!(profile.get(GateKind::Verify).unwrap().timeout_secs, 42);
+    }
+
+    #[test]
+    fn profile_from_ignores_flake_command_since_no_gate_kind_covers_it() {
+        let mut config = Config::default();
+        config.verify_command = Some(cmd("verify"));
+        config.flake_command = Some(cmd("flake"));
+
+        let profile = profile_from(&config).expect("profile");
+
+        assert_eq!(profile.gates.len(), 1);
+        assert_eq!(profile.gates[0].kind, GateKind::Verify);
     }
 }
