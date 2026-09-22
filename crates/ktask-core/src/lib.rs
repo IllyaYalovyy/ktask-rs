@@ -3,6 +3,7 @@
 //! Everything that decides *what happened* lives here and stays free of I/O:
 //! the crate is the reason the invariants in VISION.md can be tested at all.
 
+mod attempt;
 mod classify;
 mod config;
 mod error;
@@ -24,6 +25,7 @@ mod task;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
+pub use attempt::AttemptRecord;
 pub use classify::{
     FailureClass, Recovery, Stream, TddException, WaitPlan, classify, limit_message, parse_reset,
     wait_plan,
