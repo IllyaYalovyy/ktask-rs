@@ -22,6 +22,8 @@ use std::path::PathBuf;
 
 mod claude;
 mod codex;
+#[cfg(test)]
+mod conformance;
 mod dummy;
 mod process;
 pub use claude::Claude;
