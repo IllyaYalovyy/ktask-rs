@@ -14,9 +14,27 @@
 //! than `GateKind`. Each is added by the task that defines its payload type,
 //! which also adds its arm to the transition function.
 
-use crate::{AttemptId, FailureClass, PauseReason, Phase, Recovery, Stream};
+use crate::{AttemptId, EventSeq, FailureClass, PauseReason, Phase, Recovery, Stream, TaskId};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+
+/// A single record in the event journal: a position, a time, the task it
+/// concerns and what happened.
+///
+/// `ts` serializes as RFC 3339 in UTC, matching the journal's on-disk and
+/// wire format.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Event {
+    /// This event's monotonic, global position in the journal.
+    pub seq: EventSeq,
+    /// When this event was recorded.
+    #[serde(with = "time::serde::rfc3339")]
+    pub ts: OffsetDateTime,
+    /// The task this event concerns, if any.
+    pub task_id: Option<TaskId>,
+    /// What happened.
+    pub kind: EventKind,
+}
 
 /// Everything a run can record in the event journal.
 ///
@@ -177,6 +195,44 @@ impl EventKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use time::macros::datetime;
+
+    #[test]
+    fn ts_serializes_as_exact_rfc3339_utc() {
+        let event = Event {
+            seq: EventSeq::new(1),
+            ts: datetime!(2024-01-15 10:30:00 UTC),
+            task_id: Some(TaskId::new(3)),
+            kind: EventKind::Resumed,
+        };
+
+        let value: serde_json::Value = serde_json::to_value(&event).expect("serialize to value");
+        assert_eq!(value["ts"], "2024-01-15T10:30:00Z");
+    }
+
+    #[test]
+    fn event_round_trips_through_json_preserving_the_instant() {
+        let event = Event {
+            seq: EventSeq::new(42),
+            ts: datetime!(2024-01-15 10:30:00.5 UTC),
+            task_id: None,
+            kind: EventKind::TaskQueued {
+                title: "Add widget".to_string(),
+            },
+        };
+
+        let json = serde_json::to_string(&event).expect("serialize");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(back.seq, event.seq);
+        assert_eq!(back.task_id, event.task_id);
+        assert_eq!(back.kind, event.kind);
+        assert_eq!(back.ts, event.ts);
+        assert_eq!(
+            back.ts.unix_timestamp_nanos(),
+            event.ts.unix_timestamp_nanos()
+        );
+    }
 
     fn all_events() -> Vec<EventKind> {
         vec![
