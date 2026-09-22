@@ -21,7 +21,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 mod dummy;
+mod process;
 pub use dummy::{Dummy, Scenario, ScenarioFile, Step, StepOutcome};
+pub use process::run_streaming;
 
 /// Token and cost usage for one attempt, as reported by (or recovered for) a
 /// provider. Every field is independently optional: a provider may report
