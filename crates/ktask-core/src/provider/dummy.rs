@@ -1,20 +1,34 @@
-//! The TOML scenario format that drives the built-in `dummy` provider
-//! (`VISION.md` §12, §15).
+//! The TOML scenario format that drives the built-in `dummy` provider, and
+//! [`Dummy`], the [`Provider`] it drives (`VISION.md` §12, §15).
 //!
 //! A scenario is an ordered list of [`Step`]s. Each declares the outcome a
 //! canned agent run reports — `success`, `failure`, `hang`, `limit` or
 //! `needs_input` — and optionally the standard output it produces, the exit
 //! code it reports, an artificial delay, and files it leaves behind in the
 //! invocation's working directory. `on_task` and `on_attempt` document which
-//! task or attempt a step was written for; they are not enforced here.
+//! task or attempt a step was written for; parsing and validation do not
+//! enforce them, but [`Dummy::invoke`] uses them to address the
+//! [`crate::Event`] it publishes for a step's declared output.
 //!
-//! This module defines and validates the format only. Consuming a parsed
-//! [`Scenario`] to drive a real [`crate::Provider`] implementation is a
-//! later task's responsibility.
+//! [`Dummy`] replays a [`Scenario`]'s steps in order, one per call to
+//! [`Provider::invoke`]: it writes each step's declared files into the
+//! invocation's working directory, publishes its declared standard output to
+//! the bus, and returns its declared exit code and output as the reported
+//! [`Outcome`]. A `hang` step never returns, exercising external timeout
+//! handling exactly as a stalled real provider would. Running out of steps
+//! is reported as a [`crate::Error::Provider`], not a panic.
 
-use crate::{AttemptId, Error, Result, TaskId};
+use crate::{
+    AttemptId, Bus, Capabilities, Error, Event, EventKind, EventSeq, Invocation, Outcome, Provider,
+    Result, Stream, TaskId,
+};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
+use std::thread;
+use std::time::Duration;
 
 /// A full dummy-provider scenario: the ordered steps it works through.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -150,6 +164,118 @@ impl Scenario {
         toml::to_string(self).map_err(|err| Error::Provider {
             provider: "dummy".to_string(),
             detail: err.to_string(),
+        })
+    }
+}
+
+/// The built-in [`Provider`] that replays a [`Scenario`] deterministically
+/// (`VISION.md` §12): every call to [`Provider::invoke`] consumes the
+/// scenario's next [`Step`], in the order the scenario declares them.
+///
+/// Two `Dummy`s built from an equal [`Scenario`] and driven through the same
+/// sequence of calls report byte-identical [`Outcome`]s and publish
+/// byte-identical [`crate::Event`]s, since neither depends on wall-clock
+/// time or any other source of nondeterminism.
+#[derive(Debug)]
+pub struct Dummy {
+    steps: Mutex<VecDeque<Step>>,
+    next_seq: AtomicU64,
+}
+
+impl Dummy {
+    /// Builds a `Dummy` that replays `scenario`'s steps in order, one per
+    /// call to [`Provider::invoke`].
+    #[must_use]
+    pub fn new(scenario: Scenario) -> Self {
+        Dummy {
+            steps: Mutex::new(scenario.steps.into()),
+            next_seq: AtomicU64::new(1),
+        }
+    }
+
+    /// Pops and returns the next step, or a [`Error::Provider`] naming the
+    /// scenario as exhausted when none is left.
+    fn next_step(&self) -> Result<Step> {
+        let mut steps = self.steps.lock().unwrap_or_else(PoisonError::into_inner);
+        steps.pop_front().ok_or_else(|| Error::Provider {
+            provider: "dummy".to_string(),
+            detail: "scenario exhausted: no step left to replay".to_string(),
+        })
+    }
+}
+
+/// Writes each of `files` into `working_dir`, creating any parent
+/// directories a file's declared path needs.
+fn write_scenario_files(working_dir: &Path, files: &[ScenarioFile]) -> Result<()> {
+    for file in files {
+        let path = working_dir.join(&file.path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, &file.content)?;
+    }
+    Ok(())
+}
+
+impl Provider for Dummy {
+    fn name(&self) -> &'static str {
+        "dummy"
+    }
+
+    /// The `dummy` provider reports no capabilities: nothing in a [`Step`]
+    /// models structured output, model selection or usage telemetry.
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            structured_output: false,
+            model_selection: false,
+            usage_telemetry: false,
+        }
+    }
+
+    /// Consumes the scenario's next step, writes its declared files into
+    /// `inv.working_dir`, publishes its declared standard output to `bus`
+    /// if given, and returns its declared exit code and output.
+    ///
+    /// A `hang` step never returns from this call, so it can exercise a
+    /// caller's own timeout handling exactly as a stalled real provider
+    /// would.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Provider`] when the scenario has no step left to
+    /// replay, or when writing a declared file fails.
+    fn invoke(&self, inv: &Invocation, bus: Option<&Bus>) -> Result<Outcome> {
+        let step = self.next_step()?;
+
+        write_scenario_files(&inv.working_dir, &step.files)?;
+
+        if let Some(delay) = step.delay_ms {
+            thread::sleep(Duration::from_millis(delay));
+        }
+
+        if let (Some(bus), Some(text)) = (bus, step.stdout.clone()) {
+            bus.publish(Event {
+                seq: EventSeq::new(self.next_seq.fetch_add(1, Ordering::SeqCst)),
+                ts: time::OffsetDateTime::UNIX_EPOCH,
+                task_id: step.on_task,
+                kind: EventKind::AgentOutput {
+                    attempt: step.on_attempt.unwrap_or(AttemptId::new(0)),
+                    stream: Stream::Stdout,
+                    text,
+                },
+            });
+        }
+
+        if step.outcome == StepOutcome::Hang {
+            thread::sleep(Duration::MAX);
+        }
+
+        Ok(Outcome {
+            exit_code: step.exit_code.unwrap_or(0),
+            stdout: step.stdout.unwrap_or_default(),
+            stderr: String::new(),
+            usage: None,
+            session_id: None,
         })
     }
 }
@@ -384,5 +510,288 @@ bogus_key = 1
         assert!(!text.contains("exit_code"));
         assert!(!text.contains("delay_ms"));
         assert!(!text.contains("files"));
+    }
+}
+
+#[cfg(test)]
+mod dummy_provider {
+    use super::*;
+    use std::sync::{Arc, mpsc};
+
+    fn step(outcome: StepOutcome) -> Step {
+        Step {
+            on_task: None,
+            on_attempt: None,
+            outcome,
+            stdout: None,
+            exit_code: None,
+            delay_ms: None,
+            files: Vec::new(),
+        }
+    }
+
+    fn invocation(working_dir: &Path) -> Invocation {
+        Invocation {
+            prompt: "go".to_string(),
+            model: None,
+            working_dir: working_dir.to_path_buf(),
+        }
+    }
+
+    #[test]
+    fn name_reports_dummy() {
+        let dummy = Dummy::new(Scenario { steps: Vec::new() });
+        assert_eq!(dummy.name(), "dummy");
+    }
+
+    #[test]
+    fn capabilities_reports_no_capabilities() {
+        let dummy = Dummy::new(Scenario { steps: Vec::new() });
+        let caps = dummy.capabilities();
+        assert!(!caps.structured_output);
+        assert!(!caps.model_selection);
+        assert!(!caps.usage_telemetry);
+    }
+
+    /// The core of `Done-when`: consuming steps in order and returning each
+    /// step's own declared exit code and stdout, not the first step's or a
+    /// fixed one.
+    #[test]
+    fn invoke_consumes_steps_in_order_and_reports_each_ones_declared_result() {
+        let scenario = Scenario {
+            steps: vec![
+                Step {
+                    stdout: Some("first\n".to_string()),
+                    exit_code: Some(0),
+                    ..step(StepOutcome::Success)
+                },
+                Step {
+                    stdout: Some("second\n".to_string()),
+                    exit_code: Some(7),
+                    ..step(StepOutcome::Failure)
+                },
+            ],
+        };
+        let dummy = Dummy::new(scenario);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inv = invocation(dir.path());
+
+        let first = dummy.invoke(&inv, None).expect("first invoke");
+        let second = dummy.invoke(&inv, None).expect("second invoke");
+
+        assert_eq!(first.stdout, "first\n");
+        assert_eq!(first.exit_code, 0);
+        assert_eq!(second.stdout, "second\n");
+        assert_eq!(second.exit_code, 7);
+    }
+
+    #[test]
+    fn invoke_defaults_the_exit_code_to_zero_when_the_step_does_not_declare_one() {
+        let dummy = Dummy::new(Scenario {
+            steps: vec![step(StepOutcome::Success)],
+        });
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inv = invocation(dir.path());
+
+        let outcome = dummy.invoke(&inv, None).expect("invoke");
+
+        assert_eq!(outcome.exit_code, 0);
+    }
+
+    #[test]
+    fn invoke_writes_declared_files_into_the_invocations_working_directory() {
+        let dummy = Dummy::new(Scenario {
+            steps: vec![Step {
+                files: vec![
+                    ScenarioFile {
+                        path: PathBuf::from("src/lib.rs"),
+                        content: "pub fn hello() {}\n".to_string(),
+                    },
+                    ScenarioFile {
+                        path: PathBuf::from("README.md"),
+                        content: "hello\n".to_string(),
+                    },
+                ],
+                ..step(StepOutcome::Success)
+            }],
+        });
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inv = invocation(dir.path());
+
+        dummy.invoke(&inv, None).expect("invoke");
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("src/lib.rs")).expect("read lib.rs"),
+            "pub fn hello() {}\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("README.md")).expect("read README.md"),
+            "hello\n"
+        );
+    }
+
+    #[test]
+    fn invoke_publishes_declared_stdout_to_the_bus() {
+        let dummy = Dummy::new(Scenario {
+            steps: vec![Step {
+                on_task: Some(TaskId::new(3)),
+                on_attempt: Some(AttemptId::new(2)),
+                stdout: Some("working on it\n".to_string()),
+                ..step(StepOutcome::Success)
+            }],
+        });
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inv = invocation(dir.path());
+        let bus = Bus::new(8);
+        let mut sub = bus.subscribe();
+
+        dummy.invoke(&inv, Some(&bus)).expect("invoke");
+
+        let (events, dropped) = sub.drain();
+        assert_eq!(dropped, 0);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].task_id, Some(TaskId::new(3)));
+        match &events[0].kind {
+            EventKind::AgentOutput {
+                attempt,
+                stream,
+                text,
+            } => {
+                assert_eq!(*attempt, AttemptId::new(2));
+                assert_eq!(*stream, Stream::Stdout);
+                assert_eq!(text, "working on it\n");
+            }
+            other => panic!("expected AgentOutput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invoke_publishes_nothing_when_the_step_declares_no_stdout() {
+        let dummy = Dummy::new(Scenario {
+            steps: vec![step(StepOutcome::Success)],
+        });
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inv = invocation(dir.path());
+        let bus = Bus::new(8);
+        let mut sub = bus.subscribe();
+
+        dummy.invoke(&inv, Some(&bus)).expect("invoke");
+
+        let (events, dropped) = sub.drain();
+        assert_eq!(dropped, 0);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn invoke_runs_without_a_bus_even_when_the_step_declares_stdout() {
+        let dummy = Dummy::new(Scenario {
+            steps: vec![Step {
+                stdout: Some("no one is listening\n".to_string()),
+                ..step(StepOutcome::Success)
+            }],
+        });
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inv = invocation(dir.path());
+
+        let outcome = dummy.invoke(&inv, None).expect("invoke");
+
+        assert_eq!(outcome.stdout, "no one is listening\n");
+    }
+
+    /// The other half of `Done-when`: running past the scenario's last step
+    /// is a named, non-panicking error rather than a wrap-around or a
+    /// default step.
+    #[test]
+    fn invoking_past_the_last_step_is_a_clear_provider_error() {
+        let dummy = Dummy::new(Scenario {
+            steps: vec![step(StepOutcome::Success)],
+        });
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inv = invocation(dir.path());
+
+        dummy.invoke(&inv, None).expect("first invoke succeeds");
+        let err = dummy
+            .invoke(&inv, None)
+            .expect_err("second invoke must fail: the scenario is exhausted");
+
+        assert!(matches!(err, Error::Provider { .. }));
+        let message = err.to_string();
+        assert!(message.contains("exhausted"), "message was: {message}");
+    }
+
+    /// `Do:` requires `hang` to sleep past any timeout a caller might apply.
+    /// `invoke` cannot be called directly on the test thread for this, since
+    /// a genuine hang would never return; instead it is driven on a worker
+    /// thread and the test only asserts that no result arrives within a
+    /// short, bounded wait.
+    #[test]
+    fn a_hang_step_does_not_return_within_a_bounded_wait() {
+        let dummy = Arc::new(Dummy::new(Scenario {
+            steps: vec![step(StepOutcome::Hang)],
+        }));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inv = invocation(dir.path());
+
+        let (tx, rx) = mpsc::channel::<()>();
+        let worker = Arc::clone(&dummy);
+        thread::spawn(move || {
+            let _ = worker.invoke(&inv, None);
+            let _ = tx.send(());
+        });
+
+        let result = rx.recv_timeout(Duration::from_millis(200));
+
+        assert!(
+            result.is_err(),
+            "a hang step must not return within a bounded wait"
+        );
+    }
+
+    fn multi_step_scenario() -> Scenario {
+        Scenario {
+            steps: vec![
+                Step {
+                    on_task: Some(TaskId::new(1)),
+                    stdout: Some("built the feature\n".to_string()),
+                    exit_code: Some(0),
+                    ..step(StepOutcome::Success)
+                },
+                Step {
+                    on_task: Some(TaskId::new(1)),
+                    on_attempt: Some(AttemptId::new(2)),
+                    stdout: Some("hit a limit\n".to_string()),
+                    ..step(StepOutcome::Limit)
+                },
+            ],
+        }
+    }
+
+    /// The headline guarantee of `Done-when`: replaying the same scenario
+    /// from a fresh `Dummy` reports byte-identical outcomes and publishes
+    /// byte-identical events, across two entirely separate runs.
+    #[test]
+    fn the_same_scenario_produces_byte_identical_outcomes_and_events_across_runs() {
+        let run = |dir: &Path| {
+            let dummy = Dummy::new(multi_step_scenario());
+            let inv = invocation(dir);
+            let bus = Bus::new(8);
+            let mut sub = bus.subscribe();
+
+            let outcomes: Vec<Outcome> = (0..2)
+                .map(|_| dummy.invoke(&inv, Some(&bus)).expect("invoke"))
+                .collect();
+            let (events, dropped) = sub.drain();
+            assert_eq!(dropped, 0);
+            (outcomes, events)
+        };
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+
+        let (outcomes_a, events_a) = run(dir_a.path());
+        let (outcomes_b, events_b) = run(dir_b.path());
+
+        assert_eq!(outcomes_a, outcomes_b);
+        assert_eq!(events_a, events_b);
     }
 }

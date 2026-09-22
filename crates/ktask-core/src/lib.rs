@@ -42,8 +42,8 @@ pub use lock::{Holder, RepoLock, acquire};
 pub use paths::{config_file, project_id, state_root};
 pub use project::{Project, project_config_path};
 pub use provider::{
-    Capabilities, Invocation, Outcome, Provider, Scenario, ScenarioFile, Step, StepOutcome, Usage,
-    UsageSource,
+    Capabilities, Dummy, Invocation, Outcome, Provider, Scenario, ScenarioFile, Step, StepOutcome,
+    Usage, UsageSource,
 };
 pub use queue::{load, next_runnable};
 pub use redact::redact;
