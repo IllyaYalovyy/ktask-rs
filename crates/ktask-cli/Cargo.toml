@@ -9,8 +9,5 @@ license.workspace = true
 name = "ktask-rs"
 path = "src/main.rs"
 
-[dependencies]
-ktask-core = { path = "../ktask-core", version = "0.1.0" }
-
 [lints]
 workspace = true

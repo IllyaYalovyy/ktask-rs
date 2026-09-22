@@ -6,6 +6,4 @@
 //! emitting them, and the supervisor stays testable without capturing output.
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
-fn main() {
-    println!("{} (seed)", ktask_core::seed_marker());
-}
+fn main() {}
