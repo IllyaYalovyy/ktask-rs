@@ -16,6 +16,7 @@ pub mod git;
 mod ids;
 pub mod journal;
 pub mod lock;
+pub mod log;
 mod paths;
 mod project;
 pub mod protocol;
@@ -49,6 +50,7 @@ pub use gate::{
 };
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::{Journal, journal_path};
+pub use log::{Level, Logger, log_path};
 pub use paths::{config_file, project_id, prompt_library, state_root};
 pub use project::{Project, discover, project_config_path, register};
 pub use protocol::{
