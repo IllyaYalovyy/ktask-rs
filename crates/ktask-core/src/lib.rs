@@ -18,6 +18,8 @@ mod queue;
 mod redact;
 mod state;
 mod task;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 
 pub use classify::{FailureClass, Recovery, Stream, TddException};
 pub use config::{Config, Resolved, Source, load_for};

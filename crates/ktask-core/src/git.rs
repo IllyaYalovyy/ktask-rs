@@ -22,14 +22,26 @@ use crate::{Error, Result};
 /// process could not be spawned (`git` not on `PATH`, a nonexistent `root`)
 /// or exited non-zero.
 pub fn git(root: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .output()
-        .map_err(|err| Error::Git {
-            args: args_owned(args),
-            stderr: err.to_string(),
-        })?;
+    with_env(root, args, &[])
+}
+
+/// Like [`git`], but also sets `env` on the subprocess.
+///
+/// Only the crate's scratch-repository test fixtures need this: pinning
+/// `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` is what makes a seed commit's hash
+/// reproducible across machines and runs. Every other caller goes through
+/// [`git`] so this stays the one function that actually spawns the process.
+pub(crate) fn with_env(root: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
+    let mut command = Command::new("git");
+    command.args(args).current_dir(root);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+
+    let output = command.output().map_err(|err| Error::Git {
+        args: args_owned(args),
+        stderr: err.to_string(),
+    })?;
 
     if !output.status.success() {
         return Err(Error::Git {

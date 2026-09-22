@@ -5,6 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# Exposes crate::testing (scratch git repositories) outside this crate's own
+# unit tests, e.g. to integration tests elsewhere in the workspace. Off by
+# default, so release builds never pull in tempfile.
+testing = []
+
 [dependencies]
 thiserror = { workspace = true }
 rusqlite = { workspace = true }
