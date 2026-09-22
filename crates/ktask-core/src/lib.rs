@@ -26,7 +26,7 @@ pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::{Journal, journal_path};
 pub use paths::{config_file, project_id, state_root};
 pub use project::{Project, project_config_path};
-pub use queue::next_runnable;
+pub use queue::{load, next_runnable};
 pub use redact::redact;
 pub use state::{PauseReason, Phase, TaskState, apply, check_one_active, check_predecessor};
 pub use task::{Task, TaskStatus, parse_plan, validate};

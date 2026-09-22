@@ -1,16 +1,39 @@
-//! `next_runnable`: which task the runner should pick up next.
+//! `load`, `next_runnable`: reading the queue and picking the next task.
 //!
-//! A pure function of queue state, per `VISION.md` §6's task lifecycle and
-//! §3's invariants 1 and 2. It reuses [`check_one_active`] and
-//! [`check_predecessor`] rather than reimplementing either, so the queue's
-//! notion of "runnable" can never drift from the invariants those functions
-//! already enforce.
+//! `next_runnable` is a pure function of queue state, per `VISION.md` §6's
+//! task lifecycle and §3's invariants 1 and 2. It reuses [`check_one_active`]
+//! and [`check_predecessor`] rather than reimplementing either, so the
+//! queue's notion of "runnable" can never drift from the invariants those
+//! functions already enforce.
 
-use crate::{Result, Task, TaskId, TaskState, check_one_active, check_predecessor};
+use crate::{
+    Journal, Project, Result, Task, TaskId, TaskState, check_one_active, check_predecessor,
+};
 use std::collections::BTreeMap;
 
 #[cfg(test)]
 use crate::{EventKind, apply};
+
+/// Reads `project`'s queue: every task recorded in its journal, in document
+/// order.
+///
+/// There is no separate queue file and no write-back here: a task's runtime
+/// status lives as a [`TaskState`] in the journal's `task_state` projection,
+/// recorded event by event like every other change, not as something this
+/// function computes or caches. An empty queue yields an empty vector rather
+/// than an error, and opening the journal to read it does not write to the
+/// state directory (`docs/DESIGN.md` Paths): [`Journal::open_for`] applies
+/// its schema with idempotent `CREATE TABLE IF NOT EXISTS` statements, so an
+/// already-initialized journal is left untouched.
+///
+/// # Errors
+///
+/// Returns [`Error::Database`](crate::Error::Database) if the journal cannot
+/// be opened or queried, and [`Error::Corrupt`](crate::Error::Corrupt) if a
+/// stored task id does not fit a [`TaskId`].
+pub fn load(project: &Project) -> Result<Vec<Task>> {
+    Journal::open_for(project)?.tasks()
+}
 
 /// Picks the next task the runner should start, or `Ok(None)` if nothing is
 /// runnable right now.
@@ -247,5 +270,102 @@ mod tests {
             next_runnable(&tasks, &states).unwrap(),
             Some(TaskId::new(3))
         );
+    }
+
+    fn journal_project(state_dir: &tempfile::TempDir) -> Project {
+        Project {
+            root: std::path::PathBuf::from("/repo"),
+            id: "abc123".to_string(),
+            state_dir: state_dir.path().to_path_buf(),
+        }
+    }
+
+    #[test]
+    fn load_on_an_empty_queue_returns_an_empty_vec() {
+        let state_dir = tempfile::tempdir().expect("tempdir");
+        let project = journal_project(&state_dir);
+        // Registers the journal (creating its tables) without importing any
+        // tasks into it.
+        Journal::open_for(&project).expect("open journal");
+
+        assert_eq!(load(&project).expect("load"), Vec::new());
+    }
+
+    #[test]
+    fn load_returns_tasks_in_document_order() {
+        let state_dir = tempfile::tempdir().expect("tempdir");
+        let project = journal_project(&state_dir);
+        let plan = "\
+## First task
+
+**Outcome:** the first thing happens.
+
+**Done-when:** it happened.
+
+**Verify:** `true`
+
+**Refs:** none
+
+## Second task
+
+**Outcome:** the second thing happens.
+
+**Done-when:** it happened too.
+
+**Verify:** `true`
+
+**Refs:** none
+";
+        let parsed = crate::parse_plan(plan).expect("parse_plan");
+        assert_eq!(parsed.len(), 2, "sanity: the plan has two tasks");
+        {
+            let mut journal = Journal::open_for(&project).expect("open journal");
+            journal.put_tasks(&parsed).expect("put_tasks");
+        }
+
+        assert_eq!(load(&project).expect("load"), parsed);
+    }
+
+    #[test]
+    fn load_does_not_modify_the_state_directory() {
+        let state_dir = tempfile::tempdir().expect("tempdir");
+        let project = journal_project(&state_dir);
+        let plan = "\
+## Only task
+
+**Outcome:** the thing happens.
+
+**Done-when:** it happened.
+
+**Verify:** `true`
+
+**Refs:** none
+";
+        let parsed = crate::parse_plan(plan).expect("parse_plan");
+        {
+            let mut journal = Journal::open_for(&project).expect("open journal");
+            journal.put_tasks(&parsed).expect("put_tasks");
+        }
+
+        let before = state_dir_snapshot(state_dir.path());
+        load(&project).expect("load");
+        let after = state_dir_snapshot(state_dir.path());
+
+        assert_eq!(before, after, "loading must not modify the state directory");
+    }
+
+    /// A sorted `(file name, byte length)` listing of `dir`'s entries, used
+    /// to prove a read-only operation left the state directory untouched.
+    fn state_dir_snapshot(dir: &std::path::Path) -> Vec<(String, u64)> {
+        let mut entries: Vec<(String, u64)> = std::fs::read_dir(dir)
+            .expect("read_dir")
+            .map(|entry| {
+                let entry = entry.expect("dir entry");
+                let len = entry.metadata().expect("metadata").len();
+                (entry.file_name().to_string_lossy().to_string(), len)
+            })
+            .collect();
+        entries.sort();
+        entries
     }
 }
