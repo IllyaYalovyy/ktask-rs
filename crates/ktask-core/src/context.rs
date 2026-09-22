@@ -24,8 +24,9 @@
 //! which is the whole of why its output is reproducible. A remediation is judged
 //! against the attempt it replaces, and a prompt assembled from an instant or a
 //! directory listing could not be. ADR-0075 records the decisions that file had to
-//! make, including what the header can name as the report path when no project is
-//! in scope to say where its state lives.
+//! make, including the one thing it could not name while its signature carried no
+//! project: where an attempt's report goes. [`crate::report_path`] resolved that
+//! last gap, and the header now prints the path the run itself will read back.
 //!
 //! [`ensure_defaults`], [`load_template`] and [`collect_adrs`] are the other half,
 //! and they do touch the filesystem, because a prompt has to come from somewhere
@@ -48,28 +49,15 @@ use std::io::{self, Write as _};
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
-use crate::attempt::EVIDENCE_ROOT;
 use crate::ids::{AttemptId, TaskId};
 use crate::paths::{process_env, prompt_library_with};
 use crate::project::Project;
-use crate::report::AGENT_REPORT_FILE;
+use crate::report::report_path;
 use crate::task::Task;
 use crate::{Error, Result};
 
 /// Where a prompt template wants the task body, as [`Task::body`].
 const TASK_PLACEHOLDER: &str = "{{TASK}}";
-
-/// The stand-in for a project's state directory in the path an agent is told to
-/// write its report to.
-///
-/// It is a marker rather than a resolved directory because this signature carries
-/// no [`crate::Project`], and a path resolved from `$XDG_STATE_HOME` and the
-/// process's home directory would depend on something that is not one of the
-/// prompt's inputs. A path beginning with a character no path may start with is
-/// also the answer that fails loudly: an agent that tries to open it gets an
-/// error, where a bare relative path would quietly write a run's report into the
-/// repository, which is what VISION.md §3's invariant 6 forbids.
-const STATE_DIR: &str = "<state_dir>";
 
 /// The heading a template that never named [`TASK_PLACEHOLDER`] gets the task
 /// under, so that a prompt is never handed over without the task it is about.
@@ -166,7 +154,9 @@ const DEFAULT_CONTEXT: &str = "# Project context\n\n\
 /// Four parts, in this order, joined by a blank line:
 ///
 /// 1. a header naming the task number and how many tasks the queue holds, the
-///    attempt within that task, and the path the report is to be written to;
+///    attempt within that task, and the path the report is to be written to —
+///    [`crate::report_path`]'s path for this project, so the file an agent is
+///    told to write is the file the run reads back;
 /// 2. `context_doc`, the project's context document, as written;
 /// 3. every ADR recorded so far, in the order the caller gave them, each under a
 ///    heading naming its position;
@@ -177,6 +167,8 @@ const DEFAULT_CONTEXT: &str = "# Project context\n\n\
 /// Equal inputs are the same bytes: nothing here reads a clock, the environment
 /// or the filesystem. That is what lets a later attempt be compared against the
 /// one it replaced, and it is the determinism VISION.md §6 asks of assembly.
+/// `project` is not read either: only the state directory its registration gave
+/// it reaches the header, as text.
 ///
 /// # What is passed through untouched
 ///
@@ -201,6 +193,7 @@ const DEFAULT_CONTEXT: &str = "# Project context\n\n\
 /// [`crate::write_evidence`].
 #[must_use]
 pub fn assemble(
+    project: &Project,
     task: &Task,
     context_doc: &str,
     adrs: &[String],
@@ -209,7 +202,7 @@ pub fn assemble(
     total: usize,
 ) -> String {
     let parts = [
-        header(task.id, attempt, total),
+        header(project, task.id, attempt, total),
         context_doc.to_string(),
         decisions(adrs),
         filled(template, task.body.trim_end()),
@@ -233,25 +226,20 @@ pub fn assemble(
 /// is 12 of 161 is working to a different sense of urgency from one that knows it
 /// is 12 of 12, and the length is the one figure about the queue a prompt can
 /// carry without a database in scope.
-fn header(task: TaskId, attempt: AttemptId, total: usize) -> String {
-    format!(
-        "# ktask run — task {task} of {total}, attempt {attempt}\n\nReport: `{path}` — \
-         `{STATE_DIR}` is this project's ktask state directory, outside the repository.",
-        path = report_path(task, attempt).display(),
-    )
-}
-
-/// Where one attempt's own report goes, below [`STATE_DIR`].
 ///
-/// The two id levels are the ones [`crate::evidence_dir`] uses, so the file an
-/// agent is told to write joins its attempt's directory rather than a third
-/// layout nobody else reads.
-fn report_path(task: TaskId, attempt: AttemptId) -> PathBuf {
-    PathBuf::from(STATE_DIR)
-        .join(EVIDENCE_ROOT)
-        .join(task.to_string())
-        .join(attempt.to_string())
-        .join(AGENT_REPORT_FILE)
+/// The report path is spelled by [`crate::report_path`] and nothing else, which is
+/// what makes the round trip one fact: the prompt cannot name a file the run will
+/// not look at, and the run cannot read a file the agent was never told about. It
+/// is absolute for the same reason — an agent's working directory is its task
+/// worktree, so any shorter spelling would be resolved inside the repository,
+/// which VISION.md §3's invariant 6 forbids.
+fn header(project: &Project, task: TaskId, attempt: AttemptId, total: usize) -> String {
+    format!(
+        "# ktask run — task {task} of {total}, attempt {attempt}\n\nReport: `{path}` — write \
+         your report to exactly this path, below this project's ktask state directory and \
+         outside the repository.",
+        path = report_path(project, task, attempt).display(),
+    )
 }
 
 /// Every decision recorded so far, oldest first, under a heading that counts them.
@@ -435,6 +423,7 @@ fn build_prompt_with(
     let template = load_template_with(env, project)?;
     let adrs = collect_adrs(&project.root)?;
     Ok(assemble(
+        project,
         task,
         &context_doc,
         &adrs,
@@ -737,6 +726,16 @@ mod tests {
     /// the state directory the way a registration would.
     const PROJECT_ID: &str = "0123456789abcdef";
 
+    /// The state directory the `assemble` fixtures name, and the working copy they
+    /// say it belongs to.
+    ///
+    /// Spelled out rather than taken from a temporary directory: [`assemble`] opens
+    /// nothing, so a literal is legal, and the whole-prompt expectation below is an
+    /// array of spelled-out lines — the spec in the house ADR-0075 keeps. A path
+    /// that differed per machine would rewrite that spec on every run.
+    const STATE_DIR: &str = "/var/ktask/state";
+    const REPOSITORY: &str = "/var/ktask/repository";
+
     /// Set on a child copy of this binary to name the scratch home it is to work
     /// in; its presence is the whole of the child role. See
     /// `the_public_entry_points_read_the_environment_the_process_actually_has`.
@@ -781,6 +780,16 @@ mod tests {
         }
     }
 
+    /// The project an attempt is assembled for: registered, with a state directory
+    /// of its own. Nothing here creates either path — see [`STATE_DIR`].
+    fn project() -> Project {
+        Project {
+            root: PathBuf::from(REPOSITORY),
+            id: PROJECT_ID.to_owned(),
+            state_dir: PathBuf::from(STATE_DIR).join(PROJECT_ID),
+        }
+    }
+
     /// The two decisions a project that has been running for a while holds.
     fn decisions() -> Vec<String> {
         vec![ADR_ONE.to_owned(), ADR_TWO.to_owned()]
@@ -789,6 +798,7 @@ mod tests {
     /// The prompt the fixtures assemble, with both decisions on record.
     fn prompt() -> String {
         assemble(
+            &project(),
             &task(),
             CONTEXT,
             &decisions(),
@@ -803,8 +813,9 @@ mod tests {
         let expected = [
             "# ktask run — task 12 of 40, attempt 2",
             "",
-            "Report: `<state_dir>/attempts/12/2/agent-report.md` — `<state_dir>` is this \
-             project's ktask state directory, outside the repository.",
+            "Report: `/var/ktask/state/0123456789abcdef/attempts/12/2/agent-report.md` — \
+             write your report to exactly this path, below this project's ktask state \
+             directory and outside the repository.",
             "",
             "# Project context",
             "",
@@ -842,17 +853,93 @@ mod tests {
 
     #[test]
     fn the_report_path_names_the_attempt_it_was_assembled_for() {
-        let prompt = assemble(&task(), CONTEXT, &[], TEMPLATE, AttemptId::new(11), TOTAL);
+        let prompt = assemble(
+            &project(),
+            &task(),
+            CONTEXT,
+            &[],
+            TEMPLATE,
+            AttemptId::new(11),
+            TOTAL,
+        );
         assert!(
-            prompt.contains("Report: `<state_dir>/attempts/12/11/agent-report.md`"),
+            prompt.contains(
+                "Report: `/var/ktask/state/0123456789abcdef/attempts/12/11/agent-report.md`"
+            ),
             "the header has to name the attempt whose evidence the report joins: {prompt}"
         );
+    }
+
+    /// The path between the two backticks of the header's `Report:` line.
+    ///
+    /// Read out of the prompt rather than recomputed, because what these tests
+    /// are about is what an agent is *told* — a fixture that called the same
+    /// function the header calls would agree with itself whatever the prompt said.
+    fn named_report_path(prompt: &str) -> PathBuf {
+        let named = prompt
+            .split_once("Report: `")
+            .expect("the header names a report path")
+            .1;
+        PathBuf::from(
+            named
+                .split('`')
+                .next()
+                .expect("the path the header names is closed by a backtick"),
+        )
+    }
+
+    #[test]
+    fn the_prompt_names_a_report_path_the_agent_can_actually_write() {
+        let scratch = Scratch::new();
+        fs::create_dir_all(scratch.state_dir())
+            .expect("a state directory to hold an attempt's report below");
+
+        let prompt = build_prompt_with(
+            &scratch.env(),
+            &scratch.project(),
+            &task(),
+            AttemptId::new(2),
+            TOTAL,
+        )
+        .expect("a prompt library that exists builds a prompt for a registered project");
+        let path = named_report_path(&prompt);
+
+        assert!(
+            path.is_absolute(),
+            "an agent resolves a relative path against its own worktree, so a prompt naming \
+             one writes the run's report inside the repository: {path:?} was named for task \
+             {} of project {}",
+            TASK_NUMBER,
+            scratch.project().id,
+        );
+        assert!(
+            path.starts_with(scratch.state_dir()),
+            "the report of a registered project belongs below that project's own state \
+             directory, and the prompt named {path:?} rather than something below {:?}",
+            scratch.state_dir(),
+        );
+        let directory = path
+            .parent()
+            .expect("a report path is a file inside a directory");
+        fs::create_dir_all(directory)
+            .unwrap_or_else(|why| panic!("`{}`: {why}", directory.display()));
+        fs::write(&path, "KTASK_RESULT: DONE\n").unwrap_or_else(|why| {
+            panic!("the prompt named `{}` as writable: {why}", path.display())
+        });
     }
 
     #[test]
     fn the_context_document_is_passed_through_word_for_word() {
         let odd = "# Context\n\n  indented code\n\ttab\n\ntrailing\n\n";
-        let prompt = assemble(&task(), odd, &[], TEMPLATE, AttemptId::new(1), TOTAL);
+        let prompt = assemble(
+            &project(),
+            &task(),
+            odd,
+            &[],
+            TEMPLATE,
+            AttemptId::new(1),
+            TOTAL,
+        );
         let starts = prompt
             .find("# Context")
             .expect("the context document is in the prompt");
@@ -877,6 +964,7 @@ mod tests {
     fn the_task_body_lands_without_the_gap_it_was_read_in_with() {
         let gap = "**Outcome:** the runner assembles the prompt.\n\n";
         let prompt = assemble(
+            &project(),
             &task_with(gap),
             CONTEXT,
             &[],
@@ -901,7 +989,15 @@ mod tests {
             "ADR beta".to_owned(),
             "ADR gamma".to_owned(),
         ];
-        let prompt = assemble(&task(), CONTEXT, &three, TEMPLATE, AttemptId::new(1), TOTAL);
+        let prompt = assemble(
+            &project(),
+            &task(),
+            CONTEXT,
+            &three,
+            TEMPLATE,
+            AttemptId::new(1),
+            TOTAL,
+        );
         assert!(prompt.contains("# Decisions on record (3)"));
         let mut place = 0;
         for (index, adr) in three.iter().enumerate() {
@@ -919,7 +1015,15 @@ mod tests {
 
     #[test]
     fn a_project_with_no_decisions_says_so_rather_than_leaving_the_slot_empty() {
-        let prompt = assemble(&task(), CONTEXT, &[], TEMPLATE, AttemptId::new(1), TOTAL);
+        let prompt = assemble(
+            &project(),
+            &task(),
+            CONTEXT,
+            &[],
+            TEMPLATE,
+            AttemptId::new(1),
+            TOTAL,
+        );
         assert!(
             prompt.contains("# Decisions on record (0)\n\nNone recorded yet."),
             "an empty list is a fact about the project, not an omission: {prompt}"
@@ -929,7 +1033,15 @@ mod tests {
     #[test]
     fn the_task_body_replaces_every_placeholder_the_template_named() {
         let template = "Do the task.\n\n{{TASK}}\n\nRestate it: {{TASK}}\nDone?";
-        let prompt = assemble(&task(), CONTEXT, &[], template, AttemptId::new(1), TOTAL);
+        let prompt = assemble(
+            &project(),
+            &task(),
+            CONTEXT,
+            &[],
+            template,
+            AttemptId::new(1),
+            TOTAL,
+        );
         assert!(
             !prompt.contains(TASK_PLACEHOLDER),
             "a placeholder that survives reaches the provider as a literal: {prompt}"
@@ -945,6 +1057,7 @@ mod tests {
     #[test]
     fn a_template_that_never_named_the_placeholder_still_carries_the_task() {
         let prompt = assemble(
+            &project(),
             &task(),
             CONTEXT,
             &[],
@@ -963,7 +1076,15 @@ mod tests {
 
     #[test]
     fn an_empty_part_leaves_no_empty_section_behind() {
-        let prompt = assemble(&task(), "", &[], TEMPLATE, AttemptId::new(1), TOTAL);
+        let prompt = assemble(
+            &project(),
+            &task(),
+            "",
+            &[],
+            TEMPLATE,
+            AttemptId::new(1),
+            TOTAL,
+        );
         assert!(
             !prompt.contains("\n\n\n"),
             "an absent context document stacked two separators: {prompt}"
@@ -973,6 +1094,7 @@ mod tests {
     #[test]
     fn the_prompt_ends_where_the_last_words_do() {
         let prompt = assemble(
+            &project(),
             &task(),
             CONTEXT,
             &[],
@@ -990,6 +1112,7 @@ mod tests {
     fn the_same_inputs_assemble_the_same_bytes_twice() {
         let first = prompt();
         let second = assemble(
+            &project(),
             &task(),
             CONTEXT,
             &decisions(),
@@ -1019,7 +1142,9 @@ mod tests {
             fs::read_to_string(&filed).unwrap_or_else(|why| panic!("{}: {why}", filed.display()));
 
         assert!(
-            filed.contains("Report: `<state_dir>/attempts/12/2/agent-report.md`"),
+            filed.contains(
+                "Report: `/var/ktask/state/0123456789abcdef/attempts/12/2/agent-report.md`"
+            ),
             "the prompt an attempt was started with is the prompt its evidence holds: {filed}"
         );
 
@@ -1070,6 +1195,7 @@ mod tests {
                 .map(|adr| adr.replace(TASK_PLACEHOLDER, ""))
                 .collect();
             let once = assemble(
+                &project(),
                 &task_with(&body),
                 &context,
                 &adrs,
@@ -1078,6 +1204,7 @@ mod tests {
                 total,
             );
             let twice = assemble(
+                &project(),
                 &task_with(&body),
                 &context,
                 &adrs,
@@ -1283,7 +1410,15 @@ mod tests {
             "the context document holds a hole:\n{context}"
         );
 
-        let prompt = assemble(&task(), &context, &[], &template, AttemptId::new(1), 1);
+        let prompt = assemble(
+            &project(),
+            &task(),
+            &context,
+            &[],
+            &template,
+            AttemptId::new(1),
+            1,
+        );
         assert!(
             prompt.contains(task().body.trim_end()),
             "the default template does not carry the task it was written for:\n{prompt}"
