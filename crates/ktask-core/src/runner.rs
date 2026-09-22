@@ -10,11 +10,11 @@
 //! adapter as arguments is that a run assembled from what its caller happened to
 //! carry is a run whose gates and journal somebody else chose.
 //!
-//! Its four jobs so far are [`Runner::prepare`], [`Runner::begin_attempt`],
-//! [`Runner::run_phase`] and the round trip an attempt's report makes. The first takes a
-//! queued task as far as the ground it stands on; the second is the
-//! transition that spends a token, and three things about it are not free to
-//! change:
+//! Its five jobs so far are [`Runner::prepare`], [`Runner::begin_attempt`],
+//! [`Runner::run_phase`], [`Runner::gate_phase`] and the round trip an attempt's
+//! report makes. The first takes a queued task as far as the ground it stands on;
+//! the second is the transition that spends a token, and three things about it are
+//! not free to change:
 //!
 //! - The [`crate::EventKind::AttemptStarted`] row is appended before the attempt's
 //!   evidence is filed, because VISION.md §3's third invariant makes the journal the
@@ -64,9 +64,14 @@
 //!   success, and the class is the one [`crate::ReportClaim::Missing`] reported
 //!   rather than one re-derived from an error (ADR-0057, ADR-0087).
 //!
-//! What happens after a phase — its gate, the state its verdict moves, publication,
-//! remediation — belongs to the tasks after this one, and this module starts no state
-//! transition of its own.
+//! [`Runner::gate_phase`] is the mechanical half of the same step. VISION.md §9 makes a
+//! red phase's failing test and a green phase's passing one the runner's own findings
+//! rather than the agent's claims, so the gate the phase declares is run here, the
+//! verdict is read out of the two test summaries the phase ran between, and the command,
+//! the output and the tree hash are filed beside the attempt as its evidence. What is
+//! still not here is the state a verdict moves, the publication it earns and the
+//! remediation a refusal earns: this module runs, records and refuses, and starts no
+//! state transition of its own.
 //!
 //! # Preflight: the checks that prove the world is sane before a token is spent
 //!
@@ -140,10 +145,15 @@
 //!   (ADR-0046) instead of being refused here.
 
 use std::fmt;
+use std::fs::{self, OpenOptions, Permissions};
+use std::io::{self, Write as _};
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use nix::sys::statvfs;
+use serde::Serialize;
+use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 
 use crate::config;
@@ -151,11 +161,12 @@ use crate::git;
 use crate::lock;
 use crate::protocol;
 use crate::provider;
+use crate::redact::redact_json;
 use crate::{
     AttemptId, AttemptRecord, Bus, Capabilities, Config, Error, EventKind, FailureClass, Gate,
     GateKind, GateResult, Invocation, Journal, Phase, PhaseSpec, Profile, Project, Provider,
-    Recorder, ReportClaim, ReportResult, Result, Stream, Subscription, Task, TaskId, profile_from,
-    run_gate, write_evidence,
+    Recorder, ReportClaim, ReportResult, Result, Stream, Subscription, Task, TaskId, TestSummary,
+    evidence_dir, parse_cargo, profile_from, run_gate, write_evidence,
 };
 use crate::{context, queue};
 
@@ -644,6 +655,225 @@ impl Runner {
                 detail,
             },
         })
+    }
+
+    /// Run the gate one phase declares, and decide the phase from what it reported.
+    ///
+    /// VISION.md §9 gives the red and green phases to the runner rather than to the
+    /// agent's account of itself: *"the runner executes `targeted_test_command` and
+    /// confirms the expected new failure"*, and then the same for the fix that ends it.
+    /// So this runs the command [`PhaseSpec::gate`] names, reads a [`TestSummary`] out
+    /// of what it printed, and hands the pair of summaries — the one the phase started
+    /// from and the one it just ran — to [`protocol::verify_red`] or
+    /// [`protocol::verify_green`]. Five things about the order are not free to change:
+    ///
+    /// - A phase that decides itself by comparing two runs is refused before anything
+    ///   is journaled when it was handed neither. Red with nothing to differ from is
+    ///   not a red phase that failed; it is the step called wrongly, and the refusal
+    ///   names the phase it could not decide.
+    /// - [`crate::EventKind::GateStarted`] is appended before the command is spawned,
+    ///   exactly as [`crate::run_completion_set`] and the preflight's baseline do it: a
+    ///   gate that could not be started leaves its start with no finish after it, which
+    ///   is the pair that reads as "this gate never completed" (ADR-0036).
+    /// - The phase's verdict comes from the two summaries and not from the exit status,
+    ///   and the exit status still has the last word. A red phase is *expected* to
+    ///   refuse, and a green phase whose names all passed but whose command refused is
+    ///   refused too: [`GateResult::passed`] is the gate's own verdict and the names are
+    ///   an addition to it, never a substitute.
+    /// - The verdict outranks the evidence filing, and the filing happens whatever the
+    ///   verdict was. A refusal nobody can read is a refusal nobody can act on, so a
+    ///   phase that proved nothing still files what it ran before it is refused.
+    /// - A red phase whose task declared §9's exception to test-first runs no gate at
+    ///   all: [`protocol::claim`] answers with the row that records the exception over
+    ///   the paths the phase was allowed to write, and the phase hands on the summary it
+    ///   started from.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when the phase declares no gate, or names a comparison it
+    /// was not given. [`Error::Config`] when the gate it declares is configured with no
+    /// command. [`Error::Policy`] when a red phase claimed the exception over paths its
+    /// write scope did not grant. [`Error::Gate`] when the command could not be started,
+    /// wrote no test report, or refused to decide the phase. [`Error::NotFound`],
+    /// [`Error::Io`] and [`Error::Serde`] when the evidence it files could not be
+    /// filed, and [`Error::Database`] when one of its two rows was refused.
+    pub fn gate_phase(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+        spec: &PhaseSpec,
+        before: Option<&TestSummary>,
+    ) -> Result<TestSummary> {
+        let Some(kind) = spec.gate else {
+            return Err(no_gate_declared(spec.phase));
+        };
+        let way = comparison(spec.phase, before)?;
+        if let Comparison::Red(prior) = way
+            && let Some(skipped) = self.excused_red(prep, task, spec, prior)?
+        {
+            return Ok(skipped);
+        }
+        let gate = self.configured_gate(kind)?;
+        let result = self.run_declared_gate(task.id, &gate, &prep.worktree)?;
+        let summary = test_report(&result).ok_or_else(|| no_test_report(&gate, &result))?;
+        let verdict = phase_verdict(way, &gate, &result, &summary);
+        let named = verdict.as_ref().cloned().unwrap_or_default();
+        let filed = if spec.records_evidence {
+            let run = PhaseRun {
+                gate: &gate,
+                result: &result,
+                named: &named,
+            };
+            self.file_phase_evidence(prep, task.id, attempt, spec.phase, &run)
+        } else {
+            Ok(())
+        };
+        verdict?;
+        filed?;
+        Ok(summary)
+    }
+
+    /// Honour §9's exception to test-first, if this red phase's task claimed one.
+    ///
+    /// The exception is not a pardon for what was written — it is a statement that
+    /// nothing *needing* a new test was written — so the claim is checked against
+    /// the same [`crate::WriteScope`] the phase itself was granted before it
+    /// excuses anything: [`protocol::claim`] refuses a documentation exception
+    /// claimed over a production path with the same [`Error::Policy`] that refuses
+    /// the phase, and the run never reaches the gate that would have been skipped.
+    ///
+    /// Nothing is journaled but the exception itself. A phase that ran no command has
+    /// no gate pair to leave, and an invented one would be read as a check that passed.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Policy`] when a path the phase changed sits outside its write scope,
+    /// [`Error::Config`] when the task's declaration names no exception category §9
+    /// knows, and [`Error::Database`] when the row recording it was refused.
+    fn excused_red(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        spec: &PhaseSpec,
+        started_from: &TestSummary,
+    ) -> Result<Option<TestSummary>> {
+        let changed = git::changed_paths(&prep.worktree, &prep.base_sha)?;
+        let Some(event) =
+            protocol::claim(task, spec.write_scope, &changed, &self.config.test_globs)?
+        else {
+            return Ok(None);
+        };
+        self.recorder.record(Some(task.id), event)?;
+        Ok(Some(started_from.clone()))
+    }
+
+    /// The gate one phase's declaration named, as this project configured it.
+    ///
+    /// A phase declares *which* check decides it; the configuration decides *what that
+    /// check runs*, and a declaration with nothing behind it is refused rather than
+    /// skipped — a phase that was never gated and a phase whose gate passed are the
+    /// same answer to everything downstream, which is exactly why they must not be.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] naming the setting that would have configured it.
+    fn configured_gate(&self, kind: GateKind) -> Result<Gate> {
+        self.profile
+            .get(kind)
+            .cloned()
+            .ok_or_else(|| Error::Config {
+                key: gate_setting(kind),
+                detail: format!(
+                    "the phase's declaration names the {kind} gate, and no command is \
+                 configured for it, so nothing decides the phase"
+                ),
+            })
+    }
+
+    /// Run one declared gate, journalling the pair that says it ran.
+    ///
+    /// [`crate::run_completion_set`] journals this pair for the completion gates and
+    /// [`check_baseline`] for the preflight's; this is it for a phase's own gate, and
+    /// the pair is written under the task the phase belongs to rather than under no
+    /// task at all. A failures screen opens a task's rows, and a phase whose gate
+    /// appears nowhere in them is indistinguishable from a phase that ran none.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Gate`] when the command could not be started at all, with the
+    /// [`crate::EventKind::GateStarted`] row left by itself: a gate that never ran
+    /// cannot answer for what it would have found.
+    fn run_declared_gate(&mut self, work: TaskId, gate: &Gate, root: &Path) -> Result<GateResult> {
+        self.recorder
+            .record(Some(work), EventKind::GateStarted { gate: gate.kind })?;
+        let result = run_gate(gate, root, None).map_err(|failure| Error::Gate {
+            kind: gate.kind.to_string(),
+            detail: format!(
+                "the gate `{}` could not be started: {failure}",
+                command_words(gate)
+            ),
+        })?;
+        self.recorder.record(
+            Some(work),
+            EventKind::GateFinished {
+                result: result.clone(),
+            },
+        )?;
+        Ok(result)
+    }
+
+    /// File one phase's evidence beside the attempt whose phase it was.
+    ///
+    /// VISION.md §9 wants RED and GREEN evidence — *command, output, tree hash* —
+    /// stored with the attempt, and ADR-0065 gave an attempt a file home beside the
+    /// journal for what a row cannot carry. `phases/<phase>.jsonl` is that rule held
+    /// open for a phase that may gate more than once: [`write_evidence`] refuses a
+    /// second, different record for one attempt, which is right for the record and
+    /// wrong for a red phase that was refused and tried again, and an append-only line
+    /// per run says both attempts happened instead of leaving only the last.
+    ///
+    /// The whole line is redacted with the project's own `secret_patterns` before it
+    /// reaches the disk, which is the gap ADR-0065 recorded for the attempt's other
+    /// files: gate output is where a test binary prints what it was testing, and a
+    /// secret that only ever appears in evidence still reached the tree it was filed in.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when the project has no state directory, [`Error::Policy`]
+    /// when a level of the layout is there and is not a directory, [`Error::Io`] when
+    /// the filesystem refused the append, and [`Error::Serde`] when the record had no
+    /// JSON spelling or no redaction could be built.
+    fn file_phase_evidence(
+        &self,
+        prep: &Prepared,
+        work: TaskId,
+        attempt: AttemptId,
+        phase: Phase,
+        run: &PhaseRun<'_>,
+    ) -> Result<()> {
+        crate::attempt::ensure_evidence_dir(&self.project, work, attempt)?;
+        let dir = evidence_dir(&self.project, work, attempt).join(PHASES_DIR);
+        private_directory(&dir)?;
+        let evidence = PhaseEvidence {
+            phase: phase_word(phase),
+            gate: run.gate.kind.as_str(),
+            command: &run.gate.command,
+            base_sha: &prep.base_sha,
+            tree_sha: tree_hash(prep)?,
+            names: run.named,
+            passed: run.result.passed,
+            exit_code: run.result.exit_code,
+            timed_out: run.result.timed_out,
+            stdout: &run.result.stdout,
+            stderr: &run.result.stderr,
+        };
+        let line = redact_json(
+            &serde_json::to_string(&evidence)?,
+            &self.config.secret_patterns,
+        )?;
+        let path = dir.join(format!("{}{JSONL_SUFFIX}", phase_word(phase)));
+        append_private(&path, &line)
     }
 
     /// What an attempt looks like at the instant it started: everything that was
@@ -1466,6 +1696,373 @@ fn last_words(result: &GateResult) -> Option<&str> {
 /// A gate's command as the one string a report line names it by.
 fn command_words(gate: &Gate) -> String {
     gate.command.join(" ")
+}
+
+/// The directory of one attempt's phase evidence, inside its evidence directory.
+const PHASES_DIR: &str = "phases";
+
+/// The suffix of one phase's evidence file, named for the [`Phase`] it records.
+const JSONL_SUFFIX: &str = ".jsonl";
+
+/// The mode bits of the phase-evidence directory: owner-only, the rule every level of
+/// the state directory is kept to (VISION.md §11).
+const PHASE_DIR_MODE: u32 = 0o700;
+
+/// The mode bits of a phase's evidence file. Gate output is the least shareable thing a
+/// run produces, and it is the one artifact that holds a test's own words verbatim.
+const PHASE_FILE_MODE: u32 = 0o600;
+
+/// The prefix that makes a tree hash a tree hash rather than somebody else's digest of
+/// a similar string.
+const TREE_PREFIX: &[u8] = b"ktask-tree-v1\0";
+
+/// What a phase compares its own gate run against, which its declaration alone decides.
+///
+/// Three answers, because the phases decide themselves three different ways. Red and
+/// green are differences — a test that newly fails, a name that newly passes — and so
+/// each carries the summary the phase started from. Every other phase a protocol holds
+/// is decided by one run's verdict, and the [`Comparison::Gate`] arm carrying no summary
+/// is what keeps [`Runner::gate_phase`] honest about that: a refactor handed no
+/// comparison is not a red phase missing one, and refusing it would be a rule no
+/// declaration wrote.
+#[derive(Clone, Copy)]
+enum Comparison<'a> {
+    /// The summary the red phase started from, which its new failure has to be new.
+    Red(&'a TestSummary),
+    /// The names the phase started from failing, which green has to leave passing.
+    Green(&'a TestSummary),
+    /// Nothing to compare: the run's own verdict decides.
+    Gate,
+}
+
+/// Pair a phase with what it has to differ from, refusing the phases that need one.
+///
+/// The refusal comes before any gate row, and before any command is started, because
+/// there is no finding to make: a red phase with nothing to compare did not fail to
+/// break a test, it was asked a question with both halves missing. VISION.md §3's
+/// invariant 3 is what the ordering protects — a run cannot end up with the journal's
+/// account of a gate whose answer the caller could not have read.
+fn comparison(phase: Phase, before: Option<&TestSummary>) -> Result<Comparison<'_>> {
+    match (phase, before) {
+        (Phase::Red, Some(prior)) => Ok(Comparison::Red(prior)),
+        (Phase::Green, Some(prior)) => Ok(Comparison::Green(prior)),
+        (Phase::Red | Phase::Green, None) => Err(no_prior_summary(phase)),
+        _ => Ok(Comparison::Gate),
+    }
+}
+
+/// Decide one phase from the run its gate made, naming what the verdict named.
+///
+/// The names are the phase's deliverable rather than a by-product: they are what §9
+/// files as RED evidence, what green is confirmed against, and what an inspector shows
+/// a person who has to decide whether the test that failed is the test that was meant
+/// to. The lists themselves belong to [`protocol::verify_red`] and
+/// [`protocol::verify_green`], which is where the two rules are written and tested;
+/// this chooses which rule a phase is decided by and adds the run's own verdict to it.
+fn phase_verdict(
+    way: Comparison<'_>,
+    gate: &Gate,
+    result: &GateResult,
+    after: &TestSummary,
+) -> Result<Vec<String>> {
+    match way {
+        Comparison::Red(prior) => protocol::verify_red(prior, after),
+        Comparison::Green(prior) => confirm_green(prior, gate, result, after),
+        Comparison::Gate if result.passed => Ok(Vec::new()),
+        Comparison::Gate => Err(gate_refused(gate, result)),
+    }
+}
+
+/// Confirm a green phase fixed what it was for and broke nothing else.
+///
+/// Both halves of §9 step 4 in one call — the named test passing and no other test
+/// newly failing — and then the gate's own verdict on top. That order matters: the
+/// named refusal says which test this phase was for, which is the sentence an operator
+/// can act on, where "the command exited 1" only says the phase did not finish. And the
+/// gate's verdict still has to agree, because a `cargo test` that died after printing
+/// its counts, or a workspace whose second test binary failed to build, prints names
+/// that all pass and still refuses.
+///
+/// The names handed to [`protocol::verify_green`] are every name the previous run left
+/// failing, which after a phase that ran the same command is the set §9 means: a green
+/// phase answers for the whole targeted list, not only for the one test red added.
+fn confirm_green(
+    prior: &TestSummary,
+    gate: &Gate,
+    result: &GateResult,
+    after: &TestSummary,
+) -> Result<Vec<String>> {
+    protocol::verify_green(&prior.failures, after)?;
+    decided_by_gate(gate, result)?;
+    Ok(prior.failures.clone())
+}
+
+/// Refuse unless the gate's own verdict is that it passed.
+fn decided_by_gate(gate: &Gate, result: &GateResult) -> Result<()> {
+    if result.passed {
+        return Ok(());
+    }
+    Err(gate_refused(gate, result))
+}
+
+/// Refuse a phase by the run that refused it, in the words the preflight's baseline
+/// line already uses for the same facts: which command, how long, how it ended, and the
+/// last thing it said.
+fn gate_refused(gate: &Gate, result: &GateResult) -> Error {
+    let said = match last_words(result) {
+        Some(line) => format!(", and its last line was `{line}`"),
+        None => String::new(),
+    };
+    Error::Gate {
+        kind: gate.kind.to_string(),
+        detail: format!(
+            "the gate `{}` ran for {} ms and {}{said}",
+            command_words(gate),
+            result.duration_ms,
+            ended_words(result, gate.timeout_secs)
+        ),
+    }
+}
+
+/// Refuse a phase whose gate ran and wrote nothing a summary could be read out of.
+///
+/// This is the case a count can be wrong about: output with no `test result:` line is
+/// [`None`] from [`crate::parse_cargo`] rather than a run with zero failures
+/// (ADR-0039), and reading it as `0 failed` would pass a red phase that ran nothing and
+/// green phases that built nothing. The command is refused with what it did end with,
+/// because "there is no report" and "here is the line it failed on" are the two halves
+/// of the same answer.
+fn no_test_report(gate: &Gate, result: &GateResult) -> Error {
+    let said = match last_words(result) {
+        Some(line) => format!(", and its last line was `{line}`"),
+        None => String::new(),
+    };
+    Error::Gate {
+        kind: gate.kind.to_string(),
+        detail: format!(
+            "the gate `{}` ran for {} ms and {}, and wrote no test report its counts could \
+             come from{said}",
+            command_words(gate),
+            result.duration_ms,
+            ended_words(result, gate.timeout_secs)
+        ),
+    }
+}
+
+/// Refuse a phase whose declaration names no gate, by the phase that had none.
+fn no_gate_declared(phase: Phase) -> Error {
+    Error::NotFound {
+        what: format!(
+            "the gate the {} phase declares: its declaration names none, so nothing decides \
+             it mechanically and no run of any command is recorded",
+            phase_word(phase)
+        ),
+    }
+}
+
+/// Refuse a phase that decides by a difference and was given nothing to differ from.
+fn no_prior_summary(phase: Phase) -> Error {
+    Error::NotFound {
+        what: format!(
+            "the test summary the {} phase compares against: {} decides by what changed \
+             between two runs of the gate, and only one run was handed to it",
+            phase_word(phase),
+            phase_word(phase)
+        ),
+    }
+}
+
+/// The phase as its evidence file is named and its refusals quote it: lower-case, one
+/// hyphenated word.
+///
+/// [`crate::Phase`] deliberately carries no spelling of its own — `state.rs` says the
+/// lower-case forms belong to whoever is printing — and this module is what prints the
+/// evidence layout, so the rendering lives here beside the file names it produces.
+const fn phase_word(phase: Phase) -> &'static str {
+    match phase {
+        Phase::Goal => "goal",
+        Phase::Scope => "scope",
+        Phase::AcceptanceTests => "acceptance-tests",
+        Phase::Implement => "implement",
+        Phase::Red => "red",
+        Phase::Green => "green",
+        Phase::Refactor => "refactor",
+        Phase::Review => "review",
+        Phase::Harden => "harden",
+        Phase::DoneCheck => "done-check",
+        Phase::Verify => "verify",
+        Phase::Publish => "publish",
+    }
+}
+
+/// The setting that would have configured `kind`, named in the refusal that says it
+/// holds no command.
+///
+/// [`profile_from`] is what maps these keys to gate kinds, and this mirrors its table
+/// rather than deriving from it: `targeted_test_command` is the one key that does not
+/// follow the `{kind}_command` shape, and the refusal has to name what an operator has
+/// to go and set, not the shape it would have fitted.
+fn gate_setting(kind: GateKind) -> String {
+    if kind == GateKind::Targeted {
+        return "targeted_test_command".to_owned();
+    }
+    format!("{kind}_command")
+}
+
+/// The summary a gate's run reported, read from whichever stream it wrote it on.
+///
+/// Standard error second, not merged into the first: `cargo test` writes its report to
+/// standard output and a harness that is not cargo's writes its own wherever it likes,
+/// and a run that reported its counts on the other stream is still reporting. Neither
+/// stream holding a report is [`None`] rather than an empty summary — see
+/// [`no_test_report`] for what reading that as zero failures would pass.
+fn test_report(result: &GateResult) -> Option<TestSummary> {
+    parse_cargo(&result.stdout).or_else(|| parse_cargo(&result.stderr))
+}
+
+/// What the checkout held at the instant the phase's gate ran.
+///
+/// §9 wants the tree hash filed with a phase's evidence, so that a later reader can say
+/// *which* work a green verdict belongs to. It is a digest rather than a git object
+/// name, and deliberately so: the tree the gate ran against is the working tree, which
+/// git has no OID for — a green phase's edits are unstaged, and `HEAD` names the commit
+/// the phase started from, which never moves here. So this digests the base the
+/// preflight recorded together with the content digest of every path that differs from
+/// it, which is the same measurement [`protocol::check_scope`] refuses over
+/// ([`crate::git::changed_paths`], tracked edits and never-staged files together).
+///
+/// Two trees that differ by one byte of one changed file digest differently, and two
+/// checkouts of one base whose changes are identical digest the same: the question §9
+/// asks is "is this the work that was gated", not "which commit is this".
+fn tree_hash(prep: &Prepared) -> Result<String> {
+    let mut digest = Sha256::new();
+    digest.update(TREE_PREFIX);
+    digest.update(prep.base_sha.as_bytes());
+    for path in git::changed_paths(&prep.worktree, &prep.base_sha)? {
+        digest.update([0]);
+        digest.update(path.as_os_str().as_encoded_bytes());
+        digest.update([0]);
+        digest.update(content_state(&prep.worktree.join(&path))?.as_bytes());
+    }
+    Ok(hex(digest.finalize().as_ref()))
+}
+
+/// What one changed path held, as the one letter and digest that say it: its content, or
+/// that it was gone. A path git listed as deleted from the base is read as absent rather
+/// than refused, because its absence *is* the change.
+fn content_state(path: &Path) -> Result<String> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(format!("A{}", hex(Sha256::digest(&bytes).as_ref()))),
+        Err(why) if why.kind() == io::ErrorKind::NotFound => Ok("D".to_owned()),
+        Err(why) => Err(why.into()),
+    }
+}
+
+/// Lowercase hexadecimal, the way the project id and the failure signature spell it.
+fn hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .flat_map(|byte| [byte >> 4, byte & 0x0f])
+        .filter_map(|nibble| char::from_digit(u32::from(nibble), 16))
+        .collect()
+}
+
+/// What one phase's gate run left, gathered for the evidence that files it.
+///
+/// Three borrows rather than six arguments, so that the record can be built in one
+/// place: what a phase filed and what its gate journalled have to agree, and a
+/// [`PhaseRun`] that could hold half of a run is how they would stop agreeing.
+struct PhaseRun<'a> {
+    /// The gate the phase's declaration named, as this project configured it.
+    gate: &'a Gate,
+    /// What running it answered.
+    result: &'a GateResult,
+    /// The names the phase's verdict named — empty when it refused, because a refusal
+    /// named nothing new.
+    named: &'a [String],
+}
+
+/// One phase's evidence, as one line of `phases/<phase>.jsonl`.
+///
+/// The three things VISION.md §9 names — command, output, tree hash — and the three
+/// that make them readable: which phase and which gate they belong to, and the verdict
+/// the pair produced. The command is kept as the words it was spawned with rather than
+/// joined into a string, because joining is a claim about quoting and this record has to
+/// be re-runnable exactly.
+#[derive(Serialize)]
+struct PhaseEvidence<'a> {
+    /// Which phase filed this line, in the word its file is named by.
+    phase: &'a str,
+    /// Which gate ran, which for §9's red and green is always the targeted one.
+    gate: &'a str,
+    /// The command the gate ran, as the separate words it was spawned with.
+    command: &'a [String],
+    /// The commit the phase's work was measured against, which is the base the
+    /// preflight recorded rather than wherever `HEAD` stands.
+    base_sha: &'a str,
+    /// What the checkout held when the gate ran — see [`tree_hash`].
+    tree_sha: String,
+    /// The tests the phase's verdict named; empty for a phase it refused.
+    names: &'a [String],
+    /// The gate's own verdict on the run. Stored, not derived (ADR-0036).
+    passed: bool,
+    /// The status the command exited with, or `None` when it never produced one.
+    exit_code: Option<i32>,
+    /// Whether the run outlived its budget and was killed.
+    timed_out: bool,
+    /// Both streams verbatim. §9 stores the output rather than a summary of it, and a
+    /// harness that reports on standard error is not reporting less.
+    stdout: &'a str,
+    /// The stream a command explains itself on, kept beside the other.
+    stderr: &'a str,
+}
+
+/// Append one redacted line to a phase's evidence file, and flush it.
+///
+/// Appended rather than written, and synced rather than left in the page cache, for the
+/// two reasons the attempt's own files are written the same way (ADR-0065): a phase that
+/// gated twice has two answers worth reading, and evidence lost to a power cut is a run
+/// nobody can review. The mode is set after the write as well as asked for at creation,
+/// because a file that already existed keeps whatever mode somebody gave it.
+fn append_private(path: &Path, line: &str) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(PHASE_FILE_MODE)
+        .open(path)?;
+    file.write_all(line.as_bytes())?;
+    file.write_all(b"\n")?;
+    fs::set_permissions(path, Permissions::from_mode(PHASE_FILE_MODE))?;
+    file.sync_all()?;
+    Ok(())
+}
+
+/// Make `path` exist as a directory kept at [`PHASE_DIR_MODE`].
+///
+/// The same rule the attempt's other evidence levels follow: a link is refused rather
+/// than written through, since writing through one would put a run's evidence wherever
+/// the link points, and a level that is there and is not a directory is refused rather
+/// than deleted to make room.
+fn private_directory(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(seen) if seen.is_dir() => {}
+        Ok(_) => return Err(occupied(path)),
+        Err(why) if why.kind() == io::ErrorKind::NotFound => fs::create_dir(path)?,
+        Err(why) => return Err(why.into()),
+    }
+    fs::set_permissions(path, Permissions::from_mode(PHASE_DIR_MODE))?;
+    Ok(())
+}
+
+/// Refuse a level of the evidence layout that is there and is not a directory.
+fn occupied(path: &Path) -> Error {
+    Error::Policy {
+        detail: format!(
+            "`{}` is already there and is not a directory",
+            path.display()
+        ),
+        paths: vec![path.to_path_buf()],
+    }
 }
 
 /// Ask whether this project's repository lock can be taken, and give it back.
@@ -4137,6 +4734,951 @@ mod run_phase {
             !fixture.report_of(1).exists(),
             "the report read back is the one attempt 2 was told to write, and attempt 1 \
              left none for this phase to mistake for it"
+        );
+    }
+}
+
+#[cfg(test)]
+mod gate_phase {
+    //! One phase's mechanical check, run here rather than trusted from a report:
+    //! the gate pair journalled around the command, the red and green verdicts read
+    //! out of two test summaries, and the evidence a phase leaves beside the attempt
+    //! it was run for.
+    //!
+    //! Named after the method it tests, the way `mod new`, `mod prepare`,
+    //! `mod report` and `mod run_phase` are named after theirs, because the task
+    //! that asked for this step fixed `test(/runner::gate_phase/)` as its Verify
+    //! command.
+    //!
+    //! The gate every test here runs is a `/bin/sh` script that prints a
+    //! cargo-shaped report — the text of one, in a file outside every checkout — and
+    //! exits the way that report reads. Running a real `cargo test` would make each
+    //! of these tests depend on a workspace compiling at the instant it ran, while
+    //! what the runner decides on is the *report* and the exit status. Reading a
+    //! report correctly is [`crate::parse_cargo`]'s own coverage.
+
+    use super::{Prepared, Runner};
+    use crate::testing::{ScratchRepo, scratch_repo};
+    use crate::{
+        AttemptId, Config, Error, EventKind, GateKind, GateResult, Journal, Phase, PhaseSpec,
+        Project, Task, TaskId, TddException, TestSummary, WriteScope, evidence_dir, for_task,
+        parse_plan, project_config_path,
+    };
+    use serde_json::Value;
+    use std::fmt::Write as _;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    /// The identity every fixture gives its registered project.
+    const PROJECT_ID: &str = "0123456789abcdef";
+
+    /// The queue position [`parse_plan`] gives the one-row plan below, and so the
+    /// task every phase here is gated for.
+    const TASK: u32 = 1;
+
+    /// The attempt every phase here is filed under. The fixtures file under a
+    /// hand-numbered one rather than calling [`Runner::begin_attempt`] so that the
+    /// rows a test counts are the rows this step wrote.
+    const ATTEMPT: u32 = 1;
+
+    /// The rows a prepared task has already left when its phase is gated: the
+    /// preflight, and nothing else.
+    const PREPARED: [&str; 2] = ["PreflightStarted", "PreflightPassed"];
+
+    /// The rows a phase that ran its gate leaves: the pair, beside the preflight.
+    const GATED: [&str; 4] = [
+        "PreflightStarted",
+        "PreflightPassed",
+        "GateStarted",
+        "GateFinished",
+    ];
+
+    /// Which command a fixture's settings document names as `targeted_test_command`.
+    #[derive(Clone, Copy)]
+    enum Command {
+        /// The script [`Fixture`] writes, which prints a report and exits as it
+        /// reads.
+        Script,
+        /// Nothing: a project that configured no targeted gate at all.
+        Unset,
+        /// A program that is not there, so the gate cannot be started.
+        Nowhere,
+    }
+
+    /// The settings a gate runs under: an adapter this build has, the mandatory
+    /// verify gate, whatever `gate` names as the targeted command, and a disk floor
+    /// no test machine breaches.
+    fn settings(gate: &str, extra: &str) -> String {
+        format!(
+            "provider = \"claude\"\n\
+             verify_command = [\"/bin/sh\", \"-c\", \"exit 0\"]\n\
+             {gate}\
+             min_free_disk_bytes = 1\n\
+             {extra}"
+        )
+    }
+
+    /// The `targeted_test_command` line a settings document runs `words` with.
+    fn gate_line(words: &[&str]) -> String {
+        let quoted = words
+            .iter()
+            .map(|word| format!("\"{word}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("targeted_test_command = [{quoted}]\n")
+    }
+
+    /// The gate script: print the report, or say on standard error that there is
+    /// none to print; hand the report to standard error and refuse when a marker
+    /// file says this command writes its results there; otherwise exit the way the
+    /// report reads, because a cargo test run exits non-zero on a failing test.
+    fn gate_script(report: &Path, stderr_marker: &Path, exit_marker: &Path) -> String {
+        format!(
+            "#!/bin/sh\n\
+             REPORT='{}'\n\
+             if [ ! -f \"$REPORT\" ]; then echo 'gate: nothing to print' >&2; exit 2; fi\n\
+             if [ -f '{}' ]; then cat \"$REPORT\" >&2; exit 1; fi\n\
+             cat \"$REPORT\"\n\
+             if [ -f '{}' ]; then read code < '{}'; exit \"$code\"; fi\n\
+             if grep -q '^test result: FAILED' \"$REPORT\"; then exit 1; fi\n\
+             exit 0\n",
+            report.display(),
+            stderr_marker.display(),
+            exit_marker.display(),
+            exit_marker.display()
+        )
+    }
+
+    /// A registered project, the script its targeted gate runs, and the file that
+    /// script prints as its test report.
+    struct Fixture {
+        repo: ScratchRepo,
+        project: Project,
+        script: PathBuf,
+        report: PathBuf,
+        stderr_marker: PathBuf,
+        exit_marker: PathBuf,
+    }
+
+    impl Fixture {
+        /// A project whose targeted gate is the script this fixture writes.
+        fn new() -> Self {
+            Self::with_gate(Command::Script, "")
+        }
+
+        /// As [`Fixture::new`], with `extra` appended to the settings document —
+        /// how one test sets `secret_patterns` and the rest do not.
+        fn with_settings(extra: &str) -> Self {
+            Self::with_gate(Command::Script, extra)
+        }
+
+        /// A project that configured no `targeted_test_command`, so a phase's
+        /// declaration names a gate the profile holds no command for.
+        fn without_gate_command() -> Self {
+            Self::with_gate(Command::Unset, "")
+        }
+
+        /// A project whose targeted gate names a program that is not there.
+        fn with_unspawnable_gate() -> Self {
+            Self::with_gate(Command::Nowhere, "")
+        }
+
+        /// A project with `targeted_test_command` decided by `command`, and `extra`
+        /// beside the base settings.
+        fn with_gate(command: Command, extra: &str) -> Self {
+            let repo = scratch_repo().expect("a scratch repository is buildable");
+            let state_dir = repo.path().join("state").join(PROJECT_ID);
+            let project = Project {
+                root: repo.work().to_path_buf(),
+                id: PROJECT_ID.to_owned(),
+                state_dir,
+            };
+            let script = repo.path().join("gate.sh");
+            let report = repo.path().join("report.txt");
+            let stderr_marker = repo.path().join("report-on-stderr");
+            let exit_marker = repo.path().join("exit-code");
+            fs::create_dir_all(&project.state_dir).expect("a state directory is creatable");
+            fs::write(&script, gate_script(&report, &stderr_marker, &exit_marker))
+                .expect("a gate script is writable");
+            let gate = match command {
+                Command::Script => gate_line(&["/bin/sh", &script.display().to_string()]),
+                Command::Unset => String::new(),
+                Command::Nowhere => gate_line(&["/nonexistent/ktask-gate-program"]),
+            };
+            fs::write(project_config_path(&project), settings(&gate, extra))
+                .expect("a project settings document is writable");
+            Self {
+                repo,
+                project,
+                script,
+                report,
+                stderr_marker,
+                exit_marker,
+            }
+        }
+
+        /// The run this project is configured to have.
+        fn run(&self) -> Runner {
+            Runner::new(self.project.clone()).expect("a registered, configured project opens a run")
+        }
+
+        /// What the gate's command will print as its test report.
+        fn report(&self, text: &str) {
+            fs::write(&self.report, text).expect("a test report is writable");
+        }
+
+        /// Make the command carry its report on standard error and refuse, as a
+        /// command that explains itself there does.
+        fn report_on_stderr(&self) {
+            fs::write(&self.stderr_marker, "").expect("a marker file is writable");
+        }
+
+        /// Make the command exit `code` whatever its report says.
+        fn exits_with(&self, code: u8) {
+            fs::write(&self.exit_marker, format!("{code}\n")).expect("an exit marker is writable");
+        }
+
+        /// Where one attempt's evidence for `phase` is spelled to live.
+        fn evidence_of(&self, phase: &str) -> PathBuf {
+            evidence_dir(&self.project, TaskId::new(TASK), AttemptId::new(ATTEMPT))
+                .join("phases")
+                .join(format!("{phase}.jsonl"))
+        }
+
+        /// Every line that file holds, oldest first.
+        fn filed(&self, phase: &str) -> Vec<Value> {
+            let path = self.evidence_of(phase);
+            let text = fs::read_to_string(&path).unwrap_or_else(|why| {
+                panic!(
+                    "`{}` should hold what the phase filed: {why}",
+                    path.display()
+                )
+            });
+            text.lines()
+                .map(|line| serde_json::from_str(line).expect("a filed line is JSON"))
+                .collect()
+        }
+    }
+
+    /// The queue's one task.
+    fn task() -> Task {
+        let document = "\
+## T092 Runner step: TDD phase gating
+
+**Outcome:** the red and green phases are enforced by the runner, not trusted.
+**Done-when:** a red phase that fails no new test does not advance.
+**Verify:** `cargo nextest run -p ktask-core -E 'test(/runner::gate_phase/)'`
+**Refs:** VISION.md section 9
+";
+        let parsed = parse_plan(document)
+            .expect("a task block with the four mandatory sections is a parseable plan");
+        let row = parsed
+            .into_iter()
+            .next()
+            .expect("the fixture plan holds one row");
+        assert_eq!(row.id, TaskId::new(TASK), "every fixture works task {TASK}");
+        row
+    }
+
+    /// The same row, working `tdd` and declaring §9's exception to test-first.
+    ///
+    /// The declaration is appended to the body rather than stored in a field, the
+    /// way `protocol.rs`'s own fixtures spell it: the section is a fact about a
+    /// queue row, and a run reads it back out of the row's text.
+    fn excused() -> Task {
+        let mut row = task();
+        row.protocol = Some("tdd".to_owned());
+        row.body
+            .push_str("**Tdd-exception:** Documentation\nOnly a doc comment moved.\n");
+        row
+    }
+
+    /// A phase that declares the targeted gate, hand-spelled the way `mod
+    /// run_phase` spells its phase: which gate decides a phase, what it may write
+    /// and whether it records evidence are the arguments these tests turn on, and
+    /// a fixture that took them from the declaration under test would agree with
+    /// whatever that declaration said.
+    fn declared(step: Phase, scope: WriteScope, records: bool) -> PhaseSpec {
+        PhaseSpec {
+            phase: step,
+            write_scope: scope,
+            gate: Some(GateKind::Targeted),
+            records_evidence: records,
+        }
+    }
+
+    /// §9's red phase: tests only, targeted gate, evidence recorded.
+    fn red() -> PhaseSpec {
+        declared(Phase::Red, WriteScope::TestsOnly, true)
+    }
+
+    /// §9's green phase: the whole tree, the same gate, evidence recorded.
+    fn green() -> PhaseSpec {
+        declared(Phase::Green, WriteScope::All, true)
+    }
+
+    /// §9's refactor phase: the same gate, no evidence of its own.
+    fn refactor() -> PhaseSpec {
+        declared(Phase::Refactor, WriteScope::All, false)
+    }
+
+    /// A green phase that declares no gate, so nothing decides it.
+    fn ungated() -> PhaseSpec {
+        PhaseSpec {
+            phase: Phase::Green,
+            write_scope: WriteScope::All,
+            gate: None,
+            records_evidence: true,
+        }
+    }
+
+    /// A cargo-shaped report: one test binary that opened, named its failures under
+    /// the `failures:` block, and answered with the result line at column zero.
+    fn report(passed: u32, failing: &[&str]) -> String {
+        let failed = u32::try_from(failing.len()).unwrap_or(u32::MAX);
+        let mut text = format!("running {} tests\n", passed + failed);
+        for name in failing {
+            writeln!(&mut text, "test {name} ... FAILED")
+                .expect("a String is a writer that never refuses");
+        }
+        if !failing.is_empty() {
+            text.push_str("failures:\n");
+            for name in failing {
+                writeln!(&mut text, "    {name}").expect("a String is a writer that never refuses");
+            }
+        }
+        let verdict = if failing.is_empty() { "ok" } else { "FAILED" };
+        write!(
+            &mut text,
+            "\ntest result: {verdict}. {passed} passed; {failed} failed; 0 ignored; 0 measured; \
+             0 filtered out; finished in 0.00s\n"
+        )
+        .expect("a String is a writer that never refuses");
+        text
+    }
+
+    /// The summary a phase starts from, as [`report`]'s run would have been parsed.
+    fn summary(passed: u32, failing: &[&str]) -> TestSummary {
+        TestSummary {
+            passed,
+            failed: u32::try_from(failing.len()).unwrap_or(u32::MAX),
+            ignored: 0,
+            failures: failing.iter().map(|name| (*name).to_owned()).collect(),
+        }
+    }
+
+    /// Take a task as far as an attempt can start, so a phase has a checkout and a
+    /// base to be measured against.
+    fn prepared(run: &mut Runner) -> Prepared {
+        run.prepare(&task())
+            .expect("nothing in this fixture gives preflight a reason to refuse")
+    }
+
+    /// Gate one phase of the queue's task, at the attempt every fixture files under.
+    fn gate(
+        run: &mut Runner,
+        ready: &Prepared,
+        spec: &PhaseSpec,
+        before: Option<&TestSummary>,
+    ) -> crate::Result<TestSummary> {
+        run.gate_phase(ready, &task(), AttemptId::new(ATTEMPT), spec, before)
+    }
+
+    /// As [`gate`], for `work` as the queue row describes it — how a test declares the
+    /// `**Tdd-exception:**` a phase is expected to honour.
+    fn gate_for(
+        run: &mut Runner,
+        ready: &Prepared,
+        work: &Task,
+        spec: &PhaseSpec,
+        before: Option<&TestSummary>,
+    ) -> crate::Result<TestSummary> {
+        run.gate_phase(ready, work, AttemptId::new(ATTEMPT), spec, before)
+    }
+
+    /// The kinds the journal holds for the task, oldest first, read on a second
+    /// connection because that is who asks this question in real life.
+    fn kinds(project: &Project) -> Vec<&'static str> {
+        Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events_for(TaskId::new(TASK))
+            .expect("the rows this run wrote are readable")
+            .iter()
+            .map(|row| row.kind.discriminant())
+            .collect()
+    }
+
+    /// What the phase's `GateFinished` row says the command did.
+    fn finished(project: &Project) -> GateResult {
+        for row in Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events_for(TaskId::new(TASK))
+            .expect("the rows this run wrote are readable")
+        {
+            if let EventKind::GateFinished { result } = row.kind {
+                return result;
+            }
+        }
+        panic!("a gate that ran leaves the row that records what it produced");
+    }
+
+    /// The exception row an excused phase left, as its category and its reason.
+    fn claimed(project: &Project) -> (TddException, String) {
+        for row in Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events_for(TaskId::new(TASK))
+            .expect("the rows this run wrote are readable")
+        {
+            if let EventKind::TddExceptionUsed { exception, reason } = row.kind {
+                return (exception, reason);
+            }
+        }
+        panic!("an excused phase leaves the row that records the exception and its reason");
+    }
+
+    /// Leave `text` at `path` inside the task's checkout, as a session that wrote
+    /// there would have.
+    fn write_in(ready: &Prepared, path: &str, text: &str) {
+        let full = ready.worktree.join(path);
+        if let Some(parent) = full.parent() {
+            fs::create_dir_all(parent).expect("a checkout directory is creatable");
+        }
+        fs::write(&full, text).expect("a checkout file is writable");
+    }
+
+    #[test]
+    fn a_red_phase_that_newly_fails_is_told_the_failure_it_asked_for() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(1, &["tests::a_new_refusal"]));
+        let after = gate(&mut run, &ready, &red(), Some(&summary(2, &[])))
+            .expect("a test that failed and was not failing before is the failure red asked for");
+        assert_eq!(after.failures, vec!["tests::a_new_refusal".to_owned()]);
+        assert_eq!(after.failed, 1);
+        assert_eq!(after.passed, 1);
+    }
+
+    #[test]
+    fn a_red_phase_journals_the_gate_pair_around_the_command_it_ran() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(1, &["tests::a_new_refusal"]));
+        let _ = gate(&mut run, &ready, &red(), Some(&summary(2, &[])));
+        assert_eq!(kinds(&fixture.project), GATED);
+        let result = finished(&fixture.project);
+        assert_eq!(result.kind, GateKind::Targeted);
+        assert!(!result.passed, "a run with a failing test did not pass");
+        assert_eq!(result.exit_code, Some(1));
+        assert!(
+            result.stdout.contains("test result: FAILED"),
+            "the row carries the report the command printed: {}",
+            result.stdout
+        );
+    }
+
+    #[test]
+    fn a_red_phase_that_fails_nothing_new_does_not_advance() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(1, &["tests::an_old_refusal"]));
+        let refusal = gate(
+            &mut run,
+            &ready,
+            &red(),
+            Some(&summary(1, &["tests::an_old_refusal"])),
+        )
+        .expect_err("a failure that was already failing proves no new test");
+        let Error::Gate { kind, detail } = refusal else {
+            panic!("a red phase that proved nothing is a gate refusal, not {refusal:?}");
+        };
+        assert_eq!(kind, "targeted");
+        assert!(
+            detail.contains("failing before: `tests::an_old_refusal`")
+                && detail.contains("failing after: `tests::an_old_refusal`"),
+            "the refusal quotes both lists it compared: {detail}"
+        );
+        assert_eq!(kinds(&fixture.project), GATED);
+    }
+
+    #[test]
+    fn a_red_phase_with_no_summary_to_compare_is_refused_before_anything_runs() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(0, &["tests::a_new_refusal"]));
+        let refusal = gate(&mut run, &ready, &red(), None)
+            .expect_err("red decides by a difference, and there is nothing to differ from");
+        assert!(
+            matches!(&refusal, Error::NotFound { what } if what.contains("red")),
+            "the refusal names the phase it could not decide: {refusal:?}"
+        );
+        assert!(
+            !kinds(&fixture.project).contains(&"GateStarted"),
+            "a refusal before the gate ran started no gate: {:?}",
+            kinds(&fixture.project)
+        );
+    }
+
+    #[test]
+    fn a_green_phase_with_no_summary_to_compare_is_refused_before_anything_runs() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(2, &[]));
+        let refusal = gate(&mut run, &ready, &green(), None)
+            .expect_err("green confirms names, and none were given");
+        assert!(
+            matches!(&refusal, Error::NotFound { what } if what.contains("green")),
+            "the refusal names the phase it could not decide: {refusal:?}"
+        );
+        assert!(
+            !kinds(&fixture.project).contains(&"GateStarted"),
+            "a refusal before the gate ran started no gate: {:?}",
+            kinds(&fixture.project)
+        );
+    }
+
+    #[test]
+    fn a_phase_that_declares_no_gate_names_the_phase_no_command_decides() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(2, &[]));
+        let refusal = gate(&mut run, &ready, &ungated(), Some(&summary(1, &[])))
+            .expect_err("a phase with no declared gate cannot be decided by this step");
+        assert!(
+            matches!(&refusal, Error::NotFound { what } if what.contains("green")),
+            "the refusal names the phase whose declaration was empty: {refusal:?}"
+        );
+        assert_eq!(kinds(&fixture.project), PREPARED);
+    }
+
+    #[test]
+    fn a_phase_whose_gate_no_setting_configures_names_the_key_it_needs() {
+        let fixture = Fixture::without_gate_command();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        let refusal = gate(&mut run, &ready, &red(), Some(&summary(2, &[])))
+            .expect_err("a targeted gate with no command cannot decide a phase");
+        let Error::Config { key, detail } = refusal else {
+            panic!("a missing gate command is a configuration refusal, not {refusal:?}");
+        };
+        assert_eq!(key, "targeted_test_command");
+        assert!(
+            detail.contains("targeted"),
+            "the refusal says which gate has no command: {detail}"
+        );
+        assert_eq!(kinds(&fixture.project), PREPARED);
+    }
+
+    #[test]
+    fn a_green_phase_that_leaves_the_named_test_passing_is_told_the_run() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(2, &[]));
+        let after = gate(
+            &mut run,
+            &ready,
+            &green(),
+            Some(&summary(1, &["tests::a_new_refusal"])),
+        )
+        .expect("the test red made fail passes now, and nothing else broke");
+        assert_eq!(after.passed, 2);
+        assert!(after.failures.is_empty());
+        assert_eq!(kinds(&fixture.project), GATED);
+    }
+
+    #[test]
+    fn a_green_phase_that_breaks_a_passing_test_names_the_regression() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(1, &["tests::an_unrelated_test"]));
+        let refusal = gate(
+            &mut run,
+            &ready,
+            &green(),
+            Some(&summary(2, &["tests::a_new_refusal"])),
+        )
+        .expect_err("a green phase that broke another test is not done");
+        let Error::Gate { kind, detail } = refusal else {
+            panic!("a regression is a gate refusal, not {refusal:?}");
+        };
+        assert_eq!(kind, "targeted");
+        assert!(
+            detail.contains("passing before and failing now: `tests::an_unrelated_test`"),
+            "the refusal names the test this phase broke: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_green_phase_whose_named_test_still_fails_names_it() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(1, &["tests::a_new_refusal"]));
+        let refusal = gate(
+            &mut run,
+            &ready,
+            &green(),
+            Some(&summary(1, &["tests::a_new_refusal"])),
+        )
+        .expect_err("green ended where red ended");
+        let Error::Gate { detail, .. } = refusal else {
+            panic!("a still-failing test is a gate refusal, not {refusal:?}");
+        };
+        assert!(
+            detail.contains("expected and still failing: `tests::a_new_refusal`"),
+            "the refusal names the test that was to be fixed: {detail}"
+        );
+    }
+
+    #[test]
+    fn a_green_phase_whose_command_refused_is_refused_however_its_report_reads() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(2, &[]));
+        fixture.exits_with(1);
+        let refusal = gate(
+            &mut run,
+            &ready,
+            &green(),
+            Some(&summary(1, &["tests::a_new_refusal"])),
+        )
+        .expect_err("a command that refused is not a green phase, whatever it printed");
+        let Error::Gate { detail, .. } = refusal else {
+            panic!("a refused command is a gate refusal, not {refusal:?}");
+        };
+        assert!(
+            detail.contains("exited with code 1"),
+            "the refusal says how the run ended: {detail}"
+        );
+        assert_eq!(kinds(&fixture.project), GATED);
+    }
+
+    #[test]
+    fn a_gate_that_reports_no_test_result_is_not_read_as_everything_passing() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        let refusal = gate(&mut run, &ready, &red(), Some(&summary(2, &[])))
+            .expect_err("a command that printed no test report proved nothing");
+        let Error::Gate { detail, .. } = refusal else {
+            panic!("an unreadable run is a gate refusal, not {refusal:?}");
+        };
+        assert!(
+            detail.contains("wrote no test report"),
+            "the refusal says what was missing: {detail}"
+        );
+        assert_eq!(kinds(&fixture.project), GATED);
+    }
+
+    #[test]
+    fn a_test_report_carried_on_standard_error_is_still_read_as_the_verdict() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(1, &["tests::a_new_refusal"]));
+        fixture.report_on_stderr();
+        let after = gate(&mut run, &ready, &red(), Some(&summary(2, &[])))
+            .expect("a tool that writes its test output on standard error is still reporting");
+        assert_eq!(after.failures, vec!["tests::a_new_refusal".to_owned()]);
+    }
+
+    #[test]
+    fn a_gate_that_cannot_be_started_leaves_its_start_without_a_finish() {
+        let fixture = Fixture::with_unspawnable_gate();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        let refusal = gate(&mut run, &ready, &red(), Some(&summary(2, &[])))
+            .expect_err("a command that cannot be started decides nothing");
+        let Error::Gate { kind, detail } = refusal else {
+            panic!("a gate that never started is a gate refusal, not {refusal:?}");
+        };
+        assert_eq!(kind, "targeted");
+        assert!(
+            detail.contains("could not be started"),
+            "the refusal says the command never ran: {detail}"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            ["PreflightStarted", "PreflightPassed", "GateStarted"],
+            "the start is journaled and the answer that never came is not"
+        );
+    }
+
+    #[test]
+    fn a_red_phase_files_the_command_the_output_and_the_tree_hash() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(1, &["tests::a_new_refusal"]));
+        gate(&mut run, &ready, &red(), Some(&summary(2, &[])))
+            .expect("the new failure is what red asked for");
+        let filed = fixture.filed("red");
+        assert_eq!(filed.len(), 1, "one run files one line");
+        let line = &filed[0];
+        let script = fixture.script.display().to_string();
+        assert_eq!(line["phase"].as_str(), Some("red"));
+        assert!(
+            Path::new(&script).starts_with(fixture.repo.path()),
+            "the stored command names a script inside this fixture's own scratch directory, \
+             not one the runner invented: {script}"
+        );
+        assert_eq!(line["gate"].as_str(), Some("targeted"));
+        assert_eq!(line["command"][1].as_str(), Some(script.as_str()));
+        assert_eq!(line["base_sha"].as_str(), Some(ready.base_sha.as_str()));
+        assert_eq!(line["names"][0].as_str(), Some("tests::a_new_refusal"));
+        assert_eq!(line["passed"], Value::Bool(false));
+        assert_eq!(line["exit_code"], Value::from(1));
+        assert_eq!(line["timed_out"], Value::Bool(false));
+        assert!(
+            line["stdout"]
+                .as_str()
+                .is_some_and(|text| text.contains("test result: FAILED")),
+            "§9's output is stored, not summarised: {}",
+            line["stdout"]
+        );
+        let tree = line["tree_sha"].as_str().expect("a tree hash is text");
+        assert_eq!(tree.len(), 64, "a SHA-256 digest is 64 hex characters");
+        assert!(
+            tree.chars().all(|digit| digit.is_ascii_hexdigit()),
+            "a tree hash is hexadecimal: {tree}"
+        );
+    }
+
+    #[test]
+    fn a_refused_red_phase_files_what_it_ran_as_a_denial() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(1, &["tests::an_old_refusal"]));
+        let _ = gate(
+            &mut run,
+            &ready,
+            &red(),
+            Some(&summary(1, &["tests::an_old_refusal"])),
+        )
+        .expect_err("nothing failed newly");
+        let filed = fixture.filed("red");
+        assert_eq!(filed.len(), 1, "a refusal is filed so it can be read");
+        assert_eq!(filed[0]["passed"], Value::Bool(false));
+        assert_eq!(filed[0]["phase"].as_str(), Some("red"));
+        assert!(
+            filed[0]["names"].as_array().is_some_and(Vec::is_empty),
+            "a refusal named nothing new: {}",
+            filed[0]["names"]
+        );
+    }
+
+    #[test]
+    fn the_tree_hash_moves_when_the_checkout_moves() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(1, &["tests::a_new_refusal"]));
+        gate(&mut run, &ready, &red(), Some(&summary(2, &[])))
+            .expect("the new failure is what red asked for");
+        write_in(
+            &ready,
+            "tests/a_new_test.rs",
+            "#[test] fn a_new_test() {}\n",
+        );
+        fixture.report(&report(2, &[]));
+        gate(
+            &mut run,
+            &ready,
+            &green(),
+            Some(&summary(1, &["tests::a_new_refusal"])),
+        )
+        .expect("the named test passes now");
+        let red = fixture.filed("red");
+        let green = fixture.filed("green");
+        let before = red[0]["tree_sha"].as_str().expect("red filed a tree hash");
+        let after = green[0]["tree_sha"]
+            .as_str()
+            .expect("green filed a tree hash");
+        assert_ne!(
+            before, after,
+            "the tree green left holds a file red left no trace of"
+        );
+    }
+
+    #[test]
+    fn a_phase_that_records_no_evidence_files_nothing() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(2, &[]));
+        gate(&mut run, &ready, &refactor(), None)
+            .expect("the targeted tests stayed green through the cleanup");
+        assert!(
+            !fixture.evidence_of("refactor").exists(),
+            "a phase that declares no evidence of its own files none"
+        );
+    }
+
+    #[test]
+    fn evidence_is_refused_when_its_own_path_is_occupied() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(2, &[]));
+        fs::create_dir_all(fixture.evidence_of("green"))
+            .expect("a fixture can occupy the evidence path");
+        let refusal = gate(
+            &mut run,
+            &ready,
+            &green(),
+            Some(&summary(1, &["tests::a_new_refusal"])),
+        )
+        .expect_err("evidence cannot be filed through a directory in its place");
+        assert!(
+            matches!(refusal, Error::Io { .. }),
+            "the filesystem refused the write: {refusal:?}"
+        );
+        assert_eq!(kinds(&fixture.project), GATED);
+    }
+
+    #[test]
+    fn a_declared_exception_skips_the_red_phase_and_records_itself() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        let work = excused();
+        let started = summary(3, &["tests::an_old_refusal"]);
+        let after = gate_for(&mut run, &ready, &work, &red(), Some(&started))
+            .expect("a declared exception needs no new failing test");
+        assert_eq!(
+            after, started,
+            "the skipped phase hands on what it began with"
+        );
+        let (exception, reason) = claimed(&fixture.project);
+        assert_eq!(exception, TddException::Documentation);
+        assert_eq!(reason, "Only a doc comment moved.");
+        assert_eq!(
+            kinds(&fixture.project),
+            ["PreflightStarted", "PreflightPassed", "TddExceptionUsed"]
+        );
+        let phases = for_task(&work, &Config::default())
+            .expect("a task may name the protocol it is worked under")
+            .phases;
+        assert!(
+            !phases.iter().any(|spec| spec.phase == Phase::Red),
+            "§9's exception removes the red phase from the protocol: {phases:?}"
+        );
+    }
+
+    #[test]
+    fn an_exception_claimed_over_production_code_is_refused_naming_the_path() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        write_in(&ready, "src/main.rs", "fn main() {}\n");
+        let work = excused();
+        let refusal = gate_for(
+            &mut run,
+            &ready,
+            &work,
+            &red(),
+            Some(&summary(3, &["tests::an_old_refusal"])),
+        )
+        .expect_err("an exception is no pardon for what was already written");
+        let Error::Policy { paths, .. } = refusal else {
+            panic!("a scope violation stays a policy refusal, not {refusal:?}");
+        };
+        assert!(
+            paths.contains(&PathBuf::from("src/main.rs")),
+            "the refusal names what broke the scope: {paths:?}"
+        );
+        assert_eq!(kinds(&fixture.project), PREPARED);
+    }
+
+    #[test]
+    fn an_exception_claimed_over_tests_only_is_recorded_and_skips_the_gate() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        write_in(
+            &ready,
+            "tests/a_new_test.rs",
+            "#[test] fn a_new_test() {}\n",
+        );
+        let work = excused();
+        let after = gate_for(
+            &mut run,
+            &ready,
+            &work,
+            &red(),
+            Some(&summary(3, &["tests::an_old_refusal"])),
+        )
+        .expect("an exception over the paths red was allowed to write is honoured");
+        assert_eq!(after.passed, 3);
+        assert_eq!(
+            kinds(&fixture.project),
+            ["PreflightStarted", "PreflightPassed", "TddExceptionUsed"]
+        );
+    }
+
+    #[test]
+    fn a_phase_that_compares_nothing_is_decided_by_its_gate_verdict() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(4, &[]));
+        let after = gate(&mut run, &ready, &refactor(), None)
+            .expect("the gate passed, so the phase is decided");
+        assert_eq!(after.passed, 4);
+        assert!(after.failures.is_empty());
+    }
+
+    #[test]
+    fn a_phase_whose_gate_refused_is_refused_however_much_passed() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        fixture.report(&report(9, &["tests::broken_by_the_cleanup"]));
+        let refusal = gate(&mut run, &ready, &refactor(), None)
+            .expect_err("a refactor that left a test failing is not decided as done");
+        let Error::Gate { kind, detail } = refusal else {
+            panic!("a refused gate is a gate refusal, not {refusal:?}");
+        };
+        assert_eq!(kind, "targeted");
+        assert!(
+            detail.contains("exited with code 1"),
+            "the refusal says how the run ended: {detail}"
+        );
+    }
+
+    #[test]
+    fn the_evidence_a_phase_files_is_redacted_with_the_projects_own_patterns() {
+        let fixture = Fixture::with_settings("secret_patterns = [\"s3cret-[a-z]+\"]\n");
+        let mut run = fixture.run();
+        let ready = prepared(&mut run);
+        let mut printed = report(2, &[]);
+        printed.push_str("note: s3cret-token printed by the test binary\n");
+        fixture.report(&printed);
+        gate(
+            &mut run,
+            &ready,
+            &green(),
+            Some(&summary(1, &["tests::a_new_refusal"])),
+        )
+        .expect("the phase is green; the report merely happens to print a secret");
+        let text = fs::read_to_string(fixture.evidence_of("green"))
+            .expect("the evidence a phase filed is readable");
+        assert!(
+            !text.contains("s3cret-token"),
+            "the configured pattern did not reach the evidence file"
+        );
+        assert!(
+            text.contains(crate::redact::MASK),
+            "what it replaced is marked as redacted: {text}"
         );
     }
 }
