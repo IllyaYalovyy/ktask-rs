@@ -18,14 +18,14 @@ mod state;
 mod task;
 
 pub use classify::{FailureClass, Recovery, Stream, TddException};
-pub use config::{Config, Resolved, Source};
+pub use config::{Config, Resolved, Source, load_for};
 pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use events::{Bus, Recorder, Subscription};
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::{Journal, journal_path};
 pub use paths::{config_file, project_id, state_root};
-pub use project::Project;
+pub use project::{Project, project_config_path};
 pub use queue::next_runnable;
 pub use redact::redact;
 pub use state::{PauseReason, Phase, TaskState, apply, check_one_active, check_predecessor};

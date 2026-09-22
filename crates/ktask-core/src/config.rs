@@ -13,6 +13,7 @@
 //! which layer won for every key, so the effective configuration is never a
 //! mystery.
 
+use crate::project::{Project, project_config_path};
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -200,6 +201,25 @@ impl Config {
             })
             .collect()
     }
+}
+
+/// Loads `project`'s effective configuration: [`Config::load`] with the
+/// global config file (`paths::config_file`), `project`'s own config file
+/// ([`project_config_path`]) and the process environment.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] under the conditions of [`Config::load`], and
+/// also when the global config path cannot be resolved (see
+/// [`crate::paths::config_file`]).
+pub fn load_for(project: &Project) -> Result<Config> {
+    load_for_with(project, &|key| std::env::var(key).ok())
+}
+
+fn load_for_with(project: &Project, env: &dyn Fn(&str) -> Option<String>) -> Result<Config> {
+    let global = crate::paths::config_file_with(env)?;
+    let project_file = project_config_path(project);
+    Config::load(Some(&global), Some(&project_file), env)
 }
 
 /// `Config::default()`, rendered as a TOML table.
@@ -491,5 +511,63 @@ mod tests {
                 .into_iter()
                 .all(|(_, source)| source == Source::Default)
         );
+    }
+
+    fn project_with_state_dir(state_dir: PathBuf) -> Project {
+        Project {
+            root: state_dir.clone(),
+            id: "test-project".to_string(),
+            state_dir,
+        }
+    }
+
+    fn env_with_xdg_config_home(dir: &tempfile::TempDir) -> impl Fn(&str) -> Option<String> {
+        let config_home = dir.path().to_string_lossy().to_string();
+        move |key| (key == "XDG_CONFIG_HOME").then(|| config_home.clone())
+    }
+
+    #[test]
+    fn load_for_with_no_config_files_gets_documented_defaults() {
+        let config_home = tempfile::tempdir().expect("config home");
+        let state = tempfile::tempdir().expect("state dir");
+        let project = project_with_state_dir(state.path().to_path_buf());
+        let env = env_with_xdg_config_home(&config_home);
+
+        let config = load_for_with(&project, &env).expect("load_for_with");
+
+        assert_eq!(config.provider, Config::default().provider);
+        assert_eq!(config.max_attempts, Config::default().max_attempts);
+        assert!(
+            config
+                .provenance()
+                .into_iter()
+                .all(|(_, source)| source == Source::Default)
+        );
+    }
+
+    #[test]
+    fn load_for_with_project_file_overrides_global_file() {
+        let config_home = tempfile::tempdir().expect("config home");
+        let state = tempfile::tempdir().expect("state dir");
+        let project = project_with_state_dir(state.path().to_path_buf());
+        let env = env_with_xdg_config_home(&config_home);
+
+        let global_path = crate::paths::config_file_with(&env).expect("global path");
+        std::fs::create_dir_all(global_path.parent().expect("parent")).expect("mkdir global");
+        std::fs::write(&global_path, r#"provider = "from-global""#).expect("write global");
+
+        let config = load_for_with(&project, &env).expect("load_for_with");
+        assert_eq!(config.provider, "from-global");
+        assert_eq!(source_of(&config, "provider"), Some(Source::GlobalFile));
+
+        std::fs::write(
+            project_config_path(&project),
+            r#"provider = "from-project""#,
+        )
+        .expect("write project");
+
+        let config = load_for_with(&project, &env).expect("load_for_with");
+        assert_eq!(config.provider, "from-project");
+        assert_eq!(source_of(&config, "provider"), Some(Source::ProjectFile));
     }
 }

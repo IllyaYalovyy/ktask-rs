@@ -24,6 +24,12 @@ pub struct Project {
     pub state_dir: PathBuf,
 }
 
+/// Returns the path to `project`'s own config file, `<state_dir>/config.toml`.
+#[must_use]
+pub fn project_config_path(project: &Project) -> PathBuf {
+    project.state_dir.join("config.toml")
+}
+
 impl Project {
     /// Registers `root` as a project.
     ///
@@ -218,5 +224,19 @@ mod tests {
     fn env_with_state_home(dir: &tempfile::TempDir) -> impl Fn(&str) -> Option<String> {
         let home = state_home(dir).to_string_lossy().to_string();
         move |key| (key == "XDG_STATE_HOME").then(|| home.clone())
+    }
+
+    #[test]
+    fn project_config_path_is_config_toml_under_the_state_dir() {
+        let project = Project {
+            root: PathBuf::from("/repo"),
+            id: "abc123".to_string(),
+            state_dir: PathBuf::from("/state/abc123"),
+        };
+
+        assert_eq!(
+            project_config_path(&project),
+            PathBuf::from("/state/abc123/config.toml")
+        );
     }
 }

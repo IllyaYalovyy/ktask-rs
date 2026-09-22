@@ -42,7 +42,7 @@ pub(crate) fn state_root_with(env: &dyn Fn(&str) -> Option<String>) -> Result<Pa
     Ok(home.join(".local").join("state").join("ktask-rs"))
 }
 
-fn config_file_with(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
+pub(crate) fn config_file_with(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
     if let Some(xdg_config_home) = env("XDG_CONFIG_HOME") {
         return Ok(PathBuf::from(xdg_config_home)
             .join("ktask-rs")
