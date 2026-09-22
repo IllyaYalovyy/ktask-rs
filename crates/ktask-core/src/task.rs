@@ -7,6 +7,7 @@
 //! `body` holds the task's full Markdown text.
 
 use crate::{Error, Result, TaskId};
+use serde::{Deserialize, Serialize};
 
 /// The maximum number of characters kept in a task's [`Task::title`].
 const TITLE_MAX_CHARS: usize = 80;
@@ -16,7 +17,7 @@ const TITLE_MAX_CHARS: usize = 80;
 const REQUIRED_SECTIONS: [&str; 4] = ["Outcome", "Done-when", "Verify", "Refs"];
 
 /// Where a task stands in its lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TaskStatus {
     /// Queued but not yet started.
     Pending,
@@ -31,7 +32,7 @@ pub enum TaskStatus {
 }
 
 /// A unit of work a run supervises.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Task {
     /// The task's position in the queue.
     pub id: TaskId,
@@ -519,6 +520,149 @@ Nothing but prose here.
         let message = err.to_string();
         for label in ["Outcome", "Done-when", "Verify", "Refs"] {
             assert!(message.contains(label), "expected {label} in {message}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// One generated task heading plus the raw lines that follow it, kept
+    /// alongside the rendered document so a property can check what
+    /// [`parse_plan`] produced against what was actually written.
+    #[derive(Debug, Clone)]
+    struct TaskSpec {
+        title: String,
+        lines: Vec<String>,
+    }
+
+    /// A character allowed in a generated line: any non-control Unicode
+    /// scalar value except the ones that would change the document's
+    /// structure if it leaked into a line unconstrained — a newline (would
+    /// split the line in two), a bare `` ` `` or `~` (would open or close a
+    /// fence outside the fenced-block generator below).
+    fn arb_text_char() -> impl Strategy<Value = char> {
+        any::<char>().prop_filter("structural characters excluded", |c| {
+            !c.is_control() && !matches!(c, '`' | '~')
+        })
+    }
+
+    /// A single line of arbitrary Unicode text, unconstrained beyond
+    /// [`arb_text_char`].
+    fn arb_line_text(max_chars: usize) -> impl Strategy<Value = String> {
+        prop::collection::vec(arb_text_char(), 0..=max_chars)
+            .prop_map(|chars| chars.into_iter().collect())
+    }
+
+    /// A plain content line: arbitrary Unicode text that is never allowed to
+    /// itself open a new heading (`## `), so the number of tasks in a
+    /// generated document stays exactly the number of specs that built it.
+    fn arb_plain_line() -> impl Strategy<Value = String> {
+        arb_line_text(30).prop_filter("must not open a heading", |s| !s.starts_with("## "))
+    }
+
+    /// A line beginning with a single `#` (never `##`, so it can never be
+    /// mistaken for a heading marker).
+    fn arb_hash_line() -> impl Strategy<Value = String> {
+        arb_line_text(20).prop_map(|s| format!("# {s}"))
+    }
+
+    /// A line beginning with `---`, the other structurally-loaded prefix
+    /// `parse_plan` is required to treat as ordinary content.
+    fn arb_dash_line() -> impl Strategy<Value = String> {
+        arb_line_text(20).prop_map(|s| format!("--- {s}"))
+    }
+
+    /// A fenced code block whose interior lines are free to start with `#`,
+    /// `##` or `---` — inside the fence, `parse_plan` must pass them through
+    /// untouched rather than treating them as headings.
+    fn arb_fenced_block() -> impl Strategy<Value = Vec<String>> {
+        prop::collection::vec(
+            prop_oneof![
+                arb_plain_line(),
+                arb_line_text(20).prop_map(|s| format!("## {s}")),
+                arb_dash_line(),
+            ],
+            0..=4,
+        )
+        .prop_map(|inner| {
+            let mut block = vec!["```text".to_string()];
+            block.extend(inner);
+            block.push("```".to_string());
+            block
+        })
+    }
+
+    /// One group of lines to splice into a task's body: either a single
+    /// plain/`#`/`---` line, or a whole fenced block.
+    fn arb_line_group() -> impl Strategy<Value = Vec<String>> {
+        prop_oneof![
+            3 => arb_plain_line().prop_map(|s| vec![s]),
+            1 => arb_hash_line().prop_map(|s| vec![s]),
+            1 => arb_dash_line().prop_map(|s| vec![s]),
+            1 => arb_fenced_block(),
+        ]
+    }
+
+    fn arb_task_spec() -> impl Strategy<Value = TaskSpec> {
+        (
+            arb_line_text(40),
+            prop::collection::vec(arb_line_group(), 0..=5),
+        )
+            .prop_map(|(title, groups)| TaskSpec {
+                title,
+                lines: groups.into_iter().flatten().collect(),
+            })
+    }
+
+    /// Renders a document with an arbitrary number of tasks (including
+    /// zero), each with a Unicode title and body content that mixes plain
+    /// text, `#`/`---`-prefixed lines and fenced code blocks.
+    fn arb_plan_document() -> impl Strategy<Value = (String, Vec<TaskSpec>)> {
+        prop::collection::vec(arb_task_spec(), 0..=6).prop_map(|specs| {
+            let mut text = String::new();
+            for spec in &specs {
+                text.push_str("## ");
+                text.push_str(&spec.title);
+                text.push('\n');
+                for line in &spec.lines {
+                    text.push_str(line);
+                    text.push('\n');
+                }
+            }
+            (text, specs)
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// `parse_plan` is total: no input, however unstructured, makes it
+        /// panic.
+        #[test]
+        fn parse_plan_never_panics_on_arbitrary_input(text in ".*") {
+            let _ = parse_plan(&text);
+        }
+
+        /// Parsing a generated document yields exactly the tasks it was
+        /// built from (one per heading, titles preserved), and storing that
+        /// result — serializing it and reading it back — reproduces it
+        /// exactly.
+        #[test]
+        fn parse_then_store_then_read_back_is_lossless((text, specs) in arb_plan_document()) {
+            let tasks = parse_plan(&text).expect("parse_plan is currently infallible");
+
+            prop_assert_eq!(tasks.len(), specs.len());
+            for (task, spec) in tasks.iter().zip(specs.iter()) {
+                prop_assert_eq!(task.title(), spec.title.as_str());
+            }
+
+            let stored = serde_json::to_string(&tasks).expect("Task serializes to JSON");
+            let read_back: Vec<Task> =
+                serde_json::from_str(&stored).expect("a just-serialized Task deserializes");
+            prop_assert_eq!(read_back, tasks);
         }
     }
 }
