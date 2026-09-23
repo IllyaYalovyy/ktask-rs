@@ -16,11 +16,12 @@ use time::OffsetDateTime;
 use crate::{
     AttemptId, AttemptRecord, Bus, Config, Error, EventKind, FailureClass, Gate, GateKind,
     GateResult, Invocation, Journal, Outcome, Phase, PhaseSpec, Profile, Project, Provider,
-    Recorder, RepoLock, ReportResult, Result, Stream, Task, TaskId, TestSummary, acquire, assemble,
-    build, changed_paths, check_model, check_scope, claim_tdd_exception, classify, collect_adrs,
-    create_worktree, ensure_report_dir, fetch, for_task, head_sha, load, load_context_doc,
-    load_for, load_template, parse_cargo, profile_from, read_report, redact, require_clean,
-    run_gate, verify_green, verify_red, write_evidence,
+    RebaseOutcome, Recorder, RepoLock, ReportResult, Result, Stream, Task, TaskId, TestSummary,
+    acquire, assemble, build, changed_paths, check_model, check_scope, claim_tdd_exception,
+    classify, collect_adrs, commit_all, create_worktree, ensure_report_dir, fetch, for_task,
+    head_sha, load, load_context_doc, load_for, load_template, parse_cargo, profile_from, publish,
+    read_report, rebase_onto_remote, redact, require_clean, run_completion_set, run_gate,
+    verify_green, verify_red, write_evidence,
 };
 
 /// How long [`Runner::prepare`] waits for the repository lock ([`acquire`])
@@ -489,6 +490,247 @@ impl Runner {
 
         Ok(after)
     }
+
+    /// Decides whether `task`'s `attempt` is publishable, and publishes it
+    /// if so (`VISION.md` §3 invariant 7, §8, §10): a dirty worktree is
+    /// rejected outright, the mandatory completion gates
+    /// ([`run_completion_set`]) must pass before anything is committed, and
+    /// publication itself is only trusted once a fresh fetch confirms the
+    /// candidate actually landed on `config.mainline_branch`
+    /// ([`crate::publish`]).
+    ///
+    /// In order:
+    ///
+    /// 1. [`require_clean`] on `prep.worktree`. A dirty tree is a
+    ///    [`FailureClass::PolicyFailure`], journaled as
+    ///    [`EventKind::VerifyFailed`] exactly like a failing gate would be —
+    ///    `VISION.md` §10 names this explicitly ("a dirty tree at
+    ///    verification time is a `policy_failure`").
+    /// 2. [`run_completion_set`] against `prep.base_sha`, recording
+    ///    [`EventKind::VerifyPassed`] if every configured gate passed, or
+    ///    [`EventKind::VerifyFailed`] otherwise.
+    /// 3. [`commit_all`], capturing anything the completion gates
+    ///    themselves changed (a mutating `format_command`, for instance) —
+    ///    [`Error::NothingToCommit`] is not an error here, since a
+    ///    well-behaved provider already committed its own work during
+    ///    [`Runner::run_phase`]; the candidate is simply `prep.worktree`'s
+    ///    current `HEAD` in that case.
+    /// 4. Records [`EventKind::PublishStarted`] naming the candidate SHA,
+    ///    then calls [`crate::publish`].
+    ///
+    /// A push [`crate::publish`] rejects is recovered mechanically: fetch
+    /// and replay onto the new remote tip ([`rebase_onto_remote`]). A clean
+    /// divergence reruns the completion set from scratch — nothing survives
+    /// a rebase's file changes uninspected — and retries publication exactly
+    /// once more; a conflicting divergence is returned as
+    /// [`Error::Git`] rather than attempted automatically, since resolving a
+    /// real conflict is a human's call, not an agent's (`VISION.md` §7 lists
+    /// "conflicting publication" itself as `git_conflict`).
+    ///
+    /// No further [`EventKind::VerifyFailed`] or [`EventKind::PublishStarted`]
+    /// is recorded on the retried path: `task`'s pipeline state has already
+    /// moved to `Publishing` by the first [`EventKind::PublishStarted`], and
+    /// that state only accepts [`EventKind::PublishVerified`] as its next
+    /// success event (`state.rs`'s `from_publishing`) — the retry's own
+    /// completion-set failure or renewed rejection is reported purely
+    /// through this call's `Err`.
+    ///
+    /// Returns the published commit's SHA on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever [`require_clean`], [`run_completion_set`],
+    /// [`commit_all`] (other than [`Error::NothingToCommit`]),
+    /// [`crate::publish`] or [`rebase_onto_remote`] themselves return;
+    /// [`Error::Gate`] if the completion set (first run or retry) left any
+    /// gate failing; [`Error::Git`] if a rebase onto the fetched remote tip
+    /// conflicts; and whatever [`Recorder::record`] returns on failure to
+    /// journal.
+    pub fn verify_and_publish(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+    ) -> Result<String> {
+        if let Err(err) = require_clean(&prep.worktree) {
+            let class = classify(&empty_outcome(), &[], Some(&err));
+            self.recorder.record(
+                Some(task.id),
+                EventKind::VerifyFailed {
+                    attempt,
+                    class,
+                    detail: err.to_string(),
+                },
+            )?;
+            return Err(err);
+        }
+
+        self.run_completion_gates(prep, task, attempt)?;
+
+        let candidate_sha = match commit_all(&prep.worktree, &commit_message(task)) {
+            Ok(sha) => sha,
+            Err(Error::NothingToCommit { .. }) => head_sha(&prep.worktree)?,
+            Err(err) => return Err(err),
+        };
+
+        self.recorder.record(
+            Some(task.id),
+            EventKind::PublishStarted {
+                attempt,
+                candidate_sha: candidate_sha.clone(),
+            },
+        )?;
+
+        match publish(
+            &prep.worktree,
+            &self.config.mainline_remote,
+            &self.config.mainline_branch,
+            &candidate_sha,
+        ) {
+            Ok(()) => self.record_published(task, &candidate_sha),
+            Err(err) if is_rejected_push(&err) => self.retry_after_rebase(prep, task),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// The rejected-push recovery path of [`Runner::verify_and_publish`]:
+    /// fetches and replays `prep.worktree` onto the freshly fetched tip of
+    /// `config.mainline_branch`, reruns the completion set from scratch
+    /// against the rebased tree, and retries publication exactly once.
+    fn retry_after_rebase(&mut self, prep: &Prepared, task: &Task) -> Result<String> {
+        match rebase_onto_remote(
+            &prep.worktree,
+            &self.config.mainline_remote,
+            &self.config.mainline_branch,
+        )? {
+            RebaseOutcome::Applied { new_sha } => {
+                self.check_completion_gates(prep)?;
+                publish(
+                    &prep.worktree,
+                    &self.config.mainline_remote,
+                    &self.config.mainline_branch,
+                    &new_sha,
+                )?;
+                self.record_published(task, &new_sha)
+            }
+            RebaseOutcome::Conflict { paths } => Err(Error::Git {
+                args: vec!["rebase".to_string(), "conflict".to_string()],
+                stderr: format!(
+                    "rebase onto {}/{} conflicted on: {}",
+                    self.config.mainline_remote,
+                    self.config.mainline_branch,
+                    paths
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }),
+        }
+    }
+
+    /// Records [`EventKind::PublishVerified`] for `commit`, once
+    /// [`crate::publish`] has itself already confirmed `commit` is the
+    /// freshly fetched tip of `config.mainline_branch` — so `remote_sha`
+    /// always equals `commit` here, never a stale or divergent value.
+    fn record_published(&mut self, task: &Task, commit: &str) -> Result<String> {
+        self.recorder.record(
+            Some(task.id),
+            EventKind::PublishVerified {
+                commit: commit.to_string(),
+                remote_sha: commit.to_string(),
+            },
+        )?;
+        Ok(commit.to_string())
+    }
+
+    /// Runs [`run_completion_set`] against `prep` and records the outcome as
+    /// [`EventKind::VerifyPassed`] or [`EventKind::VerifyFailed`] for
+    /// `attempt` — the first, journaled run [`Runner::verify_and_publish`]
+    /// makes before anything is committed.
+    fn run_completion_gates(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+    ) -> Result<()> {
+        let results = run_completion_set(&self.profile, &prep.worktree, &prep.base_sha, None)?;
+        if completion_passed(&results) {
+            self.recorder
+                .record(Some(task.id), EventKind::VerifyPassed { attempt })?;
+            Ok(())
+        } else {
+            let (class, detail) = completion_failure(&results);
+            self.recorder.record(
+                Some(task.id),
+                EventKind::VerifyFailed {
+                    attempt,
+                    class,
+                    detail: detail.clone(),
+                },
+            )?;
+            Err(Error::Gate {
+                kind: "completion".to_string(),
+                detail,
+            })
+        }
+    }
+
+    /// Reruns [`run_completion_set`] against `prep` without journaling
+    /// anything: the check [`Runner::retry_after_rebase`] makes after a
+    /// clean rebase, where `task`'s pipeline state has already moved past
+    /// [`EventKind::VerifyPassed`]/[`EventKind::VerifyFailed`] and cannot
+    /// legally accept another one (`state.rs`'s `from_publishing`).
+    fn check_completion_gates(&self, prep: &Prepared) -> Result<()> {
+        let results = run_completion_set(&self.profile, &prep.worktree, &prep.base_sha, None)?;
+        if completion_passed(&results) {
+            Ok(())
+        } else {
+            let (_, detail) = completion_failure(&results);
+            Err(Error::Gate {
+                kind: "completion".to_string(),
+                detail,
+            })
+        }
+    }
+}
+
+/// Whether every gate [`run_completion_set`] ran passed — and it ran at
+/// least one, since an empty result would otherwise vacuously "pass" without
+/// a single gate having proven anything.
+fn completion_passed(results: &[GateResult]) -> bool {
+    !results.is_empty() && results.iter().all(|result| result.passed)
+}
+
+/// Classifies why [`run_completion_set`]'s `results` did not all pass, and
+/// names the first gate that failed. `results` is expected to contain at
+/// least the mandatory [`GateKind::Verify`] gate ([`profile_from`]
+/// guarantees this), so the "no gate ran at all" branch below is only ever
+/// reached defensively.
+fn completion_failure(results: &[GateResult]) -> (FailureClass, String) {
+    let class = classify(&empty_outcome(), results, None);
+    let detail = results.iter().find(|result| !result.passed).map_or_else(
+        || "the completion set ran no gate to verify".to_string(),
+        |result| format!("completion gate {:?} failed", result.kind),
+    );
+    (class, detail)
+}
+
+/// Whether `err` is [`crate::publish`]'s report of a push `remote` itself
+/// rejected — `args[0] == "push"`, the shape its own doc comment promises —
+/// as distinct from the push succeeding but the post-push fetched-tip
+/// comparison mismatching (`args[0] == "publish"`), which
+/// [`Runner::verify_and_publish`] does not attempt to recover from
+/// automatically.
+fn is_rejected_push(err: &Error) -> bool {
+    matches!(err, Error::Git { args, .. } if args.first().map(String::as_str) == Some("push"))
+}
+
+/// The commit message [`Runner::verify_and_publish`] gives the candidate
+/// commit [`commit_all`] produces: `task`'s title, so mainline history reads
+/// one line per task the same way `git log --oneline` already would.
+fn commit_message(task: &Task) -> String {
+    task.title().to_string()
 }
 
 /// The empty [`TestSummary`]: no tests run, none failing. [`Runner::gate_phase`]'s
@@ -881,8 +1123,8 @@ mod tests {
     use super::*;
     use crate::testing::scratch_repo;
     use crate::{
-        Bus, Capabilities, Error, Phase, Scenario, ScenarioFile, Step, StepOutcome, TaskStatus,
-        TddException, WriteScope, project_config_path, read_evidence, report_path,
+        Bus, Capabilities, Error, Event, Phase, Scenario, ScenarioFile, Step, StepOutcome,
+        TaskStatus, TddException, WriteScope, project_config_path, read_evidence, report_path,
     };
 
     /// A [`Provider`] whose `invoke` always succeeds, proving
@@ -2271,6 +2513,314 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
             .expect_err("a gate kind with no configured command must be rejected");
 
         assert!(matches!(err, Error::Config { .. }));
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    /// Every event journaled for `task` so far, in order —
+    /// [`Runner::prepare`]'s own `PreflightStarted`/`PreflightPassed` pair
+    /// always leads, since every `verify_and_publish` test below reaches
+    /// [`Runner::verify_and_publish`] through a real [`Runner::prepare`] call.
+    fn verify_and_publish_events(project: &Project, task: TaskId) -> Vec<Event> {
+        let journal = Journal::open_for(project).expect("open journal");
+        journal.events_for(task).expect("events_for")
+    }
+
+    fn verify_and_publish_discriminants(project: &Project, task: TaskId) -> Vec<&'static str> {
+        verify_and_publish_events(project, task)
+            .iter()
+            .map(|event| event.kind.discriminant())
+            .collect()
+    }
+
+    #[test]
+    fn verify_and_publish_commits_and_publishes_a_clean_worktree_with_passing_gates() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(AlwaysAvailable));
+        let prep = runner.prepare(&task).expect("prepare");
+
+        let published = runner
+            .verify_and_publish(&prep, &task, attempt)
+            .expect("verify_and_publish");
+
+        assert_eq!(
+            published, repo.seed_sha,
+            "nothing changed beyond the fetched base, so the published commit is that base"
+        );
+        let remote_tip =
+            crate::git(&repo.origin, &["rev-parse", "main"]).expect("rev-parse bare origin");
+        assert_eq!(remote_tip, published);
+
+        assert_eq!(
+            verify_and_publish_discriminants(&project, task.id),
+            vec![
+                "PreflightStarted",
+                "PreflightPassed",
+                "VerifyPassed",
+                "PublishStarted",
+                "PublishVerified",
+            ]
+        );
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    #[test]
+    fn verify_and_publish_rejects_a_dirty_worktree_as_a_policy_failure_before_any_gate_runs() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(AlwaysAvailable));
+        let prep = runner.prepare(&task).expect("prepare");
+        std::fs::write(prep.worktree.join("stray.txt"), "uncommitted\n")
+            .expect("leave the worktree dirty");
+
+        let err = runner
+            .verify_and_publish(&prep, &task, attempt)
+            .expect_err("a dirty worktree must never reach publication");
+
+        assert!(matches!(err, Error::Policy { .. }), "got {err:?}");
+
+        let events = verify_and_publish_events(&project, task.id);
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.kind.discriminant())
+                .collect::<Vec<_>>(),
+            vec!["PreflightStarted", "PreflightPassed", "VerifyFailed"]
+        );
+        let EventKind::VerifyFailed { class, .. } = &events[2].kind else {
+            panic!("expected VerifyFailed, got {:?}", events[2].kind);
+        };
+        assert_eq!(*class, FailureClass::PolicyFailure);
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    #[test]
+    fn verify_and_publish_rejects_a_failing_completion_gate_before_anything_is_committed() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let mut config = runnable_config();
+        config.verify_command = Some(vec!["false".to_string()]);
+        let mut runner = manual_runner(&project, config, Box::new(AlwaysAvailable));
+        let prep = runner.prepare(&task).expect("prepare");
+
+        let err = runner
+            .verify_and_publish(&prep, &task, attempt)
+            .expect_err("a failing completion gate must never reach publication");
+
+        assert!(matches!(err, Error::Gate { .. }), "got {err:?}");
+
+        let events = verify_and_publish_events(&project, task.id);
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.kind.discriminant())
+                .collect::<Vec<_>>(),
+            vec!["PreflightStarted", "PreflightPassed", "VerifyFailed"]
+        );
+        let EventKind::VerifyFailed { class, .. } = &events[2].kind else {
+            panic!("expected VerifyFailed, got {:?}", events[2].kind);
+        };
+        assert_eq!(*class, FailureClass::VerificationFailure);
+
+        assert_eq!(
+            head_sha(&repo.origin).expect("head_sha of bare origin"),
+            repo.seed_sha,
+            "origin must be untouched"
+        );
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    #[test]
+    fn verify_and_publish_recovers_a_rejected_push_from_a_clean_divergence_by_rebasing_rerunning_gates_and_retrying_once()
+     {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(AlwaysAvailable));
+        let prep = runner.prepare(&task).expect("prepare");
+
+        // Another actor's commit lands on `origin` after this attempt's
+        // worktree was created from the seed, but before this attempt
+        // publishes — the same shape `ScratchRepo::diverge` builds,
+        // reproduced here because the divergent commit must live only on
+        // `origin`, never in `repo.path`'s own local checkout.
+        let shadow = tempfile::tempdir().expect("shadow tempdir");
+        crate::git(
+            shadow.path(),
+            &["clone", "--quiet", &repo.origin.to_string_lossy(), "."],
+        )
+        .expect("clone shadow");
+        std::fs::write(shadow.path().join("origin-only.txt"), "origin change\n")
+            .expect("write origin-only.txt");
+        crate::git(shadow.path(), &["add", "origin-only.txt"]).expect("git add");
+        crate::git(
+            shadow.path(),
+            &["commit", "--quiet", "-m", "add origin-only.txt"],
+        )
+        .expect("git commit");
+        crate::git(
+            shadow.path(),
+            &["push", "--quiet", "origin", "HEAD:refs/heads/main"],
+        )
+        .expect("push origin-only.txt");
+        let origin_sha =
+            crate::git(shadow.path(), &["rev-parse", "HEAD"]).expect("rev-parse shadow HEAD");
+
+        // The agent's own work, already committed inside the attempt's
+        // worktree, on disjoint paths from the origin-only commit above — a
+        // clean divergence the rebase can replay without a conflict.
+        std::fs::write(prep.worktree.join("local-only.txt"), "local change\n")
+            .expect("write local-only.txt");
+        crate::git(&prep.worktree, &["add", "local-only.txt"]).expect("git add");
+        crate::git(
+            &prep.worktree,
+            &["commit", "--quiet", "-m", "add local-only.txt"],
+        )
+        .expect("git commit");
+        let local_sha = head_sha(&prep.worktree).expect("head_sha before publish");
+
+        let published = runner
+            .verify_and_publish(&prep, &task, attempt)
+            .expect("a clean divergence must recover mechanically");
+
+        assert_ne!(
+            published, local_sha,
+            "a rebased candidate must carry a new sha, replayed onto the new base"
+        );
+        let remote_tip =
+            crate::git(&repo.origin, &["rev-parse", "main"]).expect("rev-parse bare origin");
+        assert_eq!(remote_tip, published);
+        let parent = crate::git(&prep.worktree, &["rev-parse", &format!("{published}^")])
+            .expect("rev-parse rebased commit's parent");
+        assert_eq!(
+            parent, origin_sha,
+            "the rebased commit must sit on top of the fetched remote tip"
+        );
+
+        // Exactly one VerifyPassed and one PublishStarted despite the
+        // rebase-and-retry: `task`'s pipeline state moved to `Publishing` on
+        // the first `PublishStarted` and cannot legally accept another one
+        // (`state.rs`'s `from_publishing`).
+        assert_eq!(
+            verify_and_publish_discriminants(&project, task.id),
+            vec![
+                "PreflightStarted",
+                "PreflightPassed",
+                "VerifyPassed",
+                "PublishStarted",
+                "PublishVerified",
+            ]
+        );
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    #[test]
+    fn verify_and_publish_stops_a_conflicting_divergence_with_a_git_error_rather_than_retrying() {
+        let repo = scratch_repo().expect("scratch_repo");
+        repo.commit("shared.txt", "base\n")
+            .expect("commit shared.txt");
+        crate::git(
+            &repo.path,
+            &["push", "--quiet", "origin", "HEAD:refs/heads/main"],
+        )
+        .expect("push shared.txt to origin");
+
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(AlwaysAvailable));
+        let prep = runner.prepare(&task).expect("prepare");
+
+        // The agent's own work modifies `shared.txt` in the attempt's
+        // worktree...
+        std::fs::write(prep.worktree.join("shared.txt"), "local change\n")
+            .expect("write shared.txt locally");
+        crate::git(&prep.worktree, &["add", "shared.txt"]).expect("git add");
+        crate::git(&prep.worktree, &["commit", "--quiet", "-m", "local edit"]).expect("git commit");
+        let local_sha = head_sha(&prep.worktree).expect("head_sha before publish");
+
+        // ...while another actor's commit modifies the very same path on
+        // `origin`, guaranteeing the rebase this triggers conflicts.
+        let shadow = tempfile::tempdir().expect("shadow tempdir");
+        crate::git(
+            shadow.path(),
+            &["clone", "--quiet", &repo.origin.to_string_lossy(), "."],
+        )
+        .expect("clone shadow");
+        std::fs::write(shadow.path().join("shared.txt"), "origin change\n")
+            .expect("write shared.txt on origin");
+        crate::git(shadow.path(), &["add", "shared.txt"]).expect("git add");
+        crate::git(shadow.path(), &["commit", "--quiet", "-m", "origin edit"]).expect("git commit");
+        crate::git(
+            shadow.path(),
+            &["push", "--quiet", "origin", "HEAD:refs/heads/main"],
+        )
+        .expect("push origin edit");
+
+        let err = runner
+            .verify_and_publish(&prep, &task, attempt)
+            .expect_err("a conflicting divergence must never be resolved automatically");
+
+        let Error::Git { args, stderr } = &err else {
+            panic!("expected Error::Git, got {err:?}");
+        };
+        assert_eq!(args, &["rebase".to_string(), "conflict".to_string()]);
+        assert!(
+            stderr.contains("shared.txt"),
+            "detail must name the conflicted path, got {stderr:?}"
+        );
+
+        // No agent was called and no further publish was attempted: the
+        // worktree is exactly where the agent's own commit left it, and no
+        // rebase is mid-flight.
+        assert_eq!(
+            head_sha(&prep.worktree).expect("head_sha after the aborted rebase"),
+            local_sha
+        );
+        assert!(!prep.worktree.join(".git").join("rebase-merge").exists());
+        assert!(!prep.worktree.join(".git").join("rebase-apply").exists());
+
+        assert_eq!(
+            verify_and_publish_discriminants(&project, task.id),
+            vec![
+                "PreflightStarted",
+                "PreflightPassed",
+                "VerifyPassed",
+                "PublishStarted",
+            ]
+        );
 
         let worktree = prep.worktree.clone();
         drop(prep);
