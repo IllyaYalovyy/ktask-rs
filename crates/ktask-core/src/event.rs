@@ -158,6 +158,13 @@ pub enum EventKind {
         /// A human-readable description of the failure.
         detail: String,
     },
+    /// A human asked for a failed task to be retried: a fresh remediation
+    /// attempt, in a fresh provider session seeded with the failure bundle,
+    /// starts from [`crate::TaskState::Failed`] (`ktask-rs retry`).
+    RetryStarted {
+        /// The new attempt the retry runs as.
+        attempt: AttemptId,
+    },
     /// A task was cancelled.
     TaskCancelled {
         /// Why the task was cancelled.
@@ -252,6 +259,7 @@ impl EventKind {
             EventKind::PublishVerified { .. } => "PublishVerified",
             EventKind::TaskDone { .. } => "TaskDone",
             EventKind::TaskFailed { .. } => "TaskFailed",
+            EventKind::RetryStarted { .. } => "RetryStarted",
             EventKind::TaskCancelled { .. } => "TaskCancelled",
             EventKind::Paused { .. } => "Paused",
             EventKind::Resumed => "Resumed",
@@ -398,6 +406,9 @@ mod tests {
                 class: FailureClass::AgentFailure,
                 detail: "agent crashed".to_string(),
             },
+            EventKind::RetryStarted {
+                attempt: AttemptId::new(2),
+            },
             EventKind::TaskCancelled {
                 reason: "superseded".to_string(),
             },
@@ -455,9 +466,9 @@ mod tests {
     }
 
     #[test]
-    fn event_kind_has_exactly_twenty_six_variants() {
+    fn event_kind_has_exactly_twenty_seven_variants() {
         let variants = all_events();
-        assert_eq!(variants.len(), 26);
+        assert_eq!(variants.len(), 27);
 
         // Exhaustive, wildcard-free match: a variant added to `EventKind`
         // without being listed here fails to compile instead of silently
@@ -480,6 +491,7 @@ mod tests {
                 | EventKind::PublishVerified { .. }
                 | EventKind::TaskDone { .. }
                 | EventKind::TaskFailed { .. }
+                | EventKind::RetryStarted { .. }
                 | EventKind::TaskCancelled { .. }
                 | EventKind::Paused { .. }
                 | EventKind::Resumed
@@ -523,6 +535,7 @@ mod tests {
             "PublishVerified",
             "TaskDone",
             "TaskFailed",
+            "RetryStarted",
             "TaskCancelled",
             "Paused",
             "Resumed",

@@ -38,12 +38,12 @@ const DETAIL_LIMIT: usize = 200;
 
 /// One task's result line, in human and `--json` form alike.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct TaskResult {
-    task: TaskId,
+pub(super) struct TaskResult {
+    pub(super) task: TaskId,
     /// `done`, `failed`, `paused` or `interrupted`.
-    result: &'static str,
+    pub(super) result: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    detail: Option<String>,
+    pub(super) detail: Option<String>,
 }
 
 impl TaskResult {
@@ -58,11 +58,11 @@ impl TaskResult {
 
 /// What the progress thread saw, handed back once the run ends.
 #[derive(Debug, Default)]
-struct Pumped {
+pub(super) struct Pumped {
     /// Tasks whose result line has already been printed.
-    reported: BTreeSet<TaskId>,
+    pub(super) reported: BTreeSet<TaskId>,
     /// Events the bus evicted before the thread read them.
-    dropped: usize,
+    pub(super) dropped: usize,
 }
 
 /// Runs the queue (or, with `task`, exactly one task; with `from`, from that
@@ -119,7 +119,9 @@ fn drain(
         Err(detail) => return RunOutcome::Usage { detail },
     };
 
-    let (result, pumped) = run_with_progress(&mut runner, &scope, from, json_output);
+    let (result, pumped) = run_with_progress(&mut runner, json_output, |runner| {
+        runner.run_queue(&scope, from)
+    });
     let outcome = match result {
         Ok(outcome) => outcome,
         Err(err) => {
@@ -163,18 +165,17 @@ fn drain(
     }
 }
 
-/// Runs `scope` through `runner`, printing progress and result lines from a
+/// Runs `work` against `runner`, printing progress and result lines from a
 /// second thread for as long as it takes.
 ///
 /// `runner` stays on the calling thread; only the [`ktask_core::Subscription`]
-/// crosses to the printer, which keeps draining until the run has returned
-/// and then once more, so nothing recorded before the run ended is lost.
-fn run_with_progress(
+/// crosses to the printer, which keeps draining until `work` has returned
+/// and then once more, so nothing recorded before it ended is lost.
+pub(super) fn run_with_progress<T>(
     runner: &mut Runner,
-    scope: &[Task],
-    from: Option<TaskId>,
     json_output: bool,
-) -> (ktask_core::Result<RunOutcome>, Pumped) {
+    work: impl FnOnce(&mut Runner) -> ktask_core::Result<T>,
+) -> (ktask_core::Result<T>, Pumped) {
     let mut subscription = runner.subscribe();
     let finished = AtomicBool::new(false);
     let finished = &finished;
@@ -196,7 +197,7 @@ fn run_with_progress(
             }
         });
 
-        let result = runner.run_queue(scope, from);
+        let result = work(runner);
         finished.store(true, Ordering::SeqCst);
         (result, printer.join().unwrap_or_default())
     })
@@ -217,7 +218,7 @@ fn print_event(event: &Event, json_output: bool, reported: &mut BTreeSet<TaskId>
 
 /// Writes `result` to stdout: one JSON object under `--json`, otherwise its
 /// human line.
-fn emit_result(result: &TaskResult, json_output: bool) {
+pub(super) fn emit_result(result: &TaskResult, json_output: bool) {
     if json_output {
         let _ = json::emit_json(result);
     } else {
@@ -232,7 +233,9 @@ fn emit_result(result: &TaskResult, json_output: bool) {
 /// is only rebuilt by recovery, so between runs it can lag the journal that
 /// is the source of truth. A task with no events has not started, so it is
 /// [`TaskState::Queued`].
-fn read_queue(project: &Project) -> ktask_core::Result<(Vec<Task>, BTreeMap<TaskId, TaskState>)> {
+pub(super) fn read_queue(
+    project: &Project,
+) -> ktask_core::Result<(Vec<Task>, BTreeMap<TaskId, TaskState>)> {
     let journal = Journal::open_for(project)?;
     let tasks = journal.tasks()?;
     let mut states = BTreeMap::new();
@@ -403,6 +406,9 @@ fn progress_line(event: &Event) -> Option<String> {
         EventKind::TaskCancelled { reason } => format!("cancelled: {reason}"),
         EventKind::Paused { reason } => format!("paused: {}", pause_text(reason)),
         EventKind::Resumed => "resumed".to_string(),
+        EventKind::RetryStarted { attempt } => {
+            format!("retry: attempt {attempt} started in a fresh session")
+        }
         EventKind::Interrupted { phase } => format!("interrupted during {phase:?}"),
         EventKind::RecoveryDecision { decision, detail } => {
             format!("recovery: {decision:?}: {detail}")
@@ -439,7 +445,7 @@ fn pause_text(reason: &PauseReason) -> String {
 }
 
 /// The closing stderr sentence for `outcome`.
-fn describe(outcome: &RunOutcome) -> String {
+pub(super) fn describe(outcome: &RunOutcome) -> String {
     match outcome {
         RunOutcome::Drained => "queue drained".to_string(),
         RunOutcome::TaskFailed { task } => {
@@ -878,6 +884,10 @@ mod tests {
     fn progress_covers_the_attempt_lifecycle() {
         let attempt = AttemptId::new(2);
         let cases = [
+            (
+                EventKind::RetryStarted { attempt },
+                "task 1: retry: attempt 2 started in a fresh session",
+            ),
             (
                 EventKind::PreflightPassed {
                     base_sha: "0123456789".to_string(),

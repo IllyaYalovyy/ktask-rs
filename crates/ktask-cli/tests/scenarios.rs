@@ -416,3 +416,209 @@ fn cli_run_stops_at_a_human_gate_with_exit_4() {
     assert!(lines[1].starts_with("task 2: paused"), "got {:?}", lines[1]);
     assert!(lines[1].contains("human gate"), "got {:?}", lines[1]);
 }
+
+/// Rewrites the project config so preflight's baseline gate is `command`
+/// (`None` removes it), leaving the provider and scenario wiring as
+/// [`support::build`] wrote it.
+fn set_baseline(scenario: &support::Scenario, command: Option<&str>) -> std::io::Result<()> {
+    let baseline = command.map_or_else(String::new, |command| {
+        format!("baseline_command = [\"{command}\"]\n")
+    });
+    std::fs::write(
+        scenario.state_dir().join("config.toml"),
+        format!(
+            "provider = \"dummy\"\ndummy_scenario_path = \"{}\"\nverify_command = [\"true\"]\n{baseline}",
+            scenario.state_dir().join("scenario.toml").display()
+        ),
+    )
+}
+
+/// The event kinds journaled for `task`, oldest first, read straight from
+/// the scenario's journal.
+fn journaled_kinds(
+    scenario: &support::Scenario,
+    task: u32,
+) -> ktask_core::Result<Vec<&'static str>> {
+    let journal = ktask_core::Journal::open(&ktask_core::journal_path(scenario.state_dir()))?;
+    Ok(journal
+        .events_for(ktask_core::TaskId::new(task))?
+        .iter()
+        .map(|event| event.kind.discriminant())
+        .collect())
+}
+
+/// `resume` picks the queue up at the first task that is not done, and
+/// exits 2 once nothing is left; `retry` gives a failed task a fresh
+/// remediation attempt and exits 2 for a task that is not failed — all
+/// through the compiled binary, against the dummy provider.
+#[test]
+fn cli_resume_continues_and_retry_remediates() {
+    // resume: task 1 was run on its own; resume carries on from task 2.
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(3)).expect("build scenario");
+    scenario
+        .set_scenario(&succeed_step(&scenario, 1))
+        .expect("write scenario");
+    let first = scenario.run(&["run", "--task", "1"]).expect("run task 1");
+    assert_eq!(first.status.code(), Some(0), "{}", stderr_of(&first));
+
+    scenario
+        .set_scenario(&format!(
+            "{}{}",
+            succeed_step(&scenario, 2),
+            succeed_step(&scenario, 3)
+        ))
+        .expect("write scenario");
+    let resume = scenario.run(&["resume"]).expect("resume");
+
+    let stdout = stdout_of(&resume);
+    assert_eq!(
+        resume.status.code(),
+        Some(0),
+        "stdout: {stdout}\nstderr: {}",
+        stderr_of(&resume)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "task 1 is not run again, got {stdout:?}");
+    assert!(lines[0].starts_with("task 2: done"), "got {:?}", lines[0]);
+    assert!(lines[1].starts_with("task 3: done"), "got {:?}", lines[1]);
+
+    // resume on a drained queue: nothing to continue is a usage error.
+    let drained = scenario.run(&["resume"]).expect("resume again");
+    assert_eq!(drained.status.code(), Some(2), "{}", stderr_of(&drained));
+    assert_eq!(stdout_of(&drained), "");
+    assert!(
+        stderr_of(&drained).contains("drained"),
+        "got {}",
+        stderr_of(&drained)
+    );
+
+    // retry: task 2 fails preflight (a red baseline), stopping the queue.
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(3)).expect("build scenario");
+    scenario
+        .set_scenario(&succeed_step(&scenario, 1))
+        .expect("write scenario");
+    let first = scenario.run(&["run", "--task", "1"]).expect("run task 1");
+    assert_eq!(first.status.code(), Some(0), "{}", stderr_of(&first));
+    set_baseline(&scenario, Some("false")).expect("write config");
+    let failed = scenario.run(&["resume"]).expect("resume into a failure");
+    assert_eq!(failed.status.code(), Some(1), "{}", stderr_of(&failed));
+    assert!(stdout_of(&failed).starts_with("task 2: failed"));
+    assert!(
+        stderr_of(&failed).contains("ktask-rs retry --task 2"),
+        "resume must say how to get past a failed task, got {}",
+        stderr_of(&failed)
+    );
+
+    // retry on a task that is not failed: usage error, nothing journaled.
+    let queued = scenario.run(&["retry", "--task", "3"]).expect("retry 3");
+    assert_eq!(queued.status.code(), Some(2), "{}", stderr_of(&queued));
+    assert_eq!(stdout_of(&queued), "");
+    assert!(
+        stderr_of(&queued).contains("not failed"),
+        "got {}",
+        stderr_of(&queued)
+    );
+    let done = scenario.run(&["retry", "--task", "1"]).expect("retry 1");
+    assert_eq!(done.status.code(), Some(2), "{}", stderr_of(&done));
+    assert!(
+        !journaled_kinds(&scenario, 3)
+            .expect("read journal")
+            .contains(&"RetryStarted")
+    );
+
+    // With the environment repaired, retry runs a fresh attempt and the
+    // queue can move on past the task.
+    set_baseline(&scenario, None).expect("write config");
+    scenario
+        .set_scenario(&succeed_step(&scenario, 2))
+        .expect("write scenario");
+    let retry = scenario.run(&["retry", "--task", "2"]).expect("retry 2");
+    assert_eq!(
+        retry.status.code(),
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&retry),
+        stderr_of(&retry)
+    );
+    assert_eq!(stdout_of(&retry).lines().count(), 1);
+    assert!(stdout_of(&retry).starts_with("task 2: done"));
+    assert!(
+        stderr_of(&retry).contains("implemented thing 2"),
+        "the retry's agent output streams to stderr, got {}",
+        stderr_of(&retry)
+    );
+    let kinds = journaled_kinds(&scenario, 2).expect("read journal");
+    let position = |kind: &str| kinds.iter().position(|k| *k == kind);
+    assert!(
+        position("PreflightFailed") < position("RetryStarted")
+            && position("RetryStarted") < position("TaskDone"),
+        "the retry is recorded after the failure it answers, got {kinds:?}"
+    );
+
+    scenario
+        .set_scenario(&succeed_step(&scenario, 3))
+        .expect("write scenario");
+    let rest = scenario.run(&["resume"]).expect("resume after retry");
+    assert_eq!(rest.status.code(), Some(0), "{}", stderr_of(&rest));
+    assert!(stdout_of(&rest).starts_with("task 3: done"));
+}
+
+/// A retry whose agent fails too exits 1, leaves the task failed rather
+/// than stranded mid-attempt, and can be retried again.
+#[test]
+fn cli_retry_that_fails_again_exits_1_and_stays_retryable() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(1)).expect("build scenario");
+    set_baseline(&scenario, Some("false")).expect("write config");
+    let failed = scenario.run(&["run"]).expect("run");
+    assert_eq!(failed.status.code(), Some(1), "{}", stderr_of(&failed));
+
+    // The agent runs but writes no report.
+    set_baseline(&scenario, None).expect("write config");
+    scenario
+        .set_scenario(
+            "[[steps]]\noutcome = \"success\"\nexit_code = 0\n\n\
+             [[steps]]\noutcome = \"success\"\nexit_code = 0\nstdout = \"gave up\\n\"\n",
+        )
+        .expect("write scenario");
+    let again = scenario.run(&["retry", "--task", "1"]).expect("retry");
+    assert_eq!(
+        again.status.code(),
+        Some(1),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&again),
+        stderr_of(&again)
+    );
+    assert!(stdout_of(&again).starts_with("task 1: failed"));
+    assert_eq!(
+        journaled_kinds(&scenario, 1).expect("read journal").last(),
+        Some(&"TaskFailed")
+    );
+
+    // Still a failed task, so it can be retried again — and this time works.
+    scenario
+        .set_scenario(&succeed_step(&scenario, 1).replace("1/report.md", "2/report.md"))
+        .expect("write scenario");
+    let third = scenario
+        .run(&["retry", "--task", "1", "--json"])
+        .expect("retry");
+    assert_eq!(third.status.code(), Some(0), "{}", stderr_of(&third));
+    let result: serde_json::Value =
+        serde_json::from_str(stdout_of(&third).trim()).expect("one JSON object");
+    assert_eq!(result["task"], 1);
+    assert_eq!(result["result"], "done");
+}
+
+/// `retry` names a task that is not in the queue: a usage error.
+#[test]
+fn cli_retry_unknown_task_is_a_usage_error() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(1)).expect("build scenario");
+
+    let retry = scenario.run(&["retry", "--task", "9"]).expect("retry");
+
+    assert_eq!(retry.status.code(), Some(2), "{}", stderr_of(&retry));
+    assert!(
+        stderr_of(&retry).contains("no task 9"),
+        "got {}",
+        stderr_of(&retry)
+    );
+}

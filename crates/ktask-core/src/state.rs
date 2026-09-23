@@ -241,9 +241,11 @@ fn invalid(from: &str, event: &EventKind) -> Error {
 /// Applies `event` to `state`, returning the state that results.
 ///
 /// The only way a [`TaskState`] changes. Pure: no I/O, no clock, no
-/// randomness. Terminal states (`Done`, `Acknowledged`, `Failed`,
-/// `Cancelled`) accept no event at all; every other state delegates to one
-/// helper below, which matches `event` exhaustively.
+/// randomness. Terminal states (`Done`, `Acknowledged`, `Cancelled`) accept
+/// no event at all, and `Failed` accepts only [`EventKind::RetryStarted`]
+/// (`ktask-rs retry`, the one external intervention a failure allows);
+/// every other state delegates to one helper below, which matches `event`
+/// exhaustively.
 ///
 /// # Errors
 ///
@@ -259,10 +261,16 @@ pub fn apply(state: &TaskState, event: &EventKind) -> Result<TaskState> {
         TaskState::Publishing { attempt } => from_publishing(*attempt, event),
         TaskState::PublishedVerified { commit } => from_published_verified(commit, event),
         TaskState::Paused { reason, resume_to } => from_paused(reason, resume_to, event),
-        TaskState::Done
-        | TaskState::Acknowledged { .. }
-        | TaskState::Failed { .. }
-        | TaskState::Cancelled => Err(invalid(state.name(), event)),
+        TaskState::Failed { .. } => match event {
+            EventKind::RetryStarted { attempt } => Ok(TaskState::Remediating {
+                attempt: *attempt,
+                phase: Phase::Implement,
+            }),
+            _ => Err(invalid(state.name(), event)),
+        },
+        TaskState::Done | TaskState::Acknowledged { .. } | TaskState::Cancelled => {
+            Err(invalid(state.name(), event))
+        }
     }
 }
 
@@ -297,6 +305,7 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
+        | EventKind::RetryStarted { .. }
         | EventKind::SelfHealingReport { .. } => Err(invalid("Queued", event)),
     }
 }
@@ -341,6 +350,7 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
         | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
+        | EventKind::RetryStarted { .. }
         | EventKind::SelfHealingReport { .. } => Err(invalid("Preflight", event)),
     }
 }
@@ -399,6 +409,7 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
         | EventKind::GateAcknowledged { .. }
+        | EventKind::RetryStarted { .. }
         | EventKind::SelfHealingReport { .. } => Err(invalid("Running", event)),
     }
 }
@@ -464,6 +475,7 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
+        | EventKind::RetryStarted { .. }
         | EventKind::GateAcknowledged { .. } => Err(invalid("Remediating", event)),
     }
 }
@@ -506,6 +518,7 @@ fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. }
+        | EventKind::RetryStarted { .. }
         | EventKind::SelfHealingReport { .. } => Err(invalid("Verifying", event)),
     }
 }
@@ -555,6 +568,7 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. }
+        | EventKind::RetryStarted { .. }
         | EventKind::SelfHealingReport { .. } => Err(invalid("Publishing", event)),
     }
 }
@@ -595,6 +609,7 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
+        | EventKind::RetryStarted { .. }
         | EventKind::SelfHealingReport { .. } => {
             Err(invalid(&format!("PublishedVerified({commit})"), event))
         }
@@ -671,6 +686,7 @@ fn from_paused(
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
         | EventKind::AttemptRecorded { .. }
+        | EventKind::RetryStarted { .. }
         | EventKind::SelfHealingReport { .. } => Err(invalid("Paused", event)),
     }
 }
@@ -1613,6 +1629,54 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_task_leaves_failed_only_through_retry_started_into_remediating_that_attempt() {
+        let failed = TaskState::Failed {
+            class: FailureClass::VerificationFailure,
+            detail: "gate red".to_string(),
+        };
+        let attempt = AttemptId::new(3);
+
+        let state = apply(&failed, &EventKind::RetryStarted { attempt }).expect("legal");
+
+        assert_eq!(
+            state,
+            TaskState::Remediating {
+                attempt,
+                phase: Phase::Implement,
+            }
+        );
+        // The retry then runs like any remediation round: implement, verify.
+        let verifying = apply(
+            &state,
+            &EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Verify,
+            },
+        )
+        .expect("legal");
+        assert_eq!(verifying, TaskState::Verifying { attempt });
+    }
+
+    #[test]
+    fn retry_started_is_rejected_by_every_state_that_is_not_failed() {
+        for (label, state) in representative_states() {
+            if label == "Failed" {
+                continue;
+            }
+            let result = apply(
+                &state,
+                &EventKind::RetryStarted {
+                    attempt: AttemptId::new(2),
+                },
+            );
+            assert!(
+                matches!(result, Err(Error::InvalidTransition { .. })),
+                "{label} must reject RetryStarted, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
     fn from_remediating_accepts_phase_entered_and_moves_phase() {
         let attempt = AttemptId::new(2);
         let remediating = TaskState::Remediating {
@@ -2473,6 +2537,7 @@ mod tests {
                 class: FailureClass::AgentFailure,
                 detail: "x".to_string(),
             },
+            EventKind::RetryStarted { attempt },
             EventKind::TaskCancelled {
                 reason: "x".to_string(),
             },
@@ -2569,14 +2634,16 @@ mod tests {
             ("Paused/Interrupted", "TaskCancelled"),
             ("Paused/Blocked", "Resumed"),
             ("Paused/Blocked", "TaskCancelled"),
-            // Done, Acknowledged, Failed and Cancelled are terminal: no
-            // event is legal against them, so they contribute no rows.
+            ("Failed", "RetryStarted"),
+            // Done, Acknowledged and Cancelled are terminal: no event is
+            // legal against them, so they contribute no rows. Failed is
+            // terminal too, except that a human's `retry` may leave it.
         ];
 
         let states = representative_states();
         let events = representative_events();
         assert_eq!(states.len(), 16, "expected one row per distinguished state");
-        assert_eq!(events.len(), 23, "expected one row per distinguished event");
+        assert_eq!(events.len(), 24, "expected one row per distinguished event");
 
         let mut checked = 0;
         for (state_label, state) in &states {
@@ -2604,7 +2671,7 @@ mod tests {
         assert_eq!(checked, states.len() * events.len());
         assert_eq!(
             ALLOWED.len(),
-            53,
+            54,
             "the allowed list itself changed size; update this guard deliberately"
         );
     }

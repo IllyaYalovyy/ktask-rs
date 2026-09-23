@@ -122,6 +122,7 @@ fn level_for(kind: &EventKind) -> Level {
         | EventKind::PublishVerified { .. }
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
+        | EventKind::RetryStarted { .. }
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::GateAcknowledged { .. }
@@ -140,6 +141,7 @@ fn attempt_of(kind: &EventKind) -> Option<AttemptId> {
         | EventKind::VerifyPassed { attempt }
         | EventKind::VerifyFailed { attempt, .. }
         | EventKind::PublishStarted { attempt, .. }
+        | EventKind::RetryStarted { attempt }
         | EventKind::SelfHealingReport { attempt, .. } => Some(*attempt),
         EventKind::AttemptRecorded { record } => Some(record.id),
         EventKind::TaskQueued { .. }
@@ -189,6 +191,7 @@ fn phase_of(kind: &EventKind) -> Option<Phase> {
         | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
+        | EventKind::RetryStarted { .. }
         | EventKind::SelfHealingReport { .. } => None,
     }
 }
@@ -240,6 +243,7 @@ fn message_for(kind: &EventKind) -> String {
         }
         EventKind::TaskDone { commit } => format!("task done: {commit}"),
         EventKind::TaskFailed { class, detail } => format!("task failed ({class:?}): {detail}"),
+        EventKind::RetryStarted { attempt } => format!("retry started as attempt {attempt}"),
         EventKind::TaskCancelled { reason } => format!("task cancelled: {reason}"),
         EventKind::Paused { reason } => format!("paused: {reason:?}"),
         EventKind::Resumed => "resumed".to_string(),

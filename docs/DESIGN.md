@@ -223,6 +223,7 @@ may be added without extending `state::apply` in the same task.
 | `PublishVerified` | `commit: String, remote_sha: String` |
 | `TaskDone` | `commit: String` |
 | `TaskFailed` | `class: FailureClass, detail: String` |
+| `RetryStarted` | `attempt: AttemptId` |
 | `TaskCancelled` | `reason: String` |
 | `Paused` | `reason: PauseReason` |
 | `Resumed` | *(none)* |

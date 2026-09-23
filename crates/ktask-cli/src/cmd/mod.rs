@@ -5,10 +5,11 @@
 //! the three run-control commands — pause, interrupt, cancel — together,
 //! since `docs/CONTRACT.md` section 3 and a later task treat them as one
 //! unit). `init` (T108), `doctor` (T110), `status` (T111), `add` (T112),
-//! `plan lint` (T113) and `run` (T115) have their real behavior; every
-//! other module still only returns [`RunOutcome::Drained`] as a placeholder for later,
-//! per-command work: T116 (resume, retry), T117 (resolve, ack),
-//! T119 (pause, interrupt, cancel), T120 (rerun-gate) and T131 (tui). What
+//! `plan lint` (T113), `run` (T115) and `resume` and `retry` (T116) have
+//! their real behavior; every other module still only returns
+//! [`RunOutcome::Drained`] as a placeholder for later, per-command work:
+//! T117 (resolve, ack), T119 (pause, interrupt, cancel), T120 (rerun-gate)
+//! and T131 (tui). What
 //! this module is responsible for is that [`dispatch`] itself is real: the
 //! match below is exhaustive, so a `Command` variant added without a
 //! corresponding arm fails to compile instead of silently falling through
@@ -51,8 +52,8 @@ pub(crate) fn dispatch(
         Command::Plan { command } => plan::run(project, config, command),
         Command::Status => status::run(project, config, json),
         Command::Run { task, from } => run::run(project, *task, *from, json),
-        Command::Resume => resume::run(project, config),
-        Command::Retry { task } => retry::run(project, config, *task),
+        Command::Resume => resume::run(project, json),
+        Command::Retry { task } => retry::run(project, *task, json),
         Command::Resolve { task, note } => resolve::run(project, config, *task, note.as_deref()),
         Command::Ack { task } => ack::run(project, config, *task),
         Command::Pause => control::pause(project, config),
@@ -131,16 +132,20 @@ mod tests {
         for command in every_command() {
             let outcome = dispatch(&command, &project, &config, false);
 
-            // `doctor` (T110), `status` (T111) and `plan lint` (T113) have
-            // real behavior now: run against this fixture's nonexistent
-            // state directory, all three fail to even open it, so each
-            // reaches `RunOutcome::CheckFailed` rather than the placeholder
-            // `Drained` every other still-unimplemented command returns.
-            // Their own modules' tests cover the behavior in detail; this
-            // loop only needs to prove dispatch reached it.
+            // `doctor` (T110), `status` (T111), `plan lint` (T113), `resume`
+            // and `retry` (T116) have real behavior now: run against this
+            // fixture's nonexistent state directory, all five fail to even
+            // open it, so each reaches `RunOutcome::CheckFailed` rather than
+            // the placeholder `Drained` every other still-unimplemented
+            // command returns. Their own modules' tests cover the behavior
+            // in detail; this loop only needs to prove dispatch reached it.
             if matches!(
                 command,
-                Command::Doctor | Command::Status | Command::Plan { .. }
+                Command::Doctor
+                    | Command::Status
+                    | Command::Plan { .. }
+                    | Command::Resume
+                    | Command::Retry { .. }
             ) {
                 assert!(
                     matches!(outcome, RunOutcome::CheckFailed { .. }),

@@ -328,6 +328,19 @@ impl Runner {
             }
         };
 
+        self.open_worktree(task, base_sha)
+    }
+
+    /// Takes the repository lock and creates `task`'s isolated worktree at
+    /// `base_sha`: what [`Runner::prepare`] and [`Runner::retry_task`] do
+    /// once preflight has passed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::LockTimeout`] if the repository lock cannot be
+    /// acquired within a bounded timeout, and whatever [`create_worktree`]
+    /// returns if the worktree cannot be created.
+    fn open_worktree(&self, task: &Task, base_sha: String) -> Result<Prepared> {
         let lock = acquire(&self.project.state_dir, PREPARE_LOCK_TIMEOUT)?;
         let worktree =
             create_worktree(&self.project.root, &format!("task-{}", task.id), &base_sha)?;
@@ -806,6 +819,197 @@ impl Runner {
         let removed = remove_worktree(&self.project.root, &worktree);
 
         outcome.and_then(|state| removed.map(|()| state))
+    }
+
+    /// Starts a fresh remediation attempt for a [`TaskState::Failed`]
+    /// `task` and drives it to a verdict (`ktask-rs retry`, `VISION.md` §7).
+    ///
+    /// The attempt runs in a new provider session — never a resumed one —
+    /// whose prompt is the same compact failure bundle a remediation round
+    /// gets ([`bundle`]): the recorded failure's classification and detail,
+    /// the gate output the failed attempt journaled, a summary of the fresh
+    /// worktree's diff, and every prior attempt's evidence. The failed
+    /// attempt's own worktree is gone (every run removes its worktree), so
+    /// nothing but that evidence carries over.
+    ///
+    /// Preflight runs first, against the world as it is now, since a retry
+    /// is usually what follows the human fixing something: if it fails, the
+    /// task stays [`TaskState::Failed`] and nothing is recorded against it.
+    /// Once it passes, [`EventKind::RetryStarted`] is journaled — the only
+    /// event that leaves `Failed` — naming the new attempt, one past every
+    /// attempt already evidenced. Then, exactly as in a remediation round,
+    /// the agent runs (`run_remediation_phase`), the mandatory
+    /// completion gates rerun from scratch and the result is published
+    /// ([`Runner::verify_and_publish`]).
+    ///
+    /// A retry that succeeds records [`EventKind::TaskDone`]. One that fails
+    /// records [`EventKind::TaskFailed`] again, so the task is `Failed` (and
+    /// retryable) rather than stranded mid-attempt, and returns the error
+    /// that failed it. The worktree is removed and the lock released on
+    /// every path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidTransition`] if `task` is not
+    /// [`TaskState::Failed`], [`Error::Preflight`] if the world is still not
+    /// sane, and whatever creating the worktree returns; otherwise the
+    /// error the retried attempt failed with.
+    pub fn retry_task(&mut self, task: &Task) -> Result<TaskState> {
+        let TaskState::Failed { class, detail } = journaled_state(&self.project, task.id)? else {
+            let state = journaled_state(&self.project, task.id)?;
+            return Err(Error::InvalidTransition {
+                from: state.name().to_string(),
+                event: "RetryStarted".to_string(),
+            });
+        };
+
+        let base_sha = match preflight(&self.project, &self.config, self.provider.as_ref())? {
+            PreflightReport::Passed { base_sha } => base_sha,
+            PreflightReport::Failed { class, detail } => {
+                return Err(Error::Preflight { class, detail });
+            }
+        };
+        let prep = self.open_worktree(task, base_sha)?;
+        let worktree = prep.worktree.clone();
+
+        let outcome = self.drive_retry(&prep, task, class, &detail);
+        drop(prep);
+        let removed = remove_worktree(&self.project.root, &worktree);
+
+        outcome.and_then(|state| removed.map(|()| state))
+    }
+
+    /// [`Runner::retry_task`]'s inner loop, run against `prep`'s already-open
+    /// worktree and lock, for a task that failed with `class` and `detail`.
+    fn drive_retry(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        class: FailureClass,
+        detail: &str,
+    ) -> Result<TaskState> {
+        let attempt = self.next_evidence_attempt_id(task.id)?;
+        let gates = self.failed_attempt_gates(task.id, detail)?;
+        let prior = read_evidence(&self.project, task.id)?;
+        let budget = usize::try_from(self.config.failure_bundle_bytes).unwrap_or(usize::MAX);
+        let text = bundle(task, class, &gates, &diff_summary(prep)?, &prior, budget);
+
+        self.recorder
+            .record(Some(task.id), EventKind::RetryStarted { attempt })?;
+
+        let round = self
+            .run_remediation_phase(prep, task, attempt, &text)
+            .and_then(|_outcome| {
+                self.recorder.record(
+                    Some(task.id),
+                    EventKind::PhaseEntered {
+                        attempt,
+                        phase: Phase::Verify,
+                    },
+                )?;
+                self.verify_and_publish(prep, task, attempt)
+            });
+
+        match round {
+            Ok(commit) => {
+                self.write_remediation_evidence(
+                    prep,
+                    task,
+                    attempt,
+                    "remediated".to_string(),
+                    Some(commit.clone()),
+                )?;
+                self.recorder
+                    .record(Some(task.id), EventKind::TaskDone { commit })?;
+                journaled_state(&self.project, task.id)
+            }
+            Err(err) => {
+                let class = classify(
+                    &empty_outcome(),
+                    &gates_for_classification(&err),
+                    Some(&err),
+                );
+                self.write_remediation_evidence(
+                    prep,
+                    task,
+                    attempt,
+                    format!("{class:?}: {err}"),
+                    None,
+                )?;
+                self.record_failure(task, attempt, class, err.to_string())?;
+                Err(err)
+            }
+        }
+    }
+
+    /// Journals `task`'s failure as [`EventKind::TaskFailed`], first
+    /// recording the [`EventKind::VerifyFailed`] `state.rs` requires to leave
+    /// [`TaskState::Verifying`] when the attempt failed there without having
+    /// recorded one (a commit that could not be made, say).
+    fn record_failure(
+        &mut self,
+        task: &Task,
+        attempt: AttemptId,
+        class: FailureClass,
+        detail: String,
+    ) -> Result<()> {
+        if matches!(
+            journaled_state(&self.project, task.id)?,
+            TaskState::Verifying { .. }
+        ) {
+            self.recorder.record(
+                Some(task.id),
+                EventKind::VerifyFailed {
+                    attempt,
+                    class,
+                    detail: detail.clone(),
+                },
+            )?;
+        }
+        self.recorder
+            .record(Some(task.id), EventKind::TaskFailed { class, detail })?;
+        Ok(())
+    }
+
+    /// The failing gates the journal holds for `task`'s most recent attempt
+    /// (everything since its last [`EventKind::AttemptStarted`] or
+    /// [`EventKind::RetryStarted`]), for a failure bundle.
+    ///
+    /// A failure that ran no gate — preflight, an agent that never
+    /// reported — has none, so the recorded `detail` stands in as one
+    /// failing gate's output: the same stand-in
+    /// [`gates_for_classification`] builds, and for the same reason, that
+    /// the failure text reaches the bundle's "Failing gates" section.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever [`Journal::open_for`] or [`Journal::events_for`]
+    /// return on failure to read the journal.
+    fn failed_attempt_gates(&self, task: TaskId, detail: &str) -> Result<Vec<GateResult>> {
+        let journal = Journal::open_for(&self.project)?;
+        let mut gates = Vec::new();
+        for event in journal.events_for(task)? {
+            match event.kind {
+                EventKind::AttemptStarted { .. } | EventKind::RetryStarted { .. } => {
+                    gates.clear();
+                }
+                EventKind::GateFinished { result } if !result.passed => gates.push(result),
+                _ => {}
+            }
+        }
+        if gates.is_empty() {
+            gates.push(GateResult {
+                kind: GateKind::Verify,
+                passed: false,
+                exit_code: None,
+                signal: None,
+                duration_ms: 0,
+                stdout: String::new(),
+                stderr: detail.to_string(),
+                timed_out: false,
+            });
+        }
+        Ok(gates)
     }
 
     /// [`Runner::run_task`]'s inner loop, run against `prep`'s already-open
@@ -4591,5 +4795,404 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
         let outcome = runner.run_queue(&[], None).expect("run_queue");
 
         assert_eq!(outcome, RunOutcome::Drained);
+    }
+
+    /// A [`Provider`] that hands every prompt it is given to an inner
+    /// [`Dummy`] after keeping a copy, so a test can prove what a fresh
+    /// session was actually seeded with.
+    struct PromptRecorder {
+        inner: Dummy,
+        prompts: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+    }
+
+    impl Provider for PromptRecorder {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+
+        fn capabilities(&self) -> Capabilities {
+            self.inner.capabilities()
+        }
+
+        fn invoke(&self, inv: &Invocation, bus: Option<&Bus>) -> Result<Outcome> {
+            self.prompts.borrow_mut().push(inv.prompt.clone());
+            self.inner.invoke(inv, bus)
+        }
+    }
+
+    /// A dummy step that succeeds, optionally printing `stdout` and writing
+    /// `report` (path and content) as the agent would.
+    fn dummy_step(stdout: Option<&str>, report: Option<(PathBuf, &str)>) -> Step {
+        Step {
+            on_task: None,
+            on_attempt: None,
+            outcome: StepOutcome::Success,
+            stdout: stdout.map(str::to_string),
+            exit_code: Some(0),
+            delay_ms: None,
+            files: report
+                .into_iter()
+                .map(|(path, content)| ScenarioFile {
+                    path,
+                    content: content.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    /// A failing gate result whose captured stderr is `stderr`.
+    fn red_gate(stderr: &str) -> GateResult {
+        GateResult {
+            kind: GateKind::Verify,
+            passed: false,
+            exit_code: Some(1),
+            signal: None,
+            duration_ms: 1,
+            stdout: String::new(),
+            stderr: stderr.to_string(),
+            timed_out: false,
+        }
+    }
+
+    /// Journals `task` as having run attempt 1 to a verification failure
+    /// (its `gates` recorded) and then failed for good: the history a
+    /// `Failed` task carries into `retry`.
+    fn journal_failed_task(project: &Project, task: &Task, gates: Vec<GateResult>) {
+        let mut journal = Journal::open_for(project).expect("open journal");
+        let attempt = AttemptId::new(1);
+        let mut history = vec![
+            EventKind::PreflightStarted,
+            EventKind::PreflightPassed {
+                base_sha: "base".to_string(),
+            },
+            EventKind::AttemptStarted {
+                attempt,
+                protocol: "direct".to_string(),
+                pid: 4242,
+                base_sha: "base".to_string(),
+            },
+            EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Verify,
+            },
+        ];
+        history.extend(
+            gates
+                .into_iter()
+                .map(|result| EventKind::GateFinished { result }),
+        );
+        history.push(EventKind::VerifyFailed {
+            attempt,
+            class: FailureClass::VerificationFailure,
+            detail: "the completion gates failed".to_string(),
+        });
+        history.push(EventKind::TaskFailed {
+            class: FailureClass::VerificationFailure,
+            detail: "the completion gates failed".to_string(),
+        });
+        for kind in &history {
+            journal.append(Some(task.id), kind).expect("append history");
+        }
+    }
+
+    /// Evidence for attempt 1 having failed, as `remediate` leaves it.
+    fn write_failed_first_attempt(project: &Project, task: &Task) {
+        let now = OffsetDateTime::now_utc();
+        let record = AttemptRecord {
+            id: AttemptId::new(1),
+            task: task.id,
+            started: now,
+            ended: Some(now),
+            model_configured: None,
+            model_reported: None,
+            session_id: Some("first-session".to_string()),
+            exit_reason: "VerificationFailure: the completion gates failed".to_string(),
+            gates: Vec::new(),
+            usage: None,
+            base_sha: "base".to_string(),
+            candidate_sha: None,
+        };
+        write_evidence(project, &record, "").expect("write evidence");
+    }
+
+    fn event_kinds(project: &Project, task: &Task) -> Vec<&'static str> {
+        Journal::open_for(project)
+            .expect("open journal")
+            .events_for(task.id)
+            .expect("events_for")
+            .iter()
+            .map(|event| event.kind.discriminant())
+            .collect()
+    }
+
+    #[test]
+    fn retry_task_runs_a_fresh_session_seeded_with_the_failure_bundle_and_reaches_done() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        journal_failed_task(&project, &task, vec![red_gate("lint exploded on line 7")]);
+        write_failed_first_attempt(&project, &task);
+        let retry_report = report_path(&project, task.id, AttemptId::new(2));
+
+        let prompts = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let provider = PromptRecorder {
+            inner: Dummy::new(Scenario {
+                steps: vec![
+                    dummy_step(None, None),
+                    dummy_step(
+                        Some("repaired\n"),
+                        Some((
+                            retry_report.clone(),
+                            "KTASK_RESULT: DONE\nSummary: fixed.\n",
+                        )),
+                    ),
+                ],
+            }),
+            prompts: prompts.clone(),
+        };
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(provider));
+
+        let state = runner
+            .retry_task(&task)
+            .expect("a failed task can be retried");
+
+        assert_eq!(state, TaskState::Done);
+        let prompts = prompts.borrow();
+        assert_eq!(prompts.len(), 2, "one preflight probe, one retry session");
+        let prompt = &prompts[1];
+        for expected in [
+            "Classification: VerificationFailure",
+            "lint exploded on line 7",
+            "Prior attempt 1: exit_reason=VerificationFailure",
+            &retry_report.display().to_string(),
+        ] {
+            assert!(
+                prompt.contains(expected),
+                "the retry prompt must carry {expected:?}, got:\n{prompt}"
+            );
+        }
+        assert!(
+            !prompt.contains("first-session"),
+            "a retry never carries the failed attempt's session forward, got:\n{prompt}"
+        );
+
+        let kinds = event_kinds(&project, &task);
+        let after_failure = &kinds[kinds.iter().position(|k| *k == "TaskFailed").unwrap() + 1..];
+        assert_eq!(
+            after_failure,
+            [
+                "RetryStarted",
+                "PhaseEntered",
+                "AgentOutput",
+                "AttemptFinished",
+                "PhaseEntered",
+                "VerifyPassed",
+                "PublishStarted",
+                "PublishVerified",
+                "TaskDone",
+            ]
+        );
+        let records = read_evidence(&project, task.id).expect("read_evidence");
+        assert_eq!(records.len(), 2, "attempt 1 stays; the retry is attempt 2");
+        assert_eq!(records[1].id, AttemptId::new(2));
+        assert_eq!(records[1].exit_reason, "remediated");
+        assert!(records[1].candidate_sha.is_some());
+        assert_eq!(records[1].session_id, None);
+        assert_eq!(
+            crate::list_worktrees(&repo.path)
+                .expect("list_worktrees")
+                .len(),
+            1,
+            "the retry's worktree must be removed"
+        );
+    }
+
+    #[test]
+    fn retry_task_that_fails_again_journals_task_failed_so_it_can_be_retried_once_more() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        journal_failed_task(&project, &task, Vec::new());
+        // No report is written: the agent "ran" and produced nothing.
+        let provider = Dummy::new(Scenario {
+            steps: vec![dummy_step(None, None), dummy_step(Some("gave up\n"), None)],
+        });
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(provider));
+
+        let err = runner
+            .retry_task(&task)
+            .expect_err("a retry whose agent wrote no report fails");
+
+        assert!(matches!(err, Error::Report { .. }), "got {err:?}");
+        let kinds = event_kinds(&project, &task);
+        assert_eq!(
+            kinds.last(),
+            Some(&"TaskFailed"),
+            "the failure must be journaled, not left mid-attempt: {kinds:?}"
+        );
+        let state = journaled_state(&project, task.id).expect("journaled_state");
+        assert!(
+            matches!(
+                state,
+                TaskState::Failed {
+                    class: FailureClass::AgentFailure,
+                    ..
+                }
+            ),
+            "got {state:?}"
+        );
+        let records = read_evidence(&project, task.id).expect("read_evidence");
+        assert_eq!(records.len(), 1);
+        assert!(records[0].exit_reason.contains("AgentFailure"));
+        assert_eq!(records[0].candidate_sha, None);
+    }
+
+    #[test]
+    fn retry_task_refuses_a_task_that_is_not_failed_and_journals_nothing() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let mut runner = manual_runner(
+            &project,
+            runnable_config(),
+            Box::new(Dummy::new(Scenario { steps: Vec::new() })),
+        );
+
+        let err = runner
+            .retry_task(&task)
+            .expect_err("a queued task is not failed");
+
+        assert!(
+            matches!(&err, Error::InvalidTransition { from, .. } if from == "Queued"),
+            "got {err:?}"
+        );
+        assert_eq!(event_kinds(&project, &task), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn retry_task_stays_failed_when_preflight_still_fails() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        journal_failed_task(&project, &task, Vec::new());
+        let before = event_kinds(&project, &task);
+        let mut config = runnable_config();
+        config.baseline_command = Some(vec!["false".to_string()]);
+        let mut runner = manual_runner(
+            &project,
+            config,
+            Box::new(Dummy::new(Scenario { steps: Vec::new() })),
+        );
+
+        let err = runner
+            .retry_task(&task)
+            .expect_err("a red baseline still blocks the retry");
+
+        assert!(matches!(err, Error::Preflight { .. }), "got {err:?}");
+        assert_eq!(
+            event_kinds(&project, &task),
+            before,
+            "a retry that never started records nothing against the task"
+        );
+    }
+
+    #[test]
+    fn record_failure_leaves_verifying_through_verify_failed_and_leaves_remediating_directly() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let attempt = AttemptId::new(1);
+        let mut runner = manual_runner(
+            &project,
+            runnable_config(),
+            Box::new(Dummy::new(Scenario { steps: Vec::new() })),
+        );
+
+        // Task 1 failed while `Verifying` (a commit that could not be made):
+        // `Verifying` has no `TaskFailed` edge, so `VerifyFailed` comes first.
+        let verifying = sample_task(1);
+        {
+            let mut journal = Journal::open_for(&project).expect("open journal");
+            for kind in [
+                EventKind::PreflightStarted,
+                EventKind::PreflightPassed {
+                    base_sha: "base".to_string(),
+                },
+                EventKind::AttemptStarted {
+                    attempt,
+                    protocol: "direct".to_string(),
+                    pid: 4242,
+                    base_sha: "base".to_string(),
+                },
+                EventKind::PhaseEntered {
+                    attempt,
+                    phase: Phase::Verify,
+                },
+            ] {
+                journal.append(Some(verifying.id), &kind).expect("append");
+            }
+        }
+        runner
+            .record_failure(
+                &verifying,
+                attempt,
+                FailureClass::GitConflict,
+                "could not commit".to_string(),
+            )
+            .expect("record_failure from Verifying");
+        let kinds = event_kinds(&project, &verifying);
+        assert_eq!(&kinds[kinds.len() - 2..], ["VerifyFailed", "TaskFailed"]);
+        assert!(matches!(
+            journaled_state(&project, verifying.id).expect("state"),
+            TaskState::Failed {
+                class: FailureClass::GitConflict,
+                ..
+            }
+        ));
+
+        // Task 2 is already `Remediating` (its gate failed and said so): only
+        // `TaskFailed` is recorded, never a second `VerifyFailed`.
+        let remediating = sample_task(2);
+        {
+            let mut journal = Journal::open_for(&project).expect("open journal");
+            for kind in [
+                EventKind::PreflightStarted,
+                EventKind::PreflightPassed {
+                    base_sha: "base".to_string(),
+                },
+                EventKind::AttemptStarted {
+                    attempt,
+                    protocol: "direct".to_string(),
+                    pid: 4242,
+                    base_sha: "base".to_string(),
+                },
+                EventKind::PhaseEntered {
+                    attempt,
+                    phase: Phase::Verify,
+                },
+                EventKind::VerifyFailed {
+                    attempt,
+                    class: FailureClass::VerificationFailure,
+                    detail: "red".to_string(),
+                },
+            ] {
+                journal.append(Some(remediating.id), &kind).expect("append");
+            }
+        }
+        runner
+            .record_failure(
+                &remediating,
+                attempt,
+                FailureClass::VerificationFailure,
+                "still red".to_string(),
+            )
+            .expect("record_failure from Remediating");
+        let kinds = event_kinds(&project, &remediating);
+        assert_eq!(&kinds[kinds.len() - 2..], ["VerifyFailed", "TaskFailed"]);
+        assert_eq!(kinds.iter().filter(|k| **k == "VerifyFailed").count(), 1);
     }
 }
