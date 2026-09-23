@@ -11,12 +11,14 @@ use ktask_core::RunOutcome;
 /// section 1 documents it.
 ///
 /// Codes 3, 4 and 5 are pauses, not failures, and — like 130 — must never
-/// collapse to 1: only [`RunOutcome::TaskFailed`] does.
+/// collapse to 1: only [`RunOutcome::TaskFailed`] and
+/// [`RunOutcome::CheckFailed`] do, the two shapes "the command completed and
+/// found something wrong" takes.
 #[must_use]
 pub(crate) fn code_for(outcome: &RunOutcome) -> i32 {
     match outcome {
         RunOutcome::Drained => 0,
-        RunOutcome::TaskFailed { .. } => 1,
+        RunOutcome::TaskFailed { .. } | RunOutcome::CheckFailed { .. } => 1,
         RunOutcome::Usage { .. } => 2,
         RunOutcome::ProviderLimit { .. } => 3,
         RunOutcome::HumanGate { .. } => 4,
@@ -40,6 +42,12 @@ mod tests {
             (
                 RunOutcome::TaskFailed {
                     task: TaskId::new(1),
+                },
+                1,
+            ),
+            (
+                RunOutcome::CheckFailed {
+                    detail: "git: not runnable".to_string(),
                 },
                 1,
             ),
@@ -86,6 +94,7 @@ mod tests {
             match outcome {
                 RunOutcome::Drained
                 | RunOutcome::TaskFailed { .. }
+                | RunOutcome::CheckFailed { .. }
                 | RunOutcome::Usage { .. }
                 | RunOutcome::ProviderLimit { .. }
                 | RunOutcome::HumanGate { .. }
@@ -93,7 +102,7 @@ mod tests {
                 | RunOutcome::Interrupted => {}
             }
         }
-        assert_eq!(table().len(), 7, "one row per RunOutcome variant");
+        assert_eq!(table().len(), 8, "one row per RunOutcome variant");
     }
 
     #[test]
@@ -118,13 +127,17 @@ mod tests {
     }
 
     #[test]
-    fn only_task_failed_maps_to_the_failure_code() {
+    fn only_task_failed_and_check_failed_map_to_the_failure_code() {
         for (outcome, code) in table() {
-            let is_task_failed = matches!(outcome, RunOutcome::TaskFailed { .. });
+            let is_a_failure = matches!(
+                outcome,
+                RunOutcome::TaskFailed { .. } | RunOutcome::CheckFailed { .. }
+            );
             assert_eq!(
                 code == 1,
-                is_task_failed,
-                "exit code 1 must be reserved for TaskFailed, got {outcome:?} -> {code}"
+                is_a_failure,
+                "exit code 1 must be reserved for TaskFailed and CheckFailed, \
+                 got {outcome:?} -> {code}"
             );
         }
     }

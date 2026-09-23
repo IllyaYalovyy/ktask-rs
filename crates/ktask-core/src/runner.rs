@@ -1556,6 +1556,17 @@ pub enum RunOutcome {
         /// The task that failed.
         task: TaskId,
     },
+    /// A command-level diagnostic check failed (`docs/CONTRACT.md` §3
+    /// `doctor`: "Exit 0 if every check passes, 1 otherwise"). Unlike
+    /// [`RunOutcome::TaskFailed`], this is not about any one queued task, so
+    /// it carries a summary of what failed instead of a [`TaskId`]. Maps to
+    /// the same exit code as `TaskFailed`: both are "the command ran to
+    /// completion and found something wrong," as opposed to the pauses
+    /// below, which stop before completion.
+    CheckFailed {
+        /// Which checks failed, and why.
+        detail: String,
+    },
     /// The command could not even start: bad arguments, a malformed task
     /// file, or no registered project.
     Usage {
@@ -2146,6 +2157,9 @@ mod tests {
             RunOutcome::TaskFailed {
                 task: TaskId::new(1),
             },
+            RunOutcome::CheckFailed {
+                detail: "git: not runnable".to_string(),
+            },
             RunOutcome::Usage {
                 detail: "no registered project".to_string(),
             },
@@ -2163,9 +2177,9 @@ mod tests {
     }
 
     #[test]
-    fn outcome_has_exactly_seven_variants() {
+    fn outcome_has_exactly_eight_variants() {
         let variants = all_outcomes();
-        assert_eq!(variants.len(), 7);
+        assert_eq!(variants.len(), 8);
 
         // Exhaustive, wildcard-free match: a variant added to `RunOutcome`
         // without being listed here fails to compile instead of silently
@@ -2174,6 +2188,7 @@ mod tests {
             match outcome {
                 RunOutcome::Drained
                 | RunOutcome::TaskFailed { .. }
+                | RunOutcome::CheckFailed { .. }
                 | RunOutcome::Usage { .. }
                 | RunOutcome::ProviderLimit { .. }
                 | RunOutcome::HumanGate { .. }
