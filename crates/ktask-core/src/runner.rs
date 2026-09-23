@@ -8,20 +8,21 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nix::sys::statvfs::statvfs;
 use time::OffsetDateTime;
 
 use crate::{
-    AttemptId, AttemptRecord, Bus, Config, Error, EventKind, FailureClass, Gate, GateKind,
-    GateResult, Invocation, Journal, Outcome, Phase, PhaseSpec, Profile, Project, Provider,
-    RebaseOutcome, Recorder, RepoLock, ReportResult, Result, Stream, Task, TaskId, TaskState,
-    TestSummary, acquire, apply, assemble, build, changed_paths, check_model, check_scope,
-    claim_tdd_exception, classify, collect_adrs, commit_all, create_worktree, ensure_report_dir,
-    fetch, for_task, head_sha, load, load_context_doc, load_for, load_template, parse_cargo,
-    profile_from, publish, read_report, rebase_onto_remote, redact, remove_worktree, require_clean,
-    run_completion_set, run_gate, verify_green, verify_red, write_evidence,
+    AttemptId, AttemptRecord, Bounds, Breaker, BreakerState, Bus, Config, Decision, Error,
+    EventKind, FailureClass, Gate, GateKind, GateResult, Invocation, Journal, Outcome, Phase,
+    PhaseSpec, Profile, Project, Provider, RebaseOutcome, Recorder, RepoLock, ReportResult, Result,
+    Stream, Task, TaskId, TaskState, TestSummary, acquire, apply, assemble, build, bundle,
+    changed_paths, check_model, check_no_policy_edit, check_scope, claim_tdd_exception, classify,
+    collect_adrs, commit_all, create_worktree, ensure_report_dir, fetch, for_task, head_sha, load,
+    load_context_doc, load_for, load_template, parse_cargo, profile_from, publish, read_evidence,
+    read_report, rebase_onto_remote, redact, remove_worktree, require_clean, run_completion_set,
+    run_gate, should_continue, signature, verify_green, verify_red, write_evidence,
 };
 
 /// How long [`Runner::prepare`] waits for the repository lock ([`acquire`])
@@ -665,11 +666,260 @@ impl Runner {
             },
         )?;
 
-        let commit = self.verify_and_publish(prep, task, attempt)?;
+        let commit = match self.verify_and_publish(prep, task, attempt) {
+            Ok(commit) => commit,
+            Err(err) => self.remediate(prep, task, attempt, err)?,
+        };
         self.recorder
             .record(Some(task.id), EventKind::TaskDone { commit })?;
 
         journaled_state(&self.project, task.id)
+    }
+
+    /// Bounded, mechanical recovery from a failed attempt (`VISION.md` §7):
+    /// classifies why `failed_attempt` failed, seeds a fresh provider
+    /// session with a compact failure bundle built from every attempt's
+    /// evidence so far, and reruns the mandatory completion gates from
+    /// scratch against whatever that session produced.
+    ///
+    /// Loops until either a retry publishes successfully, [`Breaker::record`]
+    /// reports [`BreakerState::Tripped`] on a repeated failure signature, or
+    /// [`should_continue`] reports [`Decision::Stop`] against
+    /// `config.max_remediation_attempts` and `config.attempt_timeout_secs`
+    /// (`VISION.md` §7: "Bound remediation by attempts, elapsed time, and
+    /// token budget"). No token budget is enforced: nothing in `Config` names
+    /// one, and [`Bounds::max_tokens`] is `None` in exactly that case.
+    ///
+    /// Each round gets its own [`AttemptId`], one past every attempt already
+    /// evidenced for `task` ([`read_evidence`]) — never `begin_attempt`,
+    /// which would journal a second [`EventKind::AttemptStarted`] that
+    /// `state.rs` only ever accepts from [`TaskState::Preflight`]. A round's
+    /// provider invocation never carries the failed attempt's session
+    /// forward: [`Invocation`] has no field for one, and the retried
+    /// attempt's own evidence records only the session its own [`Outcome`]
+    /// reports.
+    ///
+    /// Every round's evidence is written before this returns — a failed
+    /// round's exit reason and classification, or a successful round's
+    /// candidate commit — so [`read_evidence`] always reflects exactly how
+    /// many attempts `task` actually took, including remediation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the triggering error, or the last round's, once the circuit
+    /// breaker trips or the bounds are exhausted; whatever
+    /// [`Runner::run_remediation_phase`] or [`Runner::verify_and_publish`]
+    /// themselves return from a round that fails for a new reason; and
+    /// whatever [`write_evidence`] or [`read_evidence`] return on failure to
+    /// persist or read evidence.
+    fn remediate(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        failed_attempt: AttemptId,
+        mut err: Error,
+    ) -> Result<String> {
+        let bounds = Bounds {
+            max_attempts: self.config.max_remediation_attempts,
+            max_elapsed: Duration::from_secs(self.config.attempt_timeout_secs),
+            max_tokens: None,
+        };
+        let mut breaker = Breaker::new(self.config.circuit_breaker_threshold);
+        let clock = Instant::now();
+        let mut rounds: u32 = 0;
+        let mut last_attempt = failed_attempt;
+
+        loop {
+            let gates = gates_for_classification(&err);
+            let class = classify(&empty_outcome(), &gates, Some(&err));
+            self.write_remediation_evidence(
+                prep,
+                task,
+                last_attempt,
+                format!("{class:?}: {err}"),
+                None,
+            )?;
+
+            if let BreakerState::Tripped { .. } = breaker.record(&signature(class, &gates)) {
+                return Err(err);
+            }
+            if let Decision::Stop(_) = should_continue(&bounds, rounds, clock.elapsed(), 0) {
+                return Err(err);
+            }
+            rounds += 1;
+
+            let prior = read_evidence(&self.project, task.id)?;
+            let diff_summary = diff_summary(prep)?;
+            let budget = usize::try_from(self.config.failure_bundle_bytes).unwrap_or(usize::MAX);
+            let text = bundle(task, class, &gates, &diff_summary, &prior, budget);
+            let retry_attempt = self.next_evidence_attempt_id(task.id)?;
+
+            let round = self
+                .run_remediation_phase(prep, task, retry_attempt, &text)
+                .and_then(|_outcome| {
+                    self.recorder.record(
+                        Some(task.id),
+                        EventKind::PhaseEntered {
+                            attempt: retry_attempt,
+                            phase: Phase::Verify,
+                        },
+                    )?;
+                    self.verify_and_publish(prep, task, retry_attempt)
+                });
+
+            match round {
+                Ok(commit) => {
+                    self.write_remediation_evidence(
+                        prep,
+                        task,
+                        retry_attempt,
+                        "remediated".to_string(),
+                        Some(commit.clone()),
+                    )?;
+                    return Ok(commit);
+                }
+                Err(next_err) => {
+                    err = next_err;
+                    last_attempt = retry_attempt;
+                }
+            }
+        }
+    }
+
+    /// One remediation round's provider invocation (`VISION.md` §7): a
+    /// fresh session prompted with `bundle_text` alone rather than
+    /// [`crate::assemble`]'s usual context, since the failure bundle already
+    /// carries everything a retry needs — classification, failing gate
+    /// output, the diff summary, and prior attempt evidence.
+    ///
+    /// Mirrors [`Runner::run_phase`]'s [`Phase::Implement`] handling
+    /// (`PhaseEntered`, invoke, `check_model`, `AgentOutput`,
+    /// `AttemptFinished`, [`crate::read_report`]) but checks the resulting
+    /// diff with [`check_no_policy_edit`] rather than [`check_scope`]:
+    /// `VISION.md` §7's "self-healing ... never edits gate definitions"
+    /// applies regardless of the phase's own write scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever [`Recorder::record`] returns on failure to journal;
+    /// whatever `self.provider.invoke` returns if it cannot be invoked;
+    /// [`Error::Provider`] if the configured and reported models mismatch;
+    /// [`Error::Report`] if the agent never wrote the report it was told to;
+    /// and [`Error::Policy`] naming every path [`check_no_policy_edit`]
+    /// rejected.
+    fn run_remediation_phase(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+        bundle_text: &str,
+    ) -> Result<PhaseOutcome> {
+        self.recorder.record(
+            Some(task.id),
+            EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Implement,
+            },
+        )?;
+
+        let mut prompt = bundle_text.to_string();
+        prompt.push('\n');
+        prompt.push_str(&self.name_report_path(task, attempt)?);
+
+        let inv = Invocation {
+            prompt,
+            model: self.config.model.clone(),
+            working_dir: prep.worktree.clone(),
+        };
+        let outcome = self.provider.invoke(&inv, None)?;
+
+        check_model(self.config.model.as_deref(), None)?;
+
+        if !outcome.stdout.is_empty() {
+            self.recorder.record(
+                Some(task.id),
+                EventKind::AgentOutput {
+                    attempt,
+                    stream: Stream::Stdout,
+                    text: outcome.stdout.clone(),
+                },
+            )?;
+        }
+        if !outcome.stderr.is_empty() {
+            self.recorder.record(
+                Some(task.id),
+                EventKind::AgentOutput {
+                    attempt,
+                    stream: Stream::Stderr,
+                    text: outcome.stderr.clone(),
+                },
+            )?;
+        }
+        self.recorder.record(
+            Some(task.id),
+            EventKind::AttemptFinished {
+                attempt,
+                exit_code: outcome.exit_code,
+                usage: outcome.usage,
+                session_id: outcome.session_id.clone(),
+                model_reported: None,
+            },
+        )?;
+
+        let report = read_report(&self.project, task.id, attempt)?;
+
+        let changed = changed_paths(&prep.worktree, &prep.base_sha)?;
+        check_no_policy_edit(&changed)?;
+
+        Ok(PhaseOutcome { report, changed })
+    }
+
+    /// The next [`AttemptId`] to evidence for `task`: one past every attempt
+    /// [`read_evidence`] already finds on disk, independent of
+    /// [`EventKind::AttemptStarted`] ([`next_attempt_id`] counts those
+    /// instead, and only [`Runner::begin_attempt`] should ever call that).
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever [`read_evidence`] returns on failure to read.
+    fn next_evidence_attempt_id(&self, task_id: TaskId) -> Result<AttemptId> {
+        let count = read_evidence(&self.project, task_id)?.len();
+        Ok(AttemptId::new(u32::try_from(count).unwrap_or(u32::MAX) + 1))
+    }
+
+    /// Writes (or overwrites) `attempt`'s evidence with a concluded
+    /// [`AttemptRecord`]: `exit_reason` describes how the round ended, and
+    /// `candidate_sha` is `Some` only for a round that published
+    /// successfully. Never carries a session id: `VISION.md` §7's remediation
+    /// sessions are never resumed, so nothing here has one to preserve.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever [`write_evidence`] returns on failure to persist.
+    fn write_remediation_evidence(
+        &self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+        exit_reason: String,
+        candidate_sha: Option<String>,
+    ) -> Result<()> {
+        let now = OffsetDateTime::now_utc();
+        let record = AttemptRecord {
+            id: attempt,
+            task: task.id,
+            started: now,
+            ended: Some(now),
+            model_configured: self.config.model.clone(),
+            model_reported: None,
+            session_id: None,
+            exit_reason,
+            gates: Vec::new(),
+            usage: None,
+            base_sha: prep.base_sha.clone(),
+            candidate_sha,
+        };
+        write_evidence(&self.project, &record, "")
     }
 
     /// The rejected-push recovery path of [`Runner::verify_and_publish`]:
@@ -1088,6 +1338,57 @@ fn empty_outcome() -> Outcome {
     }
 }
 
+/// A synthetic single-element gate list for [`classify()`] and [`bundle`],
+/// built from `err` when it is [`Error::Gate`] — [`Runner::verify_and_publish`]'s
+/// own error for a failing completion gate carries only a kind and a detail
+/// message, not the [`GateResult`] history `classify` otherwise expects.
+/// This stands in for it just well enough that `classify` reports
+/// [`FailureClass::VerificationFailure`] rather than falling through to its
+/// generic [`FailureClass::AgentFailure`] fallback, and that the failing
+/// gate's own detail text reaches [`bundle`]'s "Failing gates" section.
+///
+/// Every other [`Error`] variant [`Runner::verify_and_publish`] can return
+/// (`Policy`, `Git`) is already classified correctly from `git_error` alone,
+/// without needing a [`GateResult`] at all, so this returns an empty `Vec`
+/// for anything but [`Error::Gate`].
+/// A short, deterministic summary of everything changed in `prep.worktree`
+/// since `prep.base_sha`, for [`bundle`]'s `diff_summary` argument.
+///
+/// # Errors
+///
+/// Returns whatever [`changed_paths`] returns on failure to diff.
+fn diff_summary(prep: &Prepared) -> Result<String> {
+    let changed = changed_paths(&prep.worktree, &prep.base_sha)?;
+    if changed.is_empty() {
+        return Ok("no files changed".to_string());
+    }
+    Ok(format!(
+        "{} file(s) changed: {}",
+        changed.len(),
+        changed
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
+fn gates_for_classification(err: &Error) -> Vec<GateResult> {
+    match err {
+        Error::Gate { detail, .. } => vec![GateResult {
+            kind: GateKind::Verify,
+            passed: false,
+            exit_code: None,
+            signal: None,
+            duration_ms: 0,
+            stdout: String::new(),
+            stderr: detail.clone(),
+            timed_out: false,
+        }],
+        _ => Vec::new(),
+    }
+}
+
 /// Checks that `config.mainline_remote` fetches cleanly into
 /// `project.root`. A fetch failure is a `git` operation failing outside of
 /// publication, which [`classify()`] (`VISION.md` §7) always reports as
@@ -1225,7 +1526,7 @@ mod tests {
     use super::*;
     use crate::testing::scratch_repo;
     use crate::{
-        Bus, Capabilities, Error, Event, Phase, Scenario, ScenarioFile, Step, StepOutcome,
+        Bus, Capabilities, Dummy, Error, Event, Phase, Scenario, ScenarioFile, Step, StepOutcome,
         TaskStatus, TddException, WriteScope, project_config_path, read_evidence, report_path,
     };
 
@@ -3110,5 +3411,211 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
             ],
             "no TaskDone must ever be recorded for a failed attempt"
         );
+    }
+
+    /// A `verify_command` that fails exactly once: it touches `marker` and
+    /// exits `1` the first time it runs, then exits `0` on every call after,
+    /// since `marker` now exists. Proves a remediation round's completion
+    /// gates are genuinely rerun rather than replaying a cached result — the
+    /// second run must actually execute the command to observe `marker` and
+    /// pass, not merely skip re-checking.
+    fn fails_once_then_passes_command(marker: &std::path::Path) -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "test -f \"$1\" && exit 0 || { touch \"$1\"; exit 1; }".to_string(),
+            "_".to_string(),
+            marker.display().to_string(),
+        ]
+    }
+
+    #[test]
+    fn run_task_remediates_a_failing_completion_gate_once_then_reaches_done_with_two_attempt_records()
+     {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let first_attempt = AttemptId::new(1);
+        let retry_attempt = AttemptId::new(2);
+        let first_report = report_path(&project, task.id, first_attempt);
+        let retry_report = report_path(&project, task.id, retry_attempt);
+        let marker = state_dir.path().join("verify-marker");
+
+        let scenario = Scenario {
+            steps: vec![
+                // `prepare`'s own `check_provider_available` probe.
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: None,
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: Vec::new(),
+                },
+                // The original `Implement` phase: reports done, but the
+                // completion gate below still fails this first time.
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: Some("implemented the thing\n".to_string()),
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: vec![ScenarioFile {
+                        path: first_report,
+                        content: "KTASK_RESULT: DONE\nSummary: first pass.\n".to_string(),
+                    }],
+                },
+                // The remediation round's own invocation.
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: Some("fixed it on retry\n".to_string()),
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: vec![ScenarioFile {
+                        path: retry_report,
+                        content: "KTASK_RESULT: DONE\nSummary: fixed on retry.\n".to_string(),
+                    }],
+                },
+            ],
+        };
+
+        let mut config = runnable_config();
+        config.verify_command = Some(fails_once_then_passes_command(&marker));
+        let mut runner = manual_runner(&project, config, Box::new(Dummy::new(scenario)));
+
+        let state = runner
+            .run_task(&task)
+            .expect("a failure remediated once must still reach Done");
+
+        assert_eq!(state, TaskState::Done);
+        assert!(
+            marker.exists(),
+            "the completion gate must have actually run"
+        );
+
+        let records = read_evidence(&project, task.id).expect("read_evidence");
+        assert_eq!(
+            records.len(),
+            2,
+            "the original failed attempt and the remediated retry must both be evidenced, got {records:?}"
+        );
+        assert_eq!(records[0].id, first_attempt);
+        assert_eq!(records[1].id, retry_attempt);
+        assert!(
+            records[0].exit_reason.contains("VerificationFailure"),
+            "the first attempt's evidence must record why it failed, got {:?}",
+            records[0].exit_reason
+        );
+        assert!(records[0].candidate_sha.is_none());
+        assert!(records[1].candidate_sha.is_some());
+        assert!(
+            records[1].gates.is_empty(),
+            "no stale gate result from the first attempt may survive into the second, got {:?}",
+            records[1].gates
+        );
+
+        let journal = Journal::open_for(&project).expect("open journal");
+        let events = journal.events_for(task.id).expect("events_for");
+        let verify_failed_count = events
+            .iter()
+            .filter(|event| event.kind.discriminant() == "VerifyFailed")
+            .count();
+        let verify_passed_count = events
+            .iter()
+            .filter(|event| event.kind.discriminant() == "VerifyPassed")
+            .count();
+        assert_eq!(
+            verify_failed_count, 1,
+            "exactly the first attempt's completion gate must have failed"
+        );
+        assert_eq!(
+            verify_passed_count, 1,
+            "exactly the remediated retry's completion gate must have passed"
+        );
+
+        let EventKind::TaskDone { commit } = &events.last().expect("at least one event").kind
+        else {
+            panic!(
+                "expected the run to end in TaskDone, got {:?}",
+                events.last()
+            );
+        };
+        let remote_tip =
+            crate::git(&repo.origin, &["rev-parse", "main"]).expect("rev-parse bare origin");
+        assert_eq!(*commit, remote_tip);
+    }
+
+    #[test]
+    fn remediate_stops_after_max_remediation_attempts_and_returns_the_last_error() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let first_report = report_path(&project, task.id, AttemptId::new(1));
+        let retry_report = report_path(&project, task.id, AttemptId::new(2));
+
+        // `verify_command` always fails: remediation gets no genuine chance
+        // to recover, so it must stop after exactly one retry
+        // (`max_remediation_attempts`'s default) rather than looping forever.
+        let scenario = Scenario {
+            steps: vec![
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: None,
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: Vec::new(),
+                },
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: None,
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: vec![ScenarioFile {
+                        path: first_report,
+                        content: "KTASK_RESULT: DONE\nSummary: first pass.\n".to_string(),
+                    }],
+                },
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: None,
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: vec![ScenarioFile {
+                        path: retry_report,
+                        content: "KTASK_RESULT: DONE\nSummary: still broken.\n".to_string(),
+                    }],
+                },
+            ],
+        };
+
+        let mut config = runnable_config();
+        config.verify_command = Some(vec!["false".to_string()]);
+        let mut runner = manual_runner(&project, config, Box::new(Dummy::new(scenario)));
+
+        let err = runner
+            .run_task(&task)
+            .expect_err("an unrecoverable failure must not loop forever");
+
+        assert!(matches!(err, Error::Gate { .. }), "got {err:?}");
+
+        let records = read_evidence(&project, task.id).expect("read_evidence");
+        assert_eq!(
+            records.len(),
+            2,
+            "the original attempt and exactly one bounded retry must both be evidenced, got {records:?}"
+        );
+        assert!(records.iter().all(|record| record.candidate_sha.is_none()));
     }
 }
