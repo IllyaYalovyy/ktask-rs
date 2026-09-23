@@ -7,6 +7,7 @@
 
 use crate::event::AppEvent;
 use crate::keys::{KeyAction, lookup};
+use crate::layout::layout_for;
 use crate::types::{Overlay, Screen, TaskView};
 use crossterm::event::KeyEvent;
 use ktask_core::{Event, EventKind};
@@ -134,16 +135,23 @@ fn apply_core(app: &mut App, event: Event) {
     }
 }
 
-/// Draws the interface into `frame`: a header naming the screen, then the
-/// overlay, if one is open, centred over it.
+/// The hint the footer shows, in the layouts that have one.
+const FOOTER_HINT: &str = "Press ? for the key map";
+
+/// Draws the interface into `frame`: the regions [`layout_for`] plans, a
+/// header naming the screen and, in the full layout, a footer hint, then the
+/// overlay, if one is open, centred over the whole frame.
+///
+/// Every screen goes through here, so every screen is laid out by the same
+/// plan and none draws outside the area the frame was given.
 pub fn render(app: &App, frame: &mut Frame<'_>) {
     let area = frame.area();
-    let header = Rect {
-        height: area.height.min(1),
-        ..area
-    };
+    let plan = layout_for(area);
     let title = format!("{} {}", app.screen as u8, crate::screen::title(app.screen));
-    frame.render_widget(Paragraph::new(title), header);
+    frame.render_widget(Paragraph::new(title), plan.header);
+    if let Some(footer) = plan.footer {
+        frame.render_widget(Paragraph::new(FOOTER_HINT), footer);
+    }
     match &app.overlay {
         Some(Overlay::KeyMap) => crate::screen::help::render(app.screen, area, frame),
         Some(Overlay::Confirm { prompt, .. }) => render_confirm(prompt, area, frame),

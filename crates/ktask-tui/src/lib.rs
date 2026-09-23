@@ -6,6 +6,7 @@
 pub mod app;
 pub mod event;
 pub mod keys;
+pub mod layout;
 pub mod screen;
 pub mod terminal;
 pub mod testing;
@@ -14,6 +15,7 @@ pub mod types;
 pub use app::{App, OUTPUT_WINDOW, render, update};
 pub use event::AppEvent;
 pub use keys::{BINDINGS, Binding, KeyAction, bindings_for, lookup};
+pub use layout::{LayoutMode, LayoutPlan, layout_for};
 pub use types::{Action, Overlay, Screen, TaskView, ViewOp};
 
 use ktask_core::{EventSeq, Journal, Result, Subscription};
