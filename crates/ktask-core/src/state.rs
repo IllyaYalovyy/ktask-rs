@@ -281,6 +281,7 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::AttemptStarted { .. }
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -322,6 +323,7 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
         | EventKind::PreflightStarted
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -353,6 +355,7 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
             phase: *phase,
         }),
         EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::TddExceptionUsed { .. } => Ok(TaskState::Running { attempt, phase }),
         EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
@@ -408,6 +411,7 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
             phase: *phase,
         }),
         EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::TddExceptionUsed { .. } => Ok(TaskState::Remediating { attempt, phase }),
         EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
@@ -474,6 +478,7 @@ fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::AttemptStarted { .. }
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::PublishVerified { .. }
         | EventKind::TaskDone { .. }
         | EventKind::TaskFailed { .. }
@@ -517,6 +522,7 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::AttemptStarted { .. }
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -549,6 +555,7 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::AttemptStarted { .. }
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -624,6 +631,7 @@ fn from_paused(
         | EventKind::AttemptStarted { .. }
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }

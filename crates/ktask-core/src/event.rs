@@ -4,18 +4,18 @@
 //! listed here, `#[serde(tag = "kind")]` so a stored event's `kind` column
 //! names its variant. Nothing may emit an event this enum does not contain.
 //!
-//! Five variants are deliberately absent because their payload names a type
-//! no earlier task has defined: `GateFinished`, `AttemptFinished`,
-//! `ProviderDetected`, `DecisionResolved` and `SelfHealingReport`. A sixth,
-//! `GateStarted`, is absent for the same reason: its `kind: GateKind` field
-//! names a type `gate.rs` has not yet introduced, matching the precedent
-//! set by [`crate::Error::Gate`], whose `kind` field is a `String` today
-//! rather than `GateKind`. Each is added by the task that defines its
-//! payload type, which also adds its arm to the transition function.
+//! Four variants are deliberately absent because their payload names a type
+//! no earlier task has defined: `GateFinished`, `ProviderDetected`,
+//! `DecisionResolved` and `SelfHealingReport`. A fifth, `GateStarted`, is
+//! absent for the same reason: its `kind: GateKind` field names a type
+//! `gate.rs` has not yet introduced, matching the precedent set by
+//! [`crate::Error::Gate`], whose `kind` field is a `String` today rather
+//! than `GateKind`. Each is added by the task that defines its payload
+//! type, which also adds its arm to the transition function.
 
 use crate::{
     AttemptId, AttemptRecord, DecisionRequest, EventSeq, FailureClass, PauseReason, Phase,
-    Recovery, Stream, TaskId, TddException,
+    Recovery, Stream, TaskId, TddException, Usage,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -90,6 +90,20 @@ pub enum EventKind {
         stream: Stream,
         /// The output text.
         text: String,
+    },
+    /// The provider's invocation for the current phase finished running.
+    AttemptFinished {
+        /// The attempt that finished.
+        attempt: AttemptId,
+        /// The provider process's exit code.
+        exit_code: i32,
+        /// Token and cost usage, if the provider reported any.
+        usage: Option<Usage>,
+        /// The provider's own session identifier, if it has one.
+        session_id: Option<String>,
+        /// The model the provider reported it actually ran, if it reports
+        /// one (`VISION.md` §12).
+        model_reported: Option<String>,
     },
     /// The completion gates passed for an attempt.
     VerifyPassed {
@@ -203,6 +217,7 @@ impl EventKind {
             EventKind::AttemptStarted { .. } => "AttemptStarted",
             EventKind::PhaseEntered { .. } => "PhaseEntered",
             EventKind::AgentOutput { .. } => "AgentOutput",
+            EventKind::AttemptFinished { .. } => "AttemptFinished",
             EventKind::VerifyPassed { .. } => "VerifyPassed",
             EventKind::VerifyFailed { .. } => "VerifyFailed",
             EventKind::PublishStarted { .. } => "PublishStarted",
@@ -292,6 +307,19 @@ mod tests {
                 stream: Stream::Stdout,
                 text: "running tests".to_string(),
             },
+            EventKind::AttemptFinished {
+                attempt: AttemptId::new(1),
+                exit_code: 0,
+                usage: Some(Usage {
+                    input_tokens: Some(120),
+                    output_tokens: Some(45),
+                    cached_tokens: None,
+                    cost_usd: Some(0.02),
+                    source: crate::UsageSource::Provider,
+                }),
+                session_id: Some("session-1".to_string()),
+                model_reported: Some("claude-opus-5".to_string()),
+            },
             EventKind::VerifyPassed {
                 attempt: AttemptId::new(1),
             },
@@ -366,9 +394,9 @@ mod tests {
     }
 
     #[test]
-    fn event_kind_has_exactly_twenty_two_variants() {
+    fn event_kind_has_exactly_twenty_three_variants() {
         let variants = all_events();
-        assert_eq!(variants.len(), 22);
+        assert_eq!(variants.len(), 23);
 
         // Exhaustive, wildcard-free match: a variant added to `EventKind`
         // without being listed here fails to compile instead of silently
@@ -382,6 +410,7 @@ mod tests {
                 | EventKind::AttemptStarted { .. }
                 | EventKind::PhaseEntered { .. }
                 | EventKind::AgentOutput { .. }
+                | EventKind::AttemptFinished { .. }
                 | EventKind::VerifyPassed { .. }
                 | EventKind::VerifyFailed { .. }
                 | EventKind::PublishStarted { .. }
@@ -421,6 +450,7 @@ mod tests {
             "AttemptStarted",
             "PhaseEntered",
             "AgentOutput",
+            "AttemptFinished",
             "VerifyPassed",
             "VerifyFailed",
             "PublishStarted",

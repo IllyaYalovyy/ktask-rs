@@ -113,6 +113,7 @@ fn level_for(kind: &EventKind) -> Level {
         | EventKind::PreflightPassed { .. }
         | EventKind::AttemptStarted { .. }
         | EventKind::PhaseEntered { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::PublishStarted { .. }
         | EventKind::PublishVerified { .. }
@@ -131,6 +132,7 @@ fn attempt_of(kind: &EventKind) -> Option<AttemptId> {
         EventKind::AttemptStarted { attempt, .. }
         | EventKind::PhaseEntered { attempt, .. }
         | EventKind::AgentOutput { attempt, .. }
+        | EventKind::AttemptFinished { attempt, .. }
         | EventKind::VerifyPassed { attempt }
         | EventKind::VerifyFailed { attempt, .. }
         | EventKind::PublishStarted { attempt, .. } => Some(*attempt),
@@ -163,6 +165,7 @@ fn phase_of(kind: &EventKind) -> Option<Phase> {
         | EventKind::PreflightFailed { .. }
         | EventKind::AttemptStarted { .. }
         | EventKind::AgentOutput { .. }
+        | EventKind::AttemptFinished { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -200,6 +203,14 @@ fn message_for(kind: &EventKind) -> String {
         } => format!("attempt started: protocol={protocol} pid={pid} base_sha={base_sha}"),
         EventKind::PhaseEntered { phase, .. } => format!("phase entered: {phase:?}"),
         EventKind::AgentOutput { stream, text, .. } => format!("[{stream:?}] {text}"),
+        EventKind::AttemptFinished {
+            exit_code,
+            model_reported,
+            ..
+        } => format!(
+            "attempt finished: exit_code={exit_code} model_reported={}",
+            model_reported.as_deref().unwrap_or("unknown")
+        ),
         EventKind::VerifyPassed { .. } => "verify passed".to_string(),
         EventKind::VerifyFailed { class, detail, .. } => {
             format!("verify failed ({class:?}): {detail}")
