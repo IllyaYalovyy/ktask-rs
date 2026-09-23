@@ -57,7 +57,7 @@ pub use git::{
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::{Journal, journal_path};
 pub use lock::{Holder, RepoLock, acquire};
-pub use log::{Level, Logger};
+pub use log::{Level, LogLine, Logger};
 pub use paths::{config_file, project_id, prompt_library, state_root};
 pub use project::{Project, project_config_path};
 pub use protocol::{

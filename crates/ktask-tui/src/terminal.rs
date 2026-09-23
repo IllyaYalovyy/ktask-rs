@@ -153,11 +153,14 @@ fn event_loop(
 }
 
 /// Whether `key` ends the session: Ctrl-C always, and `q` unless an overlay is
-/// open, where it closes the overlay instead.
+/// open, where it closes the overlay instead, or a search is being typed,
+/// where it is a letter of the search.
 fn quits(app: &App, key: &KeyEvent) -> bool {
     match key.code {
         KeyCode::Char('c') => key.modifiers.contains(KeyModifiers::CONTROL),
-        KeyCode::Char('q') => key.modifiers.is_empty() && app.overlay.is_none(),
+        KeyCode::Char('q') => {
+            key.modifiers.is_empty() && app.overlay.is_none() && !app.logs.is_typing()
+        }
         _ => false,
     }
 }
@@ -259,6 +262,26 @@ mod tests {
             &app,
             &KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)
         ));
+    }
+
+    #[test]
+    fn q_is_a_letter_of_the_search_while_one_is_typed_but_ctrl_c_still_quits() {
+        let mut app = App::new((20, 5));
+        app.screen = crate::types::Screen::Logs;
+        let q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        app = update(
+            app,
+            AppEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)),
+        );
+        assert!(app.logs.is_typing());
+        assert!(!quits(&app, &q));
+        assert!(quits(&app, &ctrl_c));
+        app = update(
+            app,
+            AppEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        );
+        assert!(quits(&app, &q));
     }
 
     #[test]

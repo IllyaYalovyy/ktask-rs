@@ -191,6 +191,18 @@ Bindings are consistent across screens: a key never means two different things.
    region of the screen.
 3. **Logs** — raw and structured views, filter by level and phase, search,
    follow mode, jump between errors.
+
+   ```
+   v           structured / raw view
+   l           raise the minimum level: debug, info, warn, error, then debug
+   p           filter to the next phase seen, then to all
+   /           type a search (Enter keeps it, Esc abandons it; Esc later clears it)
+   n / N       next / previous match
+   e / E       next / previous error
+   ```
+
+   Filters and search compose: what a filter hides is neither searched nor
+   visited. `G` follows the newest entry; any other movement stops following.
 4. **Failures** — classified causes, repeated signatures, circuit-breaker
    state, and the actions available for each.
 5. **Task inspector** — objective, acceptance criteria, dependencies,

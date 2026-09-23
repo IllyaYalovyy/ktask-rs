@@ -282,6 +282,34 @@ fn message_for(kind: &EventKind) -> String {
     }
 }
 
+/// What the log says about one event: the fields of a log record other than
+/// its timestamp and task, so a screen that shows the log describes an event
+/// exactly as [`Logger`] writes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogLine {
+    /// How severe the event is.
+    pub level: Level,
+    /// The attempt the event concerns, when it names one.
+    pub attempt: Option<AttemptId>,
+    /// The phase the event itself names, when it names one.
+    pub phase: Option<Phase>,
+    /// A short rendering of the event, with credentials redacted.
+    pub message: String,
+}
+
+impl LogLine {
+    /// Describes `kind`.
+    #[must_use]
+    pub fn of(kind: &EventKind) -> LogLine {
+        LogLine {
+            level: level_for(kind),
+            attempt: attempt_of(kind),
+            phase: phase_of(kind),
+            message: redact(&message_for(kind), &[]),
+        }
+    }
+}
+
 /// Writes a redacted, newline-delimited JSON record of a run to
 /// `<state_dir>/logs/run-<date>.jsonl`.
 ///
@@ -534,6 +562,33 @@ mod tests {
             stderr: String::new(),
             timed_out: false,
         }
+    }
+
+    #[test]
+    fn log_line_of_an_event_is_what_the_logger_would_write_for_it() {
+        let kind = EventKind::VerifyFailed {
+            attempt: AttemptId::new(2),
+            class: FailureClass::VerificationFailure,
+            detail: "token=ghp_abcdefghijklmnopqrstuvwxyz0123456789".to_string(),
+        };
+        let line = LogLine::of(&kind);
+        assert_eq!(line.level, Level::Error);
+        assert_eq!(line.attempt, Some(AttemptId::new(2)));
+        assert_eq!(line.phase, None);
+        assert!(
+            line.message.starts_with("verify failed"),
+            "{}",
+            line.message
+        );
+        assert!(!line.message.contains("ghp_abcdefghijklmnopqrstuvwxyz"));
+
+        let entered = LogLine::of(&EventKind::PhaseEntered {
+            attempt: AttemptId::new(1),
+            phase: Phase::Red,
+        });
+        assert_eq!(entered.level, Level::Info);
+        assert_eq!(entered.phase, Some(Phase::Red));
+        assert_eq!(entered.message, "phase entered: Red");
     }
 
     #[test]

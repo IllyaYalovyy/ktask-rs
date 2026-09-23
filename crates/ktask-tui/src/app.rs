@@ -9,6 +9,7 @@ use crate::event::AppEvent;
 use crate::keys::{KeyAction, lookup};
 use crate::layout::layout_for;
 use crate::screen::live::LiveRun;
+use crate::screen::logs::LogView;
 use crate::types::{Action, Overlay, Screen, TaskView};
 use crossterm::event::KeyEvent;
 use ktask_core::{Event, EventKind};
@@ -48,6 +49,9 @@ pub struct App {
     /// phase and command, the gate results and the elapsed time. It also holds
     /// the decoders that turn output bytes into the lines of [`App::output`].
     pub live: LiveRun,
+    /// The logs screen's entries, filters, view and cursor. The search text
+    /// it looks for is [`App::search`].
+    pub logs: LogView,
     /// The terminal's size as columns and rows.
     pub size: (u16, u16),
     /// The actions the operator has asked for, oldest first, that the shell
@@ -75,6 +79,7 @@ impl App {
             tasks: Vec::new(),
             output: VecDeque::new(),
             live: LiveRun::default(),
+            logs: LogView::default(),
             size,
             outbox: Vec::new(),
             notice: None,
@@ -94,8 +99,9 @@ impl App {
 /// [`screen::help`](crate::screen::help)), screen navigation (`1`..`9`,
 /// `Tab`, `Shift-Tab`), the queue's movement keys (see
 /// [`screen::queue`](crate::screen::queue), which also has the queue's action
-/// keys) and the live run's scroll and follow keys (see
-/// [`screen::live`](crate::screen::live)) are wired so far; any other key press leaves the state
+/// keys), the live run's scroll and follow keys (see
+/// [`screen::live`](crate::screen::live)) and the logs' filter, search and
+/// navigation keys (see [`screen::logs`](crate::screen::logs)) are wired so far; any other key press leaves the state
 /// as it was.
 #[must_use]
 pub fn update(mut app: App, ev: AppEvent) -> App {
@@ -103,9 +109,14 @@ pub fn update(mut app: App, ev: AppEvent) -> App {
         AppEvent::Resize(columns, rows) => app.size = (columns, rows),
         AppEvent::Core(event) => apply_core(&mut app, event),
         AppEvent::Key(key) => {
+            // A search being typed takes the key as text, before any binding.
+            if crate::screen::logs::capture(&mut app, &key) {
+                return app;
+            }
             crate::screen::help::handle_key(&mut app, &key);
             crate::screen::queue::handle_key(&mut app, &key);
             crate::screen::live::handle_key(&mut app, &key);
+            crate::screen::logs::handle_key(&mut app, &key);
             navigate(&mut app, &key);
         }
         AppEvent::Tick => {}
@@ -142,6 +153,7 @@ fn step(from: Screen, by: usize) -> Screen {
 fn apply_core(app: &mut App, event: Event) {
     // The live-run screen folds every event itself; the queue's part is below.
     crate::screen::live::fold(app, &event);
+    crate::screen::logs::fold(app, &event);
     if let (Some(id), EventKind::TaskQueued { title }) = (event.task_id, event.kind)
         && app.tasks.iter().all(|task| task.id != id)
     {
@@ -180,6 +192,7 @@ pub fn render(app: &App, frame: &mut Frame<'_>) {
     match app.screen {
         Screen::Queue => crate::screen::queue::render(app, &plan, frame),
         Screen::LiveRun => crate::screen::live::render(app, &plan, frame),
+        Screen::Logs => crate::screen::logs::render(app, &plan, frame),
         _ => {}
     }
     match &app.overlay {
@@ -573,10 +586,21 @@ mod tests {
     }
 
     #[test]
-    fn app_core_events_it_does_not_show_leave_the_state_unchanged() {
+    fn app_core_events_only_the_logs_show_change_nothing_but_the_logs() {
         let before = update(App::new((80, 24)), queued(1, "First"));
         let after = update(before.clone(), core(Some(1), EventKind::Resumed));
-        assert_eq!(after, before);
+        assert_eq!(after.logs.len(), before.logs.len() + 1);
+        assert_eq!(
+            after.logs.selected().map(|entry| entry.text().to_owned()),
+            Some("resumed".to_owned())
+        );
+        assert_eq!(
+            App {
+                logs: before.logs.clone(),
+                ..after
+            },
+            before
+        );
     }
 
     #[test]

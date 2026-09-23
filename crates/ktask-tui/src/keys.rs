@@ -40,6 +40,20 @@ pub enum KeyAction {
     Last,
     /// Re-attach the live output pane to new lines.
     Follow,
+    /// Switch the logs between the structured and the raw view.
+    ToggleView,
+    /// Raise the logs' minimum level one step, wrapping after the last.
+    CycleLevel,
+    /// Step the logs' phase filter through the phases seen, then off.
+    CyclePhase,
+    /// Go to the next search match in the logs.
+    NextMatch,
+    /// Go to the previous search match in the logs.
+    PrevMatch,
+    /// Go to the next error in the logs.
+    NextError,
+    /// Go to the previous error in the logs.
+    PrevError,
     /// Quit; never kills a running task.
     Quit,
     /// Close the overlay if one is open, otherwise quit.
@@ -64,6 +78,7 @@ pub struct Binding {
 
 const ALL: &[Screen] = &Screen::ALL;
 const LIVE_RUN: &[Screen] = &[Screen::LiveRun];
+const LOGS: &[Screen] = &[Screen::Logs];
 
 const fn bind(
     key: KeyCode,
@@ -91,7 +106,7 @@ const fn plain(
 }
 
 /// Every key binding, in the order the key map lists them.
-pub static BINDINGS: [Binding; 24] = [
+pub static BINDINGS: [Binding; 31] = [
     plain(
         KeyCode::Char('1'),
         KeyAction::Jump(Screen::Queue),
@@ -188,6 +203,43 @@ pub static BINDINGS: [Binding; 24] = [
         KeyAction::Follow,
         LIVE_RUN,
         "Follow new output",
+    ),
+    plain(
+        KeyCode::Char('v'),
+        KeyAction::ToggleView,
+        LOGS,
+        "Structured or raw view",
+    ),
+    plain(
+        KeyCode::Char('l'),
+        KeyAction::CycleLevel,
+        LOGS,
+        "Raise the minimum level",
+    ),
+    plain(
+        KeyCode::Char('p'),
+        KeyAction::CyclePhase,
+        LOGS,
+        "Filter by the next phase",
+    ),
+    plain(
+        KeyCode::Char('n'),
+        KeyAction::NextMatch,
+        LOGS,
+        "Next search match",
+    ),
+    plain(
+        KeyCode::Char('N'),
+        KeyAction::PrevMatch,
+        LOGS,
+        "Previous search match",
+    ),
+    plain(KeyCode::Char('e'), KeyAction::NextError, LOGS, "Next error"),
+    plain(
+        KeyCode::Char('E'),
+        KeyAction::PrevError,
+        LOGS,
+        "Previous error",
     ),
     bind(
         KeyCode::Char('c'),
@@ -312,12 +364,55 @@ mod tests {
     }
 
     #[test]
-    fn the_table_holds_the_documented_bindings_and_the_follow_key_only() {
+    fn the_table_holds_the_documented_bindings_and_the_screen_keys_only() {
         let extra: Vec<_> = BINDINGS
             .iter()
-            .filter(|binding| binding.action != KeyAction::Follow)
+            .filter(|binding| binding.screens.len() == Screen::ALL.len())
             .collect();
         assert_eq!(extra.len(), documented().len());
+        let screen_keys: Vec<_> = BINDINGS
+            .iter()
+            .filter(|binding| binding.screens.len() != Screen::ALL.len())
+            .map(|binding| binding.action)
+            .collect();
+        assert_eq!(screen_keys.len(), 8);
+    }
+
+    /// The keys of the logs screen, written out independently of the table.
+    fn logs_keys() -> [(char, KeyAction); 7] {
+        [
+            ('v', KeyAction::ToggleView),
+            ('l', KeyAction::CycleLevel),
+            ('p', KeyAction::CyclePhase),
+            ('n', KeyAction::NextMatch),
+            ('N', KeyAction::PrevMatch),
+            ('e', KeyAction::NextError),
+            ('E', KeyAction::PrevError),
+        ]
+    }
+
+    #[test]
+    fn the_logs_keys_are_bound_on_the_logs_screen_alone() {
+        for screen in Screen::ALL {
+            for (c, action) in logs_keys() {
+                let expected = (screen == Screen::Logs).then_some(action);
+                assert_eq!(
+                    action_on(screen, &char_key(c)),
+                    expected,
+                    "{c} on {screen:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_logs_keys_are_listed_with_help_for_the_key_map() {
+        let helps: Vec<&str> = bindings_for(Screen::Logs)
+            .filter(|binding| logs_keys().iter().any(|(_, a)| *a == binding.action))
+            .map(|binding| binding.help)
+            .collect();
+        assert_eq!(helps.len(), 7);
+        assert!(helps.iter().all(|help| !help.trim().is_empty()));
     }
 
     #[test]
