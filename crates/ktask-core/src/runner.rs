@@ -16,12 +16,12 @@ use time::OffsetDateTime;
 use crate::{
     AttemptId, AttemptRecord, Bus, Config, Error, EventKind, FailureClass, Gate, GateKind,
     GateResult, Invocation, Journal, Outcome, Phase, PhaseSpec, Profile, Project, Provider,
-    RebaseOutcome, Recorder, RepoLock, ReportResult, Result, Stream, Task, TaskId, TestSummary,
-    acquire, assemble, build, changed_paths, check_model, check_scope, claim_tdd_exception,
-    classify, collect_adrs, commit_all, create_worktree, ensure_report_dir, fetch, for_task,
-    head_sha, load, load_context_doc, load_for, load_template, parse_cargo, profile_from, publish,
-    read_report, rebase_onto_remote, redact, require_clean, run_completion_set, run_gate,
-    verify_green, verify_red, write_evidence,
+    RebaseOutcome, Recorder, RepoLock, ReportResult, Result, Stream, Task, TaskId, TaskState,
+    TestSummary, acquire, apply, assemble, build, changed_paths, check_model, check_scope,
+    claim_tdd_exception, classify, collect_adrs, commit_all, create_worktree, ensure_report_dir,
+    fetch, for_task, head_sha, load, load_context_doc, load_for, load_template, parse_cargo,
+    profile_from, publish, read_report, rebase_onto_remote, redact, remove_worktree, require_clean,
+    run_completion_set, run_gate, verify_green, verify_red, write_evidence,
 };
 
 /// How long [`Runner::prepare`] waits for the repository lock ([`acquire`])
@@ -593,6 +593,85 @@ impl Runner {
         }
     }
 
+    /// Drives `task` through its chosen protocol end to end (`VISION.md`
+    /// §6): [`Runner::prepare`] proves the world is sane and opens the
+    /// isolated worktree, then this runner's private inner loop runs every
+    /// agent-driven phase, the mandatory completion gates, and records
+    /// [`EventKind::TaskDone`] once publication is verified.
+    ///
+    /// The worktree [`Runner::prepare`] created is always removed
+    /// ([`remove_worktree`]) and the repository lock it held is always
+    /// released, on every exit path — whether `task` reaches
+    /// [`TaskState::Done`] or a step fails partway. A failure removing the
+    /// worktree is only surfaced when the attempt itself otherwise
+    /// succeeded; an attempt's own failure is never masked by a subsequent
+    /// cleanup failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever [`Runner::prepare`], [`Runner::run_phase`],
+    /// [`Runner::gate_phase`], [`Runner::verify_and_publish`] or
+    /// [`remove_worktree`] themselves return.
+    pub fn run_task(&mut self, task: &Task) -> Result<TaskState> {
+        let prep = self.prepare(task)?;
+        let worktree = prep.worktree.clone();
+
+        let outcome = self.drive_attempt(&prep, task);
+        drop(prep);
+        let removed = remove_worktree(&self.project.root, &worktree);
+
+        outcome.and_then(|state| removed.map(|()| state))
+    }
+
+    /// [`Runner::run_task`]'s inner loop, run against `prep`'s already-open
+    /// worktree and lock: opens the attempt ([`Runner::begin_attempt`]),
+    /// runs [`Runner::run_phase`] then, where the phase names a gate,
+    /// [`Runner::gate_phase`] for every phase of `task`'s protocol except
+    /// its mandatory [`Phase::Verify`]/[`Phase::Publish`] tail (every
+    /// [`crate::Protocol`] ends with exactly that pair,
+    /// `protocol.rs`'s `checked` guarantees it) — those two are entirely
+    /// mechanical and are instead driven by [`Runner::verify_and_publish`].
+    ///
+    /// Immediately before calling it, records
+    /// [`EventKind::PhaseEntered`] naming [`Phase::Verify`] itself: this is
+    /// the one transition `state.rs`'s `from_running` recognizes as moving
+    /// a task from `Running`/`Remediating` into [`TaskState::Verifying`],
+    /// and neither [`Runner::verify_and_publish`] nor anything it calls
+    /// emits it, so nothing else in this call graph would.
+    ///
+    /// Returns the [`TaskState`] [`crate::apply`] derives from replaying
+    /// every event this attempt journaled for `task`, from
+    /// [`TaskState::Queued`] — never a value assumed because control flow
+    /// reached the end without an `Err` (`VISION.md` §3 invariant 4).
+    fn drive_attempt(&mut self, prep: &Prepared, task: &Task) -> Result<TaskState> {
+        let attempt = self.begin_attempt(task)?;
+        let protocol = for_task(task, &self.config)?;
+        let split = protocol.phases.len().saturating_sub(2);
+        let (agent_phases, _verify_and_publish) = protocol.phases.split_at(split);
+
+        let mut before: Option<TestSummary> = None;
+        for spec in agent_phases {
+            self.run_phase(prep, task, attempt, spec)?;
+            if spec.gate.is_some() {
+                before = Some(self.gate_phase(prep, task, attempt, spec, before.as_ref())?);
+            }
+        }
+
+        self.recorder.record(
+            Some(task.id),
+            EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Verify,
+            },
+        )?;
+
+        let commit = self.verify_and_publish(prep, task, attempt)?;
+        self.recorder
+            .record(Some(task.id), EventKind::TaskDone { commit })?;
+
+        journaled_state(&self.project, task.id)
+    }
+
     /// The rejected-push recovery path of [`Runner::verify_and_publish`]:
     /// fetches and replays `prep.worktree` onto the freshly fetched tip of
     /// `config.mainline_branch`, reruns the completion set from scratch
@@ -860,6 +939,29 @@ fn next_attempt_id(project: &Project, task: TaskId) -> Result<AttemptId> {
         .max()
         .unwrap_or(0);
     Ok(AttemptId::new(last + 1))
+}
+
+/// The [`TaskState`] [`crate::apply`] derives for `task` by replaying every
+/// event journaled for it, in order, from [`TaskState::Queued`] — the
+/// single source of truth [`Runner::drive_attempt`] returns, rather than a
+/// state its own control flow would otherwise merely assume.
+///
+/// Opens its own read of `project`'s journal, the same pattern
+/// [`next_attempt_id`] already uses, rather than going through a
+/// [`Runner`]'s [`Recorder`], which exposes no way to read events back.
+///
+/// # Errors
+///
+/// Returns whatever [`Journal::open_for`] or [`Journal::events_for`] return
+/// on failure to open or read the journal, and [`Error::InvalidTransition`]
+/// if any recorded event does not legally apply to the state that preceded
+/// it.
+fn journaled_state(project: &Project, task: TaskId) -> Result<TaskState> {
+    let journal = Journal::open_for(project)?;
+    journal
+        .events_for(task)?
+        .into_iter()
+        .try_fold(TaskState::Queued, |state, event| apply(&state, &event.kind))
 }
 
 /// One check in [`preflight`]'s fixed sequence: `Ok(())` when it passes, or
@@ -1764,7 +1866,7 @@ mod tests {
             acquire(&project.state_dir, Duration::from_secs(0))
                 .expect("dropping `Prepared` must release the repository lock"),
         );
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     #[test]
@@ -1935,7 +2037,7 @@ mod tests {
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     #[test]
@@ -1999,7 +2101,7 @@ mod tests {
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     /// A [`Provider`] that, once it receives a real (non-empty) prompt,
@@ -2093,7 +2195,7 @@ mod tests {
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     fn red_spec() -> PhaseSpec {
@@ -2267,7 +2369,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     #[test]
@@ -2295,7 +2397,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     #[test]
@@ -2334,7 +2436,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     #[test]
@@ -2364,7 +2466,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     #[test]
@@ -2418,7 +2520,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     #[test]
@@ -2446,7 +2548,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     #[test]
@@ -2470,7 +2572,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     #[test]
@@ -2493,7 +2595,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     #[test]
@@ -2516,7 +2618,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     /// Every event journaled for `task` so far, in order —
@@ -2571,7 +2673,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     #[test]
@@ -2608,7 +2710,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     #[test]
@@ -2651,7 +2753,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     #[test]
@@ -2741,7 +2843,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 
     #[test]
@@ -2824,6 +2926,189 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
         let worktree = prep.worktree.clone();
         drop(prep);
-        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+        remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    /// A two-step dummy scenario: the first step answers
+    /// [`check_provider_available`]'s empty-prompt probe during
+    /// [`Runner::prepare`]'s preflight, and the second answers the `direct`
+    /// protocol's single `Implement` phase, writing a `KTASK_RESULT: DONE`
+    /// report at `report_path` and touching nothing else — so the worktree
+    /// [`Runner::verify_and_publish`] checks stays clean, exactly like
+    /// [`write_config_with_an_available_dummy_provider`]'s scenario but with
+    /// the second step present for `run_phase` to consume.
+    fn write_config_for_a_successful_direct_run(project: &Project, report_path: &std::path::Path) {
+        let state_dir = project.state_dir.clone();
+        let scenario = Scenario {
+            steps: vec![
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: None,
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: Vec::new(),
+                },
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: Some("implemented the thing\n".to_string()),
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: vec![ScenarioFile {
+                        path: report_path.to_path_buf(),
+                        content: "KTASK_RESULT: DONE\nSummary: it worked.\n".to_string(),
+                    }],
+                },
+            ],
+        };
+        let scenario_path = state_dir.join("scenario.toml");
+        std::fs::write(&scenario_path, scenario.to_toml().expect("serialize"))
+            .expect("write scenario");
+        std::fs::write(
+            project_config_path(project),
+            format!(
+                "provider = \"dummy\"\ndummy_scenario_path = \"{}\"\nverify_command = [\"true\"]\n",
+                scenario_path.display()
+            ),
+        )
+        .expect("write project config");
+    }
+
+    #[test]
+    fn run_task_drives_a_dummy_success_through_to_done_leaving_no_worktree_or_lock_behind() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let expected_report_path = report_path(&project, task.id, AttemptId::new(1));
+        write_config_for_a_successful_direct_run(&project, &expected_report_path);
+
+        let mut runner = Runner::new(project.clone()).expect("build runner");
+        let state = runner.run_task(&task).expect("run_task");
+
+        assert_eq!(state, TaskState::Done);
+
+        let worktrees = crate::list_worktrees(&repo.path).expect("list_worktrees");
+        assert_eq!(
+            worktrees.len(),
+            1,
+            "only the main worktree may remain, got {worktrees:?}"
+        );
+
+        drop(
+            acquire(&project.state_dir, Duration::from_secs(0))
+                .expect("run_task must release the repository lock on success"),
+        );
+
+        let journal = Journal::open_for(&project).expect("open journal");
+        let events = journal.events_for(task.id).expect("events_for");
+        let kinds: Vec<&str> = events.iter().map(|e| e.kind.discriminant()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "PreflightStarted",
+                "PreflightPassed",
+                "AttemptStarted",
+                "PhaseEntered",
+                "AgentOutput",
+                "AttemptFinished",
+                "PhaseEntered",
+                "VerifyPassed",
+                "PublishStarted",
+                "PublishVerified",
+                "TaskDone",
+            ]
+        );
+
+        let EventKind::TaskDone { commit } = &events[10].kind else {
+            panic!("expected TaskDone, got {:?}", events[10].kind);
+        };
+        let remote_tip =
+            crate::git(&repo.origin, &["rev-parse", "main"]).expect("rev-parse bare origin");
+        assert_eq!(*commit, remote_tip);
+    }
+
+    #[test]
+    fn run_task_removes_the_worktree_and_releases_the_lock_when_a_step_fails_partway() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+
+        // Two steps, neither of which writes a report file: one for
+        // `prepare`'s own availability check, one for `run_phase`'s
+        // `Implement` invocation — which therefore fails to find the report
+        // it was told to write (`run_phase_fails_with_a_classified_report_error_when_the_agent_never_writes_one`'s
+        // own fixture, reused here as `run_task`'s partway failure).
+        let scenario = Scenario {
+            steps: vec![
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: None,
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: Vec::new(),
+                },
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: None,
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: Vec::new(),
+                },
+            ],
+        };
+        let scenario_path = state_dir.path().join("scenario.toml");
+        std::fs::write(&scenario_path, scenario.to_toml().expect("serialize"))
+            .expect("write scenario");
+        std::fs::write(
+            project_config_path(&project),
+            format!(
+                "provider = \"dummy\"\ndummy_scenario_path = \"{}\"\nverify_command = [\"true\"]\n",
+                scenario_path.display()
+            ),
+        )
+        .expect("write project config");
+
+        let mut runner = Runner::new(project.clone()).expect("build runner");
+        let err = runner
+            .run_task(&task)
+            .expect_err("a missing report must fail run_task rather than being assumed");
+
+        assert!(matches!(err, Error::Report { .. }), "got {err:?}");
+
+        let worktrees = crate::list_worktrees(&repo.path).expect("list_worktrees");
+        assert_eq!(
+            worktrees.len(),
+            1,
+            "the failed attempt's worktree must still be cleaned up, got {worktrees:?}"
+        );
+
+        drop(
+            acquire(&project.state_dir, Duration::from_secs(0))
+                .expect("run_task must release the repository lock even when a step fails partway"),
+        );
+
+        let journal = Journal::open_for(&project).expect("open journal");
+        let events = journal.events_for(task.id).expect("events_for");
+        let kinds: Vec<&str> = events.iter().map(|e| e.kind.discriminant()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "PreflightStarted",
+                "PreflightPassed",
+                "AttemptStarted",
+                "PhaseEntered",
+                "AttemptFinished",
+            ],
+            "no TaskDone must ever be recorded for a failed attempt"
+        );
     }
 }
