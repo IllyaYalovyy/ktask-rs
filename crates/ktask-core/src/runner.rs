@@ -15,14 +15,15 @@ use time::OffsetDateTime;
 
 use crate::{
     AttemptId, AttemptRecord, Bounds, Breaker, BreakerState, Bus, Config, Decision, Error,
-    EventKind, FailureClass, Gate, GateKind, GateResult, Invocation, Journal, Outcome, Phase,
-    PhaseSpec, Profile, Project, Provider, RebaseOutcome, Recorder, RepoLock, ReportResult, Result,
-    Stream, Task, TaskId, TaskState, TestSummary, acquire, apply, assemble, build, bundle,
-    changed_paths, check_model, check_no_policy_edit, check_scope, claim_tdd_exception, classify,
-    collect_adrs, commit_all, create_worktree, ensure_report_dir, fetch, for_task, head_sha, load,
-    load_context_doc, load_for, load_template, parse_cargo, profile_from, publish, read_evidence,
-    read_report, rebase_onto_remote, redact, remove_worktree, require_clean, run_completion_set,
-    run_gate, should_continue, signature, verify_green, verify_red, write_evidence,
+    EventKind, FailureClass, Gate, GateKind, GateResult, Invocation, Journal, Outcome, PauseReason,
+    Phase, PhaseSpec, Profile, Project, Provider, RebaseOutcome, Recorder, RepoLock, ReportResult,
+    Result, Stream, Task, TaskId, TaskState, TaskStatus, TestSummary, WaitPlan, acquire, apply,
+    assemble, build, bundle, changed_paths, check_model, check_no_policy_edit, check_scope,
+    claim_tdd_exception, classify, collect_adrs, commit_all, create_worktree, ensure_report_dir,
+    fetch, for_task, head_sha, load, load_context_doc, load_for, load_template, parse_cargo,
+    parse_reset, profile_from, publish, read_evidence, read_report, rebase_onto_remote, redact,
+    remove_worktree, require_clean, run_completion_set, run_gate, should_continue, signature,
+    verify_green, verify_red, wait_plan, write_evidence,
 };
 
 /// How long [`Runner::prepare`] waits for the repository lock ([`acquire`])
@@ -600,13 +601,20 @@ impl Runner {
     /// agent-driven phase, the mandatory completion gates, and records
     /// [`EventKind::TaskDone`] once publication is verified.
     ///
+    /// A `task` whose status is [`TaskStatus::HumanGate`] never reaches any
+    /// of that: `VISION.md` §6's gate "is never handed to an agent" and
+    /// "produces no commit", so this records [`EventKind::Paused`] with
+    /// [`crate::PauseReason::HumanGate`] straight from [`TaskState::Queued`]
+    /// and returns — no worktree is created, no lock is acquired, and
+    /// [`Runner::prepare`] is never called.
+    ///
     /// The worktree [`Runner::prepare`] created is always removed
     /// ([`remove_worktree`]) and the repository lock it held is always
     /// released, on every exit path — whether `task` reaches
-    /// [`TaskState::Done`] or a step fails partway. A failure removing the
-    /// worktree is only surfaced when the attempt itself otherwise
-    /// succeeded; an attempt's own failure is never masked by a subsequent
-    /// cleanup failure.
+    /// [`TaskState::Done`], a durable pause, or a step fails partway. A
+    /// failure removing the worktree is only surfaced when the attempt
+    /// itself otherwise succeeded; an attempt's own failure is never masked
+    /// by a subsequent cleanup failure.
     ///
     /// # Errors
     ///
@@ -614,6 +622,16 @@ impl Runner {
     /// [`Runner::gate_phase`], [`Runner::verify_and_publish`] or
     /// [`remove_worktree`] themselves return.
     pub fn run_task(&mut self, task: &Task) -> Result<TaskState> {
+        if task.status == TaskStatus::HumanGate {
+            self.recorder.record(
+                Some(task.id),
+                EventKind::Paused {
+                    reason: PauseReason::HumanGate,
+                },
+            )?;
+            return journaled_state(&self.project, task.id);
+        }
+
         let prep = self.prepare(task)?;
         let worktree = prep.worktree.clone();
 
@@ -644,6 +662,17 @@ impl Runner {
     /// every event this attempt journaled for `task`, from
     /// [`TaskState::Queued`] — never a value assumed because control flow
     /// reached the end without an `Err` (`VISION.md` §3 invariant 4).
+    ///
+    /// Two of `VISION.md` §6's durable pauses are decided here rather than
+    /// ever reaching [`Runner::remediate`] as an ordinary failure: a report
+    /// claiming [`ReportResult::NeedsInput`] records
+    /// [`EventKind::DecisionRaised`] and returns the resulting
+    /// [`TaskState::Paused`] with [`crate::PauseReason::Input`] immediately
+    /// (§7: "`needs_input` never loop; they pause for the human
+    /// immediately"); a phase whose provider reported a usage limit is
+    /// recognized by [`Runner::pause_for_provider_limit`] and turned into
+    /// [`TaskState::Paused`] with [`crate::PauseReason::Limit`] the same
+    /// way. Neither ever reaches [`EventKind::TaskFailed`].
     fn drive_attempt(&mut self, prep: &Prepared, task: &Task) -> Result<TaskState> {
         let attempt = self.begin_attempt(task)?;
         let protocol = for_task(task, &self.config)?;
@@ -652,7 +681,20 @@ impl Runner {
 
         let mut before: Option<TestSummary> = None;
         for spec in agent_phases {
-            self.run_phase(prep, task, attempt, spec)?;
+            let phase_outcome = match self.run_phase(prep, task, attempt, spec) {
+                Ok(phase_outcome) => phase_outcome,
+                Err(err) => {
+                    return match self.pause_for_provider_limit(task, attempt, &err)? {
+                        Some(state) => Ok(state),
+                        None => Err(err),
+                    };
+                }
+            };
+            if let ReportResult::NeedsInput(request) = phase_outcome.report {
+                self.recorder
+                    .record(Some(task.id), EventKind::DecisionRaised { request })?;
+                return journaled_state(&self.project, task.id);
+            }
             if spec.gate.is_some() {
                 before = Some(self.gate_phase(prep, task, attempt, spec, before.as_ref())?);
             }
@@ -674,6 +716,114 @@ impl Runner {
             .record(Some(task.id), EventKind::TaskDone { commit })?;
 
         journaled_state(&self.project, task.id)
+    }
+
+    /// After [`Runner::run_phase`] returns `err` for `task`'s `attempt`,
+    /// decides whether the provider actually hit a usage limit rather than
+    /// merely never writing the report `err` names as missing, and if so
+    /// pauses `task` instead of letting `err` propagate as an ordinary
+    /// failure (`VISION.md` §7: `provider_limit` is never `agent_failure`).
+    ///
+    /// The limit text is recovered from [`EventKind::AgentOutput`] —
+    /// [`Runner::run_phase`] journals it before it ever tries to read the
+    /// report, so a provider that stopped mid-run because of a limit still
+    /// leaves it behind even though it wrote no report at all. Reclassifying
+    /// that recovered text with [`classify()`] is what tells a genuine
+    /// limit apart from every other reason a report could be missing.
+    ///
+    /// A recognized reset ([`parse_reset`]) becomes [`wait_plan`]'s deadline,
+    /// plus `config.limit_wait_margin_secs`; an unrecognized or already-past
+    /// one leaves `until` unknown (`VISION.md` §7: "unknown resets use
+    /// bounded backoff") rather than guessing one. Either way this never
+    /// blocks waiting the limit out — it records [`EventKind::Paused`] with
+    /// [`crate::PauseReason::Limit`] and returns immediately, leaving `task`
+    /// resumable once the limit is believed to have lifted.
+    ///
+    /// Returns `Ok(None)` — doing nothing — when `err` is not
+    /// [`Error::Report`], or when the recovered text does not classify as
+    /// [`FailureClass::ProviderLimit`], so the caller propagates `err`
+    /// unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever [`Journal::open_for`] or [`Journal::events_for`]
+    /// return on failure to read `attempt`'s journaled output back, and
+    /// whatever [`Recorder::record`] returns on failure to journal the pause.
+    fn pause_for_provider_limit(
+        &mut self,
+        task: &Task,
+        attempt: AttemptId,
+        err: &Error,
+    ) -> Result<Option<TaskState>> {
+        if !matches!(err, Error::Report { .. }) {
+            return Ok(None);
+        }
+
+        let (stdout, stderr) = self.last_agent_output(task.id, attempt)?;
+        let outcome = Outcome {
+            exit_code: 1,
+            stdout,
+            stderr,
+            usage: None,
+            session_id: None,
+        };
+        if classify(&outcome, &[], None) != FailureClass::ProviderLimit {
+            return Ok(None);
+        }
+
+        let now = OffsetDateTime::now_utc();
+        let text = format!("{}\n{}", outcome.stdout, outcome.stderr);
+        let reset = parse_reset(&text, now);
+        let margin = time::Duration::seconds(
+            i64::try_from(self.config.limit_wait_margin_secs).unwrap_or(i64::MAX),
+        );
+        let max = time::Duration::seconds(
+            i64::try_from(self.config.limit_max_wait_secs).unwrap_or(i64::MAX),
+        );
+        let until = match wait_plan(reset, now, margin, max) {
+            WaitPlan::Deadline(at) => Some(at),
+            WaitPlan::Backoff(_) => None,
+        };
+
+        self.recorder.record(
+            Some(task.id),
+            EventKind::Paused {
+                reason: PauseReason::Limit { until },
+            },
+        )?;
+        Ok(Some(journaled_state(&self.project, task.id)?))
+    }
+
+    /// The stdout and stderr [`EventKind::AgentOutput`] already journaled
+    /// for `task`'s `attempt`, read back from the journal rather than
+    /// threaded through as a parameter: by the time a caller needs it,
+    /// [`Runner::run_phase`] has already recorded it as durable evidence, so
+    /// there is nothing gained by carrying the live value any further than
+    /// that call's own body needs it.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever [`Journal::open_for`] or [`Journal::events_for`]
+    /// return on failure to open or read the journal.
+    fn last_agent_output(&self, task: TaskId, attempt: AttemptId) -> Result<(String, String)> {
+        let journal = Journal::open_for(&self.project)?;
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        for event in journal.events_for(task)? {
+            if let EventKind::AgentOutput {
+                attempt: recorded,
+                stream,
+                text,
+            } = event.kind
+                && recorded == attempt
+            {
+                match stream {
+                    Stream::Stdout => stdout = text,
+                    Stream::Stderr => stderr = text,
+                }
+            }
+        }
+        Ok((stdout, stderr))
     }
 
     /// Bounded, mechanical recovery from a failed attempt (`VISION.md` §7):
@@ -3410,6 +3560,256 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
                 "AttemptFinished",
             ],
             "no TaskDone must ever be recorded for a failed attempt"
+        );
+    }
+
+    #[test]
+    fn run_task_pauses_a_human_gate_task_without_ever_invoking_the_provider() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let mut task = sample_task(1);
+        task.status = TaskStatus::HumanGate;
+
+        // No steps at all: any call to the provider (preflight's own probe
+        // included) would fail the scenario as exhausted, so a passing test
+        // proves the provider is never reached.
+        let scenario = Scenario { steps: Vec::new() };
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(Dummy::new(scenario)));
+
+        let state = runner
+            .run_task(&task)
+            .expect("a human gate must pause, never fail");
+
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::HumanGate,
+                resume_to: Box::new(TaskState::Queued),
+            }
+        );
+
+        let journal = Journal::open_for(&project).expect("open journal");
+        let events = journal.events_for(task.id).expect("events_for");
+        let kinds: Vec<&str> = events.iter().map(|e| e.kind.discriminant()).collect();
+        assert_eq!(
+            kinds,
+            vec!["Paused"],
+            "a gate is never handed to preflight or an agent"
+        );
+
+        let worktrees = crate::list_worktrees(&repo.path).expect("list_worktrees");
+        assert_eq!(
+            worktrees.len(),
+            1,
+            "a human gate creates no worktree to begin with, got {worktrees:?}"
+        );
+
+        // Resumable exactly the documented way: only `ack` (`GateAcknowledged`)
+        // resolves a `HumanGate` pause, never `Resumed`.
+        assert!(apply(&state, &EventKind::Resumed).is_err());
+        let acknowledged = apply(
+            &state,
+            &EventKind::GateAcknowledged {
+                by: "alice".to_string(),
+                at: OffsetDateTime::UNIX_EPOCH,
+            },
+        )
+        .expect("a HumanGate pause accepts GateAcknowledged");
+        assert!(matches!(acknowledged, TaskState::Acknowledged { .. }));
+    }
+
+    #[test]
+    fn run_task_pauses_with_a_decision_request_when_the_agent_reports_needs_input() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+        let expected_report_path = report_path(&project, task.id, attempt);
+
+        let scenario = Scenario {
+            steps: vec![
+                // `prepare`'s own `check_provider_available` probe.
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: None,
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: Vec::new(),
+                },
+                // The `Implement` phase: the agent cannot proceed and asks a
+                // structured question instead of claiming done or failed.
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::NeedsInput,
+                    stdout: Some("which database driver?".to_string()),
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: vec![ScenarioFile {
+                        path: expected_report_path,
+                        content: "KTASK_RESULT: NEEDS_INPUT\n\
+                                  Question: Postgres or SQLite for the journal?\n\
+                                  Options:\n\
+                                  - Postgres\n\
+                                  - SQLite\n\
+                                  Trade-offs: Postgres scales better; SQLite is simpler to run.\n\
+                                  Impact: Journal durability and operational overhead.\n\
+                                  Recommended: SQLite\n"
+                            .to_string(),
+                    }],
+                },
+            ],
+        };
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(Dummy::new(scenario)));
+
+        let state = runner
+            .run_task(&task)
+            .expect("a needs-input report must pause, never fail");
+
+        let TaskState::Paused {
+            reason: PauseReason::Input,
+            resume_to,
+        } = state.clone()
+        else {
+            panic!("expected an Input pause, got {state:?}");
+        };
+        assert_eq!(
+            *resume_to,
+            TaskState::Running {
+                attempt,
+                phase: Phase::Implement,
+            }
+        );
+
+        let journal = Journal::open_for(&project).expect("open journal");
+        let events = journal.events_for(task.id).expect("events_for");
+        let kinds: Vec<&str> = events.iter().map(|e| e.kind.discriminant()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "PreflightStarted",
+                "PreflightPassed",
+                "AttemptStarted",
+                "PhaseEntered",
+                "AgentOutput",
+                "AttemptFinished",
+                "DecisionRaised",
+            ],
+            "the mandatory completion gates must never run before a decision is answered"
+        );
+
+        let EventKind::DecisionRaised { request } = &events[6].kind else {
+            panic!("expected DecisionRaised, got {:?}", events[6].kind);
+        };
+        assert_eq!(request.question, "Postgres or SQLite for the journal?");
+
+        // Resumable exactly the documented way: `Resumed` returns to the
+        // interrupted phase; `GateAcknowledged` does not apply here.
+        assert!(matches!(
+            apply(&state, &EventKind::Resumed).expect("an Input pause accepts Resumed"),
+            TaskState::Running { .. }
+        ));
+
+        let worktrees = crate::list_worktrees(&repo.path).expect("list_worktrees");
+        assert_eq!(
+            worktrees.len(),
+            1,
+            "the worktree must still be cleaned up, got {worktrees:?}"
+        );
+    }
+
+    #[test]
+    fn run_task_pauses_with_a_wait_deadline_when_the_provider_reports_a_usage_limit() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let scenario = Scenario {
+            steps: vec![
+                // `prepare`'s own `check_provider_available` probe.
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: None,
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: Vec::new(),
+                },
+                // The `Implement` phase: the provider hits a usage limit and
+                // writes no report at all -- exactly what a real provider
+                // stopped mid-run by a limit would leave behind.
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Limit,
+                    stdout: Some("usage limit reached, try again in 20s".to_string()),
+                    exit_code: Some(1),
+                    delay_ms: None,
+                    files: Vec::new(),
+                },
+            ],
+        };
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(Dummy::new(scenario)));
+
+        let state = runner
+            .run_task(&task)
+            .expect("a provider usage limit must pause, never fail");
+
+        let TaskState::Paused {
+            reason: PauseReason::Limit { until },
+            resume_to,
+        } = state.clone()
+        else {
+            panic!("expected a Limit pause, got {state:?}");
+        };
+        assert!(
+            until.is_some(),
+            "a recognized reset (\"try again in 20s\") must produce a wait deadline"
+        );
+        assert_eq!(
+            *resume_to,
+            TaskState::Running {
+                attempt,
+                phase: Phase::Implement,
+            }
+        );
+
+        let journal = Journal::open_for(&project).expect("open journal");
+        let events = journal.events_for(task.id).expect("events_for");
+        let kinds: Vec<&str> = events.iter().map(|e| e.kind.discriminant()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "PreflightStarted",
+                "PreflightPassed",
+                "AttemptStarted",
+                "PhaseEntered",
+                "AgentOutput",
+                "AttemptFinished",
+                "Paused",
+            ],
+            "a provider limit must never be TaskFailed"
+        );
+
+        // Resumable exactly the documented way: `Resumed` returns to the
+        // interrupted phase.
+        assert!(matches!(
+            apply(&state, &EventKind::Resumed).expect("a Limit pause accepts Resumed"),
+            TaskState::Running { .. }
+        ));
+
+        let worktrees = crate::list_worktrees(&repo.path).expect("list_worktrees");
+        assert_eq!(
+            worktrees.len(),
+            1,
+            "the worktree must still be cleaned up, got {worktrees:?}"
         );
     }
 
