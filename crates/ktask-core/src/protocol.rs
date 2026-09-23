@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{Config, Error, GateKind, Phase, Result, Task};
+use crate::{Config, Error, GateKind, Phase, Result, Task, TestSummary};
 
 /// Which paths a [`PhaseSpec`]'s agent may modify while it runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -224,6 +224,44 @@ pub fn check_scope(scope: WriteScope, changed: &[PathBuf], test_globs: &[String]
         detail: detail.to_string(),
         paths: offending,
     })
+}
+
+/// Confirms the `tdd` protocol's red phase produced a genuinely new test
+/// failure (VISION.md §9 step 2: "confirms the expected *new* failure").
+///
+/// Returns the names of tests present in `after.failures` but absent from
+/// `before.failures` — the runner's evidence that the just-written test
+/// actually exercises unimplemented behavior, rather than merely re-reporting
+/// a failure the codebase already had (a stale baseline, a flaky test, or a
+/// test that never ran at all). Order matches `after.failures`, deduplicated.
+///
+/// # Errors
+///
+/// Returns [`Error::Gate`] when the two failure sets are identical: nothing
+/// new failed, so red-phase evidence would be indistinguishable from doing
+/// nothing.
+pub fn verify_red(before: &TestSummary, after: &TestSummary) -> Result<Vec<String>> {
+    let before_failures: std::collections::HashSet<&str> =
+        before.failures.iter().map(String::as_str).collect();
+
+    let mut seen = std::collections::HashSet::new();
+    let new_failures: Vec<String> = after
+        .failures
+        .iter()
+        .filter(|name| !before_failures.contains(name.as_str()))
+        .filter(|name| seen.insert(name.as_str()))
+        .cloned()
+        .collect();
+
+    if new_failures.is_empty() {
+        return Err(Error::Gate {
+            kind: "red".to_string(),
+            detail: "no new test failure: the failure set is unchanged from before the red phase"
+                .to_string(),
+        });
+    }
+
+    Ok(new_failures)
 }
 
 /// Reports whether `path` matches at least one glob in `globs`.
@@ -557,5 +595,64 @@ mod tests {
         assert!(glob_matches("src/**/tests.rs", "src/tests.rs"));
         assert!(glob_matches("src/**/tests.rs", "src/a/b/tests.rs"));
         assert!(!glob_matches("src/**/tests.rs", "lib/tests.rs"));
+    }
+
+    fn summary(failed: u32, failures: &[&str]) -> TestSummary {
+        TestSummary {
+            passed: 0,
+            failed,
+            ignored: 0,
+            failures: failures.iter().map(ToString::to_string).collect(),
+        }
+    }
+
+    #[test]
+    fn verify_red_returns_a_failure_absent_before_the_red_phase() {
+        let before = summary(0, &[]);
+        let after = summary(1, &["widget::tests::rejects_a_bad_size"]);
+
+        let new_failures = verify_red(&before, &after).expect("a new failure must be reported");
+        assert_eq!(new_failures, vec!["widget::tests::rejects_a_bad_size"]);
+    }
+
+    #[test]
+    fn verify_red_rejects_an_unchanged_failure_set() {
+        let before = summary(1, &["widget::tests::flaky"]);
+        let after = summary(1, &["widget::tests::flaky"]);
+
+        let err = verify_red(&before, &after).expect_err("unchanged failures must be rejected");
+        assert!(matches!(&err, Error::Gate { kind, .. } if kind == "red"));
+    }
+
+    #[test]
+    fn verify_red_rejects_when_after_has_no_failures_at_all() {
+        let before = summary(0, &[]);
+        let after = summary(0, &[]);
+
+        assert!(verify_red(&before, &after).is_err());
+    }
+
+    #[test]
+    fn verify_red_ignores_a_pre_existing_failure_that_is_still_present() {
+        let before = summary(1, &["widget::tests::pre_existing"]);
+        let after = summary(
+            2,
+            &["widget::tests::pre_existing", "widget::tests::new_one"],
+        );
+
+        let new_failures = verify_red(&before, &after).expect("the new failure must be reported");
+        assert_eq!(new_failures, vec!["widget::tests::new_one"]);
+    }
+
+    #[test]
+    fn verify_red_deduplicates_a_repeated_new_failure_name() {
+        // Cargo can print the same test name twice when a workspace runs the
+        // same crate's tests under more than one target; the evidence must
+        // name it once, not once per binary.
+        let before = summary(0, &[]);
+        let after = summary(2, &["widget::tests::new_one", "widget::tests::new_one"]);
+
+        let new_failures = verify_red(&before, &after).expect("a new failure must be reported");
+        assert_eq!(new_failures, vec!["widget::tests::new_one"]);
     }
 }
