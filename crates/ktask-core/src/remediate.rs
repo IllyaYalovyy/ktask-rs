@@ -132,6 +132,39 @@
 //! [`policy_edit_event`] is the journal record the refusal leaves, so a run that
 //! stopped on a protected path says so — with the paths — in the same
 //! append-only file every other decision is in.
+//!
+//! # What a recovery leaves behind
+//!
+//! §7's last requirement is its shortest and its least testable: "every recovery
+//! produces a self-healing report: classification, attempted repairs, final
+//! result." [`RecoveryReport`] is those three parts given a type, and
+//! [`file_report`] is the one step that leaves them behind in both places they
+//! have to be — the journal, so a later screen or repair can ask what a
+//! remediation tried, and the remediation's own evidence directory, so a human
+//! can read the same account without opening a database.
+//!
+//! The row comes through the run's [`crate::Recorder`] rather than a bare
+//! append, which is the difference between an account and an unmentioned one:
+//! the run log is that bus's own reader (ADR-0081), so a filing that skipped
+//! the recorder would leave §7's account in the database and out of the
+//! interface a remediation is actually watched through. ADR-0091 records that
+//! door, and why the check below is asked of the journal on the other side of
+//! it.
+//!
+//! Filing is refused rather than repeated. One remediation leaving one account
+//! is what makes "what did the repair try?" a question with an answer, and a
+//! second account of one repair either contradicts the first or duplicates it —
+//! both cost the reader that answer. [`crate::write_evidence`] refuses a second,
+//! different record for one attempt the same way (ADR-0065), and ADR-0091
+//! records why the check is asked of the journal rather than of the directory an
+//! artifact sits in.
+//!
+//! The order of a filing is the order the invariant asks for: every refusal
+//! first, then the journal row, then the file. A crash between the last two
+//! leaves a recovery that is journalled and has no artifact, which is a gap a
+//! reader can see. The reverse would leave an artifact no row accounts for, and
+//! a reader who trusted the directory would conclude a recovery had been
+//! audited when it had only been written.
 
 use regex::Regex;
 use sha2::{Digest as _, Sha256};
@@ -143,8 +176,8 @@ use std::sync::OnceLock;
 use time::Duration;
 
 use crate::{
-    AttemptRecord, Error, EventKind, FailureClass, GateResult, Result, Task, Usage, parse_cargo,
-    redact::redact,
+    AttemptId, AttemptRecord, Error, EventKind, FailureClass, GateResult, Journal, Project,
+    Recorder, Result, Task, TaskId, Usage, attempt, parse_cargo, redact::redact,
 };
 
 /// How many hexadecimal characters a signature carries.
@@ -1133,19 +1166,249 @@ pub fn policy_edit_event(offending_paths: &[PathBuf]) -> EventKind {
     }
 }
 
+/// The artifact naming what one remediation accounted for.
+///
+/// `report.md` is an attempt's account of the work it did (ADR-0065); this is a
+/// remediation's account of the *repair*, which is a different question with a
+/// different three answers. The two have to be tellable apart in one directory,
+/// because a remediation is an attempt: the repair of attempt 1 *is* attempt 2,
+/// and its evidence directory holds both halves.
+const HEALING_FILE: &str = "self-healing.md";
+
+/// What one remediation did, in the form VISION.md §7 requires it to leave.
+///
+/// §7 names three parts — classification, attempted repairs, final result — and
+/// this is those three with a type. The classification is carried rather than
+/// read back off the failure row the journal already holds: an account that does
+/// not name the failure it set out to answer cannot be told apart from an
+/// account of some other failure that happened to land on the same task, which
+/// is the difference between a repair history and a pile of notes.
+///
+/// # What each part may be empty
+///
+/// [`RecoveryReport::repairs`] may be empty and says so: a remediation the
+/// breaker tripped or a bound stopped before it tried anything has tried
+/// nothing, and that is the finding a reader wants. [`RecoveryReport::outcome`]
+/// may not, and [`file_report`] refuses one whose outcome is blank — the result
+/// is the part the file is opened for, and an account of a recovery that ended
+/// nowhere is the same unreadable sentence as no account at all.
+///
+/// The catalog entry these parts become is [`EventKind::SelfHealingReport`],
+/// whose four fields are this type's minus [`RecoveryReport::task`]: the
+/// journal's own task column carries the task, and the evidence file cannot
+/// count on that, because a file outlives the row it was written beside and gets
+/// read on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryReport {
+    /// The task the remediation was launched for.
+    pub task: TaskId,
+    /// The remediation this is the account of — the attempt number the repair
+    /// ran as, which is what [`crate::TaskState::Remediating`] holds and what
+    /// the evidence directory this is filed in is named for.
+    pub attempt: AttemptId,
+    /// The class the remediation was launched against, as
+    /// [`crate::classify()`] settled it before any recovery was attempted.
+    pub class: FailureClass,
+    /// The repairs that were tried, in the order they were tried. Empty is the
+    /// answer "nothing was tried", not a field that failed to fill.
+    pub repairs: Vec<String>,
+    /// What the remediation ended with, in the words of the step that ended it:
+    /// the bound that stopped it, the gate that refused again, the rerun that
+    /// came back green.
+    pub outcome: String,
+}
+
+impl RecoveryReport {
+    /// The catalog entry this account becomes.
+    ///
+    /// The task is absent on purpose: [`Journal::append`] takes it as the row's
+    /// own column, and a payload that repeated the envelope would be a second
+    /// place for the two to disagree.
+    #[must_use]
+    pub fn event(&self) -> EventKind {
+        EventKind::SelfHealingReport {
+            attempt: self.attempt,
+            class: self.class,
+            repairs: self.repairs.clone(),
+            outcome: self.outcome.clone(),
+        }
+    }
+
+    /// The account as the evidence artifact holds it: §7's three parts in §7's
+    /// order, one fact to a line, beside the two ids that let a file read on its
+    /// own say which recovery it describes.
+    ///
+    /// Every piece of free text goes through `sentence`, which is
+    /// [`crate::redact::redact`] and a fold to one line: a repair an agent
+    /// described across four lines is still one repair, and a gate that echoed
+    /// the credential it authenticated with cannot leave it in an account a
+    /// screen prints. The ids and the class are not free text and are not
+    /// redacted — an attempt number is not a secret, and masking it would make
+    /// the artifact unattributable rather than safe.
+    #[must_use]
+    pub fn text(&self) -> String {
+        let repairs = if self.repairs.is_empty() {
+            "none".to_owned()
+        } else {
+            self.repairs
+                .iter()
+                .map(|repair| sentence(repair))
+                .collect::<Vec<String>>()
+                .join("; ")
+        };
+        format!(
+            "# task {} remediation {}\n\
+             \n\
+             - class: {:?}\n\
+             - repairs: {repairs}\n\
+             - outcome: {}\n",
+            self.task,
+            self.attempt,
+            self.class,
+            sentence(&self.outcome),
+        )
+    }
+}
+
+/// File one remediation's account of itself, and hand back where it was filed.
+///
+/// Both halves are the deliverable: the journal row is what makes the account
+/// retrievable by anything that reads a run back — a failures screen, the next
+/// remediation's bundle, a rebuild of the projected state — and the artifact is
+/// what §7's audit is actually a human reading. One call writes both because a
+/// caller allowed to do one half would produce an account half of which exists.
+///
+/// The row comes through `recorder`, the door every row of a run comes through
+/// ([`Recorder::record`]), rather than through a bare [`Journal::append`]. The
+/// difference is who else hears about it: the run log is the bus's own reader
+/// (ADR-0081) and a frontend follows the same bus, so an account that was only
+/// appended would be in the database and missing from both — a remediation
+/// whose repair was journalled and never mentioned, in the one interface this
+/// supervisor is watched through.
+///
+/// # The order, and what each step refuses
+///
+/// 1. An account with no outcome is refused with [`Error::Corrupt`]: §7's three
+///    parts are three, and the missing one is the answer the file exists to
+///    carry.
+/// 2. A second account for a remediation that already has one is refused with
+///    [`Error::Policy`], naming the artifact it will not write a second version
+///    of. This is the "exactly one report per remediation attempt" of the
+///    done-when, and it is asked of the journal rather than of the directory —
+///    see `holds_an_account`.
+/// 3. An unregistered project is refused [`Error::NotFound`] by
+///    `attempt::ensure_evidence_dir`, which makes the remediation's own two
+///    levels owner-only and nothing above them.
+/// 4. The row is recorded: appended, and published once the append committed.
+/// 5. The artifact is written, at the mode every evidence file is kept at.
+///
+/// A refusal at 1, 2 or 3 leaves nothing behind at all, which is what the third
+/// test in this module's account section insists on: a row for a recovery that
+/// was never filed would be the first half of the disagreement this order exists
+/// to prevent. A refusal at 5 leaves a row and no artifact — the durable-write
+/// failure a supervisor has to report rather than hide, and the one gap the
+/// order cannot close, since a journaled recovery with no file is auditable and
+/// a file no journal knows about is not.
+///
+/// # What this does not decide
+///
+/// Nothing here knows whether the attempt named was a remediation at all. That
+/// is the machine's check, and it is a real one: [`crate::apply`] refuses an
+/// account in every state but the `Remediating` whose own attempt number it
+/// names, so a runner that filed an account of a first attempt has its row
+/// refused where the journal is folded (ADR-0022). Filing is the writing of an
+/// account a caller says it holds; *whether that account may exist* is
+/// `apply`'s answer.
+///
+/// # Errors
+///
+/// [`Error::Corrupt`] for the blank outcome, [`Error::Policy`] for the second
+/// account, [`Error::NotFound`] for a project with no state directory,
+/// [`Error::Io`] for a filesystem that refused the artifact or the directory,
+/// and what [`Recorder::record`] refuses for the row: [`Error::Serde`] when the
+/// payload has no JSON encoding, [`Error::Database`] when SQLite refuses the
+/// insert, and [`Error::Corrupt`] when the row that committed cannot be read
+/// back to be published.
+pub fn file_report(
+    project: &Project,
+    recorder: &mut Recorder,
+    report: &RecoveryReport,
+) -> Result<PathBuf> {
+    if report.outcome.trim().is_empty() {
+        return Err(Error::Corrupt {
+            detail: format!(
+                "the account of remediation {} carries no outcome; §7's three parts are the \
+                 class it was launched against, the repairs it tried and the result it ended \
+                 with, and the last of those is what the account is read for",
+                report.attempt
+            ),
+            seq: None,
+        });
+    }
+    let artifact = attempt::evidence_dir(project, report.task, report.attempt).join(HEALING_FILE);
+    if holds_an_account(recorder.journal(), report)? {
+        return Err(Error::Policy {
+            detail: format!(
+                "remediation {} of task {} has already accounted for itself; one recovery \
+                 leaves one record of what it tried, and a second would leave \"what did the \
+                 repair try?\" without one answer",
+                report.attempt, report.task
+            ),
+            paths: vec![artifact],
+        });
+    }
+    attempt::ensure_evidence_dir(project, report.task, report.attempt)?;
+    recorder.record(Some(report.task), report.event())?;
+    attempt::write_private(&artifact, &report.text())?;
+    Ok(artifact)
+}
+
+/// Whether `journal` already holds an account of this remediation.
+///
+/// Asked of the journal, not of the directory, because the two are not equally
+/// trustworthy about it. An artifact can be swept by a retention pass, lost to a
+/// torn write, or read by a repair that has no business trusting it; the journal
+/// is append-only (ADR-0017), so a row that is there stays there and a row that
+/// is not was never written. Trusting the directory would let the loss of one
+/// file license a second row for one remediation, which is the exact thing the
+/// done-when forbids and the thing a reader of the journal would then have to
+/// resolve.
+///
+/// The read is the task's own rows rather than the whole journal: attempt
+/// numbers belong to a task, so an account of remediation 2 of another task is
+/// not this remediation having spoken already.
+///
+/// The journal asked is the one the filing records through, not a connection
+/// opened beside it: the answer to "has this remediation spoken" has to come
+/// from the handle the row is about to be written with (ADR-0091).
+fn holds_an_account(journal: &Journal, report: &RecoveryReport) -> Result<bool> {
+    Ok(journal.events_for(report.task)?.iter().any(|event| {
+        matches!(
+            &event.kind,
+            EventKind::SelfHealingReport { attempt, .. } if *attempt == report.attempt
+        )
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::RULES;
     use super::{Bound, Bounds, Decision, should_continue};
     use super::{Breaker, BreakerState, bundle, signature, trip_event};
-    use super::{PROTECTED_PATHS, ProtectedKind, check_no_policy_edit, policy_edit_event};
+    use super::{
+        PROTECTED_PATHS, ProtectedKind, RecoveryReport, check_no_policy_edit, file_report,
+        policy_edit_event,
+    };
+    use crate::redact::fixtures::github_token;
     use crate::{
-        AttemptId, AttemptRecord, Error, EventKind, FailureClass, GateKind, GateResult, Journal,
-        Phase, Task, TaskId, TaskState, TaskStatus, Usage, UsageSource, apply, journal_path,
-        redact::MASK,
+        AttemptId, AttemptRecord, Bus, Error, EventKind, FailureClass, GateKind, GateResult,
+        Journal, Phase, Project, Recorder, Task, TaskId, TaskState, TaskStatus, Usage, UsageSource,
+        apply, evidence_dir, journal_path, redact::MASK,
     };
     use proptest::prelude::*;
-    use std::path::PathBuf;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::{Path, PathBuf};
     use tempfile::{TempDir, tempdir};
     use time::Duration;
     use time::macros::datetime;
@@ -1618,7 +1881,7 @@ mod tests {
         };
         let dir = scratch();
         let state_dir = dir.path().join("state-7");
-        std::fs::create_dir(&state_dir).expect("a state directory the journal may live in");
+        fs::create_dir(&state_dir).expect("a state directory the journal may live in");
         let task = TaskId::new(7);
         let mut journal = Journal::open(&journal_path(&state_dir)).expect("a journal opens in it");
         journal
@@ -2479,7 +2742,7 @@ mod tests {
     fn journalled(paths: &[&str]) -> (FailureClass, String) {
         let dir = scratch();
         let state_dir = dir.path().join("state-72");
-        std::fs::create_dir(&state_dir).expect("a state directory the journal may live in");
+        fs::create_dir(&state_dir).expect("a state directory the journal may live in");
         let task = TaskId::new(72);
         let mut journal = Journal::open(&journal_path(&state_dir)).expect("a journal opens in it");
         let (_, offenders) = refusal(paths);
@@ -2769,6 +3032,427 @@ mod tests {
                 }
             ),
             "a refusal ends a remediation on the spot: {projected:?}",
+        );
+    }
+
+    /// A project as a registration leaves it: its state directory exists, at the
+    /// mode a registration gives it, and nothing is filed below it yet.
+    fn registered(scratch: &Path) -> Project {
+        let id = "0123456789abcdef".to_owned();
+        let state_dir = scratch.join("state").join(&id);
+        fs::create_dir_all(&state_dir).expect("a state directory to file an account below");
+        Project {
+            root: scratch.join("repository"),
+            id,
+            state_dir,
+        }
+    }
+
+    /// `project`'s journal, opened where a registration puts it.
+    fn journal_of(project: &Project) -> Journal {
+        Journal::open(&journal_path(&project.state_dir))
+            .expect("a journal opens inside a state directory")
+    }
+
+    /// One remediation's account of itself: the class it was launched against,
+    /// two repairs in the order they were attempted, and the result it ended
+    /// with — the three parts VISION.md §7 names, none of them optional.
+    fn account(attempt: u32) -> RecoveryReport {
+        RecoveryReport {
+            task: TaskId::new(77),
+            attempt: AttemptId::new(attempt),
+            class: FailureClass::VerificationFailure,
+            repairs: vec![
+                "re-run the fmt gate".to_owned(),
+                "widen the write scope to src/gate.rs".to_owned(),
+            ],
+            outcome: "green on the rerun".to_owned(),
+        }
+    }
+
+    /// What `journal` holds for the account's task, as the entries it decoded
+    /// back into — the read a later screen or a repair does, not a private one.
+    fn filed(journal: &Journal) -> Vec<EventKind> {
+        journal
+            .events_for(TaskId::new(77))
+            .expect("the journal reads back")
+            .into_iter()
+            .map(|event| event.kind)
+            .collect()
+    }
+
+    /// The mode bits of whatever is at `path`.
+    fn mode(path: &Path) -> u32 {
+        fs::metadata(path)
+            .unwrap_or_else(|why| panic!("`{}` is there to be looked at: {why}", path.display()))
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    /// The account as the file §7 says every recovery leaves. A return value
+    /// accounts for nothing: the recovery has to be readable after the process
+    /// that made it is gone, which is the whole point of the journal.
+    #[test]
+    fn a_filed_account_is_one_journal_row_holding_what_the_repair_tried() {
+        let scratch = scratch();
+        let project = registered(scratch.path());
+        let mut recorder = Recorder::new(journal_of(&project));
+        let report = account(2);
+
+        file_report(&project, &mut recorder, &report).expect("an account files");
+
+        let rows = filed(recorder.journal());
+        assert_eq!(
+            rows.len(),
+            1,
+            "one remediation produces one row, not a pair: {:?}",
+            rows.iter().map(EventKind::discriminant).collect::<Vec<_>>()
+        );
+        assert_eq!(rows[0].discriminant(), "SelfHealingReport");
+        let EventKind::SelfHealingReport {
+            attempt,
+            class,
+            repairs,
+            outcome,
+        } = &rows[0]
+        else {
+            panic!("the account is the entry the catalog names: {:?}", rows[0]);
+        };
+        assert_eq!(
+            *attempt,
+            AttemptId::new(2),
+            "the account names the remediation it accounts for"
+        );
+        assert_eq!(*class, FailureClass::VerificationFailure);
+        assert_eq!(
+            repairs, &report.repairs,
+            "the repairs are read back in the order they were attempted"
+        );
+        assert_eq!(outcome, "green on the rerun");
+    }
+
+    /// The journal row is the half a machine reads. The audit VISION.md §7 asks
+    /// for is a human reading an account, so the same three parts are filed in
+    /// the remediation's own evidence directory and kept as privately as every
+    /// other artifact there.
+    #[test]
+    fn a_filed_account_is_written_into_the_remediation_s_own_evidence_directory() {
+        let scratch = scratch();
+        let project = registered(scratch.path());
+        let mut recorder = Recorder::new(journal_of(&project));
+
+        let path = file_report(&project, &mut recorder, &account(2)).expect("an account files");
+
+        assert_eq!(
+            path,
+            evidence_dir(&project, TaskId::new(77), AttemptId::new(2)).join("self-healing.md"),
+            "the account belongs to the remediation's own directory, spelled the way every \
+             other artifact there spells it"
+        );
+        let text = fs::read_to_string(&path).expect("the account is there to be read");
+        assert!(
+            text.contains("task 77") && text.contains("remediation 2"),
+            "a file read outside the tree it lives in still says which run it accounts \
+             for: {text}"
+        );
+        assert!(
+            text.contains("VerificationFailure"),
+            "the classification: {text}"
+        );
+        assert!(
+            text.contains("green on the rerun"),
+            "the final result: {text}"
+        );
+        let first = text
+            .find("re-run the fmt gate")
+            .expect("the first repair is named");
+        let second = text
+            .find("widen the write scope to src/gate.rs")
+            .expect("the second repair is named");
+        assert!(
+            first < second,
+            "the account lists the repairs in the order they were attempted: {text}"
+        );
+        assert_eq!(
+            mode(&path),
+            0o600,
+            "an account is evidence, not a public file"
+        );
+        assert_eq!(
+            mode(path.parent().expect("the directory the account sits in")),
+            0o700,
+            "and the directory holding it is kept the way the evidence layout keeps every level"
+        );
+    }
+
+    /// A row that is only appended is in the database and nowhere else.
+    ///
+    /// [`crate::Recorder::record`] is the one door an event comes through (ADR-0080):
+    /// it appends and then publishes what was appended, and the run log is the bus's
+    /// own reader (ADR-0081). An account of a recovery that skipped that door would
+    /// be readable by a query and invisible to the interface this supervisor is
+    /// actually watched through — a screen would show a remediation starting and
+    /// ending with its account of itself missing from the middle, which is the
+    /// unreadable sentence §7 exists to prevent.
+    #[test]
+    fn an_account_is_published_to_the_screen_watching_the_remediation() {
+        let scratch = scratch();
+        let project = registered(scratch.path());
+        let mut recorder = Recorder::with_bus(journal_of(&project), Bus::with_capacity(4));
+        let mut watching = recorder.subscribe();
+
+        file_report(&project, &mut recorder, &account(2)).expect("an account files");
+
+        let (seen, dropped) = watching.drain();
+        assert_eq!(
+            dropped, 0,
+            "one account cannot overflow a frontend that was keeping up"
+        );
+        assert_eq!(
+            seen.len(),
+            1,
+            "a screen sees the account exactly once, as it sees every other row: {seen:?}"
+        );
+        assert_eq!(
+            seen[0].task_id,
+            Some(TaskId::new(77)),
+            "and the record it sees is attributed to the task that was remediated"
+        );
+        assert_eq!(
+            seen[0].kind.discriminant(),
+            "SelfHealingReport",
+            "the entry a frontend is told about is the one the journal holds"
+        );
+    }
+
+    /// "exactly one report per remediation attempt" is a refusal, not a
+    /// convention: a second account of one repair either contradicts the first
+    /// or duplicates it, and either way "what did the repair try" stops having
+    /// one answer. The refusal is the shape [`crate::write_evidence`] makes of a
+    /// second record for one attempt, and it appends nothing on the way out — a
+    /// row written before the refusal would leave the journal holding exactly the
+    /// two rows the refusal exists to prevent.
+    #[test]
+    fn one_remediation_leaves_one_account_and_a_second_is_refused_without_another_row() {
+        let scratch = scratch();
+        let project = registered(scratch.path());
+        let mut recorder = Recorder::new(journal_of(&project));
+        file_report(&project, &mut recorder, &account(2)).expect("the first account files");
+
+        let contradiction = RecoveryReport {
+            outcome: "still red after both repairs".to_owned(),
+            ..account(2)
+        };
+        let error = file_report(&project, &mut recorder, &contradiction)
+            .expect_err("one remediation has one account");
+        let Error::Policy { detail, paths } = &error else {
+            panic!("a second account of one repair is a policy violation: {error:?}");
+        };
+        assert!(
+            detail.contains("remediation 2"),
+            "the refusal names the remediation that already accounted for itself: {detail}"
+        );
+        assert_eq!(
+            paths.len(),
+            1,
+            "and the one artifact it refuses to write a second version of: {paths:?}"
+        );
+
+        let duplicate = file_report(&project, &mut recorder, &account(2))
+            .expect_err("even the identical account is a second filing");
+        assert!(
+            matches!(duplicate, Error::Policy { .. }),
+            "a filing is refused because it is a second, not because it differs: {duplicate:?}"
+        );
+
+        let rows = filed(recorder.journal());
+        assert_eq!(rows.len(), 1, "a refusal writes no row: {rows:?}");
+        let text = fs::read_to_string(
+            evidence_dir(&project, TaskId::new(77), AttemptId::new(2)).join("self-healing.md"),
+        )
+        .expect("the first account is still there");
+        assert!(
+            text.contains("green on the rerun") && !text.contains("still red"),
+            "the refusal leaves the account it refused to replace alone: {text}"
+        );
+    }
+
+    /// One account per remediation is not one account per task: a task repaired
+    /// twice has two things to answer, and each answer belongs in the directory
+    /// of the remediation it describes.
+    #[test]
+    fn two_remediations_leave_two_accounts_each_naming_its_own_attempt() {
+        let scratch = scratch();
+        let project = registered(scratch.path());
+        let mut recorder = Recorder::new(journal_of(&project));
+
+        let second =
+            file_report(&project, &mut recorder, &account(2)).expect("the first repair accounts");
+        let third = file_report(&project, &mut recorder, &account(3))
+            .expect("a second repair accounts for itself");
+        assert_ne!(
+            second, third,
+            "one account per remediation means one per remediation's own directory"
+        );
+
+        for attempt in [2, 3] {
+            let text = fs::read_to_string(
+                evidence_dir(&project, TaskId::new(77), AttemptId::new(attempt))
+                    .join("self-healing.md"),
+            )
+            .expect("each remediation's own directory holds its own account");
+            assert!(
+                text.contains(&format!("remediation {attempt}")),
+                "and says which remediation it is: {text}"
+            );
+        }
+
+        let accounts: Vec<AttemptId> = filed(recorder.journal())
+            .iter()
+            .filter_map(|row| match row {
+                EventKind::SelfHealingReport { attempt, .. } => Some(*attempt),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            accounts,
+            vec![AttemptId::new(2), AttemptId::new(3)],
+            "a reader asking what remediation 3 tried finds it in the journal, in order"
+        );
+    }
+
+    /// The account is journalled after every check that can refuse and before
+    /// the artifact is written, so the two halves of a filing cannot disagree
+    /// about whether a recovery was accounted for.
+    #[test]
+    fn an_account_that_could_not_be_filed_journals_nothing() {
+        let scratch = scratch();
+        let id = "0123456789abcdef".to_owned();
+        let unregistered = Project {
+            root: scratch.path().join("repository"),
+            id,
+            state_dir: scratch.path().join("state").join("0123456789abcdef"),
+        };
+        let journal = Journal::open(&scratch.path().join("journal.sqlite"))
+            .expect("a journal opens beside the project the filing is refused for");
+        let mut recorder = Recorder::new(journal);
+
+        let error = file_report(&unregistered, &mut recorder, &account(2))
+            .expect_err("an unregistered project has no evidence home to file in");
+        let Error::NotFound { what } = error else {
+            panic!("a state directory that is not there is not found: {error:?}");
+        };
+        assert!(
+            what.starts_with("state directory of project 0123456789abcdef ("),
+            "the refusal names the project and the directory it looked in: {what}"
+        );
+        assert!(
+            filed(recorder.journal()).is_empty(),
+            "a refused filing leaves no row"
+        );
+    }
+
+    /// The repairs and the outcome are free text out of a session's transcript
+    /// and a gate's output, which is exactly where a credential turns up. Both
+    /// halves are checked because they are written by two different steps: the
+    /// journal redacts its own payload, and the artifact is written from a
+    /// projection that has to redact the same text on its own way out.
+    #[test]
+    fn an_account_never_carries_a_secret_into_the_journal_or_the_evidence() {
+        let scratch = scratch();
+        let project = registered(scratch.path());
+        let mut recorder = Recorder::new(journal_of(&project));
+        let secret = github_token();
+        let report = RecoveryReport {
+            repairs: vec![format!("retry the push with {secret} in the environment")],
+            outcome: format!("the rerun printed {secret} and then refused"),
+            ..account(2)
+        };
+
+        let path = file_report(&project, &mut recorder, &report).expect("an account files");
+
+        let text = fs::read_to_string(&path).expect("the account is there to be read");
+        assert!(
+            !text.contains(&secret),
+            "the artifact holds the mask, never the token: {text}"
+        );
+        assert!(text.contains(MASK), "and says that it redacted: {text}");
+        let EventKind::SelfHealingReport {
+            repairs, outcome, ..
+        } = &filed(recorder.journal())[0]
+        else {
+            panic!("the row is the account, whatever the text of it was redacted to");
+        };
+        assert!(
+            !repairs.iter().any(|repair| repair.contains(&secret)) && !outcome.contains(&secret),
+            "the journaled account is redacted too: {repairs:?} / {outcome}"
+        );
+    }
+
+    /// VISION.md §7 names three parts and an account missing the third accounts
+    /// for nothing: it is the difference between a recovery that ended green and
+    /// one that is still going, which is the question the file is opened to
+    /// answer. Whitespace is as empty as nothing, because a caller that filled
+    /// the field with a newline has written no result either.
+    #[test]
+    fn an_account_with_no_result_is_refused_because_it_accounts_for_nothing() {
+        let scratch = scratch();
+        let project = registered(scratch.path());
+        let mut recorder = Recorder::new(journal_of(&project));
+        let blank = RecoveryReport {
+            outcome: "\n".to_owned(),
+            ..account(2)
+        };
+
+        let error = file_report(&project, &mut recorder, &blank)
+            .expect_err("an account with no result is not an account");
+        let Error::Corrupt { detail, .. } = error else {
+            panic!("an account short of its third part is unreadable: {error:?}");
+        };
+        assert!(
+            detail.contains("outcome"),
+            "the refusal names the part that is missing: {detail}"
+        );
+        assert!(
+            filed(recorder.journal()).is_empty(),
+            "a refused account journals nothing"
+        );
+        assert!(
+            !evidence_dir(&project, TaskId::new(77), AttemptId::new(2)).exists(),
+            "and leaves no half of the evidence layout behind it"
+        );
+    }
+
+    /// The other half of that asymmetry: a remediation a bound or the breaker
+    /// stopped before it tried anything still owes an account, and the account
+    /// it owes says *nothing*. An empty list is the finding, not a field that
+    /// failed to fill, so it is filed rather than refused.
+    #[test]
+    fn an_account_that_attempted_nothing_says_that_it_attempted_nothing() {
+        let scratch = scratch();
+        let project = registered(scratch.path());
+        let mut recorder = Recorder::new(journal_of(&project));
+        let stopped = RecoveryReport {
+            repairs: Vec::new(),
+            outcome: "stopped by the attempt bound before any repair was tried".to_owned(),
+            ..account(2)
+        };
+
+        let path = file_report(&project, &mut recorder, &stopped)
+            .expect("a recovery that tried nothing still accounts for itself");
+
+        let text = fs::read_to_string(&path).expect("the account is there to be read");
+        assert!(
+            text.contains("repairs: none"),
+            "an empty list is written as the answer it is: {text}"
+        );
+        let EventKind::SelfHealingReport { repairs, .. } = &filed(recorder.journal())[0] else {
+            panic!("the row is the account");
+        };
+        assert!(
+            repairs.is_empty(),
+            "the journal keeps the emptiness rather than inventing a repair: {repairs:?}"
         );
     }
 }

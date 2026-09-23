@@ -565,7 +565,12 @@ fn refused_because_absent(why: &io::Error) -> bool {
 /// evidence a later human judges a run by: an attempt whose report was lost to a
 /// power cut is a run that cannot be reviewed, which is the failure VISION.md §11
 /// restrictive permissions and durable state exist to prevent.
-fn write_private(path: &Path, text: &str) -> Result<()> {
+///
+/// `pub(crate)` rather than private because [`crate::file_report`] files a
+/// remediation's account in the same layout and has to keep it to the same mode
+/// and the same durability: two spellings of a durable private write is how one
+/// of them ends up un-synced (the reason `EVIDENCE_ROOT` is widened too).
+pub(crate) fn write_private(path: &Path, text: &str) -> Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)

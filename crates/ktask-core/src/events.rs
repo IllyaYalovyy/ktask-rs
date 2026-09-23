@@ -297,6 +297,21 @@ impl Recorder {
         self.bus.subscribe()
     }
 
+    /// The journal this recorder appends to, for a step that has to ask it a
+    /// question before it records anything.
+    ///
+    /// `pub(crate)` and shared rather than mutable: [`Journal::append`] needs
+    /// `&mut self`, so a handle taken from here cannot write, and the two
+    /// triggers that keep the journal append-only are untouched.
+    /// [`crate::file_report`] is the caller that needs it — whether one
+    /// remediation has accounted for itself already is a question about the
+    /// journal, and asking it through a second connection to the same file
+    /// would leave two answers available to disagree (ADR-0091).
+    #[must_use]
+    pub(crate) fn journal(&self) -> &Journal {
+        &self.journal
+    }
+
     /// Append one event and publish the record the journal wrote, returning the
     /// sequence the journal gave it.
     ///

@@ -60,8 +60,8 @@ pub use protocol::{
 pub use provider::{Capabilities, Invocation, Outcome, Provider, Usage, UsageSource};
 pub use queue::{load, next_runnable};
 pub use remediate::{
-    Bound, Bounds, Breaker, BreakerState, bundle, check_no_policy_edit, policy_edit_event,
-    should_continue, signature, trip_event,
+    Bound, Bounds, Breaker, BreakerState, RecoveryReport, bundle, check_no_policy_edit,
+    file_report, policy_edit_event, should_continue, signature, trip_event,
 };
 pub use report::{ReportClaim, ReportResult, parse_report, read_report, report_path};
 pub use runner::{
