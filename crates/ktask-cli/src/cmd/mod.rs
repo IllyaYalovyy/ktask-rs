@@ -1,0 +1,125 @@
+//! Command dispatch: routes a parsed [`Command`] to the `cmd::` module that
+//! implements it.
+//!
+//! Each command gets its own file, named for the command (`control` covers
+//! the three run-control commands — pause, interrupt, cancel — together,
+//! since `docs/CONTRACT.md` section 3 and a later task treat them as one
+//! unit). Every module currently only returns [`RunOutcome::Drained`]: the
+//! behavior each command actually performs is later, per-command work: T108
+//! (init), T110 (doctor), T111 (status), T112 (add), T113 (plan lint), T115
+//! (run), T116 (resume, retry), T117 (resolve, ack), T119 (pause, interrupt,
+//! cancel), T120 (rerun-gate) and T131 (tui). What this module is
+//! responsible for is that [`dispatch`] itself is real: the match below is
+//! exhaustive, so a `Command` variant added without a corresponding arm
+//! fails to compile instead of silently falling through to a default.
+
+mod ack;
+mod add;
+mod control;
+mod doctor;
+mod init;
+mod plan;
+mod rerun_gate;
+mod resolve;
+mod resume;
+mod retry;
+mod run;
+mod status;
+mod tui;
+
+use crate::cli::Command;
+use ktask_core::{Config, Project, RunOutcome};
+
+/// Routes `command` to the `cmd::` function that implements it, against the
+/// already-resolved `project` and its effective `config`.
+pub(crate) fn dispatch(command: &Command, project: &Project, config: &Config) -> RunOutcome {
+    match command {
+        Command::Doctor => doctor::run(project, config),
+        Command::Init => init::run(project, config),
+        Command::Add { file } => add::run(project, config, file.as_deref()),
+        Command::Plan { command } => plan::run(project, config, command),
+        Command::Status => status::run(project, config),
+        Command::Run { task, from } => run::run(project, config, *task, *from),
+        Command::Resume => resume::run(project, config),
+        Command::Retry { task } => retry::run(project, config, *task),
+        Command::Resolve { task, note } => resolve::run(project, config, *task, note.as_deref()),
+        Command::Ack { task } => ack::run(project, config, *task),
+        Command::Pause => control::pause(project, config),
+        Command::Interrupt => control::interrupt(project, config),
+        Command::Cancel { task } => control::cancel(project, config, *task),
+        Command::RerunGate { task, gate } => rerun_gate::run(project, config, *task, *gate),
+        Command::Tui => tui::run(project, config),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::PlanCommand;
+    use ktask_core::TaskId;
+    use std::path::PathBuf;
+
+    /// A `Project` value good enough for the stubs under test: none of them
+    /// touch the filesystem, so nothing here needs to exist on disk.
+    fn fixture_project() -> Project {
+        Project {
+            root: PathBuf::from("/nonexistent/ktask-dispatch-fixture/root"),
+            id: "dispatch-fixture".to_string(),
+            state_dir: PathBuf::from("/nonexistent/ktask-dispatch-fixture/state"),
+        }
+    }
+
+    /// One instance of every [`Command`] variant. A variant added to the
+    /// enum without an arm in `every_command` still fails to compile the
+    /// exhaustive match in [`dispatch`]; this list exists so the test below
+    /// actually calls each arm rather than merely typechecking it.
+    fn every_command() -> Vec<Command> {
+        vec![
+            Command::Doctor,
+            Command::Init,
+            Command::Add { file: None },
+            Command::Plan {
+                command: PlanCommand::Lint,
+            },
+            Command::Status,
+            Command::Run {
+                task: None,
+                from: None,
+            },
+            Command::Resume,
+            Command::Retry {
+                task: TaskId::new(1),
+            },
+            Command::Resolve {
+                task: TaskId::new(1),
+                note: None,
+            },
+            Command::Ack { task: None },
+            Command::Pause,
+            Command::Interrupt,
+            Command::Cancel {
+                task: TaskId::new(1),
+            },
+            Command::RerunGate {
+                task: TaskId::new(1),
+                gate: None,
+            },
+            Command::Tui,
+        ]
+    }
+
+    #[test]
+    fn dispatch_reaches_every_command_variant() {
+        let project = fixture_project();
+        let config = Config::default();
+
+        for command in every_command() {
+            let outcome = dispatch(&command, &project, &config);
+            assert_eq!(
+                outcome,
+                RunOutcome::Drained,
+                "{command:?} did not reach its cmd:: placeholder"
+            );
+        }
+    }
+}

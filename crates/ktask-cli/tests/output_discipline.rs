@@ -6,17 +6,39 @@
 
 use std::process::Command;
 
-/// Runs `status --json --verbose`, a state-reporting invocation per
-/// `docs/CONTRACT.md` section 3, and checks that the JSON result on stdout
-/// parses cleanly while the `--verbose` diagnostic dump — real progress
-/// chatter, not fixture text — lands only on stderr.
+/// Runs `status --json --verbose` against a directory that is guaranteed not
+/// to be a registered project (a fresh `tempfile::tempdir`, with
+/// `XDG_STATE_HOME` pointed at another fresh directory so no real
+/// registration on the machine running this test can be found either). Every
+/// per-command `cmd::` implementation is still a placeholder (T107's own
+/// scope; T111 gives `status` its real body), so this "no project" usage
+/// error is the one outcome dispatch can produce on its own right now — and
+/// it is enough to prove the stdout/stderr split `docs/CONTRACT.md` section 0
+/// rule 4 requires: the JSON result lands only on stdout, the `--verbose`
+/// diagnostic dump lands only on stderr, and neither leaks into the other.
 #[test]
 fn json_result_on_stdout_is_never_mixed_with_verbose_progress_on_stderr() {
     let exe = env!("CARGO_BIN_EXE_ktask-rs");
+    let project_dir = tempfile::tempdir().expect("an unregistered project directory");
+    let state_home = tempfile::tempdir().expect("an empty XDG_STATE_HOME");
+
     let output = Command::new(exe)
-        .args(["status", "--json", "--verbose"])
+        .args([
+            "--project",
+            project_dir.path().to_str().expect("utf-8 path"),
+            "status",
+            "--json",
+            "--verbose",
+        ])
+        .env("XDG_STATE_HOME", state_home.path())
         .output()
         .expect("run the compiled ktask-rs binary");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "no registered project is a usage error"
+    );
 
     let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
     let stderr = String::from_utf8(output.stderr).expect("stderr is utf8");
@@ -34,6 +56,10 @@ fn json_result_on_stdout_is_never_mixed_with_verbose_progress_on_stderr() {
     assert!(
         stderr.contains("\"verbose\":true"),
         "expected the verbose diagnostic dump on stderr, got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("ktask-rs init"),
+        "expected the no-project error to name `ktask-rs init`, got: {stderr:?}"
     );
     assert!(
         !stdout.contains("\"verbose\""),
