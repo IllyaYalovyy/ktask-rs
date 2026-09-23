@@ -16,6 +16,7 @@ mod journal;
 mod lock;
 mod paths;
 mod project;
+mod protocol;
 mod provider;
 mod queue;
 mod redact;
@@ -47,6 +48,7 @@ pub use journal::{Journal, journal_path};
 pub use lock::{Holder, RepoLock, acquire};
 pub use paths::{config_file, project_id, state_root};
 pub use project::{Project, project_config_path};
+pub use protocol::{PhaseSpec, Protocol, WriteScope};
 pub use provider::{
     Capabilities, Claude, Codex, Dummy, Invocation, Outcome, Provider, Scenario, ScenarioFile,
     Step, StepOutcome, Usage, UsageSource, build, check_model, run_streaming,
