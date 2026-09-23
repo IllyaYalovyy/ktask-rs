@@ -20,10 +20,10 @@ use crate::{
     Result, Stream, Task, TaskId, TaskState, TaskStatus, TestSummary, WaitPlan, acquire, apply,
     assemble, build, bundle, changed_paths, check_model, check_no_policy_edit, check_scope,
     claim_tdd_exception, classify, collect_adrs, commit_all, create_worktree, ensure_report_dir,
-    fetch, for_task, head_sha, load, load_context_doc, load_for, load_template, parse_cargo,
-    parse_reset, profile_from, publish, read_evidence, read_report, rebase_onto_remote, redact,
-    remove_worktree, require_clean, run_completion_set, run_gate, should_continue, signature,
-    verify_green, verify_red, wait_plan, write_evidence,
+    fetch, for_task, head_sha, load, load_context_doc, load_for, load_template, next_runnable,
+    parse_cargo, parse_reset, profile_from, publish, read_evidence, read_report,
+    rebase_onto_remote, redact, remove_worktree, require_clean, run_completion_set, run_gate,
+    should_continue, signature, verify_green, verify_red, wait_plan, write_evidence,
 };
 
 /// How long [`Runner::prepare`] waits for the repository lock ([`acquire`])
@@ -592,6 +592,87 @@ impl Runner {
             Ok(()) => self.record_published(task, &candidate_sha),
             Err(err) if is_rejected_push(&err) => self.retry_after_rebase(prep, task),
             Err(err) => Err(err),
+        }
+    }
+
+    /// Drains `tasks` in order, driving each runnable one through
+    /// [`Runner::run_task`] (`VISION.md` §3 invariant 2: a successor never
+    /// starts before its predecessor settles) until nothing is left to run
+    /// or something needs a human: a failed attempt or a durable pause.
+    ///
+    /// `from`, when given, restricts `tasks` to those with an id at or after
+    /// it before selection ever runs (`docs/CONTRACT.md`'s `run --from`): an
+    /// excluded task's state plays no part in [`next_runnable`]'s
+    /// predecessor check, so the drained subset starts exactly at `from`
+    /// rather than being blocked behind whatever an excluded predecessor's
+    /// state happens to be.
+    ///
+    /// Before every selection, the candidates' current [`TaskState`] is
+    /// rebuilt fresh from each one's own journal ([`Journal::events_for`]) —
+    /// a task with no recorded event yet defaults to [`TaskState::Queued`],
+    /// matching [`next_runnable`]'s own contract. [`next_runnable`]
+    /// returning `Ok(None)` means every candidate has reached a settled
+    /// state: the run is [`RunOutcome::Drained`].
+    ///
+    /// Once a task is selected, [`Runner::run_task`] drives it to
+    /// completion. An `Err` from that call stops the run at
+    /// [`RunOutcome::TaskFailed`] without ever selecting again. A durable
+    /// [`TaskState::Paused`] it returns instead is translated to the
+    /// matching [`RunOutcome`]: [`crate::PauseReason::HumanGate`] to
+    /// [`RunOutcome::HumanGate`], [`crate::PauseReason::Input`] to
+    /// [`RunOutcome::NeedsInput`], [`crate::PauseReason::Limit`] to
+    /// [`RunOutcome::ProviderLimit`]. `run_task` never produces
+    /// [`crate::PauseReason::Interrupted`] or [`crate::PauseReason::Blocked`]
+    /// today, but both are pauses rather than failures, so — matched here
+    /// only so this stays exhaustive as [`crate::PauseReason`] grows — they
+    /// are also reported as a resumable [`RunOutcome::Interrupted`] rather
+    /// than a failure. Every other state `run_task` returns, `Done` chief
+    /// among them, is settled progress, and selection continues.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever [`Journal::open_for`], [`Journal::events_for`] or
+    /// [`next_runnable`] themselves return on failure to read a candidate's
+    /// journaled state, and [`Error::Policy`] in the defensive case where
+    /// [`next_runnable`] selects an id [`next_runnable`]'s own contract
+    /// guarantees never happens: one absent from `candidates`.
+    pub fn run_queue(&mut self, tasks: &[Task], from: Option<TaskId>) -> Result<RunOutcome> {
+        let candidates: Vec<Task> = tasks
+            .iter()
+            .filter(|task| from.is_none_or(|from| task.id >= from))
+            .cloned()
+            .collect();
+
+        loop {
+            let mut states = BTreeMap::new();
+            for task in &candidates {
+                states.insert(task.id, journaled_state(&self.project, task.id)?);
+            }
+
+            let Some(next_id) = next_runnable(&candidates, &states)? else {
+                return Ok(RunOutcome::Drained);
+            };
+            let Some(task) = candidates.iter().find(|task| task.id == next_id) else {
+                return Err(Error::Policy {
+                    detail: format!(
+                        "next_runnable selected task {next_id}, which is not among the candidates"
+                    ),
+                    paths: Vec::new(),
+                });
+            };
+
+            match self.run_task(task) {
+                Ok(TaskState::Paused { reason, .. }) => {
+                    return Ok(match reason {
+                        PauseReason::HumanGate => RunOutcome::HumanGate { task: next_id },
+                        PauseReason::Input => RunOutcome::NeedsInput { task: next_id },
+                        PauseReason::Limit { until } => RunOutcome::ProviderLimit { until },
+                        PauseReason::Interrupted | PauseReason::Blocked => RunOutcome::Interrupted,
+                    });
+                }
+                Ok(_) => {}
+                Err(_) => return Ok(RunOutcome::TaskFailed { task: next_id }),
+            }
         }
     }
 
@@ -4146,5 +4227,226 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
             "the original attempt and exactly one bounded retry must both be evidenced, got {records:?}"
         );
         assert!(records.iter().all(|record| record.candidate_sha.is_none()));
+    }
+
+    /// Answers [`Runner::prepare`]'s own `check_provider_available` probe:
+    /// present once per task ahead of that task's own phase step, exactly
+    /// like [`write_config_for_a_successful_direct_run`]'s first step.
+    fn probe_step() -> Step {
+        Step {
+            on_task: None,
+            on_attempt: None,
+            outcome: StepOutcome::Success,
+            stdout: None,
+            exit_code: Some(0),
+            delay_ms: None,
+            files: Vec::new(),
+        }
+    }
+
+    /// Answers a task's `Implement` phase by writing a `KTASK_RESULT: DONE`
+    /// report at `report_path` and touching nothing else, so the worktree
+    /// stays clean for [`Runner::verify_and_publish`].
+    fn success_step(report_path: &std::path::Path) -> Step {
+        Step {
+            on_task: None,
+            on_attempt: None,
+            outcome: StepOutcome::Success,
+            stdout: Some("implemented the thing\n".to_string()),
+            exit_code: Some(0),
+            delay_ms: None,
+            files: vec![ScenarioFile {
+                path: report_path.to_path_buf(),
+                content: "KTASK_RESULT: DONE\nSummary: it worked.\n".to_string(),
+            }],
+        }
+    }
+
+    /// Answers a task's `Implement` phase without writing a report at all,
+    /// so [`crate::read_report`] fails it with [`Error::Report`] — the same
+    /// classified failure
+    /// [`run_task_removes_the_worktree_and_releases_the_lock_when_a_step_fails_partway`]
+    /// relies on.
+    fn no_report_step() -> Step {
+        Step {
+            on_task: None,
+            on_attempt: None,
+            outcome: StepOutcome::Success,
+            stdout: None,
+            exit_code: Some(0),
+            delay_ms: None,
+            files: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn run_queue_drains_three_dummy_tasks_in_order() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let tasks = vec![sample_task(1), sample_task(2), sample_task(3)];
+
+        let scenario = Scenario {
+            steps: tasks
+                .iter()
+                .flat_map(|task| {
+                    let report = report_path(&project, task.id, AttemptId::new(1));
+                    vec![probe_step(), success_step(&report)]
+                })
+                .collect(),
+        };
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(Dummy::new(scenario)));
+
+        let outcome = runner.run_queue(&tasks, None).expect("run_queue");
+
+        assert_eq!(outcome, RunOutcome::Drained);
+        for task in &tasks {
+            let journal = Journal::open_for(&project).expect("open journal");
+            let events = journal.events_for(task.id).expect("events_for");
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event.kind.discriminant() == "TaskDone"),
+                "task {} must have reached TaskDone, events: {:?}",
+                task.id,
+                events
+                    .iter()
+                    .map(|e| e.kind.discriminant())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn run_queue_stops_at_a_failing_middle_task_leaving_the_third_untouched() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let tasks = vec![sample_task(1), sample_task(2), sample_task(3)];
+        let first_report = report_path(&project, tasks[0].id, AttemptId::new(1));
+
+        // Task 1 succeeds; task 2's `Implement` phase never writes a
+        // report, failing `run_task` outright. No steps are provided beyond
+        // that: if task 3 were ever touched, the scenario would fail as
+        // exhausted rather than this test passing.
+        let scenario = Scenario {
+            steps: vec![
+                probe_step(),
+                success_step(&first_report),
+                probe_step(),
+                no_report_step(),
+            ],
+        };
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(Dummy::new(scenario)));
+
+        let outcome = runner.run_queue(&tasks, None).expect("run_queue");
+
+        assert_eq!(outcome, RunOutcome::TaskFailed { task: tasks[1].id });
+
+        let journal = Journal::open_for(&project).expect("open journal");
+        assert!(
+            journal
+                .events_for(tasks[2].id)
+                .expect("events_for")
+                .is_empty(),
+            "the third task must never have been touched"
+        );
+        let second_kinds: Vec<&str> = journal
+            .events_for(tasks[1].id)
+            .expect("events_for")
+            .iter()
+            .map(|event| event.kind.discriminant())
+            .collect();
+        assert_eq!(
+            second_kinds,
+            vec![
+                "PreflightStarted",
+                "PreflightPassed",
+                "AttemptStarted",
+                "PhaseEntered",
+                "AttemptFinished",
+            ],
+            "the failing task must never reach TaskDone"
+        );
+    }
+
+    #[test]
+    fn run_queue_stops_at_a_human_gate_without_ever_touching_the_task_behind_it() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let mut gate = sample_task(1);
+        gate.status = TaskStatus::HumanGate;
+        let tasks = vec![gate, sample_task(2)];
+
+        // No steps at all: a human gate is decided before the provider is
+        // ever invoked, and task 2 must never be reached either.
+        let scenario = Scenario { steps: Vec::new() };
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(Dummy::new(scenario)));
+
+        let outcome = runner.run_queue(&tasks, None).expect("run_queue");
+
+        assert_eq!(outcome, RunOutcome::HumanGate { task: tasks[0].id });
+        let journal = Journal::open_for(&project).expect("open journal");
+        assert!(
+            journal
+                .events_for(tasks[1].id)
+                .expect("events_for")
+                .is_empty(),
+            "a task behind an unacknowledged gate must never be touched"
+        );
+    }
+
+    #[test]
+    fn run_queue_from_skips_earlier_tasks_entirely() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let tasks = vec![sample_task(1), sample_task(2)];
+        let second_report = report_path(&project, tasks[1].id, AttemptId::new(1));
+
+        // A single task's worth of steps: if task 1 were considered at all
+        // (it never had a `TaskQueued` event, so `next_runnable` would
+        // otherwise treat it as blocking task 2's predecessor check), this
+        // scenario would be exhausted trying to run it first.
+        let scenario = Scenario {
+            steps: vec![probe_step(), success_step(&second_report)],
+        };
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(Dummy::new(scenario)));
+
+        let outcome = runner
+            .run_queue(&tasks, Some(tasks[1].id))
+            .expect("run_queue");
+
+        assert_eq!(outcome, RunOutcome::Drained);
+        let journal = Journal::open_for(&project).expect("open journal");
+        assert!(
+            journal
+                .events_for(tasks[0].id)
+                .expect("events_for")
+                .is_empty(),
+            "a task before `from` must never be touched"
+        );
+        assert!(
+            journal
+                .events_for(tasks[1].id)
+                .expect("events_for")
+                .iter()
+                .any(|event| event.kind.discriminant() == "TaskDone"),
+            "the task at `from` must still run to completion"
+        );
+    }
+
+    #[test]
+    fn run_queue_on_an_empty_task_list_is_immediately_drained() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let scenario = Scenario { steps: Vec::new() };
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(Dummy::new(scenario)));
+
+        let outcome = runner.run_queue(&[], None).expect("run_queue");
+
+        assert_eq!(outcome, RunOutcome::Drained);
     }
 }
