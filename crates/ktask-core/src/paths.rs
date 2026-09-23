@@ -34,6 +34,29 @@ pub fn config_file() -> Result<PathBuf> {
     config_file_with(&|key| std::env::var(key).ok())
 }
 
+/// Returns the directory ktask-rs stores its prompt templates under.
+///
+/// Resolves to `$XDG_CONFIG_HOME/ktask-rs/prompts`, falling back to
+/// `$HOME/.config/ktask-rs/prompts` when `XDG_CONFIG_HOME` is unset.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] naming `HOME` when neither `XDG_CONFIG_HOME` nor
+/// `HOME` is set.
+pub fn prompt_library() -> Result<PathBuf> {
+    prompt_library_with(&|key| std::env::var(key).ok())
+}
+
+pub(crate) fn prompt_library_with(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
+    if let Some(xdg_config_home) = env("XDG_CONFIG_HOME") {
+        return Ok(PathBuf::from(xdg_config_home)
+            .join("ktask-rs")
+            .join("prompts"));
+    }
+    let home = home_dir(env)?;
+    Ok(home.join(".config").join("ktask-rs").join("prompts"))
+}
+
 pub(crate) fn state_root_with(env: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf> {
     if let Some(xdg_state_home) = env("XDG_STATE_HOME") {
         return Ok(PathBuf::from(xdg_state_home).join("ktask-rs"));
@@ -147,6 +170,28 @@ mod tests {
     fn config_file_errors_naming_home_when_both_unset() {
         let env = env_with(&[]);
         let err = config_file_with(&env).expect_err("must fail");
+        assert!(matches!(&err, Error::Config { key, .. } if key == "HOME"));
+        assert!(err.to_string().contains("HOME"));
+    }
+
+    #[test]
+    fn prompt_library_uses_xdg_config_home_when_set() {
+        let env = env_with(&[("XDG_CONFIG_HOME", "/custom/config")]);
+        let dir = prompt_library_with(&env).expect("resolves");
+        assert_eq!(dir, PathBuf::from("/custom/config/ktask-rs/prompts"));
+    }
+
+    #[test]
+    fn prompt_library_falls_back_to_home_when_xdg_config_home_unset() {
+        let env = env_with(&[("HOME", "/home/alice")]);
+        let dir = prompt_library_with(&env).expect("resolves");
+        assert_eq!(dir, PathBuf::from("/home/alice/.config/ktask-rs/prompts"));
+    }
+
+    #[test]
+    fn prompt_library_errors_naming_home_when_both_unset() {
+        let env = env_with(&[]);
+        let err = prompt_library_with(&env).expect_err("must fail");
         assert!(matches!(&err, Error::Config { key, .. } if key == "HOME"));
         assert!(err.to_string().contains("HOME"));
     }

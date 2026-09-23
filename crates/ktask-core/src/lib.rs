@@ -34,7 +34,7 @@ pub use classify::{
     wait_plan,
 };
 pub use config::{Config, Resolved, Source, load_for};
-pub use context::assemble;
+pub use context::{assemble, ensure_defaults, load_template};
 pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use events::{Bus, Recorder, Subscription};
@@ -49,7 +49,7 @@ pub use git::{
 pub use ids::{AttemptId, EventSeq, TaskId};
 pub use journal::{Journal, journal_path};
 pub use lock::{Holder, RepoLock, acquire};
-pub use paths::{config_file, project_id, state_root};
+pub use paths::{config_file, project_id, prompt_library, state_root};
 pub use project::{Project, project_config_path};
 pub use protocol::{
     PhaseSpec, Protocol, WriteScope, check_scope, claim_tdd_exception, for_task,

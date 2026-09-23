@@ -12,8 +12,100 @@
 //! opens a file: the caller decides where each one came from, and this
 //! function only ever concatenates what it is given.
 
-use crate::{AttemptId, Task};
+#[cfg(doc)]
+use crate::Error;
+use crate::project::Project;
+use crate::{AttemptId, Result, Task, paths};
 use std::fmt::Write as _;
+use std::path::Path;
+
+/// The default task template written by [`ensure_defaults`] on first use.
+///
+/// Contains `{{TASK}}`, the placeholder [`assemble`] replaces with the
+/// task's body.
+const DEFAULT_TASK_TEMPLATE: &str = "\
+# Prompt template — {{TASK}} is replaced with the task body
+
+## Your task
+
+{{TASK}}
+";
+
+/// The default context document written by [`ensure_defaults`] on first use.
+const DEFAULT_CONTEXT_DOC: &str = "\
+# Project context
+
+No project-specific context has been configured yet. Replace this file (or
+add a per-project override) with what an agent should know about this
+codebase before starting a task.
+";
+
+/// The file name the task template is stored under, both in the global
+/// prompt library and in a project's per-project override.
+const TASK_TEMPLATE_FILE: &str = "task.md";
+
+/// The file name the context document is stored under in the global prompt
+/// library.
+const CONTEXT_DOC_FILE: &str = "context.md";
+
+/// Writes the default task template and context document into
+/// [`paths::prompt_library`], if they are not already there.
+///
+/// Idempotent: an existing file is left untouched, so a user's edits to the
+/// defaults survive being "ensured" again on a later run.
+///
+/// # Errors
+///
+/// Returns [`Error::Io`] when the prompt library directory cannot be created
+/// or a default file cannot be written, and [`Error::Config`] when the
+/// prompt library's path cannot be resolved (see [`paths::prompt_library`]).
+pub fn ensure_defaults() -> Result<()> {
+    ensure_defaults_with(&|key| std::env::var(key).ok())
+}
+
+fn ensure_defaults_with(env: &dyn Fn(&str) -> Option<String>) -> Result<()> {
+    let dir = paths::prompt_library_with(env)?;
+    std::fs::create_dir_all(&dir)?;
+    write_if_absent(&dir.join(TASK_TEMPLATE_FILE), DEFAULT_TASK_TEMPLATE)?;
+    write_if_absent(&dir.join(CONTEXT_DOC_FILE), DEFAULT_CONTEXT_DOC)?;
+    Ok(())
+}
+
+fn write_if_absent(path: &Path, contents: &str) -> Result<()> {
+    if !path.is_file() {
+        std::fs::write(path, contents)?;
+    }
+    Ok(())
+}
+
+/// Loads the task template to use for `project`'s attempts.
+///
+/// Prefers a per-project override at `<project.state_dir>/task.md`; falls
+/// back to the global default in [`paths::prompt_library`], creating it via
+/// [`ensure_defaults`] first if this is the first run. Neither file is ever
+/// read from inside the repository (VISION.md §11): the override lives in
+/// the project's private state directory, and the default lives in the
+/// global prompt library.
+///
+/// # Errors
+///
+/// Returns [`Error::Io`] when a present file cannot be read, and
+/// [`Error::Config`] when the global prompt library's path cannot be
+/// resolved.
+pub fn load_template(project: &Project) -> Result<String> {
+    load_template_with(project, &|key| std::env::var(key).ok())
+}
+
+fn load_template_with(project: &Project, env: &dyn Fn(&str) -> Option<String>) -> Result<String> {
+    let override_path = project.state_dir.join(TASK_TEMPLATE_FILE);
+    if override_path.is_file() {
+        return Ok(std::fs::read_to_string(override_path)?);
+    }
+
+    ensure_defaults_with(env)?;
+    let default_path = paths::prompt_library_with(env)?.join(TASK_TEMPLATE_FILE);
+    Ok(std::fs::read_to_string(default_path)?)
+}
 
 /// Assembles the full prompt handed to a provider for one attempt at `task`.
 ///
@@ -221,5 +313,107 @@ mod tests {
         let task_pos = result.find("TASKBODY").expect("task body present");
         assert!(doc_pos < adr_pos, "context doc must precede ADRs");
         assert!(adr_pos < task_pos, "ADRs must precede the template");
+    }
+
+    fn env_with(dir: &tempfile::TempDir) -> impl Fn(&str) -> Option<String> {
+        let config_home = dir.path().to_string_lossy().to_string();
+        move |key| (key == "XDG_CONFIG_HOME").then(|| config_home.clone())
+    }
+
+    fn project_with_state_dir(state_dir: std::path::PathBuf) -> Project {
+        Project {
+            root: std::path::PathBuf::from("/repo"),
+            id: "abc123".to_string(),
+            state_dir,
+        }
+    }
+
+    #[test]
+    fn ensure_defaults_creates_the_prompt_library_on_first_use() {
+        let config_home = tempfile::tempdir().expect("tempdir");
+        let env = env_with(&config_home);
+
+        ensure_defaults_with(&env).expect("ensure defaults");
+
+        let dir = paths::prompt_library_with(&env).expect("prompt library path");
+        assert!(dir.join(TASK_TEMPLATE_FILE).is_file());
+        assert!(dir.join(CONTEXT_DOC_FILE).is_file());
+    }
+
+    #[test]
+    fn ensure_defaults_writes_a_task_template_containing_the_placeholder() {
+        let config_home = tempfile::tempdir().expect("tempdir");
+        let env = env_with(&config_home);
+
+        ensure_defaults_with(&env).expect("ensure defaults");
+
+        let dir = paths::prompt_library_with(&env).expect("prompt library path");
+        let template = std::fs::read_to_string(dir.join(TASK_TEMPLATE_FILE)).expect("read task.md");
+        assert!(template.contains("{{TASK}}"));
+    }
+
+    #[test]
+    fn ensure_defaults_does_not_overwrite_an_existing_file() {
+        let config_home = tempfile::tempdir().expect("tempdir");
+        let env = env_with(&config_home);
+        let dir = paths::prompt_library_with(&env).expect("prompt library path");
+        std::fs::create_dir_all(&dir).expect("create prompt library");
+        std::fs::write(dir.join(TASK_TEMPLATE_FILE), "custom {{TASK}} template")
+            .expect("write custom template");
+
+        ensure_defaults_with(&env).expect("ensure defaults");
+
+        let template = std::fs::read_to_string(dir.join(TASK_TEMPLATE_FILE)).expect("read task.md");
+        assert_eq!(template, "custom {{TASK}} template");
+    }
+
+    #[test]
+    fn load_template_creates_the_defaults_on_a_first_run_instead_of_failing() {
+        let config_home = tempfile::tempdir().expect("tempdir");
+        let env = env_with(&config_home);
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_with_state_dir(state_dir.path().to_path_buf());
+
+        let template = load_template_with(&project, &env).expect("load template");
+
+        assert!(template.contains("{{TASK}}"));
+        let dir = paths::prompt_library_with(&env).expect("prompt library path");
+        assert!(dir.join(TASK_TEMPLATE_FILE).is_file());
+    }
+
+    #[test]
+    fn load_template_prefers_the_per_project_override_over_the_global_default() {
+        let config_home = tempfile::tempdir().expect("tempdir");
+        let env = env_with(&config_home);
+        let state_dir = tempfile::tempdir().expect("state dir");
+        std::fs::write(
+            state_dir.path().join(TASK_TEMPLATE_FILE),
+            "override {{TASK}} template",
+        )
+        .expect("write override");
+        let project = project_with_state_dir(state_dir.path().to_path_buf());
+
+        let template = load_template_with(&project, &env).expect("load template");
+
+        assert_eq!(template, "override {{TASK}} template");
+    }
+
+    #[test]
+    fn load_template_never_reads_from_inside_the_repository() {
+        let config_home = tempfile::tempdir().expect("tempdir");
+        let env = env_with(&config_home);
+        let state_dir = tempfile::tempdir().expect("state dir");
+        // `project.root` points at a directory that does not exist at all;
+        // if `load_template` ever tried to read a template from inside it,
+        // this would fail.
+        let project = Project {
+            root: std::path::PathBuf::from("/nonexistent/repo/root"),
+            id: "abc123".to_string(),
+            state_dir: state_dir.path().to_path_buf(),
+        };
+
+        let template = load_template_with(&project, &env).expect("load template");
+
+        assert!(template.contains("{{TASK}}"));
     }
 }
