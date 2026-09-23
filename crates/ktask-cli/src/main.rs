@@ -6,4 +6,14 @@
 //! emitting them, and the supervisor stays testable without capturing output.
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
-fn main() {}
+mod cli;
+
+use clap::Parser;
+use cli::Cli;
+
+fn main() {
+    let cli = Cli::parse();
+    if cli.verbose {
+        eprintln!("{}", serde_json::to_string(&cli).unwrap_or_default());
+    }
+}
