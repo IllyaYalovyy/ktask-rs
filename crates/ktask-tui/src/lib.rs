@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod event;
+pub mod testing;
 pub mod types;
 
 pub use app::{App, OUTPUT_WINDOW, render, update};
