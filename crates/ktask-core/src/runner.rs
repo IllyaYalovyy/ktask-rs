@@ -10,11 +10,11 @@
 //! adapter as arguments is that a run assembled from what its caller happened to
 //! carry is a run whose gates and journal somebody else chose.
 //!
-//! Its six jobs so far are [`Runner::prepare`], [`Runner::begin_attempt`],
+//! Its seven jobs so far are [`Runner::prepare`], [`Runner::begin_attempt`],
 //! [`Runner::run_phase`], [`Runner::gate_phase`], [`Runner::verify_and_publish`] and
-//! the round trip an attempt's report makes. The first takes a queued task as far as
-//! the ground it stands on; the second is the transition that spends a token, and
-//! three things about it are not free to change:
+//! [`Runner::run_task`] and the round trip an attempt's report makes. The first takes
+//! a queued task as far as the ground it stands on; the second is the transition that
+//! spends a token, and three things about it are not free to change:
 //!
 //! - The [`crate::EventKind::AttemptStarted`] row is appended before the attempt's
 //!   evidence is filed, because VISION.md §3's third invariant makes the journal the
@@ -80,6 +80,14 @@
 //! than measurements — a tree holding uncommitted work, and a replay that stops on
 //! conflicting content — and both end the attempt in the journal rather than handing
 //! the work back to an agent to sort out.
+//!
+//! [`Runner::run_task`] is the order those six go in, and the one job that measures
+//! nothing of its own. What it owns is what a caller assembling the steps by hand
+//! would be free to assemble wrongly: which phases of a protocol no session is
+//! started for, what a phase that decides by a difference is measured against before
+//! it begins, which answers from a phase's own session mean its gate has nothing to
+//! prove, and what the run gives back — its checkout and its repository lock — on
+//! every way out of it, the refusal in particular.
 //!
 //! # Preflight: the checks that prove the world is sane before a token is spent
 //!
@@ -173,8 +181,9 @@ use crate::redact::redact_json;
 use crate::{
     AttemptId, AttemptRecord, Bus, Capabilities, Config, Error, EventKind, FailureClass, Gate,
     GateKind, GateResult, Invocation, Journal, Phase, PhaseSpec, Profile, Project, Provider,
-    Recorder, ReportClaim, ReportResult, Result, Stream, Subscription, Task, TaskId, TestSummary,
-    evidence_dir, parse_cargo, profile_from, run_completion_set, run_gate, write_evidence,
+    Recorder, ReportClaim, ReportResult, Result, Stream, Subscription, Task, TaskId, TaskState,
+    TestSummary, apply, evidence_dir, parse_cargo, profile_from, run_completion_set, run_gate,
+    write_evidence,
 };
 use crate::{context, queue};
 
@@ -1236,6 +1245,333 @@ impl Runner {
             .map(|gate| gate.kind.to_string())
             .collect()
     }
+
+    /// Drive one task end to end: prepare it, work every phase its protocol declares,
+    /// verify and publish what resulted, and close the task on the commit the remote
+    /// was read back holding.
+    ///
+    /// VISION.md §6 draws the machine, and [`Runner::prepare`],
+    /// [`Runner::begin_attempt`], [`Runner::run_phase`], [`Runner::gate_phase`] and
+    /// [`Runner::verify_and_publish`] are its arrows — each already tested against its
+    /// own refusals, and each called here in the order that makes a task finish
+    /// instead of a task that stopped. What this adds is not a measurement but the
+    /// holding of an order, and five things about it are not free to change — each
+    /// recorded as ADR-0090, for whoever is tempted to reorder them:
+    ///
+    /// - [`Runner::prepare`] comes first, and its refusal ends the run. A task refused
+    ///   before it began holds no lock and has no checkout, so there is nothing to
+    ///   give back and nothing to write behind the preflight's own verdict.
+    /// - The ending belongs to the run, not to a session. [`protocol`] appends
+    ///   [`Phase::Verify`] and [`Phase::Publish`] to every protocol body, and no agent
+    ///   is started for either: [`Runner::verify_and_publish`] is what runs the
+    ///   completion set and pushes. So the [`crate::EventKind::PhaseEntered`] row for
+    ///   `Verify` is written here — `verify_and_publish` refuses to write an entry
+    ///   that is not its own, and [`crate::TaskState::Verifying`] is the state §7's
+    ///   remediation is chosen from, so a task whose completion set refused has to be
+    ///   standing in it — and no entry is written for `Publish`, because no state
+    ///   accepts one.
+    /// - A phase that decides by a difference is given the run it differs from.
+    ///   [`Runner::gate_phase`] refuses a `red` or `green` phase handed one summary
+    ///   rather than two, so the gate that phase declares is run over the checkout as
+    ///   the phase starts, before its session has touched anything: the only point at
+    ///   which a failure can still be found to be *new*. The summary a phase's own
+    ///   gate reached is then what the next phase is compared against.
+    /// - A phase's gate runs only when that phase's session says the work is complete.
+    ///   A session that left no report, and one that said it stopped short, stop the
+    ///   run *before* the gate — the same reason `verify_and_publish` refuses an
+    ///   uncommitted tree before any completion gate is spent: a phase with nothing to
+    ///   have proved must not collect green gate rows on the way to being refused.
+    /// - The state this returns is the journal's, not the run's. It is [`apply`] folded
+    ///   over the task's own rows, so a `Done` here is a `Done` the durable record
+    ///   replays to; a row the machine would refuse comes back as the refusal it is
+    ///   rather than as a finished task its own journal contradicts.
+    ///
+    /// Whatever the run was holding is given back on every way out of it, including the
+    /// ways that end in a refusal, and one case keeps the checkout rather than removing
+    /// it: the checkout whose tree still holds work.
+    ///
+    /// What is *not* here: the remediation a refusal earns (§7), the pause a
+    /// `NEEDS_INPUT` asks for (§3's eighth invariant), and the attempt's own record
+    /// being closed over what its phases did. Those are the tasks after this one, and
+    /// each of them arrives at a journal this one leaves in a state recovery can read.
+    ///
+    /// # Errors
+    ///
+    /// Every refusal of every step it calls, unchanged: as [`Runner::prepare`] for a
+    /// preflight that refused and for the lock and checkout that follow its verdict; as
+    /// [`Runner::begin_attempt`]; as [`Runner::run_phase`], including the
+    /// [`Error::Policy`] for a session that wrote outside its phase's scope; as
+    /// [`Runner::gate_phase`]; and as [`Runner::verify_and_publish`], which is the step
+    /// that owns a refused completion gate. Two refusals are this step's own, both
+    /// [`Error::NotFound`]: a phase whose session left no report, named by the path the
+    /// prompt told it to write, and a phase whose session named the claim it ended on.
+    pub fn run_task(&mut self, task: &Task) -> Result<TaskState> {
+        self.run_task_with(&crate::paths::process_env, task)
+    }
+
+    /// [`Runner::run_task`] with the environment the phases' prompts are read from
+    /// supplied by the caller.
+    ///
+    /// Threaded out for the same reason [`Runner::run_phase_with`] is, and for a whole
+    /// run rather than one phase: `docs/DESIGN.md` Conventions keeps a test out of the
+    /// process environment and out of the operator's real configuration home, and a
+    /// task driven end to end cannot be aimed at a scratch configuration home unless
+    /// the accessor reaches the run that hands it to every phase it works.
+    fn run_task_with(
+        &mut self,
+        env: &dyn Fn(&str) -> Option<String>,
+        task: &Task,
+    ) -> Result<TaskState> {
+        let ground = self.prepare(task)?;
+        match self.work_the_phases(env, task, &ground) {
+            Ok(state) => {
+                self.clear_ground(ground)?;
+                Ok(state)
+            }
+            Err(refusal) => {
+                // The refusal the run stopped on is the one whoever receives it can act
+                // on, so it comes back as it came. A sweep that faulted leaves the
+                // checkout standing, which is VISION.md §7's kept checkout and not a
+                // second finding; and the lock is given back either way, because
+                // [`Runner::clear_ground`] reaches it whatever the checkout did.
+                let _fault = self.clear_ground(ground);
+                Err(refusal)
+            }
+        }
+    }
+
+    /// Work the phases the task's protocol declares, then the ending.
+    ///
+    /// The order is the protocol's own, and the two completion phases are where it
+    /// stops being a list of sessions: they are the last two entries of every protocol
+    /// ([`protocol::for_task`]'s own checks insist on it), so leaving the loop at the
+    /// first of them is leaving the work phases behind, not skipping one.
+    ///
+    /// The [`TestSummary`] carried between phases is the summary the previous phase's
+    /// gate reached, which is the half of §9's comparison that a phase cannot produce
+    /// for itself; [`Runner::gate_baseline`] supplies the other half, for the phases
+    /// that need one and no others.
+    fn work_the_phases(
+        &mut self,
+        env: &dyn Fn(&str) -> Option<String>,
+        task: &Task,
+        ground: &Prepared,
+    ) -> Result<TaskState> {
+        let attempt = self.begin_attempt(task)?;
+        let mut carried: Option<TestSummary> = None;
+        for spec in protocol::for_task(task, &self.config)?.phases {
+            if is_ending(spec.phase) {
+                break;
+            }
+            carried = Some(self.work_one_phase(env, task, ground, attempt, &spec, carried)?);
+        }
+        self.finish_the_task(task, ground, attempt)
+    }
+
+    /// Work one phase from the measurement it starts from to the verdict its gate
+    /// reached — and hand that verdict on as the next phase's starting point.
+    fn work_one_phase(
+        &mut self,
+        env: &dyn Fn(&str) -> Option<String>,
+        task: &Task,
+        ground: &Prepared,
+        attempt: AttemptId,
+        spec: &PhaseSpec,
+        carried: Option<TestSummary>,
+    ) -> Result<TestSummary> {
+        let started_from = match carried {
+            Some(summary) => Some(summary),
+            None => self.gate_baseline(task, spec, ground)?,
+        };
+        let session = self.run_phase_with(env, ground, task, attempt, spec)?;
+        Self::earned_its_gate(&session)?;
+        self.gate_phase(ground, task, attempt, spec, started_from.as_ref())
+    }
+
+    /// The measurement a phase that decides by a difference starts from.
+    ///
+    /// VISION.md §9 decides red by the expected *new* failure and green by that same
+    /// test passing, which is a sentence about two runs of a gate, and
+    /// [`Runner::gate_phase`] refuses either phase rather than inventing the missing
+    /// half. So the gate the phase declares is run here, over the checkout as the phase
+    /// starts.
+    ///
+    /// Nothing is run for a phase that decides by a gate's exit status, and nothing for
+    /// a phase that declares no gate: [`Runner::gate_phase`] refuses the second by the
+    /// declaration, which is the refusal it makes on its own and the one worth having.
+    /// A red phase whose task claims §9's exception to test-first is measured here all
+    /// the same, because the claim can only be judged against what the phase changed —
+    /// which is not known until its session has ended — and the alternative to
+    /// measuring it is comparing the phase against nothing. The gate the exception
+    /// excuses is then a gate that ran and whose pair the journal holds; nothing is
+    /// decided by it, and no evidence is filed for it, because a phase's deliverable is
+    /// the difference between this run and the one that answers it, and the gate that
+    /// decides the phase files the names of both.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] when the phase declares a gate no command is configured for,
+    /// [`Error::Gate`] when the command could not be started or wrote no report its
+    /// counts could come from, and [`Error::Database`] as [`Recorder::record`] for the
+    /// pair this runs.
+    fn gate_baseline(
+        &mut self,
+        task: &Task,
+        spec: &PhaseSpec,
+        ground: &Prepared,
+    ) -> Result<Option<TestSummary>> {
+        if !matches!(spec.phase, Phase::Red | Phase::Green) {
+            return Ok(None);
+        }
+        let Some(kind) = spec.gate else {
+            return Ok(None);
+        };
+        let gate = self.configured_gate(kind)?;
+        let result = self.run_declared_gate(task.id, &gate, &ground.worktree)?;
+        let summary = test_report(&result).ok_or_else(|| no_test_report(&gate, &result))?;
+        Ok(Some(summary))
+    }
+
+    /// Refuse a phase whose session left the run nothing to gate.
+    ///
+    /// [`Runner::gate_phase`] turns a phase's work into a verdict, so it is asked of a
+    /// phase whose own session says the work is finished. The two other answers stop the
+    /// run here — before the gate, before the ending — and each is refused by what it was
+    /// found to be rather than by a class re-derived from it (ADR-0057): a report that
+    /// was never written is refused by the path the prompt named and the class
+    /// [`crate::ReportClaim::Missing`] carried with it, and a session that said it
+    /// stopped short is refused by the header it wrote, quoted rather than paraphrased so
+    /// the refusal carries what the agent actually claimed.
+    ///
+    /// Nothing is journalled here. What a phase that stopped has is the rows it reached
+    /// itself — [`Runner::run_phase`] wrote its entry, its output and its end — and a
+    /// verdict belongs to a gate that did not run. The pause VISION.md §3's eighth
+    /// invariant makes `NEEDS_INPUT` is a later task's; what belongs to this one is that
+    /// such an answer neither publishes a task nor closes it.
+    fn earned_its_gate(outcome: &PhaseOutcome) -> Result<()> {
+        match outcome {
+            PhaseOutcome::Claimed {
+                report: ReportResult::Done,
+                ..
+            } => Ok(()),
+            PhaseOutcome::Claimed { phase, text, .. } => Err(Error::NotFound {
+                what: format!(
+                    "the {} phase's finished work: its session ended the report the prompt \
+                 named with `{}`, so its gate has nothing to have proved and the task \
+                 is not carried to publication on that answer",
+                    phase_word(*phase),
+                    claim_words(text)
+                ),
+            }),
+            PhaseOutcome::Unreported {
+                phase,
+                class,
+                detail,
+                ..
+            } => Err(Error::NotFound {
+                what: format!(
+                    "the report the {} phase's session owed: {detail}, and a phase that never \
+                 accounted for itself has nothing its gate could prove, so the run stops \
+                 before the ending ({class:?})",
+                    phase_word(*phase)
+                ),
+            }),
+        }
+    }
+
+    /// The ending every protocol has, which no session is started for: the completion
+    /// set, the candidate, the push, and the row that closes the task on the commit the
+    /// remote was read back holding.
+    ///
+    /// [`crate::EventKind::TaskDone`] carries that SHA and no other, which is what makes
+    /// [`crate::TaskState::Done`] mean *the task was closed on the commit the remote
+    /// holds*: the state refuses the row unless the two agree.
+    fn finish_the_task(
+        &mut self,
+        task: &Task,
+        ground: &Prepared,
+        attempt: AttemptId,
+    ) -> Result<TaskState> {
+        self.recorder.record(
+            Some(task.id),
+            EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Verify,
+            },
+        )?;
+        let commit = self.verify_and_publish(ground, task, attempt)?;
+        self.recorder
+            .record(Some(task.id), EventKind::TaskDone { commit })?;
+        self.folded(task.id)
+    }
+
+    /// Give back everything the run was holding, whatever it is returning.
+    ///
+    /// The checkout first, then the lock, and both always reached: [`Prepared`] holds
+    /// [`crate::lock::RepoLock`] by value, and asking it for the lock back is what makes
+    /// a lock this run no longer owns a reported fault rather than the silence of a
+    /// destructor. One refusal does not hide the other question — both are asked, and
+    /// the first refusal is the one handed back.
+    fn clear_ground(&self, ground: Prepared) -> Result<()> {
+        let Prepared { worktree, lock, .. } = ground;
+        let swept = self.sweep_checkout(&worktree);
+        let released = lock.release();
+        swept.and(released)
+    }
+
+    /// Remove the task's checkout, unless it holds work.
+    ///
+    /// [`git::remove_worktree`] has no force, on purpose: it refuses a checkout with
+    /// anything uncommitted in it rather than delete the work an attempt left. So the
+    /// checkout is asked whether it is empty first, and *no* is VISION.md §7's kept
+    /// checkout — the work the next attempt is told to read, and the directory
+    /// [`git::create_worktree`] hands that attempt back instead of cutting a second one
+    /// beside it. Refusing to remove a checkout that *was* empty is a git fault, and
+    /// comes back as one: a run that cannot tell what it left behind is not a run that
+    /// should have started.
+    fn sweep_checkout(&self, worktree: &Path) -> Result<()> {
+        if git::is_clean(worktree)? {
+            git::remove_worktree(&self.project.root, worktree)?;
+        }
+        Ok(())
+    }
+
+    /// The state the task's own rows fold to, read out of the journal.
+    ///
+    /// The run answers "where is this task" with the projection's answer rather than a
+    /// value it remembered, which is what makes VISION.md §3's third invariant a check
+    /// instead of a slogan: a row the state machine refuses is returned as the
+    /// [`Error::InvalidTransition`] it is. This is the fold
+    /// [`crate::Journal::rebuild_state`] does, over one task's rows rather than the
+    /// whole journal's — and the rows whose task is `NULL` are left out here too, for
+    /// the same reason: they are about the queue, and they move no task.
+    fn folded(&self, work: TaskId) -> Result<TaskState> {
+        let journal = Journal::open_for(&self.project)?;
+        let mut state = TaskState::Queued;
+        for row in journal.events_for(work)? {
+            state = apply(&state, &row.kind)?;
+        }
+        Ok(state)
+    }
+}
+
+/// Whether `phase` is part of the ending every protocol ends with — and which the run
+/// therefore works itself, because no session is started for either of the two.
+const fn is_ending(phase: Phase) -> bool {
+    matches!(phase, Phase::Verify | Phase::Publish)
+}
+
+/// The header an agent's report opened with, in the report's own words.
+///
+/// [`crate::parse_report`] read that line before this could be reached — a report whose
+/// first line with content is none of the three claims is [`Error::Corrupt`] by then —
+/// so quoting it says what the agent claimed rather than re-spelling a table that lives
+/// in another module and would drift from it.
+fn claim_words(text: &str) -> &str {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
 }
 
 /// A task that has been proved worth starting, and the ground it starts on.
@@ -7574,6 +7910,817 @@ mod verify_and_publish {
                 attempt: AttemptId::new(ATTEMPT)
             }),
             "the task stays where a refused push left it, for whoever reads the dangling pair"
+        );
+    }
+}
+
+#[cfg(test)]
+mod run_task {
+    //! One task driven end to end: the steps in the order that makes a task
+    //! finish, and what a run that stops partway leaves behind.
+    //!
+    //! Named after the method it tests, the way `mod new`, `mod prepare`,
+    //! `mod report`, `mod run_phase`, `mod gate_phase` and
+    //! `mod verify_and_publish` are named after theirs, because the task that
+    //! asked for this one fixed `test(/runner::run_task/)` as its Verify command.
+    //!
+    //! Two kinds of evidence run through these tests, for the reasons the two
+    //! modules before this one gives them. The journal's own rows say what the run
+    //! claimed, and every one is replayed through [`crate::Journal::rebuild_state`]
+    //! so that "complete" means *legal as well as present* — a row the machine
+    //! refuses is a journal no later run can recover from. The gate script's log
+    //! says which commands actually ran, in order: a row can be written by a step
+    //! that ran nothing, and a line in that log cannot.
+    //!
+    //! The targeted gate prints the next report in a plan each test writes — one
+    //! file per run, in order. That is what lets a `tdd` run answer red's session
+    //! with a new failure and green's with that same name passing, and it is also
+    //! what makes a phase gated too often or too seldom loud: a driver that ran one
+    //! gate too many runs out of planned reports and is refused, rather than
+    //! repeating the last one and looking correct.
+    //!
+    //! The second thing these tests hold the driver to is what a refusal costs. A
+    //! run that stopped has given the repository lock back whatever happened, and it
+    //! keeps a checkout whose tree holds work — the session's uncommitted work is the
+    //! evidence a later attempt is told to read (VISION.md §7) — while a checkout
+    //! that holds nothing is removed rather than left for a human to find.
+
+    use super::Runner;
+    use crate::testing::{ScratchRepo, scratch_repo};
+    use crate::{
+        AttemptId, Error, Event, EventKind, Journal, Phase, Project, Task, TaskId, TaskState,
+        evidence_dir, git, lock, parse_plan, project_config_path,
+    };
+    use std::fmt::Write as _;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    /// The identity every fixture gives its registered project.
+    const PROJECT_ID: &str = "0123456789abcdef";
+
+    /// The queue position [`parse_plan`] gives the one-row plan below, and so the
+    /// task every run here is driven for.
+    const TASK: u32 = 1;
+
+    /// The attempt a task that has never been attempted is opened at.
+    const ATTEMPT: u32 = 1;
+
+    /// The file the scratch repository's seed commit tracks — the only path a
+    /// scripted session can change and the run can then commit, because
+    /// [`crate::git::commit_all`] stages tracked paths and no one stages the rest.
+    const SEED_FILE: &str = "seed.txt";
+
+    /// What a session that finished leaves in the report the prompt named.
+    const DONE: &str = "KTASK_RESULT: DONE\nSummary: every step the task had is worked.\n";
+
+    /// What a session that stopped short leaves there instead.
+    const FAILED: &str =
+        "KTASK_RESULT: FAILED\nSummary: what is left is more than the remainder.\n";
+
+    /// What every scripted session prints, as two lines so a row per line is
+    /// observable rather than assumed.
+    const PRINTED: &str = "reading the seed\nwriting the fix\n";
+
+    /// The test name a `tdd` run's red phase is expected to break and green is
+    /// expected to leave passing.
+    const NEW_TEST: &str = "the_new_test";
+
+    /// A disk floor no machine running this suite clears, for the one test whose
+    /// subject is a preflight that refuses.
+    const TOO_BIG_A_FLOOR: u64 = 1_000_000_000_000_000;
+
+    /// The rows a run that worked one phase and published it leaves for the task,
+    /// oldest first. The completion set's own pairs are absent because
+    /// [`crate::run_completion_set`] attributes them to no task.
+    const DIRECT_DONE: [&str; 14] = [
+        "PreflightStarted",
+        "PreflightPassed",
+        "AttemptStarted",
+        "PhaseEntered",
+        "AgentOutput",
+        "AgentOutput",
+        "AttemptFinished",
+        "GateStarted",
+        "GateFinished",
+        "PhaseEntered",
+        "VerifyPassed",
+        "PublishStarted",
+        "PublishVerified",
+        "TaskDone",
+    ];
+
+    /// The rows a run leaves when a phase is refused for what it wrote: the pair its
+    /// baseline gate left — which sits before the phase's entry because it is the
+    /// measurement the phase starts from, not an answer it gave — then the entry and
+    /// the session's own rows, and nothing after them.
+    const REFUSED_RED: [&str; 9] = [
+        "PreflightStarted",
+        "PreflightPassed",
+        "AttemptStarted",
+        "GateStarted",
+        "GateFinished",
+        "PhaseEntered",
+        "AgentOutput",
+        "AgentOutput",
+        "AttemptFinished",
+    ];
+
+    /// The rows a run leaves when its one session ended without a report: the
+    /// session's own story, and no gate, no verdict, no publication.
+    const UNREPORTED: [&str; 7] = [
+        "PreflightStarted",
+        "PreflightPassed",
+        "AttemptStarted",
+        "PhaseEntered",
+        "AgentOutput",
+        "AgentOutput",
+        "AttemptFinished",
+    ];
+
+    /// The settings a whole run is opened with: the scripted adapter and its
+    /// scenario file, the phase gate and the completion gate as calls into one
+    /// script, `floor` as the disk floor, and `extra` appended.
+    ///
+    /// One script answers both gates because what a driver's tests turn on is which
+    /// commands ran in what order, and two scripts would let a test pass without
+    /// saying which of them a step called.
+    fn settings(scenario: &Path, script: &Path, floor: u64, extra: &str) -> String {
+        format!(
+            "provider = \"dummy\"\n\
+             dummy_scenario_path = \"{}\"\n\
+             min_free_disk_bytes = {floor}\n\
+             targeted_test_command = [\"/bin/sh\", \"{}\", \"targeted\"]\n\
+             verify_command = [\"/bin/sh\", \"{}\", \"verify\"]\n\
+             {extra}",
+            scenario.display(),
+            script.display(),
+            script.display()
+        )
+    }
+
+    /// The gate script: log the name it was called under, and answer as that gate.
+    ///
+    /// The completion gate passes unless a marker says it refuses, because which
+    /// completion gate refused is not what a driver decides — `mod
+    /// verify_and_publish` covers the set itself. The targeted gate prints the next
+    /// planned report and exits the way that report reads, exactly as the script in
+    /// `mod gate_phase` does, and when the plan has no report left it refuses
+    /// without one: a run that gated a phase nobody planned for has to be heard
+    /// about, and a repeated report would hide it.
+    fn gate_script(log: &Path, markers: &Path) -> String {
+        format!(
+            "#!/bin/sh\n\
+             name=\"$1\"\n\
+             m='{}'\n\
+             echo \"$name\" >> '{}'\n\
+             if [ \"$name\" = verify ]; then\n\
+             if [ -f \"$m/refuse-verify\" ]; then echo 'verify refused' >&2; exit 1; fi\n\
+             exit 0\n\
+             fi\n\
+             seen=0\n\
+             if [ -f \"$m/targeted-seen\" ]; then seen=$(cat \"$m/targeted-seen\"); fi\n\
+             echo $((seen + 1)) > \"$m/targeted-seen\"\n\
+             report=\"$m/report-$((seen + 1)).txt\"\n\
+             if [ ! -f \"$report\" ]; then echo 'targeted: the plan holds no further report' >&2; exit 2; fi\n\
+             cat \"$report\"\n\
+             if grep -q '^test result: FAILED' \"$report\"; then exit 1; fi\n\
+             exit 0\n",
+            markers.display(),
+            log.display()
+        )
+    }
+
+    /// A registered project, the scenario its adapter replays, the script its two
+    /// gates run, and the log and marker directory that script is driven by.
+    struct Fixture {
+        repo: ScratchRepo,
+        project: Project,
+        scenario: PathBuf,
+        markers: PathBuf,
+        log: PathBuf,
+        config_home: PathBuf,
+    }
+
+    impl Fixture {
+        /// A project whose gates pass and whose disk floor is one byte.
+        fn new() -> Self {
+            Self::built(1, "")
+        }
+
+        /// As [`Fixture::new`], with the `tdd` red phase's write scope drawn on the
+        /// file a scripted session is able to change.
+        ///
+        /// `seed.txt` is the only tracked path the scratch repository has, and a red
+        /// phase may write test paths only; a project that names its test paths
+        /// somewhere the seed commit never put a file could not have a red phase
+        /// whose work the run could then commit and publish.
+        fn tdd_ground() -> Self {
+            Self::built(1, "test_globs = [\"seed.txt\"]\n")
+        }
+
+        /// As [`Fixture::new`], on a filesystem the preflight will call too full.
+        fn short_on_disk() -> Self {
+            Self::built(TOO_BIG_A_FLOOR, "")
+        }
+
+        /// A project configured with `floor` as its disk floor and `extra` appended
+        /// to its settings document.
+        fn built(floor: u64, extra: &str) -> Self {
+            let repo = scratch_repo().expect("a scratch repository is buildable");
+            let state_dir = repo.path().join("state").join(PROJECT_ID);
+            let project = Project {
+                root: repo.work().to_path_buf(),
+                id: PROJECT_ID.to_owned(),
+                state_dir,
+            };
+            let scenario = repo.path().join("scenario.toml");
+            let script = repo.path().join("gate.sh");
+            let log = repo.path().join("gate.log");
+            let markers = repo.path().join("markers");
+            fs::create_dir_all(&project.state_dir).expect("a state directory is creatable");
+            fs::create_dir_all(&markers).expect("a marker directory is creatable");
+            fs::write(&script, gate_script(&log, &markers)).expect("a gate script is writable");
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
+                .expect("a gate script is made executable");
+            let config_home = repo.path().join("config-home");
+            fs::write(
+                project_config_path(&project),
+                settings(&scenario, &script, floor, extra),
+            )
+            .expect("a project settings document is writable");
+            Self {
+                repo,
+                project,
+                scenario,
+                markers,
+                log,
+                config_home,
+            }
+        }
+
+        /// The script the adapter replays, written before the run is opened:
+        /// [`crate::provider::build`] reads the file once, so a scenario written
+        /// after the run was built would be a scenario the run never saw.
+        fn script(&self, document: &str) {
+            fs::write(&self.scenario, document).expect("a scenario document is writable");
+        }
+
+        /// The reports the targeted gate prints, one per run, in order.
+        fn plan(&self, reports: &[String]) {
+            for (index, text) in reports.iter().enumerate() {
+                let number = index + 1;
+                fs::write(self.markers.join(format!("report-{number}.txt")), text)
+                    .expect("a planned report is writable");
+            }
+        }
+
+        /// Make the completion gate refuse.
+        fn refuse_verify(&self) {
+            fs::write(self.markers.join("refuse-verify"), "").expect("a marker is writable");
+        }
+
+        /// Leave `words` at the path the prompt names, as a session that reported
+        /// would have. Written by hand rather than through [`Runner::prepare_report`]
+        /// because the run under test is what calls that step.
+        fn report(&self, attempt: u32, words: &str) {
+            let path = self
+                .project
+                .state_dir
+                .join("attempts")
+                .join(TASK.to_string())
+                .join(attempt.to_string())
+                .join("agent-report.md");
+            fs::create_dir_all(
+                path.parent()
+                    .expect("a report is spelled below an attempt directory"),
+            )
+            .expect("an attempt's report directory is creatable");
+            fs::write(&path, words).expect("a report is writable");
+        }
+
+        /// The run this project is configured to have.
+        fn run(&self) -> Runner {
+            Runner::new(self.project.clone()).expect("a registered, configured project opens a run")
+        }
+
+        /// The environment a phase's prompt is read from: a configuration home of
+        /// the fixture's own, so no test aims the prompt library at the machine
+        /// running it.
+        fn env(&self) -> impl Fn(&str) -> Option<String> {
+            let home = self.config_home.clone();
+            move |key: &str| (key == "XDG_CONFIG_HOME").then(|| home.display().to_string())
+        }
+
+        /// The gate names that actually ran, in the order they ran.
+        fn ran(&self) -> Vec<String> {
+            let text = fs::read_to_string(&self.log).unwrap_or_default();
+            text.lines().map(str::to_owned).collect()
+        }
+
+        /// Every checkout the repository registers, the user's own included.
+        fn checkouts(&self) -> Vec<git::Worktree> {
+            git::list_worktrees(&self.project.root).expect("the repository answers what it holds")
+        }
+
+        /// The task's own checkout: the one registered checkout that is not the
+        /// project's root.
+        ///
+        /// Read out of what git registers rather than rebuilt from the directory
+        /// shape [`crate::git`] gives a managed checkout, because the question this
+        /// answers is "what is left in the repository after the run", and a path the
+        /// test assembled itself would agree with a run that put its work somewhere
+        /// else entirely.
+        fn checkout(&self) -> PathBuf {
+            self.checkouts()
+                .into_iter()
+                .map(|entry| entry.path)
+                .find(|path| path != &self.project.root)
+                .expect("a run that kept a checkout left one the repository registers")
+        }
+
+        /// Where one attempt's evidence for `phase` is spelled to live.
+        fn evidence(&self, phase: &str) -> PathBuf {
+            evidence_dir(&self.project, TaskId::new(TASK), AttemptId::new(ATTEMPT))
+                .join("phases")
+                .join(format!("{phase}.jsonl"))
+        }
+
+        /// The tip the origin itself holds.
+        fn origin_tip(&self) -> String {
+            git::git(self.repo.origin(), &["rev-parse", "main"])
+                .expect("the origin holds its branch")
+        }
+    }
+
+    /// The queue's one task, worked by the project's default protocol.
+    fn task() -> Task {
+        let document = "\
+## T094 Runner step: drive one task end to end
+
+**Outcome:** the steps compose into a task that completes.
+**Done-when:** a dummy run reaches done and leaves no worktree or lock behind.
+**Verify:** `cargo nextest run -p ktask-core -E 'test(/runner::run_task/)'`
+**Refs:** VISION.md section 6
+";
+        let parsed = parse_plan(document)
+            .expect("a task block with the four mandatory sections is a parseable plan");
+        let row = parsed
+            .into_iter()
+            .next()
+            .expect("the fixture plan holds one row");
+        assert_eq!(row.id, TaskId::new(TASK), "every fixture works task {TASK}");
+        row
+    }
+
+    /// The same row, worked by `tdd`: red, green, refactor, then the ending.
+    fn tdd_task() -> Task {
+        let mut row = task();
+        row.protocol = Some("tdd".to_owned());
+        row
+    }
+
+    /// A scenario document's string, escaped the way TOML wants the breaks agent
+    /// text is full of.
+    fn toml_text(text: &str) -> String {
+        text.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+    }
+
+    /// A scenario of one successful session per entry in `writes`, each printing
+    /// [`PRINTED`] and leaving its own files in the checkout it runs in. An empty
+    /// entry is a session that touches nothing.
+    fn sessions(writes: &[Vec<(&str, &str)>]) -> String {
+        let mut document = String::new();
+        for files in writes {
+            writeln!(
+                document,
+                "[[steps]]\non_task = {TASK}\noutcome = \"success\"\nstdout = \"{}\"\n",
+                toml_text(PRINTED)
+            )
+            .expect("a String always has room for what is written into it");
+            if !files.is_empty() {
+                document.push_str("[steps.files]\n");
+                for (path, contents) in files {
+                    writeln!(document, "\"{path}\" = \"{}\"", toml_text(contents))
+                        .expect("a String always has room for what is written into it");
+                }
+            }
+            document.push('\n');
+        }
+        document
+    }
+
+    /// A cargo-shaped report: one test binary that opened, named its failures under
+    /// the `failures:` block, and answered with the result line.
+    fn report(passed: u32, failing: &[&str]) -> String {
+        let failed = u32::try_from(failing.len()).unwrap_or(u32::MAX);
+        let mut text = format!("running {} tests\n", passed + failed);
+        for name in failing {
+            writeln!(&mut text, "test {name} ... FAILED")
+                .expect("a String is a writer that never refuses");
+        }
+        if !failing.is_empty() {
+            text.push_str("failures:\n");
+            for name in failing {
+                writeln!(&mut text, "    {name}").expect("a String never refuses a write");
+            }
+        }
+        let verdict = if failing.is_empty() { "ok" } else { "FAILED" };
+        write!(
+            &mut text,
+            "\ntest result: {verdict}. {passed} passed; {failed} failed; 0 ignored; 0 measured; \
+             0 filtered out; finished in 0.00s\n"
+        )
+        .expect("a String never refuses a write");
+        text
+    }
+
+    /// The task's own rows, oldest first, read on a second connection because that
+    /// is who asks this question in real life.
+    fn rows(project: &Project) -> Vec<Event> {
+        Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events_for(TaskId::new(TASK))
+            .expect("the rows this run wrote are readable")
+    }
+
+    /// The kinds the journal holds for the task, oldest first.
+    fn kinds(project: &Project) -> Vec<&'static str> {
+        rows(project)
+            .iter()
+            .map(|row| row.kind.discriminant())
+            .collect()
+    }
+
+    /// Whether the journal holds a row of this kind for the task.
+    fn holds(project: &Project, kind: &str) -> bool {
+        kinds(project).contains(&kind)
+    }
+
+    /// The phases the journal says were entered, in order — the reading that says
+    /// which phases a protocol actually worked.
+    fn entered(project: &Project) -> Vec<Phase> {
+        let mut phases = Vec::new();
+        for row in rows(project) {
+            if let EventKind::PhaseEntered { phase, .. } = row.kind {
+                phases.push(phase);
+            }
+        }
+        phases
+    }
+
+    /// The commit the `TaskDone` row closed the task on.
+    fn closed_on(project: &Project) -> String {
+        for row in rows(project) {
+            if let EventKind::TaskDone { commit } = row.kind {
+                return commit;
+            }
+        }
+        panic!("a finished task is closed on the commit it was published as");
+    }
+
+    /// The state the journal replays to, with an illegal row reported as the failure
+    /// it is rather than as a state that was never reached.
+    fn replayed(project: &Project) -> Option<TaskState> {
+        let mut journal =
+            Journal::open_for(project).expect("a registered project's journal is openable");
+        journal
+            .rebuild_state()
+            .expect("every row this run wrote is one the state machine accepts");
+        journal
+            .get_state(TaskId::new(TASK))
+            .expect("the projection is readable")
+    }
+
+    /// Take the project's lock from a test, as an outsider would, and give it back.
+    fn lock_is_free(project: &Project) -> bool {
+        let Ok(held) = lock::acquire(&project.state_dir, Duration::ZERO) else {
+            return false;
+        };
+        held.release().expect("a lock this test took is given back");
+        true
+    }
+
+    /// Drive the queue's task to the end, with the prompt read from the fixture's
+    /// own configuration home.
+    fn finish(fixture: &Fixture, run: &mut Runner, work: &Task) -> TaskState {
+        run.run_task_with(&fixture.env(), work)
+            .expect("nothing here gives a step a reason to refuse")
+    }
+
+    /// Drive the queue's task and hand back the refusal it stopped on.
+    fn refusal(fixture: &Fixture, run: &mut Runner, work: &Task) -> Error {
+        match run.run_task_with(&fixture.env(), work) {
+            Err(why) => why,
+            Ok(state) => panic!("this fixture is built to stop the run, and it reached {state:?}"),
+        }
+    }
+
+    #[test]
+    fn a_direct_run_ends_at_done_with_every_step_journaled_in_order() {
+        let fixture = Fixture::new();
+        fixture.script(&sessions(&[vec![(SEED_FILE, "the work")]]));
+        fixture.plan(&[report(1, &[])]);
+        fixture.report(ATTEMPT, DONE);
+        let mut run = fixture.run();
+
+        let state = finish(&fixture, &mut run, &task());
+
+        assert_eq!(
+            state,
+            TaskState::Done,
+            "the run's answer is the state its own journal folds to"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            DIRECT_DONE,
+            "preflight, attempt, the phase and its gate, the verify phase and its verdict, \
+             the publication and its read-back, and the row that closes the task"
+        );
+        assert_eq!(
+            entered(&fixture.project),
+            [Phase::Implement, Phase::Verify],
+            "the work phase the protocol declares, then the ending — and no `Publish` entry, \
+             which no state accepts"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ["targeted", "verify"],
+            "the phase's own gate, then the completion set — once each"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::Done),
+            "a replay of every row lands where the run says it did: the journal is complete"
+        );
+        assert_eq!(
+            fixture.origin_tip(),
+            closed_on(&fixture.project),
+            "the commit the task was closed on is the commit the remote was read back holding"
+        );
+        assert_eq!(
+            fixture.checkouts().len(),
+            1,
+            "the task's checkout is removed once its work is published: {:?}",
+            fixture.checkouts()
+        );
+        assert!(
+            lock_is_free(&fixture.project),
+            "the repository lock is given back at the end of the run"
+        );
+    }
+
+    #[test]
+    fn a_tdd_run_works_every_phase_its_protocol_declares_in_order() {
+        let fixture = Fixture::tdd_ground();
+        fixture.script(&sessions(&[
+            vec![(SEED_FILE, "the test, failing")],
+            vec![(SEED_FILE, "the fix")],
+            vec![],
+        ]));
+        fixture.plan(&[
+            report(1, &[]),
+            report(1, &[NEW_TEST]),
+            report(2, &[]),
+            report(1, &[]),
+        ]);
+        fixture.report(ATTEMPT, DONE);
+        let mut run = fixture.run();
+
+        let state = finish(&fixture, &mut run, &tdd_task());
+
+        assert_eq!(
+            state,
+            TaskState::Done,
+            "a red phase that broke a new test and a green one that fixed it finish"
+        );
+        assert_eq!(
+            entered(&fixture.project),
+            [Phase::Red, Phase::Green, Phase::Refactor, Phase::Verify],
+            "one entry per phase the protocol declares, in the order it declares them"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ["targeted", "targeted", "targeted", "targeted", "verify"],
+            "red's gate ran before its session, so the new failure was new, and once after \
+             each of the three phases; the ending ran the completion set"
+        );
+        assert!(
+            fixture.evidence("red").is_file() && fixture.evidence("green").is_file(),
+            "the two phases that declare §9's evidence filed it"
+        );
+        assert!(
+            !fixture.evidence("refactor").is_file(),
+            "the phase that declares none filed none"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::Done),
+            "three phases' rows and one ending replay to done"
+        );
+        assert_eq!(fixture.checkouts().len(), 1, "and the checkout goes");
+        assert!(lock_is_free(&fixture.project), "and the lock comes back");
+    }
+
+    #[test]
+    fn a_refused_completion_gate_leaves_the_task_verifying_and_holds_nothing_back() {
+        let fixture = Fixture::new();
+        fixture.script(&sessions(&[vec![(SEED_FILE, "the work")]]));
+        fixture.plan(&[report(1, &[])]);
+        fixture.report(ATTEMPT, DONE);
+        fixture.refuse_verify();
+        let mut run = fixture.run();
+
+        let why = refusal(&fixture, &mut run, &task());
+
+        assert!(
+            matches!(&why, Error::Gate { kind, .. } if kind == "verify"),
+            "the refusing gate's own refusal comes back unchanged, and it was {why}"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::Verifying {
+                attempt: AttemptId::new(ATTEMPT)
+            }),
+            "the task is where the refused set left it, and every row to get there is legal"
+        );
+        assert!(
+            !holds(&fixture.project, "PublishStarted") && !holds(&fixture.project, "TaskDone"),
+            "a candidate no completion set proved was never offered"
+        );
+        assert_eq!(
+            fixture.origin_tip(),
+            fixture.repo.seed_sha(),
+            "nothing reached the remote"
+        );
+        assert_eq!(
+            fixture.checkouts().len(),
+            1,
+            "the checkout held nothing the run had not committed, so it is removed: {:?}",
+            fixture.checkouts()
+        );
+        assert!(
+            lock_is_free(&fixture.project),
+            "a run that refused gives the lock back too — the next attempt needs it"
+        );
+    }
+
+    #[test]
+    fn a_refusal_that_left_work_behind_keeps_the_checkout_and_gives_the_lock_back() {
+        let fixture = Fixture::new();
+        fixture.script(&sessions(&[vec![(
+            "notes.md",
+            "outside a red phase's scope",
+        )]]));
+        fixture.plan(&[report(1, &[])]);
+        fixture.report(ATTEMPT, DONE);
+        let mut run = fixture.run();
+
+        let why = refusal(&fixture, &mut run, &tdd_task());
+
+        assert!(
+            matches!(&why, Error::Policy { paths, .. } if paths.contains(&PathBuf::from("notes.md"))),
+            "the scope refusal names the path the session wrote, and it was {why}"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ["targeted"],
+            "the run stopped at the phase, not at its gate: only the baseline run before the \
+             session reached a command"
+        );
+        assert_eq!(
+            fixture.checkouts().len(),
+            2,
+            "the checkout that holds the session's work is kept for the attempt that reads \
+             it (VISION.md §7): {:?}",
+            fixture.checkouts()
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.checkout().join("notes.md"))
+                .expect("the work is where the next attempt is told to look"),
+            "outside a red phase's scope",
+            "unchanged, and not quietly discarded on the way out"
+        );
+        assert!(
+            lock_is_free(&fixture.project),
+            "keeping the checkout is not keeping the lock: another run can start the moment \
+             this one stopped"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            REFUSED_RED,
+            "the baseline the red phase was measured against, the entry, the session's own \
+             rows — and no gate, no verdict, no ending, because the phase was refused for \
+             what it wrote before anything was asked of it"
+        );
+    }
+
+    #[test]
+    fn a_session_that_left_no_report_stops_the_run_before_the_ending() {
+        let fixture = Fixture::new();
+        fixture.script(&sessions(&[vec![]]));
+        fixture.plan(&[report(1, &[])]);
+        let mut run = fixture.run();
+
+        let why = refusal(&fixture, &mut run, &task());
+
+        assert!(
+            matches!(&why, Error::NotFound { what } if what.contains("agent-report.md")),
+            "an attempt that accounted for nothing is refused by the path its report should \
+             have been at, and it was {why}"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            UNREPORTED,
+            "the session's own rows, and no gate, no verdict, no publication"
+        );
+        assert!(
+            fixture.ran().is_empty(),
+            "nothing was gated: a phase that never reported has nothing to have proved, and \
+             it was {:?}",
+            fixture.ran()
+        );
+        assert_eq!(
+            fixture.checkouts().len(),
+            1,
+            "the checkout held nothing, so it is removed rather than left: {:?}",
+            fixture.checkouts()
+        );
+        assert!(lock_is_free(&fixture.project), "and the lock comes back");
+    }
+
+    #[test]
+    fn a_session_that_said_it_stopped_short_is_not_carried_to_publication() {
+        let fixture = Fixture::new();
+        fixture.script(&sessions(&[vec![(SEED_FILE, "half of the work")]]));
+        fixture.plan(&[report(1, &[])]);
+        fixture.report(ATTEMPT, FAILED);
+        let mut run = fixture.run();
+
+        let why = refusal(&fixture, &mut run, &task());
+
+        assert!(
+            matches!(&why, Error::NotFound { what } if what.contains("FAILED")),
+            "the refusal names the claim the phase ended on, and it was {why}"
+        );
+        assert!(
+            fixture.ran().is_empty(),
+            "its gate never ran: a phase whose own session says it stopped short has nothing \
+             to have proved, and it was {:?}",
+            fixture.ran()
+        );
+        assert!(
+            !holds(&fixture.project, "PublishStarted") && !holds(&fixture.project, "TaskDone"),
+            "a task its own session calls unfinished is not published and not closed"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::Running {
+                attempt: AttemptId::new(ATTEMPT),
+                phase: Phase::Implement,
+            }),
+            "the journal says honestly where the run stopped, for whoever recovers it"
+        );
+        assert_eq!(
+            fixture.checkouts().len(),
+            2,
+            "and the half-finished work is kept with it: {:?}",
+            fixture.checkouts()
+        );
+        assert!(lock_is_free(&fixture.project), "while the lock comes back");
+    }
+
+    #[test]
+    fn a_refused_preflight_leaves_nothing_to_clean_up() {
+        let fixture = Fixture::short_on_disk();
+        fixture.script(&sessions(&[vec![]]));
+        let mut run = fixture.run();
+
+        let why = refusal(&fixture, &mut run, &task());
+
+        assert!(
+            matches!(&why, Error::NotFound { what } if what.contains("preflight")),
+            "the refusal is the preflight's own, naming the check that refused, and it was \
+             {why}"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            ["PreflightStarted", "PreflightFailed"],
+            "the verdict the checks earned, and nothing after it"
+        );
+        assert_eq!(
+            fixture.checkouts().len(),
+            1,
+            "no checkout is cut for a task that was refused before it began: {:?}",
+            fixture.checkouts()
+        );
+        assert!(
+            lock_is_free(&fixture.project),
+            "and no lock is held on its behalf: {:?}",
+            lock::lock_path(&fixture.project.state_dir)
         );
     }
 }
