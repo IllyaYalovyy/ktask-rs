@@ -15,10 +15,21 @@
 //! path. What is stored is therefore always safe to draw.
 //!
 //! Drawing costs what the pane costs, not what the run has produced. The
-//! lines are a window of [`OUTPUT_WINDOW`] entries, [`visible`] takes the last
-//! few of them without walking the rest, and each is cut at the pane's edge
-//! on a grapheme boundary before it is drawn, so even a single enormous line
-//! costs one row's width.
+//! lines are a ring of at most [`LiveRun::cap`] entries ([`OUTPUT_WINDOW`]
+//! unless [`set_cap`] says otherwise), [`visible`] takes the last few of them
+//! without walking the rest, and each is cut at the pane's edge on a grapheme
+//! boundary before it is drawn, so even a single enormous line costs one
+//! row's width.
+//!
+//! The ring drops its oldest line when it is full, but the journal keeps
+//! every line, and the view can be scrolled back over all of them. Lines are
+//! numbered from the first the interface saw; [`LiveRun`] counts how many the
+//! ring has let go. When the view reaches into those, [`wanted`] names the
+//! numbers it needs and [`backfill`] (the shell's part, since [`update`](crate::update)
+//! does no I/O) replays the journal's `AgentOutput` events to fetch them into
+//! a second, equally bounded page. Until the page arrives the rows it would
+//! fill say so. Memory is therefore at most two caps of lines however long
+//! the run.
 //!
 //! Follow mode decides which lines the pane shows. Following (the default),
 //! it shows the newest. Any upward scroll (`k`, `Up`, `g`) detaches it: the
@@ -38,13 +49,17 @@ use crate::sanitize::{Utf8Stream, sanitize};
 use crate::text::{display_width, truncate_to_width};
 use crate::types::Screen;
 use crossterm::event::KeyEvent;
-use ktask_core::{AttemptId, Event, EventKind, GateKind, GateResult, Phase, Stream, TaskId};
+use ktask_core::{
+    AttemptId, Event, EventKind, EventSeq, GateKind, GateResult, Journal, Phase, Result, Stream,
+    TaskId,
+};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::time::Duration;
 use time::OffsetDateTime;
 
@@ -67,6 +82,9 @@ const NONE: &str = "-";
 const NO_RUN: &str = "No run in progress";
 
 const WAITING: &str = "Waiting for output";
+
+/// What a row of output that has left the ring and is not loaded yet shows.
+const NOT_LOADED: &str = "… older output, not loaded";
 
 /// What the title bar adds while the pane follows new output.
 const FOLLOWING: &str = " · following";
@@ -136,7 +154,7 @@ fn gate_name(kind: GateKind) -> String {
 /// The live run as the interface knows it: which task is running and where it
 /// is, the gate results so far, and the decoders that turn output bytes into
 /// the lines of [`App::output`].
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveRun {
     /// The gate results of the current attempt, oldest first.
     pub gates: Vec<GateLine>,
@@ -155,9 +173,66 @@ pub struct LiveRun {
     /// Unlike the window it never shrinks, so a caller can tell how many new
     /// lines an event brought even when the window was full.
     added: usize,
+    /// The most lines the ring holds.
+    cap: usize,
+    /// How many lines the ring has dropped, which are the lines numbered
+    /// below the ring's first.
+    evicted: usize,
+    /// Dropped lines fetched back from the journal.
+    older: Older,
+}
+
+/// A run of lines that have left the ring, read back from the journal.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Older {
+    /// The number of the first line.
+    start: usize,
+    lines: Vec<String>,
+}
+
+impl Older {
+    fn get(&self, number: usize) -> Option<&str> {
+        let at = number.checked_sub(self.start)?;
+        self.lines.get(at).map(String::as_str)
+    }
+}
+
+impl Default for LiveRun {
+    fn default() -> Self {
+        Self {
+            gates: Vec::new(),
+            stdout: Utf8Stream::default(),
+            stderr: Utf8Stream::default(),
+            open: None,
+            task: None,
+            attempt: None,
+            phase: None,
+            command: None,
+            started: None,
+            last: None,
+            running: false,
+            added: 0,
+            cap: OUTPUT_WINDOW,
+            evicted: 0,
+            older: Older::default(),
+        }
+    }
 }
 
 impl LiveRun {
+    /// The most lines the ring holds.
+    #[must_use]
+    pub fn cap(&self) -> usize {
+        self.cap
+    }
+
+    /// How many lines the ring has dropped over the run. They are still in
+    /// the journal.
+    #[must_use]
+    pub fn evicted(&self) -> usize {
+        self.evicted
+    }
+
     /// Adds a chunk of `stream` output to `output`.
     ///
     /// The chunk is decoded, sanitized and split into lines. Text after the
@@ -191,6 +266,9 @@ impl LiveRun {
                     last: Some(at),
                     running: true,
                     added: self.added,
+                    cap: self.cap,
+                    evicted: self.evicted,
+                    older: std::mem::take(&mut self.older),
                     ..Self::default()
                 };
                 // The output of every attempt shares one pane, so each starts
@@ -285,13 +363,14 @@ impl LiveRun {
     }
 
     /// Adds `text` to the open line, or to a new line if none is open, and
-    /// leaves that line open. The oldest line goes when the window is full.
+    /// leaves that line open. The oldest line goes when the ring is full.
     fn append(&mut self, output: &mut VecDeque<String>, stream: Stream, text: &str) {
         if let Some(line) = output.back_mut().filter(|_| self.open.is_some()) {
             line.push_str(text);
         } else {
-            if output.len() >= OUTPUT_WINDOW {
+            while output.len() >= self.cap {
                 output.pop_front();
+                self.evicted = self.evicted.saturating_add(1);
             }
             output.push_back(text.to_owned());
             self.added = self.added.saturating_add(1);
@@ -325,12 +404,129 @@ fn areas(body: Rect) -> [Rect; 2] {
     Layout::vertical([Constraint::Length(meta_rows), Constraint::Fill(1)]).areas(body)
 }
 
-/// How far the view can be above the newest line: the lines that do not fit
-/// in the pane.
-fn max_up(app: &App) -> usize {
+/// The rows of the output pane.
+fn pane_rows(app: &App) -> usize {
     let (width, height) = app.size;
     let [_, pane] = areas(layout_for(Rect::new(0, 0, width, height)).body);
-    app.output.len().saturating_sub(usize::from(pane.height))
+    usize::from(pane.height)
+}
+
+/// How many lines the run has produced that the interface knows of: those
+/// the ring dropped and those it holds.
+fn total(app: &App) -> usize {
+    app.live.evicted.saturating_add(app.output.len())
+}
+
+/// How far the view can be above the newest line: the lines that do not fit
+/// in the pane, dropped or not.
+fn max_up(app: &App) -> usize {
+    total(app).saturating_sub(pane_rows(app))
+}
+
+/// The numbers of the lines the pane shows, `rows` of them, ending `up`
+/// lines above the newest.
+fn view_span(app: &App, rows: usize, up: usize) -> Range<usize> {
+    let all = total(app);
+    let end = all - up.min(all.saturating_sub(rows));
+    end.saturating_sub(rows)..end
+}
+
+/// The line numbered `number`, if the ring or the fetched page has it.
+fn line_at(app: &App, number: usize) -> Option<&str> {
+    match number.checked_sub(app.live.evicted) {
+        Some(at) => app.output.get(at).map(String::as_str),
+        None => app.live.older.get(number),
+    }
+}
+
+/// The lines of output the view needs that have left the ring and are not
+/// in the fetched page: a range of line numbers, at most [`LiveRun::cap`]
+/// long and placed so that scrolling on in either direction stays inside it
+/// for a while. `None` when the ring and the page already cover the view.
+#[must_use]
+pub fn wanted(app: &App) -> Option<Range<usize>> {
+    let rows = pane_rows(app);
+    let up = if app.follow { 0 } else { up(app) };
+    let span = view_span(app, rows, up);
+    let live = &app.live;
+    let missing = span.start..span.end.min(live.evicted);
+    if missing
+        .clone()
+        .all(|number| live.older.get(number).is_some())
+    {
+        return None;
+    }
+    let first = span.start.saturating_sub(live.cap.saturating_sub(rows) / 2);
+    Some(first..first.saturating_add(live.cap).min(live.evicted))
+}
+
+/// Sets the ring's cap (at least one line), dropping the oldest lines if it
+/// now holds more, and trims the fetched page to match.
+pub fn set_cap(app: &mut App, cap: usize) {
+    let cap = cap.max(1);
+    app.live.cap = cap;
+    while app.output.len() > cap {
+        app.output.pop_front();
+        app.live.evicted = app.live.evicted.saturating_add(1);
+    }
+    app.live.older.lines.truncate(cap);
+}
+
+/// The lines `event` adds to the output, as the interface would store them.
+fn event_lines(event: &Event) -> Vec<String> {
+    let mut scratch = LiveRun {
+        cap: usize::MAX,
+        ..LiveRun::default()
+    };
+    let mut lines = VecDeque::new();
+    scratch.apply(&mut lines, event);
+    lines.into()
+}
+
+/// Reads the lines numbered `range` from `journal`, counting from the first
+/// line of its first event.
+///
+/// The journal is streamed, so memory is the range plus one event; only lines
+/// in the range are kept. Numbers match those of an interface that was fed
+/// the journal from the start, as [`Attachment`](crate::Attachment) does.
+///
+/// # Errors
+///
+/// See [`Journal::for_each_event`].
+pub fn read_lines(journal: &Journal, range: Range<usize>) -> Result<Vec<String>> {
+    let mut found = Vec::new();
+    let mut number = 0usize;
+    journal.for_each_event(EventSeq::new(0), &mut |event| {
+        if number < range.end {
+            for line in event_lines(&event) {
+                if range.contains(&number) {
+                    found.push(line);
+                }
+                number += 1;
+            }
+        }
+        Ok(())
+    })?;
+    Ok(found)
+}
+
+/// Fetches from `journal` the lines [`wanted`] names into the page the view
+/// reads them from, replacing the previous page. Returns whether it fetched.
+///
+/// The shell calls this after a turn that scrolled; it is the one place the
+/// live screen does I/O.
+///
+/// # Errors
+///
+/// See [`read_lines`]. The page is unchanged on error.
+pub fn backfill(app: &mut App, journal: &Journal) -> Result<bool> {
+    let Some(range) = wanted(app) else {
+        return Ok(false);
+    };
+    let start = range.start;
+    let lines = read_lines(journal, range)?;
+    app.live.older = Older { start, lines };
+    Ok(true)
 }
 
 /// How many lines the view is above the newest.
@@ -479,16 +675,22 @@ pub fn render(app: &App, plan: &LayoutPlan, frame: &mut Frame<'_>) {
     if output_area.is_empty() {
         return;
     }
-    let lines: Vec<Line<'_>> = if app.output.is_empty() {
+    let lines: Vec<Line<'_>> = if app.output.is_empty() && app.live.evicted == 0 {
         vec![Line::styled(
             truncate_to_width(WAITING, width),
             Style::new().add_modifier(Modifier::DIM),
         )]
     } else {
         let up = if app.follow { 0 } else { up(app) };
-        scrolled(&app.output, usize::from(output_area.height), up)
-            .map(|line| Line::raw(truncate_to_width(line, width)))
-            .collect()
+        let span = view_span(app, usize::from(output_area.height), up);
+        span.map(|number| match line_at(app, number) {
+            Some(line) => Line::raw(truncate_to_width(line, width)),
+            None => Line::styled(
+                truncate_to_width(NOT_LOADED, width),
+                Style::new().add_modifier(Modifier::DIM),
+            ),
+        })
+        .collect()
     };
     frame.render_widget(Paragraph::new(lines), output_area);
 }
@@ -1246,21 +1448,27 @@ mod tests {
     }
 
     #[test]
-    fn live_a_detached_view_is_not_pushed_out_by_the_window_forgetting_its_lines() {
-        let mut harness = live_harness(80, 24);
-        for n in 0..OUTPUT_WINDOW {
-            harness.send(out(&format!("line {n}")));
-        }
-        press(&mut harness, KeyCode::Char('g'));
-        assert_eq!(rows(&harness)[4].trim_end(), "line 0");
+    fn live_a_detached_view_is_not_pushed_out_by_the_ring_forgetting_its_lines() {
+        let (mut app, mut journal, _scratch) = windowed(100, 100);
+        app = key(app, KeyCode::Char('g'));
+        assert_eq!(
+            rows(&Harness::from_app(app.clone()))[4].trim_end(),
+            "line 0"
+        );
         for n in 0..50 {
-            harness.send(out(&format!("fresh {n}")));
+            app = feed(app, &mut journal, &format!("fresh {n}"));
         }
-        // Everything the view was on has been dropped; it shows the oldest
-        // lines that remain, and pressing down still moves it.
-        assert_eq!(rows(&harness)[4].trim_end(), "line 50");
-        press(&mut harness, KeyCode::Char('j'));
-        assert_eq!(rows(&harness)[4].trim_end(), "line 51");
+        // The ring has forgotten what the view is on, so the rows say the
+        // lines are not loaded rather than showing others in their place ...
+        let harness = Harness::from_app(app.clone());
+        assert_eq!(rows(&harness)[4].trim_end(), NOT_LOADED);
+        assert!(!harness.text().contains("line 50"));
+        // ... until the journal gives them back.
+        assert!(backfill(&mut app, &journal).expect("backfill"));
+        let harness = Harness::from_app(app.clone());
+        assert_eq!(rows(&harness)[4].trim_end(), "line 0");
+        let app = key(app, KeyCode::Char('j'));
+        assert_eq!(rows(&Harness::from_app(app))[4].trim_end(), "line 1");
     }
 
     #[test]
@@ -1383,5 +1591,251 @@ mod tests {
         harness.send(out("behind"));
         harness.key('?');
         assert!(harness.text().contains("Key map"));
+    }
+
+    // --- output windowing: the ring stays at its cap, the journal has the rest
+
+    /// A journal in its own directory under the system temp directory,
+    /// removed on drop.
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static NEXT: AtomicU32 = AtomicU32::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "ktask-tui-live-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&dir).expect("scratch dir");
+            Self(dir)
+        }
+
+        fn journal(&self) -> Journal {
+            Journal::open(&self.0.join("journal.db")).expect("open journal")
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn output_kind(text: &str) -> EventKind {
+        EventKind::AgentOutput {
+            attempt: AttemptId::new(1),
+            stream: Stream::Stdout,
+            text: text.into(),
+        }
+    }
+
+    /// Records `text` as agent output in `journal` and folds the event, as
+    /// read back from the journal, into `app`.
+    fn feed(app: App, journal: &mut Journal, text: &str) -> App {
+        let seq = journal
+            .append(Some(TaskId::new(3)), &output_kind(text))
+            .expect("append");
+        let event = journal
+            .events_since(EventSeq::new(seq.get() - 1))
+            .expect("read back")
+            .remove(0);
+        crate::update(app, AppEvent::Core(event))
+    }
+
+    fn key(app: App, code: KeyCode) -> App {
+        crate::update(app, AppEvent::Key(KeyEvent::new(code, KeyModifiers::NONE)))
+    }
+
+    /// An 80x24 live screen (19 rows of output) with a ring of `cap` lines
+    /// and a journal holding `count` lines named `line 0`, `line 1`, ...,
+    /// all folded in.
+    fn windowed(cap: usize, count: usize) -> (App, Journal, Scratch) {
+        let scratch = Scratch::new();
+        let mut journal = scratch.journal();
+        let mut app = App::new((80, 24));
+        app.screen = Screen::LiveRun;
+        set_cap(&mut app, cap);
+        for n in 0..count {
+            app = feed(app, &mut journal, &format!("line {n}"));
+        }
+        (app, journal, scratch)
+    }
+
+    fn pane(app: &App) -> Vec<String> {
+        let harness = Harness::from_app(app.clone());
+        rows(&harness)[4..23]
+            .iter()
+            .map(|row| row.trim_end().to_owned())
+            .collect()
+    }
+
+    fn numbered(range: Range<usize>) -> Vec<String> {
+        range.map(|n| format!("line {n}")).collect()
+    }
+
+    #[test]
+    fn output_ring_stays_at_its_cap() {
+        let mut app = App::new((80, 24));
+        app.screen = Screen::LiveRun;
+        assert_eq!(app.live.cap(), OUTPUT_WINDOW);
+        set_cap(&mut app, 500);
+        let mut fullest = 0;
+        for n in 0..100_000 {
+            app = crate::update(app, out(&format!("line {n}")));
+            fullest = fullest.max(app.output.len());
+        }
+        assert_eq!(fullest, 500);
+        assert_eq!(app.output.len(), 500);
+        assert_eq!(app.output.front().map(String::as_str), Some("line 99500"));
+        assert_eq!(app.output.back().map(String::as_str), Some("line 99999"));
+        assert_eq!(app.live.evicted(), 99_500);
+    }
+
+    #[test]
+    fn output_ring_stays_at_the_default_cap_over_a_hundred_thousand_lines() {
+        let mut app = App::new((80, 24));
+        for n in 0..100_000 {
+            app = crate::update(app, out(&format!("line {n}")));
+        }
+        assert_eq!(app.output.len(), OUTPUT_WINDOW);
+        assert_eq!(app.live.evicted(), 100_000 - OUTPUT_WINDOW);
+    }
+
+    #[test]
+    fn output_ring_is_trimmed_when_the_cap_is_lowered_and_never_below_one() {
+        let (mut app, _journal, _scratch) = windowed(100, 100);
+        set_cap(&mut app, 10);
+        assert_eq!(app.output.len(), 10);
+        assert_eq!(app.output.front().map(String::as_str), Some("line 90"));
+        assert_eq!(app.live.evicted(), 90);
+        set_cap(&mut app, 0);
+        assert_eq!(app.live.cap(), 1);
+        assert_eq!(app.output.len(), 1);
+    }
+
+    #[test]
+    fn output_scrolling_back_past_the_ring_reads_older_lines_from_the_journal() {
+        let (mut app, journal, _scratch) = windowed(100, 1_000);
+        assert_eq!(app.output.len(), 100);
+        assert_eq!(pane(&app), numbered(981..1000));
+        // The oldest line of the run is far outside the ring.
+        app = key(app, KeyCode::Char('g'));
+        assert!(!app.follow);
+        assert_eq!(pane(&app)[0], NOT_LOADED);
+        assert!(backfill(&mut app, &journal).expect("backfill"));
+        assert_eq!(pane(&app), numbered(0..19));
+        // A page is a bounded slice, and the ring is still at its cap.
+        assert!(app.live.older.lines.len() <= 100);
+        assert_eq!(app.output.len(), 100);
+        // The view now holds; the page covers it.
+        assert_eq!(wanted(&app), None);
+    }
+
+    #[test]
+    fn output_scrolling_to_the_middle_of_the_run_shows_exactly_those_lines() {
+        let (mut app, journal, _scratch) = windowed(100, 1_000);
+        // 500 lines above the newest: the pane ends on line 499.
+        app.scroll.insert(Screen::LiveRun, 500);
+        app.follow = false;
+        let range = wanted(&app).expect("outside the ring");
+        assert!(range.len() <= 100);
+        assert!(range.start <= 481 && range.end >= 500);
+        assert!(backfill(&mut app, &journal).expect("backfill"));
+        assert_eq!(pane(&app), numbered(481..500));
+    }
+
+    #[test]
+    fn output_wanted_is_nothing_while_the_view_is_inside_the_ring() {
+        let (mut app, _journal, _scratch) = windowed(100, 1_000);
+        assert_eq!(wanted(&app), None);
+        app = key(app, KeyCode::Char('k'));
+        assert_eq!(wanted(&app), None);
+        let (fresh, _journal, _scratch) = windowed(100, 50);
+        assert_eq!(wanted(&fresh), None);
+    }
+
+    #[test]
+    fn output_backfill_fetches_nothing_when_nothing_is_wanted() {
+        let (mut app, journal, _scratch) = windowed(100, 1_000);
+        assert!(!backfill(&mut app, &journal).expect("backfill"));
+        assert!(app.live.older.lines.is_empty());
+    }
+
+    #[test]
+    fn output_a_detached_view_on_fetched_lines_stays_on_them_as_output_arrives() {
+        let (mut app, mut journal, _scratch) = windowed(100, 1_000);
+        app = key(app, KeyCode::Char('g'));
+        backfill(&mut app, &journal).expect("backfill");
+        for n in 0..200 {
+            app = feed(app, &mut journal, &format!("fresh {n}"));
+        }
+        assert_eq!(pane(&app), numbered(0..19));
+        // Following again shows the newest.
+        app = key(app, KeyCode::Char('f'));
+        assert_eq!(pane(&app)[18], "fresh 199");
+    }
+
+    #[test]
+    fn output_scrolling_back_and_forth_through_pages_never_shows_a_wrong_line() {
+        let (mut app, journal, _scratch) = windowed(100, 1_000);
+        for up in [981, 400, 250, 120, 899, 0, 500, 300] {
+            app.scroll.insert(Screen::LiveRun, up);
+            app.follow = up == 0;
+            backfill(&mut app, &journal).expect("backfill");
+            let end = 1_000 - up;
+            assert_eq!(pane(&app), numbered(end - 19..end), "up {up}");
+        }
+    }
+
+    #[test]
+    fn output_read_lines_numbers_lines_as_the_interface_does() {
+        // Events of several lines, an empty one, and an attempt marker.
+        let scratch = Scratch::new();
+        let mut journal = scratch.journal();
+        let mut app = App::new((80, 24));
+        for text in ["a\nb\nc", "", "d"] {
+            app = feed(app, &mut journal, text);
+        }
+        let seq = journal
+            .append(
+                Some(TaskId::new(3)),
+                &EventKind::AttemptStarted {
+                    attempt: AttemptId::new(2),
+                    protocol: "tdd".into(),
+                    pid: 9,
+                    base_sha: "abc".into(),
+                },
+            )
+            .expect("append");
+        for event in journal
+            .events_since(EventSeq::new(seq.get() - 1))
+            .expect("read")
+        {
+            app = crate::update(app, AppEvent::Core(event));
+        }
+        app = feed(app, &mut journal, "e\nf");
+        let seen: Vec<String> = app.output.iter().cloned().collect();
+        assert_eq!(seen.len(), 8);
+        assert_eq!(read_lines(&journal, 0..8).expect("read"), seen);
+        assert_eq!(read_lines(&journal, 2..5).expect("read"), seen[2..5]);
+        assert_eq!(read_lines(&journal, 5..100).expect("read"), seen[5..]);
+        assert!(read_lines(&journal, 8..10).expect("read").is_empty());
+    }
+
+    #[test]
+    fn output_lines_fetched_from_the_journal_are_as_safe_to_draw_as_live_ones() {
+        let (mut app, journal, _scratch) = windowed(10, 0);
+        let mut journal = journal;
+        app = feed(app, &mut journal, "\x1b[2J\x1b]0;pwned\x07boom");
+        for n in 0..30 {
+            app = feed(app, &mut journal, &format!("line {n}"));
+        }
+        app = key(app, KeyCode::Char('g'));
+        backfill(&mut app, &journal).expect("backfill");
+        let shown = pane(&app).join("\n");
+        assert!(shown.contains("boom"));
+        assert!(shown.chars().all(|c| !c.is_control() || c == '\n'));
     }
 }

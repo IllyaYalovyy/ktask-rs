@@ -17,9 +17,10 @@ use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use std::collections::{BTreeMap, VecDeque};
 
-/// The most output lines the interface keeps. Older lines are dropped as new
-/// ones arrive; it matches the default `output_ring_lines`, so the view holds
-/// what a bus subscriber would.
+/// The default for the most output lines the interface keeps. Older lines are
+/// dropped as new ones arrive and read back from the journal when the view
+/// scrolls to them; it matches the default `output_ring_lines`, so the view
+/// holds what a bus subscriber would.
 pub const OUTPUT_WINDOW: usize = 4_096;
 
 /// Everything the interface remembers: which screen is showing, where each
@@ -40,7 +41,8 @@ pub struct App {
     pub overlay: Option<Overlay>,
     /// The tasks, in queue order.
     pub tasks: Vec<TaskView>,
-    /// The most recent agent output, oldest first, at most [`OUTPUT_WINDOW`].
+    /// The most recent agent output, oldest first, at most the ring's cap
+    /// (see [`crate::screen::live::set_cap`]; [`OUTPUT_WINDOW`] by default).
     pub output: VecDeque<String>,
     /// What the live-run screen shows besides the output: the current task,
     /// phase and command, the gate results and the elapsed time. It also holds
