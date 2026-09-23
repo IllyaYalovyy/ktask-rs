@@ -15,11 +15,12 @@ use time::OffsetDateTime;
 
 use crate::{
     AttemptId, AttemptRecord, Bus, Config, Error, EventKind, FailureClass, Gate, GateKind,
-    Invocation, Journal, Outcome, PhaseSpec, Profile, Project, Provider, Recorder, RepoLock,
-    ReportResult, Result, Stream, Task, TaskId, acquire, assemble, build, changed_paths,
-    check_model, check_scope, classify, collect_adrs, create_worktree, ensure_report_dir, fetch,
-    for_task, head_sha, load, load_context_doc, load_for, load_template, profile_from, read_report,
-    require_clean, run_gate, write_evidence,
+    GateResult, Invocation, Journal, Outcome, Phase, PhaseSpec, Profile, Project, Provider,
+    Recorder, RepoLock, ReportResult, Result, Stream, Task, TaskId, TestSummary, acquire, assemble,
+    build, changed_paths, check_model, check_scope, claim_tdd_exception, classify, collect_adrs,
+    create_worktree, ensure_report_dir, fetch, for_task, head_sha, load, load_context_doc,
+    load_for, load_template, parse_cargo, profile_from, read_report, redact, require_clean,
+    run_gate, verify_green, verify_red, write_evidence,
 };
 
 /// How long [`Runner::prepare`] waits for the repository lock ([`acquire`])
@@ -365,6 +366,199 @@ impl Runner {
 
         Ok(PhaseOutcome { report, changed })
     }
+
+    /// Runs `spec`'s mechanical gate against `prep.worktree` and enforces
+    /// the `tdd` protocol's ordering (`VISION.md` §9): the runner confirms
+    /// red and green, rather than trusting the agent's word for either.
+    ///
+    /// A [`Phase::Red`] call must produce a genuinely new test failure
+    /// ([`verify_red`]) before it advances. A [`Phase::Green`] call must
+    /// turn every test [`Phase::Red`] found newly failing green, without
+    /// regressing anything else ([`verify_green`]). Every other gated phase
+    /// (`refactor`, the mandatory `verify`) only requires its gate command
+    /// to exit successfully.
+    ///
+    /// `before` is the [`TestSummary`] the previous gated phase produced: the
+    /// pre-red baseline for a [`Phase::Red`] call (a missing baseline is
+    /// treated as empty — no tests failing yet), and [`Phase::Red`]'s own
+    /// returned summary for the [`Phase::Green`] call that follows it, whose
+    /// `failures` become [`verify_green`]'s `expected` argument.
+    ///
+    /// A [`Phase::Red`] call is skipped entirely — no gate runs, no test
+    /// comparison is made — when `task` declares a `**TDD-Exception:**`
+    /// ([`claim_tdd_exception`]): [`EventKind::TddExceptionUsed`] is recorded
+    /// instead, and this returns an empty [`TestSummary`], so the
+    /// [`Phase::Green`] call that follows treats "expected" as empty too —
+    /// [`verify_green`] then demands the targeted gate be fully green, the
+    /// correct bar for a change that was never meant to start red.
+    ///
+    /// Every gate invocation is bracketed by [`EventKind::GateStarted`] and
+    /// [`EventKind::GateFinished`] in `task`'s journal, and its command,
+    /// combined output and the worktree's tree hash at the moment it ran are
+    /// written to `<state_dir>/attempts/<task>/<attempt>/gates/<phase>.log`
+    /// as durable evidence (`VISION.md` §9: "RED and GREEN evidence
+    /// (command, output, tree hash) is stored with the attempt").
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Policy`] if `spec` names no gate, [`Error::Config`]
+    /// if the named gate has no command configured in this project's
+    /// profile, whatever [`run_gate`] returns if the command cannot be
+    /// spawned, [`Error::Gate`] if the gate's output carries no recognizable
+    /// test summary, if a [`Phase::Red`] gate found no new failure
+    /// ([`verify_red`]), if a [`Phase::Green`] gate left an expected test
+    /// still failing or regressed another ([`verify_green`]), or if any
+    /// other gated phase's command exited unsuccessfully; and whatever
+    /// [`Recorder::record`], [`head_sha`] or writing the evidence file
+    /// return on failure.
+    pub fn gate_phase(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+        spec: &PhaseSpec,
+        before: Option<&TestSummary>,
+    ) -> Result<TestSummary> {
+        if spec.phase == Phase::Red
+            && let Some((exception, reason)) = claim_tdd_exception(task, false)?
+        {
+            self.recorder.record(
+                Some(task.id),
+                EventKind::TddExceptionUsed { exception, reason },
+            )?;
+            return Ok(empty_summary());
+        }
+
+        let kind = spec.gate.ok_or_else(|| Error::Policy {
+            detail: format!("phase {:?} has no gate configured to run", spec.phase),
+            paths: Vec::new(),
+        })?;
+        let gate = self
+            .profile
+            .get(kind)
+            .cloned()
+            .ok_or_else(|| Error::Config {
+                key: format!("{kind:?}"),
+                detail: "no gate command is configured for this phase".to_string(),
+            })?;
+
+        self.recorder
+            .record(Some(task.id), EventKind::GateStarted { gate: kind })?;
+        let result = run_gate(&gate, &prep.worktree, None)?;
+        let tree_hash = head_sha(&prep.worktree)?;
+        self.recorder.record(
+            Some(task.id),
+            EventKind::GateFinished {
+                result: result.clone(),
+            },
+        )?;
+        write_gate_evidence(
+            &self.project,
+            task.id,
+            attempt,
+            spec.phase,
+            &gate,
+            &result,
+            &tree_hash,
+        )?;
+
+        let combined = format!("{}{}", result.stdout, result.stderr);
+        let after = parse_cargo(&combined).ok_or_else(|| Error::Gate {
+            kind: format!("{kind:?}"),
+            detail: "gate output did not contain a recognizable test summary".to_string(),
+        })?;
+
+        match spec.phase {
+            Phase::Red => {
+                let baseline = before.cloned().unwrap_or_else(empty_summary);
+                verify_red(&baseline, &after)?;
+            }
+            Phase::Green => {
+                let expected = before.map(|b| b.failures.clone()).unwrap_or_default();
+                verify_green(&expected, &after)?;
+            }
+            _ => {
+                if !result.passed {
+                    return Err(Error::Gate {
+                        kind: format!("{kind:?}"),
+                        detail: "gate command failed".to_string(),
+                    });
+                }
+            }
+        }
+
+        Ok(after)
+    }
+}
+
+/// The empty [`TestSummary`]: no tests run, none failing. [`Runner::gate_phase`]'s
+/// baseline when a caller has none yet, and its own result when a `tdd` `Red`
+/// phase is skipped by a declared exception.
+fn empty_summary() -> TestSummary {
+    TestSummary {
+        passed: 0,
+        failed: 0,
+        ignored: 0,
+        failures: Vec::new(),
+    }
+}
+
+/// Restricts `dir` to owner-only access, mirroring [`crate::write_evidence`]'s
+/// own directories (`VISION.md` §11). A no-op on non-Unix targets, since
+/// there is no equivalent mode bit to set.
+#[cfg(unix)]
+fn set_private(dir: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_private(_dir: &std::path::Path) -> Result<()> {
+    Ok(())
+}
+
+/// Writes `result`'s command, combined output and `tree_hash` as durable,
+/// redacted evidence at
+/// `<state_dir>/attempts/<task>/<attempt>/gates/<phase>.log`
+/// (`VISION.md` §9, §11) — mid-attempt, well before [`write_evidence`] is
+/// ever called for `attempt`, so [`Runner::gate_phase`] cannot defer this to
+/// it.
+///
+/// # Errors
+///
+/// Returns [`Error::Io`] if the directory or file cannot be created or
+/// written.
+fn write_gate_evidence(
+    project: &Project,
+    task: TaskId,
+    attempt: AttemptId,
+    phase: Phase,
+    gate: &Gate,
+    result: &GateResult,
+    tree_hash: &str,
+) -> Result<()> {
+    let dir = project
+        .state_dir
+        .join("attempts")
+        .join(task.get().to_string())
+        .join(attempt.get().to_string())
+        .join("gates");
+    std::fs::create_dir_all(&dir)?;
+    set_private(&dir)?;
+
+    let content = redact(
+        &format!(
+            "command: {}\ntree_hash: {tree_hash}\n\n{}{}",
+            gate.command.join(" "),
+            result.stdout,
+            result.stderr,
+        ),
+        &[],
+    );
+    let name = format!("{phase:?}").to_lowercase();
+    std::fs::write(dir.join(format!("{name}.log")), content)?;
+    Ok(())
 }
 
 /// What one call to [`Runner::run_phase`] produced: the agent's own claim
@@ -688,7 +882,7 @@ mod tests {
     use crate::testing::scratch_repo;
     use crate::{
         Bus, Capabilities, Error, Phase, Scenario, ScenarioFile, Step, StepOutcome, TaskStatus,
-        WriteScope, project_config_path, read_evidence, report_path,
+        TddException, WriteScope, project_config_path, read_evidence, report_path,
     };
 
     /// A [`Provider`] whose `invoke` always succeeds, proving
@@ -1654,6 +1848,429 @@ mod tests {
             }
             other => panic!("expected Error::Policy, got {other:?}"),
         }
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    fn red_spec() -> PhaseSpec {
+        PhaseSpec {
+            phase: Phase::Red,
+            write_scope: WriteScope::TestsOnly,
+            gate: Some(GateKind::Targeted),
+            records_evidence: true,
+        }
+    }
+
+    fn green_spec() -> PhaseSpec {
+        PhaseSpec {
+            phase: Phase::Green,
+            write_scope: WriteScope::All,
+            gate: Some(GateKind::Targeted),
+            records_evidence: true,
+        }
+    }
+
+    fn refactor_spec() -> PhaseSpec {
+        PhaseSpec {
+            phase: Phase::Refactor,
+            write_scope: WriteScope::All,
+            gate: Some(GateKind::Targeted),
+            records_evidence: false,
+        }
+    }
+
+    fn empty_test_summary() -> TestSummary {
+        TestSummary {
+            passed: 0,
+            failed: 0,
+            ignored: 0,
+            failures: Vec::new(),
+        }
+    }
+
+    /// Builds a [`Config`] carrying [`runnable_config`]'s mandatory
+    /// `verify_command` plus a `targeted_test_command` of `cat <fixture>`:
+    /// the simplest way to hand [`Runner::gate_phase`] fixed, arbitrary
+    /// cargo-shaped output without any shell-quoting concern.
+    fn config_with_fixture(fixture: &std::path::Path) -> Config {
+        let mut config = runnable_config();
+        config.targeted_test_command = Some(cat_command(fixture));
+        config
+    }
+
+    fn cat_command(fixture: &std::path::Path) -> Vec<String> {
+        vec!["cat".to_string(), fixture.display().to_string()]
+    }
+
+    /// A command that prints `fixture`'s contents and then exits `1`,
+    /// passing the path as `sh -c`'s own `$1` rather than interpolating it
+    /// into the script text, so the fixture's path never has to be
+    /// shell-escaped.
+    fn cat_then_fail_command(fixture: &std::path::Path) -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "cat \"$1\"; exit 1".to_string(),
+            "_".to_string(),
+            fixture.display().to_string(),
+        ]
+    }
+
+    fn write_fixture(dir: &std::path::Path, name: &str, content: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, content).expect("write fixture");
+        path
+    }
+
+    /// `cargo test`-shaped output reporting one genuinely new failure.
+    const NEW_FAILURE: &str = "\
+running 1 test
+test widget::tests::rejects_a_bad_size ... FAILED
+
+failures:
+
+---- widget::tests::rejects_a_bad_size stdout ----
+thread panicked
+
+failures:
+    widget::tests::rejects_a_bad_size
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+";
+
+    /// `cargo test`-shaped output reporting no failures at all.
+    const NO_FAILURES: &str = "\
+running 1 test
+test widget::tests::already_passing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+";
+
+    /// `cargo test`-shaped output where the red phase's own test now passes,
+    /// but an unrelated test regressed.
+    const REGRESSION: &str = "\
+running 2 tests
+test widget::tests::rejects_a_bad_size ... ok
+test other::tests::broke ... FAILED
+
+failures:
+
+---- other::tests::broke stdout ----
+thread panicked
+
+failures:
+    other::tests::broke
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+";
+
+    /// `cargo test`-shaped output where every test passes.
+    const ALL_GREEN: &str = "\
+running 1 test
+test widget::tests::rejects_a_bad_size ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+";
+
+    #[test]
+    fn gate_phase_red_advances_and_journals_gate_started_and_gate_finished_when_a_genuinely_new_failure_appears()
+     {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let fixture = write_fixture(state_dir.path(), "red.out", NEW_FAILURE);
+        let config = config_with_fixture(&fixture);
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let mut runner = manual_runner(&project, config, Box::new(AlwaysAvailable));
+        let prep = runner.prepare(&task).expect("prepare");
+
+        let baseline = empty_test_summary();
+        let after = runner
+            .gate_phase(&prep, &task, attempt, &red_spec(), Some(&baseline))
+            .expect("a genuinely new failure must advance red");
+
+        assert_eq!(
+            after.failures,
+            vec!["widget::tests::rejects_a_bad_size".to_string()]
+        );
+
+        let journal = Journal::open_for(&project).expect("open journal");
+        let events = journal.events_for(task.id).expect("events_for");
+        let kinds: Vec<&str> = events.iter().map(|e| e.kind.discriminant()).collect();
+        assert!(
+            kinds
+                .windows(2)
+                .any(|window| window == ["GateStarted", "GateFinished"]),
+            "GateStarted must be immediately followed by GateFinished, got {kinds:?}"
+        );
+
+        let evidence_path = project
+            .state_dir
+            .join("attempts")
+            .join(task.id.get().to_string())
+            .join(attempt.get().to_string())
+            .join("gates")
+            .join("red.log");
+        let evidence = std::fs::read_to_string(&evidence_path).expect("read gate evidence");
+        assert!(evidence.contains("command: cat "), "evidence: {evidence}");
+        assert!(evidence.contains("tree_hash: "), "evidence: {evidence}");
+        assert!(
+            evidence.contains("widget::tests::rejects_a_bad_size"),
+            "evidence: {evidence}"
+        );
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    #[test]
+    fn gate_phase_red_does_not_advance_when_no_new_failing_test_is_produced() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let fixture = write_fixture(state_dir.path(), "red.out", NO_FAILURES);
+        let config = config_with_fixture(&fixture);
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let mut runner = manual_runner(&project, config, Box::new(AlwaysAvailable));
+        let prep = runner.prepare(&task).expect("prepare");
+
+        let baseline = empty_test_summary();
+        let err = runner
+            .gate_phase(&prep, &task, attempt, &red_spec(), Some(&baseline))
+            .expect_err("no new failure must not advance red");
+
+        match err {
+            Error::Gate { kind, .. } => assert_eq!(kind, "red"),
+            other => panic!("expected Error::Gate, got {other:?}"),
+        }
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    #[test]
+    fn gate_phase_green_fails_naming_the_regressed_test_when_it_regresses_another_test() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let fixture = write_fixture(state_dir.path(), "green.out", REGRESSION);
+        let config = config_with_fixture(&fixture);
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let mut runner = manual_runner(&project, config, Box::new(AlwaysAvailable));
+        let prep = runner.prepare(&task).expect("prepare");
+
+        let red_result = TestSummary {
+            passed: 0,
+            failed: 1,
+            ignored: 0,
+            failures: vec!["widget::tests::rejects_a_bad_size".to_string()],
+        };
+        let err = runner
+            .gate_phase(&prep, &task, attempt, &green_spec(), Some(&red_result))
+            .expect_err("a regression must fail green");
+
+        match err {
+            Error::Gate { kind, detail } => {
+                assert_eq!(kind, "green");
+                assert!(
+                    detail.contains("other::tests::broke"),
+                    "detail was: {detail}"
+                );
+            }
+            other => panic!("expected Error::Gate, got {other:?}"),
+        }
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    #[test]
+    fn gate_phase_green_advances_when_every_expected_test_now_passes() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let fixture = write_fixture(state_dir.path(), "green.out", ALL_GREEN);
+        let config = config_with_fixture(&fixture);
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let mut runner = manual_runner(&project, config, Box::new(AlwaysAvailable));
+        let prep = runner.prepare(&task).expect("prepare");
+
+        let red_result = TestSummary {
+            passed: 0,
+            failed: 1,
+            ignored: 0,
+            failures: vec!["widget::tests::rejects_a_bad_size".to_string()],
+        };
+        let after = runner
+            .gate_phase(&prep, &task, attempt, &green_spec(), Some(&red_result))
+            .expect("every expected test passing must advance green");
+
+        assert!(after.failures.is_empty());
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    #[test]
+    fn gate_phase_skips_red_and_records_tdd_exception_used_when_the_task_declares_one() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let mut config = runnable_config();
+        // A gate command that would fail to spawn if `gate_phase` ever ran
+        // it, proving the exception path skips the gate entirely rather
+        // than merely ignoring its result.
+        config.targeted_test_command = Some(vec!["ktask-gate-phase-must-not-run".to_string()]);
+        let mut task = sample_task(1);
+        task.body = "Do the thing\n\n\
+             **TDD-Exception:** documentation: README only, no code changed.\n"
+            .to_string();
+        let attempt = AttemptId::new(1);
+
+        let mut runner = manual_runner(&project, config, Box::new(AlwaysAvailable));
+        let prep = runner.prepare(&task).expect("prepare");
+
+        let after = runner
+            .gate_phase(&prep, &task, attempt, &red_spec(), None)
+            .expect("a declared exception must skip red rather than error");
+
+        assert_eq!(after, empty_test_summary());
+
+        let journal = Journal::open_for(&project).expect("open journal");
+        let events = journal.events_for(task.id).expect("events_for");
+        let kinds: Vec<&str> = events.iter().map(|e| e.kind.discriminant()).collect();
+        assert!(
+            kinds.contains(&"TddExceptionUsed"),
+            "expected TddExceptionUsed among {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&"GateStarted"),
+            "the gate must never run when an exception is declared, got {kinds:?}"
+        );
+
+        let recorded = events
+            .iter()
+            .find(|event| event.kind.discriminant() == "TddExceptionUsed")
+            .expect("TddExceptionUsed event")
+            .kind
+            .clone();
+        let EventKind::TddExceptionUsed { exception, reason } = recorded else {
+            panic!("expected TddExceptionUsed");
+        };
+        assert_eq!(exception, TddException::Documentation);
+        assert_eq!(reason, "README only, no code changed.");
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    #[test]
+    fn gate_phase_for_a_non_red_green_phase_fails_when_the_gate_command_itself_fails() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let fixture = write_fixture(state_dir.path(), "refactor.out", ALL_GREEN);
+        let mut config = runnable_config();
+        config.targeted_test_command = Some(cat_then_fail_command(&fixture));
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let mut runner = manual_runner(&project, config, Box::new(AlwaysAvailable));
+        let prep = runner.prepare(&task).expect("prepare");
+
+        let err = runner
+            .gate_phase(&prep, &task, attempt, &refactor_spec(), None)
+            .expect_err("a failing gate command must fail a non-red/green phase");
+
+        match err {
+            Error::Gate { detail, .. } => assert!(detail.contains("gate command failed")),
+            other => panic!("expected Error::Gate, got {other:?}"),
+        }
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    #[test]
+    fn gate_phase_for_a_non_red_green_phase_advances_when_the_gate_command_passes() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let fixture = write_fixture(state_dir.path(), "refactor.out", ALL_GREEN);
+        let config = config_with_fixture(&fixture);
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let mut runner = manual_runner(&project, config, Box::new(AlwaysAvailable));
+        let prep = runner.prepare(&task).expect("prepare");
+
+        let after = runner
+            .gate_phase(&prep, &task, attempt, &refactor_spec(), None)
+            .expect("a passing gate command must advance a non-red/green phase");
+
+        assert!(after.failures.is_empty());
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    #[test]
+    fn gate_phase_fails_with_a_policy_error_when_the_phase_names_no_gate() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let config = runnable_config();
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let mut runner = manual_runner(&project, config, Box::new(AlwaysAvailable));
+        let prep = runner.prepare(&task).expect("prepare");
+
+        let err = runner
+            .gate_phase(&prep, &task, attempt, &implement_spec(), None)
+            .expect_err("a phase with no configured gate must be rejected");
+
+        assert!(matches!(err, Error::Policy { .. }));
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    #[test]
+    fn gate_phase_fails_with_a_config_error_when_the_named_gate_has_no_command_configured() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let config = runnable_config();
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let mut runner = manual_runner(&project, config, Box::new(AlwaysAvailable));
+        let prep = runner.prepare(&task).expect("prepare");
+
+        let err = runner
+            .gate_phase(&prep, &task, attempt, &red_spec(), None)
+            .expect_err("a gate kind with no configured command must be rejected");
+
+        assert!(matches!(err, Error::Config { .. }));
 
         let worktree = prep.worktree.clone();
         drop(prep);

@@ -4,15 +4,12 @@
 //! listed here, `#[serde(tag = "kind")]` so a stored event's `kind` column
 //! names its variant. Nothing may emit an event this enum does not contain.
 //!
-//! Four variants are deliberately absent because their payload names a type
-//! no earlier task has defined: `GateFinished`, `ProviderDetected`,
-//! `DecisionResolved` and `SelfHealingReport`. A fifth, `GateStarted`, is
-//! absent for the same reason: its `kind: GateKind` field names a type
-//! `gate.rs` has not yet introduced, matching the precedent set by
-//! [`crate::Error::Gate`], whose `kind` field is a `String` today rather
-//! than `GateKind`. Each is added by the task that defines its payload
+//! Three variants are deliberately absent because their payload names a type
+//! no earlier task has defined: `ProviderDetected`, `DecisionResolved` and
+//! `SelfHealingReport`. Each is added by the task that defines its payload
 //! type, which also adds its arm to the transition function.
 
+use crate::gate::{GateKind, GateResult};
 use crate::{
     AttemptId, AttemptRecord, DecisionRequest, EventSeq, FailureClass, PauseReason, Phase,
     Recovery, Stream, TaskId, TddException, Usage,
@@ -104,6 +101,22 @@ pub enum EventKind {
         /// The model the provider reported it actually ran, if it reports
         /// one (`VISION.md` §12).
         model_reported: Option<String>,
+    },
+    /// A mechanical quality gate began running.
+    ///
+    /// The field is named `gate` rather than `kind`, unlike every other
+    /// [`GateKind`]-carrying field in this codebase, because `EventKind`'s
+    /// own `#[serde(tag = "kind")]` reserves that name: a variant field
+    /// called `kind` collides with the enum's internal tag and fails to
+    /// compile.
+    GateStarted {
+        /// Which gate started.
+        gate: GateKind,
+    },
+    /// A mechanical quality gate finished running.
+    GateFinished {
+        /// What it found.
+        result: GateResult,
     },
     /// The completion gates passed for an attempt.
     VerifyPassed {
@@ -218,6 +231,8 @@ impl EventKind {
             EventKind::PhaseEntered { .. } => "PhaseEntered",
             EventKind::AgentOutput { .. } => "AgentOutput",
             EventKind::AttemptFinished { .. } => "AttemptFinished",
+            EventKind::GateStarted { .. } => "GateStarted",
+            EventKind::GateFinished { .. } => "GateFinished",
             EventKind::VerifyPassed { .. } => "VerifyPassed",
             EventKind::VerifyFailed { .. } => "VerifyFailed",
             EventKind::PublishStarted { .. } => "PublishStarted",
@@ -280,6 +295,12 @@ mod tests {
     }
 
     fn all_events() -> Vec<EventKind> {
+        let mut events = all_events_head();
+        events.extend(all_events_tail());
+        events
+    }
+
+    fn all_events_head() -> Vec<EventKind> {
         vec![
             EventKind::TaskQueued {
                 title: "Add widget".to_string(),
@@ -320,6 +341,26 @@ mod tests {
                 session_id: Some("session-1".to_string()),
                 model_reported: Some("claude-opus-5".to_string()),
             },
+            EventKind::GateStarted {
+                gate: GateKind::Targeted,
+            },
+            EventKind::GateFinished {
+                result: GateResult {
+                    kind: GateKind::Targeted,
+                    passed: false,
+                    exit_code: Some(1),
+                    signal: None,
+                    duration_ms: 12,
+                    stdout: "running 1 test".to_string(),
+                    stderr: String::new(),
+                    timed_out: false,
+                },
+            },
+        ]
+    }
+
+    fn all_events_tail() -> Vec<EventKind> {
+        vec![
             EventKind::VerifyPassed {
                 attempt: AttemptId::new(1),
             },
@@ -394,9 +435,9 @@ mod tests {
     }
 
     #[test]
-    fn event_kind_has_exactly_twenty_three_variants() {
+    fn event_kind_has_exactly_twenty_five_variants() {
         let variants = all_events();
-        assert_eq!(variants.len(), 23);
+        assert_eq!(variants.len(), 25);
 
         // Exhaustive, wildcard-free match: a variant added to `EventKind`
         // without being listed here fails to compile instead of silently
@@ -411,6 +452,8 @@ mod tests {
                 | EventKind::PhaseEntered { .. }
                 | EventKind::AgentOutput { .. }
                 | EventKind::AttemptFinished { .. }
+                | EventKind::GateStarted { .. }
+                | EventKind::GateFinished { .. }
                 | EventKind::VerifyPassed { .. }
                 | EventKind::VerifyFailed { .. }
                 | EventKind::PublishStarted { .. }
@@ -451,6 +494,8 @@ mod tests {
             "PhaseEntered",
             "AgentOutput",
             "AttemptFinished",
+            "GateStarted",
+            "GateFinished",
             "VerifyPassed",
             "VerifyFailed",
             "PublishStarted",

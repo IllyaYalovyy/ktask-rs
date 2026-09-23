@@ -282,6 +282,8 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
         | EventKind::AttemptFinished { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -324,6 +326,8 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
         | EventKind::AttemptFinished { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -356,6 +360,8 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
         }),
         EventKind::AgentOutput { .. }
         | EventKind::AttemptFinished { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::TddExceptionUsed { .. } => Ok(TaskState::Running { attempt, phase }),
         EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
@@ -412,6 +418,8 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
         }),
         EventKind::AgentOutput { .. }
         | EventKind::AttemptFinished { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::TddExceptionUsed { .. } => Ok(TaskState::Remediating { attempt, phase }),
         EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
@@ -454,9 +462,10 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
 /// completion gates against `attempt`'s result.
 fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
     match event {
-        EventKind::VerifyPassed { .. } | EventKind::AttemptRecorded { .. } => {
-            Ok(TaskState::Verifying { attempt })
-        }
+        EventKind::VerifyPassed { .. }
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. } => Ok(TaskState::Verifying { attempt }),
         EventKind::VerifyFailed { .. } => Ok(TaskState::Remediating {
             attempt,
             phase: Phase::Implement,
@@ -523,6 +532,8 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
         | EventKind::AttemptFinished { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -556,6 +567,8 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
         | EventKind::AttemptFinished { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -632,6 +645,8 @@ fn from_paused(
         | EventKind::PhaseEntered { .. }
         | EventKind::AgentOutput { .. }
         | EventKind::AttemptFinished { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -701,6 +716,20 @@ pub enum PauseReason {
 mod tests {
     use super::*;
     use crate::classify::{Stream, TddException};
+    use crate::gate::{GateKind, GateResult};
+
+    fn sample_gate_result() -> GateResult {
+        GateResult {
+            kind: GateKind::Targeted,
+            passed: true,
+            exit_code: Some(0),
+            signal: None,
+            duration_ms: 5,
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+        }
+    }
 
     fn all_phases() -> Vec<Phase> {
         vec![
@@ -1240,6 +1269,24 @@ mod tests {
     }
 
     #[test]
+    fn from_queued_rejects_gate_started() {
+        let err = apply(
+            &TaskState::Queued,
+            &EventKind::GateStarted {
+                gate: GateKind::Targeted,
+            },
+        )
+        .expect_err("illegal");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "Queued");
+                assert_eq!(event, "GateStarted");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn from_queued_rejects_verify_passed() {
         let attempt = AttemptId::new(1);
         let err =
@@ -1404,6 +1451,33 @@ mod tests {
         )
         .expect("legal");
         assert_eq!(state, running);
+    }
+
+    #[test]
+    fn from_running_accepts_gate_started_and_gate_finished_without_changing_phase() {
+        let attempt = AttemptId::new(1);
+        let running = TaskState::Running {
+            attempt,
+            phase: Phase::Red,
+        };
+
+        let started = apply(
+            &running,
+            &EventKind::GateStarted {
+                gate: GateKind::Targeted,
+            },
+        )
+        .expect("legal");
+        assert_eq!(started, running);
+
+        let finished = apply(
+            &running,
+            &EventKind::GateFinished {
+                result: sample_gate_result(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(finished, running);
     }
 
     #[test]
@@ -1574,6 +1648,33 @@ mod tests {
         )
         .expect("legal");
         assert_eq!(state, remediating);
+    }
+
+    #[test]
+    fn from_remediating_accepts_gate_started_and_gate_finished_without_changing_phase() {
+        let attempt = AttemptId::new(2);
+        let remediating = TaskState::Remediating {
+            attempt,
+            phase: Phase::Green,
+        };
+
+        let started = apply(
+            &remediating,
+            &EventKind::GateStarted {
+                gate: GateKind::Targeted,
+            },
+        )
+        .expect("legal");
+        assert_eq!(started, remediating);
+
+        let finished = apply(
+            &remediating,
+            &EventKind::GateFinished {
+                result: sample_gate_result(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(finished, remediating);
     }
 
     #[test]
@@ -1750,6 +1851,29 @@ mod tests {
         )
         .expect("legal");
         assert_eq!(state, TaskState::Verifying { attempt });
+    }
+
+    #[test]
+    fn from_verifying_accepts_gate_started_and_gate_finished_and_stays_verifying() {
+        let attempt = AttemptId::new(1);
+
+        let started = apply(
+            &TaskState::Verifying { attempt },
+            &EventKind::GateStarted {
+                gate: GateKind::Verify,
+            },
+        )
+        .expect("legal");
+        assert_eq!(started, TaskState::Verifying { attempt });
+
+        let finished = apply(
+            &TaskState::Verifying { attempt },
+            &EventKind::GateFinished {
+                result: sample_gate_result(),
+            },
+        )
+        .expect("legal");
+        assert_eq!(finished, TaskState::Verifying { attempt });
     }
 
     #[test]

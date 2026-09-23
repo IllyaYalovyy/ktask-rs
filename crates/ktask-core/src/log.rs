@@ -103,6 +103,7 @@ fn level_for(kind: &EventKind) -> Level {
         EventKind::PreflightFailed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::TaskFailed { .. } => Level::Error,
+        EventKind::GateFinished { result } if !result.passed => Level::Error,
         EventKind::Paused { .. }
         | EventKind::Interrupted { .. }
         | EventKind::DecisionRaised { .. }
@@ -114,6 +115,8 @@ fn level_for(kind: &EventKind) -> Level {
         | EventKind::AttemptStarted { .. }
         | EventKind::PhaseEntered { .. }
         | EventKind::AttemptFinished { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::PublishStarted { .. }
         | EventKind::PublishVerified { .. }
@@ -141,6 +144,8 @@ fn attempt_of(kind: &EventKind) -> Option<AttemptId> {
         | EventKind::PreflightStarted
         | EventKind::PreflightPassed { .. }
         | EventKind::PreflightFailed { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::PublishVerified { .. }
         | EventKind::TaskDone { .. }
         | EventKind::TaskFailed { .. }
@@ -166,6 +171,8 @@ fn phase_of(kind: &EventKind) -> Option<Phase> {
         | EventKind::AttemptStarted { .. }
         | EventKind::AgentOutput { .. }
         | EventKind::AttemptFinished { .. }
+        | EventKind::GateStarted { .. }
+        | EventKind::GateFinished { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -210,6 +217,13 @@ fn message_for(kind: &EventKind) -> String {
         } => format!(
             "attempt finished: exit_code={exit_code} model_reported={}",
             model_reported.as_deref().unwrap_or("unknown")
+        ),
+        EventKind::GateStarted { gate } => format!("gate started: {gate:?}"),
+        EventKind::GateFinished { result } => format!(
+            "gate finished: {:?} {} (exit_code={:?})",
+            result.kind,
+            if result.passed { "passed" } else { "failed" },
+            result.exit_code
         ),
         EventKind::VerifyPassed { .. } => "verify passed".to_string(),
         EventKind::VerifyFailed { class, detail, .. } => {
@@ -480,6 +494,83 @@ mod tests {
         assert!(Level::Debug < Level::Info);
         assert!(Level::Info < Level::Warn);
         assert!(Level::Warn < Level::Error);
+    }
+
+    fn sample_gate_result(passed: bool) -> crate::GateResult {
+        crate::GateResult {
+            kind: crate::GateKind::Targeted,
+            passed,
+            exit_code: Some(i32::from(!passed)),
+            signal: None,
+            duration_ms: 7,
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+        }
+    }
+
+    #[test]
+    fn gate_started_is_info_level() {
+        assert_eq!(
+            level_for(&EventKind::GateStarted {
+                gate: crate::GateKind::Targeted
+            }),
+            Level::Info
+        );
+    }
+
+    #[test]
+    fn gate_finished_is_info_level_when_it_passed() {
+        assert_eq!(
+            level_for(&EventKind::GateFinished {
+                result: sample_gate_result(true),
+            }),
+            Level::Info
+        );
+    }
+
+    #[test]
+    fn gate_finished_is_error_level_when_it_failed() {
+        assert_eq!(
+            level_for(&EventKind::GateFinished {
+                result: sample_gate_result(false),
+            }),
+            Level::Error
+        );
+    }
+
+    #[test]
+    fn gate_events_carry_neither_attempt_nor_phase() {
+        assert_eq!(
+            attempt_of(&EventKind::GateStarted {
+                gate: crate::GateKind::Targeted
+            }),
+            None
+        );
+        assert_eq!(
+            phase_of(&EventKind::GateFinished {
+                result: sample_gate_result(true),
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn gate_messages_name_the_gate_kind_and_outcome() {
+        assert!(
+            message_for(&EventKind::GateStarted {
+                gate: crate::GateKind::Targeted
+            })
+            .contains("Targeted")
+        );
+        let passed = message_for(&EventKind::GateFinished {
+            result: sample_gate_result(true),
+        });
+        assert!(passed.contains("passed"));
+        let failed = message_for(&EventKind::GateFinished {
+            result: sample_gate_result(false),
+        });
+        assert!(failed.contains("failed"));
     }
 
     #[test]
