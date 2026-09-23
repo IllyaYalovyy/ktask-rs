@@ -622,3 +622,140 @@ fn cli_retry_unknown_task_is_a_usage_error() {
         stderr_of(&retry)
     );
 }
+
+/// `resolve` and `ack` against a task in neither of their states are usage
+/// errors (exit 2) that change nothing.
+#[test]
+fn cli_resolve_and_ack_refuse_a_task_in_the_wrong_state() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(1)).expect("build scenario");
+
+    let resolve = scenario
+        .run(&["resolve", "--task", "1", "--note", "anything"])
+        .expect("resolve");
+    let ack = scenario.run(&["ack"]).expect("ack");
+    let ack_task = scenario.run(&["ack", "--task", "1"]).expect("ack --task");
+    let unknown = scenario
+        .run(&["resolve", "--task", "9", "--note", "anything"])
+        .expect("resolve unknown");
+
+    assert_eq!(resolve.status.code(), Some(2), "{}", stderr_of(&resolve));
+    assert!(
+        stderr_of(&resolve).contains("not waiting for input"),
+        "got {}",
+        stderr_of(&resolve)
+    );
+    assert_eq!(ack.status.code(), Some(2), "{}", stderr_of(&ack));
+    assert!(
+        stderr_of(&ack).contains("no human gate is pending"),
+        "got {}",
+        stderr_of(&ack)
+    );
+    assert_eq!(ack_task.status.code(), Some(2), "{}", stderr_of(&ack_task));
+    assert_eq!(unknown.status.code(), Some(2), "{}", stderr_of(&unknown));
+    assert!(
+        !scenario.project_dir().join("docs").exists(),
+        "a refused resolve must not write an ADR"
+    );
+}
+
+/// A task that asks a question stops the run with exit 5; `resolve --note`
+/// writes the ADR into the repository, prints its path, and returns the task
+/// to the queue.
+#[test]
+fn cli_resolve_answers_a_question_and_writes_the_adr() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(1)).expect("build scenario");
+    let report = scenario
+        .state_dir()
+        .join("attempts")
+        .join("1")
+        .join("1")
+        .join("report.md");
+    scenario
+        .set_scenario(&format!(
+            "[[steps]]\noutcome = \"success\"\nexit_code = 0\n\n\
+             [[steps]]\noutcome = \"success\"\nexit_code = 0\n\n\
+             [[steps.files]]\npath = \"{}\"\ncontent = \"KTASK_RESULT: NEEDS_INPUT\\n\
+             Question: Which store?\\nOptions:\\n- Postgres\\n- SQLite\\n\
+             Trade-offs: one scales, one is a file.\\nImpact: durability.\\n\"\n",
+            report.display()
+        ))
+        .expect("write scenario");
+    let run = scenario.run(&["run"]).expect("run");
+    assert_eq!(run.status.code(), Some(5), "{}", stderr_of(&run));
+
+    let resolve = scenario
+        .run(&["resolve", "--task", "1", "--note", "Use SQLite."])
+        .expect("resolve");
+
+    assert_eq!(resolve.status.code(), Some(0), "{}", stderr_of(&resolve));
+    assert_eq!(
+        stdout_of(&resolve).trim(),
+        "task 1 resolved: docs/adr/0001-which-store.md"
+    );
+    let adr = std::fs::read_to_string(scenario.project_dir().join("docs/adr/0001-which-store.md"))
+        .expect("the ADR is in the repository");
+    assert!(adr.starts_with("# 0001. Which store\n"), "{adr}");
+    assert!(adr.contains("## Decision\n\nUse SQLite.\n"), "{adr}");
+    // The question is answered: the task is back in the queue, no longer
+    // waiting, so a second answer is refused and no second ADR appears.
+    let again = scenario
+        .run(&["resolve", "--task", "1", "--note", "Use SQLite."])
+        .expect("resolve again");
+    assert_eq!(again.status.code(), Some(2), "{}", stderr_of(&again));
+    assert!(
+        stderr_of(&again).contains("task 1 is queued, not waiting for input"),
+        "got {}",
+        stderr_of(&again)
+    );
+    assert_eq!(
+        std::fs::read_dir(scenario.project_dir().join("docs/adr"))
+            .expect("read adr dir")
+            .count(),
+        1
+    );
+}
+
+/// `ack` passes the gate the run stopped at; the queue stays paused until
+/// `resume`, which then runs the task behind the gate.
+#[test]
+fn cli_ack_passes_a_human_gate_and_resume_continues() {
+    let plan = format!(
+        "{}## Approve\n\n**Outcome:** approved.\n\n**Done-when:** a human approved.\n\n**Verify:** `true`\n\n**Refs:** none\n\n**Gate:** a human approves.\n\n{}",
+        plan_of(1),
+        "## After\n\n**Outcome:** after.\n\n**Done-when:** after.\n\n**Verify:** `true`\n\n**Refs:** none\n"
+    );
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan).expect("build scenario");
+    scenario
+        .set_scenario(&succeed_step(&scenario, 1))
+        .expect("write scenario");
+    let run = scenario.run(&["run"]).expect("run");
+    assert_eq!(run.status.code(), Some(4), "{}", stderr_of(&run));
+
+    let ack = scenario.run(&["ack"]).expect("ack");
+
+    assert_eq!(ack.status.code(), Some(0), "{}", stderr_of(&ack));
+    assert!(
+        stdout_of(&ack).starts_with("task 2 acknowledged by "),
+        "got {}",
+        stdout_of(&ack)
+    );
+    // The queue stays paused: acknowledging ran nothing, so the gate is
+    // passed but the task behind it has not started.
+    let again = scenario.run(&["ack"]).expect("ack again");
+    assert_eq!(again.status.code(), Some(2), "{}", stderr_of(&again));
+
+    scenario
+        .set_scenario(&succeed_step(&scenario, 3))
+        .expect("write scenario");
+    let resume = scenario.run(&["resume"]).expect("resume");
+    assert_eq!(resume.status.code(), Some(0), "{}", stderr_of(&resume));
+    assert_eq!(
+        stdout_of(&resume)
+            .lines()
+            .next()
+            .map(|line| line.starts_with("task 3: done")),
+        Some(true),
+        "got {}",
+        stdout_of(&resume)
+    );
+}

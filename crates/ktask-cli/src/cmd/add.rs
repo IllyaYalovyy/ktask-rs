@@ -13,10 +13,9 @@
 
 use ktask_core::{Config, Journal, Project, RunOutcome, Task, parse_plan, validate};
 use std::env;
-use std::io;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
+use super::editor;
 use crate::render;
 
 /// The template written into the scratch file `$EDITOR` opens: one task
@@ -33,12 +32,7 @@ const TASK_TEMPLATE: &str = "\
 **Refs:**
 ";
 
-/// The scratch file's name within the project's state directory. Fixed
-/// rather than randomized: [`ScratchFile`] removes it as soon as this
-/// command is done with it, so nothing is left behind for a name collision
-/// to matter, and one run of `add` at a time is already this command's own
-/// concurrency model (the same single scratch path `journal.db` in the same
-/// state directory already assumes).
+/// The scratch file's name within the project's state directory.
 const SCRATCH_FILE_NAME: &str = "add-draft.md";
 
 /// Reads the task (or tasks) to add from `file` if given, or from `$EDITOR`
@@ -110,26 +104,9 @@ fn add_content(project: &Project, content: &str) -> Result<Vec<Task>, String> {
     Ok(tasks)
 }
 
-/// Removes the scratch file it wraps when dropped, so the file left for
-/// `$EDITOR` to open never survives past this command — however it exits,
-/// including through an early `?` return.
-struct ScratchFile(PathBuf);
-
-impl Drop for ScratchFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
-/// Writes [`TASK_TEMPLATE`] to a scratch file in `state_dir`, opens it in
-/// `$EDITOR` (read through `env_var`, so a test can inject one without
-/// touching the real process environment), and returns what the editor left
-/// behind once it exits successfully.
-///
-/// `$EDITOR` is run through `sh -c` (the same indirection `git` and other
-/// editor-invoking tools use) so a value like `"code --wait"` — a command
-/// plus arguments — works without this needing to parse shell quoting
-/// itself.
+/// Opens [`TASK_TEMPLATE`] in `$EDITOR` (read through `env_var`, so a test
+/// can inject one without touching the real process environment) and returns
+/// what the editor left behind once it exits successfully.
 ///
 /// # Errors
 ///
@@ -140,45 +117,14 @@ fn edit_via_editor(
     state_dir: &Path,
     env_var: &dyn Fn(&str) -> Result<String, env::VarError>,
 ) -> Result<String, String> {
-    let editor = env_var("EDITOR")
-        .map_err(|_| "add: $EDITOR is not set; set it or use --file".to_string())?;
-
-    std::fs::create_dir_all(state_dir)
-        .map_err(|err| format!("add: could not prepare {}: {err}", state_dir.display()))?;
-    let scratch_path = state_dir.join(SCRATCH_FILE_NAME);
-    std::fs::write(&scratch_path, TASK_TEMPLATE).map_err(|err| {
-        format!(
-            "add: could not write the draft at {}: {err}",
-            scratch_path.display()
-        )
-    })?;
-    let scratch = ScratchFile(scratch_path.clone());
-
-    let status = run_editor(&editor, &scratch_path)
-        .map_err(|err| format!("add: could not run $EDITOR ({editor}): {err}"))?;
-    if !status.success() {
-        return Err(format!("add: $EDITOR ({editor}) exited with {status}"));
-    }
-
-    let content = std::fs::read_to_string(&scratch.0).map_err(|err| {
-        format!(
-            "add: could not read the draft back from {}: {err}",
-            scratch.0.display()
-        )
-    })?;
-    Ok(content)
-}
-
-/// Runs `editor` (a full command line, not necessarily a bare program name)
-/// against `path`, via `sh -c '<editor> "$0"' <path>` so `path` lands in the
-/// shell as `$0` regardless of whatever arguments `editor` itself already
-/// carries.
-fn run_editor(editor: &str, path: &Path) -> io::Result<std::process::ExitStatus> {
-    Command::new("sh")
-        .arg("-c")
-        .arg(format!("{editor} \"$0\""))
-        .arg(path)
-        .status()
+    editor::edit(
+        "add",
+        "--file",
+        SCRATCH_FILE_NAME,
+        TASK_TEMPLATE,
+        state_dir,
+        env_var,
+    )
 }
 
 #[cfg(test)]
@@ -186,6 +132,8 @@ mod tests {
     use super::*;
     use ktask_core::TaskStatus;
     use std::env;
+    use std::path::PathBuf;
+    use std::process::Command;
 
     fn journal_project(state_dir: &Path) -> Project {
         Project {

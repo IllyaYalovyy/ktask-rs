@@ -5,10 +5,10 @@
 //! the three run-control commands — pause, interrupt, cancel — together,
 //! since `docs/CONTRACT.md` section 3 and a later task treat them as one
 //! unit). `init` (T108), `doctor` (T110), `status` (T111), `add` (T112),
-//! `plan lint` (T113), `run` (T115) and `resume` and `retry` (T116) have
-//! their real behavior; every other module still only returns
-//! [`RunOutcome::Drained`] as a placeholder for later, per-command work:
-//! T117 (resolve, ack), T119 (pause, interrupt, cancel), T120 (rerun-gate)
+//! `plan lint` (T113), `run` (T115), `resume` and `retry` (T116) and
+//! `resolve` and `ack` (T117) have their real behavior; every other module
+//! still only returns [`RunOutcome::Drained`] as a placeholder for later,
+//! per-command work: T119 (pause, interrupt, cancel), T120 (rerun-gate)
 //! and T131 (tui). What
 //! this module is responsible for is that [`dispatch`] itself is real: the
 //! match below is exhaustive, so a `Command` variant added without a
@@ -19,6 +19,7 @@ mod ack;
 mod add;
 mod control;
 mod doctor;
+mod editor;
 mod init;
 mod plan;
 mod rerun_gate;
@@ -133,9 +134,9 @@ mod tests {
             let outcome = dispatch(&command, &project, &config, false);
 
             // `doctor` (T110), `status` (T111), `plan lint` (T113), `resume`
-            // and `retry` (T116) have real behavior now: run against this
-            // fixture's nonexistent state directory, all five fail to even
-            // open it, so each reaches `RunOutcome::CheckFailed` rather than
+            // and `retry` (T116), and `resolve` and `ack` (T117) have real
+            // behavior now: run against this fixture's nonexistent state
+            // directory, all seven fail to even open it, so each reaches `RunOutcome::CheckFailed` rather than
             // the placeholder `Drained` every other still-unimplemented
             // command returns. Their own modules' tests cover the behavior
             // in detail; this loop only needs to prove dispatch reached it.
@@ -146,6 +147,8 @@ mod tests {
                     | Command::Plan { .. }
                     | Command::Resume
                     | Command::Retry { .. }
+                    | Command::Resolve { .. }
+                    | Command::Ack { .. }
             ) {
                 assert!(
                     matches!(outcome, RunOutcome::CheckFailed { .. }),
