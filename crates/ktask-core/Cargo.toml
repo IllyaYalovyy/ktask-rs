@@ -9,7 +9,7 @@ license.workspace = true
 # Exposes crate::testing (scratch git repositories) outside this crate's own
 # unit tests, e.g. to integration tests elsewhere in the workspace. Off by
 # default, so release builds never pull in tempfile.
-testing = []
+testing = ["dep:tempfile"]
 
 [dependencies]
 thiserror = { workspace = true }
@@ -22,6 +22,7 @@ toml = { workspace = true }
 time = { workspace = true }
 nix = { workspace = true }
 signal-hook = { workspace = true }
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

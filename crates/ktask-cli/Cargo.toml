@@ -17,6 +17,7 @@ serde_json = { workspace = true }
 time = { workspace = true }
 
 [dev-dependencies]
+ktask-core = { path = "../ktask-core", version = "0.1.0", features = ["testing"] }
 tempfile = { workspace = true }
 
 [lints]
