@@ -6,6 +6,7 @@
 pub mod app;
 pub mod event;
 pub mod keys;
+pub mod screen;
 pub mod terminal;
 pub mod testing;
 pub mod types;

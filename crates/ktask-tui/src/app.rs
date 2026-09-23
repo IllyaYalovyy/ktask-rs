@@ -108,24 +108,10 @@ pub fn render(app: &App, frame: &mut Frame<'_>) {
         height: area.height.min(1),
         ..area
     };
-    let title = format!("{} {}", app.screen as u8, screen_title(app.screen));
+    let title = format!("{} {}", app.screen as u8, crate::screen::title(app.screen));
     frame.render_widget(Paragraph::new(title), header);
     if let Some(overlay) = &app.overlay {
         render_overlay(overlay, area, frame);
-    }
-}
-
-fn screen_title(screen: Screen) -> &'static str {
-    match screen {
-        Screen::Queue => "Queue",
-        Screen::LiveRun => "Live run",
-        Screen::Logs => "Logs",
-        Screen::Failures => "Failures",
-        Screen::Inspector => "Task inspector",
-        Screen::InputInbox => "Input inbox",
-        Screen::History => "History",
-        Screen::Git => "Git",
-        Screen::Config => "Configuration and doctor",
     }
 }
 
