@@ -13,7 +13,7 @@ pub use app::{App, OUTPUT_WINDOW, render, update};
 pub use event::AppEvent;
 pub use types::{Action, Overlay, Screen, TaskView, ViewOp};
 
-use ktask_core::{EventSeq, Journal, Result};
+use ktask_core::{EventSeq, Journal, Result, Subscription};
 use std::path::Path;
 
 /// A cursor over a project's journal that yields only what is new.
@@ -78,6 +78,85 @@ impl JournalTail {
     /// keep the old state across a failed poll should clone it first.
     pub fn tick(&mut self, app: App) -> Result<App> {
         Ok(self.poll()?.into_iter().fold(app, update))
+    }
+}
+
+/// A live attachment to a run in this process: the journal's history first,
+/// then the bus's events as they are published.
+///
+/// [`attach`](Attachment::attach) subscribes *before* it reads the journal, so
+/// an event recorded in between is in the history, the subscription, or both;
+/// [`poll`](Attachment::poll) drops the copies it already delivered by
+/// sequence number, so nothing is missed and nothing is shown twice. The
+/// subscription is a bounded ring that evicts its own oldest events, so an
+/// interface that stops polling never blocks the publisher or grows the bus;
+/// [`dropped`](Attachment::dropped) says how many events it lost that way.
+#[derive(Debug)]
+pub struct Attachment {
+    subscription: Subscription,
+    last_seq: EventSeq,
+    dropped: usize,
+}
+
+impl Attachment {
+    /// Subscribes with `subscribe`, then reads everything already in
+    /// `journal`, returning the attachment and that history as
+    /// [`AppEvent::Core`] values, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// See [`Journal::events_since`].
+    pub fn attach(
+        journal: &Journal,
+        subscribe: impl FnOnce() -> Subscription,
+    ) -> Result<(Self, Vec<AppEvent>)> {
+        let subscription = subscribe();
+        let history = journal.events_since(EventSeq::new(0))?;
+        let last_seq = history.last().map_or(EventSeq::new(0), |e| e.seq);
+        let attachment = Self {
+            subscription,
+            last_seq,
+            dropped: 0,
+        };
+        Ok((
+            attachment,
+            history.into_iter().map(AppEvent::Core).collect(),
+        ))
+    }
+
+    /// The sequence number of the last event delivered, or zero before any.
+    #[must_use]
+    pub fn last_seq(&self) -> EventSeq {
+        self.last_seq
+    }
+
+    /// How many events the subscription evicted before they were polled,
+    /// over the attachment's whole life.
+    #[must_use]
+    pub fn dropped(&self) -> usize {
+        self.dropped
+    }
+
+    /// Returns the events published since the previous poll, oldest first,
+    /// skipping any the history already delivered. Never blocks.
+    pub fn poll(&mut self) -> Vec<AppEvent> {
+        let (events, dropped) = self.subscription.drain();
+        self.dropped += dropped;
+        let mut fresh = Vec::with_capacity(events.len());
+        for event in events {
+            if event.seq > self.last_seq {
+                self.last_seq = event.seq;
+                fresh.push(AppEvent::Core(event));
+            }
+        }
+        fresh
+    }
+
+    /// Folds whatever [`poll`](Attachment::poll) returns into `app`: the
+    /// interface's reaction to a clock tick.
+    #[must_use]
+    pub fn tick(&mut self, app: App) -> App {
+        self.poll().into_iter().fold(app, update)
     }
 }
 
@@ -229,5 +308,106 @@ mod tests {
         let scratch = Scratch::new();
         let missing = scratch.0.join("no-such-dir").join("journal.db");
         assert!(JournalTail::open(&missing).is_err());
+    }
+
+    fn recorder(scratch: &Scratch, capacity: usize) -> ktask_core::Recorder {
+        ktask_core::Recorder::new(
+            Journal::open(&scratch.journal()).expect("open"),
+            ktask_core::Bus::new(capacity),
+        )
+    }
+
+    fn record_queued(recorder: &mut ktask_core::Recorder, id: u32, title: &str) {
+        recorder
+            .record(
+                Some(TaskId::new(id)),
+                EventKind::TaskQueued {
+                    title: title.into(),
+                },
+            )
+            .expect("record");
+    }
+
+    #[test]
+    fn attach_shows_history_at_once_then_live_events() {
+        let scratch = Scratch::new();
+        let mut recorder = recorder(&scratch, 16);
+        record_queued(&mut recorder, 1, "Before");
+        record_queued(&mut recorder, 2, "Also before");
+
+        let reader = Journal::open(&scratch.journal()).expect("open reader");
+        let (mut attachment, history) =
+            Attachment::attach(&reader, || recorder.subscribe()).expect("attach");
+        let mut app = history.into_iter().fold(App::new((80, 24)), update);
+        assert_eq!(titles(&app), ["Before", "Also before"]);
+        assert_eq!(attachment.last_seq(), EventSeq::new(2));
+
+        record_queued(&mut recorder, 3, "Live");
+        app = attachment.tick(app);
+        assert_eq!(titles(&app), ["Before", "Also before", "Live"]);
+        assert_eq!(attachment.last_seq(), EventSeq::new(3));
+        assert_eq!(attachment.dropped(), 0);
+    }
+
+    #[test]
+    fn attach_delivers_an_event_recorded_between_subscribing_and_reading_once() {
+        let scratch = Scratch::new();
+        let mut recorder = recorder(&scratch, 16);
+        record_queued(&mut recorder, 1, "Before");
+
+        let reader = Journal::open(&scratch.journal()).expect("open reader");
+        let (mut attachment, history) = Attachment::attach(&reader, || {
+            let subscription = recorder.subscribe();
+            record_queued(&mut recorder, 2, "Racing");
+            subscription
+        })
+        .expect("attach");
+        let app = history.into_iter().fold(App::new((80, 24)), update);
+        assert_eq!(titles(&app), ["Before", "Racing"]);
+
+        // The subscription holds a second copy of the racing event.
+        assert!(attachment.poll().is_empty());
+        assert_eq!(attachment.last_seq(), EventSeq::new(2));
+    }
+
+    #[test]
+    fn attach_to_an_empty_journal_starts_at_zero() {
+        let scratch = Scratch::new();
+        let mut recorder = recorder(&scratch, 4);
+        let reader = Journal::open(&scratch.journal()).expect("open reader");
+        let (mut attachment, history) =
+            Attachment::attach(&reader, || recorder.subscribe()).expect("attach");
+        assert!(history.is_empty());
+        assert_eq!(attachment.last_seq(), EventSeq::new(0));
+
+        record_queued(&mut recorder, 1, "First");
+        assert_eq!(attachment.poll().len(), 1);
+    }
+
+    #[test]
+    fn attach_with_a_stalled_ui_never_blocks_the_publisher_and_keeps_the_newest() {
+        let scratch = Scratch::new();
+        let mut recorder = recorder(&scratch, 8);
+        let reader = Journal::open(&scratch.journal()).expect("open reader");
+        let (mut attachment, _) =
+            Attachment::attach(&reader, || recorder.subscribe()).expect("attach");
+
+        // The interface never polls while 200 events are published; the
+        // publisher must finish regardless.
+        for id in 1..=200 {
+            record_queued(&mut recorder, id, &format!("Task {id}"));
+        }
+
+        let events = attachment.poll();
+        let seqs: Vec<u64> = events
+            .iter()
+            .map(|e| match e {
+                AppEvent::Core(event) => event.seq.get(),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(seqs, (193..=200).collect::<Vec<_>>());
+        assert_eq!(attachment.dropped(), 192);
+        assert_eq!(attachment.last_seq(), EventSeq::new(200));
     }
 }
