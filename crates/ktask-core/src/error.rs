@@ -102,6 +102,13 @@ pub enum Error {
         detail: String,
     },
 
+    /// An agent's report did not begin with a valid `KTASK_RESULT:` header.
+    #[error("report error: {detail}")]
+    Report {
+        /// What was expected, and what was found instead.
+        detail: String,
+    },
+
     /// [`crate::acquire`] could not create the lock file before its
     /// timeout elapsed; another live process still holds it.
     #[error("lock at {path} not acquired within {timeout_secs}s: held by pid {holder_pid}")]

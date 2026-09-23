@@ -22,6 +22,7 @@ mod provider;
 mod queue;
 mod redact;
 mod remediate;
+mod report;
 mod state;
 mod task;
 #[cfg(any(test, feature = "testing"))]
@@ -64,5 +65,6 @@ pub use remediate::{
     Bounds, Breaker, BreakerState, Decision, StopReason, bundle, check_no_policy_edit,
     should_continue, signature,
 };
+pub use report::{ReportResult, parse_report};
 pub use state::{PauseReason, Phase, TaskState, apply, check_one_active, check_predecessor};
 pub use task::{Task, TaskStatus, parse_plan, validate};
