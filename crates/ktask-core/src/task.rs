@@ -48,6 +48,11 @@ pub struct Task {
     pub verify: String,
     /// The `**Refs:**` section: pointers to supporting documentation.
     pub refs: String,
+    /// The `**Protocol:**` section: the work protocol named for this task
+    /// (`"direct"` or `"tdd"`), or `None` if the task names none — in which
+    /// case [`crate::protocol::for_task`] falls back to
+    /// `config.default_protocol`, and then to `"direct"` (VISION.md §9).
+    pub protocol: Option<String>,
 }
 
 impl Task {
@@ -67,12 +72,19 @@ impl Task {
 }
 
 /// Checks that `task` carries every required section: `Outcome`,
-/// `Done-when`, `Verify` and `Refs`.
+/// `Done-when`, `Verify` and `Refs`; and that its optional `**Protocol:**`
+/// section, if present, names a protocol that exists.
+///
+/// Catching an unknown protocol name here — at `add` time — rather than
+/// when the task runs is deliberate (VISION.md §9): a typo in a
+/// `**Protocol:**` section should never be discovered hours into a run.
 ///
 /// # Errors
 ///
 /// Returns [`Error::Policy`] naming every missing section (not just the
-/// first) if one or more of the four required fields is empty.
+/// first) if one or more of the four required fields is empty. Returns
+/// [`Error::Policy`] naming the offending value if `task.protocol` is
+/// `Some` but not `"direct"` or `"tdd"`.
 pub fn validate(task: &Task) -> Result<()> {
     let fields = [&task.outcome, &task.done_when, &task.verify, &task.refs];
     let missing: Vec<&str> = REQUIRED_SECTIONS
@@ -82,17 +94,26 @@ pub fn validate(task: &Task) -> Result<()> {
         .map(|(label, _)| label)
         .collect();
 
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(Error::Policy {
+    if !missing.is_empty() {
+        return Err(Error::Policy {
             detail: format!(
                 "task is missing required section(s): {}",
                 missing.join(", ")
             ),
             paths: Vec::new(),
-        })
+        });
     }
+
+    if let Some(name) = &task.protocol
+        && crate::protocol::by_name(name).is_none()
+    {
+        return Err(Error::Policy {
+            detail: format!("task names unknown protocol {name:?}: expected \"direct\" or \"tdd\""),
+            paths: Vec::new(),
+        });
+    }
+
+    Ok(())
 }
 
 /// Splits a plan document into its tasks.
@@ -176,6 +197,7 @@ fn build_task(id: u32, lines: &[&str]) -> Task {
             .find(|(found, _)| found == label)
             .map_or_else(String::new, |(_, content)| content.clone())
     };
+    let protocol = section("Protocol");
     Task {
         id: TaskId::new(id),
         status,
@@ -184,6 +206,7 @@ fn build_task(id: u32, lines: &[&str]) -> Task {
         done_when: section("Done-when"),
         verify: section("Verify"),
         refs: section("Refs"),
+        protocol: (!protocol.is_empty()).then_some(protocol),
     }
 }
 
@@ -258,6 +281,7 @@ mod tests {
             done_when: String::new(),
             verify: String::new(),
             refs: String::new(),
+            protocol: None,
         }
     }
 
@@ -534,6 +558,68 @@ Nothing but prose here.
         for label in ["Outcome", "Done-when", "Verify", "Refs"] {
             assert!(message.contains(label), "expected {label} in {message}");
         }
+    }
+
+    fn complete_plan_naming_protocol(protocol_line: &str) -> String {
+        format!(
+            "\
+## Do the thing
+
+**Outcome:** it happens.
+
+**Done-when:** it happened.
+
+**Verify:** `true`
+
+**Refs:** none
+
+{protocol_line}
+"
+        )
+    }
+
+    #[test]
+    fn a_task_with_no_protocol_section_has_no_named_protocol() {
+        let plan = complete_plan_naming_protocol("");
+        let tasks = parse_plan(&plan).unwrap();
+        assert_eq!(tasks[0].protocol, None);
+    }
+
+    #[test]
+    fn a_protocol_section_is_parsed_into_the_protocol_field() {
+        let plan = complete_plan_naming_protocol("**Protocol:** tdd");
+        let tasks = parse_plan(&plan).unwrap();
+        assert_eq!(tasks[0].protocol.as_deref(), Some("tdd"));
+    }
+
+    #[test]
+    fn validate_accepts_a_task_naming_the_direct_protocol() {
+        let plan = complete_plan_naming_protocol("**Protocol:** direct");
+        let tasks = parse_plan(&plan).unwrap();
+        assert!(validate(&tasks[0]).is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_a_task_naming_the_tdd_protocol() {
+        let plan = complete_plan_naming_protocol("**Protocol:** tdd");
+        let tasks = parse_plan(&plan).unwrap();
+        assert!(validate(&tasks[0]).is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_a_task_naming_no_protocol() {
+        let plan = complete_plan_naming_protocol("");
+        let tasks = parse_plan(&plan).unwrap();
+        assert!(validate(&tasks[0]).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_a_task_naming_an_unknown_protocol() {
+        let plan = complete_plan_naming_protocol("**Protocol:** waterfall");
+        let tasks = parse_plan(&plan).unwrap();
+        let err = validate(&tasks[0]).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("waterfall"));
     }
 }
 

@@ -699,6 +699,7 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
                 done_when: "it happened".to_string(),
                 verify: "cargo test".to_string(),
                 refs: "VISION.md".to_string(),
+                protocol: None,
             }
         }
 

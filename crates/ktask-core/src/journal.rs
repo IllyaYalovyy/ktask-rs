@@ -211,7 +211,7 @@ impl Journal {
                     task.done_when,
                     task.verify,
                     task.refs,
-                    Option::<String>::None,
+                    task.protocol,
                     task.body,
                     added_at,
                 ])?;
@@ -234,7 +234,7 @@ impl Journal {
     /// [`Error::Corrupt`] if a stored `id` does not fit a [`TaskId`].
     pub fn tasks(&self) -> Result<Vec<Task>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, outcome, done_when, verify, refs, body FROM tasks ORDER BY id ASC",
+            "SELECT id, outcome, done_when, verify, refs, protocol, body FROM tasks ORDER BY id ASC",
         )?;
         let rows = stmt.query_map([], |row| {
             let id: i64 = row.get(0)?;
@@ -242,13 +242,14 @@ impl Journal {
             let done_when: String = row.get(2)?;
             let verify: String = row.get(3)?;
             let refs: String = row.get(4)?;
-            let body: String = row.get(5)?;
-            Ok((id, outcome, done_when, verify, refs, body))
+            let protocol: Option<String> = row.get(5)?;
+            let body: String = row.get(6)?;
+            Ok((id, outcome, done_when, verify, refs, protocol, body))
         })?;
 
         let mut tasks = Vec::new();
         for row in rows {
-            let (id, outcome, done_when, verify, refs, body) = row?;
+            let (id, outcome, done_when, verify, refs, protocol, body) = row?;
             let id = u32::try_from(id).map_err(|_| Error::Corrupt {
                 detail: format!("tasks table has an invalid id: {id}"),
             })?;
@@ -260,6 +261,7 @@ impl Journal {
                 done_when,
                 verify,
                 refs,
+                protocol,
             });
         }
         Ok(tasks)
@@ -1231,6 +1233,47 @@ mod tests {
 
         let read_back = journal.tasks().expect("tasks");
         assert_eq!(read_back, parsed);
+    }
+
+    #[test]
+    fn put_tasks_then_tasks_round_trips_a_named_protocol() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("journal.db");
+        let mut journal = Journal::open(&path).expect("open");
+
+        let plan = "\
+## Do it test-first
+
+**Outcome:** it happens.
+
+**Done-when:** it happened.
+
+**Verify:** `true`
+
+**Refs:** none
+
+**Protocol:** tdd
+
+## Do it plainly
+
+**Outcome:** it happens too.
+
+**Done-when:** it happened too.
+
+**Verify:** `true`
+
+**Refs:** none
+";
+        let parsed = crate::parse_plan(plan).expect("parse_plan");
+        assert_eq!(parsed[0].protocol.as_deref(), Some("tdd"));
+        assert_eq!(parsed[1].protocol, None);
+
+        journal.put_tasks(&parsed).expect("put_tasks");
+
+        let read_back = journal.tasks().expect("tasks");
+        assert_eq!(read_back, parsed);
+        assert_eq!(read_back[0].protocol.as_deref(), Some("tdd"));
+        assert_eq!(read_back[1].protocol, None);
     }
 
     #[test]

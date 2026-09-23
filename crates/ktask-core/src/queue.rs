@@ -97,6 +97,7 @@ mod tests {
             done_when: "done".to_string(),
             verify: "true".to_string(),
             refs: "none".to_string(),
+            protocol: None,
         }
     }
 

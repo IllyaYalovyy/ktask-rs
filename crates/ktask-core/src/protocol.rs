@@ -9,7 +9,7 @@
 //! in [`Phase::Verify`] then [`Phase::Publish`], and both
 //! [`Protocol::direct`] and [`Protocol::tdd`] are built through it.
 
-use crate::{GateKind, Phase};
+use crate::{Config, Error, GateKind, Phase, Result, Task};
 
 /// Which paths a [`PhaseSpec`]'s agent may modify while it runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -145,6 +145,44 @@ impl Protocol {
     }
 }
 
+/// Builds the protocol named `name`, or `None` if `name` is neither
+/// `"direct"` nor `"tdd"` — the only two protocols v0.1 knows (VISION.md §9:
+/// "Protocols are chosen per task; they are not user-definable in v1").
+///
+/// The sole source of the `direct`/`tdd` name mapping, so [`for_task`] and
+/// [`crate::task::validate`]'s rejection of an unknown protocol name can
+/// never disagree about which names are valid.
+#[must_use]
+pub(crate) fn by_name(name: &str) -> Option<Protocol> {
+    match name {
+        "direct" => Some(Protocol::direct()),
+        "tdd" => Some(Protocol::tdd()),
+        _ => None,
+    }
+}
+
+/// Resolves `task`'s work protocol: its own `**Protocol:**` section if it
+/// named one, otherwise `config.default_protocol` (which itself defaults to
+/// `"direct"`, per `Config::default`).
+///
+/// # Errors
+///
+/// Returns [`Error::Policy`] if the resolved name is neither `direct` nor
+/// `tdd`. A task's own protocol name is already rejected at `add` time by
+/// [`crate::task::validate`] (VISION.md §9: "an unknown protocol name is
+/// rejected when the task is added, not when it runs"), so in practice this
+/// only fires when `config.default_protocol` itself is misconfigured.
+pub fn for_task(task: &Task, config: &Config) -> Result<Protocol> {
+    let name = task
+        .protocol
+        .as_deref()
+        .unwrap_or(config.default_protocol.as_str());
+    by_name(name).ok_or_else(|| Error::Policy {
+        detail: format!("unknown work protocol {name:?}: expected \"direct\" or \"tdd\""),
+        paths: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +261,79 @@ mod tests {
     fn direct_and_tdd_have_distinct_names() {
         assert_eq!(Protocol::direct().name, "direct");
         assert_eq!(Protocol::tdd().name, "tdd");
+    }
+
+    fn task_naming_protocol(protocol: Option<&str>) -> Task {
+        Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: "## Do the thing\n".to_string(),
+            outcome: "it happens".to_string(),
+            done_when: "it happened".to_string(),
+            verify: "cargo test".to_string(),
+            refs: "VISION.md".to_string(),
+            protocol: protocol.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn by_name_recognizes_direct_and_tdd() {
+        assert_eq!(by_name("direct"), Some(Protocol::direct()));
+        assert_eq!(by_name("tdd"), Some(Protocol::tdd()));
+    }
+
+    #[test]
+    fn by_name_rejects_anything_else() {
+        assert_eq!(by_name("waterfall"), None);
+        assert_eq!(by_name(""), None);
+    }
+
+    #[test]
+    fn for_task_uses_the_tasks_own_protocol_when_named() {
+        let task = task_naming_protocol(Some("tdd"));
+        let config = Config::default();
+        assert_eq!(config.default_protocol, "direct", "sanity: config default");
+
+        let protocol = for_task(&task, &config).expect("known protocol");
+        assert_eq!(protocol.name, "tdd");
+    }
+
+    #[test]
+    fn for_task_falls_back_to_the_configured_default_when_the_task_names_none() {
+        let task = task_naming_protocol(None);
+        let mut config = Config::default();
+        config.default_protocol = "tdd".to_string();
+
+        let protocol = for_task(&task, &config).expect("known protocol");
+        assert_eq!(protocol.name, "tdd");
+    }
+
+    #[test]
+    fn for_task_falls_back_to_direct_when_neither_task_nor_config_names_one() {
+        let task = task_naming_protocol(None);
+        let config = Config::default();
+
+        let protocol = for_task(&task, &config).expect("known protocol");
+        assert_eq!(protocol.name, "direct");
+    }
+
+    #[test]
+    fn for_task_rejects_an_unknown_configured_default() {
+        let task = task_naming_protocol(None);
+        let mut config = Config::default();
+        config.default_protocol = "waterfall".to_string();
+
+        let err = for_task(&task, &config).expect_err("unknown default must be rejected");
+        assert!(err.to_string().contains("waterfall"));
+    }
+
+    #[test]
+    fn for_task_prefers_the_tasks_own_protocol_over_an_unknown_configured_default() {
+        let task = task_naming_protocol(Some("tdd"));
+        let mut config = Config::default();
+        config.default_protocol = "waterfall".to_string();
+
+        let protocol = for_task(&task, &config).expect("task's own name wins");
+        assert_eq!(protocol.name, "tdd");
     }
 }
