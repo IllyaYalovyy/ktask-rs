@@ -273,9 +273,8 @@ fn cli_run_stops_at_a_failed_task_and_exits_1() {
     );
 }
 
-/// A queue whose earlier run failed mid-attempt is not "drained": running it
-/// again must not exit 0 — it reports the task as an unfinished, resumable
-/// attempt (130), starts nothing, and points at `resume`.
+/// A queue whose earlier run failed is not "drained": running it again must
+/// not exit 0 — it reports the failed task (exit 1) and starts nothing.
 #[test]
 fn cli_run_again_after_a_failure_does_not_claim_the_queue_drained() {
     let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
@@ -295,20 +294,20 @@ fn cli_run_again_after_a_failure_does_not_claim_the_queue_drained() {
     );
     assert!(
         stdout_of(&first).starts_with("task 1: failed"),
-        "a failure the runner could not journal still gets its result line, got {:?}",
+        "got {:?}",
         stdout_of(&first)
+    );
+    assert_eq!(
+        task_states(&scenario).expect("states"),
+        vec!["Failed", "Queued"],
+        "the failure is journaled, not left mid-attempt"
     );
 
     let second = scenario.run(&["run"]).expect("second run");
 
-    assert_eq!(second.status.code(), Some(130), "{}", stderr_of(&second));
-    assert_eq!(
-        stdout_of(&second),
-        "",
-        "nothing ran, so nothing is reported"
-    );
+    assert_eq!(second.status.code(), Some(1), "{}", stderr_of(&second));
     assert!(
-        stderr_of(&second).contains("ktask-rs resume"),
+        stderr_of(&second).contains("task 1 failed"),
         "got {}",
         stderr_of(&second)
     );
@@ -1706,4 +1705,241 @@ fn scenarios_success_drains_three_tasks_and_journals_every_step() {
         .flat_map(|task| success_events(task, &base, &origin_tip))
         .collect();
     assert_eq!(actual, expected, "the journal, in full");
+}
+
+/// Rewrites the project config so the mandatory verify gate appends a line
+/// to `log` every time it runs and then passes only once `passes_from` lines
+/// are there — `passes_from` runs of the gate is what it takes to go green
+/// (`u32::MAX` never does). The log is what proves the gate ran, and how
+/// many times, rather than being served from a cached result.
+fn set_counting_verify(
+    scenario: &support::Scenario,
+    log: &std::path::Path,
+    passes_from: u32,
+) -> std::io::Result<()> {
+    std::fs::write(
+        scenario.state_dir().join("config.toml"),
+        format!(
+            "provider = \"dummy\"\ndummy_scenario_path = \"{}\"\n\
+             verify_command = [\"sh\", \"-c\", \
+             \"echo run >> \\\"$1\\\"; test \\\"$(wc -l < \\\"$1\\\")\\\" -ge {passes_from}\", \"_\", \"{}\"]\n",
+            scenario.state_dir().join("scenario.toml").display(),
+            log.display()
+        ),
+    )
+}
+
+/// A preflight probe, an implementation attempt that reports done, and one
+/// remediation round that reports done too: the three provider invocations a
+/// task with exactly one remediation consumes. Each stage's output names it,
+/// so the journal shows which invocation said what.
+fn remediation_steps(scenario: &support::Scenario) -> String {
+    let report = |attempt: u32| {
+        scenario
+            .state_dir()
+            .join("attempts")
+            .join("1")
+            .join(attempt.to_string())
+            .join("report.md")
+    };
+    format!(
+        "[[steps]]\noutcome = \"success\"\nexit_code = 0\n\n\
+         [[steps]]\noutcome = \"success\"\nexit_code = 0\nstdout = \"first pass\\n\"\n\n\
+         [[steps.files]]\npath = \"{}\"\ncontent = \"KTASK_RESULT: DONE\\nSummary: first pass.\\n\"\n\n\
+         [[steps]]\noutcome = \"success\"\nexit_code = 0\nstdout = \"remediation pass\\n\"\n\n\
+         [[steps.files]]\npath = \"{}\"\ncontent = \"KTASK_RESULT: DONE\\nSummary: remediated.\\n\"\n",
+        report(1).display(),
+        report(2).display()
+    )
+}
+
+/// What the journal says about task 1's agent invocations and gate runs,
+/// in order: `(attempt, kind)` for every attempt-scoped event that shows a
+/// provider session beginning or ending, or the completion gates deciding.
+fn remediation_trail(scenario: &support::Scenario) -> ktask_core::Result<Vec<(u32, &'static str)>> {
+    let journal = ktask_core::Journal::open(&ktask_core::journal_path(scenario.state_dir()))?;
+    Ok(journal
+        .events_for(ktask_core::TaskId::new(1))?
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            ktask_core::EventKind::AttemptStarted { attempt, .. } => {
+                Some((attempt.get(), "AttemptStarted"))
+            }
+            ktask_core::EventKind::PhaseEntered {
+                attempt,
+                phase: ktask_core::Phase::Implement,
+            } => Some((attempt.get(), "Implement")),
+            ktask_core::EventKind::AttemptFinished {
+                attempt,
+                session_id,
+                ..
+            } => {
+                assert_eq!(
+                    session_id, None,
+                    "attempt {attempt} must not carry a session over from another attempt"
+                );
+                Some((attempt.get(), "AttemptFinished"))
+            }
+            ktask_core::EventKind::VerifyFailed { attempt, .. } => {
+                Some((attempt.get(), "VerifyFailed"))
+            }
+            ktask_core::EventKind::VerifyPassed { attempt } => {
+                Some((attempt.get(), "VerifyPassed"))
+            }
+            _ => None,
+        })
+        .collect())
+}
+
+/// The lines the counting verify gate wrote: one per time it ran.
+fn gate_runs(log: &std::path::Path) -> usize {
+    std::fs::read_to_string(log).map_or(0, |text| text.lines().count())
+}
+
+/// A failure that one remediation fixes, asserted end to end: the first
+/// attempt's verify gate fails, `run` starts a second, fresh agent session
+/// (a new provider invocation of its own, not a resumed one), reruns the
+/// verify gate from scratch against what that session left, and exits 0 with
+/// the task done. Two attempts, no more; the gate ran exactly twice.
+#[test]
+fn scenarios_remediation_after_a_failure_succeeds_with_a_fresh_session_and_gates_rerun() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(1)).expect("build scenario");
+    scenario
+        .set_scenario(&remediation_steps(&scenario))
+        .expect("write scenario");
+    let log = scenario.state_dir().join("verify-runs.log");
+    set_counting_verify(&scenario, &log, 2).expect("write config");
+
+    let run = scenario.run(&["run"]).expect("run");
+
+    let stdout = stdout_of(&run);
+    let stderr = stderr_of(&run);
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(stdout.starts_with("task 1: done"), "got {stdout:?}");
+    assert_eq!(task_states(&scenario).expect("states"), vec!["Done"]);
+
+    // A separate provider invocation per attempt: each streams its own
+    // output, and the dummy had a distinct step for each.
+    assert!(stderr.contains("first pass"), "got {stderr}");
+    assert!(stderr.contains("remediation pass"), "got {stderr}");
+
+    // The whole story, in order. The remediation is its own agent session —
+    // it has its own Implement phase and its own finish, and no second
+    // AttemptStarted — and the gate failed on attempt 1 and passed on 2.
+    let trail = remediation_trail(&scenario).expect("read journal");
+    assert_eq!(
+        trail,
+        vec![
+            (1, "AttemptStarted"),
+            (1, "Implement"),
+            (1, "AttemptFinished"),
+            (1, "VerifyFailed"),
+            (2, "Implement"),
+            (2, "AttemptFinished"),
+            (2, "VerifyPassed"),
+        ]
+    );
+
+    // Gates reran from scratch: the gate process itself ran again for the
+    // second attempt rather than the first attempt's failure being reused.
+    assert_eq!(
+        gate_runs(&log),
+        2,
+        "the verify gate must run once per attempt"
+    );
+
+    // Both attempts are evidenced, and the second one is the one that
+    // produced the published commit.
+    let records = std::fs::read_dir(scenario.state_dir().join("attempts").join("1"))
+        .expect("attempt evidence")
+        .count();
+    assert_eq!(
+        records, 2,
+        "exactly two attempts, the original and one remediation"
+    );
+    let kinds = journaled_kinds(&scenario, 1).expect("read journal");
+    assert_eq!(kinds.last(), Some(&"TaskDone"));
+}
+
+/// A failure remediation cannot fix, asserted end to end: the verify gate
+/// fails on the first attempt and again on the remediation, so `run` exits
+/// 1, the task is left `Failed`, the queue stops (the task behind it is
+/// never started), and only the one allowed remediation was made — each
+/// round with a fresh session and a from-scratch gate run.
+#[test]
+fn scenarios_remediation_that_fails_twice_leaves_the_task_failed_and_stops_the_queue() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+    // Task 2 has a step waiting; if the queue did not stop it would consume it.
+    scenario
+        .set_scenario(&format!(
+            "{}{}",
+            remediation_steps(&scenario),
+            succeed_step(&scenario, 2)
+        ))
+        .expect("write scenario");
+    let log = scenario.state_dir().join("verify-runs.log");
+    set_counting_verify(&scenario, &log, u32::MAX).expect("write config");
+
+    let run = scenario.run(&["run"]).expect("run");
+
+    let stdout = stdout_of(&run);
+    let stderr = stderr_of(&run);
+    assert_eq!(
+        run.status.code(),
+        Some(1),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 1, "task 2 must never be reported: {stdout:?}");
+    assert!(lines[0].starts_with("task 1: failed"), "got {:?}", lines[0]);
+    assert_eq!(
+        task_states(&scenario).expect("states"),
+        vec!["Failed", "Queued"],
+        "the task is left Failed and the queue stopped behind it"
+    );
+
+    let trail = remediation_trail(&scenario).expect("read journal");
+    assert_eq!(
+        trail,
+        vec![
+            (1, "AttemptStarted"),
+            (1, "Implement"),
+            (1, "AttemptFinished"),
+            (1, "VerifyFailed"),
+            (2, "Implement"),
+            (2, "AttemptFinished"),
+            (2, "VerifyFailed"),
+        ],
+        "a fresh session for the one remediation, and no third attempt"
+    );
+    assert_eq!(
+        gate_runs(&log),
+        2,
+        "the verify gate must run once per attempt"
+    );
+    let records = std::fs::read_dir(scenario.state_dir().join("attempts").join("1"))
+        .expect("attempt evidence")
+        .count();
+    assert_eq!(
+        records, 2,
+        "the original attempt and one remediation, no more"
+    );
+    assert_eq!(
+        journaled_kinds(&scenario, 1).expect("read journal").last(),
+        Some(&"TaskFailed")
+    );
+    assert!(
+        journaled_kinds(&scenario, 2)
+            .expect("read journal")
+            .is_empty(),
+        "the queue stopped: task 2 has no events"
+    );
+
+    // The queue stays stopped: task 2 is refused behind the failed task 1.
+    let third = scenario.run(&["run", "--task", "2"]).expect("run task 2");
+    assert_eq!(third.status.code(), Some(2), "{}", stderr_of(&third));
 }

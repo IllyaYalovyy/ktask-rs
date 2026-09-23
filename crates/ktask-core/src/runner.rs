@@ -887,11 +887,46 @@ impl Runner {
         let prep = self.prepare(task)?;
         let worktree = prep.worktree.clone();
 
-        let outcome = self.drive_attempt(&prep, task);
+        let outcome = self
+            .drive_attempt(&prep, task)
+            .or_else(|err| self.journal_failure(task, err));
         drop(prep);
         let removed = remove_worktree(&self.project.root, &worktree);
 
         outcome.and_then(|state| removed.map(|()| state))
+    }
+
+    /// Journals `err`, which ended `task`'s attempt, as the task's
+    /// [`EventKind::TaskFailed`] so it is `Failed` — and `retry`able — rather
+    /// than stranded mid-attempt, then returns `err` unchanged.
+    ///
+    /// A task that is not mid-attempt is left alone: a pause or interrupt
+    /// already journaled its own verdict, and a failure with nothing in
+    /// flight (the journal could not be read, say) has nothing to close.
+    ///
+    /// # Errors
+    ///
+    /// Always returns `err`, or whatever [`Runner::record_failure`] or
+    /// [`read_evidence`] returns if the failure cannot be journaled.
+    fn journal_failure(&mut self, task: &Task, err: Error) -> Result<TaskState> {
+        let in_flight = matches!(
+            journaled_state(&self.project, task.id),
+            Ok(TaskState::Running { .. }
+                | TaskState::Remediating { .. }
+                | TaskState::Verifying { .. }
+                | TaskState::Publishing { .. })
+        );
+        if in_flight {
+            let attempts = read_evidence(&self.project, task.id)?.len();
+            let attempt = AttemptId::new(u32::try_from(attempts).unwrap_or(u32::MAX).max(1));
+            let class = classify(
+                &empty_outcome(),
+                &gates_for_classification(&err),
+                Some(&err),
+            );
+            self.record_failure(task, attempt, class, err.to_string())?;
+        }
+        Err(err)
     }
 
     /// Starts a fresh remediation attempt for a [`TaskState::Failed`]
@@ -4214,8 +4249,19 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
                 "AttemptStarted",
                 "PhaseEntered",
                 "AttemptFinished",
+                "TaskFailed",
             ],
-            "no TaskDone must ever be recorded for a failed attempt"
+            "the failed attempt ends in TaskFailed, never TaskDone"
+        );
+        assert!(
+            matches!(
+                journaled_state(&project, task.id).expect("state"),
+                TaskState::Failed {
+                    class: FailureClass::AgentFailure,
+                    ..
+                }
+            ),
+            "a failed attempt must leave the task Failed, not stranded mid-attempt"
         );
     }
 
@@ -4811,8 +4857,9 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
                 "AttemptStarted",
                 "PhaseEntered",
                 "AttemptFinished",
+                "TaskFailed",
             ],
-            "the failing task must never reach TaskDone"
+            "the failing task ends in TaskFailed and never reaches TaskDone"
         );
     }
 
