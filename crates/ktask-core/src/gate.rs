@@ -517,6 +517,110 @@ pub fn run_gate(gate: &Gate, root: &Path, bus: Option<&Bus>) -> Result<GateResul
     })
 }
 
+/// The fixed order [`run_completion_set`] runs gates in — VISION.md §8's
+/// mechanical quality gates, in the sequence that fails fast: formatting and
+/// linting are cheap and catch the most common mistakes, a build proves the
+/// tree compiles before the expensive [`GateKind::Verify`] suite runs, and
+/// the privacy scan runs last since VISION.md §11 has it inspect "the full
+/// outgoing commit range" of a tree that, by then, is known to build and
+/// pass.
+///
+/// [`GateKind::Baseline`] and [`GateKind::Targeted`] are deliberately absent:
+/// VISION.md §8 scopes them to "before the task started" and "during the
+/// run" respectively, not to the completion decision this function makes.
+const COMPLETION_ORDER: [GateKind; 5] = [
+    GateKind::Format,
+    GateKind::Lint,
+    GateKind::Build,
+    GateKind::Verify,
+    GateKind::Privacy,
+];
+
+/// The environment variable [`run_completion_set`] sets, on every gate it
+/// runs, to the `base_sha` it was called with — so a gate command can learn
+/// the commit the task is being verified from without that commit being
+/// baked into the profile. [`GateKind::Privacy`]'s command is the intended
+/// reader: VISION.md §8 has it scan "the full outgoing commit range,"
+/// meaning the range from this commit to the candidate tree.
+const BASE_SHA_ENV: &str = "KTASK_BASE_SHA";
+
+/// Returns a copy of `gate` with [`BASE_SHA_ENV`] added to its environment,
+/// naming `base_sha`. A key `gate.env` already sets is overwritten: `env`
+/// belongs to the static profile, `base_sha` is per-run truth, and the
+/// latter is what a gate command needs.
+fn with_base_sha(gate: &Gate, base_sha: &str) -> Gate {
+    let mut gate = gate.clone();
+    gate.env
+        .insert(BASE_SHA_ENV.to_string(), base_sha.to_string());
+    gate
+}
+
+/// Runs the gates that decide whether a task is done: VISION.md §3
+/// invariant 7 ("completion of an executable task requires local
+/// verification, clean publication, and fetched remote-mainline equality")
+/// and §8's mechanical quality gates.
+///
+/// Runs, in a fixed order (format, lint, build, verify, privacy), whichever of [`GateKind::Format`],
+/// [`GateKind::Lint`], [`GateKind::Build`], [`GateKind::Verify`] and
+/// [`GateKind::Privacy`] `profile` defines. A gate `profile` does not define
+/// is skipped, not treated as a failure — every kind but `Verify` is
+/// optional per [`profile_from`] — but `Verify` itself is checked up front:
+/// a `profile` that omits it is a configuration error, the same one
+/// [`Profile::load`] reports, caught here rather than by silently skipping
+/// the one gate this function exists to guarantee.
+///
+/// Stops at the first gate whose [`GateResult::passed`] is `false`,
+/// returning every result gathered so far — including the failing one —
+/// rather than an error: a gate that ran and failed is not an error, it is
+/// the answer this function was asked for. If [`run_gate`] itself cannot
+/// even start a gate's command (a missing program, a bad working
+/// directory), that error is propagated immediately instead, since there is
+/// no [`GateResult`] to report for a gate that never ran.
+///
+/// `base_sha` is exported to every gate as the `KTASK_BASE_SHA` environment
+/// variable; `bus` is forwarded unchanged to each [`run_gate`] call.
+/// Per `docs/adr/0001-defer-gate-output-on-the-bus.md`, `run_gate` does not
+/// publish through `bus` yet — there is no `EventKind` payload for a gate's
+/// output or its start/finish, and building one is explicitly out of that
+/// ADR's scope (and this function's: its file scope is `gate.rs` alone).
+/// See `docs/adr/0002-completion-set-does-not-journal-gate-boundaries.md`
+/// for why this function accepts `bus` without using it to record a start
+/// or finish event, despite being asked to.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] if `profile` has no [`GateKind::Verify`] gate.
+/// Returns whatever [`Error`] the first [`run_gate`] call that cannot start
+/// its command returns.
+pub fn run_completion_set(
+    profile: &Profile,
+    root: &Path,
+    base_sha: &str,
+    bus: Option<&Bus>,
+) -> Result<Vec<GateResult>> {
+    if profile.get(GateKind::Verify).is_none() {
+        return Err(Error::Config {
+            key: "gates".to_string(),
+            detail: "a verification profile must define the mandatory Verify gate".to_string(),
+        });
+    }
+
+    let mut results = Vec::new();
+    for kind in COMPLETION_ORDER {
+        let Some(gate) = profile.get(kind) else {
+            continue;
+        };
+        let gate = with_base_sha(gate, base_sha);
+        let result = run_gate(&gate, root, bus)?;
+        let passed = result.passed;
+        results.push(result);
+        if !passed {
+            break;
+        }
+    }
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1187,6 +1291,226 @@ error: could not compile `cargoscratch` (lib test) due to 1 previous error
             assert!(
                 events.is_empty(),
                 "no EventKind variant can carry a gate output chunk yet; see the ADR"
+            );
+            assert_eq!(dropped, 0);
+        }
+    }
+
+    mod run_completion_set_tests {
+        use super::*;
+        use std::fs;
+
+        /// A gate that, on success, appends `kind` as its own line to
+        /// `marker` (so test order can be read back off disk) and exits
+        /// `exit_code`.
+        fn marker_gate(kind: GateKind, marker: &Path, exit_code: i32) -> Gate {
+            Gate {
+                kind,
+                command: vec![
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    format!(
+                        "echo {} >> {} ; exit {}",
+                        gate_name(kind),
+                        marker.display(),
+                        exit_code
+                    ),
+                ],
+                timeout_secs: 10,
+                working_dir: None,
+                env: BTreeMap::new(),
+            }
+        }
+
+        fn full_profile(marker: &Path) -> Profile {
+            Profile {
+                gates: vec![
+                    marker_gate(GateKind::Format, marker, 0),
+                    marker_gate(GateKind::Lint, marker, 0),
+                    marker_gate(GateKind::Build, marker, 0),
+                    marker_gate(GateKind::Verify, marker, 0),
+                    marker_gate(GateKind::Privacy, marker, 0),
+                ],
+            }
+        }
+
+        fn marker_lines(marker: &Path) -> Vec<String> {
+            fs::read_to_string(marker)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect()
+        }
+
+        #[test]
+        fn runs_every_configured_gate_in_format_lint_build_verify_privacy_order() {
+            let root = tempfile::tempdir().expect("tempdir");
+            let marker = root.path().join("order.log");
+            let profile = full_profile(&marker);
+
+            let results =
+                run_completion_set(&profile, root.path(), "base123", None).expect("completion set");
+
+            assert!(results.iter().all(|r| r.passed));
+            assert_eq!(
+                results.iter().map(|r| r.kind).collect::<Vec<_>>(),
+                vec![
+                    GateKind::Format,
+                    GateKind::Lint,
+                    GateKind::Build,
+                    GateKind::Verify,
+                    GateKind::Privacy,
+                ]
+            );
+            assert_eq!(
+                marker_lines(&marker),
+                vec![
+                    "Format".to_string(),
+                    "Lint".to_string(),
+                    "Build".to_string(),
+                    "Verify".to_string(),
+                    "Privacy".to_string(),
+                ]
+            );
+        }
+
+        #[test]
+        fn skips_gates_the_profile_does_not_define() {
+            let root = tempfile::tempdir().expect("tempdir");
+            let marker = root.path().join("order.log");
+            let profile = Profile {
+                gates: vec![marker_gate(GateKind::Verify, &marker, 0)],
+            };
+
+            let results =
+                run_completion_set(&profile, root.path(), "base123", None).expect("completion set");
+
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].kind, GateKind::Verify);
+        }
+
+        #[test]
+        fn a_failing_gate_short_circuits_the_gates_that_would_follow_it() {
+            let root = tempfile::tempdir().expect("tempdir");
+            let marker = root.path().join("order.log");
+            let mut profile = full_profile(&marker);
+            profile.gates[1] = marker_gate(GateKind::Lint, &marker, 1); // fails
+
+            let results =
+                run_completion_set(&profile, root.path(), "base123", None).expect("completion set");
+
+            // Every result gathered so far is still returned, including the
+            // failure itself.
+            assert_eq!(
+                results.iter().map(|r| r.kind).collect::<Vec<_>>(),
+                vec![GateKind::Format, GateKind::Lint]
+            );
+            assert!(results[0].passed);
+            assert!(!results[1].passed);
+            // Build, Verify and Privacy never ran: their markers were never
+            // written, so the mandatory Verify gate did not silently run
+            // after a failure either.
+            assert_eq!(
+                marker_lines(&marker),
+                vec!["Format".to_string(), "Lint".to_string()]
+            );
+        }
+
+        #[test]
+        fn the_mandatory_verify_gate_always_runs_when_every_earlier_gate_passes() {
+            let root = tempfile::tempdir().expect("tempdir");
+            let marker = root.path().join("order.log");
+            let profile = full_profile(&marker);
+
+            let results =
+                run_completion_set(&profile, root.path(), "base123", None).expect("completion set");
+
+            let verify = results
+                .iter()
+                .find(|r| r.kind == GateKind::Verify)
+                .expect("Verify must have run");
+            assert!(verify.passed);
+        }
+
+        #[test]
+        fn a_profile_missing_the_mandatory_verify_gate_is_a_configuration_error() {
+            let root = tempfile::tempdir().expect("tempdir");
+            let marker = root.path().join("order.log");
+            let profile = Profile {
+                gates: vec![marker_gate(GateKind::Lint, &marker, 0)],
+            };
+
+            let err = run_completion_set(&profile, root.path(), "base123", None)
+                .expect_err("must fail without a Verify gate");
+
+            assert!(matches!(&err, Error::Config { key, .. } if key == "gates"));
+            assert!(err.to_string().contains("Verify"));
+            assert!(
+                marker_lines(&marker).is_empty(),
+                "no gate should run once the profile is rejected"
+            );
+        }
+
+        #[test]
+        fn base_sha_is_exported_to_every_gates_environment() {
+            let root = tempfile::tempdir().expect("tempdir");
+            let profile = Profile {
+                gates: vec![Gate {
+                    kind: GateKind::Verify,
+                    command: vec![
+                        "sh".to_string(),
+                        "-c".to_string(),
+                        "printf '%s' \"$KTASK_BASE_SHA\"".to_string(),
+                    ],
+                    timeout_secs: 10,
+                    working_dir: None,
+                    env: BTreeMap::new(),
+                }],
+            };
+
+            let results = run_completion_set(&profile, root.path(), "deadbeef", None)
+                .expect("completion set");
+
+            assert_eq!(results[0].stdout, "deadbeef");
+        }
+
+        #[test]
+        fn a_gate_that_cannot_start_is_a_propagated_error_not_a_result() {
+            let root = tempfile::tempdir().expect("tempdir");
+            let profile = Profile {
+                gates: vec![Gate {
+                    kind: GateKind::Verify,
+                    command: vec!["definitely-not-a-real-ktask-test-command".to_string()],
+                    timeout_secs: 10,
+                    working_dir: None,
+                    env: BTreeMap::new(),
+                }],
+            };
+
+            let err = run_completion_set(&profile, root.path(), "base123", None)
+                .expect_err("must fail cleanly");
+
+            assert!(matches!(&err, Error::Gate { kind, .. } if kind == "Verify"));
+        }
+
+        #[test]
+        fn a_bus_is_forwarded_but_nothing_is_published_to_it_yet() {
+            let root = tempfile::tempdir().expect("tempdir");
+            let marker = root.path().join("order.log");
+            let profile = Profile {
+                gates: vec![marker_gate(GateKind::Verify, &marker, 0)],
+            };
+            let bus = Bus::new(8);
+            let mut sub = bus.subscribe();
+
+            let results = run_completion_set(&profile, root.path(), "base123", Some(&bus))
+                .expect("completion set");
+
+            assert!(results[0].passed);
+            let (events, dropped) = sub.drain();
+            assert!(
+                events.is_empty(),
+                "no EventKind variant can carry gate start/finish yet; see the ADR"
             );
             assert_eq!(dropped, 0);
         }
