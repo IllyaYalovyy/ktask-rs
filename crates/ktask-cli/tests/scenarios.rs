@@ -1943,3 +1943,126 @@ fn scenarios_remediation_that_fails_twice_leaves_the_task_failed_and_stops_the_q
     let third = scenario.run(&["run", "--task", "2"]).expect("run task 2");
     assert_eq!(third.status.code(), Some(2), "{}", stderr_of(&third));
 }
+
+/// Asserts `output` exited with exactly `code`, showing both streams if not.
+fn assert_exit(output: &std::process::Output, code: i32) {
+    assert_eq!(
+        output.status.code(),
+        Some(code),
+        "stdout: {}\nstderr: {}",
+        stdout_of(output),
+        stderr_of(output)
+    );
+}
+
+/// Where the dummy scenario must write `task`'s report for `attempt`.
+fn attempt_report(scenario: &support::Scenario, task: u32, attempt: u32) -> std::path::PathBuf {
+    scenario
+        .state_dir()
+        .join("attempts")
+        .join(task.to_string())
+        .join(attempt.to_string())
+        .join("report.md")
+}
+
+/// Whether `task`'s journal is readable and never records it as failed.
+fn never_failed(scenario: &support::Scenario, task: u32) -> bool {
+    journaled_kinds(scenario, task).is_ok_and(|kinds| !kinds.contains(&"TaskFailed"))
+}
+
+/// A provider limit, a human gate and a needs-input report each stop `run`
+/// with their own exit code (3, 4, 5), none of them marks a task failed, and
+/// the matching continuation (`resume` after the limit, `ack` then `resume`
+/// at the gate, `resolve` then `resume` after the question) finishes the work.
+#[test]
+fn every_pause_path_exits_correctly() {
+    // Provider limit: exit 3, the task is paused rather than failed, and
+    // `resume` while the limit stands (the provider said "try again in 20s")
+    // starts nothing behind it and leaves the task's history alone.
+    let limit = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+    limit
+        .set_scenario(
+            "[[steps]]\noutcome = \"success\"\nexit_code = 0\n\n\
+             [[steps]]\noutcome = \"limit\"\nexit_code = 1\n\
+             stdout = \"usage limit reached, try again in 20s\\n\"\n",
+        )
+        .expect("write scenario");
+    let paused = limit.run(&["run"]).expect("run into the limit");
+    assert_exit(&paused, 3);
+    assert!(
+        stdout_of(&paused).starts_with("task 1: paused"),
+        "got {}",
+        stdout_of(&paused)
+    );
+    assert_eq!(task_states(&limit).expect("states"), ["Paused", "Queued"]);
+    assert!(never_failed(&limit, 1));
+    let events_before = journaled_kinds(&limit, 1).expect("kinds");
+    limit
+        .set_scenario(&all_succeed(&limit, 2))
+        .expect("write scenario");
+    assert_exit(&limit.run(&["resume"]).expect("resume"), 3);
+    assert_eq!(task_states(&limit).expect("states"), ["Paused", "Queued"]);
+    assert_eq!(
+        journaled_kinds(&limit, 1).expect("kinds"),
+        events_before,
+        "resume during a limit must not run or fail the task"
+    );
+    assert!(journaled_kinds(&limit, 2).expect("kinds").is_empty());
+
+    // Human gate: exit 4, `ack` passes it, and `resume` runs the task behind it.
+    let gate_plan = format!(
+        "{}## Approve\n\n**Outcome:** approved.\n\n**Done-when:** a human approved.\n\n**Verify:** `true`\n\n**Refs:** none\n\n**Gate:** a human approves.\n\n\
+         ## After\n\n**Outcome:** after.\n\n**Done-when:** after.\n\n**Verify:** `true`\n\n**Refs:** none\n",
+        plan_of(1)
+    );
+    let gate = support::build(ONE_SUCCESS_STEP, &gate_plan).expect("build scenario");
+    gate.set_scenario(&succeed_step(&gate, 1))
+        .expect("write scenario");
+    assert_exit(&gate.run(&["run"]).expect("run into the gate"), 4);
+    assert!(never_failed(&gate, 2));
+    assert_exit(&gate.run(&["ack"]).expect("ack"), 0);
+    gate.set_scenario(&succeed_step(&gate, 3))
+        .expect("write scenario");
+    assert_exit(&gate.run(&["resume"]).expect("resume after ack"), 0);
+    assert_eq!(
+        task_states(&gate).expect("states"),
+        ["Done", "Acknowledged", "Done"]
+    );
+
+    // Needs input: exit 5, `resolve` answers, and `resume` finishes the task
+    // as a fresh attempt 2 once the human has committed the ADR.
+    let input = support::build(ONE_SUCCESS_STEP, &plan_of(1)).expect("build scenario");
+    input
+        .set_scenario(&format!(
+            "[[steps]]\noutcome = \"success\"\nexit_code = 0\n\n\
+             [[steps]]\noutcome = \"success\"\nexit_code = 0\n\n\
+             [[steps.files]]\npath = \"{}\"\ncontent = \"KTASK_RESULT: NEEDS_INPUT\\n\
+             Question: Which store?\\nOptions:\\n- Postgres\\n- SQLite\\n\
+             Trade-offs: one scales, one is a file.\\nImpact: durability.\\n\"\n",
+            attempt_report(&input, 1, 1).display()
+        ))
+        .expect("write scenario");
+    assert_exit(&input.run(&["run"]).expect("run into the question"), 5);
+    assert_eq!(task_states(&input).expect("states"), ["Paused"]);
+    assert!(never_failed(&input, 1));
+    let resolve = input
+        .run(&["resolve", "--task", "1", "--note", "Use SQLite."])
+        .expect("resolve");
+    assert_exit(&resolve, 0);
+    // `resolve` leaves the ADR uncommitted (docs/adr/0009-*.md) and preflight
+    // refuses an untracked file, so the human commits it before resuming.
+    let repo = input.project_dir();
+    git_in(repo, &["add", "docs/adr"]).expect("git add");
+    git_in(repo, &["commit", "-m", "Record the storage decision"]).expect("git commit");
+    git_in(repo, &["push", "origin", "main"]).expect("git push");
+    input
+        .set_scenario(&format!(
+            "[[steps]]\noutcome = \"success\"\nexit_code = 0\n\n\
+             [[steps]]\noutcome = \"success\"\nexit_code = 0\n\n\
+             [[steps.files]]\npath = \"{}\"\ncontent = \"KTASK_RESULT: DONE\\nSummary: it worked.\\n\"\n",
+            attempt_report(&input, 1, 2).display()
+        ))
+        .expect("write scenario");
+    assert_exit(&input.run(&["resume"]).expect("resume after resolve"), 0);
+    assert_eq!(task_states(&input).expect("states"), ["Done"]);
+}
