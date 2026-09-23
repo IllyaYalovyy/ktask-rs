@@ -20,7 +20,10 @@
 //! report that claims `NEEDS_INPUT` without one is rejected as malformed
 //! rather than accepted as an empty pause.
 
+use crate::ids::{AttemptId, TaskId};
+use crate::project::Project;
 use crate::{Error, Result, decision};
+use std::path::PathBuf;
 
 /// What an agent's report claimed about the outcome of its task.
 ///
@@ -79,6 +82,62 @@ pub fn parse_report(text: &str) -> Result<ReportResult> {
             detail: format!("malformed result header: expected {EXPECTED}, found {other:?}"),
         }),
     }
+}
+
+/// Where `attempt`'s report for `task` must be written, and is read back
+/// from: `<state_dir>/attempts/<task>/<attempt>/report.md`.
+///
+/// Keyed by both ids, not just the attempt's, since [`AttemptId`] only
+/// counts within its own task: two different tasks' first attempts would
+/// otherwise collide on the same path. Naming the attempt in the path is
+/// also what keeps a retry's report from ever being mistaken for an earlier
+/// attempt's: each attempt gets its own file, never overwriting a prior
+/// one's.
+#[must_use]
+pub fn report_path(project: &Project, task: TaskId, attempt: AttemptId) -> PathBuf {
+    project
+        .state_dir
+        .join("attempts")
+        .join(task.get().to_string())
+        .join(attempt.get().to_string())
+        .join("report.md")
+}
+
+/// Creates the directory [`report_path`] names, so it exists before the
+/// provider that is expected to write into it ever runs. Returns the path
+/// itself, so a caller can pass it straight into the prompt it assembles for
+/// that provider.
+///
+/// # Errors
+///
+/// Returns [`Error::Io`] if the directory cannot be created.
+pub fn ensure_report_dir(project: &Project, task: TaskId, attempt: AttemptId) -> Result<PathBuf> {
+    let path = report_path(project, task, attempt);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    Ok(path)
+}
+
+/// Reads back and parses the report a provider wrote for `attempt` at
+/// [`report_path`], per `VISION.md` §3 invariant 4: an attempt's outcome is
+/// never assumed from the provider merely exiting.
+///
+/// # Errors
+///
+/// Returns [`Error::Report`] naming `report_path`'s value if no file exists
+/// there at all — a provider exiting without writing a report is a claim of
+/// nothing, not of success — and whatever [`parse_report`] itself returns if
+/// the file exists but is malformed.
+pub fn read_report(project: &Project, task: TaskId, attempt: AttemptId) -> Result<ReportResult> {
+    let path = report_path(project, task, attempt);
+    let text = std::fs::read_to_string(&path).map_err(|source| Error::Report {
+        detail: format!(
+            "no report found at {}: expected a first line of {EXPECTED} ({source})",
+            path.display()
+        ),
+    })?;
+    parse_report(&text)
 }
 
 #[cfg(test)]
@@ -174,5 +233,140 @@ mod tests {
     #[test]
     fn missing_space_after_colon_is_malformed() {
         assert!(parse_report("KTASK_RESULT:DONE\n").is_err());
+    }
+
+    fn project_at(state_dir: &std::path::Path) -> Project {
+        Project {
+            root: PathBuf::from("/repo"),
+            id: "test-project".to_string(),
+            state_dir: state_dir.to_path_buf(),
+        }
+    }
+
+    #[test]
+    fn report_path_is_keyed_by_state_dir_task_and_attempt() {
+        let state = tempfile::tempdir().expect("tempdir");
+        let project = project_at(state.path());
+
+        let path = report_path(&project, TaskId::new(7), AttemptId::new(2));
+
+        assert_eq!(
+            path,
+            state
+                .path()
+                .join("attempts")
+                .join("7")
+                .join("2")
+                .join("report.md")
+        );
+    }
+
+    #[test]
+    fn ensure_report_dir_creates_the_directory_report_path_lives_in() {
+        let state = tempfile::tempdir().expect("tempdir");
+        let project = project_at(state.path());
+
+        let path = ensure_report_dir(&project, TaskId::new(1), AttemptId::new(1))
+            .expect("ensure_report_dir");
+
+        assert!(
+            path.parent().expect("report.md has a parent").is_dir(),
+            "the report's directory must exist before anything writes into it"
+        );
+        assert_eq!(
+            path,
+            report_path(&project, TaskId::new(1), AttemptId::new(1))
+        );
+    }
+
+    #[test]
+    fn read_report_round_trips_a_report_written_at_report_path() {
+        let state = tempfile::tempdir().expect("tempdir");
+        let project = project_at(state.path());
+        let task = TaskId::new(1);
+        let attempt = AttemptId::new(1);
+
+        let path = ensure_report_dir(&project, task, attempt).expect("ensure_report_dir");
+        std::fs::write(&path, "KTASK_RESULT: DONE\nSummary: it worked.\n").expect("write report");
+
+        let result = read_report(&project, task, attempt).expect("read_report");
+
+        assert_eq!(result, ReportResult::Done);
+    }
+
+    #[test]
+    fn read_report_for_a_missing_file_is_a_classified_failure_naming_the_expected_path() {
+        let state = tempfile::tempdir().expect("tempdir");
+        let project = project_at(state.path());
+        let task = TaskId::new(1);
+        let attempt = AttemptId::new(1);
+        let expected_path = report_path(&project, task, attempt);
+
+        let err = read_report(&project, task, attempt)
+            .expect_err("no report was ever written for this attempt");
+
+        assert!(
+            matches!(err, Error::Report { .. }),
+            "a missing report must be a classified Error::Report, not treated as success"
+        );
+        assert!(
+            err.to_string()
+                .contains(&expected_path.display().to_string()),
+            "error must name the expected path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_second_attempts_missing_report_is_never_mistaken_for_the_first_attempts_report() {
+        let state = tempfile::tempdir().expect("tempdir");
+        let project = project_at(state.path());
+        let task = TaskId::new(1);
+        let first = AttemptId::new(1);
+        let second = AttemptId::new(2);
+
+        let first_path = ensure_report_dir(&project, task, first).expect("ensure_report_dir");
+        std::fs::write(&first_path, "KTASK_RESULT: DONE\nSummary: first attempt.\n")
+            .expect("write first attempt's report");
+
+        // The second attempt never wrote its own report; reading it must
+        // fail rather than silently returning the first attempt's `Done`.
+        let err = read_report(&project, task, second)
+            .expect_err("the second attempt's report was never written");
+        assert!(matches!(err, Error::Report { .. }));
+
+        // The first attempt's report is unaffected and still reads back.
+        let first_result = read_report(&project, task, first).expect("read first attempt");
+        assert_eq!(first_result, ReportResult::Done);
+    }
+
+    #[test]
+    fn read_report_distinguishes_two_attempts_that_both_wrote_reports() {
+        let state = tempfile::tempdir().expect("tempdir");
+        let project = project_at(state.path());
+        let task = TaskId::new(1);
+        let first = AttemptId::new(1);
+        let second = AttemptId::new(2);
+
+        let first_path = ensure_report_dir(&project, task, first).expect("ensure_report_dir");
+        std::fs::write(
+            &first_path,
+            "KTASK_RESULT: FAILED\nReason: first attempt failed.\n",
+        )
+        .expect("write first attempt's report");
+        let second_path = ensure_report_dir(&project, task, second).expect("ensure_report_dir");
+        std::fs::write(
+            &second_path,
+            "KTASK_RESULT: DONE\nSummary: second attempt worked.\n",
+        )
+        .expect("write second attempt's report");
+
+        assert_eq!(
+            read_report(&project, task, first).expect("read first"),
+            ReportResult::Failed
+        );
+        assert_eq!(
+            read_report(&project, task, second).expect("read second"),
+            ReportResult::Done
+        );
     }
 }

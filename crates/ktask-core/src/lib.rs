@@ -71,7 +71,7 @@ pub use remediate::{
     Bounds, Breaker, BreakerState, Decision, StopReason, bundle, check_no_policy_edit,
     should_continue, signature,
 };
-pub use report::{ReportResult, parse_report};
+pub use report::{ReportResult, ensure_report_dir, parse_report, read_report, report_path};
 pub use runner::{PreflightReport, Prepared, Runner, preflight};
 pub use state::{PauseReason, Phase, TaskState, apply, check_one_active, check_predecessor};
 pub use task::{Task, TaskStatus, parse_plan, validate};

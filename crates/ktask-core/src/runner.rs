@@ -15,9 +15,10 @@ use time::OffsetDateTime;
 
 use crate::{
     AttemptId, AttemptRecord, Bus, Config, Error, EventKind, FailureClass, Gate, GateKind,
-    Invocation, Journal, Outcome, Profile, Project, Provider, Recorder, RepoLock, Result, Task,
-    TaskId, acquire, build, classify, create_worktree, fetch, for_task, head_sha, load_for,
-    profile_from, require_clean, run_gate, write_evidence,
+    Invocation, Journal, Outcome, Profile, Project, Provider, Recorder, RepoLock, ReportResult,
+    Result, Task, TaskId, acquire, build, classify, create_worktree, ensure_report_dir, fetch,
+    for_task, head_sha, load_for, profile_from, read_report, require_clean, run_gate,
+    write_evidence,
 };
 
 /// How long [`Runner::prepare`] waits for the repository lock ([`acquire`])
@@ -154,6 +155,40 @@ impl Runner {
         write_evidence(&self.project, &record, "")?;
 
         Ok(attempt)
+    }
+
+    /// Creates the directory `task`'s `attempt` report will be written to
+    /// ([`crate::report_path`]) before any provider that might write into it
+    /// starts, and returns the prompt fragment naming that exact path: a
+    /// caller assembling the full prompt for this attempt includes it, so
+    /// the agent is told exactly where its report belongs rather than
+    /// having to guess a convention.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`] if the report's directory cannot be created.
+    pub fn name_report_path(&self, task: &Task, attempt: AttemptId) -> Result<String> {
+        let path = ensure_report_dir(&self.project, task.id, attempt)?;
+        Ok(format!(
+            "Your task report should be written to `{}` before exiting.\n",
+            path.display()
+        ))
+    }
+
+    /// Reads back and parses the report [`Runner::name_report_path`] told
+    /// the provider to write, once it has exited (`VISION.md` §3 invariant
+    /// 4: "a task is never done based only on an agent exit code or
+    /// statement"). Delegates entirely to [`crate::read_report`], which
+    /// draws the same [`crate::report_path`] this attempt's directory was
+    /// created at, so a report from a different attempt is never mistaken
+    /// for this one's.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Report`] naming the expected path if the provider
+    /// never wrote a report there, or if what it wrote does not parse.
+    pub fn collect_report(&self, task: &Task, attempt: AttemptId) -> Result<ReportResult> {
+        read_report(&self.project, task.id, attempt)
     }
 
     /// Brings `task` to the point an agent could start (`VISION.md` §6, §10):
@@ -528,7 +563,9 @@ fn check_lock_acquirable(project: &Project) -> CheckResult {
 mod tests {
     use super::*;
     use crate::testing::scratch_repo;
-    use crate::{Bus, Capabilities, Error, TaskStatus, project_config_path, read_evidence};
+    use crate::{
+        Bus, Capabilities, Error, TaskStatus, project_config_path, read_evidence, report_path,
+    };
 
     /// A [`Provider`] whose `invoke` always succeeds, proving
     /// [`check_provider_available`] (and the full [`preflight`] happy path)
@@ -924,6 +961,122 @@ mod tests {
 
         assert_eq!(first, AttemptId::new(1));
         assert_eq!(second, AttemptId::new(2));
+    }
+
+    #[test]
+    fn name_report_path_creates_the_directory_and_names_the_exact_report_path() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        write_runnable_config(&project);
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let runner = Runner::new(project.clone()).expect("build runner");
+        let named = runner
+            .name_report_path(&task, attempt)
+            .expect("name_report_path");
+
+        let expected = report_path(&project, task.id, attempt);
+        assert!(
+            expected.parent().expect("report.md has a parent").is_dir(),
+            "the report's directory must exist before a provider could run"
+        );
+        assert!(
+            named.contains(&expected.display().to_string()),
+            "prompt fragment must name the exact report path, got: {named:?}"
+        );
+    }
+
+    #[test]
+    fn collect_report_round_trips_a_report_the_provider_wrote_at_the_named_path() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        write_runnable_config(&project);
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let runner = Runner::new(project.clone()).expect("build runner");
+        runner
+            .name_report_path(&task, attempt)
+            .expect("name_report_path");
+        std::fs::write(
+            report_path(&project, task.id, attempt),
+            "KTASK_RESULT: DONE\nSummary: it worked.\n",
+        )
+        .expect("simulate the provider writing its report");
+
+        let result = runner
+            .collect_report(&task, attempt)
+            .expect("collect_report");
+
+        assert_eq!(result, ReportResult::Done);
+    }
+
+    #[test]
+    fn collect_report_for_a_missing_report_is_a_classified_failure_naming_the_expected_path() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        write_runnable_config(&project);
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+
+        let runner = Runner::new(project.clone()).expect("build runner");
+        runner
+            .name_report_path(&task, attempt)
+            .expect("name_report_path");
+
+        let err = runner
+            .collect_report(&task, attempt)
+            .expect_err("the provider never wrote a report");
+
+        assert!(matches!(err, Error::Report { .. }));
+        let expected = report_path(&project, task.id, attempt);
+        assert!(
+            err.to_string().contains(&expected.display().to_string()),
+            "error must name the expected path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn collect_report_never_mistakes_a_previous_attempts_report_for_the_current_ones() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        write_runnable_config(&project);
+        let task = sample_task(1);
+
+        let mut runner = Runner::new(project.clone()).expect("build runner");
+        let first = runner.begin_attempt(&task).expect("first attempt");
+        runner
+            .name_report_path(&task, first)
+            .expect("name_report_path for first attempt");
+        std::fs::write(
+            report_path(&project, task.id, first),
+            "KTASK_RESULT: DONE\nSummary: first attempt worked.\n",
+        )
+        .expect("write first attempt's report");
+
+        let second = runner.begin_attempt(&task).expect("second attempt");
+        runner
+            .name_report_path(&task, second)
+            .expect("name_report_path for second attempt");
+
+        // The second attempt's own report was never written: it must not
+        // be mistaken for the first attempt's `Done` report.
+        let err = runner
+            .collect_report(&task, second)
+            .expect_err("the second attempt never wrote its own report");
+        assert!(matches!(err, Error::Report { .. }));
+
+        // The first attempt's report is untouched by the second attempt's
+        // directory having been created.
+        let first_result = runner
+            .collect_report(&task, first)
+            .expect("collect first attempt's report");
+        assert_eq!(first_result, ReportResult::Done);
     }
 
     #[test]
