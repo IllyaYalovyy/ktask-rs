@@ -8,7 +8,7 @@
 use crate::event::AppEvent;
 use crate::keys::{KeyAction, lookup};
 use crate::layout::layout_for;
-use crate::types::{Overlay, Screen, TaskView};
+use crate::types::{Action, Overlay, Screen, TaskView};
 use crossterm::event::KeyEvent;
 use ktask_core::{Event, EventKind};
 use ratatui::Frame;
@@ -43,6 +43,14 @@ pub struct App {
     pub output: VecDeque<String>,
     /// The terminal's size as columns and rows.
     pub size: (u16, u16),
+    /// The actions the operator has asked for, oldest first, that the shell
+    /// has not carried out yet. [`update`] does no I/O, so a key that means
+    /// "pause" or "cancel" is recorded here and [`App::take_outbox`] hands it
+    /// to whatever performs the same core operation as the CLI command.
+    pub outbox: Vec<Action>,
+    /// A one-line message for the operator, such as why an action did
+    /// nothing. It is cleared by the next key press on the screen showing it.
+    pub notice: Option<String>,
 }
 
 impl App {
@@ -60,7 +68,15 @@ impl App {
             tasks: Vec::new(),
             output: VecDeque::new(),
             size,
+            outbox: Vec::new(),
+            notice: None,
         }
+    }
+
+    /// Removes and returns the actions waiting to be carried out, oldest
+    /// first.
+    pub fn take_outbox(&mut self) -> Vec<Action> {
+        std::mem::take(&mut self.outbox)
     }
 }
 
@@ -69,7 +85,8 @@ impl App {
 /// Only the key map overlay's keys (`?`, `F1`, `Esc`, `q`; see
 /// [`screen::help`](crate::screen::help)), screen navigation (`1`..`9`,
 /// `Tab`, `Shift-Tab`) and the queue's movement keys (see
-/// [`screen::queue`](crate::screen::queue)) are wired so far; any other key press leaves the state
+/// [`screen::queue`](crate::screen::queue), which also has the queue's action
+/// keys) are wired so far; any other key press leaves the state
 /// as it was.
 #[must_use]
 pub fn update(mut app: App, ev: AppEvent) -> App {
@@ -245,7 +262,18 @@ mod tests {
         assert!(app.scroll.is_empty());
         assert!(app.tasks.is_empty());
         assert!(app.output.is_empty());
+        assert!(app.outbox.is_empty());
+        assert_eq!(app.notice, None);
         assert_eq!(app.size, (80, 24));
+    }
+
+    #[test]
+    fn app_take_outbox_returns_the_waiting_actions_once_in_order() {
+        let mut app = App::new((80, 24));
+        app.outbox = vec![Action::Pause, Action::Interrupt];
+        assert_eq!(app.take_outbox(), [Action::Pause, Action::Interrupt]);
+        assert!(app.outbox.is_empty());
+        assert!(app.take_outbox().is_empty());
     }
 
     #[test]
@@ -411,7 +439,7 @@ mod tests {
         for overlay in [
             Overlay::KeyMap,
             Overlay::Confirm {
-                action: crate::Action::Pause,
+                action: Action::Pause,
                 prompt: "Pause?".into(),
             },
         ] {
@@ -544,7 +572,7 @@ mod tests {
     fn app_render_shows_the_confirm_prompt() {
         let mut app = App::new((80, 24));
         app.overlay = Some(Overlay::Confirm {
-            action: crate::Action::Pause,
+            action: Action::Pause,
             prompt: "Pause the queue?".into(),
         });
         assert!(contains(&app, "Pause the queue?"));

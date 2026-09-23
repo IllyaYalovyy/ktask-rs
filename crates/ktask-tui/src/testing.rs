@@ -35,6 +35,23 @@ impl Harness {
         harness
     }
 
+    /// An interface already in `app`'s state, drawn once, for tests that need
+    /// tasks in states the journal events folded so far cannot produce.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: drawing to a [`TestBackend`] cannot fail.
+    #[must_use]
+    pub fn from_app(app: App) -> Harness {
+        let (w, h) = app.size;
+        let mut harness = Harness {
+            app,
+            terminal: Terminal::new(TestBackend::new(w, h)).expect("test backend is infallible"),
+        };
+        harness.draw();
+        harness
+    }
+
     /// Feeds `ev` to the interface and redraws.
     ///
     /// A [`AppEvent::Resize`] resizes the terminal too, as a real one would
@@ -109,6 +126,17 @@ mod tests {
         // the frame is still the queue's.
         assert!(harness.text().starts_with("1 Queue"));
         assert_eq!(harness.app(), &App::new((20, 3)));
+    }
+
+    #[test]
+    fn testing_from_app_starts_in_the_given_state_at_its_size() {
+        let mut app = App::new((12, 4));
+        app.screen = crate::types::Screen::Git;
+        let harness = Harness::from_app(app.clone());
+        assert_eq!(harness.app(), &app);
+        assert_eq!(harness.buffer().area.width, 12);
+        assert_eq!(harness.buffer().area.height, 4);
+        assert!(harness.text().starts_with("8 Git"));
     }
 
     #[test]

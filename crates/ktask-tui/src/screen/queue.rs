@@ -10,17 +10,30 @@
 //! append tasks, so it keeps pointing at the same task while the queue
 //! grows; if the queue is ever shorter than the index, the last row is shown
 //! as selected instead.
+//!
+//! Five keys act on the queue: `p` pause, `i` interrupt, `r` retry the
+//! selected task, `c` cancel it and `Enter` open it in the inspector. The
+//! first four are [`Action`]s, the operations that have a CLI command of the
+//! same name; [`update`](crate::update) does no I/O, so a key that asks for
+//! one appends it to [`App::outbox`] and the shell carries it out through the
+//! core operation behind that command. `Enter` only changes the view. Each is
+//! offered under the rule its CLI command applies (`pause` and `interrupt`
+//! need a task in flight, `retry` a failed one, `cancel` any but a finished
+//! or publishing one); an action the selected state does not allow is drawn
+//! dimmed in the action bar, does nothing when pressed, and says why in
+//! [`App::notice`].
 
 use crate::app::App;
 use crate::keys::{KeyAction, lookup};
 use crate::layout::LayoutPlan;
 use crate::text::{display_width, truncate_to_width};
-use crate::types::{Screen, TaskView};
-use crossterm::event::KeyEvent;
+use crate::types::{Action, Screen, TaskView};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Clear, Paragraph};
 
 /// The column headings.
 const HEADINGS: [&str; 5] = ["ID", "STATE", "PROTOCOL", "PHASE", "ATTEMPTS"];
@@ -28,6 +41,13 @@ const HEADINGS: [&str; 5] = ["ID", "STATE", "PROTOCOL", "PHASE", "ATTEMPTS"];
 /// The width each column asks for, in columns: wide enough for its heading
 /// and for the longest value it can hold.
 const WANTED: [usize; 5] = [4, 17, 10, 15, 8];
+
+/// The fewest body rows that leave room for the action bar: the heading, three
+/// tasks and the bar. A shorter body gives every row to the tasks.
+const BAR_MIN_HEIGHT: u16 = 5;
+
+/// What separates two entries of the action bar.
+const BAR_GAP: &str = "  ";
 
 /// The marker column that points at the selected row.
 const MARKER: &str = "> ";
@@ -75,12 +95,170 @@ pub fn selected_row(app: &App) -> Option<usize> {
     )
 }
 
-/// Moves the selection for `j`, `k`, the arrows, `g` and `G`. Does nothing on
-/// other screens, under an overlay, on an empty queue, or for other keys.
+/// What one of the queue's action keys asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Operation {
+    Pause,
+    Interrupt,
+    Retry,
+    Cancel,
+    Inspect,
+}
+
+impl Operation {
+    /// Every operation, in the order the action bar lists them.
+    const ALL: [Operation; 5] = [
+        Operation::Pause,
+        Operation::Interrupt,
+        Operation::Retry,
+        Operation::Cancel,
+        Operation::Inspect,
+    ];
+
+    /// The operation `key` asks for. Modifiers unbind the key, so `Ctrl-C`
+    /// stays quit and never cancels.
+    fn from_key(key: &KeyEvent) -> Option<Self> {
+        if key.modifiers != KeyModifiers::NONE {
+            return None;
+        }
+        match key.code {
+            KeyCode::Char('p') => Some(Operation::Pause),
+            KeyCode::Char('i') => Some(Operation::Interrupt),
+            KeyCode::Char('r') => Some(Operation::Retry),
+            KeyCode::Char('c') => Some(Operation::Cancel),
+            KeyCode::Enter => Some(Operation::Inspect),
+            _ => None,
+        }
+    }
+
+    /// The key as the action bar names it.
+    fn key(self) -> &'static str {
+        match self {
+            Operation::Pause => "p",
+            Operation::Interrupt => "i",
+            Operation::Retry => "r",
+            Operation::Cancel => "c",
+            Operation::Inspect => "Enter",
+        }
+    }
+
+    /// The word the action bar and the refusals use: the CLI command's name
+    /// for an action.
+    fn label(self) -> &'static str {
+        match self {
+            Operation::Pause => "pause",
+            Operation::Interrupt => "interrupt",
+            Operation::Retry => "retry",
+            Operation::Cancel => "cancel",
+            Operation::Inspect => "inspect",
+        }
+    }
+}
+
+/// What an available operation does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Outcome {
+    /// Ask for this action to be carried out.
+    Dispatch(Action),
+    /// Show the task on this row in the inspector.
+    Inspect(usize),
+}
+
+/// Whether a supervisor is in the middle of a task in `state`: an attempt is
+/// in flight, and `pause` and `interrupt` have something to act on. The
+/// states are named as [`TaskView::state`] names them.
+fn in_flight(state: &str) -> bool {
+    matches!(
+        state,
+        "Preflight" | "Running" | "Remediating" | "Verifying" | "Publishing"
+    )
+}
+
+/// Why `cancel` cannot help a task in `state`, completing "cancel: task N
+/// ...", or `None` when it can: nothing is running a queued, paused or failed
+/// task, and a supervisor stops a running one; but a half-published change
+/// cannot be cancelled and a finished task has nothing left to cancel.
+fn cancel_refusal(state: &str) -> Option<String> {
+    match state {
+        "Publishing" => Some(
+            "is publishing; a half-published change cannot be cancelled, and once it is \
+             published it is done"
+                .to_owned(),
+        ),
+        "PublishedVerified" | "Done" | "Acknowledged" | "Cancelled" => {
+            let name = state.to_lowercase();
+            Some(if state == "Cancelled" {
+                format!("is already {name}")
+            } else {
+                format!("is already {name}; there is nothing to cancel")
+            })
+        }
+        _ => None,
+    }
+}
+
+/// What `operation` does now, or the reason it is not available: what the
+/// operator is told when they press its key anyway.
+fn plan(app: &App, operation: Operation) -> Result<Outcome, String> {
+    let label = operation.label();
+    let selected = selected_row(app).and_then(|row| app.tasks.get(row).map(|task| (row, task)));
+    match (operation, selected) {
+        (Operation::Pause | Operation::Interrupt, _) => {
+            if app.tasks.iter().any(|task| in_flight(&task.state)) {
+                Ok(Outcome::Dispatch(if operation == Operation::Pause {
+                    Action::Pause
+                } else {
+                    Action::Interrupt
+                }))
+            } else {
+                Err(format!(
+                    "{label}: no task is running; there is nothing to {label}"
+                ))
+            }
+        }
+        (_, None) => Err(format!("{label}: no task is selected")),
+        (Operation::Inspect, Some((row, _))) => Ok(Outcome::Inspect(row)),
+        (Operation::Retry, Some((_, task))) if task.state == "Failed" => {
+            Ok(Outcome::Dispatch(Action::Retry { task: task.id }))
+        }
+        (Operation::Retry, Some((_, task))) => Err(format!(
+            "retry: task {} is {}; only a failed task can be retried",
+            task.id,
+            task.state.to_lowercase()
+        )),
+        (Operation::Cancel, Some((_, task))) => match cancel_refusal(&task.state) {
+            None => Ok(Outcome::Dispatch(Action::Cancel { task: task.id })),
+            Some(why) => Err(format!("cancel: task {} {why}", task.id)),
+        },
+    }
+}
+
+/// Carries out `operation` if it is available, otherwise leaves only the
+/// reason in [`App::notice`].
+fn perform(app: &mut App, operation: Operation) {
+    match plan(app, operation) {
+        Ok(Outcome::Dispatch(action)) => app.outbox.push(action),
+        Ok(Outcome::Inspect(row)) => {
+            app.selected.insert(Screen::Inspector, row);
+            app.screen = Screen::Inspector;
+        }
+        Err(why) => app.notice = Some(why),
+    }
+}
+
+/// Handles the queue's keys: `p`, `i`, `r`, `c` and `Enter` (see the module
+/// documentation), and `j`, `k`, the arrows, `g` and `G`, which move the
+/// selection. Does nothing on other screens, under an overlay, or for other
+/// keys. Any key press here first clears the notice the last one left.
 ///
 /// The selection stops at the first and last rows rather than wrapping.
 pub fn handle_key(app: &mut App, key: &KeyEvent) {
     if !has_focus(app) {
+        return;
+    }
+    app.notice = None;
+    if let Some(operation) = Operation::from_key(key) {
+        perform(app, operation);
         return;
     }
     let (Some(current), Some(last)) = (selected_row(app), app.tasks.len().checked_sub(1)) else {
@@ -156,33 +334,85 @@ fn task_line(task: &TaskView, selected: bool, widths: [usize; 5]) -> Line<'stati
     }
 }
 
+/// The action bar: each operation's key and name, dimmed when it is not
+/// available for the selected task, cut to `width` columns.
+fn action_bar(app: &App, width: usize) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut left = width;
+    for (at, operation) in Operation::ALL.into_iter().enumerate() {
+        let style = if plan(app, operation).is_ok() {
+            Style::new()
+        } else {
+            Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM)
+        };
+        let gap = if at == 0 { "" } else { BAR_GAP };
+        let text = truncate_to_width(
+            &format!("{gap}{} {}", operation.key(), operation.label()),
+            left,
+        );
+        left -= display_width(&text);
+        // The gap is not part of the entry, so it does not take its style.
+        match text.strip_prefix(gap) {
+            Some(entry) if !gap.is_empty() => {
+                spans.push(Span::raw(gap));
+                spans.push(Span::styled(entry.to_owned(), style));
+            }
+            _ => spans.push(Span::styled(text, style)),
+        }
+    }
+    Line::from(spans)
+}
+
+/// The last row of `body`, where the action bar and the notice go.
+fn last_row(body: Rect) -> Rect {
+    Rect {
+        y: body.bottom() - 1,
+        height: 1,
+        ..body
+    }
+}
+
 /// Draws the queue into the body of `plan`: a heading row, then the tasks,
-/// scrolled so that the selected one is in view.
+/// scrolled so that the selected one is in view, then the action bar or, when
+/// there is a notice, the notice in its place.
 pub fn render(app: &App, plan: &LayoutPlan, frame: &mut Frame<'_>) {
     let body = plan.body;
     if body.is_empty() {
         return;
     }
-    let Some(selected) = selected_row(app) else {
-        let text = truncate_to_width(EMPTY, usize::from(body.width));
-        frame.render_widget(Paragraph::new(text), body);
-        return;
-    };
-    let widths = column_widths(usize::from(body.width));
-    let headings = HEADINGS.map(|heading| (heading.to_owned(), Style::new()));
-    let mut lines =
-        vec![row_line("  ", headings, widths).style(Style::new().add_modifier(Modifier::BOLD))];
-    let rows = usize::from(body.height) - 1;
-    let offset = (selected + 1).saturating_sub(rows);
-    lines.extend(
-        app.tasks
-            .iter()
-            .enumerate()
-            .skip(offset)
-            .take(rows)
-            .map(|(at, task)| task_line(task, at == selected, widths)),
-    );
-    frame.render_widget(Paragraph::new(lines), body);
+    let width = usize::from(body.width);
+    if let Some(selected) = selected_row(app) {
+        let widths = column_widths(width);
+        let headings = HEADINGS.map(|heading| (heading.to_owned(), Style::new()));
+        let mut lines =
+            vec![row_line("  ", headings, widths).style(Style::new().add_modifier(Modifier::BOLD))];
+        let has_actions_row = body.height >= BAR_MIN_HEIGHT;
+        let rows = usize::from(body.height) - 1 - usize::from(has_actions_row);
+        let offset = (selected + 1).saturating_sub(rows);
+        lines.extend(
+            app.tasks
+                .iter()
+                .enumerate()
+                .skip(offset)
+                .take(rows)
+                .map(|(at, task)| task_line(task, at == selected, widths)),
+        );
+        frame.render_widget(Paragraph::new(lines), body);
+        if has_actions_row {
+            frame.render_widget(Paragraph::new(action_bar(app, width)), last_row(body));
+        }
+    } else {
+        frame.render_widget(Paragraph::new(truncate_to_width(EMPTY, width)), body);
+    }
+    if let Some(notice) = &app.notice {
+        let line = Span::styled(
+            truncate_to_width(notice, width),
+            Style::new().fg(Color::Yellow),
+        );
+        let row = last_row(body);
+        frame.render_widget(Clear, row);
+        frame.render_widget(Paragraph::new(line), row);
+    }
 }
 
 /// Whether the queue screen has the keys: it is showing and nothing is over it.
@@ -556,10 +786,376 @@ mod tests {
         assert_eq!(rows[0], "1 Queue");
         assert!(rows[1].contains("STATE"));
         assert!(rows[2].starts_with("> 1 "));
+        // The body's last row is the action bar, so one fewer task shows.
+        assert_eq!(
+            rows[21],
+            "  20   Queued            tdd        -               0"
+        );
         assert_eq!(
             rows[22],
-            "  21   Queued            tdd        -               0"
+            "p pause  i interrupt  r retry  c cancel  Enter inspect"
         );
         assert_eq!(rows[23], "Press ? for the key map");
+    }
+    // --- actions -----------------------------------------------------------
+
+    use crate::testing::Harness;
+    use crate::types::Action;
+
+    /// A harness over `tasks` on a terminal tall enough for the action bar.
+    fn harness_with(tasks: Vec<TaskView>) -> Harness {
+        Harness::from_app(app_with(tasks, (80, 24)))
+    }
+
+    fn press_code(harness: &mut Harness, code: KeyCode) {
+        harness.send(AppEvent::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    /// One task in each of the states an action's availability depends on.
+    fn mixed_queue() -> Vec<TaskView> {
+        vec![
+            view(1, "Running", Some(Phase::Red), 1),
+            view(2, "Failed", None, 2),
+            view(3, "Queued", None, 0),
+            view(4, "Done", None, 1),
+        ]
+    }
+
+    #[test]
+    fn queue_actions_dispatch_core_operations() {
+        let mut harness = harness_with(mixed_queue());
+
+        // Task 1 is running: pause, interrupt and cancel apply to it.
+        harness.key('p');
+        harness.key('i');
+        harness.key('c');
+        assert_eq!(
+            harness.app().outbox,
+            [
+                Action::Pause,
+                Action::Interrupt,
+                Action::Cancel {
+                    task: TaskId::new(1)
+                }
+            ]
+        );
+        assert_eq!(harness.app().notice, None);
+
+        // Task 2 is failed: it can be retried, and cancelled.
+        harness.key('j');
+        harness.key('r');
+        harness.key('c');
+        let outbox = harness.app().outbox.clone();
+        assert_eq!(
+            outbox[3..],
+            [
+                Action::Retry {
+                    task: TaskId::new(2)
+                },
+                Action::Cancel {
+                    task: TaskId::new(2)
+                }
+            ]
+        );
+
+        // Each is the action whose CLI command it names.
+        let commands: Vec<&str> = outbox.iter().map(Action::command).collect();
+        assert_eq!(
+            commands,
+            ["pause", "interrupt", "cancel", "retry", "cancel"]
+        );
+
+        // Jump to the inspector is a view change, not an action.
+        press_code(&mut harness, KeyCode::Enter);
+        assert_eq!(harness.app().screen, Screen::Inspector);
+        assert_eq!(harness.app().selected.get(&Screen::Inspector), Some(&1));
+        assert_eq!(harness.app().outbox, outbox);
+        assert!(harness.text().starts_with("5 Task inspector"));
+    }
+
+    #[test]
+    fn queue_action_keys_act_on_the_selected_task() {
+        let mut harness = harness_with(mixed_queue());
+        for (moves, want) in [(0, 1), (1, 2), (1, 3)] {
+            for _ in 0..moves {
+                harness.key('j');
+            }
+            harness.key('c');
+            let last = harness.app().outbox.last().cloned();
+            assert_eq!(
+                last,
+                Some(Action::Cancel {
+                    task: TaskId::new(want)
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn queue_enter_opens_the_inspector_on_the_selected_task() {
+        let mut harness = harness_with(mixed_queue());
+        harness.key('G');
+        press_code(&mut harness, KeyCode::Enter);
+        assert_eq!(harness.app().screen, Screen::Inspector);
+        assert_eq!(harness.app().selected.get(&Screen::Inspector), Some(&3));
+        // The queue keeps its own selection for when the operator returns.
+        assert_eq!(harness.app().selected.get(&Screen::Queue), Some(&3));
+    }
+
+    /// The actions that are available for a task in each state, named as the
+    /// CLI names them, from the rules the CLI applies (`pause` and
+    /// `interrupt` need a task in flight; `retry` a failed one; `cancel` any
+    /// task but a finished or publishing one).
+    fn expected_available(state: &TaskState) -> Vec<&'static str> {
+        let in_flight = matches!(
+            state,
+            TaskState::Preflight
+                | TaskState::Running { .. }
+                | TaskState::Remediating { .. }
+                | TaskState::Verifying { .. }
+                | TaskState::Publishing { .. }
+        );
+        let cancellable = matches!(
+            state,
+            TaskState::Queued
+                | TaskState::Paused { .. }
+                | TaskState::Failed { .. }
+                | TaskState::Preflight
+                | TaskState::Running { .. }
+                | TaskState::Remediating { .. }
+                | TaskState::Verifying { .. }
+        );
+        let mut available = Vec::new();
+        if in_flight {
+            available.extend(["pause", "interrupt"]);
+        }
+        if matches!(state, TaskState::Failed { .. }) {
+            available.push("retry");
+        }
+        if cancellable {
+            available.push("cancel");
+        }
+        available
+    }
+
+    #[test]
+    fn queue_actions_are_available_exactly_in_the_states_the_cli_accepts() {
+        for (state, phase) in every_state() {
+            let mut harness = harness_with(vec![view(1, state.name(), phase, 1)]);
+            for key in ['p', 'i', 'r', 'c'] {
+                harness.key(key);
+            }
+            let dispatched: Vec<&str> = harness.app().outbox.iter().map(Action::command).collect();
+            let mut want = expected_available(&state);
+            want.sort_by_key(|name| {
+                ["pause", "interrupt", "retry", "cancel"]
+                    .iter()
+                    .position(|n| n == name)
+            });
+            assert_eq!(dispatched, want, "{}", state.name());
+        }
+    }
+
+    #[test]
+    fn queue_bar_shows_an_unavailable_action_dimmed_and_an_available_one_plain() {
+        let bar = "p pause  i interrupt  r retry  c cancel  Enter inspect";
+        for (state, retry_available) in [("Failed", true), ("Running", false)] {
+            let harness = harness_with(vec![view(1, state, None, 1)]);
+            let text = harness.text();
+            let row = text.lines().nth(22).expect("bar row").trim_end();
+            assert_eq!(row, bar, "{state}");
+            let buffer = harness.buffer();
+            // Columns of the first letter of each action's key.
+            for (name, column, available) in [
+                ("pause", 0, state == "Running"),
+                ("interrupt", 9, state == "Running"),
+                ("retry", 22, retry_available),
+                ("cancel", 31, true),
+                ("inspect", 41, true),
+            ] {
+                let cell = &buffer[(column, 22)];
+                let dimmed = cell.modifier.contains(Modifier::DIM);
+                assert_eq!(dimmed, !available, "{name} with the task {state}");
+                assert_eq!(cell.fg == Color::DarkGray, !available, "{name} {state}");
+            }
+        }
+    }
+
+    #[test]
+    fn queue_bar_is_left_out_when_the_body_is_too_short_for_it() {
+        let app = app_with(vec![view(1, "Failed", None, 1)], (64, 5));
+        assert!(!snapshot(&app).contains("pause"));
+        let app = app_with(vec![view(1, "Failed", None, 1)], (64, 6));
+        assert!(snapshot(&app).contains("pause"));
+    }
+
+    #[test]
+    fn queue_bar_is_cut_to_the_width_and_never_overflows() {
+        let app = app_with(vec![view(1, "Failed", None, 1)], (20, 8));
+        let text = snapshot(&app);
+        let row = text.lines().nth(7).expect("bar row");
+        assert_eq!(row, "p pause  i interrupt");
+        for size in [(1, 8), (3, 8), (10, 8), (0, 8)] {
+            let _ = snapshot(&app_with(vec![view(1, "Failed", None, 1)], size));
+        }
+    }
+
+    #[test]
+    fn queue_bar_keeps_the_last_task_out_of_its_row() {
+        let tasks = (1..=10).map(|id| view(id, "Queued", None, 0)).collect();
+        let mut app = app_with(tasks, (64, 6));
+        app = press(app, KeyCode::Char('G'));
+        let text = snapshot(&app);
+        let rows: Vec<&str> = text.lines().collect();
+        assert!(rows[1].contains("ID"), "{rows:?}");
+        assert!(rows[4].starts_with("> 10 "), "{rows:?}");
+        assert!(rows[5].starts_with("p pause"), "{rows:?}");
+    }
+
+    #[test]
+    fn queue_disabled_action_does_nothing_and_says_why() {
+        let cases = [
+            (
+                'p',
+                vec![view(1, "Queued", None, 0)],
+                "pause: no task is running",
+            ),
+            (
+                'i',
+                vec![view(1, "Done", None, 1)],
+                "interrupt: no task is running",
+            ),
+            (
+                'r',
+                vec![view(1, "Running", None, 1)],
+                "retry: task 1 is running; only a failed task can be retried",
+            ),
+            (
+                'c',
+                vec![view(1, "Publishing", None, 1)],
+                "cancel: task 1 is publishing",
+            ),
+            (
+                'c',
+                vec![view(1, "Done", None, 1)],
+                "cancel: task 1 is already done; there is nothing to cancel",
+            ),
+            (
+                'c',
+                vec![view(1, "Cancelled", None, 1)],
+                "cancel: task 1 is already cancelled",
+            ),
+        ];
+        for (key, tasks, why) in cases {
+            let mut harness = harness_with(tasks.clone());
+            let before = harness.app().clone();
+            harness.key(key);
+            let after = harness.app().clone();
+            assert_eq!(
+                after.notice.as_deref().map(|n| n.starts_with(why)),
+                Some(true),
+                "{key}: {:?}",
+                after.notice
+            );
+            assert!(after.outbox.is_empty(), "{key}");
+            assert_eq!(
+                App {
+                    notice: None,
+                    ..after
+                },
+                before,
+                "{key}"
+            );
+            assert!(harness.text().contains(why), "{key}: {}", harness.text());
+        }
+    }
+
+    #[test]
+    fn queue_notice_is_drawn_in_place_of_the_bar_and_the_next_key_clears_it() {
+        let mut harness = harness_with(vec![view(1, "Done", None, 1)]);
+        harness.key('r');
+        let shown = harness.text();
+        assert!(shown.contains("retry: task 1 is done"), "{shown}");
+        assert!(!shown.contains("p pause"), "{shown}");
+        harness.key('j');
+        assert_eq!(harness.app().notice, None);
+        assert!(harness.text().contains("p pause"));
+        assert!(!harness.text().contains("retry: task 1"));
+    }
+
+    #[test]
+    fn queue_notice_is_shown_even_when_the_body_has_no_room_for_the_bar() {
+        let mut app = app_with(vec![view(1, "Done", None, 1)], (64, 4));
+        app = press(app, KeyCode::Char('r'));
+        assert!(snapshot(&app).contains("retry: task 1 is done"));
+    }
+
+    #[test]
+    fn queue_actions_on_an_empty_queue_are_disabled_with_a_reason() {
+        for (key, why) in [
+            ('p', "pause: no task is running; there is nothing to pause"),
+            (
+                'i',
+                "interrupt: no task is running; there is nothing to interrupt",
+            ),
+            ('r', "retry: no task is selected"),
+            ('c', "cancel: no task is selected"),
+        ] {
+            let mut harness = Harness::new(80, 5);
+            harness.key(key);
+            assert!(harness.app().outbox.is_empty(), "{key}");
+            assert_eq!(harness.app().notice.as_deref(), Some(why));
+            assert!(harness.text().contains(why), "{}", harness.text());
+        }
+        let mut harness = Harness::new(80, 5);
+        press_code(&mut harness, KeyCode::Enter);
+        assert_eq!(harness.app().screen, Screen::Queue);
+        assert_eq!(
+            harness.app().notice.as_deref(),
+            Some("inspect: no task is selected")
+        );
+    }
+
+    #[test]
+    fn queue_action_keys_are_ignored_off_the_queue_screen_and_under_an_overlay() {
+        for key in ['p', 'i', 'r', 'c'] {
+            let before = App {
+                screen: Screen::Logs,
+                ..app_with(mixed_queue(), (80, 24))
+            };
+            assert_eq!(press(before.clone(), KeyCode::Char(key)), before, "{key}");
+            let before = App {
+                overlay: Some(Overlay::KeyMap),
+                ..app_with(mixed_queue(), (80, 24))
+            };
+            assert_eq!(press(before.clone(), KeyCode::Char(key)), before, "{key}");
+        }
+        let before = App {
+            screen: Screen::Logs,
+            ..app_with(mixed_queue(), (80, 24))
+        };
+        assert_eq!(press(before.clone(), KeyCode::Enter), before);
+    }
+
+    #[test]
+    fn queue_action_keys_need_no_modifier() {
+        let before = app_with(mixed_queue(), (80, 24));
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+            for key in ['p', 'i', 'r', 'c'] {
+                let event = AppEvent::Key(KeyEvent::new(KeyCode::Char(key), modifiers));
+                assert_eq!(update(before.clone(), event), before, "{key} {modifiers:?}");
+            }
+            let event = AppEvent::Key(KeyEvent::new(KeyCode::Enter, modifiers));
+            assert_eq!(update(before.clone(), event), before);
+        }
+    }
+
+    #[test]
+    fn queue_selection_is_clamped_for_actions_as_it_is_for_the_marker() {
+        let mut app = app_with(mixed_queue(), (80, 24));
+        app.selected.insert(Screen::Queue, 99);
+        app = press(app, KeyCode::Char('c'));
+        assert_eq!(app.outbox, []);
+        assert!(app.notice.is_some_and(|n| n.contains("task 4")));
     }
 }
