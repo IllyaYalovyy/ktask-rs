@@ -48,6 +48,13 @@ const TASK_TEMPLATE_FILE: &str = "task.md";
 /// library.
 const CONTEXT_DOC_FILE: &str = "context.md";
 
+/// The path, relative to a repository's root, that ADRs are recorded under.
+const ADR_DIR: &str = "docs/adr";
+
+/// The template file inside [`ADR_DIR`] that `collect_adrs` never treats as
+/// a recorded decision.
+const ADR_TEMPLATE_FILE: &str = "0000-template.md";
+
 /// Writes the default task template and context document into
 /// [`paths::prompt_library`], if they are not already there.
 ///
@@ -105,6 +112,46 @@ fn load_template_with(project: &Project, env: &dyn Fn(&str) -> Option<String>) -
     ensure_defaults_with(env)?;
     let default_path = paths::prompt_library_with(env)?.join(TASK_TEMPLATE_FILE);
     Ok(std::fs::read_to_string(default_path)?)
+}
+
+/// Reads every recorded architecture decision record out of a repository, in
+/// filename order, for [`assemble`]'s `adrs` argument.
+///
+/// Recorded decisions live at `docs/adr/*.md` (VISION.md §3 invariant 8:
+/// "an unresolved product or technical decision is a first-class pause
+/// state, and its resolution is recorded as a decision record (ADR)
+/// available to future tasks"). `docs/adr/0000-template.md` is the blank
+/// template every ADR is copied from, not a decision, so it is skipped.
+/// Files are read in filename order, which is also ADR number order given
+/// the `NNNN-slug.md` naming convention every ADR in this repository
+/// follows, so a later decision always appears after an earlier one.
+///
+/// # Errors
+///
+/// Returns [`Error::Io`] when `docs/adr` exists but cannot be listed, or
+/// when one of its files cannot be read. A repository with no `docs/adr`
+/// directory at all is not an error: `resolve` (VISION.md §6, §3 invariant
+/// 8) only creates it once the first decision is recorded, so most task
+/// contexts hit this case.
+pub fn collect_adrs(repo_root: &Path) -> Result<Vec<String>> {
+    let dir = repo_root.join(ADR_DIR);
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths: Vec<_> = std::fs::read_dir(&dir)?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<_>>()?;
+    paths.retain(|path| {
+        path.extension().and_then(|ext| ext.to_str()) == Some("md")
+            && path.file_name().and_then(|name| name.to_str()) != Some(ADR_TEMPLATE_FILE)
+    });
+    paths.sort();
+
+    paths
+        .into_iter()
+        .map(|path| Ok(std::fs::read_to_string(path)?))
+        .collect()
 }
 
 /// Assembles the full prompt handed to a provider for one attempt at `task`.
@@ -415,5 +462,80 @@ mod tests {
         let template = load_template_with(&project, &env).expect("load template");
 
         assert!(template.contains("{{TASK}}"));
+    }
+
+    #[test]
+    fn collect_adrs_yields_an_empty_list_when_docs_adr_does_not_exist() {
+        let repo_root = tempfile::tempdir().expect("tempdir");
+
+        let adrs = collect_adrs(repo_root.path()).expect("collect adrs");
+
+        assert_eq!(adrs, Vec::<String>::new());
+    }
+
+    #[test]
+    fn collect_adrs_reads_files_in_filename_order_skipping_the_template() {
+        let repo_root = tempfile::tempdir().expect("tempdir");
+        let adr_dir = repo_root.path().join("docs").join("adr");
+        std::fs::create_dir_all(&adr_dir).expect("create docs/adr");
+        std::fs::write(adr_dir.join(ADR_TEMPLATE_FILE), "TEMPLATE").expect("write template");
+        std::fs::write(adr_dir.join("0002-second-decision.md"), "SECOND").expect("write second");
+        std::fs::write(adr_dir.join("0001-first-decision.md"), "FIRST").expect("write first");
+        std::fs::write(adr_dir.join("notes.txt"), "NOT AN ADR").expect("write non-md file");
+
+        let adrs = collect_adrs(repo_root.path()).expect("collect adrs");
+
+        assert_eq!(adrs, vec!["FIRST".to_string(), "SECOND".to_string()]);
+    }
+
+    #[test]
+    fn an_adr_written_by_resolve_reaches_the_next_tasks_assembled_context_end_to_end() {
+        let config_home = tempfile::tempdir().expect("tempdir");
+        let env = env_with(&config_home);
+        let repo_root = tempfile::tempdir().expect("tempdir");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_with_state_dir(state_dir.path().to_path_buf());
+
+        // Simulates `ktask-rs resolve` recording a human's answer to a
+        // `waiting_input` pause as an ADR (VISION.md §3 invariant 8, §6),
+        // before the next task in the queue is assembled.
+        let adr_dir = repo_root.path().join("docs").join("adr");
+        std::fs::create_dir_all(&adr_dir).expect("create docs/adr");
+        std::fs::write(
+            adr_dir.join(ADR_TEMPLATE_FILE),
+            "# NNNN. Short title\n\nblank template, not a decision",
+        )
+        .expect("write template");
+        std::fs::write(
+            adr_dir.join("0001-use-postgres.md"),
+            "# 0001. Use Postgres for the journal\n\nDecided by the human via `resolve`.",
+        )
+        .expect("write adr");
+
+        ensure_defaults_with(&env).expect("ensure defaults");
+        let template = load_template_with(&project, &env).expect("load template");
+        let library_dir = paths::prompt_library_with(&env).expect("prompt library path");
+        let context_doc =
+            std::fs::read_to_string(library_dir.join(CONTEXT_DOC_FILE)).expect("read context.md");
+        let adrs = collect_adrs(repo_root.path()).expect("collect adrs");
+
+        let next_task = task(81, "Do the next thing.");
+        let prompt = assemble(
+            &next_task,
+            &context_doc,
+            &adrs,
+            &template,
+            AttemptId::new(1),
+            161,
+        );
+
+        assert!(
+            prompt.contains("Use Postgres for the journal"),
+            "the recorded decision must reach the next task's context: {prompt:?}"
+        );
+        assert!(
+            !prompt.contains("blank template, not a decision"),
+            "the ADR template itself must not be injected as a decision: {prompt:?}"
+        );
     }
 }

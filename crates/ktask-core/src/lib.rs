@@ -34,7 +34,7 @@ pub use classify::{
     wait_plan,
 };
 pub use config::{Config, Resolved, Source, load_for};
-pub use context::{assemble, ensure_defaults, load_template};
+pub use context::{assemble, collect_adrs, ensure_defaults, load_template};
 pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use events::{Bus, Recorder, Subscription};
