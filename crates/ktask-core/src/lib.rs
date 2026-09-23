@@ -22,6 +22,7 @@ mod project;
 mod protocol;
 mod provider;
 mod queue;
+mod recovery;
 mod redact;
 mod remediate;
 mod report;
@@ -66,6 +67,7 @@ pub use provider::{
     Step, StepOutcome, Usage, UsageSource, build, check_model, run_streaming,
 };
 pub use queue::{load, next_runnable};
+pub use recovery::{RecoveryDecision, reconcile};
 pub use redact::redact;
 pub use remediate::{
     Bounds, Breaker, BreakerState, Decision, StopReason, bundle, check_no_policy_edit,
