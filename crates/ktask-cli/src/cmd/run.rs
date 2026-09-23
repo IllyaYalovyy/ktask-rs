@@ -417,6 +417,9 @@ fn progress_line(event: &Event) -> Option<String> {
             format!("tdd exception {exception:?}: {reason}")
         }
         EventKind::DecisionRaised { request } => format!("needs input: {}", request.question),
+        EventKind::DecisionResolved { adr_path, .. } => {
+            format!("decision resolved: {}", adr_path.display())
+        }
         EventKind::SelfHealingReport {
             attempt,
             class,
@@ -971,6 +974,13 @@ mod tests {
                     reason: PauseReason::Input,
                 },
                 "task 1: paused: needs input; `ktask-rs resolve` answers it",
+            ),
+            (
+                EventKind::DecisionResolved {
+                    adr_path: std::path::PathBuf::from("docs/adr/0009-storage.md"),
+                    answer: "SQLite".to_string(),
+                },
+                "task 1: decision resolved: docs/adr/0009-storage.md",
             ),
         ];
         for (kind, expected) in cases {

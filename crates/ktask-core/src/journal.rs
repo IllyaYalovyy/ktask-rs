@@ -2070,8 +2070,9 @@ mod proptests {
 
     /// Mirrors `state.rs`'s `from_paused`, whose legal events depend on
     /// `reason`: only a `HumanGate` pause accepts `GateAcknowledged`, only
-    /// an `Interrupted` pause accepts `RecoveryDecision`, and every reason
-    /// except `HumanGate` accepts `Resumed`.
+    /// an `Interrupted` pause accepts `RecoveryDecision`, only an `Input`
+    /// pause accepts `DecisionResolved`, and every reason except `HumanGate`
+    /// accepts `Resumed`.
     fn arb_step_from_paused(
         reason: &PauseReason,
         resume_to: TaskState,
@@ -2125,7 +2126,21 @@ mod proptests {
                 ]
                 .boxed()
             }
-            PauseReason::Limit { .. } | PauseReason::Input | PauseReason::Blocked => prop_oneof![
+            PauseReason::Input => prop_oneof![
+                Just((EventKind::Resumed, resume_to.clone())),
+                (arb_short_string(), arb_short_string()).prop_map(|(path, answer)| {
+                    let event = EventKind::DecisionResolved {
+                        adr_path: PathBuf::from(path),
+                        answer,
+                    };
+                    (event, TaskState::Queued)
+                }),
+                arb_short_string().prop_map(|reason| {
+                    (EventKind::TaskCancelled { reason }, TaskState::Cancelled)
+                }),
+            ]
+            .boxed(),
+            PauseReason::Limit { .. } | PauseReason::Blocked => prop_oneof![
                 Just((EventKind::Resumed, resume_to.clone())),
                 arb_short_string().prop_map(|reason| {
                     (EventKind::TaskCancelled { reason }, TaskState::Cancelled)

@@ -4,10 +4,10 @@
 //! listed here, `#[serde(tag = "kind")]` so a stored event's `kind` column
 //! names its variant. Nothing may emit an event this enum does not contain.
 //!
-//! Two variants are deliberately absent because their payload names a type
-//! no earlier task has defined: `ProviderDetected` and `DecisionResolved`.
-//! Each is added by the task that defines its payload type, which also adds
-//! its arm to the transition function.
+//! One variant is deliberately absent because its payload names a type no
+//! earlier task has defined: `ProviderDetected`. It is added by the task that
+//! defines its payload type, which also adds its arm to the transition
+//! function.
 
 use crate::gate::{GateKind, GateResult};
 use crate::{
@@ -15,6 +15,7 @@ use crate::{
     Recovery, Stream, TaskId, TddException, Usage,
 };
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use time::OffsetDateTime;
 
 /// A single record in the event journal: a position, a time, the task it
@@ -206,6 +207,18 @@ pub enum EventKind {
         /// The question raised, and everything a human needs to answer it.
         request: DecisionRequest,
     },
+    /// A human answered a raised decision (`ktask-rs resolve`): `VISION.md`
+    /// §3 invariant 8. The task leaves its `waiting_input` pause and is
+    /// queued to run again with the answer in its context. The answer is
+    /// journaled in full, so the ADR at `adr_path` can always be rebuilt from
+    /// the journal.
+    DecisionResolved {
+        /// Where the decision record was written, relative to the project's
+        /// repository root.
+        adr_path: PathBuf,
+        /// The human's answer, verbatim.
+        answer: String,
+    },
     /// A human acknowledged a gate that required their attention.
     GateAcknowledged {
         /// Who acknowledged the gate.
@@ -267,6 +280,7 @@ impl EventKind {
             EventKind::RecoveryDecision { .. } => "RecoveryDecision",
             EventKind::TddExceptionUsed { .. } => "TddExceptionUsed",
             EventKind::DecisionRaised { .. } => "DecisionRaised",
+            EventKind::DecisionResolved { .. } => "DecisionResolved",
             EventKind::GateAcknowledged { .. } => "GateAcknowledged",
             EventKind::AttemptRecorded { .. } => "AttemptRecorded",
             EventKind::SelfHealingReport { .. } => "SelfHealingReport",
@@ -436,6 +450,10 @@ mod tests {
                     recommended: Some("SQLite".to_string()),
                 },
             },
+            EventKind::DecisionResolved {
+                adr_path: PathBuf::from("docs/adr/0009-journal-storage.md"),
+                answer: "SQLite: it is one file and needs no server.".to_string(),
+            },
             EventKind::GateAcknowledged {
                 by: "yalovoy".to_string(),
                 at: OffsetDateTime::UNIX_EPOCH,
@@ -466,9 +484,9 @@ mod tests {
     }
 
     #[test]
-    fn event_kind_has_exactly_twenty_seven_variants() {
+    fn event_kind_has_exactly_twenty_eight_variants() {
         let variants = all_events();
-        assert_eq!(variants.len(), 27);
+        assert_eq!(variants.len(), 28);
 
         // Exhaustive, wildcard-free match: a variant added to `EventKind`
         // without being listed here fails to compile instead of silently
@@ -499,6 +517,7 @@ mod tests {
                 | EventKind::RecoveryDecision { .. }
                 | EventKind::TddExceptionUsed { .. }
                 | EventKind::DecisionRaised { .. }
+                | EventKind::DecisionResolved { .. }
                 | EventKind::GateAcknowledged { .. }
                 | EventKind::AttemptRecorded { .. }
                 | EventKind::SelfHealingReport { .. } => {}
@@ -543,6 +562,7 @@ mod tests {
             "RecoveryDecision",
             "TddExceptionUsed",
             "DecisionRaised",
+            "DecisionResolved",
             "GateAcknowledged",
             "AttemptRecorded",
             "SelfHealingReport",

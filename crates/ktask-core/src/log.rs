@@ -125,6 +125,7 @@ fn level_for(kind: &EventKind) -> Level {
         | EventKind::RetryStarted { .. }
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::SelfHealingReport { .. } => Level::Info,
@@ -160,6 +161,7 @@ fn attempt_of(kind: &EventKind) -> Option<AttemptId> {
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::GateAcknowledged { .. } => None,
     }
 }
@@ -189,6 +191,7 @@ fn phase_of(kind: &EventKind) -> Option<Phase> {
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::RetryStarted { .. }
@@ -255,6 +258,9 @@ fn message_for(kind: &EventKind) -> String {
             format!("tdd exception {exception:?}: {reason}")
         }
         EventKind::DecisionRaised { request } => format!("decision raised: {}", request.question),
+        EventKind::DecisionResolved { adr_path, .. } => {
+            format!("decision resolved: {}", adr_path.display())
+        }
         EventKind::GateAcknowledged { by, .. } => format!("gate acknowledged by {by}"),
         EventKind::AttemptRecorded { record } => {
             format!("attempt recorded: exit_reason={}", record.exit_reason)

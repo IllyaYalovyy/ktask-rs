@@ -303,6 +303,7 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::RetryStarted { .. }
@@ -348,6 +349,7 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::RetryStarted { .. }
@@ -408,6 +410,7 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::RetryStarted { .. }
         | EventKind::SelfHealingReport { .. } => Err(invalid("Running", event)),
@@ -476,6 +479,7 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
         | EventKind::RetryStarted { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::GateAcknowledged { .. } => Err(invalid("Remediating", event)),
     }
 }
@@ -517,6 +521,7 @@ fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::RetryStarted { .. }
         | EventKind::SelfHealingReport { .. } => Err(invalid("Verifying", event)),
@@ -567,6 +572,7 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::RetryStarted { .. }
         | EventKind::SelfHealingReport { .. } => Err(invalid("Publishing", event)),
@@ -607,6 +613,7 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::DecisionResolved { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::RetryStarted { .. }
@@ -619,11 +626,14 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
 /// Transitions from [`TaskState::Paused`]: suspended for `reason`,
 /// remembering `resume_to`.
 ///
-/// `Resumed` and `GateAcknowledged` are mutually exclusive by design: a
-/// `HumanGate` pause leaves through `GateAcknowledged` alone (matching
-/// `docs/CONTRACT.md`'s `ack`, and `VISION.md` §6's "a gate ... reaches
-/// `acknowledged` through `ktask-rs ack` rather than through publication");
-/// every other pause reason leaves through `Resumed` alone. `RecoveryDecision`
+/// Which event ends a pause depends on why it began. A `HumanGate` pause
+/// leaves through `GateAcknowledged` alone (matching `docs/CONTRACT.md`'s
+/// `ack`, and `VISION.md` §6's "a gate ... reaches `acknowledged` through
+/// `ktask-rs ack` rather than through publication"). An `Input` pause leaves
+/// through `Resumed` (back to `resume_to`) or `DecisionResolved`, which sends
+/// the task to `Queued` instead: the answer changes its context, so it starts
+/// over with a fresh attempt (`docs/adr/0009-*.md`). Every other pause reason
+/// leaves through `Resumed` alone. `RecoveryDecision`
 /// only applies to an `Interrupted` pause: `Resume` and `AlreadyApplied` both
 /// hand custody back to `resume_to` (nothing left to redo in either case, per
 /// `VISION.md` §6), while `MarkInterrupted` leaves the task parked exactly
@@ -648,6 +658,13 @@ fn from_paused(
             }),
             PauseReason::Limit { .. }
             | PauseReason::Input
+            | PauseReason::Interrupted
+            | PauseReason::Blocked => Err(invalid("Paused", event)),
+        },
+        EventKind::DecisionResolved { .. } => match reason {
+            PauseReason::Input => Ok(TaskState::Queued),
+            PauseReason::Limit { .. }
+            | PauseReason::HumanGate
             | PauseReason::Interrupted
             | PauseReason::Blocked => Err(invalid("Paused", event)),
         },
@@ -1124,6 +1141,13 @@ mod tests {
                 impact: "i".to_string(),
                 recommended: None,
             },
+        }
+    }
+
+    fn decision_resolved() -> EventKind {
+        EventKind::DecisionResolved {
+            adr_path: std::path::PathBuf::from("docs/adr/0009-storage.md"),
+            answer: "SQLite".to_string(),
         }
     }
 
@@ -1655,6 +1679,35 @@ mod tests {
         )
         .expect("legal");
         assert_eq!(verifying, TaskState::Verifying { attempt });
+    }
+
+    #[test]
+    fn a_resolved_decision_sends_an_input_pause_back_to_queued_not_to_its_resume_point() {
+        let paused = TaskState::Paused {
+            reason: PauseReason::Input,
+            resume_to: Box::new(TaskState::Running {
+                attempt: AttemptId::new(1),
+                phase: Phase::Implement,
+            }),
+        };
+
+        let state = apply(&paused, &decision_resolved()).expect("legal");
+
+        assert_eq!(state, TaskState::Queued);
+    }
+
+    #[test]
+    fn a_resolved_decision_is_rejected_by_every_state_that_is_not_an_input_pause() {
+        for (label, state) in representative_states() {
+            if label == "Paused/Input" {
+                continue;
+            }
+            let result = apply(&state, &decision_resolved());
+            assert!(
+                matches!(result, Err(Error::InvalidTransition { .. })),
+                "{label} must reject DecisionResolved, got {result:?}"
+            );
+        }
     }
 
     #[test]
@@ -2570,6 +2623,7 @@ mod tests {
                     recommended: None,
                 },
             },
+            decision_resolved(),
             self_healing_report(attempt),
         ]
     }
@@ -2626,6 +2680,7 @@ mod tests {
             ("Paused/Limit", "Resumed"),
             ("Paused/Limit", "TaskCancelled"),
             ("Paused/Input", "Resumed"),
+            ("Paused/Input", "DecisionResolved"),
             ("Paused/Input", "TaskCancelled"),
             ("Paused/HumanGate", "GateAcknowledged"),
             ("Paused/HumanGate", "TaskCancelled"),
@@ -2643,7 +2698,7 @@ mod tests {
         let states = representative_states();
         let events = representative_events();
         assert_eq!(states.len(), 16, "expected one row per distinguished state");
-        assert_eq!(events.len(), 24, "expected one row per distinguished event");
+        assert_eq!(events.len(), 25, "expected one row per distinguished event");
 
         let mut checked = 0;
         for (state_label, state) in &states {
@@ -2671,7 +2726,7 @@ mod tests {
         assert_eq!(checked, states.len() * events.len());
         assert_eq!(
             ALLOWED.len(),
-            54,
+            55,
             "the allowed list itself changed size; update this guard deliberately"
         );
     }
