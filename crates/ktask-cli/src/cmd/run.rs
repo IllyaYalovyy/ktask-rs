@@ -16,8 +16,8 @@
 //! provider or a clock.
 
 use ktask_core::{
-    Config, Event, EventKind, Journal, PauseReason, Project, RecoveryDecision, RunOutcome, Runner,
-    Task, TaskId, TaskState, apply, check_predecessor, reconcile,
+    Config, Event, EventKind, Journal, Level, Logger, PauseReason, Project, RecoveryDecision,
+    RunOutcome, Runner, Task, TaskId, TaskState, apply, check_predecessor, reconcile,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -183,7 +183,7 @@ fn drain(
         Err(detail) => return RunOutcome::Usage { detail },
     };
 
-    let (result, pumped) = run_with_progress(&mut runner, json_output, |runner| {
+    let (result, pumped) = run_with_progress(&mut runner, project, json_output, |runner| {
         runner.run_queue(&scope, from)
     });
     let outcome = match result {
@@ -234,13 +234,24 @@ fn drain(
 ///
 /// `runner` stays on the calling thread; only the [`ktask_core::Subscription`]
 /// crosses to the printer, which keeps draining until `work` has returned
-/// and then once more, so nothing recorded before it ended is lost.
+/// and then once more, so nothing recorded before it ended is lost. The same
+/// thread appends every event to `project`'s run log ([`Logger`]); a log
+/// that cannot be opened or written is reported on stderr and never stops
+/// the run, since the journal, not the log, is the record.
 pub(super) fn run_with_progress<T>(
     runner: &mut Runner,
+    project: &Project,
     json_output: bool,
     work: impl FnOnce(&mut Runner) -> ktask_core::Result<T>,
 ) -> (ktask_core::Result<T>, Pumped) {
     let mut subscription = runner.subscribe();
+    let logger = match Logger::open(&project.state_dir, runner.subscribe(), Level::Debug) {
+        Ok(logger) => Some(logger),
+        Err(err) => {
+            render::progress(format_args!("run: no log will be written: {err}"));
+            None
+        }
+    };
     let finished = AtomicBool::new(false);
     let finished = &finished;
 
@@ -253,6 +264,11 @@ pub(super) fn run_with_progress<T>(
                 pumped.dropped += dropped;
                 for event in &events {
                     print_event(event, json_output, &mut pumped.reported);
+                }
+                if let Some(logger) = &logger
+                    && let Err(err) = logger.drain()
+                {
+                    render::progress(format_args!("run: could not write the log: {err}"));
                 }
                 if last {
                     return pumped;

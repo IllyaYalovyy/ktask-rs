@@ -59,8 +59,9 @@ fn attempt(project: &Project, task: TaskId, json: bool) -> RunOutcome {
         }
     };
 
-    let (result, pumped) =
-        run::run_with_progress(&mut runner, json, |runner| runner.retry_task(chosen));
+    let (result, pumped) = run::run_with_progress(&mut runner, project, json, |runner| {
+        runner.retry_task(chosen)
+    });
     if pumped.dropped > 0 {
         render::progress(format_args!(
             "retry: {} progress events were not shown; `ktask-rs status` has the final state \
