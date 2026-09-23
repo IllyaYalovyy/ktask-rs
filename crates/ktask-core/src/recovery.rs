@@ -63,10 +63,7 @@ pub enum RecoveryDecision {
 /// Returns [`Error::Database`], [`Error::Serde`] or [`Error::Corrupt`] from
 /// reading or writing the journal, [`Error::Git`] if `project.root`'s
 /// worktrees cannot be listed or if a task mid publication cannot fetch
-/// `config.mainline_remote`, and [`Error::Corrupt`] if a task is mid attempt
-/// with a dead process and no surviving worktree — a combination
-/// `crate::runner::Runner::run_task`'s own cleanup contract should never
-/// produce, so it is reported rather than guessed at.
+/// `config.mainline_remote`.
 pub fn reconcile(
     journal: &mut Journal,
     project: &Project,
@@ -449,11 +446,15 @@ fn fetch_remote_tip(project: &Project, config: &Config) -> Result<String> {
 }
 
 /// The shared decision for `Running`, `Remediating` and `Verifying`: a
-/// recorded pid is either alive or dead, and reaching this point with a
-/// dead process and no surviving worktree contradicts `run_task`'s own
-/// cleanup contract (its worktree is removed only once the attempt has
-/// returned), so that combination is reported as [`Error::Corrupt`] instead
-/// of guessed at.
+/// recorded pid is either alive or dead.
+///
+/// A live process is never touched ([`Recovery::MarkInterrupted`]). A dead one
+/// whose worktree survived can be redone safely ([`Recovery::Resume`]). A dead
+/// one with no worktree left is [`Recovery::MarkInterrupted`] as well: an
+/// attempt that ended in an error the runner could not journal has exactly
+/// this shape, since `run_task` removes the worktree on every path, so there
+/// is nothing to resume in, and a human decides what happens next. Refusing
+/// to reconcile at all instead would leave every later start unable to run.
 fn resume_or_mark(
     journal: &Journal,
     project: &Project,
@@ -481,13 +482,14 @@ fn resume_or_mark(
             ),
         ))
     } else {
-        Err(Error::Corrupt {
-            detail: format!(
-                "task {task} is mid attempt {attempt} with a dead process and no surviving \
-                 worktree, a combination no code path should produce for a task that is not yet \
-                 terminal or paused"
+        Ok((
+            Recovery::MarkInterrupted,
+            format!(
+                "attempt {attempt}'s process (pid {pid}) is no longer running and no worktree \
+                 survives, so there is nothing to resume in; the task is left interrupted for a \
+                 person to decide"
             ),
-        })
+        ))
     }
 }
 
@@ -893,7 +895,7 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_errors_when_the_attempt_process_is_dead_and_no_worktree_survived() {
+    fn reconcile_marks_interrupted_when_the_attempt_process_is_dead_and_no_worktree_survived() {
         let repo = scratch_repo().expect("scratch_repo");
         let state_dir = tempfile::tempdir().expect("state dir");
         let project = Project {
@@ -923,18 +925,47 @@ mod tests {
         ] {
             journal.append(Some(task), &kind).expect("append");
         }
-        let before = journal.events_for(task).expect("events_for");
 
-        let err = reconcile(&mut journal, &project, &Config::default())
-            .expect_err("a dead process with no surviving worktree must not be guessed at");
+        let decisions = reconcile(&mut journal, &project, &Config::default())
+            .expect("a dead process with no worktree is reconciled, not an error");
 
-        assert!(matches!(err, Error::Corrupt { .. }), "got {err:?}");
-        let message = err.to_string();
-        assert!(message.contains(&task.to_string()), "message: {message}");
+        let [
+            RecoveryDecision::StateRebuilt,
+            RecoveryDecision::Task {
+                task: decided,
+                decision,
+                detail,
+            },
+        ] = decisions.as_slice()
+        else {
+            panic!("expected a rebuild then one task decision, got {decisions:?}");
+        };
+        assert_eq!(*decided, task);
         assert_eq!(
-            journal.events_for(task).expect("events_for"),
-            before,
-            "a failed reconciliation must not journal a partial decision"
+            *decision,
+            Recovery::MarkInterrupted,
+            "with nothing to resume in, a person decides: {detail}"
+        );
+        assert!(detail.contains("no worktree"), "detail: {detail}");
+        let kinds: Vec<&str> = journal
+            .events_for(task)
+            .expect("events_for")
+            .iter()
+            .map(|event| event.kind.discriminant())
+            .collect();
+        assert!(
+            kinds.ends_with(&["AttemptStarted", "Interrupted", "RecoveryDecision"]),
+            "the decision is journaled, got {kinds:?}"
+        );
+        assert_eq!(
+            journal.all_states().expect("all_states").get(&task),
+            Some(&TaskState::Paused {
+                reason: PauseReason::Interrupted,
+                resume_to: Box::new(TaskState::Running {
+                    attempt: AttemptId::new(1),
+                    phase: Phase::Implement,
+                }),
+            })
         );
     }
 

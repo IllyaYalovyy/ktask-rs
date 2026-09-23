@@ -6,7 +6,7 @@
 //! since `docs/CONTRACT.md` section 3 and a later task treat them as one
 //! unit). `init` (T108), `doctor` (T110), `status` (T111), `add` (T112),
 //! `plan lint` (T113), `run` (T115), `resume` and `retry` (T116) and
-//! `resolve` and `ack` (T117) have their real behavior; every other module
+//! `resolve` and `ack` (T117) have their real behavior; `run` and `resume` also reconcile the journal on startup (T118); every other module
 //! still only returns [`RunOutcome::Drained`] as a placeholder for later,
 //! per-command work: T119 (pause, interrupt, cancel), T120 (rerun-gate)
 //! and T131 (tui). What
@@ -52,8 +52,8 @@ pub(crate) fn dispatch(
         Command::Add { file } => add::run(project, config, file.as_deref()),
         Command::Plan { command } => plan::run(project, config, command),
         Command::Status => status::run(project, config, json),
-        Command::Run { task, from } => run::run(project, *task, *from, json),
-        Command::Resume => resume::run(project, json),
+        Command::Run { task, from } => run::run(project, config, *task, *from, json),
+        Command::Resume => resume::run(project, config, json),
         Command::Retry { task } => retry::run(project, *task, json),
         Command::Resolve { task, note } => resolve::run(project, config, *task, note.as_deref()),
         Command::Ack { task } => ack::run(project, config, *task),

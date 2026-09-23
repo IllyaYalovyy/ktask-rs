@@ -759,3 +759,213 @@ fn cli_ack_passes_a_human_gate_and_resume_continues() {
         stdout_of(&resume)
     );
 }
+
+/// Runs `git` in `dir`, returning its trimmed stdout.
+fn git_in(dir: &std::path::Path, args: &[&str]) -> std::io::Result<String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "git {args:?} failed: {}",
+            stderr_of(&output)
+        )));
+    }
+    Ok(stdout_of(&output).trim().to_string())
+}
+
+/// Appends `events` to `task`'s journal, as a run that was killed right
+/// after recording them would have left it.
+fn journal_as_killed(
+    scenario: &support::Scenario,
+    task: u32,
+    events: &[ktask_core::EventKind],
+) -> ktask_core::Result<()> {
+    let mut journal = ktask_core::Journal::open(&ktask_core::journal_path(scenario.state_dir()))?;
+    for event in events {
+        journal.append(Some(ktask_core::TaskId::new(task)), event)?;
+    }
+    Ok(())
+}
+
+/// The events that lead a task from the queue into `Publishing` candidate
+/// `sha`: everything a run journals before the push it was about to make.
+fn up_to_publishing(sha: &str, pid: u32) -> Vec<ktask_core::EventKind> {
+    use ktask_core::{AttemptId, EventKind, Phase};
+    let attempt = AttemptId::new(1);
+    vec![
+        EventKind::PreflightStarted,
+        EventKind::PreflightPassed {
+            base_sha: sha.to_string(),
+        },
+        EventKind::AttemptStarted {
+            attempt,
+            protocol: "tdd".to_string(),
+            pid,
+            base_sha: sha.to_string(),
+        },
+        EventKind::PhaseEntered {
+            attempt,
+            phase: Phase::Verify,
+        },
+        EventKind::VerifyPassed { attempt },
+        EventKind::PublishStarted {
+            attempt,
+            candidate_sha: sha.to_string(),
+        },
+    ]
+}
+
+/// The pid of a process that has already exited and been reaped.
+fn dead_pid() -> std::io::Result<u32> {
+    let mut child = std::process::Command::new("true").spawn()?;
+    let pid = child.id();
+    child.wait()?;
+    Ok(pid)
+}
+
+/// A run killed while task 1 was publishing a commit the remote already has
+/// leaves task 1 blocking the queue. `run` reconciles that first — the
+/// journal shows the push landed — so task 2 is selected and completes in the
+/// same invocation. Task 2 could not have been selected had `run` looked at
+/// the queue before recovering it.
+#[test]
+fn cli_run_reconciles_before_selecting_a_task() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+    let head = git_in(scenario.project_dir(), &["rev-parse", "HEAD"]).expect("git rev-parse");
+    journal_as_killed(
+        &scenario,
+        1,
+        &up_to_publishing(&head, dead_pid().expect("dead pid")),
+    )
+    .expect("journal");
+    scenario
+        .set_scenario(&succeed_step(&scenario, 2))
+        .expect("write scenario");
+
+    let run = scenario.run(&["run"]).expect("run");
+
+    let stderr = stderr_of(&run);
+    assert_eq!(run.status.code(), Some(0), "stderr: {stderr}");
+    let recovery = stderr
+        .lines()
+        .position(|line| line.starts_with("recovery: task 1: AlreadyApplied: "))
+        .unwrap_or_else(|| panic!("the decision is printed, got {stderr}"));
+    let selected = stderr
+        .lines()
+        .position(|line| line.starts_with("task 2: "))
+        .unwrap_or_else(|| panic!("task 2 was selected, got {stderr}"));
+    assert!(
+        recovery < selected,
+        "recovery is printed before the next task starts, got {stderr}"
+    );
+    assert!(stdout_of(&run).starts_with("task 2: done"));
+
+    let kinds = journaled_kinds(&scenario, 1).expect("read journal");
+    assert!(
+        kinds.ends_with(&["PublishStarted", "PublishVerified"]),
+        "recovery journals what it concluded, got {kinds:?}"
+    );
+}
+
+/// A journal left mid-attempt — task 1's agent was running, its process is
+/// gone, its worktree survived — is reconciled on the next start: the
+/// interruption and the decision to resume are journaled and printed.
+#[test]
+fn cli_run_reconciles_a_journal_left_mid_attempt() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(1)).expect("build scenario");
+    let head = git_in(scenario.project_dir(), &["rev-parse", "HEAD"]).expect("git rev-parse");
+    let mut events = up_to_publishing(&head, dead_pid().expect("dead pid"));
+    events.truncate(3);
+    journal_as_killed(&scenario, 1, &events).expect("journal");
+    let worktrees = tempfile::tempdir().expect("tempdir");
+    let worktree = worktrees.path().join("task-1");
+    git_in(
+        scenario.project_dir(),
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            worktree.to_str().expect("utf-8 path"),
+            "HEAD",
+        ],
+    )
+    .expect("git worktree add");
+
+    let run = scenario.run(&["run"]).expect("run");
+
+    let stderr = stderr_of(&run);
+    assert!(
+        stderr.contains("recovery: task 1: Resume: "),
+        "the decision is printed, got {stderr}"
+    );
+    let kinds = journaled_kinds(&scenario, 1).expect("read journal");
+    assert!(
+        kinds.ends_with(&["AttemptStarted", "Interrupted", "RecoveryDecision"]),
+        "the interruption and the decision are journaled, got {kinds:?}"
+    );
+}
+
+/// `resume` reconciles too, and picks its starting task from the reconciled
+/// queue: task 1's publication landed, so task 2 is where it resumes.
+#[test]
+fn cli_resume_reconciles_before_selecting_a_task() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+    let head = git_in(scenario.project_dir(), &["rev-parse", "HEAD"]).expect("git rev-parse");
+    journal_as_killed(
+        &scenario,
+        1,
+        &up_to_publishing(&head, dead_pid().expect("dead pid")),
+    )
+    .expect("journal");
+    scenario
+        .set_scenario(&succeed_step(&scenario, 2))
+        .expect("write scenario");
+
+    let resume = scenario.run(&["resume"]).expect("resume");
+
+    let stderr = stderr_of(&resume);
+    assert_eq!(resume.status.code(), Some(0), "stderr: {stderr}");
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| line.starts_with("recovery: task 1: AlreadyApplied: "))
+            .count(),
+        1,
+        "the decision is made and printed exactly once, got {stderr}"
+    );
+    assert!(stdout_of(&resume).starts_with("task 2: done"));
+    let recoveries = journaled_kinds(&scenario, 1)
+        .expect("read journal")
+        .iter()
+        .filter(|kind| **kind == "RecoveryDecision")
+        .count();
+    assert_eq!(recoveries, 0, "a landed push needs no decision event");
+}
+
+/// A journal with nothing interrupted reconciles to no decisions: nothing is
+/// printed and no recovery event is journaled.
+#[test]
+fn cli_run_on_a_clean_journal_reconciles_to_nothing() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+    scenario
+        .set_scenario(&all_succeed(&scenario, 2))
+        .expect("write scenario");
+
+    let run = scenario.run(&["run"]).expect("run");
+
+    assert_eq!(run.status.code(), Some(0), "{}", stderr_of(&run));
+    assert!(
+        !stderr_of(&run).contains("recovery:"),
+        "nothing to reconcile, got {}",
+        stderr_of(&run)
+    );
+    for task in 1..=2 {
+        let kinds = journaled_kinds(&scenario, task).expect("read journal");
+        assert!(
+            !kinds.contains(&"RecoveryDecision") && !kinds.contains(&"Interrupted"),
+            "task {task} journaled a recovery on a clean journal: {kinds:?}"
+        );
+    }
+}

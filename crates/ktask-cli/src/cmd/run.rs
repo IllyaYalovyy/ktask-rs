@@ -16,8 +16,8 @@
 //! provider or a clock.
 
 use ktask_core::{
-    Event, EventKind, Journal, PauseReason, Project, RunOutcome, Runner, Task, TaskId, TaskState,
-    apply, check_predecessor,
+    Config, Event, EventKind, Journal, PauseReason, Project, RecoveryDecision, RunOutcome, Runner,
+    Task, TaskId, TaskState, apply, check_predecessor, reconcile,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -68,6 +68,11 @@ pub(super) struct Pumped {
 /// Runs the queue (or, with `task`, exactly one task; with `from`, from that
 /// id on) against the project's configured provider.
 ///
+/// Before anything is selected, the journal is reconciled with reality
+/// ([`recover`]): a run that was killed mid-attempt is resolved to a known
+/// state, and each decision is printed, so the queue is never read in a state
+/// the last run left half-finished (`VISION.md` §6).
+///
 /// A queue that cannot be started is [`RunOutcome::Usage`] (an unbuildable
 /// provider or config, an id that is not in the queue, a `--task` that is
 /// not next in line) or [`RunOutcome::CheckFailed`] (the journal cannot be
@@ -78,11 +83,16 @@ pub(super) struct Pumped {
 /// [`blocked_outcome`] turns it back into the pause or failure it is.
 pub(crate) fn run(
     project: &Project,
+    config: &Config,
     task: Option<TaskId>,
     from: Option<TaskId>,
     json_output: bool,
 ) -> RunOutcome {
-    let outcome = drain(project, task, from, json_output);
+    summarize(drain(project, Some(config), task, from, json_output))
+}
+
+/// Prints `outcome`'s closing stderr line and hands it back.
+fn summarize(outcome: RunOutcome) -> RunOutcome {
     match &outcome {
         RunOutcome::Usage { .. } => {}
         RunOutcome::CheckFailed { detail } => render::progress(format_args!("error: {detail}")),
@@ -91,9 +101,56 @@ pub(crate) fn run(
     outcome
 }
 
-/// [`run`] without its closing summary line.
+/// [`run`] for a caller that has already reconciled the journal itself
+/// ([`recover`]) and must not have it done a second time: a task left
+/// paused on an interruption is decided afresh on every reconciliation.
+pub(super) fn run_reconciled(
+    project: &Project,
+    task: Option<TaskId>,
+    from: Option<TaskId>,
+    json_output: bool,
+) -> RunOutcome {
+    summarize(drain(project, None, task, from, json_output))
+}
+
+/// Reconciles `project`'s journal with reality after a restart and prints
+/// each decision to stderr, one line apiece.
+///
+/// The decisions themselves are journaled by [`reconcile`]; this only tells
+/// the person at the terminal what was found. A clean journal reconciles to
+/// no decisions and prints nothing.
+///
+/// # Errors
+///
+/// Returns whatever [`Journal::open_for`] or [`reconcile`] return.
+pub(super) fn recover(project: &Project, config: &Config) -> ktask_core::Result<()> {
+    let mut journal = Journal::open_for(project)?;
+    for decision in reconcile(&mut journal, project, config)? {
+        render::progress(format_args!("{}", recovery_line(&decision)));
+    }
+    Ok(())
+}
+
+/// The stderr line for one recovery `decision`.
+fn recovery_line(decision: &RecoveryDecision) -> String {
+    match decision {
+        RecoveryDecision::StateRebuilt => {
+            "recovery: rebuilt the task state from the journal; it had fallen behind".to_string()
+        }
+        RecoveryDecision::Task {
+            task,
+            decision,
+            detail,
+        } => format!("recovery: task {task}: {decision:?}: {}", one_line(detail)),
+    }
+}
+
+/// [`run`] without its closing summary line. `reconcile_with` is the config
+/// to reconcile the journal against before selecting a task, or `None` when
+/// the caller already has.
 fn drain(
     project: &Project,
+    reconcile_with: Option<&Config>,
     task: Option<TaskId>,
     from: Option<TaskId>,
     json_output: bool,
@@ -106,6 +163,13 @@ fn drain(
             };
         }
     };
+    if let Some(config) = reconcile_with
+        && let Err(err) = recover(project, config)
+    {
+        return RunOutcome::CheckFailed {
+            detail: format!("run: recovery failed: {err}"),
+        };
+    }
     let (tasks, states) = match read_queue(project) {
         Ok(queue) => queue,
         Err(err) => {
@@ -881,6 +945,28 @@ mod tests {
             run_scoped.as_deref(),
             Some("run: preflight: checking the repository")
         );
+    }
+
+    #[test]
+    fn a_task_decision_reads_as_one_recovery_line() {
+        let decision = RecoveryDecision::Task {
+            task: TaskId::new(3),
+            decision: ktask_core::Recovery::Resume,
+            detail: "the process\nis gone".to_string(),
+        };
+
+        assert_eq!(
+            recovery_line(&decision),
+            "recovery: task 3: Resume: the process is gone"
+        );
+    }
+
+    #[test]
+    fn a_rebuilt_projection_is_reported_as_a_recovery_line() {
+        let line = recovery_line(&RecoveryDecision::StateRebuilt);
+
+        assert!(line.starts_with("recovery: "), "got {line}");
+        assert!(line.contains("rebuilt"), "got {line}");
     }
 
     #[test]

@@ -11,7 +11,7 @@
 //! Whether a task is complete is a pure function of its journaled state
 //! ([`first_incomplete`]), tested without a journal.
 
-use ktask_core::{Project, RunOutcome, Task, TaskId, TaskState};
+use ktask_core::{Config, Project, RunOutcome, Task, TaskId, TaskState};
 use std::collections::BTreeMap;
 
 use crate::cmd::run;
@@ -19,7 +19,16 @@ use crate::render;
 
 /// Continues the queue from its first incomplete task, or reports it drained
 /// as a usage error (exit 2): there is nothing to continue.
-pub(crate) fn run(project: &Project, json: bool) -> RunOutcome {
+///
+/// The journal is reconciled first ([`run::recover`]), so the first
+/// incomplete task is chosen from the queue as recovery left it, not as a
+/// killed run did.
+pub(crate) fn run(project: &Project, config: &Config, json: bool) -> RunOutcome {
+    if let Err(err) = run::recover(project, config) {
+        let detail = format!("resume: recovery failed: {err}");
+        render::progress(format_args!("error: {detail}"));
+        return RunOutcome::CheckFailed { detail };
+    }
     let (tasks, states) = match run::read_queue(project) {
         Ok(queue) => queue,
         Err(err) => {
@@ -34,7 +43,7 @@ pub(crate) fn run(project: &Project, json: bool) -> RunOutcome {
         };
     };
 
-    let outcome = run::run(project, None, Some(first), json);
+    let outcome = run::run_reconciled(project, None, Some(first), json);
     if let RunOutcome::TaskFailed { task } = &outcome {
         render::progress(format_args!(
             "resume: `ktask-rs retry --task {task}` starts a fresh remediation attempt"
