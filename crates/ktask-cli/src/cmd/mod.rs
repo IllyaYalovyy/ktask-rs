@@ -4,13 +4,13 @@
 //! Each command gets its own file, named for the command (`control` covers
 //! the three run-control commands — pause, interrupt, cancel — together,
 //! since `docs/CONTRACT.md` section 3 and a later task treat them as one
-//! unit). `init` (T108), `doctor` (T110) and `status` (T111) have their real
-//! behavior; every other module still only returns [`RunOutcome::Drained`]
-//! as a placeholder for later, per-command work: T112 (add), T113 (plan
-//! lint), T115 (run), T116 (resume, retry), T117 (resolve, ack), T119
-//! (pause, interrupt, cancel), T120 (rerun-gate) and T131 (tui). What this
-//! module is responsible for is that [`dispatch`] itself is real: the match
-//! below is exhaustive, so a `Command` variant added without a
+//! unit). `init` (T108), `doctor` (T110), `status` (T111) and `add` (T112)
+//! have their real behavior; every other module still only returns
+//! [`RunOutcome::Drained`] as a placeholder for later, per-command work:
+//! T113 (plan lint), T115 (run), T116 (resume, retry), T117 (resolve, ack),
+//! T119 (pause, interrupt, cancel), T120 (rerun-gate) and T131 (tui). What
+//! this module is responsible for is that [`dispatch`] itself is real: the
+//! match below is exhaustive, so a `Command` variant added without a
 //! corresponding arm fails to compile instead of silently falling through
 //! to a default.
 
@@ -88,7 +88,11 @@ mod tests {
         vec![
             Command::Doctor,
             Command::Init,
-            Command::Add { file: None },
+            Command::Add {
+                file: Some(PathBuf::from(
+                    "/nonexistent/ktask-dispatch-fixture/no-such-task.md",
+                )),
+            },
             Command::Plan {
                 command: PlanCommand::Lint,
             },
@@ -137,6 +141,18 @@ mod tests {
             if matches!(command, Command::Doctor | Command::Status) {
                 assert!(
                     matches!(outcome, RunOutcome::CheckFailed { .. }),
+                    "{command:?} did not reach its cmd:: module's real behavior: {outcome:?}"
+                );
+                continue;
+            }
+
+            // `add` (T112) has real behavior too: the fixture's `--file`
+            // names a path that does not exist, so reading it fails before
+            // `add` ever touches the journal, reaching `RunOutcome::Usage`
+            // rather than the placeholder `Drained`.
+            if matches!(command, Command::Add { .. }) {
+                assert!(
+                    matches!(outcome, RunOutcome::Usage { .. }),
                     "{command:?} did not reach its cmd:: module's real behavior: {outcome:?}"
                 );
                 continue;
