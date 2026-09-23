@@ -4,14 +4,15 @@
 //! Each command gets its own file, named for the command (`control` covers
 //! the three run-control commands — pause, interrupt, cancel — together,
 //! since `docs/CONTRACT.md` section 3 and a later task treat them as one
-//! unit). Every module currently only returns [`RunOutcome::Drained`]: the
-//! behavior each command actually performs is later, per-command work: T108
-//! (init), T110 (doctor), T111 (status), T112 (add), T113 (plan lint), T115
-//! (run), T116 (resume, retry), T117 (resolve, ack), T119 (pause, interrupt,
-//! cancel), T120 (rerun-gate) and T131 (tui). What this module is
-//! responsible for is that [`dispatch`] itself is real: the match below is
-//! exhaustive, so a `Command` variant added without a corresponding arm
-//! fails to compile instead of silently falling through to a default.
+//! unit). `init` (T108) has its real behavior; every other module still
+//! only returns [`RunOutcome::Drained`] as a placeholder for later,
+//! per-command work: T110 (doctor), T111 (status), T112 (add), T113 (plan
+//! lint), T115 (run), T116 (resume, retry), T117 (resolve, ack), T119
+//! (pause, interrupt, cancel), T120 (rerun-gate) and T131 (tui). What this
+//! module is responsible for is that [`dispatch`] itself is real: the match
+//! below is exhaustive, so a `Command` variant added without a
+//! corresponding arm fails to compile instead of silently falling through
+//! to a default.
 
 mod ack;
 mod add;
