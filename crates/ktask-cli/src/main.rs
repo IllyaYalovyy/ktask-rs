@@ -7,13 +7,20 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 mod cli;
+mod exit;
 
 use clap::Parser;
 use cli::Cli;
+use ktask_core::RunOutcome;
 
 fn main() {
     let cli = Cli::parse();
     if cli.verbose {
         eprintln!("{}", serde_json::to_string(&cli).unwrap_or_default());
     }
+    // Command dispatch (docs/CONTRACT.md sections 2 and 3) is later work;
+    // until it lands, a successful parse is the whole outcome, and this
+    // still exits through `exit::code_for` rather than an implicit 0 so
+    // dispatch has nothing to change here but which outcome it passes in.
+    std::process::exit(exit::code_for(&RunOutcome::Drained));
 }
