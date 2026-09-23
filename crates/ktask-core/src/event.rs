@@ -32,18 +32,20 @@
 //!
 //! # Catalog entries that are not here yet
 //!
-//! `docs/DESIGN.md` lists 28 entries; 25 are defined below. The other 3 are
+//! `docs/DESIGN.md` lists 28 entries; 26 are defined below. The other 2 are
 //! absent, and a test asserts their absence rather than trusting it:
 //!
-//! - Three are deferred by the plan — `ProviderDetected`
-//!   (`capabilities: Capabilities`), `DecisionResolved` and `SelfHealingReport`.
-//!   Each arrives with the task that emits it and gives it an `apply` arm, so
-//!   nothing can journal an event whose effect on state no task has written yet.
+//! - Two are deferred by the plan — `ProviderDetected`
+//!   (`capabilities: Capabilities`) and `DecisionResolved`. Each arrives with
+//!   the task that emits it and gives it an `apply` arm, so nothing can journal
+//!   an event whose effect on state no task has written yet.
 //!   `AttemptRecorded` left this list for T068, `AttemptFinished` for T091, which
 //!   runs the session whose end it records,
 //!   `TddExceptionUsed` for T079, which wrote the arm §9's exception is
-//!   answered by, and `DecisionRaised` for T084, which wrote the arm §6's wait
-//!   for a decision is answered by.
+//!   answered by, `DecisionRaised` for T084, which wrote the arm §6's wait for a
+//!   decision is answered by, and `SelfHealingReport` for T095, which files the
+//!   account §7 says every recovery leaves and wrote the arm that state answers
+//!   it with.
 //! - None is deferred for a missing payload type any more. `GateStarted` and
 //!   `GateFinished` were the two entries waiting on `gate.rs`, and both landed
 //!   with T085, the task that emits them and writes their `apply` arms.
@@ -320,6 +322,35 @@ pub enum EventKind {
         /// to.
         record: Box<AttemptRecord>,
     },
+    /// One remediation's account of itself: the failure it was aimed at, the
+    /// repairs it tried, and what it ended with.
+    ///
+    /// VISION.md §7 requires that "every recovery produces a self-healing
+    /// report: classification, attempted repairs, final result", and this is
+    /// that record. It is the third kind of catalog entry — evidence rather
+    /// than a transition — so [`crate::apply`] answers it with the state it was
+    /// asked from, and a task that was remediated twice leaves two of them
+    /// while one remediated once leaves exactly one, whichever way the
+    /// remediation ended. T095 defines it, files it in the attempt's own
+    /// evidence directory, and gives it the one `apply` arm §7's machine allows.
+    ///
+    /// The classification is carried here rather than read back off the failure
+    /// the journal already holds: an account of a repair has to name the
+    /// failure it set out to answer, or a reader cannot tell whether the two
+    /// records are about the same problem or about two different ones that
+    /// happened to land on the same task.
+    SelfHealingReport {
+        /// The remediation attempt this is the account of.
+        attempt: AttemptId,
+        /// The class the remediation was launched against.
+        class: FailureClass,
+        /// The repairs it attempted, in the order it attempted them. Empty is
+        /// an answer: a recovery that was bound before it could try anything
+        /// tried nothing.
+        repairs: Vec<String>,
+        /// What it ended with, in the words of the step that ended it.
+        outcome: String,
+    },
 }
 
 impl EventKind {
@@ -357,6 +388,7 @@ impl EventKind {
             Self::DecisionRaised { .. } => "DecisionRaised",
             Self::GateAcknowledged { .. } => "GateAcknowledged",
             Self::AttemptRecorded { .. } => "AttemptRecorded",
+            Self::SelfHealingReport { .. } => "SelfHealingReport",
         }
     }
 }
@@ -461,7 +493,7 @@ mod tests {
     /// encode is visible rather than mistaken for a placeholder.
     const SHA: &str = "0b78d3f1c2a4";
 
-    /// The 25 entries `docs/DESIGN.md` documents whose payload types exist
+    /// The 26 entries `docs/DESIGN.md` documents whose payload types exist
     /// today, each with the payload field names the table lists for it.
     ///
     /// Spelled out a second time, on purpose: names checked only against the
@@ -505,9 +537,13 @@ mod tests {
         ("DecisionRaised", &["request"]),
         ("GateAcknowledged", &["by", "at"]),
         ("AttemptRecorded", &["record"]),
+        (
+            "SelfHealingReport",
+            &["attempt", "class", "repairs", "outcome"],
+        ),
     ];
 
-    /// The three entries this catalog does not define yet.
+    /// The two entries this catalog does not define yet.
     ///
     /// Their absence is asserted, not assumed: an entry added ahead of its
     /// producer would start decoding, and the journal would begin accepting
@@ -527,13 +563,6 @@ mod tests {
         (
             "DecisionResolved",
             r#""adr_path":"docs/adr/0011.md","answer":"a""#,
-        ),
-        (
-            "SelfHealingReport",
-            concat!(
-                r#""attempt":2,"class":"AgentFailure","#,
-                r#""repairs":["re-run fmt"],"outcome":"green""#,
-            ),
         ),
     ];
 
@@ -640,6 +669,12 @@ mod tests {
             },
             EventKind::AttemptRecorded {
                 record: Box::new(attempt_record(attempt)),
+            },
+            EventKind::SelfHealingReport {
+                attempt,
+                class: FailureClass::VerificationFailure,
+                repairs: vec!["re-run the fmt gate".to_string()],
+                outcome: "green on the rerun".to_string(),
             },
         ]
     }

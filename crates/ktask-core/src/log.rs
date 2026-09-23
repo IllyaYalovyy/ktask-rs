@@ -535,20 +535,25 @@ fn level_of(kind: &EventKind) -> Level {
         | EventKind::TddExceptionUsed { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
-        | EventKind::AttemptFinished { .. } => Level::Info,
+        | EventKind::AttemptFinished { .. }
+        | EventKind::SelfHealingReport { .. } => Level::Info,
     }
 }
 
 /// The attempt an entry names in its own payload, when it names one.
 fn carried_attempt(kind: &EventKind) -> Option<AttemptId> {
     match kind {
+        // Each of these names one run in its payload, so the run is a column of
+        // the line rather than prose inside it — including a recovery's account,
+        // whose attempt is the remediation it accounts for.
         EventKind::AttemptStarted { attempt, .. }
         | EventKind::PhaseEntered { attempt, .. }
         | EventKind::AgentOutput { attempt, .. }
         | EventKind::AttemptFinished { attempt, .. }
         | EventKind::VerifyPassed { attempt }
         | EventKind::VerifyFailed { attempt, .. }
-        | EventKind::PublishStarted { attempt, .. } => Some(*attempt),
+        | EventKind::PublishStarted { attempt, .. }
+        | EventKind::SelfHealingReport { attempt, .. } => Some(*attempt),
         _ => None,
     }
 }
@@ -630,6 +635,15 @@ fn message_of(kind: &EventKind) -> Result<String> {
             "id={} exit={} candidate={:?}",
             record.id, record.exit_reason, record.candidate_sha
         ),
+        // The account a recovery leaves behind: the three-part answer VISION.md
+        // §7 asks it to hold. The attempt it names is the line's own `attempt`
+        // column, so it is not written twice.
+        EventKind::SelfHealingReport {
+            class,
+            repairs,
+            outcome,
+            ..
+        } => format!("class={class:?} repairs={repairs:?} outcome={outcome}"),
     };
     Ok(if facts.is_empty() {
         kind.discriminant().to_owned()
@@ -1248,8 +1262,8 @@ mod tests {
         names.dedup();
         assert_eq!(
             names.len(),
-            25,
-            "the catalog holds 25 entries and this table places every one, so an \
+            26,
+            "the catalog holds 26 entries and this table places every one, so an \
              entry a later task adds has to be placed here as well"
         );
 
@@ -1413,6 +1427,12 @@ mod tests {
             },
             EventKind::AttemptRecorded {
                 record: Box::new(record()),
+            },
+            EventKind::SelfHealingReport {
+                attempt: AttemptId::new(2),
+                class: FailureClass::VerificationFailure,
+                repairs: vec!["re-run the fmt gate".to_owned()],
+                outcome: "green on the rerun".to_owned(),
             },
         ]
     }

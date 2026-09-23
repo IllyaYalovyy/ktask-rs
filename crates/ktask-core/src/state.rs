@@ -422,6 +422,7 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::DecisionRaised { .. }
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
+        | EventKind::SelfHealingReport { .. }
         | EventKind::RecoveryDecision {
             decision: Recovery::MarkInterrupted,
             ..
@@ -486,6 +487,7 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
         | EventKind::GateAcknowledged { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::SelfHealingReport { .. }
         | EventKind::RecoveryDecision {
             decision: Recovery::MarkInterrupted,
             ..
@@ -628,6 +630,7 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
         | EventKind::PublishVerified { .. }
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
+        | EventKind::SelfHealingReport { .. }
         | EventKind::GateAcknowledged { .. } => Err(refused(FROM, event)),
     }
 }
@@ -656,6 +659,13 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
 /// gate reruns from scratch" means the repair is proved by gates run again in
 /// this state, and each of those runs is a start and a finish that leaves the
 /// remediation where it was.
+///
+/// §7's account of the repair itself is admitted here and nowhere else, for the
+/// reason §7 gives it: a recovery that produced no report is a recovery nobody
+/// can audit. It is the same third kind of entry — it says what a remediation
+/// did, not where the task may go — and it names the remediation it accounts
+/// for, so `Running` refuses a report about an attempt it does not own and this
+/// state refuses one about a remediation it is not.
 fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<TaskState> {
     const FROM: &str = "Remediating";
     match event {
@@ -684,9 +694,15 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
             ),
             PhaseEntry::Publication => Err(refused(FROM, event)),
         },
+        // An event that names an attempt may only speak for the remediation
+        // running as that attempt. The account of a recovery belongs to that
+        // remediation alone: a report about another attempt says what some other
+        // run did, and the answer to "what did the repair try" cannot come from
+        // a repair that is not this one.
         EventKind::AgentOutput { attempt: mine, .. }
         | EventKind::AttemptFinished { attempt: mine, .. }
-        | EventKind::VerifyFailed { attempt: mine, .. } => refuse_unless(
+        | EventKind::VerifyFailed { attempt: mine, .. }
+        | EventKind::SelfHealingReport { attempt: mine, .. } => refuse_unless(
             *mine == attempt,
             TaskState::Remediating { attempt, phase },
             FROM,
@@ -847,6 +863,7 @@ fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::Resumed
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::SelfHealingReport { .. }
         | EventKind::GateAcknowledged { .. } => Err(refused(FROM, event)),
     }
 }
@@ -952,6 +969,7 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::Resumed
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::SelfHealingReport { .. }
         | EventKind::GateAcknowledged { .. } => Err(refused(FROM, event)),
     }
 }
@@ -1021,6 +1039,7 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::Interrupted { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
+        | EventKind::SelfHealingReport { .. }
         | EventKind::GateAcknowledged { .. } => Err(refused(FROM, event)),
     }
 }
@@ -1100,6 +1119,7 @@ fn from_paused(
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::SelfHealingReport { .. }
         | EventKind::DecisionRaised { .. } => Err(refused(FROM, event)),
     }
 }
@@ -1957,6 +1977,20 @@ mod tests {
         }
     }
 
+    /// One remediation's account of itself, naming the remediation `attempt`.
+    /// It names an attempt on purpose — unlike §9's exception, a repair is about
+    /// one particular attempt, and the sweep can only tell a report about the
+    /// remediation apart from a report about a first attempt when the entry
+    /// carries the number to compare.
+    fn self_healing_report(attempt: u32) -> EventKind {
+        EventKind::SelfHealingReport {
+            attempt: AttemptId::new(attempt),
+            class: FailureClass::VerificationFailure,
+            repairs: vec!["re-run the fmt gate".to_owned()],
+            outcome: "green on the rerun".to_owned(),
+        }
+    }
+
     /// A used exception to test-first, with the reason its author wrote. It
     /// names no attempt on purpose: `docs/DESIGN.md` gives the entry a category
     /// and a reason only, so the state that was asked is the one that owns the
@@ -2018,7 +2052,7 @@ mod tests {
     /// Written out by hand rather than generated because the point of the list
     /// is that a person named each entry — and because a sweep over it is what
     /// proves no state stays quiet about an event.
-    fn every_event() -> [EventKind; 25] {
+    fn every_event() -> [EventKind; 26] {
         [
             queued(),
             EventKind::PreflightStarted,
@@ -2045,6 +2079,12 @@ mod tests {
             decision_asked(),
             acknowledged(),
             attempt_recorded(1),
+            // The one entry below that names the *remediation* rather than the
+            // first attempt, and the only way the sweep can show the pair the
+            // table declares: `one_state_per_variant` holds a `Remediating`
+            // over attempt 2, and a report about attempt 1 is a refusal there
+            // for the same reason `PhaseEntered` about attempt 1 is one.
+            self_healing_report(2),
         ]
     }
 
@@ -2452,6 +2492,54 @@ mod tests {
         }
         refuses(&working(1, Phase::Green), &finished(2));
         refuses(&remediating(2, Phase::Red), &finished(1));
+    }
+
+    /// §7's account of a recovery is evidence about one remediation: it moves
+    /// nothing, and exactly one state answers it. Three things decide that. It
+    /// belongs to a remediation, so `Running` refuses the report even when the
+    /// report names the attempt `Running` holds — a first attempt that repaired
+    /// nothing has no recovery to account for. It names the remediation it
+    /// accounts for, so a `Remediating` over attempt 2 refuses an account of
+    /// attempt 1 for the same reason it refuses `PhaseEntered` about attempt 1.
+    /// And it is evidence, not a verdict: the account of a remediation that
+    /// ended in a failure is written before the failure is, which only works if
+    /// the account leaves the remediation where it was for the verdict to be
+    /// asked from.
+    #[test]
+    fn a_recovery_account_moves_nothing_and_names_the_remediation_it_accounts_for() {
+        for phase in [Phase::Red, Phase::Implement, Phase::Green] {
+            moves(
+                &remediating(2, phase),
+                &self_healing_report(2),
+                &remediating(2, phase),
+            );
+        }
+
+        for state in one_state_per_variant() {
+            if !matches!(state, TaskState::Remediating { attempt, .. } if attempt == AttemptId::new(2))
+            {
+                refuses(&state, &self_healing_report(2));
+            }
+        }
+        // The attempt number alone is not what admits it: a first attempt holds
+        // attempt 1, and a report about attempt 1 is still an account of a
+        // recovery that never happened.
+        refuses(&working(1, Phase::Green), &self_healing_report(1));
+        refuses(&remediating(2, Phase::Red), &self_healing_report(1));
+
+        let repaired = remediating(2, Phase::Red);
+        moves(&repaired, &self_healing_report(2), &repaired);
+        moves(
+            &repaired,
+            &EventKind::TaskFailed {
+                class: FailureClass::VerificationFailure,
+                detail: "the rerun refused too".to_owned(),
+            },
+            &TaskState::Failed {
+                class: FailureClass::VerificationFailure,
+                detail: "the rerun refused too".to_owned(),
+            },
+        );
     }
 
     /// The skip is reachable only where a phase is being worked. Every other
@@ -3109,7 +3197,16 @@ mod tests {
     /// an attempt, so no row is conditional on one: the pair says what ran, and
     /// the state asked owns the claim, exactly as `TddExceptionUsed`'s does.
     /// ADR-0080 records the ten rows and what each state's is for.
-    const LEGAL: [(&str, &str, &str); 67] = [
+    ///
+    /// `SelfHealingReport` keeps the one row the sweep can show and no other.
+    /// §7's account of a recovery belongs to a recovery, so `Running` has no row
+    /// even though a first attempt holds an attempt number a report could name:
+    /// an account of a repair cannot be made by a run that never repaired. The row
+    /// it does keep — a remediation's own account, of its own attempt — is
+    /// `a_recovery_account_moves_nothing_and_names_the_remediation_it_accounts_for`,
+    /// which also holds the refusal equality makes and the refusals of the states
+    /// that own no remediation to account for.
+    const LEGAL: [(&str, &str, &str); 68] = [
         ("Queued", "TaskQueued", "Queued"),
         ("Queued", "PreflightStarted", "Preflight"),
         ("Queued", "Paused", "Paused"),
@@ -3148,6 +3245,7 @@ mod tests {
         ("Remediating", "TaskCancelled", "Cancelled"),
         ("Remediating", "Paused", "Paused"),
         ("Remediating", "RecoveryDecision", "Remediating"),
+        ("Remediating", "SelfHealingReport", "Remediating"),
         ("Verifying", "VerifyPassed", "Publishing"),
         ("Verifying", "VerifyFailed", "Verifying"),
         ("Verifying", "AttemptRecorded", "Verifying"),
