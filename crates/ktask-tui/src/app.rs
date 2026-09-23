@@ -90,9 +90,10 @@ impl App {
 ///
 /// Only the key map overlay's keys (`?`, `F1`, `Esc`, `q`; see
 /// [`screen::help`](crate::screen::help)), screen navigation (`1`..`9`,
-/// `Tab`, `Shift-Tab`) and the queue's movement keys (see
+/// `Tab`, `Shift-Tab`), the queue's movement keys (see
 /// [`screen::queue`](crate::screen::queue), which also has the queue's action
-/// keys) are wired so far; any other key press leaves the state
+/// keys) and the live run's scroll and follow keys (see
+/// [`screen::live`](crate::screen::live)) are wired so far; any other key press leaves the state
 /// as it was.
 #[must_use]
 pub fn update(mut app: App, ev: AppEvent) -> App {
@@ -102,6 +103,7 @@ pub fn update(mut app: App, ev: AppEvent) -> App {
         AppEvent::Key(key) => {
             crate::screen::help::handle_key(&mut app, &key);
             crate::screen::queue::handle_key(&mut app, &key);
+            crate::screen::live::handle_key(&mut app, &key);
             navigate(&mut app, &key);
         }
         AppEvent::Tick => {}
@@ -137,7 +139,7 @@ fn step(from: Screen, by: usize) -> Screen {
 /// Folds one journal event into the run state the interface displays.
 fn apply_core(app: &mut App, event: Event) {
     // The live-run screen folds every event itself; the queue's part is below.
-    app.live.apply(&mut app.output, &event);
+    crate::screen::live::fold(app, &event);
     if let (Some(id), EventKind::TaskQueued { title }) = (event.task_id, event.kind)
         && app.tasks.iter().all(|task| task.id != id)
     {
@@ -165,7 +167,10 @@ const FOOTER_HINT: &str = "Press ? for the key map";
 pub fn render(app: &App, frame: &mut Frame<'_>) {
     let area = frame.area();
     let plan = layout_for(area);
-    let title = format!("{} {}", app.screen as u8, crate::screen::title(app.screen));
+    let mut title = format!("{} {}", app.screen as u8, crate::screen::title(app.screen));
+    if app.screen == Screen::LiveRun {
+        title.push_str(crate::screen::live::title_suffix(app));
+    }
     frame.render_widget(Paragraph::new(title), plan.header);
     if let Some(footer) = plan.footer {
         frame.render_widget(Paragraph::new(FOOTER_HINT), footer);
@@ -320,6 +325,17 @@ mod tests {
         AppEvent::Key(KeyEvent::new(code, modifiers))
     }
 
+    /// A screen's title as the header shows it on a fresh interface: the live
+    /// run also says it is following.
+    fn shown_title(screen: Screen) -> String {
+        let suffix = if screen == Screen::LiveRun {
+            " · following"
+        } else {
+            ""
+        };
+        format!("{}{suffix}", crate::screen::title(screen))
+    }
+
     fn digit(screen: Screen) -> AppEvent {
         let c = char::from_digit(screen as u32, 10).expect("digit");
         key(KeyCode::Char(c), KeyModifiers::NONE)
@@ -343,7 +359,7 @@ mod tests {
         for screen in Screen::ALL.into_iter().rev() {
             app = update(app, digit(screen));
             assert_eq!(app.screen, screen);
-            let expected = format!("{} {}", screen as u8, crate::screen::title(screen));
+            let expected = format!("{} {}", screen as u8, shown_title(screen));
             assert_eq!(header(&app), expected);
         }
     }
@@ -354,7 +370,7 @@ mod tests {
         for screen in Screen::ALL.into_iter().skip(1).chain([Screen::Queue]) {
             app = update(app, tab());
             assert_eq!(app.screen, screen);
-            assert!(header(&app).ends_with(crate::screen::title(screen)));
+            assert!(header(&app).ends_with(&shown_title(screen)));
         }
     }
 
@@ -365,7 +381,7 @@ mod tests {
         for screen in backwards.chain([Screen::Config]) {
             app = update(app, back_tab());
             assert_eq!(app.screen, screen);
-            assert!(header(&app).ends_with(crate::screen::title(screen)));
+            assert!(header(&app).ends_with(&shown_title(screen)));
         }
     }
 
@@ -575,7 +591,7 @@ mod tests {
     fn app_render_header_carries_the_number_key_and_title_of_every_screen() {
         let expected = [
             "1 Queue",
-            "2 Live run",
+            "2 Live run · following",
             "3 Logs",
             "4 Failures",
             "5 Task inspector",

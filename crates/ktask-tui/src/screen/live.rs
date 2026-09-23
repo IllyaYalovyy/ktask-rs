@@ -20,17 +20,27 @@
 //! on a grapheme boundary before it is drawn, so even a single enormous line
 //! costs one row's width.
 //!
+//! Follow mode decides which lines the pane shows. Following (the default),
+//! it shows the newest. Any upward scroll (`k`, `Up`, `g`) detaches it: the
+//! pane then holds the lines it showed, however much output arrives, until
+//! `f` re-attaches. [`App::scroll`] holds how many lines the view is above the
+//! newest, and [`fold`] adds each new line to it while detached, so the
+//! viewport stays on the same text. The title bar says which mode is on.
+//!
 //! The elapsed time is measured in journal time: from the event that started
 //! the attempt to the latest event of the run. [`update`](crate::update) has
 //! no clock, so it does not advance between events.
 
 use crate::app::{App, OUTPUT_WINDOW};
-use crate::layout::LayoutPlan;
+use crate::keys::{KeyAction, lookup};
+use crate::layout::{LayoutPlan, layout_for};
 use crate::sanitize::{Utf8Stream, sanitize};
 use crate::text::{display_width, truncate_to_width};
+use crate::types::Screen;
+use crossterm::event::KeyEvent;
 use ktask_core::{AttemptId, Event, EventKind, GateKind, GateResult, Phase, Stream, TaskId};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -57,6 +67,12 @@ const NONE: &str = "-";
 const NO_RUN: &str = "No run in progress";
 
 const WAITING: &str = "Waiting for output";
+
+/// What the title bar adds while the pane follows new output.
+const FOLLOWING: &str = " · following";
+
+/// What the title bar adds while it does not, with the key that re-attaches.
+const DETACHED: &str = " · detached (f to follow)";
 
 /// The outcome of one gate, as the live run lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,6 +151,10 @@ pub struct LiveRun {
     started: Option<OffsetDateTime>,
     last: Option<OffsetDateTime>,
     running: bool,
+    /// How many lines have been started in the output, over the whole run.
+    /// Unlike the window it never shrinks, so a caller can tell how many new
+    /// lines an event brought even when the window was full.
+    added: usize,
 }
 
 impl LiveRun {
@@ -170,6 +190,7 @@ impl LiveRun {
                     started: Some(at),
                     last: Some(at),
                     running: true,
+                    added: self.added,
                     ..Self::default()
                 };
                 // The output of every attempt shares one pane, so each starts
@@ -273,6 +294,7 @@ impl LiveRun {
                 output.pop_front();
             }
             output.push_back(text.to_owned());
+            self.added = self.added.saturating_add(1);
         }
         self.open = Some(stream);
     }
@@ -281,7 +303,83 @@ impl LiveRun {
 /// The last `rows` lines of `output`, oldest first, without visiting the
 /// others.
 pub fn visible(output: &VecDeque<String>, rows: usize) -> impl Iterator<Item = &String> {
-    output.range(output.len().saturating_sub(rows)..)
+    scrolled(output, rows, 0)
+}
+
+/// The `rows` lines that end `up` lines above the newest, oldest first,
+/// without visiting the others. `up` past the point where the oldest line is
+/// at the top of the pane is taken as that point.
+fn scrolled(output: &VecDeque<String>, rows: usize, up: usize) -> impl Iterator<Item = &String> {
+    let up = up.min(output.len().saturating_sub(rows));
+    let end = output.len() - up;
+    output.range(end.saturating_sub(rows)..end)
+}
+
+/// The body of the live screen split into its status rows and output pane.
+fn areas(body: Rect) -> [Rect; 2] {
+    let meta_rows = if body.height >= META_MIN_HEIGHT {
+        META_ROWS
+    } else {
+        1
+    };
+    Layout::vertical([Constraint::Length(meta_rows), Constraint::Fill(1)]).areas(body)
+}
+
+/// How far the view can be above the newest line: the lines that do not fit
+/// in the pane.
+fn max_up(app: &App) -> usize {
+    let (width, height) = app.size;
+    let [_, pane] = areas(layout_for(Rect::new(0, 0, width, height)).body);
+    app.output.len().saturating_sub(usize::from(pane.height))
+}
+
+/// How many lines the view is above the newest.
+fn up(app: &App) -> usize {
+    app.scroll.get(&Screen::LiveRun).copied().unwrap_or(0)
+}
+
+/// What the title bar adds after the screen's name: whether the pane follows.
+#[must_use]
+pub fn title_suffix(app: &App) -> &'static str {
+    if app.follow { FOLLOWING } else { DETACHED }
+}
+
+/// Folds one journal event into the run state, keeping a detached view on the
+/// lines it was showing: each line the event added moves the view that much
+/// further from the newest.
+pub fn fold(app: &mut App, event: &Event) {
+    let before = app.live.added;
+    app.live.apply(&mut app.output, event);
+    let grown = app.live.added.saturating_sub(before);
+    if !app.follow && grown > 0 {
+        let at = up(app).saturating_add(grown).min(max_up(app));
+        app.scroll.insert(Screen::LiveRun, at);
+    }
+}
+
+/// Handles the live screen's keys: `k`, `Up` and `g` scroll up and so detach
+/// follow; `j`, `Down` and `G` scroll back down, which does not re-attach it;
+/// `f` re-attaches. Nothing happens on another screen or under an overlay.
+pub fn handle_key(app: &mut App, key: &KeyEvent) {
+    if app.screen != Screen::LiveRun || app.overlay.is_some() {
+        return;
+    }
+    let scroll = match lookup(app.screen, key).map(|binding| binding.action) {
+        Some(KeyAction::MoveUp) => up(app).saturating_add(1),
+        Some(KeyAction::First) => usize::MAX,
+        Some(KeyAction::MoveDown) => up(app).saturating_sub(1),
+        Some(KeyAction::Last) => 0,
+        Some(KeyAction::Follow) => {
+            app.follow = true;
+            app.scroll.remove(&Screen::LiveRun);
+            return;
+        }
+        _ => return,
+    };
+    if scroll > up(app) {
+        app.follow = false;
+    }
+    app.scroll.insert(Screen::LiveRun, scroll.min(max_up(app)));
 }
 
 /// `h:mm:ss`.
@@ -361,20 +459,16 @@ fn gates_line(live: &LiveRun, width: usize) -> Line<'static> {
 }
 
 /// Draws the live run into the body of `plan`: the status rows, then the
-/// newest lines of output filling the rest.
+/// lines of output filling the rest: the newest while following, otherwise
+/// those the view is scrolled to.
 pub fn render(app: &App, plan: &LayoutPlan, frame: &mut Frame<'_>) {
     let body = plan.body;
     if body.is_empty() {
         return;
     }
     let width = usize::from(body.width);
-    let meta_rows = if body.height >= META_MIN_HEIGHT {
-        META_ROWS
-    } else {
-        1
-    };
-    let [meta_area, output_area] =
-        Layout::vertical([Constraint::Length(meta_rows), Constraint::Fill(1)]).areas(body);
+    let [meta_area, output_area] = areas(body);
+    let meta_rows = meta_area.height;
     let mut meta = vec![
         status_line(&app.live, width),
         command_line(&app.live, width),
@@ -391,7 +485,8 @@ pub fn render(app: &App, plan: &LayoutPlan, frame: &mut Frame<'_>) {
             Style::new().add_modifier(Modifier::DIM),
         )]
     } else {
-        visible(&app.output, usize::from(output_area.height))
+        let up = if app.follow { 0 } else { up(app) };
+        scrolled(&app.output, usize::from(output_area.height), up)
             .map(|line| Line::raw(truncate_to_width(line, width)))
             .collect()
     };
@@ -970,7 +1065,7 @@ mod tests {
             harness.send(out(chunk));
         }
         let rows = rows(&harness);
-        assert_eq!(rows[0].trim_end(), "2 Live run");
+        assert_eq!(rows[0].trim_end(), "2 Live run · following");
         assert!(rows[23].starts_with("Press ? for the key map"));
         let screen = harness.text();
         assert!(screen.contains("CLEARED"));
@@ -1007,6 +1102,268 @@ mod tests {
                 }
             }
         }
+    }
+
+    // --- follow mode -----------------------------------------------------------
+
+    fn press(harness: &mut Harness, code: KeyCode) {
+        harness.send(AppEvent::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    /// A live screen of 80x24 (pane rows 4 to 22, so 19 lines) that has been
+    /// fed `count` lines named `line 0`, `line 1`, and so on.
+    fn filled(count: usize) -> Harness {
+        let mut harness = live_harness(80, 24);
+        for n in 0..count {
+            harness.send(out(&format!("line {n}")));
+        }
+        harness
+    }
+
+    fn newest_row(harness: &Harness) -> String {
+        rows(harness)[22].trim_end().to_owned()
+    }
+
+    fn header_row(harness: &Harness) -> String {
+        rows(harness)[0].trim_end().to_owned()
+    }
+
+    #[test]
+    fn scrolling_detaches_follow_mode() {
+        for code in [KeyCode::Char('k'), KeyCode::Up, KeyCode::Char('g')] {
+            let mut harness = filled(100);
+            assert!(harness.app().follow);
+            assert_eq!(newest_row(&harness), "line 99");
+            press(&mut harness, code);
+            assert!(!harness.app().follow, "{code:?} did not detach");
+            assert_ne!(newest_row(&harness), "line 99", "{code:?} did not scroll");
+        }
+    }
+
+    #[test]
+    fn live_scrolling_up_moves_the_view_one_line_at_a_time() {
+        let mut harness = filled(100);
+        press(&mut harness, KeyCode::Char('k'));
+        assert_eq!(newest_row(&harness), "line 98");
+        assert_eq!(rows(&harness)[4].trim_end(), "line 80");
+        press(&mut harness, KeyCode::Up);
+        assert_eq!(newest_row(&harness), "line 97");
+    }
+
+    #[test]
+    fn live_scrolling_down_returns_toward_the_newest_without_re_attaching() {
+        let mut harness = filled(100);
+        for _ in 0..3 {
+            press(&mut harness, KeyCode::Char('k'));
+        }
+        assert_eq!(newest_row(&harness), "line 96");
+        press(&mut harness, KeyCode::Char('j'));
+        assert_eq!(newest_row(&harness), "line 97");
+        press(&mut harness, KeyCode::Down);
+        assert_eq!(newest_row(&harness), "line 98");
+        press(&mut harness, KeyCode::Down);
+        assert_eq!(newest_row(&harness), "line 99");
+        press(&mut harness, KeyCode::Down);
+        assert_eq!(newest_row(&harness), "line 99");
+        assert!(!harness.app().follow);
+    }
+
+    #[test]
+    fn live_scrolling_down_while_following_does_not_detach() {
+        let mut harness = filled(100);
+        for code in [KeyCode::Char('j'), KeyCode::Down, KeyCode::Char('G')] {
+            press(&mut harness, code);
+            assert!(harness.app().follow, "{code:?} detached");
+        }
+        assert_eq!(newest_row(&harness), "line 99");
+    }
+
+    #[test]
+    fn live_scrolling_stops_at_the_oldest_line_and_first_and_last_jump_to_the_ends() {
+        let mut harness = filled(30);
+        // 30 lines in a pane of 19: 11 lines can be scrolled past.
+        press(&mut harness, KeyCode::Char('g'));
+        assert_eq!(rows(&harness)[4].trim_end(), "line 0");
+        assert_eq!(newest_row(&harness), "line 18");
+        press(&mut harness, KeyCode::Char('k'));
+        assert_eq!(rows(&harness)[4].trim_end(), "line 0");
+        // One line down from the top: the view has moved, so the earlier
+        // presses did not pile up beyond the top.
+        press(&mut harness, KeyCode::Char('j'));
+        assert_eq!(rows(&harness)[4].trim_end(), "line 1");
+        press(&mut harness, KeyCode::Char('G'));
+        assert_eq!(newest_row(&harness), "line 29");
+        assert!(!harness.app().follow);
+    }
+
+    #[test]
+    fn live_scrolling_when_everything_fits_still_detaches() {
+        let mut harness = filled(3);
+        press(&mut harness, KeyCode::Char('k'));
+        assert!(!harness.app().follow);
+        assert_eq!(rows(&harness)[4].trim_end(), "line 0");
+        assert_eq!(rows(&harness)[6].trim_end(), "line 2");
+    }
+
+    #[test]
+    fn live_new_output_moves_the_view_while_attached() {
+        let mut harness = filled(100);
+        harness.send(out("fresh"));
+        assert_eq!(newest_row(&harness), "fresh");
+        assert_eq!(rows(&harness)[4].trim_end(), "line 82");
+    }
+
+    #[test]
+    fn live_new_output_does_not_move_the_view_while_detached() {
+        let mut harness = filled(100);
+        press(&mut harness, KeyCode::Char('k'));
+        press(&mut harness, KeyCode::Char('k'));
+        let before = rows(&harness);
+        assert_eq!(before[22].trim_end(), "line 97");
+        for n in 0..5 {
+            harness.send(out(&format!("fresh {n}")));
+        }
+        let after = rows(&harness);
+        assert_eq!(&after[4..23], &before[4..23]);
+        assert!(!harness.text().contains("fresh"));
+    }
+
+    #[test]
+    fn live_a_detached_view_stays_on_its_lines_when_the_window_drops_old_ones() {
+        let mut harness = live_harness(80, 24);
+        for n in 0..OUTPUT_WINDOW {
+            harness.send(out(&format!("line {n}")));
+        }
+        for _ in 0..10 {
+            press(&mut harness, KeyCode::Char('k'));
+        }
+        assert_eq!(newest_row(&harness), "line 4085");
+        for n in 0..3 {
+            harness.send(out(&format!("fresh {n}")));
+        }
+        assert_eq!(newest_row(&harness), "line 4085");
+        assert_eq!(rows(&harness)[4].trim_end(), "line 4067");
+    }
+
+    #[test]
+    fn live_a_detached_view_is_not_pushed_out_by_the_window_forgetting_its_lines() {
+        let mut harness = live_harness(80, 24);
+        for n in 0..OUTPUT_WINDOW {
+            harness.send(out(&format!("line {n}")));
+        }
+        press(&mut harness, KeyCode::Char('g'));
+        assert_eq!(rows(&harness)[4].trim_end(), "line 0");
+        for n in 0..50 {
+            harness.send(out(&format!("fresh {n}")));
+        }
+        // Everything the view was on has been dropped; it shows the oldest
+        // lines that remain, and pressing down still moves it.
+        assert_eq!(rows(&harness)[4].trim_end(), "line 50");
+        press(&mut harness, KeyCode::Char('j'));
+        assert_eq!(rows(&harness)[4].trim_end(), "line 51");
+    }
+
+    #[test]
+    fn live_an_event_with_several_lines_moves_a_detached_view_by_all_of_them() {
+        let mut harness = filled(100);
+        press(&mut harness, KeyCode::Char('k'));
+        harness.send(out("one\ntwo\nthree"));
+        assert_eq!(newest_row(&harness), "line 98");
+        harness.key('f');
+        assert_eq!(newest_row(&harness), "three");
+        assert_eq!(rows(&harness)[20].trim_end(), "one");
+    }
+
+    #[test]
+    fn live_a_new_attempt_does_not_move_a_detached_view() {
+        let mut harness = filled(100);
+        press(&mut harness, KeyCode::Char('k'));
+        harness.send(started(7));
+        assert_eq!(newest_row(&harness), "line 98");
+        assert!(!harness.text().contains("== task"));
+    }
+
+    #[test]
+    fn live_f_re_attaches_and_shows_the_newest_output_again() {
+        let mut harness = filled(100);
+        for _ in 0..4 {
+            press(&mut harness, KeyCode::Char('k'));
+        }
+        harness.send(out("fresh"));
+        assert!(!harness.text().contains("fresh"));
+        harness.key('f');
+        assert!(harness.app().follow);
+        assert_eq!(newest_row(&harness), "fresh");
+        harness.send(out("fresher"));
+        assert_eq!(newest_row(&harness), "fresher");
+        assert_eq!(harness.app().scroll.get(&Screen::LiveRun), None);
+    }
+
+    #[test]
+    fn live_f_while_following_changes_nothing() {
+        let mut harness = filled(100);
+        let before = harness.app().clone();
+        harness.key('f');
+        assert_eq!(harness.app(), &before);
+    }
+
+    #[test]
+    fn live_the_title_bar_says_whether_the_pane_follows() {
+        let mut harness = filled(100);
+        assert_eq!(header_row(&harness), "2 Live run · following");
+        press(&mut harness, KeyCode::Char('k'));
+        assert_eq!(header_row(&harness), "2 Live run · detached (f to follow)");
+        harness.key('f');
+        assert_eq!(header_row(&harness), "2 Live run · following");
+    }
+
+    #[test]
+    fn live_only_the_live_screen_shows_the_follow_state() {
+        let mut harness = live_harness(80, 24);
+        harness.key('1');
+        assert_eq!(header_row(&harness), "1 Queue");
+    }
+
+    #[test]
+    fn live_scroll_keys_leave_other_screens_and_an_open_overlay_alone() {
+        let mut harness = filled(100);
+        harness.key('1');
+        let queue = harness.app().clone();
+        harness.key('g');
+        harness.key('f');
+        assert!(harness.app().follow);
+        assert_eq!(harness.app().scroll, queue.scroll);
+
+        harness.key('2');
+        harness.key('?');
+        assert!(harness.app().overlay.is_some());
+        harness.key('k');
+        harness.key('g');
+        assert!(harness.app().follow);
+        assert_eq!(harness.app().scroll.get(&Screen::LiveRun), None);
+    }
+
+    #[test]
+    fn live_the_scroll_position_is_kept_when_leaving_and_returning() {
+        let mut harness = filled(100);
+        for _ in 0..3 {
+            press(&mut harness, KeyCode::Char('k'));
+        }
+        harness.key('1');
+        harness.send(out("fresh"));
+        harness.key('2');
+        assert!(!harness.app().follow);
+        assert_eq!(newest_row(&harness), "line 96");
+    }
+
+    #[test]
+    fn live_a_detached_view_is_kept_within_the_pane_when_the_terminal_grows() {
+        let mut harness = filled(100);
+        press(&mut harness, KeyCode::Char('g'));
+        harness.send(AppEvent::Resize(80, 40));
+        let rows = rows(&harness);
+        assert_eq!(rows[4].trim_end(), "line 0");
+        assert_eq!(rows[38].trim_end(), "line 34");
     }
 
     #[test]

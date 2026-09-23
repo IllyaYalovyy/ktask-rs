@@ -222,7 +222,7 @@ mod tests {
 
     const HEADERS: [&str; 9] = [
         "1 Queue",
-        "2 Live run",
+        "2 Live run · following",
         "3 Logs",
         "4 Failures",
         "5 Task inspector",
