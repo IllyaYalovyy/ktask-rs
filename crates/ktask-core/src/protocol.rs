@@ -264,6 +264,66 @@ pub fn verify_red(before: &TestSummary, after: &TestSummary) -> Result<Vec<Strin
     Ok(new_failures)
 }
 
+/// Confirms the `tdd` protocol's green phase made every test named in
+/// `expected` pass, without a regression elsewhere (VISION.md §9 step 4:
+/// "the runner confirms the new test passes").
+///
+/// `expected` is the set of test names the red phase reported as newly
+/// failing (typically [`verify_red`]'s return value) — the tests the green
+/// phase's implementation work was meant to satisfy. Any other name present
+/// in `after.failures` is a regression: by the time the red phase completed,
+/// every test other than `expected` was passing, so a new failure among them
+/// means the green phase broke something it was not supposed to touch.
+///
+/// # Errors
+///
+/// Returns [`Error::Gate`] naming the offending tests: for a name in
+/// `expected` still present in `after.failures`, it did not turn green; for
+/// a name in `after.failures` absent from `expected`, a previously passing
+/// test regressed. Both kinds of offense are reported together in one error
+/// so the runner does not need to guess which check to fix first.
+pub fn verify_green(expected: &[String], after: &TestSummary) -> Result<()> {
+    let after_failures: std::collections::HashSet<&str> =
+        after.failures.iter().map(String::as_str).collect();
+    let expected_set: std::collections::HashSet<&str> =
+        expected.iter().map(String::as_str).collect();
+
+    let mut seen = std::collections::HashSet::new();
+    let still_red: Vec<String> = expected
+        .iter()
+        .filter(|name| after_failures.contains(name.as_str()))
+        .filter(|name| seen.insert(name.as_str()))
+        .cloned()
+        .collect();
+
+    let mut seen = std::collections::HashSet::new();
+    let regressed: Vec<String> = after
+        .failures
+        .iter()
+        .filter(|name| !expected_set.contains(name.as_str()))
+        .filter(|name| seen.insert(name.as_str()))
+        .cloned()
+        .collect();
+
+    if still_red.is_empty() && regressed.is_empty() {
+        return Ok(());
+    }
+
+    let mut parts = Vec::new();
+    if !still_red.is_empty() {
+        parts.push(format!("still failing: {}", still_red.join(", ")));
+    }
+    if !regressed.is_empty() {
+        parts.push(format!("regressed: {}", regressed.join(", ")));
+    }
+    let detail = parts.join("; ");
+
+    Err(Error::Gate {
+        kind: "green".to_string(),
+        detail,
+    })
+}
+
 /// Reports whether `path` matches at least one glob in `globs`.
 ///
 /// A glob that fails to compile is skipped rather than treated as an error,
@@ -654,5 +714,48 @@ mod tests {
 
         let new_failures = verify_red(&before, &after).expect("a new failure must be reported");
         assert_eq!(new_failures, vec!["widget::tests::new_one"]);
+    }
+
+    #[test]
+    fn verify_green_passes_when_every_expected_test_now_passes() {
+        let expected = vec!["widget::tests::rejects_a_bad_size".to_string()];
+        let after = summary(0, &[]);
+
+        assert!(verify_green(&expected, &after).is_ok());
+    }
+
+    #[test]
+    fn verify_green_rejects_when_an_expected_test_is_still_failing() {
+        let expected = vec!["widget::tests::rejects_a_bad_size".to_string()];
+        let after = summary(1, &["widget::tests::rejects_a_bad_size"]);
+
+        let err = verify_green(&expected, &after).expect_err("still-red test must be rejected");
+        assert!(matches!(&err, Error::Gate { kind, .. } if kind == "green"));
+        assert!(
+            err.to_string()
+                .contains("widget::tests::rejects_a_bad_size")
+        );
+    }
+
+    #[test]
+    fn verify_green_rejects_a_regression_in_an_unrelated_test() {
+        let expected = vec!["widget::tests::new_one".to_string()];
+        let after = summary(1, &["other::tests::broke"]);
+
+        let err = verify_green(&expected, &after).expect_err("a regression must be rejected");
+        assert!(matches!(&err, Error::Gate { kind, .. } if kind == "green"));
+        assert!(err.to_string().contains("other::tests::broke"));
+    }
+
+    #[test]
+    fn verify_green_deduplicates_a_repeated_regression_name() {
+        let expected = vec!["widget::tests::new_one".to_string()];
+        let after = summary(2, &["other::tests::broke", "other::tests::broke"]);
+
+        let err = verify_green(&expected, &after).expect_err("a regression must be rejected");
+        let Error::Gate { detail, .. } = &err else {
+            panic!("expected Error::Gate");
+        };
+        assert_eq!(detail.matches("other::tests::broke").count(), 1);
     }
 }
