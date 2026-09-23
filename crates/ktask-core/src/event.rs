@@ -4,18 +4,19 @@
 //! listed here, `#[serde(tag = "kind")]` so a stored event's `kind` column
 //! names its variant. Nothing may emit an event this enum does not contain.
 //!
-//! Seven variants are deliberately absent because their payload names a type
+//! Six variants are deliberately absent because their payload names a type
 //! no earlier task has defined: `GateFinished`, `AttemptFinished`,
-//! `ProviderDetected`, `TddExceptionUsed`, `DecisionRaised`,
-//! `DecisionResolved` and `SelfHealingReport`. An eighth, `GateStarted`, is
-//! absent for the same reason: its `kind: GateKind` field names a type
-//! `gate.rs` has not yet introduced, matching the precedent set by
-//! [`crate::Error::Gate`], whose `kind` field is a `String` today rather
-//! than `GateKind`. Each is added by the task that defines its payload type,
-//! which also adds its arm to the transition function.
+//! `ProviderDetected`, `DecisionRaised`, `DecisionResolved` and
+//! `SelfHealingReport`. A seventh, `GateStarted`, is absent for the same
+//! reason: its `kind: GateKind` field names a type `gate.rs` has not yet
+//! introduced, matching the precedent set by [`crate::Error::Gate`], whose
+//! `kind` field is a `String` today rather than `GateKind`. Each is added by
+//! the task that defines its payload type, which also adds its arm to the
+//! transition function.
 
 use crate::{
     AttemptId, AttemptRecord, EventSeq, FailureClass, PauseReason, Phase, Recovery, Stream, TaskId,
+    TddException,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -156,6 +157,15 @@ pub enum EventKind {
         /// A human-readable description of the decision.
         detail: String,
     },
+    /// The `tdd` protocol's red phase was skipped because the task declared
+    /// an exception (VISION.md §9): documentation, pure refactoring, build
+    /// configuration, or a bug already covered by a failing test.
+    TddExceptionUsed {
+        /// Which exception category was claimed.
+        exception: TddException,
+        /// The task's stated reason, from its `**TDD-Exception:**` section.
+        reason: String,
+    },
     /// A human acknowledged a gate that required their attention.
     GateAcknowledged {
         /// Who acknowledged the gate.
@@ -198,6 +208,7 @@ impl EventKind {
             EventKind::Resumed => "Resumed",
             EventKind::Interrupted { .. } => "Interrupted",
             EventKind::RecoveryDecision { .. } => "RecoveryDecision",
+            EventKind::TddExceptionUsed { .. } => "TddExceptionUsed",
             EventKind::GateAcknowledged { .. } => "GateAcknowledged",
             EventKind::AttemptRecorded { .. } => "AttemptRecorded",
         }
@@ -311,6 +322,10 @@ mod tests {
                 decision: Recovery::Resume,
                 detail: "journal complete through phase".to_string(),
             },
+            EventKind::TddExceptionUsed {
+                exception: TddException::Documentation,
+                reason: "README.md only, no code changed.".to_string(),
+            },
             EventKind::GateAcknowledged {
                 by: "yalovoy".to_string(),
                 at: OffsetDateTime::UNIX_EPOCH,
@@ -335,9 +350,9 @@ mod tests {
     }
 
     #[test]
-    fn event_kind_has_exactly_twenty_variants() {
+    fn event_kind_has_exactly_twenty_one_variants() {
         let variants = all_events();
-        assert_eq!(variants.len(), 20);
+        assert_eq!(variants.len(), 21);
 
         // Exhaustive, wildcard-free match: a variant added to `EventKind`
         // without being listed here fails to compile instead of silently
@@ -362,6 +377,7 @@ mod tests {
                 | EventKind::Resumed
                 | EventKind::Interrupted { .. }
                 | EventKind::RecoveryDecision { .. }
+                | EventKind::TddExceptionUsed { .. }
                 | EventKind::GateAcknowledged { .. }
                 | EventKind::AttemptRecorded { .. } => {}
             }
@@ -399,6 +415,7 @@ mod tests {
             "Resumed",
             "Interrupted",
             "RecoveryDecision",
+            "TddExceptionUsed",
             "GateAcknowledged",
             "AttemptRecorded",
         ]

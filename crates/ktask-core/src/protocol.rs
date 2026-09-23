@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{Config, Error, GateKind, Phase, Result, Task, TestSummary};
+use crate::{Config, Error, GateKind, Phase, Result, Task, TddException, TestSummary};
 
 /// Which paths a [`PhaseSpec`]'s agent may modify while it runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -145,6 +145,109 @@ impl Protocol {
             ],
         )
     }
+}
+
+/// Parses a category name as it appears in a task's `**TDD-Exception:**`
+/// section (the text before the first `:`) into the [`TddException`] type
+/// `crate::classify` already defines, or `None` if `name` matches none of
+/// the four declared categories.
+///
+/// The sole source of the section-string/variant mapping, so
+/// `parse_tdd_exception`'s error message and this function can never
+/// disagree about which names are valid.
+#[must_use]
+fn parse_exception_category(name: &str) -> Option<TddException> {
+    match name {
+        "documentation" => Some(TddException::Documentation),
+        "pure-refactor" => Some(TddException::PureRefactoring),
+        "build-config" => Some(TddException::BuildConfiguration),
+        "existing-failing-test" => Some(TddException::PreExistingFailingTest),
+        _ => None,
+    }
+}
+
+/// The bold section label a task uses to declare a `tdd` protocol
+/// exception, mirroring the `**Protocol:**` convention `crate::task` uses
+/// for the task's work protocol.
+const EXCEPTION_LABEL: &str = "**TDD-Exception:**";
+
+/// Extracts `body`'s optional `**TDD-Exception:**` section: the text
+/// following the label on the first line where it appears at the start of
+/// the (trimmed) line. `None` if no such line exists.
+fn exception_section(body: &str) -> Option<&str> {
+    body.lines().find_map(|line| {
+        line.trim_start()
+            .strip_prefix(EXCEPTION_LABEL)
+            .map(str::trim)
+    })
+}
+
+/// Parses a task's `**TDD-Exception:**` section text into a category and a
+/// reason. The expected form is `"<category>: <reason>"`, where `<category>`
+/// is one of `documentation`, `pure-refactor`, `build-config` or
+/// `existing-failing-test` (VISION.md §9's four exception categories).
+///
+/// # Errors
+///
+/// Returns [`Error::Policy`] if `raw` has no `:` separator, names a category
+/// this module's private category parser does not recognize, or leaves the
+/// reason after the separator empty.
+pub fn parse_tdd_exception(raw: &str) -> Result<(TddException, String)> {
+    let (category, reason) = raw.split_once(':').ok_or_else(|| Error::Policy {
+        detail: format!("TDD exception section must be \"<category>: <reason>\", got {raw:?}"),
+        paths: Vec::new(),
+    })?;
+
+    let category = category.trim();
+    let exception = parse_exception_category(category).ok_or_else(|| Error::Policy {
+        detail: format!(
+            "unknown TDD exception category {category:?}: expected documentation, \
+             pure-refactor, build-config or existing-failing-test"
+        ),
+        paths: Vec::new(),
+    })?;
+
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err(Error::Policy {
+            detail: "TDD exception section must include a reason".to_string(),
+            paths: Vec::new(),
+        });
+    }
+
+    Ok((exception, reason.to_string()))
+}
+
+/// Resolves the `tdd` protocol's declared exception for `task`, if any.
+///
+/// `scope_violation` reports whether a write-scope violation has already
+/// been recorded for this attempt (typically the caller's own prior
+/// [`check_scope`] result). An exception is a decision a task makes up
+/// front, not an escape hatch discovered after the fact: if `scope_violation`
+/// is `true`, a declared exception is rejected even though the task names
+/// one, so a scope violation can never be claimed away after the fact.
+///
+/// # Errors
+///
+/// Returns [`Error::Policy`] if `scope_violation` is `true` and the task
+/// declares an exception, or if the task's `**TDD-Exception:**` section
+/// fails to parse (see [`parse_tdd_exception`]).
+pub fn claim_tdd_exception(
+    task: &Task,
+    scope_violation: bool,
+) -> Result<Option<(TddException, String)>> {
+    let Some(raw) = exception_section(&task.body) else {
+        return Ok(None);
+    };
+
+    if scope_violation {
+        return Err(Error::Policy {
+            detail: "a TDD exception cannot be claimed after a scope violation".to_string(),
+            paths: Vec::new(),
+        });
+    }
+
+    parse_tdd_exception(raw).map(Some)
 }
 
 /// Builds the protocol named `name`, or `None` if `name` is neither
@@ -757,5 +860,131 @@ mod tests {
             panic!("expected Error::Gate");
         };
         assert_eq!(detail.matches("other::tests::broke").count(), 1);
+    }
+
+    #[test]
+    fn parse_exception_category_recognizes_every_declared_category() {
+        assert_eq!(
+            parse_exception_category("documentation"),
+            Some(TddException::Documentation)
+        );
+        assert_eq!(
+            parse_exception_category("pure-refactor"),
+            Some(TddException::PureRefactoring)
+        );
+        assert_eq!(
+            parse_exception_category("build-config"),
+            Some(TddException::BuildConfiguration)
+        );
+        assert_eq!(
+            parse_exception_category("existing-failing-test"),
+            Some(TddException::PreExistingFailingTest)
+        );
+    }
+
+    #[test]
+    fn parse_exception_category_rejects_an_unknown_category() {
+        assert_eq!(parse_exception_category("vibes"), None);
+        assert_eq!(parse_exception_category(""), None);
+    }
+
+    fn task_with_body(body: &str) -> Task {
+        Task {
+            id: crate::TaskId::new(1),
+            status: crate::TaskStatus::Pending,
+            body: body.to_string(),
+            outcome: "it happens".to_string(),
+            done_when: "it happened".to_string(),
+            verify: "cargo test".to_string(),
+            refs: "VISION.md".to_string(),
+            protocol: Some("tdd".to_string()),
+        }
+    }
+
+    #[test]
+    fn parse_tdd_exception_reads_the_category_and_reason() {
+        let (exception, reason) =
+            parse_tdd_exception("documentation: README.md only, no code changed.")
+                .expect("well-formed exception must parse");
+        assert_eq!(exception, TddException::Documentation);
+        assert_eq!(reason, "README.md only, no code changed.");
+    }
+
+    #[test]
+    fn parse_tdd_exception_rejects_a_missing_separator() {
+        let err = parse_tdd_exception("documentation only").expect_err("must reject");
+        assert!(matches!(&err, Error::Policy { .. }));
+    }
+
+    #[test]
+    fn parse_tdd_exception_rejects_an_unknown_category() {
+        let err = parse_tdd_exception("vibes: trust me").expect_err("must reject");
+        let Error::Policy { detail, .. } = &err else {
+            panic!("expected Error::Policy");
+        };
+        assert!(detail.contains("vibes"));
+    }
+
+    #[test]
+    fn parse_tdd_exception_rejects_an_empty_reason() {
+        let err = parse_tdd_exception("documentation:   ").expect_err("must reject");
+        assert!(matches!(&err, Error::Policy { .. }));
+    }
+
+    #[test]
+    fn claim_tdd_exception_returns_none_when_the_task_names_no_exception() {
+        let task = task_with_body("## Do the thing\n\n**Outcome:** it happens.\n");
+        assert_eq!(
+            claim_tdd_exception(&task, false).expect("no exception"),
+            None
+        );
+    }
+
+    #[test]
+    fn claim_tdd_exception_returns_none_when_scope_was_violated_but_none_is_named() {
+        // A scope violation only matters once a task actually claims an
+        // exception; a task naming none has nothing to launder.
+        let task = task_with_body("## Do the thing\n\n**Outcome:** it happens.\n");
+        assert_eq!(
+            claim_tdd_exception(&task, true).expect("no exception"),
+            None
+        );
+    }
+
+    #[test]
+    fn claim_tdd_exception_returns_the_declared_category_and_reason() {
+        let task = task_with_body(
+            "## Do the thing\n\n\
+             **Outcome:** it happens.\n\n\
+             **TDD-Exception:** pure-refactor: renaming a method, no behavior change.\n",
+        );
+        let (exception, reason) = claim_tdd_exception(&task, false)
+            .expect("must parse")
+            .expect("must be Some");
+        assert_eq!(exception, TddException::PureRefactoring);
+        assert_eq!(reason, "renaming a method, no behavior change.");
+    }
+
+    #[test]
+    fn claim_tdd_exception_rejects_an_exception_claimed_after_a_scope_violation() {
+        let task = task_with_body(
+            "## Do the thing\n\n\
+             **TDD-Exception:** documentation: just docs.\n",
+        );
+        let err = claim_tdd_exception(&task, true).expect_err("must reject");
+        let Error::Policy { detail, .. } = &err else {
+            panic!("expected Error::Policy");
+        };
+        assert!(detail.contains("scope violation"));
+    }
+
+    #[test]
+    fn claim_tdd_exception_propagates_a_malformed_section_even_without_a_scope_violation() {
+        let task = task_with_body(
+            "## Do the thing\n\n\
+             **TDD-Exception:** not-a-real-category: whatever\n",
+        );
+        let err = claim_tdd_exception(&task, false).expect_err("must reject");
+        assert!(matches!(&err, Error::Policy { .. }));
     }
 }

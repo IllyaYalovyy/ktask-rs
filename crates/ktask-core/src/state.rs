@@ -290,6 +290,7 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::Resumed
         | EventKind::Interrupted { .. }
         | EventKind::RecoveryDecision { .. }
+        | EventKind::TddExceptionUsed { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. } => Err(invalid("Queued", event)),
     }
@@ -328,6 +329,7 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
         | EventKind::TaskFailed { .. }
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
+        | EventKind::TddExceptionUsed { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. } => Err(invalid("Preflight", event)),
     }
@@ -348,9 +350,9 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
             attempt,
             phase: *phase,
         }),
-        EventKind::AgentOutput { .. } | EventKind::AttemptRecorded { .. } => {
-            Ok(TaskState::Running { attempt, phase })
-        }
+        EventKind::AgentOutput { .. }
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::TddExceptionUsed { .. } => Ok(TaskState::Running { attempt, phase }),
         EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
             class: *class,
             detail: detail.clone(),
@@ -399,9 +401,9 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
             attempt,
             phase: *phase,
         }),
-        EventKind::AgentOutput { .. } | EventKind::AttemptRecorded { .. } => {
-            Ok(TaskState::Remediating { attempt, phase })
-        }
+        EventKind::AgentOutput { .. }
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::TddExceptionUsed { .. } => Ok(TaskState::Remediating { attempt, phase }),
         EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
             class: *class,
             detail: detail.clone(),
@@ -467,6 +469,7 @@ fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::TaskFailed { .. }
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
+        | EventKind::TddExceptionUsed { .. }
         | EventKind::GateAcknowledged { .. } => Err(invalid("Verifying", event)),
     }
 }
@@ -510,6 +513,7 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::TaskCancelled { .. }
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
+        | EventKind::TddExceptionUsed { .. }
         | EventKind::GateAcknowledged { .. } => Err(invalid("Publishing", event)),
     }
 }
@@ -543,6 +547,7 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::Resumed
         | EventKind::Interrupted { .. }
         | EventKind::RecoveryDecision { .. }
+        | EventKind::TddExceptionUsed { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. } => {
             Err(invalid(&format!("PublishedVerified({commit})"), event))
@@ -614,6 +619,7 @@ fn from_paused(
         | EventKind::TaskFailed { .. }
         | EventKind::Paused { .. }
         | EventKind::Interrupted { .. }
+        | EventKind::TddExceptionUsed { .. }
         | EventKind::AttemptRecorded { .. } => Err(invalid("Paused", event)),
     }
 }
@@ -672,7 +678,7 @@ pub enum PauseReason {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::classify::Stream;
+    use crate::classify::{Stream, TddException};
 
     fn all_phases() -> Vec<Phase> {
         vec![
@@ -2234,6 +2240,10 @@ mod tests {
                 decision: Recovery::Resume,
                 detail: "x".to_string(),
             },
+            EventKind::TddExceptionUsed {
+                exception: TddException::Documentation,
+                reason: "x".to_string(),
+            },
             EventKind::GateAcknowledged {
                 by: "x".to_string(),
                 at: OffsetDateTime::UNIX_EPOCH,
@@ -2262,6 +2272,7 @@ mod tests {
             ("Running", "PhaseEntered"),
             ("Running", "AgentOutput"),
             ("Running", "AttemptRecorded"),
+            ("Running", "TddExceptionUsed"),
             ("Running", "TaskFailed"),
             ("Running", "Paused"),
             ("Running", "Interrupted"),
@@ -2269,6 +2280,7 @@ mod tests {
             ("Remediating", "PhaseEntered"),
             ("Remediating", "AgentOutput"),
             ("Remediating", "AttemptRecorded"),
+            ("Remediating", "TddExceptionUsed"),
             ("Remediating", "TaskFailed"),
             ("Remediating", "Paused"),
             ("Remediating", "Interrupted"),
@@ -2304,7 +2316,7 @@ mod tests {
         let states = representative_states();
         let events = representative_events();
         assert_eq!(states.len(), 16, "expected one row per distinguished state");
-        assert_eq!(events.len(), 20, "expected one row per distinguished event");
+        assert_eq!(events.len(), 21, "expected one row per distinguished event");
 
         let mut checked = 0;
         for (state_label, state) in &states {
@@ -2332,7 +2344,7 @@ mod tests {
         assert_eq!(checked, states.len() * events.len());
         assert_eq!(
             ALLOWED.len(),
-            48,
+            50,
             "the allowed list itself changed size; update this guard deliberately"
         );
     }

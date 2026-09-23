@@ -49,7 +49,8 @@ pub use lock::{Holder, RepoLock, acquire};
 pub use paths::{config_file, project_id, state_root};
 pub use project::{Project, project_config_path};
 pub use protocol::{
-    PhaseSpec, Protocol, WriteScope, check_scope, for_task, verify_green, verify_red,
+    PhaseSpec, Protocol, WriteScope, check_scope, claim_tdd_exception, for_task,
+    parse_tdd_exception, verify_green, verify_red,
 };
 pub use provider::{
     Capabilities, Claude, Codex, Dummy, Invocation, Outcome, Provider, Scenario, ScenarioFile,
