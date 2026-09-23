@@ -42,8 +42,9 @@ impl Project {
     /// # Errors
     ///
     /// Returns [`Error::Io`] when `root` does not exist or its state
-    /// directory cannot be created, and [`Error::Database`] when the journal
-    /// database cannot be opened or written.
+    /// directory cannot be created, [`Error::Git`] when `root` is not inside
+    /// a git working tree, and [`Error::Database`] when the journal database
+    /// cannot be opened or written.
     pub fn register(root: &Path) -> Result<Project> {
         register_with(root, &|key| std::env::var(key).ok())
     }
@@ -62,6 +63,7 @@ impl Project {
 
 fn register_with(root: &Path, env: &dyn Fn(&str) -> Option<String>) -> Result<Project> {
     let canonical = std::fs::canonicalize(root)?;
+    require_git_repository(&canonical)?;
     let id = paths::project_id(&canonical, None);
     let state_dir = paths::state_root_with(env)?.join(&id);
     std::fs::create_dir_all(&state_dir)?;
@@ -82,6 +84,19 @@ fn register_with(root: &Path, env: &dyn Fn(&str) -> Option<String>) -> Result<Pr
         id,
         state_dir,
     })
+}
+
+/// Confirms `root` is inside a git working tree, so [`register_with`] never
+/// creates state — not even the state directory itself — for a path that
+/// isn't actually a repository.
+///
+/// # Errors
+///
+/// Returns [`Error::Git`], naming `root`, when it is not inside a git
+/// working tree.
+fn require_git_repository(root: &Path) -> Result<()> {
+    crate::git::git(root, &["rev-parse", "--is-inside-work-tree"])?;
+    Ok(())
 }
 
 fn discover_with(start: &Path, env: &dyn Fn(&str) -> Option<String>) -> Result<Project> {
@@ -132,9 +147,17 @@ mod tests {
         dir.path().join("state")
     }
 
+    /// `register_with` requires a real git working tree, so every fixture
+    /// that exercises it must actually be one.
+    fn init_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("repo dir");
+        crate::git::git(dir.path(), &["init", "--quiet"]).expect("git init");
+        dir
+    }
+
     #[test]
     fn register_creates_the_state_directory_with_owner_only_permissions() {
-        let repo = tempfile::tempdir().expect("repo dir");
+        let repo = init_repo();
         let state = tempfile::tempdir().expect("state dir");
         let env = env_with_state_home(&state);
 
@@ -155,7 +178,7 @@ mod tests {
 
     #[test]
     fn register_writes_the_repo_path_into_the_journals_meta_table() {
-        let repo = tempfile::tempdir().expect("repo dir");
+        let repo = init_repo();
         let state = tempfile::tempdir().expect("state dir");
         let env = env_with_state_home(&state);
 
@@ -174,7 +197,7 @@ mod tests {
 
     #[test]
     fn register_is_idempotent() {
-        let repo = tempfile::tempdir().expect("repo dir");
+        let repo = init_repo();
         let state = tempfile::tempdir().expect("state dir");
         let env = env_with_state_home(&state);
 
@@ -196,7 +219,7 @@ mod tests {
 
     #[test]
     fn discover_from_a_subdirectory_finds_the_registered_project() {
-        let repo = tempfile::tempdir().expect("repo dir");
+        let repo = init_repo();
         let state = tempfile::tempdir().expect("state dir");
         let env = env_with_state_home(&state);
         let sub = repo.path().join("a").join("b");
@@ -218,6 +241,43 @@ mod tests {
         let canonical = std::fs::canonicalize(repo.path()).expect("canonicalize");
         assert!(
             matches!(&err, Error::NotFound { what } if what.contains(&canonical.to_string_lossy().to_string()))
+        );
+    }
+
+    #[test]
+    fn register_rejects_a_directory_that_is_not_a_git_repository() {
+        let plain_dir = tempfile::tempdir().expect("plain dir");
+        let state = tempfile::tempdir().expect("state dir");
+        let env = env_with_state_home(&state);
+
+        let err = register_with(plain_dir.path(), &env).expect_err("must not register");
+
+        assert!(
+            matches!(&err, Error::Git { .. }),
+            "expected a git error, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn register_creates_no_state_directory_for_a_directory_that_is_not_a_git_repository() {
+        let plain_dir = tempfile::tempdir().expect("plain dir");
+        let state = tempfile::tempdir().expect("state dir");
+        let env = env_with_state_home(&state);
+
+        register_with(plain_dir.path(), &env).expect_err("must not register");
+
+        let canonical = std::fs::canonicalize(plain_dir.path()).expect("canonicalize");
+        let id = paths::project_id(&canonical, None);
+        assert!(
+            !state_home(&state).join(&id).exists(),
+            "register must not create a state directory when it fails"
+        );
+        assert_eq!(
+            std::fs::read_dir(plain_dir.path())
+                .expect("read plain dir")
+                .count(),
+            0,
+            "register must not create anything inside the repository directory either"
         );
     }
 
