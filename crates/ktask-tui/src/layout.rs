@@ -234,6 +234,24 @@ mod tests {
 
     const HINT: &str = "Press ? for the key map";
 
+    /// What the queue draws in its body when it has no tasks; every other
+    /// screen leaves its body blank until its own task fills it in.
+    fn body_text(screen: Screen) -> Vec<(u16, &'static str)> {
+        match screen {
+            Screen::Queue => vec![(1, "No tasks queued.")],
+            _ => Vec::new(),
+        }
+    }
+
+    fn expected(screen: Screen, size: (u16, u16), header: &'static str, hint: bool) -> String {
+        let mut lines = vec![(0, header)];
+        lines.extend(body_text(screen));
+        if hint {
+            lines.push((size.1 - 1, HINT));
+        }
+        snapshot(size.0, size.1, &lines)
+    }
+
     fn on(screen: Screen, size: (u16, u16)) -> App {
         App {
             screen,
@@ -246,7 +264,7 @@ mod tests {
         for (screen, header) in Screen::ALL.into_iter().zip(HEADERS) {
             assert_eq!(
                 drawn(&on(screen, (80, 24)), (80, 24)),
-                snapshot(80, 24, &[(0, header), (23, HINT)]),
+                expected(screen, (80, 24), header, true),
                 "{screen:?}"
             );
         }
@@ -257,7 +275,7 @@ mod tests {
         for (screen, header) in Screen::ALL.into_iter().zip(HEADERS) {
             assert_eq!(
                 drawn(&on(screen, (200, 60)), (200, 60)),
-                snapshot(200, 60, &[(0, header), (59, HINT)]),
+                expected(screen, (200, 60), header, true),
                 "{screen:?}"
             );
         }
@@ -268,7 +286,7 @@ mod tests {
         for (screen, header) in Screen::ALL.into_iter().zip(HEADERS) {
             assert_eq!(
                 drawn(&on(screen, (20, 5)), (20, 5)),
-                snapshot(20, 5, &[(0, header)]),
+                expected(screen, (20, 5), header, false),
                 "{screen:?}"
             );
         }
@@ -278,7 +296,7 @@ mod tests {
     fn layout_snapshot_just_below_full_is_reduced() {
         for size in [(79, 24), (80, 23)] {
             let shown = drawn(&on(Screen::Queue, size), size);
-            assert_eq!(shown, snapshot(size.0, size.1, &[(0, "1 Queue")]));
+            assert_eq!(shown, expected(Screen::Queue, size, "1 Queue", false));
         }
     }
 

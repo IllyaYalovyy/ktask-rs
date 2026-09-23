@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn testing_new_draws_the_queue_header_padded_to_the_terminal_size() {
         let harness = Harness::new(10, 3);
-        assert_eq!(harness.text(), "1 Queue   \n          \n          ");
+        assert_eq!(harness.text(), "1 Queue   \nNo tasks q\n          ");
     }
 
     #[test]
@@ -127,7 +127,7 @@ mod tests {
         assert_eq!(harness.buffer().area.height, 2);
         assert_eq!(
             harness.text(),
-            format!("{}\n{}", "1 Queue".get(..6).unwrap(), " ".repeat(6))
+            format!("{}\nNo tas", "1 Queue".get(..6).unwrap())
         );
         assert_eq!(harness.app().size, (6, 2));
     }

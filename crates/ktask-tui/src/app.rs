@@ -67,8 +67,9 @@ impl App {
 /// Advances the interface by one event.
 ///
 /// Only the key map overlay's keys (`?`, `F1`, `Esc`, `q`; see
-/// [`screen::help`](crate::screen::help)) and screen navigation (`1`..`9`,
-/// `Tab`, `Shift-Tab`) are wired so far; any other key press leaves the state
+/// [`screen::help`](crate::screen::help)), screen navigation (`1`..`9`,
+/// `Tab`, `Shift-Tab`) and the queue's movement keys (see
+/// [`screen::queue`](crate::screen::queue)) are wired so far; any other key press leaves the state
 /// as it was.
 #[must_use]
 pub fn update(mut app: App, ev: AppEvent) -> App {
@@ -77,6 +78,7 @@ pub fn update(mut app: App, ev: AppEvent) -> App {
         AppEvent::Core(event) => apply_core(&mut app, event),
         AppEvent::Key(key) => {
             crate::screen::help::handle_key(&mut app, &key);
+            crate::screen::queue::handle_key(&mut app, &key);
             navigate(&mut app, &key);
         }
         AppEvent::Tick => {}
@@ -151,6 +153,9 @@ pub fn render(app: &App, frame: &mut Frame<'_>) {
     frame.render_widget(Paragraph::new(title), plan.header);
     if let Some(footer) = plan.footer {
         frame.render_widget(Paragraph::new(FOOTER_HINT), footer);
+    }
+    if app.screen == Screen::Queue {
+        crate::screen::queue::render(app, &plan, frame);
     }
     match &app.overlay {
         Some(Overlay::KeyMap) => crate::screen::help::render(app.screen, area, frame),
