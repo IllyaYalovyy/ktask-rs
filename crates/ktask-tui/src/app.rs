@@ -8,6 +8,7 @@
 use crate::event::AppEvent;
 use crate::keys::{KeyAction, lookup};
 use crate::layout::layout_for;
+use crate::sanitize::sanitize;
 use crate::types::{Action, Overlay, Screen, TaskView};
 use crossterm::event::KeyEvent;
 use ktask_core::{Event, EventKind};
@@ -145,10 +146,15 @@ fn apply_core(app: &mut App, event: Event) {
             }
         }
         (_, EventKind::AgentOutput { text, .. }) => {
-            if app.output.len() >= OUTPUT_WINDOW {
-                app.output.pop_front();
+            // Provider output is untrusted: only sanitized text is kept, one
+            // entry per line, so nothing downstream can meet an escape.
+            let clean = sanitize(&text);
+            for line in clean.strip_suffix('\n').unwrap_or(&clean).split('\n') {
+                if app.output.len() >= OUTPUT_WINDOW {
+                    app.output.pop_front();
+                }
+                app.output.push_back(line.to_owned());
             }
-            app.output.push_back(text);
         }
         _ => {}
     }
@@ -499,6 +505,44 @@ mod tests {
         let app = update(App::new((80, 24)), output("one"));
         let app = update(app, output("two"));
         assert_eq!(app.output, ["one", "two"]);
+    }
+
+    #[test]
+    fn app_sanitizes_agent_output_before_it_reaches_the_pane() {
+        let app = update(
+            App::new((80, 24)),
+            output("\x1b[31mred\x1b[0m \x1b]0;t\x07ok"),
+        );
+        assert_eq!(app.output, ["red ok"]);
+    }
+
+    #[test]
+    fn app_output_carriage_return_becomes_separate_lines_and_drops_the_trailing_break() {
+        let app = update(App::new((80, 24)), output("| a\r/ a\r- a\n"));
+        assert_eq!(app.output, ["| a", "/ a", "- a"]);
+    }
+
+    #[test]
+    fn app_output_keeps_a_blank_line_as_one_entry() {
+        let app = update(App::new((80, 24)), output("\n"));
+        assert_eq!(app.output, [""]);
+    }
+
+    #[test]
+    fn app_output_of_hostile_chunks_holds_no_escape_and_still_renders() {
+        let long = "z".repeat(100_000);
+        let mut app = App::new((80, 24));
+        for chunk in [
+            "\x1b[3A\x1b[2Kcolour\n",
+            "\x1b]0;pwned\x07title\n",
+            "\r| s\r/ s\rdone\n",
+            long.as_str(),
+        ] {
+            app = update(app, output(chunk));
+        }
+        assert!(app.output.iter().all(|line| !line.contains(['\x1b', '\r'])));
+        assert_eq!(app.output.back().map(String::len), Some(100_000));
+        let _ = screen_text(&app);
     }
 
     #[test]
