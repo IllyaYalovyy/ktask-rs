@@ -63,13 +63,16 @@ impl App {
 
 /// Advances the interface by one event.
 ///
-/// Key bindings are not wired yet: a key press leaves the state as it was.
+/// Only the key map overlay's keys are wired so far (`?`, `F1`, `Esc`, `q`;
+/// see [`screen::help`](crate::screen::help)); any other key press leaves the
+/// state as it was.
 #[must_use]
 pub fn update(mut app: App, ev: AppEvent) -> App {
     match ev {
         AppEvent::Resize(columns, rows) => app.size = (columns, rows),
         AppEvent::Core(event) => apply_core(&mut app, event),
-        AppEvent::Key(_) | AppEvent::Tick => {}
+        AppEvent::Key(key) => crate::screen::help::handle_key(&mut app, &key),
+        AppEvent::Tick => {}
     }
     app
 }
@@ -110,16 +113,15 @@ pub fn render(app: &App, frame: &mut Frame<'_>) {
     };
     let title = format!("{} {}", app.screen as u8, crate::screen::title(app.screen));
     frame.render_widget(Paragraph::new(title), header);
-    if let Some(overlay) = &app.overlay {
-        render_overlay(overlay, area, frame);
+    match &app.overlay {
+        Some(Overlay::KeyMap) => crate::screen::help::render(app.screen, area, frame),
+        Some(Overlay::Confirm { prompt, .. }) => render_confirm(prompt, area, frame),
+        None => {}
     }
 }
 
-fn render_overlay(overlay: &Overlay, area: Rect, frame: &mut Frame<'_>) {
-    let (title, body) = match overlay {
-        Overlay::KeyMap => ("Key map", String::new()),
-        Overlay::Confirm { prompt, .. } => ("Confirm", prompt.clone()),
-    };
+fn render_confirm(prompt: &str, area: Rect, frame: &mut Frame<'_>) {
+    let (title, body) = ("Confirm", prompt.to_owned());
     let width = area.width.saturating_sub(4).min(60);
     let height = area.height.saturating_sub(2).min(9);
     let popup = Rect {
