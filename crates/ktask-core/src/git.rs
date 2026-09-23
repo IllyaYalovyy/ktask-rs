@@ -421,6 +421,70 @@ pub fn remove_worktree(root: &Path, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Lists every path that differs between `base` and `worktree`'s `HEAD` —
+/// added, modified, deleted and renamed files alike (`VISION.md` §9, §10:
+/// callers use this to see what a task actually changed).
+///
+/// Rename detection is requested explicitly (`--find-renames`) rather than
+/// relying on the ambient `diff.renames` config, so a renamed file with
+/// unchanged content is reported once, under its new path, regardless of the
+/// machine's git configuration.
+///
+/// # Errors
+///
+/// Returns [`Error::Git`] if `base` does not resolve in `worktree`, or
+/// `worktree` is not a git repository.
+pub fn changed_paths(worktree: &Path, base: &str) -> Result<Vec<PathBuf>> {
+    name_only_paths(
+        worktree,
+        &["diff", "--name-only", "--find-renames", base, "HEAD"],
+    )
+}
+
+/// Returns `git diff --stat` between `base` and `worktree`'s `HEAD`: one
+/// summary line per changed path plus the trailing totals line, exactly as
+/// `git` renders it.
+///
+/// A changed binary file is reported by name only ("Bin NN -> MM bytes"),
+/// never its contents, since `--stat` never renders binary content.
+///
+/// # Errors
+///
+/// Returns [`Error::Git`] if `base` does not resolve in `worktree`, or
+/// `worktree` is not a git repository.
+pub fn diff_summary(worktree: &Path, base: &str) -> Result<String> {
+    git(
+        worktree,
+        &["diff", "--stat", "--find-renames", base, "HEAD"],
+    )
+}
+
+/// Returns the full unified diff of `path` between `base` and `worktree`'s
+/// `HEAD`.
+///
+/// A binary file is reported as `git` itself reports it — "Binary files ...
+/// differ" — never its contents, since `git diff` never renders binary
+/// content without `--text`, which this never passes.
+///
+/// # Errors
+///
+/// Returns [`Error::Git`] if `base` does not resolve in `worktree`, or
+/// `worktree` is not a git repository.
+pub fn file_diff(worktree: &Path, base: &str, path: &Path) -> Result<String> {
+    let path_arg = path.to_string_lossy();
+    git(
+        worktree,
+        &[
+            "diff",
+            "--find-renames",
+            base,
+            "HEAD",
+            "--",
+            path_arg.as_ref(),
+        ],
+    )
+}
+
 /// Lists every worktree `root` knows about, including its own primary
 /// checkout and any prunable leftover from an interrupted run.
 ///
@@ -1138,6 +1202,194 @@ mod tests {
             std::fs::read_to_string(repo.path.join("shared.txt")).expect("read shared.txt"),
             "local change\n",
             "the working tree content must be restored, not left mid-conflict"
+        );
+    }
+
+    /// Sets up a repo with `modified.txt`, `deleted.txt` and `old_name.txt`
+    /// already committed, returns the SHA of that state as `base`, then
+    /// commits an add, a modify, a delete and a pure rename on top of it.
+    fn repo_with_a_base_and_every_kind_of_change() -> (crate::testing::ScratchRepo, String) {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+        repo.commit("modified.txt", "before\n")
+            .expect("seed modified.txt");
+        repo.commit("deleted.txt", "will be removed\n")
+            .expect("seed deleted.txt");
+        repo.commit("old_name.txt", "will be renamed\n")
+            .expect("seed old_name.txt");
+        let base = head_sha(&repo.path).expect("base sha");
+
+        repo.commit("added.txt", "new\n").expect("add file");
+        repo.commit("modified.txt", "after\n").expect("modify file");
+        git(&repo.path, &["rm", "--quiet", "deleted.txt"]).expect("git rm");
+        git(
+            &repo.path,
+            &["commit", "--quiet", "-m", "delete deleted.txt"],
+        )
+        .expect("commit delete");
+        git(&repo.path, &["mv", "old_name.txt", "new_name.txt"]).expect("git mv");
+        git(
+            &repo.path,
+            &["commit", "--quiet", "-m", "rename old_name.txt"],
+        )
+        .expect("commit rename");
+
+        (repo, base)
+    }
+
+    #[test]
+    fn changed_paths_reports_added_modified_deleted_and_renamed_files() {
+        let (repo, base) = repo_with_a_base_and_every_kind_of_change();
+
+        let paths = changed_paths(&repo.path, &base).expect("changed_paths");
+
+        assert!(
+            paths.contains(&PathBuf::from("added.txt")),
+            "added file missing, got {paths:?}"
+        );
+        assert!(
+            paths.contains(&PathBuf::from("modified.txt")),
+            "modified file missing, got {paths:?}"
+        );
+        assert!(
+            paths.contains(&PathBuf::from("deleted.txt")),
+            "deleted file missing, got {paths:?}"
+        );
+        assert!(
+            paths.contains(&PathBuf::from("new_name.txt")),
+            "renamed file's new path missing, got {paths:?}"
+        );
+        assert!(
+            !paths.contains(&PathBuf::from("old_name.txt")),
+            "a pure rename must be reported under its new path only, got {paths:?}"
+        );
+    }
+
+    #[test]
+    fn changed_paths_is_empty_when_base_equals_head() {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+
+        let paths = changed_paths(&repo.path, &repo.seed_sha).expect("changed_paths");
+
+        assert!(paths.is_empty(), "expected no changes, got {paths:?}");
+    }
+
+    #[test]
+    fn changed_paths_reports_a_binary_file_by_path() {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+        let base = repo.seed_sha.clone();
+        std::fs::write(repo.path.join("image.bin"), [0u8, 159, 146, 150, 0, 1, 2])
+            .expect("write binary file");
+        git(&repo.path, &["add", "image.bin"]).expect("git add");
+        git(&repo.path, &["commit", "--quiet", "-m", "add image.bin"]).expect("git commit");
+
+        let paths = changed_paths(&repo.path, &base).expect("changed_paths");
+
+        assert!(
+            paths.contains(&PathBuf::from("image.bin")),
+            "binary file missing, got {paths:?}"
+        );
+    }
+
+    #[test]
+    fn diff_summary_lists_every_changed_path_and_a_totals_line() {
+        let (repo, base) = repo_with_a_base_and_every_kind_of_change();
+
+        let summary = diff_summary(&repo.path, &base).expect("diff_summary");
+
+        assert!(summary.contains("added.txt"), "got {summary:?}");
+        assert!(summary.contains("modified.txt"), "got {summary:?}");
+        assert!(summary.contains("deleted.txt"), "got {summary:?}");
+        assert!(
+            summary.contains("old_name.txt") && summary.contains("new_name.txt"),
+            "expected the rename to be named on both sides, got {summary:?}"
+        );
+        assert!(
+            summary.contains("file") && summary.contains("changed"),
+            "expected a totals line, got {summary:?}"
+        );
+    }
+
+    #[test]
+    fn diff_summary_reports_a_binary_file_without_its_contents() {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+        let base = repo.seed_sha.clone();
+        let contents = [0u8, 159, 146, 150, 0, 1, 2];
+        std::fs::write(repo.path.join("image.bin"), contents).expect("write binary file");
+        git(&repo.path, &["add", "image.bin"]).expect("git add");
+        git(&repo.path, &["commit", "--quiet", "-m", "add image.bin"]).expect("git commit");
+
+        let summary = diff_summary(&repo.path, &base).expect("diff_summary");
+
+        assert!(summary.contains("image.bin"), "got {summary:?}");
+        assert!(
+            summary.contains("Bin"),
+            "expected a Bin marker, got {summary:?}"
+        );
+        assert!(
+            !summary
+                .as_bytes()
+                .windows(contents.len())
+                .any(|window| window == contents),
+            "summary must not carry the binary content, got {summary:?}"
+        );
+    }
+
+    #[test]
+    fn file_diff_shows_added_and_removed_lines_for_a_modified_file() {
+        let (repo, base) = repo_with_a_base_and_every_kind_of_change();
+
+        let diff = file_diff(&repo.path, &base, Path::new("modified.txt")).expect("file_diff");
+
+        assert!(diff.contains("-before"), "got {diff:?}");
+        assert!(diff.contains("+after"), "got {diff:?}");
+    }
+
+    #[test]
+    fn file_diff_reports_deletion_of_the_full_file_content() {
+        let (repo, base) = repo_with_a_base_and_every_kind_of_change();
+
+        let diff = file_diff(&repo.path, &base, Path::new("deleted.txt")).expect("file_diff");
+
+        assert!(diff.contains("deleted file mode"), "got {diff:?}");
+        assert!(diff.contains("-will be removed"), "got {diff:?}");
+    }
+
+    #[test]
+    fn file_diff_shows_a_renamed_files_content_under_its_new_path() {
+        let (repo, base) = repo_with_a_base_and_every_kind_of_change();
+
+        // A pathspec naming only the new side cannot itself see the paired old
+        // side, so git shows the renamed file's content directly rather than
+        // a `rename from`/`rename to` header, which needs both paths in
+        // scope. This still reports the file's diff without error or content
+        // loss, which is what a caller asking for `new_name.txt` needs.
+        let diff = file_diff(&repo.path, &base, Path::new("new_name.txt")).expect("file_diff");
+
+        assert!(diff.contains("new_name.txt"), "got {diff:?}");
+        assert!(diff.contains("+will be renamed"), "got {diff:?}");
+    }
+
+    #[test]
+    fn file_diff_reports_a_binary_file_without_its_contents() {
+        let repo = crate::testing::scratch_repo().expect("scratch_repo");
+        let base = repo.seed_sha.clone();
+        let contents = [0u8, 159, 146, 150, 0, 1, 2];
+        std::fs::write(repo.path.join("image.bin"), contents).expect("write binary file");
+        git(&repo.path, &["add", "image.bin"]).expect("git add");
+        git(&repo.path, &["commit", "--quiet", "-m", "add image.bin"]).expect("git commit");
+
+        let diff = file_diff(&repo.path, &base, Path::new("image.bin")).expect("file_diff");
+
+        assert!(
+            diff.contains("Binary files") && diff.contains("differ"),
+            "got {diff:?}"
+        );
+        assert!(
+            !diff
+                .as_bytes()
+                .windows(contents.len())
+                .any(|window| window == contents),
+            "diff must not carry the binary content, got {diff:?}"
         );
     }
 
