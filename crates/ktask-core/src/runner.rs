@@ -15,10 +15,11 @@ use time::OffsetDateTime;
 
 use crate::{
     AttemptId, AttemptRecord, Bus, Config, Error, EventKind, FailureClass, Gate, GateKind,
-    Invocation, Journal, Outcome, Profile, Project, Provider, Recorder, RepoLock, ReportResult,
-    Result, Task, TaskId, acquire, build, classify, create_worktree, ensure_report_dir, fetch,
-    for_task, head_sha, load_for, profile_from, read_report, require_clean, run_gate,
-    write_evidence,
+    Invocation, Journal, Outcome, PhaseSpec, Profile, Project, Provider, Recorder, RepoLock,
+    ReportResult, Result, Stream, Task, TaskId, acquire, assemble, build, changed_paths,
+    check_model, check_scope, classify, collect_adrs, create_worktree, ensure_report_dir, fetch,
+    for_task, head_sha, load, load_context_doc, load_for, load_template, profile_from, read_report,
+    require_clean, run_gate, write_evidence,
 };
 
 /// How long [`Runner::prepare`] waits for the repository lock ([`acquire`])
@@ -255,6 +256,128 @@ impl Runner {
             lock,
         })
     }
+
+    /// Runs one phase of `task`'s protocol for `attempt` (`VISION.md` §9):
+    /// enters the phase, assembles the prompt, invokes the provider,
+    /// records what happened, and confirms the agent stayed within
+    /// `spec.write_scope`.
+    ///
+    /// In order:
+    ///
+    /// 1. Records [`EventKind::PhaseEntered`].
+    /// 2. Assembles the prompt from [`crate::assemble`] — the static
+    ///    context document ([`crate::load_context_doc`]), every recorded
+    ///    ADR ([`crate::collect_adrs`]) and the task template
+    ///    ([`crate::load_template`]) — plus [`Runner::name_report_path`]'s
+    ///    fragment naming exactly where the agent's report belongs, which
+    ///    also creates that report's directory as a side effect.
+    /// 3. Invokes `self.provider` in `prep.worktree`.
+    /// 4. Checks the configured model against whatever the provider
+    ///    reported ([`crate::check_model`]) before anything from this
+    ///    invocation is journaled, so a mismatched model is rejected
+    ///    outright rather than also being recorded as if it were accepted.
+    /// 5. Records [`EventKind::AgentOutput`] for whichever of stdout/stderr
+    ///    the provider produced, then [`EventKind::AttemptFinished`].
+    /// 6. Reads back the report the agent was told to write
+    ///    ([`crate::read_report`]) — a missing report is a classified
+    ///    failure, never an assumed success (`VISION.md` §3 invariant 4).
+    /// 7. Confirms every path changed since `prep.base_sha`
+    ///    ([`crate::changed_paths`]) falls within `spec.write_scope`
+    ///    ([`crate::check_scope`]). A well-behaved provider commits its own
+    ///    work as part of running; a test double that only writes files
+    ///    without committing produces no diff for this step to see.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever [`Recorder::record`] returns on failure to journal;
+    /// whatever `self.provider.invoke` returns if it cannot be invoked at
+    /// all; [`Error::Provider`] if the configured and reported models
+    /// mismatch; [`Error::Report`] naming the expected path if the agent
+    /// never wrote a report there, or if what it wrote does not parse; and
+    /// [`Error::Policy`] naming every path `spec.write_scope` did not
+    /// permit.
+    pub fn run_phase(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+        spec: &PhaseSpec,
+    ) -> Result<PhaseOutcome> {
+        self.recorder.record(
+            Some(task.id),
+            EventKind::PhaseEntered {
+                attempt,
+                phase: spec.phase,
+            },
+        )?;
+
+        let context_doc = load_context_doc(&self.project)?;
+        let adrs = collect_adrs(&self.project.root)?;
+        let template = load_template(&self.project)?;
+        let total = load(&self.project)?.len();
+        let mut prompt = assemble(task, &context_doc, &adrs, &template, attempt, total);
+        prompt.push_str(&self.name_report_path(task, attempt)?);
+
+        let inv = Invocation {
+            prompt,
+            model: self.config.model.clone(),
+            working_dir: prep.worktree.clone(),
+        };
+        let outcome = self.provider.invoke(&inv, None)?;
+
+        check_model(self.config.model.as_deref(), None)?;
+
+        if !outcome.stdout.is_empty() {
+            self.recorder.record(
+                Some(task.id),
+                EventKind::AgentOutput {
+                    attempt,
+                    stream: Stream::Stdout,
+                    text: outcome.stdout.clone(),
+                },
+            )?;
+        }
+        if !outcome.stderr.is_empty() {
+            self.recorder.record(
+                Some(task.id),
+                EventKind::AgentOutput {
+                    attempt,
+                    stream: Stream::Stderr,
+                    text: outcome.stderr.clone(),
+                },
+            )?;
+        }
+        self.recorder.record(
+            Some(task.id),
+            EventKind::AttemptFinished {
+                attempt,
+                exit_code: outcome.exit_code,
+                usage: outcome.usage,
+                session_id: outcome.session_id.clone(),
+                model_reported: None,
+            },
+        )?;
+
+        let report = read_report(&self.project, task.id, attempt)?;
+
+        let changed = changed_paths(&prep.worktree, &prep.base_sha)?;
+        check_scope(spec.write_scope, &changed, &self.config.test_globs)?;
+
+        Ok(PhaseOutcome { report, changed })
+    }
+}
+
+/// What one call to [`Runner::run_phase`] produced: the agent's own claim
+/// about the phase ([`ReportResult`]) and every path it actually changed,
+/// already confirmed to fall within the phase's write scope
+/// ([`crate::check_scope`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhaseOutcome {
+    /// What the agent's report claimed.
+    pub report: ReportResult,
+    /// Every path changed since the attempt's base commit, already checked
+    /// against the phase's write scope.
+    pub changed: Vec<PathBuf>,
 }
 
 /// Everything an attempt needs to actually start: the isolated worktree
@@ -564,7 +687,8 @@ mod tests {
     use super::*;
     use crate::testing::scratch_repo;
     use crate::{
-        Bus, Capabilities, Error, TaskStatus, project_config_path, read_evidence, report_path,
+        Bus, Capabilities, Error, Phase, Scenario, ScenarioFile, Step, StepOutcome, TaskStatus,
+        WriteScope, project_config_path, read_evidence, report_path,
     };
 
     /// A [`Provider`] whose `invoke` always succeeds, proving
@@ -1238,5 +1362,301 @@ mod tests {
             .map(|event| event.kind.discriminant())
             .collect();
         assert_eq!(kinds, vec!["PreflightStarted", "PreflightFailed"]);
+    }
+
+    fn implement_spec() -> PhaseSpec {
+        PhaseSpec {
+            phase: Phase::Implement,
+            write_scope: WriteScope::All,
+            gate: None,
+            records_evidence: true,
+        }
+    }
+
+    fn verify_spec() -> PhaseSpec {
+        PhaseSpec {
+            phase: Phase::Verify,
+            write_scope: WriteScope::None,
+            gate: None,
+            records_evidence: true,
+        }
+    }
+
+    /// A [`Config`] with a `verify_command` set, the one thing
+    /// [`write_config_with_an_available_dummy_provider`]'s TOML config
+    /// carries that a bare [`Config::default`] does not: `run_phase`'s own
+    /// tests build a [`Runner`] by hand (to swap in a provider `build`
+    /// cannot construct), bypassing [`load_for`] entirely.
+    fn runnable_config() -> Config {
+        let mut config = passing_config();
+        config.verify_command = Some(vec!["true".to_string()]);
+        config
+    }
+
+    /// Builds a [`Runner`] directly from its fields rather than through
+    /// [`Runner::new`], so a test can drive it with a [`Provider`]
+    /// [`build`] has no way to construct (`run_phase`'s scope-violation
+    /// test needs a provider that also commits, which no built-in adapter
+    /// under test does).
+    fn manual_runner(project: &Project, config: Config, provider: Box<dyn Provider>) -> Runner {
+        let journal = Journal::open_for(project).expect("open journal");
+        let bus = Bus::new(usize::try_from(config.output_ring_lines).unwrap_or(usize::MAX));
+        let recorder = Recorder::new(journal, bus);
+        let profile = profile_from(&config).expect("profile_from");
+        Runner {
+            project: project.clone(),
+            config,
+            profile,
+            recorder,
+            provider,
+        }
+    }
+
+    #[test]
+    fn run_phase_records_phase_entered_agent_output_and_attempt_finished_then_returns_the_parsed_report()
+     {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+        let expected_report_path = report_path(&project, task.id, attempt);
+
+        let scenario = Scenario {
+            steps: vec![
+                // Consumed by `prepare`'s own `check_provider_available`.
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: None,
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: Vec::new(),
+                },
+                // Consumed by `run_phase`'s own invocation.
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: Some("implemented the thing\n".to_string()),
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: vec![ScenarioFile {
+                        path: expected_report_path.clone(),
+                        content: "KTASK_RESULT: DONE\nSummary: it worked.\n".to_string(),
+                    }],
+                },
+            ],
+        };
+        let scenario_path = state_dir.path().join("scenario.toml");
+        std::fs::write(&scenario_path, scenario.to_toml().expect("serialize"))
+            .expect("write scenario");
+        std::fs::write(
+            project_config_path(&project),
+            format!(
+                "provider = \"dummy\"\ndummy_scenario_path = \"{}\"\nverify_command = [\"true\"]\n",
+                scenario_path.display()
+            ),
+        )
+        .expect("write project config");
+
+        let mut runner = Runner::new(project.clone()).expect("build runner");
+        let prep = runner.prepare(&task).expect("prepare");
+
+        let outcome = runner
+            .run_phase(&prep, &task, attempt, &implement_spec())
+            .expect("run_phase");
+
+        assert_eq!(outcome.report, ReportResult::Done);
+        assert!(
+            outcome.changed.is_empty(),
+            "the dummy provider never commits, so there is nothing to diff: {:?}",
+            outcome.changed
+        );
+
+        let journal = Journal::open_for(&project).expect("open journal");
+        let events = journal.events_for(task.id).expect("events_for");
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|event| event.kind.discriminant())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "PreflightStarted",
+                "PreflightPassed",
+                "PhaseEntered",
+                "AgentOutput",
+                "AttemptFinished",
+            ]
+        );
+
+        let EventKind::AttemptFinished { exit_code, .. } = &events[4].kind else {
+            panic!("expected AttemptFinished, got {:?}", events[4].kind);
+        };
+        assert_eq!(*exit_code, 0);
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    #[test]
+    fn run_phase_fails_with_a_classified_report_error_when_the_agent_never_writes_one() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+        let expected_report_path = report_path(&project, task.id, attempt);
+
+        // Two steps, neither of which writes a report file: one for
+        // `prepare`'s own availability check, one for `run_phase`'s.
+        let scenario = Scenario {
+            steps: vec![
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: None,
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: Vec::new(),
+                },
+                Step {
+                    on_task: None,
+                    on_attempt: None,
+                    outcome: StepOutcome::Success,
+                    stdout: None,
+                    exit_code: Some(0),
+                    delay_ms: None,
+                    files: Vec::new(),
+                },
+            ],
+        };
+        let scenario_path = state_dir.path().join("scenario.toml");
+        std::fs::write(&scenario_path, scenario.to_toml().expect("serialize"))
+            .expect("write scenario");
+        std::fs::write(
+            project_config_path(&project),
+            format!(
+                "provider = \"dummy\"\ndummy_scenario_path = \"{}\"\nverify_command = [\"true\"]\n",
+                scenario_path.display()
+            ),
+        )
+        .expect("write project config");
+
+        let mut runner = Runner::new(project.clone()).expect("build runner");
+        let prep = runner.prepare(&task).expect("prepare");
+
+        let err = runner
+            .run_phase(&prep, &task, attempt, &implement_spec())
+            .expect_err("a missing report must never be treated as success");
+
+        assert!(matches!(err, Error::Report { .. }));
+        assert!(
+            err.to_string()
+                .contains(&expected_report_path.display().to_string()),
+            "error must name the expected path, got: {err}"
+        );
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    /// A [`Provider`] that, once it receives a real (non-empty) prompt,
+    /// writes the agent's report at a fixed absolute path, then also writes
+    /// and commits a file outside its phase's write scope — proving
+    /// `run_phase` catches a scope violation from what was actually
+    /// committed ([`crate::changed_paths`]), never from the agent's own
+    /// account of what it touched. An empty prompt (`prepare`'s own
+    /// availability check) is answered without touching the filesystem,
+    /// so this provider is also safe to use for `preflight`, which invokes
+    /// it against `project.root` itself rather than an isolated worktree.
+    struct ScopeViolator {
+        report_path: PathBuf,
+    }
+
+    impl Provider for ScopeViolator {
+        fn name(&self) -> &'static str {
+            "scope-violator"
+        }
+
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                structured_output: false,
+                model_selection: false,
+                usage_telemetry: false,
+            }
+        }
+
+        fn invoke(&self, inv: &Invocation, _bus: Option<&Bus>) -> Result<Outcome> {
+            if inv.prompt.is_empty() {
+                return Ok(Outcome {
+                    exit_code: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    usage: None,
+                    session_id: None,
+                });
+            }
+
+            std::fs::write(
+                &self.report_path,
+                "KTASK_RESULT: DONE\nSummary: it worked.\n",
+            )?;
+            std::fs::write(inv.working_dir.join("forbidden.txt"), "not allowed\n")?;
+            crate::git(&inv.working_dir, &["add", "-A"])?;
+            crate::git(
+                &inv.working_dir,
+                &["commit", "--quiet", "-m", "scope violation"],
+            )?;
+
+            Ok(Outcome {
+                exit_code: 0,
+                stdout: "wrote a forbidden file".to_string(),
+                stderr: String::new(),
+                usage: None,
+                session_id: None,
+            })
+        }
+    }
+
+    #[test]
+    fn run_phase_fails_as_a_policy_failure_naming_the_forbidden_path_when_a_phase_writes_outside_its_scope()
+     {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let attempt = AttemptId::new(1);
+        let expected_report_path = report_path(&project, task.id, attempt);
+
+        let mut runner = manual_runner(
+            &project,
+            runnable_config(),
+            Box::new(ScopeViolator {
+                report_path: expected_report_path,
+            }),
+        );
+        let prep = runner.prepare(&task).expect("prepare");
+
+        let err = runner
+            .run_phase(&prep, &task, attempt, &verify_spec())
+            .expect_err("a write outside the phase's scope must be rejected");
+
+        match err {
+            Error::Policy { paths, detail } => {
+                assert_eq!(paths, vec![PathBuf::from("forbidden.txt")]);
+                assert!(!detail.is_empty());
+            }
+            other => panic!("expected Error::Policy, got {other:?}"),
+        }
+
+        let worktree = prep.worktree.clone();
+        drop(prep);
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
     }
 }
