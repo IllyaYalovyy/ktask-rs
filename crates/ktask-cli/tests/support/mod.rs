@@ -69,13 +69,20 @@ impl Scenario {
     ///
     /// Returns an `io::Error` if the compiled binary cannot be spawned.
     pub(crate) fn run(&self, args: &[&str]) -> io::Result<Output> {
-        let exe = env!("CARGO_BIN_EXE_ktask-rs");
-        Command::new(exe)
+        self.command(args).output()
+    }
+
+    /// The compiled `ktask-rs` binary with `args`, set up as [`Scenario::run`]
+    /// sets it up but not yet started, for a test that needs it running in
+    /// the background, or with more environment.
+    pub(crate) fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ktask-rs"));
+        command
             .args(args)
             .current_dir(self.project_dir())
             .env("XDG_STATE_HOME", self.state_home.path())
-            .env("XDG_CONFIG_HOME", self.config_home.path())
-            .output()
+            .env("XDG_CONFIG_HOME", self.config_home.path());
+        command
     }
 }
 

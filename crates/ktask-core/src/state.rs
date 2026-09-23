@@ -93,7 +93,8 @@ pub enum TaskState {
         /// The state to return to once the pause is resolved.
         resume_to: Box<TaskState>,
     },
-    /// Terminally failed; no further attempts will run.
+    /// Terminally failed; no further attempts will run unless a human
+    /// retries or cancels it.
     Failed {
         /// The class of failure.
         class: FailureClass,
@@ -242,10 +243,11 @@ fn invalid(from: &str, event: &EventKind) -> Error {
 ///
 /// The only way a [`TaskState`] changes. Pure: no I/O, no clock, no
 /// randomness. Terminal states (`Done`, `Acknowledged`, `Cancelled`) accept
-/// no event at all, and `Failed` accepts only [`EventKind::RetryStarted`]
-/// (`ktask-rs retry`, the one external intervention a failure allows);
-/// every other state delegates to one helper below, which matches `event`
-/// exhaustively.
+/// no event at all, and `Failed` accepts only the two external interventions
+/// a failure allows: [`EventKind::RetryStarted`] (`ktask-rs retry`) and
+/// [`EventKind::TaskCancelled`] (`ktask-rs cancel`, which lets the queue
+/// proceed past it); every other state delegates to one helper below, which
+/// matches `event` exhaustively.
 ///
 /// # Errors
 ///
@@ -266,6 +268,7 @@ pub fn apply(state: &TaskState, event: &EventKind) -> Result<TaskState> {
                 attempt: *attempt,
                 phase: Phase::Implement,
             }),
+            EventKind::TaskCancelled { .. } => Ok(TaskState::Cancelled),
             _ => Err(invalid(state.name(), event)),
         },
         TaskState::Done | TaskState::Acknowledged { .. } | TaskState::Cancelled => {
@@ -1682,6 +1685,24 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_task_can_be_cancelled_so_the_queue_may_proceed_past_it() {
+        let failed = TaskState::Failed {
+            class: FailureClass::VerificationFailure,
+            detail: "gate red".to_string(),
+        };
+
+        let state = apply(
+            &failed,
+            &EventKind::TaskCancelled {
+                reason: "not worth fixing".to_string(),
+            },
+        )
+        .expect("legal");
+
+        assert_eq!(state, TaskState::Cancelled);
+    }
+
+    #[test]
     fn a_resolved_decision_sends_an_input_pause_back_to_queued_not_to_its_resume_point() {
         let paused = TaskState::Paused {
             reason: PauseReason::Input,
@@ -2690,9 +2711,11 @@ mod tests {
             ("Paused/Blocked", "Resumed"),
             ("Paused/Blocked", "TaskCancelled"),
             ("Failed", "RetryStarted"),
+            ("Failed", "TaskCancelled"),
             // Done, Acknowledged and Cancelled are terminal: no event is
             // legal against them, so they contribute no rows. Failed is
-            // terminal too, except that a human's `retry` may leave it.
+            // terminal too, except that a human's `retry` or `cancel` may
+            // leave it.
         ];
 
         let states = representative_states();
@@ -2726,7 +2749,7 @@ mod tests {
         assert_eq!(checked, states.len() * events.len());
         assert_eq!(
             ALLOWED.len(),
-            55,
+            56,
             "the allowed list itself changed size; update this guard deliberately"
         );
     }

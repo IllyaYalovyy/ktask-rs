@@ -19,13 +19,14 @@ use crate::{
     AttemptId, AttemptRecord, Bounds, Breaker, BreakerState, Bus, Config, Decision, Error,
     EventKind, FailureClass, Gate, GateKind, GateResult, Invocation, Journal, Outcome, PauseReason,
     Phase, PhaseSpec, Profile, Project, Provider, RebaseOutcome, Recorder, RepoLock, ReportResult,
-    Result, Stream, Subscription, Task, TaskId, TaskState, TaskStatus, TestSummary, WaitPlan,
-    acquire, apply, assemble, build, bundle, changed_paths, check_model, check_no_policy_edit,
-    check_scope, claim_tdd_exception, classify, collect_adrs, commit_all, create_worktree,
-    ensure_report_dir, fetch, for_task, head_sha, load, load_context_doc, load_for, load_template,
-    next_runnable, parse_cargo, parse_reset, profile_from, publish, read_evidence, read_report,
-    rebase_onto_remote, redact, remove_worktree, require_clean, run_completion_set, run_gate,
-    should_continue, signature, verify_green, verify_red, wait_plan, write_evidence,
+    Request, Result, Stream, Subscription, Task, TaskId, TaskState, TaskStatus, TestSummary,
+    WaitPlan, acquire, apply, assemble, build, bundle, changed_paths, check_model,
+    check_no_policy_edit, check_scope, claim_tdd_exception, classify, collect_adrs, commit_all,
+    create_worktree, ensure_report_dir, fetch, for_task, head_sha, load, load_context_doc,
+    load_for, load_template, next_runnable, parse_cargo, parse_reset, profile_from, publish,
+    read_evidence, read_report, rebase_onto_remote, redact, remove_worktree, require_clean,
+    run_completion_set, run_gate, should_continue, signature, verify_green, verify_red, wait_plan,
+    write_evidence,
 };
 
 /// How long [`Runner::prepare`] waits for the repository lock ([`acquire`])
@@ -158,31 +159,51 @@ impl Runner {
     }
 
     /// True once this process has received `SIGINT` since [`interrupt_flag`]
-    /// installed its handler.
+    /// installed its handler, or an operator has sent
+    /// [`Request::Interrupt`] ([`crate::send`]).
     fn interrupted(&self) -> bool {
-        self.interrupt.load(Ordering::SeqCst)
+        self.interrupt.load(Ordering::SeqCst) || crate::pending(&self.project, Request::Interrupt)
     }
 
-    /// If [`Runner::interrupted`], journals [`EventKind::Interrupted`] for
-    /// `task` naming `phase` as the point to resume from, and returns the
-    /// resulting durable [`TaskState::Paused`]; otherwise `Ok(None)`, so a
-    /// caller falls through to whatever it would otherwise have done.
+    /// If an operator asked for `task`'s running attempt to end now — a
+    /// [`Request::Cancel`] for `task`, or [`Runner::interrupted`] — journals
+    /// what was asked for and returns the resulting durable state;
+    /// otherwise `Ok(None)`, so a caller falls through to whatever it would
+    /// otherwise have done.
     ///
-    /// Called at every phase boundary in [`Runner::drive_attempt`] and
-    /// [`Runner::run_queue`] — before a phase starts, after it returns
-    /// (whether it succeeded or failed, since [`super::provider::run_streaming`]'s
-    /// own output loop may have just killed the provider's process group in
-    /// response to the same signal), and after its gate, if any.
+    /// An interrupt journals [`EventKind::Interrupted`] naming `phase` as
+    /// the point to resume from, leaving [`TaskState::Paused`]; a cancel
+    /// journals [`EventKind::TaskCancelled`], leaving
+    /// [`TaskState::Cancelled`], which the queue proceeds past. A cancel
+    /// wins when both are pending. The request is consumed only once the
+    /// event is journaled, so a crash in between leaves it to be found (and
+    /// discarded by [`Runner::run_queue`]) rather than acted on twice.
+    ///
+    /// Called at every phase boundary in [`Runner::drive_attempt`] — before a
+    /// phase starts, after it returns (whether it succeeded or failed, since
+    /// [`super::provider::run_streaming`]'s own output loop may have just
+    /// killed the provider's process group in response to the same request)
+    /// and after its gate, if any — and again once remediation gives up.
     ///
     /// # Errors
     ///
     /// Returns whatever [`Recorder::record`] returns on failure to journal.
-    fn pause_for_interrupt(&mut self, task: &Task, phase: Phase) -> Result<Option<TaskState>> {
-        if !self.interrupted() {
+    fn stop_if_requested(&mut self, task: &Task, phase: Phase) -> Result<Option<TaskState>> {
+        if crate::pending(&self.project, Request::Cancel(task.id)) {
+            self.recorder.record(
+                Some(task.id),
+                EventKind::TaskCancelled {
+                    reason: "cancelled by `ktask-rs cancel`".to_string(),
+                },
+            )?;
+            crate::control::take(&self.project, Request::Cancel(task.id))?;
+        } else if self.interrupted() {
+            self.recorder
+                .record(Some(task.id), EventKind::Interrupted { phase })?;
+            crate::control::take(&self.project, Request::Interrupt)?;
+        } else {
             return Ok(None);
         }
-        self.recorder
-            .record(Some(task.id), EventKind::Interrupted { phase })?;
         Ok(Some(journaled_state(&self.project, task.id)?))
     }
 
@@ -418,7 +439,10 @@ impl Runner {
             model: self.config.model.clone(),
             working_dir: prep.worktree.clone(),
         };
-        let outcome = self.provider.invoke(&inv, None)?;
+        let watch = crate::control::watch(&self.project, task.id);
+        let outcome = self.provider.invoke(&inv, None);
+        drop(watch);
+        let outcome = outcome?;
 
         check_model(self.config.model.as_deref(), None)?;
 
@@ -712,13 +736,27 @@ impl Runner {
     /// matching [`RunOutcome`]: [`crate::PauseReason::HumanGate`] to
     /// [`RunOutcome::HumanGate`], [`crate::PauseReason::Input`] to
     /// [`RunOutcome::NeedsInput`], [`crate::PauseReason::Limit`] to
-    /// [`RunOutcome::ProviderLimit`]. `run_task` never produces
-    /// [`crate::PauseReason::Interrupted`] or [`crate::PauseReason::Blocked`]
-    /// today, but both are pauses rather than failures, so — matched here
-    /// only so this stays exhaustive as [`crate::PauseReason`] grows — they
-    /// are also reported as a resumable [`RunOutcome::Interrupted`] rather
-    /// than a failure. Every other state `run_task` returns, `Done` chief
-    /// among them, is settled progress, and selection continues.
+    /// [`RunOutcome::ProviderLimit`]. [`crate::PauseReason::Interrupted`] (an
+    /// interrupt, from `SIGINT` or an operator's [`Request::Interrupt`]) is a
+    /// pause rather than a failure, so it is reported as a resumable
+    /// [`RunOutcome::Interrupted`], as is [`crate::PauseReason::Blocked`].
+    /// Every other state `run_task` returns, `Done` and an operator's
+    /// [`Request::Cancel`] (which leaves [`TaskState::Cancelled`]) chief among
+    /// them, is settled progress, and selection continues.
+    ///
+    /// Operator requests ([`crate::send`]) are honored as follows.
+    /// Whatever was pending when the run started is discarded: it was meant
+    /// for a supervisor that has since exited. A task left
+    /// [`crate::PauseReason::Blocked`] by an earlier [`Request::Pause`] is
+    /// resumed ([`EventKind::Resumed`]), which is how running the queue
+    /// again lifts the pause. A [`Request::Pause`] is acted on between tasks:
+    /// the task in flight finishes, and the next one is parked as
+    /// [`crate::PauseReason::Blocked`] instead of started, so the queue
+    /// stops with somewhere durable to resume from. A pause sent during the
+    /// last task finds nothing left to park, and the queue simply drains.
+    /// [`Request::Interrupt`] and [`Request::Cancel`] end the task in flight
+    /// (`Runner::stop_if_requested`); an interrupt that lands between
+    /// tasks stops the queue before the next one starts.
     ///
     /// # Errors
     ///
@@ -733,6 +771,23 @@ impl Runner {
             .filter(|task| from.is_none_or(|from| task.id >= from))
             .cloned()
             .collect();
+
+        // Requests are for the supervisor that was running when they were
+        // sent; any still here belong to one that has since exited.
+        crate::control::clear(&self.project)?;
+        // Running the queue again is how an operator's pause is lifted: a
+        // task parked as `Blocked` is put back where it was.
+        for task in &candidates {
+            if matches!(
+                journaled_state(&self.project, task.id)?,
+                TaskState::Paused {
+                    reason: PauseReason::Blocked,
+                    ..
+                }
+            ) {
+                self.recorder.record(Some(task.id), EventKind::Resumed)?;
+            }
+        }
 
         loop {
             let mut states = BTreeMap::new();
@@ -756,10 +811,28 @@ impl Runner {
             // caught while nothing was running yet still stops the queue
             // rather than starting one more task first.
             if self.interrupted() {
+                crate::control::take(&self.project, Request::Interrupt)?;
+                return Ok(RunOutcome::Interrupted);
+            }
+            // The running task has finished; this is the safe boundary an
+            // operator's pause waits for. The pause parks the task that
+            // would have run next, so the queue has somewhere durable to
+            // resume from.
+            if crate::control::take(&self.project, Request::Pause)? {
+                self.recorder.record(
+                    Some(task.id),
+                    EventKind::Paused {
+                        reason: PauseReason::Blocked,
+                    },
+                )?;
                 return Ok(RunOutcome::Interrupted);
             }
 
-            match self.run_task(task) {
+            let result = self.run_task(task);
+            // A cancel that missed its task's last boundary must not go on
+            // to cancel a task that has already finished.
+            crate::control::take(&self.project, Request::Cancel(task.id))?;
+            match result {
                 Ok(TaskState::Paused { reason, .. }) => {
                     return Ok(match reason {
                         PauseReason::HumanGate => RunOutcome::HumanGate { task: next_id },
@@ -924,6 +997,9 @@ impl Runner {
                 journaled_state(&self.project, task.id)
             }
             Err(err) => {
+                if let Some(state) = self.stop_if_requested(task, Phase::Implement)? {
+                    return Ok(state);
+                }
                 let class = classify(
                     &empty_outcome(),
                     &gates_for_classification(&err),
@@ -1045,15 +1121,18 @@ impl Runner {
     /// way. Neither ever reaches [`EventKind::TaskFailed`].
     ///
     /// A third pause is decided the same way, at every phase boundary
-    /// rather than only between attempts: [`Runner::pause_for_interrupt`]
-    /// checks whether this process has caught `SIGINT` since it started —
-    /// before a phase begins, after it ends (success or failure alike,
-    /// since [`super::provider::run_streaming`]'s own output loop may have
-    /// just killed the provider's process group in response to the same
-    /// signal), and after its gate. Whichever check first finds the flag set
+    /// rather than only between attempts: [`Runner::stop_if_requested`]
+    /// checks whether this process has caught `SIGINT`, or an operator has
+    /// sent an interrupt or a cancel for this task — before a phase begins,
+    /// after it ends (success or failure alike, since
+    /// [`super::provider::run_streaming`]'s own output loop may have just
+    /// killed the provider's process group in response to the same
+    /// request), and after its gate. Whichever check first finds one
     /// records [`EventKind::Interrupted`] naming the phase to resume from
-    /// and returns immediately, before the loop or [`Runner::remediate`]
-    /// ever get a chance to treat the interruption as an ordinary failure.
+    /// (or [`EventKind::TaskCancelled`]) and returns immediately, before
+    /// the loop or [`Runner::remediate`] ever get a chance to treat it as
+    /// an ordinary failure. The same check runs once [`Runner::remediate`]
+    /// gives up, for a request that arrived while it was working.
     fn drive_attempt(&mut self, prep: &Prepared, task: &Task) -> Result<TaskState> {
         let attempt = self.begin_attempt(task)?;
         let protocol = for_task(task, &self.config)?;
@@ -1062,13 +1141,13 @@ impl Runner {
 
         let mut before: Option<TestSummary> = None;
         for spec in agent_phases {
-            if let Some(state) = self.pause_for_interrupt(task, spec.phase)? {
+            if let Some(state) = self.stop_if_requested(task, spec.phase)? {
                 return Ok(state);
             }
             let phase_outcome = match self.run_phase(prep, task, attempt, spec) {
                 Ok(phase_outcome) => phase_outcome,
                 Err(err) => {
-                    if let Some(state) = self.pause_for_interrupt(task, spec.phase)? {
+                    if let Some(state) = self.stop_if_requested(task, spec.phase)? {
                         return Ok(state);
                     }
                     return match self.pause_for_provider_limit(task, attempt, &err)? {
@@ -1077,7 +1156,7 @@ impl Runner {
                     };
                 }
             };
-            if let Some(state) = self.pause_for_interrupt(task, spec.phase)? {
+            if let Some(state) = self.stop_if_requested(task, spec.phase)? {
                 return Ok(state);
             }
             if let ReportResult::NeedsInput(request) = phase_outcome.report {
@@ -1087,7 +1166,7 @@ impl Runner {
             }
             if spec.gate.is_some() {
                 before = Some(self.gate_phase(prep, task, attempt, spec, before.as_ref())?);
-                if let Some(state) = self.pause_for_interrupt(task, spec.phase)? {
+                if let Some(state) = self.stop_if_requested(task, spec.phase)? {
                     return Ok(state);
                 }
             }
@@ -1103,7 +1182,18 @@ impl Runner {
 
         let commit = match self.verify_and_publish(prep, task, attempt) {
             Ok(commit) => commit,
-            Err(err) => self.remediate(prep, task, attempt, err)?,
+            Err(err) => match self.remediate(prep, task, attempt, err) {
+                Ok(commit) => commit,
+                Err(err) => {
+                    // A round cut short by an interrupt or a cancel fails
+                    // like any other; the request is what it was, not the
+                    // failure it looks like.
+                    return match self.stop_if_requested(task, Phase::Implement)? {
+                        Some(state) => Ok(state),
+                        None => Err(err),
+                    };
+                }
+            },
         };
         self.recorder
             .record(Some(task.id), EventKind::TaskDone { commit })?;
@@ -1289,6 +1379,11 @@ impl Runner {
             if let Decision::Stop(_) = should_continue(&bounds, rounds, clock.elapsed(), 0) {
                 return Err(err);
             }
+            // No new round for a request that is waiting: the caller finds
+            // it and records it in place of the failure `err` describes.
+            if self.interrupted() || crate::pending(&self.project, Request::Cancel(task.id)) {
+                return Err(err);
+            }
             rounds += 1;
 
             let prior = read_evidence(&self.project, task.id)?;
@@ -1374,7 +1469,10 @@ impl Runner {
             model: self.config.model.clone(),
             working_dir: prep.worktree.clone(),
         };
-        let outcome = self.provider.invoke(&inv, None)?;
+        let watch = crate::control::watch(&self.project, task.id);
+        let outcome = self.provider.invoke(&inv, None);
+        drop(watch);
+        let outcome = outcome?;
 
         check_model(self.config.model.as_deref(), None)?;
 
@@ -2127,6 +2225,7 @@ mod tests {
         Bus, Capabilities, Dummy, Error, Event, Phase, Scenario, ScenarioFile, Step, StepOutcome,
         TaskStatus, TddException, WriteScope, project_config_path, read_evidence, report_path,
     };
+    use crate::{pending, send};
 
     /// A [`Provider`] whose `invoke` always succeeds, proving
     /// [`check_provider_available`] (and the full [`preflight`] happy path)
@@ -4797,6 +4896,373 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
         assert_eq!(outcome, RunOutcome::Drained);
     }
 
+    /// A [`Provider`] that sends `request` the moment its `on_call`-th
+    /// invocation begins, as an operator in another terminal would while
+    /// that invocation is in flight, then hands the call to an inner
+    /// [`Dummy`]. Calls are counted from 1, and the first of every task is
+    /// [`Runner::prepare`]'s availability probe.
+    struct Signaller {
+        inner: Dummy,
+        project: Project,
+        request: Request,
+        on_call: usize,
+        calls: std::rc::Rc<std::cell::Cell<usize>>,
+    }
+
+    impl Provider for Signaller {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+
+        fn capabilities(&self) -> Capabilities {
+            self.inner.capabilities()
+        }
+
+        fn invoke(&self, inv: &Invocation, bus: Option<&Bus>) -> Result<Outcome> {
+            self.calls.set(self.calls.get() + 1);
+            if self.calls.get() == self.on_call {
+                send(&self.project, self.request).expect("send the request");
+            }
+            self.inner.invoke(inv, bus)
+        }
+    }
+
+    /// A runner over `tasks` whose provider answers every task's probe and
+    /// `Implement` phase successfully and sends `request` during the
+    /// `on_call`-th invocation.
+    fn signalled_runner(
+        project: &Project,
+        tasks: &[Task],
+        request: Request,
+        on_call: usize,
+    ) -> Runner {
+        let scenario = Scenario {
+            steps: tasks
+                .iter()
+                .flat_map(|task| {
+                    let report = report_path(project, task.id, AttemptId::new(1));
+                    vec![probe_step(), success_step(&report)]
+                })
+                .collect(),
+        };
+        let provider = Signaller {
+            inner: Dummy::new(scenario),
+            project: project.clone(),
+            request,
+            on_call,
+            calls: std::rc::Rc::default(),
+        };
+        manual_runner(project, runnable_config(), Box::new(provider))
+    }
+
+    fn state_of(project: &Project, task: &Task) -> TaskState {
+        journaled_state(project, task.id).expect("journaled_state")
+    }
+
+    #[test]
+    fn a_pause_sent_during_a_task_lets_it_finish_then_parks_the_next_task_and_stops_the_queue() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let tasks = vec![sample_task(1), sample_task(2), sample_task(3)];
+        // Call 2 is task 1's `Implement` phase.
+        let mut runner = signalled_runner(&project, &tasks, Request::Pause, 2);
+
+        let outcome = runner.run_queue(&tasks, None).expect("run_queue");
+
+        assert_eq!(outcome, RunOutcome::Interrupted);
+        assert_eq!(state_of(&project, &tasks[0]), TaskState::Done);
+        assert_eq!(
+            state_of(&project, &tasks[1]),
+            TaskState::Paused {
+                reason: PauseReason::Blocked,
+                resume_to: Box::new(TaskState::Queued),
+            }
+        );
+        assert_eq!(state_of(&project, &tasks[2]), TaskState::Queued);
+        assert!(
+            !pending(&project, Request::Pause),
+            "the request is consumed once it has been journaled"
+        );
+    }
+
+    #[test]
+    fn running_the_queue_again_resumes_a_task_the_operator_paused() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let tasks = vec![sample_task(1), sample_task(2)];
+        let mut runner = signalled_runner(&project, &tasks, Request::Pause, 2);
+        assert_eq!(
+            runner.run_queue(&tasks, None).expect("first run"),
+            RunOutcome::Interrupted
+        );
+
+        // Task 1 is done, so the second run's scenario needs task 2's steps
+        // only.
+        let report = report_path(&project, tasks[1].id, AttemptId::new(1));
+        let mut second = manual_runner(
+            &project,
+            runnable_config(),
+            Box::new(Dummy::new(Scenario {
+                steps: vec![probe_step(), success_step(&report)],
+            })),
+        );
+        let outcome = second.run_queue(&tasks, None).expect("second run");
+
+        assert_eq!(outcome, RunOutcome::Drained);
+        assert_eq!(state_of(&project, &tasks[1]), TaskState::Done);
+        let journal = Journal::open_for(&project).expect("journal");
+        let kinds: Vec<&str> = journal
+            .events_for(tasks[1].id)
+            .expect("events")
+            .iter()
+            .map(|event| event.kind.discriminant())
+            .take(3)
+            .collect();
+        assert_eq!(kinds, vec!["Paused", "Resumed", "PreflightStarted"]);
+    }
+
+    #[test]
+    fn a_pause_sent_during_the_last_task_lets_the_queue_drain() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let tasks = vec![sample_task(1)];
+        let mut runner = signalled_runner(&project, &tasks, Request::Pause, 2);
+
+        let outcome = runner.run_queue(&tasks, None).expect("run_queue");
+
+        assert_eq!(outcome, RunOutcome::Drained);
+        assert_eq!(state_of(&project, &tasks[0]), TaskState::Done);
+    }
+
+    #[test]
+    fn requests_left_over_from_an_earlier_supervisor_do_not_affect_a_new_run() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let tasks = vec![sample_task(1), sample_task(2)];
+        send(&project, Request::Pause).expect("stale pause");
+        send(&project, Request::Interrupt).expect("stale interrupt");
+        send(&project, Request::Cancel(tasks[0].id)).expect("stale cancel");
+        // Never fires: only two tasks' worth of calls exist.
+        let mut runner = signalled_runner(&project, &tasks, Request::Pause, 99);
+
+        let outcome = runner.run_queue(&tasks, None).expect("run_queue");
+
+        assert_eq!(outcome, RunOutcome::Drained);
+        assert_eq!(state_of(&project, &tasks[0]), TaskState::Done);
+        assert_eq!(state_of(&project, &tasks[1]), TaskState::Done);
+    }
+
+    #[test]
+    fn an_interrupt_sent_during_a_phase_journals_interrupted_and_stops_the_queue() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let tasks = vec![sample_task(1), sample_task(2)];
+        let mut runner = signalled_runner(&project, &tasks, Request::Interrupt, 2);
+
+        let outcome = runner.run_queue(&tasks, None).expect("run_queue");
+
+        assert_eq!(outcome, RunOutcome::Interrupted);
+        assert_eq!(
+            state_of(&project, &tasks[0]),
+            TaskState::Paused {
+                reason: PauseReason::Interrupted,
+                resume_to: Box::new(TaskState::Running {
+                    attempt: AttemptId::new(1),
+                    phase: Phase::Implement,
+                }),
+            }
+        );
+        assert_eq!(state_of(&project, &tasks[1]), TaskState::Queued);
+        assert!(
+            !pending(&project, Request::Interrupt),
+            "the request is consumed once it has been journaled"
+        );
+        let worktrees = crate::list_worktrees(&repo.path).expect("list_worktrees");
+        assert_eq!(worktrees.len(), 1, "no worktree may be left: {worktrees:?}");
+    }
+
+    /// A `verify_command` that passes, having first dropped `marker` into
+    /// `project`'s control directory: a request that arrives while the
+    /// completion gates run, after which the runner has no phase boundary
+    /// left in that task to notice it at.
+    fn verify_that_sends(project: &Project, marker: &str) -> Vec<String> {
+        let dir = project.state_dir.join("control");
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "mkdir -p \"$1\" && touch \"$1/$2\"".to_string(),
+            "_".to_string(),
+            dir.display().to_string(),
+            marker.to_string(),
+        ]
+    }
+
+    #[test]
+    fn an_interrupt_that_lands_after_the_last_phase_boundary_stops_the_queue_before_the_next_task()
+    {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let tasks = vec![sample_task(1), sample_task(2)];
+        // Never fires: the request comes from task 1's completion gate.
+        let mut runner = signalled_runner(&project, &tasks, Request::Interrupt, 99);
+        runner.config.verify_command = Some(verify_that_sends(&project, "interrupt"));
+        runner.profile = profile_from(&runner.config).expect("profile_from");
+
+        let outcome = runner.run_queue(&tasks, None).expect("run_queue");
+
+        assert_eq!(outcome, RunOutcome::Interrupted);
+        assert_eq!(state_of(&project, &tasks[0]), TaskState::Done);
+        assert_eq!(
+            state_of(&project, &tasks[1]),
+            TaskState::Queued,
+            "the next task must not have started"
+        );
+        assert!(!pending(&project, Request::Interrupt));
+    }
+
+    #[test]
+    fn a_cancel_sent_during_a_task_cancels_it_and_the_queue_proceeds_to_its_successor() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let tasks = vec![sample_task(1), sample_task(2)];
+        // Task 1's steps are consumed by its probe and `Implement`; the
+        // cancel stops it after that phase, and task 2 then needs its own.
+        let mut runner = signalled_runner(&project, &tasks, Request::Cancel(tasks[0].id), 2);
+
+        let outcome = runner.run_queue(&tasks, None).expect("run_queue");
+
+        assert_eq!(outcome, RunOutcome::Drained);
+        assert_eq!(state_of(&project, &tasks[0]), TaskState::Cancelled);
+        assert_eq!(state_of(&project, &tasks[1]), TaskState::Done);
+        assert!(!pending(&project, Request::Cancel(tasks[0].id)));
+        let journal = Journal::open_for(&project).expect("journal");
+        let events = journal.events_for(tasks[0].id).expect("events");
+        assert!(
+            matches!(
+                &events.last().expect("an event").kind,
+                EventKind::TaskCancelled { reason } if reason.contains("cancel")
+            ),
+            "the last event must be TaskCancelled, got {:?}",
+            events.last()
+        );
+    }
+
+    #[test]
+    fn a_cancel_that_arrives_too_late_to_stop_a_task_does_not_outlive_it() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let tasks = vec![sample_task(1)];
+        let mut runner = signalled_runner(&project, &tasks, Request::Pause, 99);
+        runner.config.verify_command = Some(verify_that_sends(&project, "cancel-1"));
+        runner.profile = profile_from(&runner.config).expect("profile_from");
+
+        let outcome = runner.run_queue(&tasks, None).expect("run_queue");
+
+        assert_eq!(outcome, RunOutcome::Drained);
+        assert_eq!(state_of(&project, &tasks[0]), TaskState::Done);
+        assert!(
+            !pending(&project, Request::Cancel(tasks[0].id)),
+            "a cancel for a finished task must not linger"
+        );
+    }
+
+    #[test]
+    fn an_interrupt_sent_during_remediation_starts_no_further_round() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let reports = [1, 2, 3, 4]
+            .map(|attempt| success_step(&report_path(&project, task.id, AttemptId::new(attempt))));
+        let [first, second, third, fourth] = reports;
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let provider = Signaller {
+            inner: Dummy::new(Scenario {
+                // A fourth invocation would find a step, so only the count
+                // can show that none was made.
+                steps: vec![probe_step(), first, second, third, fourth],
+            }),
+            project: project.clone(),
+            request: Request::Interrupt,
+            // The first remediation round's invocation.
+            on_call: 3,
+            calls: calls.clone(),
+        };
+        let mut config = runnable_config();
+        config.verify_command = Some(vec!["false".to_string()]);
+        config.max_remediation_attempts = 3;
+        let mut runner = manual_runner(&project, config, Box::new(provider));
+
+        let state = runner
+            .run_task(&task)
+            .expect("an interrupt is not a failure");
+
+        assert!(
+            matches!(
+                state,
+                TaskState::Paused {
+                    reason: PauseReason::Interrupted,
+                    ..
+                }
+            ),
+            "got {state:?}"
+        );
+        assert_eq!(
+            calls.get(),
+            3,
+            "probe, the first attempt and one remediation round; no more"
+        );
+    }
+
+    #[test]
+    fn an_interrupt_sent_during_remediation_parks_the_task_instead_of_failing_it() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        let first = report_path(&project, task.id, AttemptId::new(1));
+        let retry = report_path(&project, task.id, AttemptId::new(2));
+        let scenario = Scenario {
+            steps: vec![probe_step(), success_step(&first), success_step(&retry)],
+        };
+        let provider = Signaller {
+            inner: Dummy::new(scenario),
+            project: project.clone(),
+            request: Request::Interrupt,
+            // The remediation round's own invocation.
+            on_call: 3,
+            calls: std::rc::Rc::default(),
+        };
+        // The gate never passes, so remediation cannot succeed on its own.
+        let mut config = runnable_config();
+        config.verify_command = Some(vec!["false".to_string()]);
+        let mut runner = manual_runner(&project, config, Box::new(provider));
+
+        let state = runner
+            .run_task(&task)
+            .expect("an interrupt is not a failure");
+
+        assert!(
+            matches!(
+                state,
+                TaskState::Paused {
+                    reason: PauseReason::Interrupted,
+                    ..
+                }
+            ),
+            "got {state:?}"
+        );
+        assert!(!pending(&project, Request::Interrupt));
+    }
+
     /// A [`Provider`] that hands every prompt it is given to an inner
     /// [`Dummy`] after keeping a copy, so a test can prove what a fresh
     /// session was actually seeded with.
@@ -5006,6 +5472,53 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
             1,
             "the retry's worktree must be removed"
         );
+    }
+
+    #[test]
+    fn an_interrupt_sent_during_a_retry_parks_the_task_instead_of_failing_it_again() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        let task = sample_task(1);
+        journal_failed_task(&project, &task, vec![red_gate("lint exploded")]);
+        write_failed_first_attempt(&project, &task);
+        let provider = Signaller {
+            inner: Dummy::new(Scenario {
+                steps: vec![
+                    probe_step(),
+                    // No report: whatever ended the agent early left none.
+                    dummy_step(None, None),
+                ],
+            }),
+            project: project.clone(),
+            request: Request::Interrupt,
+            on_call: 2,
+            calls: std::rc::Rc::default(),
+        };
+        let mut runner = manual_runner(&project, runnable_config(), Box::new(provider));
+
+        let state = runner
+            .retry_task(&task)
+            .expect("an interrupt is no failure");
+
+        assert!(
+            matches!(
+                state,
+                TaskState::Paused {
+                    reason: PauseReason::Interrupted,
+                    ..
+                }
+            ),
+            "got {state:?}"
+        );
+        let kinds = event_kinds(&project, &task);
+        assert_eq!(kinds.last(), Some(&"Interrupted"), "{kinds:?}");
+        assert_eq!(
+            kinds.iter().filter(|kind| **kind == "TaskFailed").count(),
+            1,
+            "only the original failure is recorded: {kinds:?}"
+        );
+        assert!(!pending(&project, Request::Interrupt));
     }
 
     #[test]

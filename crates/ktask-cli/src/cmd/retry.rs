@@ -70,6 +70,16 @@ fn attempt(project: &Project, task: TaskId, json: bool) -> RunOutcome {
     }
 
     match result {
+        // An operator's `interrupt` or `cancel` ended the retry: neither is
+        // a failure, and neither is a task that is done.
+        Ok(TaskState::Paused { .. }) => {
+            render::progress(format_args!("retry: task {task} was interrupted"));
+            RunOutcome::Interrupted
+        }
+        Ok(TaskState::Cancelled) => {
+            render::progress(format_args!("retry: task {task} was cancelled"));
+            RunOutcome::Drained
+        }
         Ok(_) => {
             render::progress(format_args!(
                 "retry: task {task} is done; `ktask-rs resume` continues the queue"

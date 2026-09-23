@@ -557,7 +557,7 @@ fn interrupted_phase(state: &TaskState) -> Phase {
 /// only a pid), so a pid reused by an unrelated process in the narrow
 /// window this leaves is a known limitation, same as that check's own
 /// non-Linux fallback.
-fn pid_alive(pid: u32) -> bool {
+pub(crate) fn pid_alive(pid: u32) -> bool {
     use nix::errno::Errno;
     use nix::sys::signal;
     use nix::unistd::Pid;

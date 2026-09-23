@@ -24,6 +24,7 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::control;
 use crate::runner::interrupt_flag;
 use crate::{AttemptId, Bus, Error, Event, EventKind, EventSeq, Result, Stream};
 
@@ -270,6 +271,8 @@ pub fn run_streaming(
         if timeout_detail.is_none() {
             if interrupt_flag().load(Ordering::SeqCst) {
                 timeout_detail = Some("interrupted by SIGINT".to_string());
+            } else if control::stop_requested() {
+                timeout_detail = Some("interrupted by a `ktask-rs` control request".to_string());
             } else if started.elapsed() >= hard_timeout {
                 timeout_detail = Some(format!("hard timeout of {hard_timeout:?} exceeded"));
             } else if last_activity.elapsed() >= idle_timeout {
@@ -310,6 +313,7 @@ pub fn run_streaming(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Project, TaskId};
     use std::fs;
     use std::path::Path;
 
@@ -527,6 +531,91 @@ mod tests {
             !alive(grandchild_pid),
             "grandchild pid {grandchild_pid} outlived the process group it was part of"
         );
+    }
+
+    #[test]
+    fn a_control_request_kills_the_process_group_promptly_and_leaves_no_grandchild() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = Project {
+            root: dir.path().join("root"),
+            id: "process-test".to_string(),
+            state_dir: dir.path().to_path_buf(),
+        };
+        let task = TaskId::new(1);
+        let pid_file = dir.path().join("grandchild.pid");
+        let mut cmd = sh(&format!(
+            "sleep 30 & echo $! > {} ; printf 'started\\n'; wait",
+            pid_file.display()
+        ));
+
+        // The operator's `ktask-rs interrupt`, sent from another thread
+        // (standing in for another terminal) once the command has started.
+        let sender_project = project.clone();
+        let sender_pid_file = pid_file.clone();
+        let sender = thread::spawn(move || {
+            while !sender_pid_file.exists() {
+                thread::sleep(Duration::from_millis(5));
+            }
+            crate::send(&sender_project, crate::Request::Interrupt).expect("send");
+        });
+
+        let started = Instant::now();
+        let watch = control::watch(&project, task);
+        let err = run_streaming(
+            &mut cmd,
+            None,
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            None,
+        )
+        .expect_err("a control request must end the run");
+        drop(watch);
+        sender.join().expect("sender thread");
+
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "killed promptly, not left to a timeout: {:?}",
+            started.elapsed()
+        );
+        assert!(err.to_string().contains("control request"), "{err}");
+
+        let pid_text = fs::read_to_string(&pid_file).expect("grandchild pid was written");
+        let grandchild_pid: u32 = pid_text.trim().parse().expect("pid file holds a pid");
+        let alive = |pid: u32| Path::new(&format!("/proc/{pid}")).exists();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while alive(grandchild_pid) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !alive(grandchild_pid),
+            "grandchild pid {grandchild_pid} outlived the request that should have killed its group"
+        );
+    }
+
+    #[test]
+    fn a_request_for_another_task_or_a_pause_does_not_end_the_run() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = Project {
+            root: dir.path().join("root"),
+            id: "process-test".to_string(),
+            state_dir: dir.path().to_path_buf(),
+        };
+        crate::send(&project, crate::Request::Pause).expect("pause");
+        crate::send(&project, crate::Request::Cancel(TaskId::new(2))).expect("cancel");
+        let mut cmd = sh("sleep 0.2; printf 'finished\\n'");
+
+        let watch = control::watch(&project, TaskId::new(1));
+        let outcome = run_streaming(
+            &mut cmd,
+            None,
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            None,
+        )
+        .expect("neither request is for this run");
+        drop(watch);
+
+        assert_eq!(outcome.stdout, "finished\n");
     }
 
     #[test]

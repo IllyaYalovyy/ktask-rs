@@ -969,3 +969,429 @@ fn cli_run_on_a_clean_journal_reconciles_to_nothing() {
         );
     }
 }
+
+// -- run control: pause, interrupt, cancel (T119) ----------------------------
+
+/// Each task's state, in queue order, as the journal's events fold to it —
+/// the record the runner and every control command read, not the
+/// `task_state` projection `status` shows, which only recovery rebuilds.
+fn task_states(scenario: &support::Scenario) -> ktask_core::Result<Vec<String>> {
+    let journal = ktask_core::Journal::open(&ktask_core::journal_path(scenario.state_dir()))?;
+    let mut states = Vec::new();
+    for task in journal.tasks()? {
+        let state = journal
+            .events_for(task.id)?
+            .iter()
+            .try_fold(ktask_core::TaskState::Queued, |state, event| {
+                ktask_core::apply(&state, &event.kind)
+            })?;
+        states.push(state.name().to_string());
+    }
+    Ok(states)
+}
+
+/// With nothing running, `pause` and `interrupt` have nothing to act on; with
+/// no such task (or one that is finished), neither has `cancel`. Each says so
+/// on stderr and exits 2, and none of them changes the journal.
+#[test]
+fn cli_pause_interrupt_and_cancel_exit_2_when_nothing_is_in_an_applicable_state() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(1)).expect("build scenario");
+    scenario
+        .set_scenario(&succeed_step(&scenario, 1))
+        .expect("write scenario");
+
+    for args in [&["pause"][..], &["interrupt"], &["cancel", "--task", "7"]] {
+        let output = scenario.run(args).expect("run");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            stderr_of(&output)
+        );
+        assert_eq!(stdout_of(&output), "", "{args:?} prints nothing on stdout");
+    }
+
+    // A finished task has nothing left to cancel.
+    let run = scenario.run(&["run"]).expect("run");
+    assert_eq!(run.status.code(), Some(0), "{}", stderr_of(&run));
+    let cancel = scenario.run(&["cancel", "--task", "1"]).expect("cancel");
+    assert_eq!(cancel.status.code(), Some(2), "{}", stderr_of(&cancel));
+    assert!(
+        stderr_of(&cancel).contains("already done"),
+        "{}",
+        stderr_of(&cancel)
+    );
+    assert_eq!(task_states(&scenario).expect("states"), vec!["Done"]);
+}
+
+/// Cancelling the task at the head of the queue lets the queue proceed past
+/// it: the successor runs, and the cancelled task is never run.
+#[test]
+fn cli_cancel_makes_the_successor_runnable() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+    scenario
+        .set_scenario(&succeed_step(&scenario, 2))
+        .expect("write scenario");
+
+    let cancel = scenario.run(&["cancel", "--task", "1"]).expect("cancel");
+    assert_eq!(cancel.status.code(), Some(0), "{}", stderr_of(&cancel));
+    assert_eq!(stdout_of(&cancel), "task 1 cancelled\n");
+    assert_eq!(
+        journaled_kinds(&scenario, 1).expect("journal"),
+        vec!["TaskCancelled"]
+    );
+
+    let run = scenario.run(&["run"]).expect("run");
+
+    assert_eq!(run.status.code(), Some(0), "{}", stderr_of(&run));
+    assert_eq!(
+        task_states(&scenario).expect("states"),
+        vec!["Cancelled", "Done"]
+    );
+    let again = scenario.run(&["cancel", "--task", "1"]).expect("cancel");
+    assert_eq!(again.status.code(), Some(2), "already cancelled");
+}
+
+/// A task that failed holds the queue; cancelling it is how a human moves
+/// on without retrying.
+#[test]
+fn cli_cancel_unblocks_the_queue_behind_a_failed_task() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+    scenario
+        .set_scenario(&succeed_step(&scenario, 2))
+        .expect("write scenario");
+    // A red baseline fails task 1 in preflight, before any agent runs.
+    set_baseline(&scenario, Some("false")).expect("write config");
+    let run = scenario.run(&["run"]).expect("run");
+    assert_eq!(run.status.code(), Some(1), "{}", stderr_of(&run));
+    assert_eq!(
+        task_states(&scenario).expect("states"),
+        vec!["Failed", "Queued"]
+    );
+    let blocked = scenario.run(&["run"]).expect("run again");
+    assert_eq!(blocked.status.code(), Some(1), "still blocked");
+
+    let cancel = scenario.run(&["cancel", "--task", "1"]).expect("cancel");
+    assert_eq!(cancel.status.code(), Some(0), "{}", stderr_of(&cancel));
+    set_baseline(&scenario, None).expect("write config");
+    let resume = scenario.run(&["resume"]).expect("resume");
+
+    assert_eq!(resume.status.code(), Some(0), "{}", stderr_of(&resume));
+    assert_eq!(
+        task_states(&scenario).expect("states"),
+        vec!["Cancelled", "Done"]
+    );
+}
+
+/// A `claude` stand-in on `PATH`, so that a task's agent is a real process
+/// the supervisor must be able to stop. The availability probe preflight
+/// makes sends an empty prompt, and the stand-in answers that at once; any
+/// other invocation records its pid and touches `started`, then runs the
+/// `behavior` it was installed with: `finish` writes the report its prompt
+/// names and exits successfully.
+struct Agent {
+    dir: tempfile::TempDir,
+    started: std::path::PathBuf,
+    pidfile: std::path::PathBuf,
+}
+
+impl Agent {
+    fn install(scenario: &support::Scenario, behavior: &str) -> std::io::Result<Self> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir()?;
+        let started = dir.path().join("started");
+        let pidfile = dir.path().join("pid");
+        let hung = dir.path().join("hung");
+        let script = format!(
+            "#!/bin/sh\n\
+             input=$(cat)\n\
+             [ -z \"$input\" ] && exit 0\n\
+             report=$(printf '%s\\n' \"$input\" | sed -n 's/.*written to `\\([^`]*\\)` before exiting.*/\\1/p' | tail -n 1)\n\
+             finish() {{ printf 'KTASK_RESULT: DONE\\nSummary: ok\\n' > \"$report\"; exit 0; }}\n\
+             echo $$ > \"{pid}\"\n\
+             touch \"{started}\"\n\
+             {behavior}\n",
+            pid = pidfile.display(),
+            started = started.display(),
+        )
+        .replace("{hung}", &hung.display().to_string());
+        let path = dir.path().join("claude");
+        std::fs::write(&path, script)?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::write(
+            scenario.state_dir().join("config.toml"),
+            "provider = \"claude\"\nverify_command = [\"true\"]\nmin_free_disk_bytes = 0\n",
+        )?;
+        Ok(Self {
+            dir,
+            started,
+            pidfile,
+        })
+    }
+
+    /// Hang on the first real invocation; finish at once on every later one.
+    fn hang_first(scenario: &support::Scenario) -> std::io::Result<Self> {
+        Self::install(
+            scenario,
+            "if [ -e \"{hung}\" ]; then finish; fi\ntouch \"{hung}\"\nsleep 30",
+        )
+    }
+
+    /// Take a couple of seconds, then succeed, every time.
+    fn slow(scenario: &support::Scenario) -> std::io::Result<Self> {
+        Self::install(scenario, "sleep 2\nfinish")
+    }
+
+    /// `ktask-rs <args>` running in the background with this agent first on
+    /// `PATH`.
+    fn spawn(
+        &self,
+        scenario: &support::Scenario,
+        args: &[&str],
+    ) -> std::io::Result<std::process::Child> {
+        let path = std::env::var("PATH").unwrap_or_default();
+        scenario
+            .command(args)
+            .env("PATH", format!("{}:{path}", self.dir.path().display()))
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+    }
+
+    /// Blocks until the agent has started its real invocation, and returns
+    /// its pid.
+    fn wait_started(&self) -> std::io::Result<u32> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !self.started.exists() {
+            if std::time::Instant::now() >= deadline {
+                return Err(std::io::Error::other("the agent never started"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        std::fs::read_to_string(&self.pidfile)?
+            .trim()
+            .parse()
+            .map_err(std::io::Error::other)
+    }
+}
+
+/// Waits for `child` to exit, killing it and failing if it does not.
+fn wait_for_exit(mut child: std::process::Child) -> std::io::Result<std::process::Output> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill()?;
+            return Err(std::io::Error::other("ktask-rs did not exit in time"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// Whether `pid` still names a process.
+fn process_exists(pid: u32) -> bool {
+    std::path::Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// Waits (briefly) for `pid` to be gone: a killed process group is reaped
+/// asynchronously.
+fn gone_soon(pid: u32) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while process_exists(pid) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    !process_exists(pid)
+}
+
+/// `interrupt`, from another terminal, ends the running attempt: the agent
+/// process is gone, the run exits 130, the journal ends with `Interrupted`,
+/// and `interrupt` itself exits 0 having waited for all of that.
+#[test]
+fn cli_interrupt_terminates_the_running_attempt_and_leaves_no_orphan() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+    let agent = Agent::hang_first(&scenario).expect("install agent");
+    let run = agent.spawn(&scenario, &["run"]).expect("spawn run");
+    let agent_pid = agent.wait_started().expect("agent started");
+    assert!(process_exists(agent_pid), "sanity: the agent is running");
+
+    let interrupt = scenario.run(&["interrupt"]).expect("interrupt");
+
+    assert_eq!(
+        interrupt.status.code(),
+        Some(0),
+        "{}",
+        stderr_of(&interrupt)
+    );
+    assert_eq!(stdout_of(&interrupt), "task 1 interrupted\n");
+    let run = wait_for_exit(run).expect("run exits");
+    assert_eq!(
+        run.status.code(),
+        Some(130),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(gone_soon(agent_pid), "the agent outlived the interrupt");
+    let kinds = journaled_kinds(&scenario, 1).expect("journal");
+    assert_eq!(kinds.last(), Some(&"Interrupted"), "{kinds:?}");
+    assert_eq!(
+        task_states(&scenario).expect("states"),
+        vec!["Paused", "Queued"]
+    );
+    assert!(
+        !scenario
+            .state_dir()
+            .join("control")
+            .join("interrupt")
+            .exists(),
+        "the request is consumed"
+    );
+
+    // Nothing is running any more, so there is nothing more to interrupt.
+    let again = scenario.run(&["interrupt"]).expect("interrupt again");
+    assert_eq!(again.status.code(), Some(2), "{}", stderr_of(&again));
+}
+
+/// `cancel` of the running task terminates its attempt and marks it
+/// cancelled, and the run carries straight on to the successor.
+#[test]
+fn cli_cancel_terminates_the_running_task_and_the_queue_proceeds() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+    let agent = Agent::hang_first(&scenario).expect("install agent");
+    let run = agent.spawn(&scenario, &["run"]).expect("spawn run");
+    let agent_pid = agent.wait_started().expect("agent started");
+
+    let cancel = scenario.run(&["cancel", "--task", "1"]).expect("cancel");
+
+    assert_eq!(cancel.status.code(), Some(0), "{}", stderr_of(&cancel));
+    assert_eq!(stdout_of(&cancel), "task 1 cancelled\n");
+    let run = wait_for_exit(run).expect("run exits");
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(gone_soon(agent_pid), "the agent outlived the cancel");
+    assert_eq!(
+        task_states(&scenario).expect("states"),
+        vec!["Cancelled", "Done"]
+    );
+}
+
+/// After an interrupt the task is parked; cancelling it acts on the journal
+/// directly (nothing is running) and the queue moves past it.
+#[test]
+fn cli_cancel_after_an_interrupt_lets_the_queue_move_on() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+    let agent = Agent::hang_first(&scenario).expect("install agent");
+    let run = agent.spawn(&scenario, &["run"]).expect("spawn run");
+    agent.wait_started().expect("agent started");
+    let interrupt = scenario.run(&["interrupt"]).expect("interrupt");
+    assert_eq!(
+        interrupt.status.code(),
+        Some(0),
+        "{}",
+        stderr_of(&interrupt)
+    );
+    assert_eq!(
+        wait_for_exit(run).expect("run exits").status.code(),
+        Some(130)
+    );
+
+    let cancel = scenario.run(&["cancel", "--task", "1"]).expect("cancel");
+    assert_eq!(cancel.status.code(), Some(0), "{}", stderr_of(&cancel));
+    let resume = wait_for_exit(agent.spawn(&scenario, &["resume"]).expect("spawn resume"))
+        .expect("resume exits");
+
+    assert_eq!(
+        resume.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&resume.stderr)
+    );
+    assert_eq!(
+        task_states(&scenario).expect("states"),
+        vec!["Cancelled", "Done"]
+    );
+}
+
+/// `pause` lets the running task finish, parks the next one instead of
+/// starting it, and stops the run; `resume` lifts the pause and finishes the
+/// queue.
+#[test]
+fn cli_pause_stops_the_queue_after_the_running_task_and_resume_continues() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(3)).expect("build scenario");
+    let agent = Agent::slow(&scenario).expect("install agent");
+    let run = agent.spawn(&scenario, &["run"]).expect("spawn run");
+    agent.wait_started().expect("agent started");
+
+    let pause = scenario.run(&["pause"]).expect("pause");
+
+    assert_eq!(pause.status.code(), Some(0), "{}", stderr_of(&pause));
+    assert_eq!(
+        stdout_of(&pause),
+        "pause requested: the queue stops after task 1\n"
+    );
+    let run = wait_for_exit(run).expect("run exits");
+    assert_eq!(
+        run.status.code(),
+        Some(130),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        task_states(&scenario).expect("states"),
+        vec!["Done", "Paused", "Queued"]
+    );
+
+    let resume = wait_for_exit(agent.spawn(&scenario, &["resume"]).expect("spawn resume"))
+        .expect("resume exits");
+    assert_eq!(
+        resume.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&resume.stderr)
+    );
+    assert_eq!(
+        task_states(&scenario).expect("states"),
+        vec!["Done", "Done", "Done"]
+    );
+}
+
+/// `interrupt` ends a retry the same way it ends a run: the agent is gone,
+/// the retry exits 130 rather than reporting the task done or failed again,
+/// and the task is parked.
+#[test]
+fn cli_interrupt_stops_a_retry_and_leaves_the_task_parked() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(1)).expect("build scenario");
+    // A red baseline fails task 1 in preflight, which is what `retry` acts on.
+    set_baseline(&scenario, Some("false")).expect("write config");
+    let run = scenario.run(&["run"]).expect("run");
+    assert_eq!(run.status.code(), Some(1), "{}", stderr_of(&run));
+    let agent = Agent::hang_first(&scenario).expect("install agent");
+    let retry = agent
+        .spawn(&scenario, &["retry", "--task", "1"])
+        .expect("spawn retry");
+    let agent_pid = agent.wait_started().expect("agent started");
+
+    let interrupt = scenario.run(&["interrupt"]).expect("interrupt");
+
+    assert_eq!(
+        interrupt.status.code(),
+        Some(0),
+        "{}",
+        stderr_of(&interrupt)
+    );
+    let retry = wait_for_exit(retry).expect("retry exits");
+    assert_eq!(
+        retry.status.code(),
+        Some(130),
+        "{}",
+        String::from_utf8_lossy(&retry.stderr)
+    );
+    assert!(gone_soon(agent_pid), "the agent outlived the interrupt");
+    assert_eq!(task_states(&scenario).expect("states"), vec!["Paused"]);
+}
