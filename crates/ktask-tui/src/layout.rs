@@ -234,18 +234,27 @@ mod tests {
 
     const HINT: &str = "Press ? for the key map";
 
-    /// What the queue draws in its body when it has no tasks; every other
-    /// screen leaves its body blank until its own task fills it in.
-    fn body_text(screen: Screen) -> Vec<(u16, &'static str)> {
+    /// What the queue and the live run draw in their bodies before anything
+    /// has happened; every other screen leaves its body blank until its own
+    /// task fills it in. The live run has its command and gate rows only where
+    /// the body is tall enough (see `screen::live`).
+    fn body_text(screen: Screen, size: (u16, u16)) -> Vec<(u16, &'static str)> {
         match screen {
             Screen::Queue => vec![(1, "No tasks queued.")],
+            Screen::LiveRun if size.1 >= 24 => vec![
+                (1, "No run in progress"),
+                (2, "command: -"),
+                (3, "gates: -"),
+                (4, "Waiting for output"),
+            ],
+            Screen::LiveRun => vec![(1, "No run in progress"), (2, "Waiting for output")],
             _ => Vec::new(),
         }
     }
 
     fn expected(screen: Screen, size: (u16, u16), header: &'static str, hint: bool) -> String {
         let mut lines = vec![(0, header)];
-        lines.extend(body_text(screen));
+        lines.extend(body_text(screen, size));
         if hint {
             lines.push((size.1 - 1, HINT));
         }

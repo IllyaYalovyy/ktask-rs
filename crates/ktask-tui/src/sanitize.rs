@@ -139,7 +139,7 @@ fn skip_string(chars: &mut Peekable<Chars<'_>>) {
 /// holds the incomplete tail back until the next chunk completes it, and
 /// replaces bytes that can never be valid UTF-8 with U+FFFD rather than
 /// dropping them or failing.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Utf8Stream {
     pending: Vec<u8>,
 }

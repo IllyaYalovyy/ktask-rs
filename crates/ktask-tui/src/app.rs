@@ -8,7 +8,7 @@
 use crate::event::AppEvent;
 use crate::keys::{KeyAction, lookup};
 use crate::layout::layout_for;
-use crate::sanitize::sanitize;
+use crate::screen::live::LiveRun;
 use crate::types::{Action, Overlay, Screen, TaskView};
 use crossterm::event::KeyEvent;
 use ktask_core::{Event, EventKind};
@@ -42,6 +42,10 @@ pub struct App {
     pub tasks: Vec<TaskView>,
     /// The most recent agent output, oldest first, at most [`OUTPUT_WINDOW`].
     pub output: VecDeque<String>,
+    /// What the live-run screen shows besides the output: the current task,
+    /// phase and command, the gate results and the elapsed time. It also holds
+    /// the decoders that turn output bytes into the lines of [`App::output`].
+    pub live: LiveRun,
     /// The terminal's size as columns and rows.
     pub size: (u16, u16),
     /// The actions the operator has asked for, oldest first, that the shell
@@ -68,6 +72,7 @@ impl App {
             overlay: None,
             tasks: Vec::new(),
             output: VecDeque::new(),
+            live: LiveRun::default(),
             size,
             outbox: Vec::new(),
             notice: None,
@@ -131,32 +136,20 @@ fn step(from: Screen, by: usize) -> Screen {
 
 /// Folds one journal event into the run state the interface displays.
 fn apply_core(app: &mut App, event: Event) {
-    match (event.task_id, event.kind) {
-        (Some(id), EventKind::TaskQueued { title }) => {
-            if app.tasks.iter().all(|task| task.id != id) {
-                app.tasks.push(TaskView {
-                    id,
-                    title,
-                    state: "Queued".to_owned(),
-                    protocol: String::new(),
-                    phase: None,
-                    attempts: 0,
-                    elapsed: None,
-                });
-            }
-        }
-        (_, EventKind::AgentOutput { text, .. }) => {
-            // Provider output is untrusted: only sanitized text is kept, one
-            // entry per line, so nothing downstream can meet an escape.
-            let clean = sanitize(&text);
-            for line in clean.strip_suffix('\n').unwrap_or(&clean).split('\n') {
-                if app.output.len() >= OUTPUT_WINDOW {
-                    app.output.pop_front();
-                }
-                app.output.push_back(line.to_owned());
-            }
-        }
-        _ => {}
+    // The live-run screen folds every event itself; the queue's part is below.
+    app.live.apply(&mut app.output, &event);
+    if let (Some(id), EventKind::TaskQueued { title }) = (event.task_id, event.kind)
+        && app.tasks.iter().all(|task| task.id != id)
+    {
+        app.tasks.push(TaskView {
+            id,
+            title,
+            state: "Queued".to_owned(),
+            protocol: String::new(),
+            phase: None,
+            attempts: 0,
+            elapsed: None,
+        });
     }
 }
 
@@ -177,8 +170,10 @@ pub fn render(app: &App, frame: &mut Frame<'_>) {
     if let Some(footer) = plan.footer {
         frame.render_widget(Paragraph::new(FOOTER_HINT), footer);
     }
-    if app.screen == Screen::Queue {
-        crate::screen::queue::render(app, &plan, frame);
+    match app.screen {
+        Screen::Queue => crate::screen::queue::render(app, &plan, frame),
+        Screen::LiveRun => crate::screen::live::render(app, &plan, frame),
+        _ => {}
     }
     match &app.overlay {
         Some(Overlay::KeyMap) => crate::screen::help::render(app.screen, area, frame),
