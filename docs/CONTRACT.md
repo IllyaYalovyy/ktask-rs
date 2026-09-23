@@ -205,6 +205,24 @@ Bindings are consistent across screens: a key never means two different things.
    visited. `G` follows the newest entry; any other movement stops following.
 4. **Failures** — classified causes, repeated signatures, circuit-breaker
    state, and the actions available for each.
+
+   ```
+   j / k       select an older / a newer failure (newest first)
+   g / G       select the newest / the oldest failure
+   r           retry the selected failure's task
+   c           cancel it
+   x           re-run its gates
+   ```
+
+   The first row is the circuit breaker. Closed, it says how close the repeats
+   have come; tripped, it is a full-width white-on-red bar naming the task and
+   the signature, and every failure that reached the limit says `TRIPPED`. A
+   failure's detail shows its class, signature and how often it recurred, and
+   the actions permitted: a failed task can be retried or cancelled, a task
+   being remediated can only be cancelled, `needs_input` is answered in the
+   input inbox rather than retried, and only a verification or environment
+   failure has gates to re-run. A key for an action that is not permitted does
+   nothing and says why.
 5. **Task inspector** — objective, acceptance criteria, dependencies,
    completion gates, work protocol with current phase highlighted, per-attempt
    evidence.

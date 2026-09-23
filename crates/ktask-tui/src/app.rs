@@ -8,6 +8,7 @@
 use crate::event::AppEvent;
 use crate::keys::{KeyAction, lookup};
 use crate::layout::layout_for;
+use crate::screen::failures::FailureBoard;
 use crate::screen::live::LiveRun;
 use crate::screen::logs::LogView;
 use crate::types::{Action, Overlay, Screen, TaskView};
@@ -52,6 +53,8 @@ pub struct App {
     /// The logs screen's entries, filters, view and cursor. The search text
     /// it looks for is [`App::search`].
     pub logs: LogView,
+    /// The failures screen's classified failures, signature counts and cursor.
+    pub failures: FailureBoard,
     /// The terminal's size as columns and rows.
     pub size: (u16, u16),
     /// The actions the operator has asked for, oldest first, that the shell
@@ -80,6 +83,7 @@ impl App {
             output: VecDeque::new(),
             live: LiveRun::default(),
             logs: LogView::default(),
+            failures: FailureBoard::default(),
             size,
             outbox: Vec::new(),
             notice: None,
@@ -101,8 +105,10 @@ impl App {
 /// [`screen::queue`](crate::screen::queue), which also has the queue's action
 /// keys), the live run's scroll and follow keys (see
 /// [`screen::live`](crate::screen::live)) and the logs' filter, search and
-/// navigation keys (see [`screen::logs`](crate::screen::logs)) are wired so far; any other key press leaves the state
-/// as it was.
+/// navigation keys (see [`screen::logs`](crate::screen::logs)) and the
+/// failures' selection and action keys (see
+/// [`screen::failures`](crate::screen::failures)) are wired so far; any other
+/// key press leaves the state as it was.
 #[must_use]
 pub fn update(mut app: App, ev: AppEvent) -> App {
     match ev {
@@ -117,6 +123,7 @@ pub fn update(mut app: App, ev: AppEvent) -> App {
             crate::screen::queue::handle_key(&mut app, &key);
             crate::screen::live::handle_key(&mut app, &key);
             crate::screen::logs::handle_key(&mut app, &key);
+            crate::screen::failures::handle_key(&mut app, &key);
             navigate(&mut app, &key);
         }
         AppEvent::Tick => {}
@@ -154,6 +161,7 @@ fn apply_core(app: &mut App, event: Event) {
     // The live-run screen folds every event itself; the queue's part is below.
     crate::screen::live::fold(app, &event);
     crate::screen::logs::fold(app, &event);
+    crate::screen::failures::fold(app, &event);
     if let (Some(id), EventKind::TaskQueued { title }) = (event.task_id, event.kind)
         && app.tasks.iter().all(|task| task.id != id)
     {
@@ -193,6 +201,7 @@ pub fn render(app: &App, frame: &mut Frame<'_>) {
         Screen::Queue => crate::screen::queue::render(app, &plan, frame),
         Screen::LiveRun => crate::screen::live::render(app, &plan, frame),
         Screen::Logs => crate::screen::logs::render(app, &plan, frame),
+        Screen::Failures => crate::screen::failures::render(app, &plan, frame),
         _ => {}
     }
     match &app.overlay {

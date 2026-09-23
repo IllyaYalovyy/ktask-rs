@@ -234,10 +234,10 @@ mod tests {
 
     const HINT: &str = "Press ? for the key map";
 
-    /// What the queue, the live run and the logs draw in their bodies before
-    /// anything has happened; every other screen leaves its body blank until
-    /// its own task fills it in. The live run has its command and gate rows
-    /// only where the body is tall enough (see `screen::live`).
+    /// What the queue, the live run, the logs and the failures draw in their
+    /// bodies before anything has happened; every other screen leaves its body
+    /// blank until its own task fills it in. The live run has its command and
+    /// gate rows only where the body is tall enough (see `screen::live`).
     fn body_text(screen: Screen, size: (u16, u16)) -> Vec<(u16, &'static str)> {
         match screen {
             Screen::Queue => vec![(1, "No tasks queued.")],
@@ -254,6 +254,10 @@ mod tests {
                     "structured · level ≥ debug · phase - · search - · 0/0 following",
                 ),
                 (2, "No log entries"),
+            ],
+            Screen::Failures => vec![
+                (1, " circuit breaker: closed · no failures"),
+                (2, "No failures recorded."),
             ],
             _ => Vec::new(),
         }
