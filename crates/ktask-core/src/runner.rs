@@ -1,19 +1,181 @@
-//! `preflight`: proving the world is sane before spending tokens
-//! (`VISION.md` §6's `preflight` pipeline state).
+//! `preflight` and `Runner`: proving the world is sane before spending
+//! tokens, then opening the first attempt against it (`VISION.md` §6).
 //!
 //! The rest of the supervisor loop this module is named for arrives in
-//! later tasks; today it holds exactly the one entry point `preflight`
-//! needs.
+//! later tasks; today it holds `preflight` and `Runner`'s construction and
+//! `begin_attempt`, the entry points those tasks have needed so far.
 
 use std::collections::BTreeMap;
+use std::process;
 use std::time::Duration;
 
 use nix::sys::statvfs::statvfs;
+use time::OffsetDateTime;
 
 use crate::{
-    Config, EventKind, FailureClass, Gate, GateKind, Invocation, Journal, Outcome, Project,
-    Provider, Result, acquire, classify, fetch, head_sha, require_clean, run_gate,
+    AttemptId, AttemptRecord, Bus, Config, EventKind, FailureClass, Gate, GateKind, Invocation,
+    Journal, Outcome, Profile, Project, Provider, Recorder, Result, Task, TaskId, acquire, build,
+    classify, fetch, for_task, head_sha, load_for, profile_from, require_clean, run_gate,
+    write_evidence,
 };
+
+/// The supervisor for one project: everything an attempt runs against, held
+/// together so nothing that drives an attempt has to reassemble it from
+/// scratch.
+///
+/// Holds the effective [`Config`] a task's protocol and gates are resolved
+/// against, the [`Profile`] of gates [`Config`] implies, the [`Recorder`]
+/// through which every event this project's runs produce is journaled and
+/// published, and the [`Provider`] driving its agent.
+pub struct Runner {
+    /// The project this runner drives attempts against.
+    project: Project,
+    /// This project's effective configuration.
+    config: Config,
+    /// The verification profile `config` implies.
+    profile: Profile,
+    /// Where every event this runner produces is journaled and published.
+    recorder: Recorder,
+    /// The agent backend attempts are driven through.
+    provider: Box<dyn Provider>,
+}
+
+/// Manual, since [`Provider`] (unlike every other field here) does not
+/// itself implement [`std::fmt::Debug`]; `provider`'s name stands in for it.
+impl std::fmt::Debug for Runner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Runner")
+            .field("project", &self.project)
+            .field("config", &self.config)
+            .field("profile", &self.profile)
+            .field("recorder", &self.recorder)
+            .field("provider", &self.provider.name())
+            .finish()
+    }
+}
+
+impl Runner {
+    /// Builds a `Runner` for `project`.
+    ///
+    /// Opens `project`'s journal ([`Journal::open_for`]), loads its
+    /// effective configuration ([`load_for`]), and derives everything else
+    /// from that config alone: the gate profile ([`profile_from`]), the
+    /// provider it names ([`build`]), and a [`Bus`] sized to
+    /// `config.output_ring_lines` — the same capacity `docs/DESIGN.md`
+    /// documents for every subscriber's ring — wrapped with the journal into
+    /// a [`Recorder`] so nothing downstream can append to the journal
+    /// without also publishing, or vice versa.
+    ///
+    /// Nothing beyond `project` itself is required: no attempt, no task, no
+    /// live subscriber has to already exist. `project` must already be
+    /// registered ([`Project::register`]), since that is what creates its
+    /// state directory and journal in the first place.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Database`](crate::Error::Database) if `project`'s
+    /// journal cannot be opened, [`Error::Config`](crate::Error::Config) if
+    /// its configuration cannot be loaded, if the resulting profile has no
+    /// `verify_command`, or if `config.provider` cannot be built, and
+    /// whatever else [`load_for`] or [`build`] themselves return.
+    pub fn new(project: Project) -> Result<Runner> {
+        let journal = Journal::open_for(&project)?;
+        let config = load_for(&project)?;
+        let bus = Bus::new(usize::try_from(config.output_ring_lines).unwrap_or(usize::MAX));
+        let recorder = Recorder::new(journal, bus);
+        let profile = profile_from(&config)?;
+        let provider = build(&config)?;
+
+        Ok(Runner {
+            project,
+            config,
+            profile,
+            recorder,
+            provider,
+        })
+    }
+
+    /// Opens a new attempt at `task`.
+    ///
+    /// Resolves `task`'s protocol ([`for_task`]), reads `project.root`'s
+    /// current commit as the attempt's base SHA, and records
+    /// [`EventKind::AttemptStarted`] carrying that protocol's name, this
+    /// process's pid and the base SHA — then immediately persists the
+    /// attempt's evidence directory ([`write_evidence`]), so an attempt's
+    /// evidence exists from the moment it starts rather than only once it
+    /// ends (`VISION.md` §6).
+    ///
+    /// The returned [`AttemptId`] is one past the highest attempt already
+    /// recorded for `task` in the journal, or `1` if `task` has none yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Policy`](crate::Error::Policy) if `task`'s protocol
+    /// cannot be resolved, whatever [`head_sha`] returns if `project.root`'s
+    /// current commit cannot be read, and whatever [`Recorder::record`] or
+    /// [`write_evidence`] return on failure to persist.
+    pub fn begin_attempt(&mut self, task: &Task) -> Result<AttemptId> {
+        let attempt = next_attempt_id(&self.project, task.id)?;
+        let protocol = for_task(task, &self.config)?;
+        let base_sha = head_sha(&self.project.root)?;
+        let pid = process::id();
+
+        self.recorder.record(
+            Some(task.id),
+            EventKind::AttemptStarted {
+                attempt,
+                protocol: protocol.name.to_string(),
+                pid,
+                base_sha: base_sha.clone(),
+            },
+        )?;
+
+        let record = AttemptRecord {
+            id: attempt,
+            task: task.id,
+            started: OffsetDateTime::now_utc(),
+            ended: None,
+            model_configured: self.config.model.clone(),
+            model_reported: None,
+            session_id: None,
+            exit_reason: "in_progress".to_string(),
+            gates: Vec::new(),
+            usage: None,
+            base_sha,
+            candidate_sha: None,
+        };
+        write_evidence(&self.project, &record, "")?;
+
+        Ok(attempt)
+    }
+}
+
+/// The next [`AttemptId`] for `task`: one past the highest `attempt` any
+/// already-journaled [`EventKind::AttemptStarted`] names for it, or `1` if
+/// none has run yet.
+///
+/// Opens its own read of `project`'s journal rather than going through a
+/// [`Runner`]'s [`Recorder`], which exposes no way to read events back —
+/// the same read-only access [`crate::read_evidence`] already relies on for
+/// the same journal file.
+///
+/// # Errors
+///
+/// Returns whatever [`Journal::open_for`] or [`Journal::events_for`] return
+/// on failure to open or read the journal.
+fn next_attempt_id(project: &Project, task: TaskId) -> Result<AttemptId> {
+    let journal = Journal::open_for(project)?;
+    let last = journal
+        .events_for(task)?
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            EventKind::AttemptStarted { attempt, .. } => Some(attempt.get()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    Ok(AttemptId::new(last + 1))
+}
 
 /// One check in [`preflight`]'s fixed sequence: `Ok(())` when it passes, or
 /// the [`FailureClass`] and human-readable detail to report when it does
@@ -275,7 +437,7 @@ fn check_lock_acquirable(project: &Project) -> CheckResult {
 mod tests {
     use super::*;
     use crate::testing::scratch_repo;
-    use crate::{Bus, Capabilities, Error};
+    use crate::{Bus, Capabilities, Error, TaskStatus, project_config_path, read_evidence};
 
     /// A [`Provider`] whose `invoke` always succeeds, proving
     /// [`check_provider_available`] (and the full [`preflight`] happy path)
@@ -567,5 +729,171 @@ mod tests {
             .map(|event| event.kind.discriminant())
             .collect();
         assert_eq!(kinds, vec!["PreflightStarted", "PreflightFailed"]);
+    }
+
+    /// Writes a project config naming `"codex"` as the provider (which,
+    /// unlike the default `"dummy"`, needs no scenario file and never
+    /// touches a real binary until `Provider::invoke` is actually called)
+    /// and a trivial `verify_command`, the one gate [`profile_from`]
+    /// requires: together, the minimum a project's own config needs for
+    /// [`Runner::new`] to succeed without depending on any global config
+    /// file the machine running this test happens to have.
+    fn write_runnable_config(project: &Project) {
+        std::fs::write(
+            project_config_path(project),
+            "provider = \"codex\"\nverify_command = [\"true\"]\n",
+        )
+        .expect("write project config");
+    }
+
+    fn sample_task(id: u32) -> Task {
+        Task {
+            id: TaskId::new(id),
+            status: TaskStatus::Pending,
+            body: "Do the thing".to_string(),
+            outcome: "the thing is done".to_string(),
+            done_when: "it is done".to_string(),
+            verify: "true".to_string(),
+            refs: String::new(),
+            protocol: None,
+        }
+    }
+
+    #[test]
+    fn new_requires_nothing_but_a_registered_project() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        write_runnable_config(&project);
+
+        Runner::new(project).expect("a project with a runnable config must build a Runner");
+    }
+
+    #[test]
+    fn begin_attempt_records_exactly_one_attempt_started_event_carrying_pid_and_base_sha() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        write_runnable_config(&project);
+        let task = sample_task(1);
+
+        let mut runner = Runner::new(project.clone()).expect("build runner");
+        let attempt = runner.begin_attempt(&task).expect("begin_attempt");
+        assert_eq!(attempt, AttemptId::new(1));
+
+        let journal = Journal::open_for(&project).expect("open journal");
+        let events = journal.events_for(task.id).expect("events_for");
+        assert_eq!(events.len(), 1, "exactly one event must be journaled");
+
+        let kind = events[0].kind.clone();
+        let EventKind::AttemptStarted {
+            attempt: recorded_attempt,
+            protocol,
+            pid,
+            base_sha,
+        } = kind
+        else {
+            panic!("expected AttemptStarted, got {kind:?}");
+        };
+        assert_eq!(recorded_attempt, attempt);
+        assert_eq!(protocol, "direct");
+        assert_eq!(pid, process::id());
+        assert_eq!(base_sha, repo.seed_sha);
+    }
+
+    #[test]
+    fn begin_attempt_writes_evidence_from_the_moment_it_starts_not_only_once_it_ends() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        write_runnable_config(&project);
+        let task = sample_task(1);
+
+        let mut runner = Runner::new(project.clone()).expect("build runner");
+        let attempt = runner.begin_attempt(&task).expect("begin_attempt");
+
+        let evidence = read_evidence(&project, task.id).expect("read_evidence");
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].id, attempt);
+        assert_eq!(evidence[0].ended, None);
+        assert_eq!(evidence[0].base_sha, repo.seed_sha);
+    }
+
+    #[test]
+    fn begin_attempt_allocates_increasing_attempt_ids_across_retries() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        write_runnable_config(&project);
+        let task = sample_task(1);
+
+        let mut runner = Runner::new(project.clone()).expect("build runner");
+        let first = runner.begin_attempt(&task).expect("first attempt");
+        let second = runner.begin_attempt(&task).expect("second attempt");
+
+        assert_eq!(first, AttemptId::new(1));
+        assert_eq!(second, AttemptId::new(2));
+    }
+
+    #[test]
+    fn new_debug_formats_the_provider_by_name_rather_than_requiring_provider_to_implement_debug() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        write_runnable_config(&project);
+
+        let runner = Runner::new(project).expect("build runner");
+
+        let debugged = format!("{runner:?}");
+        assert!(debugged.contains("Runner"));
+        assert!(debugged.contains("codex"), "debugged was: {debugged}");
+    }
+
+    #[test]
+    fn next_attempt_id_ignores_task_events_that_are_not_attempt_started() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        write_runnable_config(&project);
+        let task = sample_task(1);
+
+        {
+            let mut journal = Journal::open_for(&project).expect("open journal");
+            journal
+                .append(
+                    Some(task.id),
+                    &EventKind::TaskQueued {
+                        title: "Add widget".to_string(),
+                    },
+                )
+                .expect("append an unrelated task event");
+        }
+
+        let next = next_attempt_id(&project, task.id).expect("next_attempt_id");
+        assert_eq!(
+            next,
+            AttemptId::new(1),
+            "a non-AttemptStarted event must not be mistaken for a prior attempt"
+        );
+    }
+
+    #[test]
+    fn begin_attempt_resolves_the_tdd_protocol_when_the_task_names_it() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        write_runnable_config(&project);
+        let mut task = sample_task(1);
+        task.protocol = Some("tdd".to_string());
+
+        let mut runner = Runner::new(project.clone()).expect("build runner");
+        runner.begin_attempt(&task).expect("begin_attempt");
+
+        let journal = Journal::open_for(&project).expect("open journal");
+        let events = journal.events_for(task.id).expect("events_for");
+        let EventKind::AttemptStarted { protocol, .. } = &events[0].kind else {
+            panic!("expected AttemptStarted, got {:?}", events[0].kind);
+        };
+        assert_eq!(protocol, "tdd");
     }
 }
