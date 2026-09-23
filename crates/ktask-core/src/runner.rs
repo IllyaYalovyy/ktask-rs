@@ -1364,6 +1364,50 @@ fn journaled_state(project: &Project, task: TaskId) -> Result<TaskState> {
         .try_fold(TaskState::Queued, |state, event| apply(&state, &event.kind))
 }
 
+/// How a run of the queue — or any single CLI command — concluded.
+///
+/// Every outcome `docs/CONTRACT.md` §1 documents has a variant here.
+/// Translating a variant into a process exit status is the CLI's job alone;
+/// nothing in this crate reasons about exit statuses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunOutcome {
+    /// The queue drained: every task reached a terminal state and none
+    /// failed.
+    Drained,
+    /// `task` failed after exhausting its remediation budget; the queue
+    /// never advances past it.
+    TaskFailed {
+        /// The task that failed.
+        task: TaskId,
+    },
+    /// The command could not even start: bad arguments, a malformed task
+    /// file, or no registered project.
+    Usage {
+        /// What was wrong.
+        detail: String,
+    },
+    /// A provider usage limit was hit; work is paused, not failed.
+    ProviderLimit {
+        /// When the limit is expected to lift, if the provider reported
+        /// one.
+        until: Option<OffsetDateTime>,
+    },
+    /// `task` is waiting at a human gate; `ktask-rs ack` clears it.
+    HumanGate {
+        /// The task waiting at the gate.
+        task: TaskId,
+    },
+    /// `task` is waiting on an answered decision; `ktask-rs resolve` clears
+    /// it.
+    NeedsInput {
+        /// The task waiting on the decision.
+        task: TaskId,
+    },
+    /// The run was interrupted (for example by SIGINT); state is durable
+    /// and the same run resumes from where it left off.
+    Interrupted,
+}
+
 /// One check in [`preflight`]'s fixed sequence: `Ok(())` when it passes, or
 /// the [`FailureClass`] and human-readable detail to report when it does
 /// not.
@@ -1918,6 +1962,91 @@ mod tests {
 
         assert_eq!(class, FailureClass::EnvironmentFailure);
         assert!(!detail.is_empty());
+    }
+
+    fn all_outcomes() -> Vec<RunOutcome> {
+        vec![
+            RunOutcome::Drained,
+            RunOutcome::TaskFailed {
+                task: TaskId::new(1),
+            },
+            RunOutcome::Usage {
+                detail: "no registered project".to_string(),
+            },
+            RunOutcome::ProviderLimit {
+                until: Some(OffsetDateTime::UNIX_EPOCH),
+            },
+            RunOutcome::HumanGate {
+                task: TaskId::new(1),
+            },
+            RunOutcome::NeedsInput {
+                task: TaskId::new(1),
+            },
+            RunOutcome::Interrupted,
+        ]
+    }
+
+    #[test]
+    fn outcome_has_exactly_seven_variants() {
+        let variants = all_outcomes();
+        assert_eq!(variants.len(), 7);
+
+        // Exhaustive, wildcard-free match: a variant added to `RunOutcome`
+        // without being listed here fails to compile instead of silently
+        // passing untested.
+        for outcome in &variants {
+            match outcome {
+                RunOutcome::Drained
+                | RunOutcome::TaskFailed { .. }
+                | RunOutcome::Usage { .. }
+                | RunOutcome::ProviderLimit { .. }
+                | RunOutcome::HumanGate { .. }
+                | RunOutcome::NeedsInput { .. }
+                | RunOutcome::Interrupted => {}
+            }
+        }
+    }
+
+    #[test]
+    fn outcome_provider_limit_carries_no_deadline_when_the_provider_reported_none() {
+        let outcome = RunOutcome::ProviderLimit { until: None };
+
+        assert_eq!(outcome, RunOutcome::ProviderLimit { until: None });
+        assert_ne!(
+            outcome,
+            RunOutcome::ProviderLimit {
+                until: Some(OffsetDateTime::UNIX_EPOCH)
+            }
+        );
+    }
+
+    #[test]
+    fn outcome_task_failed_and_human_gate_and_needs_input_each_name_their_task() {
+        assert_eq!(
+            RunOutcome::TaskFailed {
+                task: TaskId::new(3)
+            },
+            RunOutcome::TaskFailed {
+                task: TaskId::new(3)
+            }
+        );
+        assert_ne!(
+            RunOutcome::TaskFailed {
+                task: TaskId::new(3)
+            },
+            RunOutcome::TaskFailed {
+                task: TaskId::new(4)
+            }
+        );
+        assert_ne!(
+            RunOutcome::HumanGate {
+                task: TaskId::new(3)
+            },
+            RunOutcome::NeedsInput {
+                task: TaskId::new(3)
+            },
+            "a human gate and a needs-input pause on the same task are distinct outcomes"
+        );
     }
 
     #[test]
