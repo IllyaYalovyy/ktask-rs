@@ -30,6 +30,7 @@ use crate::sanitize::{Utf8Stream, sanitize};
 use crate::text::{display_width, truncate_to_width};
 use ktask_core::{AttemptId, Event, EventKind, GateKind, GateResult, Phase, Stream, TaskId};
 use ratatui::Frame;
+use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -372,15 +373,8 @@ pub fn render(app: &App, plan: &LayoutPlan, frame: &mut Frame<'_>) {
     } else {
         1
     };
-    let meta_area = ratatui::layout::Rect {
-        height: meta_rows,
-        ..body
-    };
-    let output_area = ratatui::layout::Rect {
-        y: body.y + meta_rows,
-        height: body.height - meta_rows,
-        ..body
-    };
+    let [meta_area, output_area] =
+        Layout::vertical([Constraint::Length(meta_rows), Constraint::Fill(1)]).areas(body);
     let mut meta = vec![
         status_line(&app.live, width),
         command_line(&app.live, width),
@@ -804,6 +798,21 @@ mod tests {
         assert!(gates.contains("verify passed 1.2s"), "{gates}");
         assert!(!gates.contains("format"), "{gates}");
         assert!(display_width(&gates) <= 40);
+    }
+
+    #[test]
+    fn live_gates_that_exactly_fill_the_row_are_all_shown_with_a_gap_between() {
+        // "gates: " + "lint passed 1.2s" + two spaces + "verify passed 1.2s".
+        let mut harness = live_harness(43, 24);
+        harness.send(started(7));
+        harness.send(gate_finished(GateKind::Lint, true, Some(0)));
+        harness.send(gate_finished(GateKind::Verify, true, Some(0)));
+        assert_eq!(
+            rows(&harness)[3],
+            "gates: lint passed 1.2s  verify passed 1.2s"
+        );
+        harness.send(AppEvent::Resize(42, 24));
+        assert_eq!(rows(&harness)[3].trim_end(), "gates: verify passed 1.2s");
     }
 
     #[test]
