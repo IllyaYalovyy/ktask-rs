@@ -711,6 +711,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "ktask-core",
+ "ktask-tui",
  "serde",
  "serde_json",
  "tempfile",

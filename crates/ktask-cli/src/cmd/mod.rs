@@ -7,12 +7,10 @@
 //! unit). `init` (T108), `doctor` (T110), `status` (T111), `add` (T112),
 //! `plan lint` (T113), `run` (T115), `resume` and `retry` (T116),
 //! `resolve` and `ack` (T117), `pause`, `interrupt` and `cancel` (T119) and
-//! `rerun-gate` (T120) have their real behavior; `run` and `resume` also
-//! reconcile the journal on startup (T118); the one module left still only
-//! returns [`RunOutcome::Drained`] as a placeholder for later, per-command
-//! work: T131 (tui). What this module is responsible for is that
-//! [`dispatch`] itself is real: the
-//! match below is exhaustive, so a `Command` variant added without a
+//! `rerun-gate` (T120) and `tui` (T131) have their real behavior; `run` and
+//! `resume` also reconcile the journal on startup (T118). What this module
+//! is responsible for is that [`dispatch`] itself is real: the match below
+//! is exhaustive, so a `Command` variant added without a
 //! corresponding arm fails to compile instead of silently falling through
 //! to a default.
 
@@ -163,13 +161,16 @@ mod tests {
                 continue;
             }
 
-            // `add` (T112) and `run` (T115) have real behavior too: the
-            // fixture's `--file` names a path that does not exist, so
-            // reading it fails before `add` ever touches the journal, and
+            // `add` (T112), `run` (T115) and `tui` (T131) have real behavior
+            // too: the fixture's `--file` names a path that does not exist,
+            // so reading it fails before `add` ever touches the journal,
             // `run` cannot build a runner over a state directory that does
-            // not exist. Both reach `RunOutcome::Usage` rather than the
-            // placeholder `Drained`.
-            if matches!(command, Command::Add { .. } | Command::Run { .. }) {
+            // not exist, and `tui` refuses because the test's stdout is not
+            // a terminal. All three reach `RunOutcome::Usage`.
+            if matches!(
+                command,
+                Command::Add { .. } | Command::Run { .. } | Command::Tui
+            ) {
                 assert!(
                     matches!(outcome, RunOutcome::Usage { .. }),
                     "{command:?} did not reach its cmd:: module's real behavior: {outcome:?}"
