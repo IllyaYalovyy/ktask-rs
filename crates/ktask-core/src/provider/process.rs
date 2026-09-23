@@ -17,7 +17,7 @@
 //! the same problem: a subprocess this crate does not control the internals
 //! of must still be fully reapable on a budget.
 
-use std::io::{BufRead, BufReader, Read, Write as _};
+use std::io::{self, BufRead, BufReader, Read, Write as _};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
@@ -35,6 +35,32 @@ const POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// group has been signalled, before the run gives up on them and reports
 /// what it has. Matches [`crate::gate`]'s own grace window.
 const KILL_GRACE: Duration = Duration::from_secs(2);
+
+/// How long [`spawn_retrying_busy`] keeps retrying an `ExecutableFileBusy`
+/// spawn before giving up and surfacing the error.
+const BUSY_RETRY_WINDOW: Duration = Duration::from_millis(200);
+
+/// How long [`spawn_retrying_busy`] waits between retries.
+const BUSY_RETRY_INTERVAL: Duration = Duration::from_millis(5);
+
+/// Spawns `cmd`, retrying for up to [`BUSY_RETRY_WINDOW`] if the kernel
+/// reports `ExecutableFileBusy` — a transient condition where the target is
+/// still open for writing elsewhere (another writer racing the exec, an
+/// antivirus scan, a filesystem finishing a delayed close) rather than a
+/// real failure to run the command.
+fn spawn_retrying_busy(cmd: &mut Command) -> io::Result<Child> {
+    let deadline = Instant::now() + BUSY_RETRY_WINDOW;
+    loop {
+        match cmd.spawn() {
+            Err(err)
+                if err.kind() == io::ErrorKind::ExecutableFileBusy && Instant::now() < deadline =>
+            {
+                thread::sleep(BUSY_RETRY_INTERVAL);
+            }
+            result => return result,
+        }
+    }
+}
 
 /// One chunk of output read from the child's stdout or stderr, tagged with
 /// the pipe it arrived on.
@@ -183,8 +209,7 @@ pub fn run_streaming(
     .stderr(Stdio::piped());
     new_process_group(cmd);
 
-    let mut child = cmd
-        .spawn()
+    let mut child = spawn_retrying_busy(cmd)
         .map_err(|err| provider_error(format!("could not start `{program}`: {err}")))?;
     let started = Instant::now();
 
@@ -491,6 +516,47 @@ mod tests {
             !alive(grandchild_pid),
             "grandchild pid {grandchild_pid} outlived the process group it was part of"
         );
+    }
+
+    #[test]
+    fn a_transient_executable_file_busy_is_retried_until_the_writer_closes() {
+        // The kernel refuses to exec a file that is still open for writing
+        // by anyone (execve(2): ETXTBSY) — deterministic, not a race. That
+        // models what a real writer racing this spawn (or a filesystem
+        // finishing a delayed close) looks like from here: the first
+        // `spawn` must fail, and `spawn_retrying_busy` must succeed once
+        // the writer goes away.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("busy.sh");
+        fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write script");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&path).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&path, perms).expect("chmod script");
+        }
+
+        let held_open = fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open script for writing");
+        assert_eq!(
+            Command::new(&path).spawn().unwrap_err().kind(),
+            io::ErrorKind::ExecutableFileBusy,
+            "a plain spawn must fail while the script is still open for writing"
+        );
+
+        let releaser = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            drop(held_open);
+        });
+
+        let mut child = spawn_retrying_busy(&mut Command::new(&path))
+            .expect("spawn_retrying_busy must retry past the transient busy error");
+        let status = child.wait().expect("wait for retried child");
+        releaser.join().expect("releaser thread");
+
+        assert!(status.success());
     }
 
     #[test]
