@@ -6,6 +6,7 @@
 mod attempt;
 mod classify;
 mod config;
+mod context;
 mod error;
 mod event;
 mod events;
@@ -32,6 +33,7 @@ pub use classify::{
     wait_plan,
 };
 pub use config::{Config, Resolved, Source, load_for};
+pub use context::assemble;
 pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use events::{Bus, Recorder, Subscription};
