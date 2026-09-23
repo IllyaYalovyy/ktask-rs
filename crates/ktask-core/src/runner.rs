@@ -165,7 +165,7 @@ use std::fs::{self, OpenOptions, Permissions};
 use std::io::{self, Write as _};
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nix::sys::statvfs;
 use serde::Serialize;
@@ -178,12 +178,14 @@ use crate::lock;
 use crate::protocol;
 use crate::provider;
 use crate::redact::redact_json;
+use crate::remediate::{Bounds, Breaker, BreakerState, Decision, RecoveryReport};
 use crate::{
     AttemptId, AttemptRecord, Bus, Capabilities, Config, Error, EventKind, FailureClass, Gate,
-    GateKind, GateResult, Invocation, Journal, Phase, PhaseSpec, Profile, Project, Provider,
-    Recorder, ReportClaim, ReportResult, Result, Stream, Subscription, Task, TaskId, TaskState,
-    TestSummary, apply, evidence_dir, parse_cargo, profile_from, run_completion_set, run_gate,
-    write_evidence,
+    GateKind, GateResult, Invocation, Journal, Outcome, Phase, PhaseSpec, Profile, Project,
+    Provider, Recorder, ReportClaim, ReportResult, Result, Stream, Subscription, Task, TaskId,
+    TaskState, TestSummary, Usage, apply, bundle, check_no_policy_edit, classify, evidence_dir,
+    file_report, parse_cargo, policy_edit_event, profile_from, read_evidence, run_completion_set,
+    run_gate, should_continue, signature, trip_event, write_evidence,
 };
 use crate::{context, queue};
 
@@ -592,6 +594,48 @@ impl Runner {
         attempt: AttemptId,
         spec: &PhaseSpec,
     ) -> Result<PhaseOutcome> {
+        let mut under = UnderAttempt::alone(prep, attempt);
+        self.run_the_session(env, &mut under, task, spec)
+    }
+
+    /// The session one phase of a run is, and everything it leaves behind for the
+    /// refusal it may earn.
+    ///
+    /// [`Runner::run_phase`] is the door a caller outside a run comes through; this is
+    /// what a run itself calls. The difference is not the order of the rows — those are
+    /// the same and for the same reasons — it is that a refusal has to be *classifiable*
+    /// after the attempt stopped, and [`classify()`] reads an [`Outcome`] and a set of
+    /// [`GateResult`] that nothing on disk holds. So the session's own answer is kept as
+    /// soon as the provider gave it, before anything that could refuse the phase.
+    ///
+    /// Two things happen here that a first attempt never sees, and both are §7's rather
+    /// than §9's:
+    ///
+    /// - The prompt of an attempt that *is* a remediation carries the bundle its
+    ///   refusal produced, under a heading that says whose account of the refusal it
+    ///   is. [`context::build_prompt`] is left alone (ADR-0075) — the documents it
+    ///   assembles are the same ones a first attempt was handed — and the [`Invocation`]
+    ///   carries no session id, because §7's repair is a new session told what the last
+    ///   one was refused for, not the old one resumed.
+    /// - Every attempt's changed paths are asked [`check_no_policy_edit`] before its
+    ///   write scope is, including a first attempt's. An attempt that edited the rules
+    ///   it is judged by is refused before anything is measured against the edited rule,
+    ///   and the paths it touched travel out with the refusal so the row that ends the
+    ///   task can name them.
+    ///
+    /// # Errors
+    ///
+    /// As [`Runner::run_phase`], plus [`Error::Policy`] naming every protected path the
+    /// session touched.
+    fn run_the_session(
+        &mut self,
+        env: &dyn Fn(&str) -> Option<String>,
+        under: &mut UnderAttempt<'_>,
+        task: &Task,
+        spec: &PhaseSpec,
+    ) -> Result<PhaseOutcome> {
+        let attempt = under.attempt;
+        let prep = under.ground;
         let work = Some(task.id);
         self.recorder.record(
             work,
@@ -600,13 +644,16 @@ impl Runner {
                 phase: spec.phase,
             },
         )?;
-        let prompt = context::build_prompt_with(
+        let mut prompt = context::build_prompt_with(
             env,
             &self.project,
             task,
             attempt,
             queue::load(&self.project)?.len(),
         )?;
+        if let Some(repair) = under.repair {
+            repair.seed(&mut prompt);
+        }
         self.prepare_report(task.id, attempt)?;
         let outcome = self.provider.invoke(
             &Invocation {
@@ -616,6 +663,7 @@ impl Runner {
             },
             None,
         )?;
+        under.seen.session = Some(outcome.clone());
         provider::check_model(
             self.config.model.as_deref(),
             outcome.model_reported.as_deref(),
@@ -647,6 +695,12 @@ impl Runner {
         )?;
         let claim = self.read_report(task.id, attempt)?;
         let changed = git::changed_paths(&prep.worktree, &prep.base_sha)?;
+        if let Err(refusal) = check_no_policy_edit(&changed) {
+            if let Error::Policy { paths, .. } = &refusal {
+                under.seen.policy_edit.clone_from(paths);
+            }
+            return Err(refusal);
+        }
         protocol::check_scope(spec.write_scope, &changed, &self.config.test_globs)?;
         Ok(match claim {
             ReportClaim::Claimed {
@@ -722,17 +776,37 @@ impl Runner {
         spec: &PhaseSpec,
         before: Option<&TestSummary>,
     ) -> Result<TestSummary> {
+        let mut under = UnderAttempt::alone(prep, attempt);
+        self.gate_the_phase(&mut under, task, spec, before)
+    }
+
+    /// [`Runner::gate_phase`] for a phase a run is working, which is the case where
+    /// the gate's answer has to outlive the step that ran it.
+    ///
+    /// The [`GateResult`] is kept whatever the verdict then was. §7's failure signature
+    /// and the class a remediation is chosen by are both read from the gates that
+    /// refused, and a phase refused by its gate is precisely the attempt that earns the
+    /// repair — leaving the result behind on that path would classify the commonest
+    /// failure from an empty list.
+    fn gate_the_phase(
+        &mut self,
+        under: &mut UnderAttempt<'_>,
+        task: &Task,
+        spec: &PhaseSpec,
+        before: Option<&TestSummary>,
+    ) -> Result<TestSummary> {
         let Some(kind) = spec.gate else {
             return Err(no_gate_declared(spec.phase));
         };
         let way = comparison(spec.phase, before)?;
         if let Comparison::Red(prior) = way
-            && let Some(skipped) = self.excused_red(prep, task, spec, prior)?
+            && let Some(skipped) = self.excused_red(under.ground, task, spec, prior)?
         {
             return Ok(skipped);
         }
         let gate = self.configured_gate(kind)?;
-        let result = self.run_declared_gate(task.id, &gate, &prep.worktree)?;
+        let result = self.run_declared_gate(task.id, &gate, &under.ground.worktree)?;
+        under.seen.gates.push(result.clone());
         let summary = test_report(&result).ok_or_else(|| no_test_report(&gate, &result))?;
         let verdict = phase_verdict(way, &gate, &result, &summary);
         let named = verdict.as_ref().cloned().unwrap_or_default();
@@ -742,7 +816,7 @@ impl Runner {
                 result: &result,
                 named: &named,
             };
-            self.file_phase_evidence(prep, task.id, attempt, spec.phase, &run)
+            self.file_phase_evidence(under.ground, task.id, under.attempt, spec.phase, &run)
         } else {
             Ok(())
         };
@@ -975,13 +1049,27 @@ impl Runner {
         task: &Task,
         attempt: AttemptId,
     ) -> Result<String> {
+        let mut under = UnderAttempt::alone(prep, attempt);
+        self.publish_the_attempt(&mut under, task)
+    }
+
+    /// [`Runner::verify_and_publish`] for the attempt a run is working, which is the
+    /// attempt a refusal here has to be explained for.
+    ///
+    /// The completion set's results are kept whatever the set decided, passing gates
+    /// included. §7's "after any remediation, every completion gate reruns from
+    /// scratch" is worth nothing if the rerun is believed on the strength of a name:
+    /// what the remediation's own account says is which gates ran again in this attempt
+    /// and how each came back, and a signature that counted a gate which passed would
+    /// stop two identical refusals from looking identical.
+    fn publish_the_attempt(&mut self, under: &mut UnderAttempt<'_>, task: &Task) -> Result<String> {
+        let prep = under.ground;
+        let attempt = under.attempt;
         let candidate = self.commit_candidate(prep, task, attempt)?;
-        self.verify_completion(prep, task, attempt, VerdictRow::Append)?;
+        self.verify_completion(under, task, VerdictRow::Append)?;
         match self.offer(prep, task, attempt, &candidate) {
             Ok(published) => Ok(published),
-            Err(refusal) if is_push_refusal(&refusal) => {
-                self.republish_after_rebase(prep, task, attempt)
-            }
+            Err(refusal) if is_push_refusal(&refusal) => self.republish_after_rebase(under, task),
             Err(refusal) => Err(refusal),
         }
     }
@@ -1027,17 +1115,19 @@ impl Runner {
     /// journal stands in would refuse that row, which is what `verdict` says.
     fn verify_completion(
         &mut self,
-        prep: &Prepared,
+        under: &mut UnderAttempt<'_>,
         task: &Task,
-        attempt: AttemptId,
         verdict: VerdictRow,
     ) -> Result<()> {
+        let prep = under.ground;
+        let attempt = under.attempt;
         let results = run_completion_set(
             &self.profile,
             &prep.worktree,
             &prep.base_sha,
             Some(&mut self.recorder),
         )?;
+        under.seen.gates.extend(results.iter().cloned());
         if let Some(refused) = completion_refusal(&self.profile, &results) {
             if verdict == VerdictRow::Append {
                 self.verdict(task.id, attempt, refused.class, &refused.detail)?;
@@ -1109,17 +1199,18 @@ impl Runner {
     /// record there is and the dangling gate pair is the hole a reader sees.
     fn republish_after_rebase(
         &mut self,
-        prep: &Prepared,
+        under: &mut UnderAttempt<'_>,
         task: &Task,
-        attempt: AttemptId,
     ) -> Result<String> {
+        let prep = under.ground;
+        let attempt = under.attempt;
         let replayed = match self.rebase(prep)? {
             git::RebaseOutcome::Applied { new_sha } => new_sha,
             git::RebaseOutcome::Conflict { paths } => {
                 return self.stop_on_conflict(task, &paths);
             }
         };
-        self.verify_completion(prep, task, attempt, VerdictRow::Withhold)?;
+        self.verify_completion(under, task, VerdictRow::Withhold)?;
         self.offer(prep, task, attempt, &replayed)
     }
 
@@ -1290,10 +1381,15 @@ impl Runner {
     /// ways that end in a refusal, and one case keeps the checkout rather than removing
     /// it: the checkout whose tree still holds work.
     ///
-    /// What is *not* here: the remediation a refusal earns (§7), the pause a
-    /// `NEEDS_INPUT` asks for (§3's eighth invariant), and the attempt's own record
-    /// being closed over what its phases did. Those are the tasks after this one, and
-    /// each of them arrives at a journal this one leaves in a state recovery can read.
+    /// What a refusal earns is §7's one repair, and it is held in
+    /// `Runner::work_the_attempts` rather than here: this step's job is to give back
+    /// what the run was holding whatever the attempts did, and the loop's job is to
+    /// decide whether there is another attempt to give it back after.
+    ///
+    /// What is *not* here: the pause a `NEEDS_INPUT` asks for (§3's eighth invariant),
+    /// and the attempt's own record being closed over what its phases did. Those are the
+    /// tasks after this one, and each of them arrives at a journal this one leaves in a
+    /// state recovery can read.
     ///
     /// # Errors
     ///
@@ -1323,7 +1419,7 @@ impl Runner {
         task: &Task,
     ) -> Result<TaskState> {
         let ground = self.prepare(task)?;
-        match self.work_the_phases(env, task, &ground) {
+        match self.work_the_attempts(env, task, &ground) {
             Ok(state) => {
                 self.clear_ground(ground)?;
                 Ok(state)
@@ -1340,32 +1436,339 @@ impl Runner {
         }
     }
 
-    /// Work the phases the task's protocol declares, then the ending.
+    /// Work the task's attempts until one of them finishes it or §7's bounds are spent.
     ///
-    /// The order is the protocol's own, and the two completion phases are where it
-    /// stops being a list of sessions: they are the last two entries of every protocol
-    /// ([`protocol::for_task`]'s own checks insist on it), so leaving the loop at the
-    /// first of them is leaving the work phases behind, not skipping one.
+    /// One loop holds both halves of §7 because neither means anything alone: the
+    /// refusal decides what the next session is told, and the bounds decide whether
+    /// there is a next session at all. Within it the steps are in the order §7 gives
+    /// them — attempt, refusal, classification, bundle, bounds and breaker, fresh
+    /// attempt — and the last of them is this task's whole outcome: a session that never
+    /// existed before, launched in the checkout the refused attempt left, carrying that
+    /// attempt's evidence in its prompt and no session id of any kind.
     ///
-    /// The [`TestSummary`] carried between phases is the summary the previous phase's
-    /// gate reached, which is the half of §9's comparison that a phase cannot produce
-    /// for itself; [`Runner::gate_baseline`] supplies the other half, for the phases
-    /// that need one and no others.
-    fn work_the_phases(
+    /// What carries across the loop is exactly what §7 says to preserve, and it is
+    /// carried by the [`Prepared`] rather than by anything re-derived: the same worktree,
+    /// the same lock, and the attempt records each attempt filed in a directory of its
+    /// own, which [`read_evidence`] reads back off disk for the next bundle. What does
+    /// *not* carry is anything the refused attempt measured: the [`UnderAttempt`] and the
+    /// [`Witness`] inside it are built afresh every iteration, which is how "no cached
+    /// gate result survives into the second attempt" is true by construction rather than
+    /// by a call that clears something and can be forgotten.
+    fn work_the_attempts(
         &mut self,
         env: &dyn Fn(&str) -> Option<String>,
         task: &Task,
         ground: &Prepared,
     ) -> Result<TaskState> {
-        let attempt = self.begin_attempt(task)?;
+        let mut repair: Option<Remediation> = None;
+        let mut budget = self.budget();
+        loop {
+            let attempt = self.begin_attempt(task)?;
+            let mut under = UnderAttempt::new(ground, repair.as_ref(), attempt);
+            match self.work_the_attempt(env, task, &mut under) {
+                Ok(state) => return Ok(state),
+                Err(refusal) => {
+                    repair =
+                        Some(self.answer_the_refusal(task, &mut under, refusal, &mut budget)?);
+                }
+            }
+        }
+    }
+
+    /// The budget one run's remediations are held to, from its own configuration.
+    ///
+    /// §7 bounds remediation by attempts, elapsed time and tokens. Two of the three
+    /// come straight out of [`Config`]; the third is derived, and ADR-0092 records
+    /// both the mapping and the derivation:
+    ///
+    /// - **Attempts** come from [`Config::max_remediation_attempts`], the ceiling on
+    ///   how many *repairs* a task may have. [`Config::max_attempts`] counts a
+    ///   different thing — every attempt a task makes, its first one included — and
+    ///   [`should_continue`] compares a counter of refusals against a ceiling on
+    ///   repairs, so handing it the total would let a project with `max_attempts = 2`
+    ///   and `max_remediation_attempts = 1` have two repairs while its own settings
+    ///   said one.
+    /// - **Elapsed time** has no setting of its own. One session is bounded by
+    ///   [`Config::attempt_timeout_secs`] and one task's sessions by
+    ///   [`Config::max_attempts`], so their product is the window this configuration
+    ///   has already said it will spend on one task. Past that the run is waiting for
+    ///   something its own settings do not contemplate, which is the only thing a
+    ///   derived bound has earned the right to stop.
+    /// - **Tokens** are unbounded, and said out loud rather than left implicit:
+    ///   `Config` holds no token ceiling, and [`Bounds::max_tokens`] exists precisely
+    ///   so a bound that cannot be measured stops nothing. The spend is still counted
+    ///   ([`Budget::spend`]), so the day the configuration grows a ceiling the figure
+    ///   it compares against is already being gathered.
+    ///
+    /// The breaker takes [`Config::circuit_breaker_threshold`] whole. It counts one
+    /// signature rather than every refusal, and one run of one task is where a
+    /// signature has the chance to repeat.
+    fn budget(&self) -> Budget {
+        Budget {
+            bounds: Bounds {
+                max_attempts: self.config.max_remediation_attempts,
+                max_elapsed: whole_seconds(
+                    self.config
+                        .attempt_timeout_secs
+                        .saturating_mul(u64::from(self.config.max_attempts)),
+                ),
+                max_tokens: None,
+            },
+            breaker: Breaker::new(self.config.circuit_breaker_threshold),
+            refused: 0,
+            tokens: 0,
+            started: Instant::now(),
+        }
+    }
+
+    /// Answer a refused attempt the way §7 answers one: classify, then bound, then
+    /// break, then bundle — and only then let a fresh session be started.
+    ///
+    /// Six steps, and every one of them is in this order for a reason a rerun can
+    /// check:
+    ///
+    /// 1. **A protected path is looked at before a single bound is spent.** An
+    ///    attempt that edited `clippy.toml` or `scripts/` rewrote the examination it
+    ///    is about to pass (VISION.md §3's fifth invariant), and the row that ends
+    ///    the task has to name the file. Spending the bounds first would journal
+    ///    `attempts 1 past the 1 bound` over a refusal whose cause is a forbidden
+    ///    path: the row would be true about the counter and useless to whoever reads
+    ///    it.
+    /// 2. **Everything else is classified**, including a session that never ran —
+    ///    §7's first sentence carries no exception for a provider that could not be
+    ///    reached, and [`Witness::as_a_session`] is how that case is asked at all.
+    /// 3. **The classes that may not loop are handed straight back.** §7 names
+    ///    [`FailureClass::ProviderConfiguration`] and [`FailureClass::NeedsInput`] as
+    ///    the ones that "pause for the human immediately", and a pause is not a
+    ///    failure: the refusal returns with **no row added**, because the journal is
+    ///    what a screen reads the pause from and a `TaskFailed` invented here would
+    ///    be read as a task that was refused rather than one that asked. A recovery
+    ///    that stopped this way still accounts for itself, because it did try a
+    ///    session. [`FailureClass::GitConflict`] is handed back for a different
+    ///    reason and files nothing: [`Runner::stop_on_conflict`] has already journalled
+    ///    the [`EventKind::TaskFailed`] that ends the task, and an account after that
+    ///    row is one the machine has no state to hold.
+    /// 4. **The bounds are spent and then consulted.** The refusal is charged whether
+    ///    or not it had a session, and the run stops at the bound that says so.
+    /// 5. **The breaker is consulted on the signature**, so two different failures
+    ///    spend two counts and one failure twice spends one ([`signature`]).
+    /// 6. **The bundle is gathered last, from disk.** [`read_evidence`] is asked here
+    ///    rather than at the top of the step precisely because the next
+    ///    [`Runner::begin_attempt`] files a record of its own: the bundle has to say
+    ///    how many attempts *there were*, and a bundle that counted the repair it is
+    ///    about to launch is off by one in the one line a session reads first.
+    ///
+    /// A refusal anywhere in step six is a fault of the run's own — evidence it could
+    /// not read, a tree it could not diff — and comes back as it came. It is not
+    /// classified and not repaired: a supervisor that retried its own inability to
+    /// read the journal would be spending the budget it is out of.
+    fn answer_the_refusal(
+        &mut self,
+        task: &Task,
+        under: &mut UnderAttempt<'_>,
+        refusal: Error,
+        budget: &mut Budget,
+    ) -> Result<Remediation> {
+        if !under.seen.policy_edit.is_empty() {
+            return self.end_for_policy_edit(task.id, under, refusal);
+        }
+        let session = under.seen.as_a_session();
+        let class = classify(&session, &under.seen.gates, Some(&refusal));
+        if never_looped(class) {
+            if class != FailureClass::GitConflict {
+                self.file_the_account(task.id, under, PAUSED_ACCOUNT)?;
+            }
+            return Err(refusal);
+        }
+        budget.spend(under.seen.session.as_ref());
+        if let Decision::Stop(bound) = budget.consult() {
+            let detail = bound.to_string();
+            return self.end_for_a_spent_bound(task.id, under, refusal, class, &detail);
+        }
+        let key = signature(class, &under.seen.gates);
+        if let BreakerState::Tripped { signature, seen } = budget.breaker.record(&key) {
+            return self.end_for_the_breaker(task.id, under, refusal, class, &signature, seen);
+        }
+        self.bundle_the_repair(task, under, class)
+    }
+
+    /// End the task whose attempt edited the rules it is judged by.
+    ///
+    /// Three things in an order that cannot be reordered. The account comes first:
+    /// §7 owes one to every recovery, and [`crate::TaskState::Remediating`] admits
+    /// its row only while the attempt is a repair — after the row that ends the task
+    /// the state is `Failed`, which admits nothing at all. Then the ending, naming
+    /// the offending paths and not the whole diff, because whoever reads this row is
+    /// being sent to the files that broke the rule. Then the refusal unchanged:
+    /// whoever asked for the run is owed the error the attempt actually earned, and
+    /// that error already lists the paths.
+    fn end_for_policy_edit(
+        &mut self,
+        work: TaskId,
+        under: &mut UnderAttempt<'_>,
+        refusal: Error,
+    ) -> Result<Remediation> {
+        let paths = under.seen.policy_edit.clone();
+        self.file_the_account(work, under, PROTECTED_PATH_ACCOUNT)?;
+        self.recorder
+            .record(Some(work), policy_edit_event(&paths))?;
+        Err(refusal)
+    }
+
+    /// End the task whose remediation spent one of §7's bounds.
+    ///
+    /// The bound's own words are the row's detail and the account's outcome — one
+    /// sentence, in the two places a reader looks for it, with no paraphrase free to
+    /// drift from the figure that stopped the run.
+    fn end_for_a_spent_bound(
+        &mut self,
+        work: TaskId,
+        under: &mut UnderAttempt<'_>,
+        refusal: Error,
+        class: FailureClass,
+        detail: &str,
+    ) -> Result<Remediation> {
+        self.file_the_account(work, under, detail)?;
+        self.recorder.record(
+            Some(work),
+            EventKind::TaskFailed {
+                class,
+                detail: detail.to_owned(),
+            },
+        )?;
+        Err(refusal)
+    }
+
+    /// End the task whose failure signature repeated past the breaker's threshold.
+    ///
+    /// [`trip_event`] is the row §7's trip leaves, and it is the row the machine
+    /// already answers — `TaskFailed`, from `Remediating` as from `Running` — so
+    /// nothing here invents a state for a tripped breaker to park in. The account
+    /// still comes first: a trip is the *end* of a recovery, and an end without the
+    /// account of what was tried is the half-record §7's report exists to prevent.
+    fn end_for_the_breaker(
+        &mut self,
+        work: TaskId,
+        under: &mut UnderAttempt<'_>,
+        refusal: Error,
+        class: FailureClass,
+        signature: &str,
+        seen: u32,
+    ) -> Result<Remediation> {
+        self.file_the_account(work, under, BREAKER_ACCOUNT)?;
+        self.recorder
+            .record(Some(work), trip_event(class, signature, seen))?;
+        Err(refusal)
+    }
+
+    /// Gather what the next session is told, and name what it is being told.
+    ///
+    /// Four sources, and three of them are read off disk rather than remembered:
+    /// [`read_evidence`] for the attempts that came before, [`git::diff_summary`] for
+    /// what this attempt changed against the base it started from, and [`Witness`]
+    /// for the gates that ran. [`bundle`] assembles them, because the ceiling
+    /// [`Config::failure_bundle_bytes`] sets and the order in which evidence is shed
+    /// to meet it are decisions about *evidence*, and a runner that trimmed its own
+    /// bundle would be a run that chose which of its findings mattered.
+    ///
+    /// # What is deliberately absent
+    ///
+    /// No session id, in any spelling. [`Remediation`] has no field that could hold
+    /// one and [`Invocation`] no field that could carry one to an adapter, so §7's
+    /// "session resume is never relied on" is not a rule this step has to remember:
+    /// the repair is a new session told what the last one was refused for, and the
+    /// only path from one attempt's identity to the next would be a field somebody
+    /// added later, under a test that would then fail.
+    fn bundle_the_repair(
+        &self,
+        task: &Task,
+        under: &UnderAttempt<'_>,
+        class: FailureClass,
+    ) -> Result<Remediation> {
+        let prior = read_evidence(&self.project, task.id)?;
+        let diff = git::diff_summary(&under.ground.worktree, &under.ground.base_sha)?;
+        Ok(Remediation {
+            class,
+            bundle: bundle(
+                task,
+                class,
+                &under.seen.gates,
+                &diff,
+                &prior,
+                self.config.failure_bundle_bytes,
+            ),
+        })
+    }
+
+    /// File the one account §7 owes for a recovery, and mark it filed.
+    ///
+    /// A no-op unless this attempt *is* a recovery, which is what makes the same call
+    /// right on both paths that reach it: before the ending of a repair that worked,
+    /// and inside the refusal of one that did not. A first attempt has no recovery to
+    /// account for — §7's "every recovery produces a self-healing report" is a
+    /// sentence about recoveries — and the state machine says so as loudly as this
+    /// function does, since [`EventKind::SelfHealingReport`] belongs to the
+    /// [`crate::TaskState::Remediating`] whose attempt it names and to no other.
+    ///
+    /// One account per attempt, whatever else happens. `accounted` is set only after
+    /// [`file_report`] succeeded, so a filing that refused left neither a row nor a
+    /// file and the next call asks again instead of skipping an account that was never
+    /// written; and [`file_report`] itself refuses a second one, so an attempt that
+    /// was accounted for twice would be reported rather than papered over.
+    fn file_the_account(
+        &mut self,
+        work: TaskId,
+        under: &mut UnderAttempt<'_>,
+        outcome: &str,
+    ) -> Result<()> {
+        let Some(class) = under.repair.map(|repair| repair.class) else {
+            return Ok(());
+        };
+        if under.accounted {
+            return Ok(());
+        }
+        let report = RecoveryReport {
+            task: work,
+            attempt: under.attempt,
+            class,
+            repairs: under.repairs(),
+            outcome: outcome.to_owned(),
+        };
+        file_report(&self.project, &mut self.recorder, &report)?;
+        under.accounted = true;
+        Ok(())
+    }
+
+    /// Work one attempt: every phase its protocol declares, then the account it owes if
+    /// it is a remediation, then the ending.
+    ///
+    /// The account comes before [`Runner::finish_the_task`] for a reason the state
+    /// machine makes hard to miss. [`crate::EventKind::SelfHealingReport`] is accepted by
+    /// [`crate::TaskState::Remediating`] naming that same attempt and by no other state,
+    /// and the ending's own `Verify` entry moves the task out of `Remediating`. Filed
+    /// after the ending it would be a row the fold refuses — and [`Recorder::record`]
+    /// does not ask the machine whether it admits a row, so the refusal surfaces later,
+    /// as a projection that reads the task from the row before it (ADR-0091).
+    ///
+    /// The [`TestSummary`] carried between phases is the summary the previous phase's
+    /// gate reached, which is the half of §9's comparison a phase cannot produce for
+    /// itself; [`Runner::gate_the_baseline`] supplies the other half, for the phases that
+    /// need one and no others.
+    fn work_the_attempt(
+        &mut self,
+        env: &dyn Fn(&str) -> Option<String>,
+        task: &Task,
+        under: &mut UnderAttempt<'_>,
+    ) -> Result<TaskState> {
         let mut carried: Option<TestSummary> = None;
         for spec in protocol::for_task(task, &self.config)?.phases {
             if is_ending(spec.phase) {
                 break;
             }
-            carried = Some(self.work_one_phase(env, task, ground, attempt, &spec, carried)?);
+            carried = Some(self.work_one_phase(env, task, under, &spec, carried)?);
         }
-        self.finish_the_task(task, ground, attempt)
+        self.file_the_account(task.id, under, GREEN_ACCOUNT)?;
+        self.finish_the_task(task, under)
     }
 
     /// Work one phase from the measurement it starts from to the verdict its gate
@@ -1374,18 +1777,17 @@ impl Runner {
         &mut self,
         env: &dyn Fn(&str) -> Option<String>,
         task: &Task,
-        ground: &Prepared,
-        attempt: AttemptId,
+        under: &mut UnderAttempt<'_>,
         spec: &PhaseSpec,
         carried: Option<TestSummary>,
     ) -> Result<TestSummary> {
         let started_from = match carried {
             Some(summary) => Some(summary),
-            None => self.gate_baseline(task, spec, ground)?,
+            None => self.gate_the_baseline(under, task, spec)?,
         };
-        let session = self.run_phase_with(env, ground, task, attempt, spec)?;
+        let session = self.run_the_session(env, under, task, spec)?;
         Self::earned_its_gate(&session)?;
-        self.gate_phase(ground, task, attempt, spec, started_from.as_ref())
+        self.gate_the_phase(under, task, spec, started_from.as_ref())
     }
 
     /// The measurement a phase that decides by a difference starts from.
@@ -1414,12 +1816,13 @@ impl Runner {
     /// [`Error::Gate`] when the command could not be started or wrote no report its
     /// counts could come from, and [`Error::Database`] as [`Recorder::record`] for the
     /// pair this runs.
-    fn gate_baseline(
+    fn gate_the_baseline(
         &mut self,
+        under: &mut UnderAttempt<'_>,
         task: &Task,
         spec: &PhaseSpec,
-        ground: &Prepared,
     ) -> Result<Option<TestSummary>> {
+        let ground = under.ground;
         if !matches!(spec.phase, Phase::Red | Phase::Green) {
             return Ok(None);
         }
@@ -1428,6 +1831,7 @@ impl Runner {
         };
         let gate = self.configured_gate(kind)?;
         let result = self.run_declared_gate(task.id, &gate, &ground.worktree)?;
+        under.seen.gates.push(result.clone());
         let summary = test_report(&result).ok_or_else(|| no_test_report(&gate, &result))?;
         Ok(Some(summary))
     }
@@ -1486,12 +1890,15 @@ impl Runner {
     /// [`crate::EventKind::TaskDone`] carries that SHA and no other, which is what makes
     /// [`crate::TaskState::Done`] mean *the task was closed on the commit the remote
     /// holds*: the state refuses the row unless the two agree.
-    fn finish_the_task(
-        &mut self,
-        task: &Task,
-        ground: &Prepared,
-        attempt: AttemptId,
-    ) -> Result<TaskState> {
+    ///
+    /// The ending goes through [`Runner::publish_the_attempt`] rather than the
+    /// [`Runner::verify_and_publish`] a caller outside a run comes through, for the same
+    /// reason the phases do: the completion set's answer is the evidence §7 classifies a
+    /// refusal of the ending from, and a refusal that reached the loop through the door
+    /// that drops its gate results would be sorted as an agent's fault rather than the
+    /// gate's.
+    fn finish_the_task(&mut self, task: &Task, under: &mut UnderAttempt<'_>) -> Result<TaskState> {
+        let attempt = under.attempt;
         self.recorder.record(
             Some(task.id),
             EventKind::PhaseEntered {
@@ -1499,7 +1906,7 @@ impl Runner {
                 phase: Phase::Verify,
             },
         )?;
-        let commit = self.verify_and_publish(ground, task, attempt)?;
+        let commit = self.publish_the_attempt(under, task)?;
         self.recorder
             .record(Some(task.id), EventKind::TaskDone { commit })?;
         self.folded(task.id)
@@ -1561,6 +1968,24 @@ const fn is_ending(phase: Phase) -> bool {
     matches!(phase, Phase::Verify | Phase::Publish)
 }
 
+/// Whether §7 forbids launching another session after a refusal of this class.
+///
+/// Two of the nine classes are named by §7 itself — `provider_configuration` and
+/// `needs_input` — and both pause for a human rather than spend a repair: an
+/// invalid model and an unresolved product decision are both answers a retry cannot
+/// produce, and §3 makes the second one a pause rather than a failure.
+/// [`FailureClass::GitConflict`] joins them here for a reason that is the runner's
+/// rather than §7's: the conflict is refused by [`Runner::stop_on_conflict`], which
+/// journals the [`EventKind::TaskFailed`] that ends the task on the spot, and an
+/// attempt started after a row that ended one is a transition out of a state
+/// [`crate::apply`] holds terminal. Every other class is what a repair is for.
+fn never_looped(class: FailureClass) -> bool {
+    matches!(
+        class,
+        FailureClass::ProviderConfiguration | FailureClass::NeedsInput | FailureClass::GitConflict
+    )
+}
+
 /// The header an agent's report opened with, in the report's own words.
 ///
 /// [`crate::parse_report`] read that line before this could be reached — a report whose
@@ -1572,6 +1997,302 @@ fn claim_words(text: &str) -> &str {
         .map(str::trim)
         .find(|line| !line.is_empty())
         .unwrap_or_default()
+}
+
+/// The status a session that never started reports, for the one reader that needs
+/// a session where none happened.
+///
+/// §7's first sentence asks for a classification *before any recovery is
+/// attempted*, and a provider that could not be reached refused before there was
+/// an [`Outcome`] to classify. [`classify()`] takes an [`Outcome`] because a session
+/// is usually the loudest evidence there is; handing it the empty one below is the
+/// only way to ask the question at all. `-1` is the shell's own "could not be
+/// run", which no CLI returns as a status it means on the platform this supervisor
+/// runs on, and nothing else reads it: the class comes from the refusal handed in
+/// beside it, and [`Outcome::usage`] stays `None` so that no token figure is
+/// invented along with the status (ADR-0049).
+const NEVER_RAN: i32 = -1;
+
+/// What the account of a repair says when its own gates all came back green.
+///
+/// It is filed before the ending rather than after it, because
+/// [`crate::TaskState::Remediating`] is the only state that admits
+/// [`crate::EventKind::SelfHealingReport`] and the ending's own
+/// [`crate::EventKind::PhaseEntered`] leaves that state — so the sentence cannot
+/// claim the completion set passed, because at the instant it is written nothing
+/// has asked the completion set anything. What it can say, and says, is which
+/// gates it actually watched.
+const GREEN_ACCOUNT: &str = "every gate this repair ran came back green; the completion set, the \
+                             candidate and the publication are journalled after this account, in \
+                             this attempt's own rows";
+
+/// What the account of a repair says when the refusal it earned is one §7 will not
+/// loop.
+const PAUSED_ACCOUNT: &str = "the repair stopped to put a question to a human, and the run paused on \
+                              that answer instead of launching another session after it";
+
+/// What the account of a repair says when the refusal it earned was a protected path.
+const PROTECTED_PATH_ACCOUNT: &str = "the repair touched a path it is judged by, and the task ended \
+                                      before anything was measured against the edited rule";
+
+/// What the account of a repair says when the breaker ended the task it was trying.
+const BREAKER_ACCOUNT: &str = "the same failure signature came back a second time, the circuit \
+                              breaker tripped, and no further session was launched";
+
+/// The one line every account of a repair opens with, whatever else it tried.
+///
+/// §7 makes the fresh session *the* repair mechanism — "every remediation launches
+/// a fresh provider session" — so it is a repair that was attempted, in every
+/// account, and it is the one that cannot be left out of a report read a week
+/// later by someone asking what the supervisor actually did.
+const FRESH_SESSION_REPAIR: &str = "a fresh provider session, seeded with the failure bundle and \
+                                    handed no session id of the attempt it replaces";
+
+/// The heading a repair's bundle is handed under.
+///
+/// [`crate::context::build_prompt`] is left alone (ADR-0075) and the bundle is
+/// appended below this line, so a session reads the same documents its predecessor
+/// read and then the supervisor's own account of why it is being asked again.
+const BUNDLE_HEADING: &str = "Remediation: the previous attempt was refused. Its evidence, in a \
+                              compact bundle, follows.";
+
+/// What one attempt was seen to do, kept for the refusal it may earn.
+///
+/// [`classify()`] and [`signature`] both read what an attempt *measured*, and none of
+/// it survives on disk in the shape they want: an [`Outcome`] is what a provider
+/// answered, a [`GateResult`] is what a command came back with, and the journal
+/// holds rows about them rather than the values. Rebuilding them from the journal
+/// would be reading the run's own summary and calling it evidence, so the attempt
+/// keeps its answers while it is worked and hands them over once, at the refusal.
+///
+/// This is the whole of what a refusal carries out of an attempt. It is deliberately
+/// *not* what an attempt carries into the next one: [`UnderAttempt`] is built afresh
+/// for every attempt, so §7's "no cached evidence survives a file change" is true by
+/// construction — a value that was never built cannot be reused.
+#[derive(Debug, Default)]
+struct Witness {
+    /// What this attempt's session answered, or `None` when it never had one: a
+    /// provider that could not be reached refused before there was a session.
+    session: Option<Outcome>,
+    /// Every gate this attempt ran, in the order it ran them, passing ones included
+    /// — [`signature`] counts only the refusals among them, and an account says
+    /// which gates *ran again* rather than only which ones refused.
+    gates: Vec<GateResult>,
+    /// The protected paths this attempt's session touched, when it touched any.
+    ///
+    /// [`check_no_policy_edit`] names them and refuses; they travel out with the
+    /// refusal so the row that ends the task can send a human to those files rather
+    /// than to the attempt's whole diff.
+    policy_edit: Vec<PathBuf>,
+}
+
+impl Witness {
+    /// The session to hand [`classify()`] now that this attempt is over.
+    ///
+    /// One that ran answers for itself. One that never ran has nothing to answer
+    /// with, and §7 still requires its refusal to be classified before anything is
+    /// recovered — so what comes back is an empty session carrying [`NEVER_RAN`].
+    fn as_a_session(&self) -> Outcome {
+        self.session.clone().unwrap_or_else(|| Outcome {
+            exit_code: NEVER_RAN,
+            stdout: String::new(),
+            stderr: String::new(),
+            usage: None,
+            session_id: None,
+            model_reported: None,
+        })
+    }
+}
+
+/// The repair one refusal asked for, before the session that carries it out exists.
+///
+/// Two fields because a remediation is exactly two facts: what the failure was
+/// called, and what the next session is told about it. The class is carried rather
+/// than re-derived later because §7 classifies *before* recovering, and because
+/// [`crate::RecoveryReport`] has to name the failure the repair set out to answer —
+/// an account that re-classifies from what is left by then is a different question
+/// answered twice, and the two answers are free to disagree.
+struct Remediation {
+    /// The class [`classify()`] settled before any recovery was attempted.
+    class: FailureClass,
+    /// The compact bundle §7 seeds a fresh session with: classification, gate
+    /// output, diff summary and prior attempt evidence, fitted to
+    /// [`Config::failure_bundle_bytes`].
+    bundle: String,
+}
+
+impl Remediation {
+    /// Lay this bundle under the heading that says whose account of the refusal it is.
+    ///
+    /// Appended, never woven in: the documents a first attempt was handed are the
+    /// documents this one gets, and what it gets *extra* is the evidence of the
+    /// attempt it replaces. There is no field of an [`Invocation`] for a session id
+    /// to come back in, which is the mechanical half of §7's "session resume is
+    /// never relied on".
+    fn seed(&self, prompt: &mut String) {
+        prompt.push_str("\n\n");
+        prompt.push_str(BUNDLE_HEADING);
+        prompt.push('\n');
+        prompt.push_str(&self.bundle);
+        prompt.push('\n');
+    }
+}
+
+/// One attempt being worked: the ground it works on, what it has been seen to do,
+/// and whether it exists because a previous attempt was refused.
+///
+/// §7 gives a remediation two contradictory-sounding requirements — carry the
+/// refused attempt's worktree and evidence forward, and carry none of its
+/// measurements forward — and a struct is where that split can be made visible
+/// rather than merely intended. `ground` and `repair` come across the loop;
+/// `seen` and `accounted` are built fresh every iteration.
+///
+/// It is a *view* held for the length of one attempt, which is why it borrows: the
+/// checkout, the base and the lock belong to [`Prepared`], and a second owner of
+/// them would be a second answer to "who gives the lock back".
+struct UnderAttempt<'a> {
+    /// The checkout, the base and the lock — §7's "preserve the worktree and all
+    /// prior attempt evidence across remediation" is a fact about this field
+    /// surviving from one attempt to the next.
+    ground: &'a Prepared,
+    /// Which attempt this is: `1` for a task's first, and the number
+    /// [`crate::TaskState::Remediating`] holds and the evidence directory is named
+    /// for when it is a repair.
+    attempt: AttemptId,
+    /// The repair this attempt is carrying out, or `None` for a first attempt.
+    ///
+    /// Its presence answers "is this a remediation", which is the question that
+    /// decides whether the prompt is seeded with a bundle and whether an account of
+    /// a recovery is owed at the end. `None` is not a repair with an empty bundle.
+    repair: Option<&'a Remediation>,
+    /// What this attempt has been seen to do, from the first gate it ran.
+    seen: Witness,
+    /// Whether this attempt has filed its account of itself already.
+    ///
+    /// §7's "every recovery produces a self-healing report" is one report, and
+    /// [`file_report`] refuses a second one for the same attempt as
+    /// [`Error::Policy`]. A refusal can arrive on a path that already filed one —
+    /// the account is filed before the ending, and the ending can still refuse — so
+    /// the flag is what makes the second call a no-op rather than a new failure.
+    accounted: bool,
+}
+
+impl<'a> UnderAttempt<'a> {
+    /// The attempt `attempt` of `ground`, carrying `repair` when it is a repair.
+    fn new(ground: &'a Prepared, repair: Option<&'a Remediation>, attempt: AttemptId) -> Self {
+        Self {
+            ground,
+            attempt,
+            repair,
+            seen: Witness::default(),
+            accounted: false,
+        }
+    }
+
+    /// The view [`Runner::run_phase`], [`Runner::gate_phase`] and
+    /// [`Runner::verify_and_publish`] work from.
+    ///
+    /// A caller outside a run can say which checkout and which attempt, and cannot
+    /// say anything about a repair: it did not decide one. Stepping through
+    /// [`UnderAttempt::new`] with `None` is the whole of the difference, which is
+    /// the point — the single-phase doors behave exactly as they did before a run
+    /// could be retried, because the state that makes a retry different lives in the
+    /// run and not in them.
+    fn alone(ground: &'a Prepared, attempt: AttemptId) -> Self {
+        Self::new(ground, None, attempt)
+    }
+
+    /// The "attempted repairs" §7's account has to carry, in the order they were
+    /// tried.
+    ///
+    /// Empty for an attempt that is not a repair: there was nothing to attempt, and
+    /// [`crate::RecoveryReport::repairs`] being empty means "nothing was tried", so
+    /// an invented line would be read as a repair that was tried and did not work.
+    /// For a repair, the fresh session always comes first and one line per gate it
+    /// reruns follows, because "every completion gate reruns from scratch" is only
+    /// auditable if the account says which gates ran and how each came back.
+    fn repairs(&self) -> Vec<String> {
+        if self.repair.is_none() {
+            return Vec::new();
+        }
+        let mut tried = vec![FRESH_SESSION_REPAIR.to_owned()];
+        tried.extend(self.seen.gates.iter().map(|gate| {
+            let verdict = if gate.passed { "green" } else { "red" };
+            format!(
+                "the {} gate ran again from scratch and came back {verdict}",
+                gate.kind.as_str()
+            )
+        }));
+        tried
+    }
+}
+
+/// What a remediation is allowed to spend, and what it has spent so far.
+///
+/// §7 bounds remediation by attempts, elapsed time and tokens, and holds the three
+/// against [`Bounds`] rather than against three separate counters so the order the
+/// bounds are asked in lives in one place ([`should_continue`]) and a stopped
+/// remediation leaves the same reason behind every reader reaches.
+///
+/// It is one value per run rather than one per attempt, because a bound that is
+/// re-zeroed for every attempt bounds nothing: the whole point is the total a task's
+/// failure may still cost.
+struct Budget {
+    /// The three ceilings, as this project's configuration spells them.
+    bounds: Bounds,
+    /// The breaker §7 asks for: repeated identical signatures, not repeated
+    /// refusals.
+    breaker: Breaker,
+    /// Refusals this run has been refused so far.
+    refused: u32,
+    /// Tokens every session of this run has reported, held as [`should_continue`]
+    /// wants it: a figure nobody reported stays `0` rather than becoming an estimate.
+    tokens: u64,
+    /// When this run started spending, for the elapsed bound.
+    started: Instant,
+}
+
+impl Budget {
+    /// Charge one more refused attempt to this budget.
+    ///
+    /// The refusal is counted whatever it was — including one that never had a
+    /// session — because the bound §7 bounds is the number of times a task has been
+    /// refused, not the number of sessions that got far enough to report. What was
+    /// spent comes from that attempt's session alone, and adds nothing when there
+    /// was no session or it reported no figures.
+    fn spend(&mut self, session: Option<&Outcome>) {
+        self.refused = self.refused.saturating_add(1);
+        self.tokens = self.tokens.saturating_add(
+            session
+                .and_then(|outcome| outcome.usage.as_ref())
+                .and_then(Usage::total_tokens)
+                .unwrap_or(0),
+        );
+    }
+
+    /// The bound these figures have spent, or [`Decision::Continue`].
+    ///
+    /// Elapsed time is measured from [`Budget::started`] rather than summed from the
+    /// sessions' own durations: a session that hung for an hour cost an hour, and
+    /// the bound exists to stop a run waiting for it.
+    fn consult(&self) -> Decision {
+        should_continue(
+            &self.bounds,
+            self.refused,
+            whole_seconds(self.started.elapsed().as_secs()),
+            self.tokens,
+        )
+    }
+}
+
+/// `spent` whole seconds, in the signed span [`Bounds`] is spelled in.
+///
+/// The conversion saturates rather than truncating, because the alternative is a
+/// 64-bit count of seconds silently becoming a different number inside the bound
+/// that is supposed to stop a run: a span too large for `i64` is past any bound a
+/// configuration can name, and reads as one.
+fn whole_seconds(spent: u64) -> time::Duration {
+    time::Duration::seconds(i64::try_from(spent).unwrap_or(i64::MAX))
 }
 
 /// A task that has been proved worth starting, and the ground it starts on.
@@ -7944,12 +8665,18 @@ mod run_task {
     //! keeps a checkout whose tree holds work — the session's uncommitted work is the
     //! evidence a later attempt is told to read (VISION.md §7) — while a checkout
     //! that holds nothing is removed rather than left for a human to find.
+    //!
+    //! Those tests are about one refusal, so they are run with
+    //! [`Fixture::single_attempt`], which sets the project's own ceiling on repairs to
+    //! zero. §7's remediation has a module of its own; leaving a repair budget here
+    //! would only make every one of these runs start a second session and have its
+    //! scenario run out of steps on the way to the ending being examined.
 
     use super::Runner;
     use crate::testing::{ScratchRepo, scratch_repo};
     use crate::{
-        AttemptId, Error, Event, EventKind, Journal, Phase, Project, Task, TaskId, TaskState,
-        evidence_dir, git, lock, parse_plan, project_config_path,
+        AttemptId, Error, Event, EventKind, FailureClass, Journal, Phase, Project, Task, TaskId,
+        TaskState, evidence_dir, git, lock, parse_plan, project_config_path,
     };
     use std::fmt::Write as _;
     use std::fs;
@@ -8014,8 +8741,9 @@ mod run_task {
     /// The rows a run leaves when a phase is refused for what it wrote: the pair its
     /// baseline gate left — which sits before the phase's entry because it is the
     /// measurement the phase starts from, not an answer it gave — then the entry and
-    /// the session's own rows, and nothing after them.
-    const REFUSED_RED: [&str; 9] = [
+    /// the session's own rows, then the one row that ends the task; no gate, verdict or
+    /// publication between them.
+    const REFUSED_RED: [&str; 10] = [
         "PreflightStarted",
         "PreflightPassed",
         "AttemptStarted",
@@ -8025,11 +8753,13 @@ mod run_task {
         "AgentOutput",
         "AgentOutput",
         "AttemptFinished",
+        "TaskFailed",
     ];
 
     /// The rows a run leaves when its one session ended without a report: the
-    /// session's own story, and no gate, no verdict, no publication.
-    const UNREPORTED: [&str; 7] = [
+    /// session's own story, then the row that ends the task, and between them no gate,
+    /// no verdict, no publication.
+    const UNREPORTED: [&str; 8] = [
         "PreflightStarted",
         "PreflightPassed",
         "AttemptStarted",
@@ -8037,7 +8767,13 @@ mod run_task {
         "AgentOutput",
         "AgentOutput",
         "AttemptFinished",
+        "TaskFailed",
     ];
+
+    /// The sentence [`crate::should_continue`] answers with when a project that allows
+    /// no remediation has been refused once. The row that ends each refusal below
+    /// carries it, because for these runs the spent bound *is* why the run stopped.
+    const SPENT: &str = "attempts 1 past the 0 bound";
 
     /// The settings a whole run is opened with: the scripted adapter and its
     /// scenario file, the phase gate and the completion gate as calls into one
@@ -8123,6 +8859,15 @@ mod run_task {
         /// As [`Fixture::new`], on a filesystem the preflight will call too full.
         fn short_on_disk() -> Self {
             Self::built(TOO_BIG_A_FLOOR, "")
+        }
+
+        /// As [`Fixture::new`], with the project allowing its refusals no repair.
+        ///
+        /// `max_remediation_attempts = 0` is the configuration's own way of saying so,
+        /// and it is how a test looks at one refusal's ending on its own — §7's repair
+        /// is `mod remediation`'s subject, with a scenario shaped for it.
+        fn single_attempt() -> Self {
+            Self::built(1, "max_remediation_attempts = 0\n")
         }
 
         /// A project configured with `floor` as its disk floor and `extra` appended
@@ -8360,6 +9105,16 @@ mod run_task {
         kinds(project).contains(&kind)
     }
 
+    /// The task's `TaskFailed` row as the state machine folds it: the class the refusal
+    /// was sorted into and the detail the row carries, or `None` when the task was
+    /// never refused.
+    fn failure(project: &Project) -> Option<(FailureClass, String)> {
+        rows(project).iter().find_map(|row| match &row.kind {
+            EventKind::TaskFailed { class, detail } => Some((*class, detail.clone())),
+            _ => None,
+        })
+    }
+
     /// The phases the journal says were entered, in order — the reading that says
     /// which phases a protocol actually worked.
     fn entered(project: &Project) -> Vec<Phase> {
@@ -8526,8 +9281,8 @@ mod run_task {
     }
 
     #[test]
-    fn a_refused_completion_gate_leaves_the_task_verifying_and_holds_nothing_back() {
-        let fixture = Fixture::new();
+    fn a_refused_completion_gate_ends_the_task_and_holds_nothing_back() {
+        let fixture = Fixture::single_attempt();
         fixture.script(&sessions(&[vec![(SEED_FILE, "the work")]]));
         fixture.plan(&[report(1, &[])]);
         fixture.report(ATTEMPT, DONE);
@@ -8541,11 +9296,22 @@ mod run_task {
             "the refusing gate's own refusal comes back unchanged, and it was {why}"
         );
         assert_eq!(
+            failure(&fixture.project),
+            Some((FailureClass::VerificationFailure, SPENT.to_owned())),
+            "a refusal whose project has no repair left to spend is classified and ends the \
+             task, rather than leaving the task parked mid-run"
+        );
+        assert_eq!(
             replayed(&fixture.project),
-            Some(TaskState::Verifying {
-                attempt: AttemptId::new(ATTEMPT)
+            Some(TaskState::Failed {
+                class: FailureClass::VerificationFailure,
+                detail: SPENT.to_owned(),
             }),
-            "the task is where the refused set left it, and every row to get there is legal"
+            "the task ends where the refused set left it, and every row to get there is legal"
+        );
+        assert!(
+            !holds(&fixture.project, "SelfHealingReport"),
+            "nothing recovered, so there is no account for a recovery to give"
         );
         assert!(
             !holds(&fixture.project, "PublishStarted") && !holds(&fixture.project, "TaskDone"),
@@ -8570,7 +9336,7 @@ mod run_task {
 
     #[test]
     fn a_refusal_that_left_work_behind_keeps_the_checkout_and_gives_the_lock_back() {
-        let fixture = Fixture::new();
+        let fixture = Fixture::single_attempt();
         fixture.script(&sessions(&[vec![(
             "notes.md",
             "outside a red phase's scope",
@@ -8613,14 +9379,24 @@ mod run_task {
             kinds(&fixture.project),
             REFUSED_RED,
             "the baseline the red phase was measured against, the entry, the session's own \
-             rows — and no gate, no verdict, no ending, because the phase was refused for \
-             what it wrote before anything was asked of it"
+             rows — and no gate, no verdict, no publication, because the phase was refused \
+             for what it wrote before anything was asked of it; only the row that ends the \
+             task comes after"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::Failed {
+                class: FailureClass::PolicyFailure,
+                detail: SPENT.to_owned(),
+            }),
+            "the scope refusal is sorted into §7's own class for a forbidden file, and the \
+             ending row it earns is one the machine accepts where the run left the task"
         );
     }
 
     #[test]
     fn a_session_that_left_no_report_stops_the_run_before_the_ending() {
-        let fixture = Fixture::new();
+        let fixture = Fixture::single_attempt();
         fixture.script(&sessions(&[vec![]]));
         fixture.plan(&[report(1, &[])]);
         let mut run = fixture.run();
@@ -8635,7 +9411,17 @@ mod run_task {
         assert_eq!(
             kinds(&fixture.project),
             UNREPORTED,
-            "the session's own rows, and no gate, no verdict, no publication"
+            "the session's own rows, then the row that ends the task, and no gate, no \
+             verdict, no publication between them"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::Failed {
+                class: FailureClass::EnvironmentFailure,
+                detail: SPENT.to_owned(),
+            }),
+            "an attempt that accounted for nothing is the supervisor's own fault, and the \
+             run ends rather than leaving the task mid-phase"
         );
         assert!(
             fixture.ran().is_empty(),
@@ -8654,7 +9440,7 @@ mod run_task {
 
     #[test]
     fn a_session_that_said_it_stopped_short_is_not_carried_to_publication() {
-        let fixture = Fixture::new();
+        let fixture = Fixture::single_attempt();
         fixture.script(&sessions(&[vec![(SEED_FILE, "half of the work")]]));
         fixture.plan(&[report(1, &[])]);
         fixture.report(ATTEMPT, FAILED);
@@ -8678,11 +9464,12 @@ mod run_task {
         );
         assert_eq!(
             replayed(&fixture.project),
-            Some(TaskState::Running {
-                attempt: AttemptId::new(ATTEMPT),
-                phase: Phase::Implement,
+            Some(TaskState::Failed {
+                class: FailureClass::EnvironmentFailure,
+                detail: SPENT.to_owned(),
             }),
-            "the journal says honestly where the run stopped, for whoever recovers it"
+            "the journal says honestly where the run stopped, and it stops: the refusal is \
+             classified and the task ends rather than being carried to a publication"
         );
         assert_eq!(
             fixture.checkouts().len(),
@@ -8722,5 +9509,1070 @@ mod run_task {
             "and no lock is held on its behalf: {:?}",
             lock::lock_path(&fixture.project.state_dir)
         );
+    }
+}
+
+#[cfg(test)]
+mod remediation {
+    //! One failed attempt, retried once, from a session that never existed before.
+    //!
+    //! Named after what it tests the way `mod new`, `mod prepare`, `mod report`,
+    //! `mod run_phase`, `mod gate_phase`, `mod verify_and_publish` and
+    //! `mod run_task` are named after theirs, because the task that asked for this
+    //! one fixed `test(/runner::/)` as its Verify command.
+    //!
+    //! §7's requirements are all about what a repair is *made of*, and none of them
+    //! are visible in a value the runner returns: a fresh session rather than a
+    //! resumed one, the bundle it is seeded with, the gates run again from scratch,
+    //! the bounds and the breaker that stop the whole thing, and the attempt records
+    //! that say two attempts happened. So every assertion here is read out of a
+    //! record some third party keeps — the gate script's log of which commands
+    //! actually ran, the journal replayed through [`crate::Journal::rebuild_state`]
+    //! so an illegal row cannot pass, the evidence directory's attempt count, and
+    //! the prompts an adapter recorded verbatim. Nothing asserts what the runner
+    //! remembers in memory, because a memory a rerun cannot check is exactly what
+    //! §7 refuses to rely on.
+
+    use super::Runner;
+    use crate::testing::{ScratchRepo, scratch_repo};
+    use crate::{
+        AttemptId, Bus, Capabilities, Error, Event, EventKind, Invocation, Journal, Outcome, Phase,
+        Project, Provider, Result, Task, TaskId, TaskState, Usage, UsageSource, evidence_dir, git,
+        lock, parse_plan, project_config_path, provider, read_evidence, report_path,
+    };
+    use std::cell::{Cell, RefCell};
+    use std::collections::BTreeMap;
+    use std::fmt::Write as _;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::{Path, PathBuf};
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    /// The identity every fixture gives its registered project.
+    const PROJECT_ID: &str = "0123456789abcdef";
+
+    /// The queue position [`parse_plan`] gives the one-row plan below, and so the
+    /// task every run here is driven for.
+    const TASK: u32 = 1;
+
+    /// The attempt a task that has never been attempted is opened at.
+    const FIRST: u32 = 1;
+
+    /// The attempt a remediation runs as, which is the number the machine's
+    /// [`TaskState::Remediating`] holds and the directory the account is filed in.
+    const SECOND: u32 = 2;
+
+    /// The file the scratch repository's seed commit tracks — the only path a
+    /// scripted session can change and the run can then commit, because
+    /// [`crate::git::commit_all`] stages tracked paths and no one stages the rest.
+    const SEED_FILE: &str = "seed.txt";
+
+    /// What every scripted session prints, as two lines so a row per line is
+    /// observable rather than assumed.
+    const PRINTED: &str = "reading the seed\nwriting the fix\n";
+
+    /// What a session that finished leaves in the report the prompt named.
+    const DONE: &str = "KTASK_RESULT: DONE\nSummary: every step the task had is worked.\n";
+
+    /// What a session that needs a decision from a human leaves instead.
+    const NEEDS_INPUT: &str =
+        "KTASK_RESULT: NEEDS_INPUT\nSummary: which of the two readings is meant?\n";
+
+    /// What the scripted gate names the test it refuses over, in the cargo-shaped
+    /// report it prints. A named failure is what a failure signature is built from,
+    /// so a gate that refused without naming one would test less than this does.
+    const REFUSED_TEST: &str = "the_fix";
+
+    /// The report the gate prints when its test refuses, in cargo's own shape.
+    const RED: &str = "running 1 tests\ntest the_fix ... FAILED\nfailures:\n    the_fix\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n";
+
+    /// The same, once the fix is in the tree.
+    const GREEN: &str = "running 1 tests\ntest the_fix ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n";
+
+    /// The words every refusing completion gate is asked about, so no test has to
+    /// repeat the sentence the bound wrote.
+    const NOTHING_PROVED: &str = "verify: nothing is proved yet";
+
+    /// The rows a run whose first attempt refused and whose second was repaired
+    /// leaves for the task, oldest first.
+    ///
+    /// The completion set's own gate pairs are absent because
+    /// [`crate::run_completion_set`] attributes them to no task — which is why the
+    /// gate script's log, not the journal, is what says the set ran a second time.
+    const REPAIRED: [&str; 22] = [
+        "PreflightStarted",
+        "PreflightPassed",
+        "AttemptStarted",
+        "PhaseEntered",
+        "AgentOutput",
+        "AgentOutput",
+        "AttemptFinished",
+        "GateStarted",
+        "GateFinished",
+        "AttemptStarted",
+        "PhaseEntered",
+        "AgentOutput",
+        "AgentOutput",
+        "AttemptFinished",
+        "GateStarted",
+        "GateFinished",
+        "SelfHealingReport",
+        "PhaseEntered",
+        "VerifyPassed",
+        "PublishStarted",
+        "PublishVerified",
+        "TaskDone",
+    ];
+
+    /// The gate script both of the project's gates call.
+    ///
+    /// One script answers the phase gate and the completion gate, and it answers
+    /// them from what is in the tree rather than from a counter, because the thing
+    /// under test is whether a second attempt *re-measured* the work: a script that
+    /// answered from a plan file would pass for a run that replayed the first
+    /// attempt's verdict instead of running the gate again.
+    ///
+    /// It prints cargo's own shape because [`crate::parse_cargo`] is what decides
+    /// whether a refusing gate named a failure, and a signature built from nothing
+    /// is a weaker breaker than one built from a name.
+    fn gate_script(log: &Path, markers: &Path) -> String {
+        format!(
+            "#!/bin/sh\n\
+             m='{}'\n\
+             echo \"$1\" >> '{}'\n\
+             if [ \"$1\" = verify ]; then\n\
+             if [ -f \"$m/refuse-first-verify\" ] && [ ! -f \"$m/verify-refused\" ]; then\n\
+             touch \"$m/verify-refused\"\n\
+             echo '{}' >&2\n\
+             exit 1\n\
+             fi\n\
+             grep -qs '^fixed' seed.txt || {{ echo 'verify: the fix is not there' >&2; exit 1; }}\n\
+             exit 0\n\
+             fi\n\
+             if [ -f \"$m/always-fails\" ]; then cat \"$m/red\"; exit 1; fi\n\
+             if grep -qs '^fixed' seed.txt; then cat \"$m/green\"; exit 0; fi\n\
+             cat \"$m/red\"\n\
+             exit 1\n",
+            markers.display(),
+            log.display(),
+            NOTHING_PROVED
+        )
+    }
+
+    /// A registered project, the scenario its adapter replays, the script its two
+    /// gates run, and the log and marker directory that script is driven by.
+    ///
+    /// The last three fields belong to the adapter every run here answers through
+    /// ([`Scripted`]) rather than to the project: the reports it is to file, the
+    /// invocations it is to remember, and how many sessions it is to refuse. They
+    /// are shared rather than owned because the adapter is installed in the
+    /// [`Runner`], and a test reads what it saw back out here.
+    struct Fixture {
+        repo: ScratchRepo,
+        project: Project,
+        scenario: PathBuf,
+        markers: PathBuf,
+        log: PathBuf,
+        config_home: PathBuf,
+        reports: Rc<RefCell<BTreeMap<u32, String>>>,
+        asked: Rc<RefCell<Vec<Seen>>>,
+        refusals: Rc<Cell<u32>>,
+    }
+
+    impl Fixture {
+        /// A project on the configuration §7 describes: two attempts, one of them
+        /// a remediation, and a breaker that has not been reached yet.
+        fn new() -> Self {
+            Self::built("")
+        }
+
+        /// As [`Fixture::new`], with the project allowing no remediation at all.
+        ///
+        /// `max_remediation_attempts = 0` is the configuration's own way of saying
+        /// so (`docs/DESIGN.md` names the key), and a run against it stops at the
+        /// first refusal. It is how a test looks at one refusal in isolation.
+        fn single_attempt() -> Self {
+            Self::built("max_remediation_attempts = 0\n")
+        }
+
+        /// As [`Fixture::new`], with `extra` appended to its settings document.
+        fn built(extra: &str) -> Self {
+            let repo = scratch_repo().expect("a scratch repository is buildable");
+            let state_dir = repo.path().join("state").join(PROJECT_ID);
+            let project = Project {
+                root: repo.work().to_path_buf(),
+                id: PROJECT_ID.to_owned(),
+                state_dir,
+            };
+            let scenario = repo.path().join("scenario.toml");
+            let script = repo.path().join("gate.sh");
+            let log = repo.path().join("gate.log");
+            let markers = repo.path().join("markers");
+            fs::create_dir_all(&project.state_dir).expect("a state directory is creatable");
+            fs::create_dir_all(&markers).expect("a marker directory is creatable");
+            fs::write(&script, gate_script(&log, &markers)).expect("a gate script is writable");
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
+                .expect("a gate script is made executable");
+            let config_home = repo.path().join("config-home");
+            fs::write(markers.join("red"), RED).expect("a gate report is writable");
+            fs::write(markers.join("green"), GREEN).expect("a gate report is writable");
+            fs::write(
+                project_config_path(&project),
+                settings(&scenario, &script, extra),
+            )
+            .expect("a project settings document is writable");
+            Self {
+                repo,
+                project,
+                scenario,
+                markers,
+                log,
+                config_home,
+                reports: Rc::default(),
+                asked: Rc::default(),
+                refusals: Rc::default(),
+            }
+        }
+
+        /// The script the adapter replays, written before the run is opened:
+        /// [`crate::provider::build`] reads the file once, so a scenario written
+        /// after the run was built would be a scenario the run never saw.
+        fn script(&self, document: &str) {
+            fs::write(&self.scenario, document).expect("a scenario document is writable");
+        }
+
+        /// Leave `name` in the directory the gate script reads its instructions from.
+        fn marker(&self, name: &str) {
+            fs::write(self.markers.join(name), "").expect("a marker is writable");
+        }
+
+        /// Make the targeted gate refuse however many times it is asked.
+        fn always_fails(&self) {
+            self.marker("always-fails");
+        }
+
+        /// Make the completion gate refuse the first time it is asked and pass after.
+        fn refuse_first_verify(&self) {
+            self.marker("refuse-first-verify");
+        }
+
+        /// Hold `words` back as the report the session of attempt `attempt` leaves.
+        ///
+        /// Held rather than written where it belongs, because that place is the
+        /// run's to open: [`Runner::begin_attempt`] files an attempt directory's
+        /// `record.json` first and everything else after it, and [`read_evidence`]
+        /// reports a directory below `attempts/<task>/` that holds no record as an
+        /// interrupted write. Pre-writing a *later* attempt's report leaves exactly
+        /// that shape behind while a remediation is still reading the prior evidence
+        /// it is required to carry — a state no run reaches on its own, since
+        /// nothing files a report before its own attempt is open. So the report
+        /// travels with the adapter that answers for the session ([`Scripted`]) and
+        /// is filed at the path the prompt named, which is what a session does.
+        /// Staging nothing for an attempt leaves its report missing, which is a case
+        /// of its own and stays testable.
+        fn report(&self, attempt: u32, words: &str) {
+            self.reports.borrow_mut().insert(attempt, words.to_owned());
+        }
+
+        /// Where one attempt's report would be, whether or not a session filed one.
+        ///
+        /// Read through [`report_path`] rather than spelled out here, so a test about
+        /// a report that was never left cannot agree with itself if the layout moves.
+        fn report_of(&self, attempt: u32) -> PathBuf {
+            report_path(&self.project, TaskId::new(TASK), AttemptId::new(attempt))
+        }
+
+        /// The run this project is configured to have, with its sessions answered
+        /// through [`Scripted`] — the adapter that files each session's report where
+        /// that session was told to file it.
+        fn run(&self) -> Runner {
+            let mut run = Runner::new(self.project.clone())
+                .expect("a registered, configured project opens a run");
+            let answer = provider::build(&run.config).expect("the configured adapter is buildable");
+            run.provider = Box::new(Scripted {
+                inner: Inner {
+                    adapter: answer,
+                    sessions: Cell::new(0),
+                },
+                refusals: Rc::clone(&self.refusals),
+                asked: Rc::clone(&self.asked),
+                reports: Rc::clone(&self.reports),
+            });
+            run
+        }
+
+        /// Every invocation the installed adapter was handed, as it remembers them.
+        fn asked(&self) -> Rc<RefCell<Vec<Seen>>> {
+            Rc::clone(&self.asked)
+        }
+
+        /// Refuse this many sessions, as an adapter that could not be reached, before
+        /// any is replayed.
+        fn refuse_sessions(&self, times: u32) {
+            self.refusals.set(times);
+        }
+
+        /// The environment a phase's prompt is read from: a configuration home of
+        /// the fixture's own, so no test aims the prompt library at the machine
+        /// running it.
+        fn env(&self) -> impl Fn(&str) -> Option<String> {
+            let home = self.config_home.clone();
+            move |key: &str| (key == "XDG_CONFIG_HOME").then(|| home.display().to_string())
+        }
+
+        /// The gate names that actually ran, in the order they ran.
+        fn ran(&self) -> Vec<String> {
+            let text = fs::read_to_string(&self.log).unwrap_or_default();
+            text.lines().map(str::to_owned).collect()
+        }
+
+        /// Every checkout the repository registers, the user's own included.
+        fn checkouts(&self) -> Vec<git::Worktree> {
+            git::list_worktrees(&self.project.root).expect("the repository answers what it holds")
+        }
+
+        /// The directory one attempt's own evidence is filed in.
+        fn attempt_dir(&self, attempt: u32) -> PathBuf {
+            evidence_dir(&self.project, TaskId::new(TASK), AttemptId::new(attempt))
+        }
+
+        /// The account §7 makes a recovery leave beside its own evidence.
+        fn account(&self, attempt: u32) -> PathBuf {
+            evidence_dir(&self.project, TaskId::new(TASK), AttemptId::new(attempt))
+                .join("self-healing.md")
+        }
+
+        /// The tip the origin itself holds.
+        fn origin_tip(&self) -> String {
+            git::git(self.repo.origin(), &["rev-parse", "main"])
+                .expect("the origin holds its branch")
+        }
+    }
+
+    /// The settings a whole run is opened with: the scripted adapter and its
+    /// scenario file, the phase gate and the completion gate as calls into one
+    /// script, and `extra` appended.
+    fn settings(scenario: &Path, script: &Path, extra: &str) -> String {
+        format!(
+            "provider = \"dummy\"\n\
+             dummy_scenario_path = \"{}\"\n\
+             min_free_disk_bytes = 1\n\
+             targeted_test_command = [\"/bin/sh\", \"{}\", \"targeted\"]\n\
+             verify_command = [\"/bin/sh\", \"{}\", \"verify\"]\n\
+             {extra}",
+            scenario.display(),
+            script.display(),
+            script.display()
+        )
+    }
+
+    /// The queue's one task, worked by the project's default protocol.
+    fn task() -> Task {
+        let document = "\
+## T096 Remediation in the runner
+
+**Outcome:** a failed attempt is retried once, from a fresh session.
+**Done-when:** a dummy scenario failing once then succeeding reaches Done.
+**Verify:** `cargo nextest run -p ktask-core -E 'test(/runner::/)'`
+**Refs:** VISION.md section 7
+";
+        let parsed = parse_plan(document)
+            .expect("a task block with the four mandatory sections is a parseable plan");
+        let row = parsed
+            .into_iter()
+            .next()
+            .expect("the fixture plan holds one row");
+        assert_eq!(row.id, TaskId::new(TASK), "every fixture works task {TASK}");
+        row
+    }
+
+    /// A scenario document's string, escaped the way TOML wants the breaks agent
+    /// text is full of.
+    fn toml_text(text: &str) -> String {
+        text.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+    }
+
+    /// A scenario of one session per entry in `writes`, each leaving its own files
+    /// in the checkout it runs in and printing `printed`.
+    ///
+    /// The adapter hands out one step per session it is asked to run, in order, so
+    /// this is the whole script of a run: entry one is the first attempt's session
+    /// and entry two the repair's.
+    fn scripted(writes: &[Vec<(&str, &str)>], printed: &str) -> String {
+        let mut document = String::new();
+        for files in writes {
+            writeln!(
+                document,
+                "[[steps]]\non_task = {TASK}\noutcome = \"success\"\nstdout = \"{}\"\n",
+                toml_text(printed)
+            )
+            .expect("a String always has room for what is written into it");
+            if !files.is_empty() {
+                document.push_str("[steps.files]\n");
+                for (path, contents) in files {
+                    writeln!(document, "\"{path}\" = \"{}\"", toml_text(contents))
+                        .expect("a String always has room for what is written into it");
+                }
+            }
+            document.push('\n');
+        }
+        document
+    }
+
+    /// [`scripted`] with the ordinary two lines of session output.
+    fn sessions(writes: &[Vec<(&str, &str)>]) -> String {
+        scripted(writes, PRINTED)
+    }
+
+    /// The task's own rows, oldest first, read on a second connection because that
+    /// is who asks this question in real life.
+    fn rows(project: &Project) -> Vec<Event> {
+        Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events_for(TaskId::new(TASK))
+            .expect("the rows this run wrote are readable")
+    }
+
+    /// The kinds the journal holds for the task, oldest first.
+    fn kinds(project: &Project) -> Vec<&'static str> {
+        rows(project)
+            .iter()
+            .map(|row| row.kind.discriminant())
+            .collect()
+    }
+
+    /// Whether the journal holds a row of this kind for the task.
+    fn holds(project: &Project, kind: &str) -> bool {
+        kinds(project).contains(&kind)
+    }
+
+    /// The `detail` of the task's `TaskFailed` row, or `None` when it has none.
+    fn failure(project: &Project) -> Option<(String, String)> {
+        rows(project).iter().find_map(|row| match &row.kind {
+            EventKind::TaskFailed { class, detail } => Some((format!("{class:?}"), detail.clone())),
+            _ => None,
+        })
+    }
+
+    /// The state the journal replays to, with an illegal row reported as the failure
+    /// it is rather than as a state that was never reached.
+    fn replayed(project: &Project) -> Option<TaskState> {
+        let mut journal =
+            Journal::open_for(project).expect("a registered project's journal is openable");
+        journal
+            .rebuild_state()
+            .expect("every row this run wrote is one the state machine accepts");
+        journal
+            .get_state(TaskId::new(TASK))
+            .expect("the projection is readable")
+    }
+
+    /// The attempt records the evidence directory holds, which is the mechanical
+    /// answer to "how many attempts did this task actually have".
+    fn attempts(project: &Project) -> Vec<AttemptId> {
+        read_evidence(project, TaskId::new(TASK))
+            .expect("an attempt's own record is readable from the moment it opened")
+            .into_iter()
+            .map(|record| record.id)
+            .collect()
+    }
+
+    /// The commit the `TaskDone` row closed the task on.
+    fn closed_on(project: &Project) -> String {
+        for row in rows(project) {
+            if let EventKind::TaskDone { commit } = row.kind {
+                return commit;
+            }
+        }
+        panic!("a finished task is closed on the commit it was published as");
+    }
+
+    /// Take the project's lock from a test, as an outsider would, and give it back.
+    fn lock_is_free(project: &Project) -> bool {
+        let Ok(held) = lock::acquire(&project.state_dir, Duration::ZERO) else {
+            return false;
+        };
+        held.release().expect("a lock this test took is given back");
+        true
+    }
+
+    /// Drive the queue's task to the end, with the prompt read from the fixture's
+    /// own configuration home.
+    fn finish(fixture: &Fixture, run: &mut Runner, work: &Task) -> TaskState {
+        run.run_task_with(&fixture.env(), work)
+            .expect("nothing here gives a step a reason to refuse")
+    }
+
+    /// Drive the queue's task and hand back the refusal it stopped on.
+    fn refusal(fixture: &Fixture, run: &mut Runner, work: &Task) -> Error {
+        match run.run_task_with(&fixture.env(), work) {
+            Err(why) => why,
+            Ok(state) => panic!("this fixture is built to stop the run, and it reached {state:?}"),
+        }
+    }
+
+    /// One session an adapter was asked to run, as the adapter saw it.
+    ///
+    /// The three fields of an [`Invocation`] and nothing else: freshness of a
+    /// session is not a field, and the absence of a session id in what the runner
+    /// handed the second attempt over is what the test asks about.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct Seen {
+        /// The prompt, in full — including whatever the runner appended to it.
+        prompt: String,
+        /// The model the configuration asked for.
+        model: Option<String>,
+        /// The directory the session was told to work in.
+        working_dir: PathBuf,
+    }
+
+    /// The adapter [`Scripted`] hands its answers to, plus the count of how many
+    /// sessions it has been asked to run.
+    struct Inner {
+        adapter: Box<dyn Provider>,
+        sessions: Cell<u32>,
+    }
+
+    /// The adapter every session of every fixture run here goes through.
+    ///
+    /// Four things, each one a part of a real session a scripted scenario cannot
+    /// reach on its own:
+    ///
+    /// - **It files the report.** An [`Invocation`] carries a prompt, and the prompt
+    ///   names the path the report goes at; a session that answered writes there.
+    ///   That is also the only way a *second* attempt's report can appear in the
+    ///   directory the run opened a moment before it — see [`Fixture::report`] for
+    ///   why no fixture may pre-write one. A session this adapter refused answers
+    ///   nothing and files nothing, which is what an attempt that never had a
+    ///   session looks like from the outside.
+    /// - **It stamps each session with an id of its own.** The scripted adapter
+    ///   reports none, and reading back the absence of a thing that was never there
+    ///   proves nothing; §7's "no session id comes back" is only a finding once an
+    ///   id existed to withhold.
+    /// - **It remembers every [`Invocation`]**, because §7's two questions about the
+    ///   session — what the second one was told, and whether the first one's
+    ///   identity came back with it — are unaskable of the journal.
+    /// - **It can refuse on cue**, as an adapter that could not be reached.
+    struct Scripted {
+        inner: Inner,
+        /// Sessions to refuse before any is replayed, as a transient provider fault.
+        refusals: Rc<Cell<u32>>,
+        asked: Rc<RefCell<Vec<Seen>>>,
+        reports: Rc<RefCell<BTreeMap<u32, String>>>,
+    }
+
+    impl Scripted {
+        /// Leave this session's report at the path its prompt named, if the fixture
+        /// staged words for the attempt that prompt is for.
+        ///
+        /// The directory is the one [`Runner::prepare_report`] made for this
+        /// attempt, so a refusal to write here is not a scenario worth surviving: it
+        /// says a run started a session in a directory it had not prepared, and a
+        /// panic says that louder than a refusal the run would only go on to
+        /// classify.
+        fn file_report(&self, inv: &Invocation) {
+            let (attempt, path) = told_by(&inv.prompt);
+            let Some(words) = self.reports.borrow().get(&attempt).cloned() else {
+                return;
+            };
+            fs::write(&path, words)
+                .unwrap_or_else(|why| panic!("a session was told to report at {path:?}: {why}"));
+        }
+    }
+
+    impl Provider for Scripted {
+        fn name(&self) -> &str {
+            self.inner.adapter.name()
+        }
+
+        fn capabilities(&self) -> Capabilities {
+            self.inner.adapter.capabilities()
+        }
+
+        fn invoke(&self, inv: &Invocation, bus: Option<&Bus>) -> Result<Outcome> {
+            let session = self.inner.sessions.get() + 1;
+            self.inner.sessions.set(session);
+            self.asked.borrow_mut().push(Seen {
+                prompt: inv.prompt.clone(),
+                model: inv.model.clone(),
+                working_dir: inv.working_dir.clone(),
+            });
+            if self.refusals.get() > 0 {
+                self.refusals.set(self.refusals.get() - 1);
+                return Err(Error::Provider {
+                    provider: self.name().to_owned(),
+                    detail: "the session could not be reached: connection reset by peer".to_owned(),
+                });
+            }
+            let mut answer = self.inner.adapter.invoke(inv, bus)?;
+            self.file_report(inv);
+            answer.session_id = Some(format!("sess-attempt-{session}"));
+            answer.usage = Some(Usage {
+                input_tokens: Some(10),
+                output_tokens: Some(2),
+                cached_tokens: None,
+                cost_usd: None,
+                source: UsageSource::Provider,
+            });
+            Ok(answer)
+        }
+    }
+
+    /// Which attempt a prompt is for, and the path it says its report goes at.
+    ///
+    /// Read out of the prompt rather than recomputed, because what a session can act
+    /// on is what it was *told*: a fixture that called [`report_path`] itself would
+    /// agree with the header whatever the header said. The attempt is the name of the
+    /// directory the report sits in, which is [`evidence_dir`]'s spelling of it.
+    fn told_by(prompt: &str) -> (u32, PathBuf) {
+        let named = prompt
+            .split_once("Report: `")
+            .expect("the prompt names the path its report goes at")
+            .1;
+        let path = PathBuf::from(
+            named
+                .split('`')
+                .next()
+                .expect("the path the prompt names is closed by a backtick"),
+        );
+        let directory = path
+            .parent()
+            .expect("a report is named below the directory it is filed in");
+        let attempt = directory
+            .file_name()
+            .expect("the attempt's own directory name")
+            .to_string_lossy()
+            .parse::<u32>()
+            .expect("that name is the attempt number");
+        (attempt, path)
+    }
+
+    #[test]
+    fn a_refused_attempt_that_the_repair_leaves_green_is_closed_with_two_attempts() {
+        let fixture = Fixture::new();
+        fixture.script(&sessions(&[
+            vec![(SEED_FILE, "the work, which does not pass")],
+            vec![(SEED_FILE, "fixed")],
+        ]));
+        fixture.report(FIRST, DONE);
+        fixture.report(SECOND, DONE);
+        let mut run = fixture.run();
+
+        let state = finish(&fixture, &mut run, &task());
+
+        assert_eq!(
+            state,
+            TaskState::Done,
+            "the run's answer is the state its own journal folds to"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            &REPAIRED[..],
+            "one attempt's rows, then the repair's own attempt, its gate run again, the \
+             account §7 asks for, and only then the ending"
+        );
+        assert_eq!(
+            attempts(&fixture.project),
+            [AttemptId::new(FIRST), AttemptId::new(SECOND)],
+            "two attempts were opened, each with a record of its own"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ["targeted", "targeted", "verify"],
+            "the refused gate ran again for the second attempt, and the completion set ran \
+             once — against the repair"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::Done),
+            "every row the repair wrote is one the machine accepts, in the order it got them"
+        );
+        assert!(
+            fixture.account(SECOND).is_file() && !fixture.account(FIRST).is_file(),
+            "the recovery accounted for itself, in its own attempt's directory"
+        );
+        assert!(
+            fixture.attempt_dir(FIRST).is_dir() && fixture.attempt_dir(SECOND).is_dir(),
+            "each attempt files in a directory of its own, and the repair neither reused nor \
+             erased the first one's"
+        );
+        assert_eq!(
+            fixture.origin_tip(),
+            closed_on(&fixture.project),
+            "the task closed on the commit the remote was read back holding"
+        );
+        assert_eq!(
+            fixture.checkouts().len(),
+            1,
+            "the shared checkout is removed once the work in it is published: {:?}",
+            fixture.checkouts()
+        );
+        assert!(
+            lock_is_free(&fixture.project),
+            "and the lock is given back after both attempts"
+        );
+    }
+
+    #[test]
+    fn a_remediation_reruns_the_completion_set_from_scratch() {
+        let fixture = Fixture::new();
+        fixture.script(&sessions(&[
+            vec![(SEED_FILE, "fixed")],
+            vec![(
+                SEED_FILE,
+                "fixed again, which is what the second commit holds",
+            )],
+        ]));
+        fixture.report(FIRST, DONE);
+        fixture.report(SECOND, DONE);
+        fixture.refuse_first_verify();
+        let mut run = fixture.run();
+
+        let state = finish(&fixture, &mut run, &task());
+
+        assert_eq!(
+            state,
+            TaskState::Done,
+            "a completion set that refused the first time passes against the repair"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ["targeted", "verify", "targeted", "verify"],
+            "the whole set ran again for the second attempt: no verdict carried over, and \
+             nothing was skipped because a gate had already been green"
+        );
+        assert_eq!(
+            attempts(&fixture.project),
+            [AttemptId::new(FIRST), AttemptId::new(SECOND)],
+            "and the second of them is the repair"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            REPAIRED[..9]
+                .iter()
+                .chain(["PhaseEntered", "VerifyFailed"].iter())
+                .chain(REPAIRED[9..22].iter())
+                .copied()
+                .collect::<Vec<&'static str>>(),
+            "the first attempt reached the ending and its refused verdict, and the second \
+             worked the phase, accounted for itself and closed the task"
+        );
+        assert_eq!(
+            fixture.origin_tip(),
+            closed_on(&fixture.project),
+            "the commit the remote holds is the one the second attempt's gates were run against"
+        );
+        assert!(lock_is_free(&fixture.project), "and the lock comes back");
+    }
+
+    #[test]
+    fn a_repair_is_a_fresh_session_seeded_with_the_failure_and_no_session_id() {
+        let fixture = Fixture::new();
+        fixture.script(&sessions(&[
+            vec![(SEED_FILE, "the work, which does not pass")],
+            vec![(SEED_FILE, "fixed")],
+        ]));
+        fixture.report(FIRST, DONE);
+        fixture.report(SECOND, DONE);
+        let mut run = fixture.run();
+        let seen = fixture.asked();
+
+        let state = finish(&fixture, &mut run, &task());
+
+        assert_eq!(state, TaskState::Done, "and the repair finished the task");
+        let asked = seen.borrow().clone();
+        assert_eq!(asked.len(), 2, "one session per attempt, no more");
+        let first = &asked[0];
+        let second = &asked[1];
+        assert!(
+            !first.prompt.contains("class:") && !first.prompt.contains("prior attempts:"),
+            "the first session was seeded with the task alone — there was nothing to hand over"
+        );
+        assert!(
+            second.prompt.contains("class: VerificationFailure"),
+            "the repair is seeded with the classification, and its prompt was:\n{}",
+            second.prompt
+        );
+        assert!(
+            second.prompt.contains(REFUSED_TEST),
+            "and with the gate output that named the failure"
+        );
+        assert!(
+            second.prompt.contains("diff:") && second.prompt.contains(SEED_FILE),
+            "and with the diff summary of what the failed attempt changed"
+        );
+        assert!(
+            second.prompt.contains("prior attempts: 1"),
+            "and with the prior attempt's outcome"
+        );
+        assert_eq!(
+            second.working_dir, first.working_dir,
+            "in the same checkout, which §7 requires be preserved"
+        );
+        assert_eq!(
+            second.model, first.model,
+            "on the same configured model, so the repair is not a different run of the task"
+        );
+        assert!(
+            !second.prompt.contains("sess-attempt-1"),
+            "and no session id came back: the repair is a new session, not a resumed one"
+        );
+        assert!(
+            !first.prompt.contains("sess-attempt-2"),
+            "and the ids are not in either prompt at all"
+        );
+    }
+
+    #[test]
+    fn the_second_identical_refusal_trips_the_breaker_and_ends_the_task() {
+        let fixture = Fixture::built(
+            "max_attempts = 5\nmax_remediation_attempts = 4\ncircuit_breaker_threshold = 2\n",
+        );
+        fixture.script(&sessions(&[
+            vec![(SEED_FILE, "the first try")],
+            vec![(SEED_FILE, "the second try, which differs")],
+        ]));
+        fixture.report(FIRST, DONE);
+        fixture.report(SECOND, DONE);
+        fixture.always_fails();
+        let mut run = fixture.run();
+
+        let why = refusal(&fixture, &mut run, &task());
+
+        assert!(
+            matches!(&why, Error::Gate { kind, .. } if kind == "targeted"),
+            "the gate that refused is what the run hands back, and it was {why}"
+        );
+        let (class, detail) = failure(&fixture.project).expect("the trip ends the task");
+        assert_eq!(
+            class, "VerificationFailure",
+            "the class the trip was counting"
+        );
+        assert!(
+            detail.contains("circuit breaker tripped") && detail.contains("failed 2 times"),
+            "and the record says the breaker spent the task on its second identical failure: {detail}"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            REPAIRED[..16]
+                .iter()
+                .chain(["SelfHealingReport", "TaskFailed"].iter())
+                .copied()
+                .collect::<Vec<&'static str>>(),
+            "two attempts, the repair's account of itself, and the row that ends it — and no \
+             ending of the task"
+        );
+        assert_eq!(
+            attempts(&fixture.project),
+            [AttemptId::new(FIRST), AttemptId::new(SECOND)],
+            "the breaker stopped the task at its bound, not before it"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ["targeted", "targeted"],
+            "the gate ran once per attempt and no completion set was offered a candidate"
+        );
+        assert!(
+            !holds(&fixture.project, "PublishStarted"),
+            "nothing was offered to the remote"
+        );
+        assert_eq!(
+            fixture.origin_tip(),
+            fixture.repo.seed_sha(),
+            "and the remote holds none of it"
+        );
+        assert_eq!(
+            fixture.checkouts().len(),
+            2,
+            "the tree still holds both attempts' uncommitted work, so the checkout stays: {:?}",
+            fixture.checkouts()
+        );
+        assert!(lock_is_free(&fixture.project), "while the lock comes back");
+    }
+
+    #[test]
+    fn a_project_that_allows_no_remediation_stops_at_the_first_refusal() {
+        let fixture = Fixture::single_attempt();
+        fixture.script(&sessions(&[vec![(
+            SEED_FILE,
+            "the work, which does not pass",
+        )]]));
+        fixture.report(FIRST, DONE);
+        let mut run = fixture.run();
+
+        let why = refusal(&fixture, &mut run, &task());
+
+        assert!(
+            matches!(&why, Error::Gate { kind, .. } if kind == "targeted"),
+            "the refusal is the gate's own, and it was {why}"
+        );
+        let (class, detail) = failure(&fixture.project).expect("a spent bound ends the task");
+        assert_eq!(class, "VerificationFailure", "the class it refused on");
+        assert_eq!(
+            detail, "attempts 1 past the 0 bound",
+            "the bound the configuration's zero ceiling spent"
+        );
+        assert_eq!(
+            attempts(&fixture.project),
+            [AttemptId::new(FIRST)],
+            "and no second attempt was opened to spend a budget that does not exist"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            REPAIRED[..9]
+                .iter()
+                .chain(["TaskFailed"].iter())
+                .copied()
+                .collect::<Vec<&'static str>>(),
+            "one attempt's own rows and the row that ends the task — no second attempt, and \
+             no account of a recovery that never happened"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ["targeted"],
+            "one session, one gate, and no repair"
+        );
+        assert!(
+            !holds(&fixture.project, "SelfHealingReport"),
+            "nothing recovered, so nothing had an account to give"
+        );
+        assert!(lock_is_free(&fixture.project), "and the lock comes back");
+    }
+
+    #[test]
+    fn a_repair_that_edits_the_rules_it_is_judged_by_ends_the_task() {
+        let fixture = Fixture::new();
+        fixture.script(&sessions(&[
+            vec![(SEED_FILE, "the work, which does not pass")],
+            vec![
+                ("clippy.toml", "too-many-arguments-threshold = 100\n"),
+                (SEED_FILE, "fixed"),
+            ],
+        ]));
+        fixture.report(FIRST, DONE);
+        fixture.report(SECOND, DONE);
+        let mut run = fixture.run();
+
+        let why = refusal(&fixture, &mut run, &task());
+
+        assert!(
+            matches!(&why, Error::Policy { paths, .. }
+                if paths.contains(&PathBuf::from("clippy.toml"))),
+            "the repair is refused by the rule it touched, and it was {why}"
+        );
+        let (class, detail) = failure(&fixture.project).expect("a policy edit ends the task");
+        assert_eq!(
+            class, "PolicyFailure",
+            "§7's own class for a forbidden file"
+        );
+        assert!(
+            detail.contains("clippy.toml"),
+            "and the row names the file a human has to look at: {detail}"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ["targeted"],
+            "the second attempt's gate never ran: the edit is refused before anything is \
+             measured against it"
+        );
+        assert_eq!(
+            attempts(&fixture.project),
+            [AttemptId::new(FIRST), AttemptId::new(SECOND)],
+            "the repair was opened, and ended by what it wrote"
+        );
+        assert!(
+            fixture.account(SECOND).is_file(),
+            "and it accounted for the repair it tried before it was stopped"
+        );
+        assert!(
+            !holds(&fixture.project, "PublishStarted"),
+            "nothing it wrote was offered to anyone"
+        );
+        assert_eq!(
+            fixture.checkouts().len(),
+            2,
+            "the work it left stays where the next attempt is told to read it: {:?}",
+            fixture.checkouts()
+        );
+        assert!(lock_is_free(&fixture.project), "and the lock comes back");
+    }
+
+    #[test]
+    fn a_session_that_asks_for_input_is_never_looped_through() {
+        let fixture = Fixture::new();
+        fixture.script(&scripted(&[vec![]], NEEDS_INPUT));
+        fixture.report(FIRST, NEEDS_INPUT);
+        let mut run = fixture.run();
+
+        let why = refusal(&fixture, &mut run, &task());
+
+        assert!(
+            matches!(&why, Error::NotFound { what } if what.contains("NEEDS_INPUT")),
+            "the refusal is the session's own claim, quoted, and it was {why}"
+        );
+        assert_eq!(
+            fixture.ran(),
+            Vec::<String>::new(),
+            "nothing was gated, because nothing was claimed to have been finished"
+        );
+        assert_eq!(
+            attempts(&fixture.project),
+            [AttemptId::new(FIRST)],
+            "§7: needs_input never loops — no second session was launched to be asked again"
+        );
+        assert!(
+            failure(&fixture.project).is_none(),
+            "and the task is not marked failed for asking the question §3 makes a pause"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::Running {
+                attempt: AttemptId::new(FIRST),
+                phase: Phase::Implement,
+            }),
+            "the journal says honestly where the run stopped, for whoever pauses it"
+        );
+        assert!(
+            lock_is_free(&fixture.project),
+            "and the lock comes back all the same"
+        );
+    }
+
+    #[test]
+    fn a_session_that_never_ran_is_classified_and_repaired_like_any_other() {
+        let fixture = Fixture::new();
+        fixture.script(&sessions(&[vec![(SEED_FILE, "fixed")]]));
+        fixture.report(FIRST, DONE);
+        fixture.report(SECOND, DONE);
+        let mut run = fixture.run();
+        fixture.refuse_sessions(1);
+
+        let state = finish(&fixture, &mut run, &task());
+
+        assert_eq!(
+            state,
+            TaskState::Done,
+            "a provider that could not be reached once is repaired like any other failure"
+        );
+        assert_eq!(
+            attempts(&fixture.project),
+            [AttemptId::new(FIRST), AttemptId::new(SECOND)],
+            "and the attempt that never had a session is recorded as having been made"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ["targeted", "verify"],
+            "the gate of the attempt that never ran was never run"
+        );
+        assert!(
+            !fixture.report_of(FIRST).exists(),
+            "the attempt whose session was never reached filed no report, and none was \
+             invented for it"
+        );
+        assert!(fixture.account(SECOND).is_file());
+        assert!(lock_is_free(&fixture.project));
     }
 }
