@@ -4,9 +4,9 @@
 //! Each command gets its own file, named for the command (`control` covers
 //! the three run-control commands — pause, interrupt, cancel — together,
 //! since `docs/CONTRACT.md` section 3 and a later task treat them as one
-//! unit). `init` (T108) and `doctor` (T110) have their real behavior; every
-//! other module still only returns [`RunOutcome::Drained`] as a placeholder
-//! for later, per-command work: T111 (status), T112 (add), T113 (plan
+//! unit). `init` (T108), `doctor` (T110) and `status` (T111) have their real
+//! behavior; every other module still only returns [`RunOutcome::Drained`]
+//! as a placeholder for later, per-command work: T112 (add), T113 (plan
 //! lint), T115 (run), T116 (resume, retry), T117 (resolve, ack), T119
 //! (pause, interrupt, cancel), T120 (rerun-gate) and T131 (tui). What this
 //! module is responsible for is that [`dispatch`] itself is real: the match
@@ -49,7 +49,7 @@ pub(crate) fn dispatch(
         Command::Init => init::run(project, config),
         Command::Add { file } => add::run(project, config, file.as_deref()),
         Command::Plan { command } => plan::run(project, config, command),
-        Command::Status => status::run(project, config),
+        Command::Status => status::run(project, config, json),
         Command::Run { task, from } => run::run(project, config, *task, *from),
         Command::Resume => resume::run(project, config),
         Command::Retry { task } => retry::run(project, config, *task),
@@ -127,16 +127,17 @@ mod tests {
         for command in every_command() {
             let outcome = dispatch(&command, &project, &config, false);
 
-            // `doctor` (T110) has real behavior now: run against this
-            // fixture's nonexistent state directory, its checks genuinely
-            // fail, so it reaches `RunOutcome::CheckFailed` rather than the
-            // placeholder `Drained` every other still-unimplemented command
-            // returns. `cmd::doctor`'s own tests cover its behavior in
-            // detail; this loop only needs to prove dispatch reached it.
-            if matches!(command, Command::Doctor) {
+            // `doctor` (T110) and `status` (T111) have real behavior now:
+            // run against this fixture's nonexistent state directory, both
+            // fail to even open it, so each reaches `RunOutcome::CheckFailed`
+            // rather than the placeholder `Drained` every other
+            // still-unimplemented command returns. Their own modules' tests
+            // cover the behavior in detail; this loop only needs to prove
+            // dispatch reached it.
+            if matches!(command, Command::Doctor | Command::Status) {
                 assert!(
                     matches!(outcome, RunOutcome::CheckFailed { .. }),
-                    "{command:?} did not reach cmd::doctor's real behavior: {outcome:?}"
+                    "{command:?} did not reach its cmd:: module's real behavior: {outcome:?}"
                 );
                 continue;
             }

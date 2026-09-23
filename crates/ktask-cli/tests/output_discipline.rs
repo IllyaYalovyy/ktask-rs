@@ -9,11 +9,12 @@ use std::process::Command;
 /// Runs `status --json --verbose` against a directory that is guaranteed not
 /// to be a registered project (a fresh `tempfile::tempdir`, with
 /// `XDG_STATE_HOME` pointed at another fresh directory so no real
-/// registration on the machine running this test can be found either). Every
-/// per-command `cmd::` implementation is still a placeholder (T107's own
-/// scope; T111 gives `status` its real body), so this "no project" usage
-/// error is the one outcome dispatch can produce on its own right now — and
-/// it is enough to prove the stdout/stderr split `docs/CONTRACT.md` section 0
+/// registration on the machine running this test can be found either). No
+/// project means `main::run` returns `RunOutcome::Usage` before dispatch
+/// ever reaches `cmd::status` (`status` itself has real behavior as of
+/// T111), so this "no project" usage error is the one outcome this test can
+/// rely on regardless of what any individual command does — and it is
+/// enough to prove the stdout/stderr split `docs/CONTRACT.md` section 0
 /// rule 4 requires: the JSON result lands only on stdout, the `--verbose`
 /// diagnostic dump lands only on stderr, and neither leaks into the other.
 #[test]
