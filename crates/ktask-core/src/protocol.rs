@@ -9,6 +9,8 @@
 //! in [`Phase::Verify`] then [`Phase::Publish`], and both
 //! [`Protocol::direct`] and [`Protocol::tdd`] are built through it.
 
+use std::path::{Path, PathBuf};
+
 use crate::{Config, Error, GateKind, Phase, Result, Task};
 
 /// Which paths a [`PhaseSpec`]'s agent may modify while it runs.
@@ -183,6 +185,123 @@ pub fn for_task(task: &Task, config: &Config) -> Result<Protocol> {
     })
 }
 
+/// Fails if `changed` contains a path `scope` does not permit a phase to
+/// write.
+///
+/// `changed` is the set of paths the phase's attempt actually modified —
+/// callers get this from [`crate::changed_paths`] against the pre-phase git
+/// state, never from the agent's own account of what it touched, since the
+/// point of this check is to not have to trust that account. `test_globs`
+/// supplies the patterns [`WriteScope::TestsOnly`] treats as test paths
+/// (typically [`Config::test_globs`]), so what counts as a test file is
+/// configurable per language profile rather than hard-coded here.
+///
+/// # Errors
+///
+/// Returns [`Error::Policy`] naming every offending path: for
+/// [`WriteScope::None`], every entry in `changed`; for
+/// [`WriteScope::TestsOnly`], every entry that matches none of `test_globs`.
+/// [`WriteScope::All`] never fails.
+pub fn check_scope(scope: WriteScope, changed: &[PathBuf], test_globs: &[String]) -> Result<()> {
+    let (offending, detail): (Vec<PathBuf>, &str) = match scope {
+        WriteScope::All => return Ok(()),
+        WriteScope::None => (changed.to_vec(), "phase writes are not permitted"),
+        WriteScope::TestsOnly => (
+            changed
+                .iter()
+                .filter(|path| !matches_any_glob(path, test_globs))
+                .cloned()
+                .collect(),
+            "phase may only write test paths",
+        ),
+    };
+
+    if offending.is_empty() {
+        return Ok(());
+    }
+
+    Err(Error::Policy {
+        detail: detail.to_string(),
+        paths: offending,
+    })
+}
+
+/// Reports whether `path` matches at least one glob in `globs`.
+///
+/// A glob that fails to compile is skipped rather than treated as an error,
+/// matching how [`crate::redact::redact`] treats a malformed configured
+/// pattern: one typo in a language profile's globs must not make every path
+/// look like a violation.
+fn matches_any_glob(path: &Path, globs: &[String]) -> bool {
+    let path = path.to_string_lossy();
+    globs.iter().any(|glob| glob_matches(glob, &path))
+}
+
+/// Reports whether `path` matches glob pattern `pattern`.
+///
+/// Supports `*` (any run of characters within one path segment), `**` (any
+/// run of characters, including `/`, spanning whole segments) and `?` (one
+/// character within a segment) — the subset `Config::test_globs`'s
+/// documented defaults use (`"**/tests/**"`, `"**/*_test.rs"`,
+/// `"src/**/tests.rs"`). Every other character is matched literally.
+fn glob_matches(pattern: &str, path: &str) -> bool {
+    match regex::Regex::new(&glob_to_regex(pattern)) {
+        Ok(re) => re.is_match(path),
+        Err(_) => false,
+    }
+}
+
+/// Compiles a glob pattern into an anchored regex, segment by segment so
+/// that a `**` segment can absorb the slash on either side of it (`"**/"` at
+/// the start, `"/**"` at the end, `"/**/"` in the middle) — without that,
+/// `"**/tests/**"` would fail to match a bare `"tests/foo.rs"` at the
+/// repository root, since a literal `.*` either side of literal slashes
+/// would demand a slash that is not there.
+fn glob_to_regex(pattern: &str) -> String {
+    let segments: Vec<&str> = pattern.split('/').collect();
+    let last = segments.len().saturating_sub(1);
+
+    let mut regex = String::from("^");
+    let mut pending_slash = false;
+    for (index, segment) in segments.iter().enumerate() {
+        if *segment == "**" {
+            if index == 0 && index == last {
+                regex.push_str(".*");
+            } else if index == 0 {
+                regex.push_str("(?:.*/)?");
+            } else if index == last {
+                regex.push_str("(?:/.*)?");
+            } else {
+                regex.push_str("/(?:.*/)?");
+            }
+            pending_slash = false;
+        } else {
+            if pending_slash {
+                regex.push('/');
+            }
+            regex.push_str(&segment_to_regex(segment));
+            pending_slash = true;
+        }
+    }
+    regex.push('$');
+    regex
+}
+
+/// Converts one path segment of a glob pattern (no `/`) into the regex
+/// fragment matching it: `*` becomes `[^/]*`, `?` becomes `[^/]`, and every
+/// other character is escaped literally.
+fn segment_to_regex(segment: &str) -> String {
+    let mut out = String::new();
+    for ch in segment.chars() {
+        match ch {
+            '*' => out.push_str("[^/]*"),
+            '?' => out.push_str("[^/]"),
+            other => out.push_str(&regex::escape(&other.to_string())),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,5 +454,108 @@ mod tests {
 
         let protocol = for_task(&task, &config).expect("task's own name wins");
         assert_eq!(protocol.name, "tdd");
+    }
+
+    fn paths(entries: &[&str]) -> Vec<PathBuf> {
+        entries.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn all_permits_any_change() {
+        let changed = paths(&["src/lib.rs", "tests/it.rs", "README.md"]);
+        assert!(check_scope(WriteScope::All, &changed, &[]).is_ok());
+    }
+
+    #[test]
+    fn none_permits_no_changes() {
+        assert!(check_scope(WriteScope::None, &[], &[]).is_ok());
+    }
+
+    #[test]
+    fn none_rejects_any_edit() {
+        let changed = paths(&["crates/ktask-core/src/lib.rs"]);
+        let err = check_scope(WriteScope::None, &changed, &[]).expect_err("must reject");
+        assert!(
+            matches!(&err, Error::Policy { paths, .. } if paths == &[PathBuf::from("crates/ktask-core/src/lib.rs")])
+        );
+    }
+
+    #[test]
+    fn none_rejects_even_a_test_edit() {
+        let changed = paths(&["crates/ktask-core/tests/it.rs"]);
+        let globs = Config::default().test_globs;
+        let err = check_scope(WriteScope::None, &changed, &globs).expect_err("must reject");
+        assert!(matches!(&err, Error::Policy { .. }));
+    }
+
+    #[test]
+    fn tests_only_permits_a_test_edit() {
+        let globs = Config::default().test_globs;
+        let changed = paths(&["crates/ktask-core/tests/protocol_it.rs"]);
+        assert!(check_scope(WriteScope::TestsOnly, &changed, &globs).is_ok());
+    }
+
+    #[test]
+    fn tests_only_rejects_a_production_edit() {
+        let globs = Config::default().test_globs;
+        let changed = paths(&["crates/ktask-core/src/protocol.rs"]);
+        let err = check_scope(WriteScope::TestsOnly, &changed, &globs).expect_err("must reject");
+        assert!(
+            matches!(&err, Error::Policy { paths, .. } if paths == &[PathBuf::from("crates/ktask-core/src/protocol.rs")])
+        );
+    }
+
+    #[test]
+    fn tests_only_names_only_the_offending_paths_among_a_mixed_change() {
+        let globs = Config::default().test_globs;
+        let changed = paths(&["crates/ktask-core/tests/protocol_it.rs", "src/main.rs"]);
+        let err = check_scope(WriteScope::TestsOnly, &changed, &globs).expect_err("must reject");
+        assert!(
+            matches!(&err, Error::Policy { paths, .. } if paths == &[PathBuf::from("src/main.rs")])
+        );
+    }
+
+    #[test]
+    fn tests_only_globs_are_configurable_per_language() {
+        // A Python profile's test paths look nothing like Rust's; the check
+        // must honor whatever globs it is handed rather than a hard-coded
+        // Rust convention.
+        let python_globs = vec!["test_*.py".to_string(), "**/tests/**".to_string()];
+        let changed = paths(&["test_widgets.py", "app/widgets.py"]);
+        let err =
+            check_scope(WriteScope::TestsOnly, &changed, &python_globs).expect_err("must reject");
+        assert!(
+            matches!(&err, Error::Policy { paths, .. } if paths == &[PathBuf::from("app/widgets.py")])
+        );
+
+        let all_tests = paths(&["test_widgets.py", "pkg/tests/helpers.py"]);
+        assert!(check_scope(WriteScope::TestsOnly, &all_tests, &python_globs).is_ok());
+    }
+
+    #[test]
+    fn glob_star_star_matches_at_the_start_of_a_path() {
+        assert!(glob_matches("**/tests/**", "tests/foo.rs"));
+        assert!(glob_matches(
+            "**/tests/**",
+            "crates/ktask-core/tests/foo.rs"
+        ));
+        assert!(!glob_matches("**/tests/**", "crates/ktask-core/src/lib.rs"));
+    }
+
+    #[test]
+    fn glob_single_star_stays_within_one_segment() {
+        assert!(glob_matches("**/*_test.rs", "widget_test.rs"));
+        assert!(glob_matches("**/*_test.rs", "crates/foo/widget_test.rs"));
+        assert!(!glob_matches(
+            "**/*_test.rs",
+            "crates/foo/widget_test_helpers.rs.bak"
+        ));
+    }
+
+    #[test]
+    fn glob_star_star_in_the_middle_matches_zero_or_more_directories() {
+        assert!(glob_matches("src/**/tests.rs", "src/tests.rs"));
+        assert!(glob_matches("src/**/tests.rs", "src/a/b/tests.rs"));
+        assert!(!glob_matches("src/**/tests.rs", "lib/tests.rs"));
     }
 }
