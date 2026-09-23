@@ -291,6 +291,7 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::Interrupted { .. }
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. } => Err(invalid("Queued", event)),
     }
@@ -330,6 +331,7 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. } => Err(invalid("Preflight", event)),
     }
@@ -356,6 +358,10 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
         EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
             class: *class,
             detail: detail.clone(),
+        }),
+        EventKind::DecisionRaised { .. } => Ok(TaskState::Paused {
+            reason: PauseReason::Input,
+            resume_to: Box::new(TaskState::Running { attempt, phase }),
         }),
         EventKind::Paused { reason } => Ok(TaskState::Paused {
             reason: reason.clone(),
@@ -407,6 +413,10 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
         EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
             class: *class,
             detail: detail.clone(),
+        }),
+        EventKind::DecisionRaised { .. } => Ok(TaskState::Paused {
+            reason: PauseReason::Input,
+            resume_to: Box::new(TaskState::Remediating { attempt, phase }),
         }),
         EventKind::Paused { reason } => Ok(TaskState::Paused {
             reason: reason.clone(),
@@ -470,6 +480,7 @@ fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. } => Err(invalid("Verifying", event)),
     }
 }
@@ -514,6 +525,7 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. } => Err(invalid("Publishing", event)),
     }
 }
@@ -548,6 +560,7 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::Interrupted { .. }
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. } => {
             Err(invalid(&format!("PublishedVerified({commit})"), event))
@@ -620,6 +633,7 @@ fn from_paused(
         | EventKind::Paused { .. }
         | EventKind::Interrupted { .. }
         | EventKind::TddExceptionUsed { .. }
+        | EventKind::DecisionRaised { .. }
         | EventKind::AttemptRecorded { .. } => Err(invalid("Paused", event)),
     }
 }
@@ -1025,6 +1039,18 @@ mod tests {
         }
     }
 
+    fn decision_raised() -> EventKind {
+        EventKind::DecisionRaised {
+            request: crate::DecisionRequest {
+                question: "Postgres or SQLite?".to_string(),
+                options: vec!["Postgres".to_string(), "SQLite".to_string()],
+                tradeoffs: "t".to_string(),
+                impact: "i".to_string(),
+                recommended: None,
+            },
+        }
+    }
+
     #[test]
     fn the_direct_protocol_happy_path_reaches_done_event_by_event() {
         let attempt = AttemptId::new(1);
@@ -1408,6 +1434,23 @@ mod tests {
     }
 
     #[test]
+    fn from_running_accepts_decision_raised_and_pauses_for_input() {
+        let attempt = AttemptId::new(1);
+        let running = TaskState::Running {
+            attempt,
+            phase: Phase::Green,
+        };
+        let state = apply(&running, &decision_raised()).expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::Input,
+                resume_to: Box::new(running),
+            }
+        );
+    }
+
+    #[test]
     fn from_running_accepts_interrupted_and_pauses_at_the_events_phase() {
         let attempt = AttemptId::new(1);
         // The stored phase is the placeholder `Implement` seeded by
@@ -1534,6 +1577,23 @@ mod tests {
         };
         let state = apply(&remediating, &attempt_recorded(attempt)).expect("legal");
         assert_eq!(state, remediating);
+    }
+
+    #[test]
+    fn from_remediating_accepts_decision_raised_and_pauses_for_input() {
+        let attempt = AttemptId::new(2);
+        let remediating = TaskState::Remediating {
+            attempt,
+            phase: Phase::Harden,
+        };
+        let state = apply(&remediating, &decision_raised()).expect("legal");
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::Input,
+                resume_to: Box::new(remediating),
+            }
+        );
     }
 
     #[test]
@@ -2249,6 +2309,15 @@ mod tests {
                 at: OffsetDateTime::UNIX_EPOCH,
             },
             attempt_recorded(attempt),
+            EventKind::DecisionRaised {
+                request: crate::DecisionRequest {
+                    question: "q?".to_string(),
+                    options: vec!["a".to_string(), "b".to_string()],
+                    tradeoffs: "t".to_string(),
+                    impact: "i".to_string(),
+                    recommended: None,
+                },
+            },
         ]
     }
 
@@ -2274,6 +2343,7 @@ mod tests {
             ("Running", "AttemptRecorded"),
             ("Running", "TddExceptionUsed"),
             ("Running", "TaskFailed"),
+            ("Running", "DecisionRaised"),
             ("Running", "Paused"),
             ("Running", "Interrupted"),
             ("Running", "TaskCancelled"),
@@ -2282,6 +2352,7 @@ mod tests {
             ("Remediating", "AttemptRecorded"),
             ("Remediating", "TddExceptionUsed"),
             ("Remediating", "TaskFailed"),
+            ("Remediating", "DecisionRaised"),
             ("Remediating", "Paused"),
             ("Remediating", "Interrupted"),
             ("Remediating", "TaskCancelled"),
@@ -2316,7 +2387,7 @@ mod tests {
         let states = representative_states();
         let events = representative_events();
         assert_eq!(states.len(), 16, "expected one row per distinguished state");
-        assert_eq!(events.len(), 21, "expected one row per distinguished event");
+        assert_eq!(events.len(), 22, "expected one row per distinguished event");
 
         let mut checked = 0;
         for (state_label, state) in &states {
@@ -2344,7 +2415,7 @@ mod tests {
         assert_eq!(checked, states.len() * events.len());
         assert_eq!(
             ALLOWED.len(),
-            50,
+            52,
             "the allowed list itself changed size; update this guard deliberately"
         );
     }

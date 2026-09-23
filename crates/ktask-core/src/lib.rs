@@ -7,6 +7,7 @@ mod attempt;
 mod classify;
 mod config;
 mod context;
+mod decision;
 mod error;
 mod event;
 mod events;
@@ -35,6 +36,7 @@ pub use classify::{
 };
 pub use config::{Config, Resolved, Source, load_for};
 pub use context::{assemble, collect_adrs, ensure_defaults, load_template};
+pub use decision::{DecisionRequest, parse_decision_request};
 pub use error::{Error, Result};
 pub use event::{Event, EventKind};
 pub use events::{Bus, Recorder, Subscription};

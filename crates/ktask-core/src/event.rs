@@ -4,19 +4,18 @@
 //! listed here, `#[serde(tag = "kind")]` so a stored event's `kind` column
 //! names its variant. Nothing may emit an event this enum does not contain.
 //!
-//! Six variants are deliberately absent because their payload names a type
+//! Five variants are deliberately absent because their payload names a type
 //! no earlier task has defined: `GateFinished`, `AttemptFinished`,
-//! `ProviderDetected`, `DecisionRaised`, `DecisionResolved` and
-//! `SelfHealingReport`. A seventh, `GateStarted`, is absent for the same
-//! reason: its `kind: GateKind` field names a type `gate.rs` has not yet
-//! introduced, matching the precedent set by [`crate::Error::Gate`], whose
-//! `kind` field is a `String` today rather than `GateKind`. Each is added by
-//! the task that defines its payload type, which also adds its arm to the
-//! transition function.
+//! `ProviderDetected`, `DecisionResolved` and `SelfHealingReport`. A sixth,
+//! `GateStarted`, is absent for the same reason: its `kind: GateKind` field
+//! names a type `gate.rs` has not yet introduced, matching the precedent
+//! set by [`crate::Error::Gate`], whose `kind` field is a `String` today
+//! rather than `GateKind`. Each is added by the task that defines its
+//! payload type, which also adds its arm to the transition function.
 
 use crate::{
-    AttemptId, AttemptRecord, EventSeq, FailureClass, PauseReason, Phase, Recovery, Stream, TaskId,
-    TddException,
+    AttemptId, AttemptRecord, DecisionRequest, EventSeq, FailureClass, PauseReason, Phase,
+    Recovery, Stream, TaskId, TddException,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -166,6 +165,13 @@ pub enum EventKind {
         /// The task's stated reason, from its `**TDD-Exception:**` section.
         reason: String,
     },
+    /// A `NEEDS_INPUT` report surfaced a structured decision request:
+    /// `VISION.md` §6's `waiting_input` mechanism (invariant 8). The queue
+    /// pauses until `ktask-rs resolve` answers it.
+    DecisionRaised {
+        /// The question raised, and everything a human needs to answer it.
+        request: DecisionRequest,
+    },
     /// A human acknowledged a gate that required their attention.
     GateAcknowledged {
         /// Who acknowledged the gate.
@@ -209,6 +215,7 @@ impl EventKind {
             EventKind::Interrupted { .. } => "Interrupted",
             EventKind::RecoveryDecision { .. } => "RecoveryDecision",
             EventKind::TddExceptionUsed { .. } => "TddExceptionUsed",
+            EventKind::DecisionRaised { .. } => "DecisionRaised",
             EventKind::GateAcknowledged { .. } => "GateAcknowledged",
             EventKind::AttemptRecorded { .. } => "AttemptRecorded",
         }
@@ -326,6 +333,15 @@ mod tests {
                 exception: TddException::Documentation,
                 reason: "README.md only, no code changed.".to_string(),
             },
+            EventKind::DecisionRaised {
+                request: DecisionRequest {
+                    question: "Postgres or SQLite for the journal?".to_string(),
+                    options: vec!["Postgres".to_string(), "SQLite".to_string()],
+                    tradeoffs: "Postgres scales better; SQLite is simpler to run.".to_string(),
+                    impact: "Journal durability and operational overhead.".to_string(),
+                    recommended: Some("SQLite".to_string()),
+                },
+            },
             EventKind::GateAcknowledged {
                 by: "yalovoy".to_string(),
                 at: OffsetDateTime::UNIX_EPOCH,
@@ -350,9 +366,9 @@ mod tests {
     }
 
     #[test]
-    fn event_kind_has_exactly_twenty_one_variants() {
+    fn event_kind_has_exactly_twenty_two_variants() {
         let variants = all_events();
-        assert_eq!(variants.len(), 21);
+        assert_eq!(variants.len(), 22);
 
         // Exhaustive, wildcard-free match: a variant added to `EventKind`
         // without being listed here fails to compile instead of silently
@@ -378,6 +394,7 @@ mod tests {
                 | EventKind::Interrupted { .. }
                 | EventKind::RecoveryDecision { .. }
                 | EventKind::TddExceptionUsed { .. }
+                | EventKind::DecisionRaised { .. }
                 | EventKind::GateAcknowledged { .. }
                 | EventKind::AttemptRecorded { .. } => {}
             }
@@ -416,6 +433,7 @@ mod tests {
             "Interrupted",
             "RecoveryDecision",
             "TddExceptionUsed",
+            "DecisionRaised",
             "GateAcknowledged",
             "AttemptRecorded",
         ]
