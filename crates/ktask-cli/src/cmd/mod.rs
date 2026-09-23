@@ -4,10 +4,10 @@
 //! Each command gets its own file, named for the command (`control` covers
 //! the three run-control commands — pause, interrupt, cancel — together,
 //! since `docs/CONTRACT.md` section 3 and a later task treat them as one
-//! unit). `init` (T108), `doctor` (T110), `status` (T111) and `add` (T112)
-//! have their real behavior; every other module still only returns
-//! [`RunOutcome::Drained`] as a placeholder for later, per-command work:
-//! T113 (plan lint), T115 (run), T116 (resume, retry), T117 (resolve, ack),
+//! unit). `init` (T108), `doctor` (T110), `status` (T111), `add` (T112) and
+//! `plan lint` (T113) have their real behavior; every other module still
+//! only returns [`RunOutcome::Drained`] as a placeholder for later,
+//! per-command work: T115 (run), T116 (resume, retry), T117 (resolve, ack),
 //! T119 (pause, interrupt, cancel), T120 (rerun-gate) and T131 (tui). What
 //! this module is responsible for is that [`dispatch`] itself is real: the
 //! match below is exhaustive, so a `Command` variant added without a
@@ -131,14 +131,17 @@ mod tests {
         for command in every_command() {
             let outcome = dispatch(&command, &project, &config, false);
 
-            // `doctor` (T110) and `status` (T111) have real behavior now:
-            // run against this fixture's nonexistent state directory, both
-            // fail to even open it, so each reaches `RunOutcome::CheckFailed`
-            // rather than the placeholder `Drained` every other
-            // still-unimplemented command returns. Their own modules' tests
-            // cover the behavior in detail; this loop only needs to prove
-            // dispatch reached it.
-            if matches!(command, Command::Doctor | Command::Status) {
+            // `doctor` (T110), `status` (T111) and `plan lint` (T113) have
+            // real behavior now: run against this fixture's nonexistent
+            // state directory, all three fail to even open it, so each
+            // reaches `RunOutcome::CheckFailed` rather than the placeholder
+            // `Drained` every other still-unimplemented command returns.
+            // Their own modules' tests cover the behavior in detail; this
+            // loop only needs to prove dispatch reached it.
+            if matches!(
+                command,
+                Command::Doctor | Command::Status | Command::Plan { .. }
+            ) {
                 assert!(
                     matches!(outcome, RunOutcome::CheckFailed { .. }),
                     "{command:?} did not reach its cmd:: module's real behavior: {outcome:?}"
