@@ -8,6 +8,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use nix::sys::statvfs::statvfs;
@@ -32,6 +34,33 @@ use crate::{
 /// has to cover the narrow window between that check and this acquisition.
 const PREPARE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The process-wide flag [`interrupt_flag`]'s `SIGINT` handler sets.
+static INTERRUPTED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+
+/// Returns the flag this process's `SIGINT` handler sets, installing that
+/// handler the first time this is called (`docs/CONTRACT.md` §1: exit code
+/// 130, "state is durable and resumable"). Every later call, from a fresh
+/// [`Runner`] or from [`super::provider::run_streaming`]'s own output loop,
+/// reads the same `Arc` rather than registering a second handler:
+/// `signal_hook` itself tolerates more than one flag being registered for
+/// the same signal, but nothing here needs more than one.
+///
+/// Registration is best-effort: the only realistic failure
+/// (`signal_hook::low_level::register` rejecting a signal it never allows a
+/// handler for, such as `SIGKILL`) does not apply to `SIGINT`, so a flag
+/// that silently never gets set is an acceptable, untested-in-practice
+/// fallback rather than a reason to make every caller handle an `Err` that
+/// does not happen.
+pub(crate) fn interrupt_flag() -> Arc<AtomicBool> {
+    INTERRUPTED
+        .get_or_init(|| {
+            let flag = Arc::new(AtomicBool::new(false));
+            let _ = signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&flag));
+            flag
+        })
+        .clone()
+}
+
 /// The supervisor for one project: everything an attempt runs against, held
 /// together so nothing that drives an attempt has to reassemble it from
 /// scratch.
@@ -51,6 +80,10 @@ pub struct Runner {
     recorder: Recorder,
     /// The agent backend attempts are driven through.
     provider: Box<dyn Provider>,
+    /// Set once this process receives `SIGINT` ([`interrupt_flag`]); checked
+    /// at every phase boundary so an interrupt lands as a durable
+    /// [`PauseReason::Interrupted`] pause rather than an ordinary failure.
+    interrupt: Arc<AtomicBool>,
 }
 
 /// Manual, since [`Provider`] (unlike every other field here) does not
@@ -63,6 +96,7 @@ impl std::fmt::Debug for Runner {
             .field("profile", &self.profile)
             .field("recorder", &self.recorder)
             .field("provider", &self.provider.name())
+            .field("interrupt", &self.interrupt)
             .finish()
     }
 }
@@ -98,6 +132,7 @@ impl Runner {
         let recorder = Recorder::new(journal, bus);
         let profile = profile_from(&config)?;
         let provider = build(&config)?;
+        let interrupt = interrupt_flag();
 
         Ok(Runner {
             project,
@@ -105,7 +140,37 @@ impl Runner {
             profile,
             recorder,
             provider,
+            interrupt,
         })
+    }
+
+    /// True once this process has received `SIGINT` since [`interrupt_flag`]
+    /// installed its handler.
+    fn interrupted(&self) -> bool {
+        self.interrupt.load(Ordering::SeqCst)
+    }
+
+    /// If [`Runner::interrupted`], journals [`EventKind::Interrupted`] for
+    /// `task` naming `phase` as the point to resume from, and returns the
+    /// resulting durable [`TaskState::Paused`]; otherwise `Ok(None)`, so a
+    /// caller falls through to whatever it would otherwise have done.
+    ///
+    /// Called at every phase boundary in [`Runner::drive_attempt`] and
+    /// [`Runner::run_queue`] — before a phase starts, after it returns
+    /// (whether it succeeded or failed, since [`super::provider::run_streaming`]'s
+    /// own output loop may have just killed the provider's process group in
+    /// response to the same signal), and after its gate, if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever [`Recorder::record`] returns on failure to journal.
+    fn pause_for_interrupt(&mut self, task: &Task, phase: Phase) -> Result<Option<TaskState>> {
+        if !self.interrupted() {
+            return Ok(None);
+        }
+        self.recorder
+            .record(Some(task.id), EventKind::Interrupted { phase })?;
+        Ok(Some(journaled_state(&self.project, task.id)?))
     }
 
     /// Opens a new attempt at `task`.
@@ -661,6 +726,13 @@ impl Runner {
                 });
             };
 
+            // Between tasks, not just between phases within one: a signal
+            // caught while nothing was running yet still stops the queue
+            // rather than starting one more task first.
+            if self.interrupted() {
+                return Ok(RunOutcome::Interrupted);
+            }
+
             match self.run_task(task) {
                 Ok(TaskState::Paused { reason, .. }) => {
                     return Ok(match reason {
@@ -754,6 +826,17 @@ impl Runner {
     /// recognized by [`Runner::pause_for_provider_limit`] and turned into
     /// [`TaskState::Paused`] with [`crate::PauseReason::Limit`] the same
     /// way. Neither ever reaches [`EventKind::TaskFailed`].
+    ///
+    /// A third pause is decided the same way, at every phase boundary
+    /// rather than only between attempts: [`Runner::pause_for_interrupt`]
+    /// checks whether this process has caught `SIGINT` since it started —
+    /// before a phase begins, after it ends (success or failure alike,
+    /// since [`super::provider::run_streaming`]'s own output loop may have
+    /// just killed the provider's process group in response to the same
+    /// signal), and after its gate. Whichever check first finds the flag set
+    /// records [`EventKind::Interrupted`] naming the phase to resume from
+    /// and returns immediately, before the loop or [`Runner::remediate`]
+    /// ever get a chance to treat the interruption as an ordinary failure.
     fn drive_attempt(&mut self, prep: &Prepared, task: &Task) -> Result<TaskState> {
         let attempt = self.begin_attempt(task)?;
         let protocol = for_task(task, &self.config)?;
@@ -762,15 +845,24 @@ impl Runner {
 
         let mut before: Option<TestSummary> = None;
         for spec in agent_phases {
+            if let Some(state) = self.pause_for_interrupt(task, spec.phase)? {
+                return Ok(state);
+            }
             let phase_outcome = match self.run_phase(prep, task, attempt, spec) {
                 Ok(phase_outcome) => phase_outcome,
                 Err(err) => {
+                    if let Some(state) = self.pause_for_interrupt(task, spec.phase)? {
+                        return Ok(state);
+                    }
                     return match self.pause_for_provider_limit(task, attempt, &err)? {
                         Some(state) => Ok(state),
                         None => Err(err),
                     };
                 }
             };
+            if let Some(state) = self.pause_for_interrupt(task, spec.phase)? {
+                return Ok(state);
+            }
             if let ReportResult::NeedsInput(request) = phase_outcome.report {
                 self.recorder
                     .record(Some(task.id), EventKind::DecisionRaised { request })?;
@@ -778,6 +870,9 @@ impl Runner {
             }
             if spec.gate.is_some() {
                 before = Some(self.gate_phase(prep, task, attempt, spec, before.as_ref())?);
+                if let Some(state) = self.pause_for_interrupt(task, spec.phase)? {
+                    return Ok(state);
+                }
             }
         }
 
@@ -2608,6 +2703,7 @@ mod tests {
             profile,
             recorder,
             provider,
+            interrupt: interrupt_flag(),
         }
     }
 

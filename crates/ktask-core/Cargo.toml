@@ -21,6 +21,7 @@ regex = { workspace = true }
 toml = { workspace = true }
 time = { workspace = true }
 nix = { workspace = true }
+signal-hook = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

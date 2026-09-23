@@ -19,10 +19,12 @@
 
 use std::io::{self, BufRead, BufReader, Read, Write as _};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::runner::interrupt_flag;
 use crate::{AttemptId, Bus, Error, Event, EventKind, EventSeq, Result, Stream};
 
 use super::Outcome;
@@ -182,11 +184,18 @@ fn publish_chunk(bus: &Bus, seq: &mut u64, chunk: &Chunk) {
 /// matching [`super::Provider::invoke`]'s own contract that only a
 /// completed run is an `Ok` outcome.
 ///
+/// The same loop that checks the two timeouts also checks this process's
+/// `SIGINT` flag on every tick: a signal caught while this is in flight
+/// kills the process group exactly like a timeout would, well within one
+/// poll interval of the signal arriving, rather than leaving it running
+/// until the caller's next chance to notice between calls.
+///
 /// # Errors
 ///
 /// Returns [`Error::Provider`] when `cmd` could not be spawned, when either
 /// output pipe was not piped, or when `idle_timeout` or `hard_timeout`
-/// elapsed and the process group was killed.
+/// elapsed, or this process caught `SIGINT`, and the process group was
+/// killed.
 pub fn run_streaming(
     cmd: &mut Command,
     stdin_data: Option<&str>,
@@ -259,7 +268,9 @@ pub fn run_streaming(
         }
 
         if timeout_detail.is_none() {
-            if started.elapsed() >= hard_timeout {
+            if interrupt_flag().load(Ordering::SeqCst) {
+                timeout_detail = Some("interrupted by SIGINT".to_string());
+            } else if started.elapsed() >= hard_timeout {
                 timeout_detail = Some(format!("hard timeout of {hard_timeout:?} exceeded"));
             } else if last_activity.elapsed() >= idle_timeout {
                 timeout_detail = Some(format!(
