@@ -6484,6 +6484,47 @@ mod verify_and_publish {
             self.touch("peer-move");
         }
 
+        /// Make the origin move its branch back off whatever it accepts: a
+        /// `post-receive` hook resets the branch to the seed commit the moment a push
+        /// lands, so the remote ends up holding a commit that is not the one it was
+        /// handed.
+        ///
+        /// This is how [`crate::git::publish`]'s read-back can refuse while its push
+        /// and its fetch both succeeded — a server that rewrites what it receives, or
+        /// one that simply outraced us. Measured: the push prints its own success, the
+        /// fetch reports `forced update`, and the tip read back is the seed. Reaching
+        /// that state with a hook rather than with a race is what makes the refusal
+        /// testable at all; the alternative is a test that passes or fails depending on
+        /// when two processes happened to run.
+        ///
+        /// The hook goes in a directory of its own, inside the scratch directory, and
+        /// the origin is pointed at it by its own local `core.hooksPath`. The
+        /// repository's default `hooks/` answers to no one here: the fixture sets
+        /// `core.hooksPath` at [`crate::testing`] level so a hook configured for the
+        /// machine running the suite cannot run inside it, and writing beside that
+        /// setting rather than over it keeps the isolation and the hook both.
+        fn move_the_remote_off_what_it_took(&self) {
+            let hooks = self.repo.path().join("origin-hooks");
+            fs::create_dir_all(&hooks).expect("a hooks directory is creatable");
+            let hook = hooks.join("post-receive");
+            fs::write(
+                &hook,
+                format!(
+                    "#!/bin/sh\ngit update-ref refs/heads/{BRANCH} '{}'\n",
+                    self.repo.seed_sha()
+                ),
+            )
+            .expect("the origin's post-receive hook is writable");
+            fs::set_permissions(&hook, fs::Permissions::from_mode(0o755))
+                .expect("a hook is made executable");
+            let where_hooks_live = hooks.display().to_string();
+            git::git(
+                self.repo.origin(),
+                &["config", "--local", "core.hooksPath", &where_hooks_live],
+            )
+            .expect("the origin is told where its hooks live");
+        }
+
         fn touch(&self, marker: &str) {
             fs::write(self.markers.join(marker), "").expect("a marker file is writable");
         }
@@ -7376,7 +7417,8 @@ mod verify_and_publish {
         assert_eq!(
             args.first().map(String::as_str),
             Some("fetch"),
-            "the repair was attempted, and the fetch it opens with is what refused: {args:?}"
+            "the remote is gone by the time the publication fetches, and that refusal is \
+             what comes back: {args:?}"
         );
         assert_eq!(
             candidates(&fixture.project).len(),
@@ -7406,6 +7448,85 @@ mod verify_and_publish {
                 attempt: AttemptId::new(ATTEMPT)
             }),
             "a run that dies with a push in the air is found there, not back at the gates"
+        );
+    }
+
+    /// The guard on the one repair this step is allowed to make: a replay answers a
+    /// push the remote refused, and nothing else.
+    ///
+    /// Here git refused nothing but the read-back, so there is no divergence to
+    /// replay over — and replaying would be worse than useless, because the remote
+    /// holds a tip this checkout is already based on. The step reports what the
+    /// fetched tip said and leaves the task in `Publishing`, where recovery finds a
+    /// candidate in the air, rather than spending a second completion set on a commit
+    /// the remote will move off again.
+    #[test]
+    fn a_tip_that_is_not_the_candidate_is_reported_rather_than_replayed_onto() {
+        let fixture = Fixture::new();
+        fixture.move_the_remote_off_what_it_took();
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        work(&ready);
+
+        let refusal = publish(&mut run, &ready, attempt)
+            .expect_err("a remote holding another commit has not been published");
+
+        let Error::Git { args, stderr } = &refusal else {
+            panic!("a remote that kept none of the work is git refusing: {refusal:?}");
+        };
+        assert_eq!(
+            args.first().map(String::as_str),
+            Some("rev-parse"),
+            "the push and the fetch both succeeded, so the refusal is the read-back's \
+             own rather than a repair's: {args:?}"
+        );
+        let offered = candidates(&fixture.project);
+        assert_eq!(
+            offered.len(),
+            1,
+            "one candidate was offered, and no second followed a replay: {offered:?}"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ran_words(&[&SET]),
+            "the set ran once, before the offer: a replay that was never attempted \
+             spends no gate on a commit the remote already declined"
+        );
+        assert!(
+            stderr.contains(&offered[0]),
+            "the refusal names the candidate the fetched tip is not: {stderr}"
+        );
+        assert_eq!(
+            offered[0],
+            head(&ready.worktree),
+            "the checkout still stands on the candidate: no replay moved it"
+        );
+        assert_eq!(
+            fixture.origin_tip(),
+            fixture.repo.seed_sha(),
+            "the remote is back on the seed, holding none of this task's work"
+        );
+        assert!(
+            !holds(&fixture.project, "PublishVerified"),
+            "nothing was proved about the candidate"
+        );
+        assert!(
+            !holds(&fixture.project, "VerifyFailed"),
+            "the gates passed; the remote is what disagreed, and blaming the code for \
+             it would send the next attempt to fix work that is fine"
+        );
+        assert!(
+            !holds(&fixture.project, "TaskFailed"),
+            "this refusal ends no task: a remote that rewrote what it took is not this \
+             step's decision to make"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::Publishing {
+                attempt: AttemptId::new(ATTEMPT)
+            }),
+            "the journal leaves the task with the offer it made, which is the only \
+             state that can be resumed"
         );
     }
 
