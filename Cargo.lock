@@ -744,6 +744,8 @@ dependencies = [
  "ktask-core",
  "ratatui",
  "time",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

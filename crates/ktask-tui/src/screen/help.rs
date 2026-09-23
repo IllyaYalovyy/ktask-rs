@@ -58,7 +58,7 @@ pub fn lines(screen: Screen) -> Vec<String> {
     }
     let width = rows
         .iter()
-        .map(|(_, _, keys)| keys.join(" / ").chars().count())
+        .map(|(_, _, keys)| crate::text::display_width(&keys.join(" / ")))
         .max()
         .unwrap_or(0);
     rows.into_iter()
@@ -85,7 +85,7 @@ pub fn render(screen: Screen, area: Rect, frame: &mut Frame<'_>) {
     let rows = lines(screen);
     let widest = rows
         .iter()
-        .map(|row| row.chars().count())
+        .map(|row| crate::text::display_width(row))
         .max()
         .unwrap_or(0);
     let wanted_width = u16::try_from(widest + 4).unwrap_or(u16::MAX);
