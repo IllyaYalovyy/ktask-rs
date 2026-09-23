@@ -1,10 +1,10 @@
 //! Headless command-line entry point.
 //!
 //! Writing to stdout and stderr is this crate's purpose: it is the process
-//! boundary where results become text. `render::out` and `render::progress`
-//! are the only two sanctioned call sites for that; library code returns
-//! values and errors instead of emitting them, and the supervisor stays
-//! testable without capturing output.
+//! boundary where results become text. `render::out`, `render::progress`
+//! and `render::progress_verbose` are the only sanctioned call sites for
+//! that; library code returns values and errors instead of emitting them,
+//! and the supervisor stays testable without capturing output.
 
 mod cli;
 mod cmd;
@@ -20,12 +20,11 @@ use std::path::PathBuf;
 fn main() {
     let cli = Cli::parse();
     render::init_color(cli.output.no_color);
-    if cli.verbose {
-        render::progress(format_args!(
-            "{}",
-            serde_json::to_string(&cli).unwrap_or_default()
-        ));
-    }
+    render::init_verbosity(cli.verbose, cli.quiet);
+    render::progress_verbose(format_args!(
+        "{}",
+        serde_json::to_string(&cli).unwrap_or_default()
+    ));
 
     let outcome = run(&cli).unwrap_or_else(|err| RunOutcome::Usage {
         detail: err.to_string(),
@@ -47,6 +46,12 @@ fn main() {
 /// Resolves `cli`'s project and effective configuration, then dispatches its
 /// command to [`cmd::dispatch`].
 ///
+/// `--verbose` and `--quiet` set opposite ends of the same stderr
+/// threshold (`docs/CONTRACT.md` section 2), so requesting both is
+/// rejected as a usage error before any project resolution or dispatch —
+/// the same [`RunOutcome::Usage`] path a missing project takes, so it gets
+/// exit code 2 and, under `--json`, the same JSON form.
+///
 /// Every command needs an already-registered project except `init`, which
 /// registers one when discovery finds none — the one command that has to
 /// work before any project does. Any other failure to find a project is
@@ -54,6 +59,12 @@ fn main() {
 /// rather than as an `Err`: it is an ordinary, documented outcome
 /// (`docs/CONTRACT.md` section 2), not a bug in this process.
 fn run(cli: &Cli) -> Result<RunOutcome> {
+    if cli.verbose && cli.quiet {
+        return Ok(RunOutcome::Usage {
+            detail: "--verbose and --quiet cannot be used together".to_string(),
+        });
+    }
+
     let root = cli.project.clone().unwrap_or_else(|| PathBuf::from("."));
 
     let project = match Project::discover(&root) {

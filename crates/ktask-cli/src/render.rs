@@ -14,6 +14,11 @@
 //! sequences embedded in the formatted text are stripped before the line is
 //! written, so a caller that built colored text does not leak escape codes
 //! into a pipe or a redirected file just because it forgot to check first.
+//!
+//! [`progress`] also honours the stderr threshold `--verbose` and `--quiet`
+//! select (`docs/CONTRACT.md` section 2): `--quiet` suppresses it, and
+//! [`progress_verbose`] is the extra diagnostic detail `--verbose` unlocks.
+//! [`out`] never consults either flag — results are never "non-essential".
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,6 +26,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// Whether ANSI styling is currently suppressed. Set once at startup by
 /// [`init_color`]; read by [`out`] and [`progress`] on every call.
 static COLOR_DISABLED: AtomicBool = AtomicBool::new(false);
+
+/// Whether `--quiet` is currently suppressing [`progress`]. Set once at
+/// startup by [`init_verbosity`]; read by [`progress`] on every call.
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+/// Whether `--verbose` is currently unlocking [`progress_verbose`]. Set
+/// once at startup by [`init_verbosity`]; read by [`progress_verbose`] on
+/// every call.
+static VERBOSE: AtomicBool = AtomicBool::new(false);
+
+/// Records the stderr verbosity threshold from `--verbose` and `--quiet`.
+///
+/// The two are mutually exclusive (`docs/CONTRACT.md` section 2 — the
+/// caller rejects that combination as a usage error before this runs), but
+/// this function stays defensive rather than trusting that: passing both as
+/// `true` neutralizes each other back to the default threshold rather than
+/// suppressing the very usage-error message that would explain why, so a
+/// caller that reaches here with both set cannot go silent.
+pub(crate) fn init_verbosity(verbose: bool, quiet: bool) {
+    QUIET.store(quiet && !verbose, Ordering::Relaxed);
+    VERBOSE.store(verbose && !quiet, Ordering::Relaxed);
+}
 
 /// Records whether output should be styled, honouring both the `--no-color`
 /// flag and a set `NO_COLOR` environment variable. Either one disables
@@ -84,12 +111,31 @@ pub(crate) fn out(args: fmt::Arguments<'_>) {
 }
 
 /// Writes progress or diagnostic chatter to stderr: everything that is not
-/// itself the command's result.
+/// itself the command's result. Suppressed by `--quiet`.
+pub(crate) fn progress(args: fmt::Arguments<'_>) {
+    if QUIET.load(Ordering::Relaxed) {
+        return;
+    }
+    write_stderr(args);
+}
+
+/// Writes diagnostic detail to stderr, but only when `--verbose` unlocked
+/// it: the extra narration `docs/CONTRACT.md` section 2 promises beyond
+/// [`progress`]'s default threshold.
+pub(crate) fn progress_verbose(args: fmt::Arguments<'_>) {
+    if VERBOSE.load(Ordering::Relaxed) {
+        write_stderr(args);
+    }
+}
+
+/// The one sanctioned call site for stderr in this crate; [`progress`] and
+/// [`progress_verbose`] are its only callers, after they have each decided
+/// whether the current verbosity threshold allows the line through.
 #[allow(
     clippy::print_stderr,
     reason = "the one sanctioned call site for stderr in this crate; see module docs"
 )]
-pub(crate) fn progress(args: fmt::Arguments<'_>) {
+fn write_stderr(args: fmt::Arguments<'_>) {
     eprintln!("{}", format_line(args));
 }
 
@@ -224,5 +270,94 @@ mod tests {
     fn emit_colored_lines_with_default_color() {
         out(format_args!("\u{1b}[31mred result\u{1b}[0m"));
         progress(format_args!("\u{1b}[34mblue progress\u{1b}[0m"));
+    }
+
+    #[test]
+    fn quiet_suppresses_progress_but_never_out() {
+        let (stdout, stderr) = run_child("render::tests::emit_lines_under_quiet");
+        assert!(
+            stdout.contains("a result"),
+            "quiet must not suppress results: {stdout:?}"
+        );
+        assert!(
+            !stderr.contains("some progress"),
+            "quiet must suppress progress, got: {stderr:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "invoked directly as a child process by quiet_suppresses_progress_but_never_out"]
+    fn emit_lines_under_quiet() {
+        init_verbosity(false, true);
+        out(format_args!("a result"));
+        progress(format_args!("some progress"));
+    }
+
+    #[test]
+    fn default_verbosity_lets_progress_through_but_not_progress_verbose() {
+        let (_stdout, stderr) =
+            run_child("render::tests::emit_progress_and_progress_verbose_at_default");
+        assert!(
+            stderr.contains("normal progress"),
+            "missing normal progress: {stderr:?}"
+        );
+        assert!(
+            !stderr.contains("verbose detail"),
+            "verbose detail must not appear without --verbose: {stderr:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "invoked directly as a child process by \
+                default_verbosity_lets_progress_through_but_not_progress_verbose"]
+    fn emit_progress_and_progress_verbose_at_default() {
+        progress(format_args!("normal progress"));
+        progress_verbose(format_args!("verbose detail"));
+    }
+
+    #[test]
+    fn verbose_unlocks_progress_verbose_without_suppressing_progress() {
+        let (_stdout, stderr) =
+            run_child("render::tests::emit_progress_and_progress_verbose_when_verbose");
+        assert!(
+            stderr.contains("normal progress"),
+            "verbose must not suppress ordinary progress: {stderr:?}"
+        );
+        assert!(
+            stderr.contains("verbose detail"),
+            "missing verbose detail: {stderr:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "invoked directly as a child process by \
+                verbose_unlocks_progress_verbose_without_suppressing_progress"]
+    fn emit_progress_and_progress_verbose_when_verbose() {
+        init_verbosity(true, false);
+        progress(format_args!("normal progress"));
+        progress_verbose(format_args!("verbose detail"));
+    }
+
+    #[test]
+    fn conflicting_verbose_and_quiet_neutralize_to_the_default_threshold() {
+        let (_stdout, stderr) =
+            run_child("render::tests::emit_progress_lines_with_conflicting_flags");
+        assert!(
+            stderr.contains("normal progress"),
+            "a conflicting quiet must not suppress progress, got: {stderr:?}"
+        );
+        assert!(
+            !stderr.contains("verbose detail"),
+            "a conflicting verbose must not unlock progress_verbose, got: {stderr:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "invoked directly as a child process by \
+                conflicting_verbose_and_quiet_neutralize_to_the_default_threshold"]
+    fn emit_progress_lines_with_conflicting_flags() {
+        init_verbosity(true, true);
+        progress(format_args!("normal progress"));
+        progress_verbose(format_args!("verbose detail"));
     }
 }
