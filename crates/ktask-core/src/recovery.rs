@@ -10,8 +10,8 @@
 //! second restart never has to redo the same detective work from scratch.
 
 use crate::{
-    AttemptId, Error, EventKind, Journal, PauseReason, Phase, Project, Recovery, Result, TaskId,
-    TaskState, apply, list_worktrees,
+    AttemptId, Config, Error, EventKind, Journal, PauseReason, Phase, Project, Recovery, Result,
+    TaskId, TaskState, apply, fetch, git, list_worktrees,
 };
 use std::collections::BTreeMap;
 
@@ -52,17 +52,26 @@ pub enum RecoveryDecision {
 /// it before a decision is reached. Either way the decision itself is
 /// journaled — as [`EventKind::RecoveryDecision`], or, for a task whose
 /// publication was already confirmed, the terminal [`EventKind::TaskDone`]
-/// that decision amounts to — before it is returned.
+/// that decision amounts to — before it is returned. A task caught mid
+/// [`TaskState::Publishing`] is a case of its own: the dangerous one
+/// `VISION.md` §10 calls out, where a fresh fetch and comparison against
+/// the remote decides between advancing straight to
+/// [`TaskState::PublishedVerified`] and retrying, never a blind re-push.
 ///
 /// # Errors
 ///
 /// Returns [`Error::Database`], [`Error::Serde`] or [`Error::Corrupt`] from
 /// reading or writing the journal, [`Error::Git`] if `project.root`'s
-/// worktrees cannot be listed, and [`Error::Corrupt`] if a task is mid
-/// attempt with a dead process and no surviving worktree — a combination
+/// worktrees cannot be listed or if a task mid publication cannot fetch
+/// `config.mainline_remote`, and [`Error::Corrupt`] if a task is mid attempt
+/// with a dead process and no surviving worktree — a combination
 /// `crate::runner::Runner::run_task`'s own cleanup contract should never
 /// produce, so it is reported rather than guessed at.
-pub fn reconcile(journal: &mut Journal, project: &Project) -> Result<Vec<RecoveryDecision>> {
+pub fn reconcile(
+    journal: &mut Journal,
+    project: &Project,
+    config: &Config,
+) -> Result<Vec<RecoveryDecision>> {
     let tasks = journal.tasks()?;
 
     let mut derived: BTreeMap<TaskId, TaskState> = BTreeMap::new();
@@ -90,7 +99,7 @@ pub fn reconcile(journal: &mut Journal, project: &Project) -> Result<Vec<Recover
         if state.is_terminal() {
             continue;
         }
-        if let Some(decision) = reconcile_task(journal, project, task.id, &state)? {
+        if let Some(decision) = reconcile_task(journal, project, config, task.id, &state)? {
             decisions.push(decision);
         }
     }
@@ -103,24 +112,30 @@ pub fn reconcile(journal: &mut Journal, project: &Project) -> Result<Vec<Recover
 fn reconcile_task(
     journal: &mut Journal,
     project: &Project,
+    config: &Config,
     task: TaskId,
     state: &TaskState,
 ) -> Result<Option<RecoveryDecision>> {
     match state {
         TaskState::Queued => Ok(None),
         TaskState::Paused { reason, .. } if !matches!(reason, PauseReason::Interrupted) => Ok(None),
-        TaskState::Paused { resume_to, .. } => {
-            reconcile_interrupted(journal, project, task, resume_to, true)
-        }
+        TaskState::Paused { resume_to, .. } => match resume_to.as_ref() {
+            TaskState::Publishing { attempt } => {
+                reconcile_publishing(journal, project, config, task, *attempt, true)
+            }
+            _ => reconcile_interrupted(journal, project, task, resume_to, true),
+        },
         TaskState::PublishedVerified { commit } => {
             reconcile_published_verified(journal, task, commit)
         }
         TaskState::Preflight
         | TaskState::Running { .. }
         | TaskState::Remediating { .. }
-        | TaskState::Verifying { .. }
-        | TaskState::Publishing { .. } => {
+        | TaskState::Verifying { .. } => {
             reconcile_interrupted(journal, project, task, state, false)
+        }
+        TaskState::Publishing { attempt } => {
+            reconcile_publishing(journal, project, config, task, *attempt, false)
         }
         TaskState::Done
         | TaskState::Acknowledged { .. }
@@ -216,14 +231,17 @@ fn reconcile_published_verified(
 }
 
 /// Decides how to reconcile `state` — a task's real, unwrapped work — with
-/// reality: whether it is safe to [`Recovery::Resume`], must be
-/// [`Recovery::MarkInterrupted`] pending a human, or is already
-/// [`Recovery::AlreadyApplied`].
+/// reality: whether it is safe to [`Recovery::Resume`], or must be
+/// [`Recovery::MarkInterrupted`] pending a human.
 ///
-/// Only called with the states [`EventKind::Interrupted`] legally applies
-/// to (`state.rs`'s `from_preflight`, `from_running`, `from_remediating`,
-/// `from_verifying` and `from_publishing`); every other variant is
-/// unreachable here by construction.
+/// Only called with the states [`EventKind::Interrupted`] legally applies to
+/// other than [`TaskState::Publishing`] (`state.rs`'s `from_preflight`,
+/// `from_running`, `from_remediating` and `from_verifying`); every other
+/// variant is unreachable here by construction. `Publishing` is deliberately
+/// excluded: [`reconcile_publishing`] must fetch and compare the remote
+/// before any decision can be reached at all, which this function's
+/// `(Recovery, String)` return shape cannot express — the answer might be
+/// "already done", not merely "safe to resume" or "needs a human".
 fn decide(
     journal: &Journal,
     project: &Project,
@@ -252,22 +270,182 @@ fn decide(
             *attempt,
             "verification only runs local gates, so redoing it has no external side effect",
         ),
-        TaskState::Publishing { .. } => Ok((
-            Recovery::MarkInterrupted,
-            "the push to mainline may have already landed before the crash; VISION.md requires \
-             this is never assumed either way"
-                .to_string(),
-        )),
         TaskState::Queued
+        | TaskState::Publishing { .. }
         | TaskState::PublishedVerified { .. }
         | TaskState::Paused { .. }
         | TaskState::Done
         | TaskState::Acknowledged { .. }
         | TaskState::Failed { .. }
         | TaskState::Cancelled => {
-            unreachable!("decide is only called with the states Interrupted legally applies to")
+            unreachable!(
+                "decide is only called with the states Interrupted legally applies to, other \
+                 than Publishing, which reconcile_publishing handles directly"
+            )
         }
     }
+}
+
+/// Reconciles a task caught mid publication: the last event the journal
+/// recorded before the crash was [`EventKind::PublishStarted`], so whether
+/// `attempt`'s candidate commit actually reached `config.mainline_branch` is
+/// the one thing that must never be assumed either way (`VISION.md` §10).
+///
+/// A fresh fetch and comparison against the remote's tip settles it exactly
+/// — the same check [`crate::publish`] itself makes right after a push it
+/// ran directly, made here without ever pushing anything:
+///
+/// - The candidate matches the fetched tip: the push landed before the
+///   crash. [`EventKind::PublishVerified`] is journaled directly and the
+///   task advances straight to [`TaskState::PublishedVerified`] — as if the
+///   crash had struck one line later, after `crate::publish` returned but
+///   before its caller recorded that same event. `already_paused` first
+///   returns the task to `Publishing` via [`EventKind::RecoveryDecision`]
+///   ([`Recovery::AlreadyApplied`]), since `state.rs`'s `from_paused` only
+///   accepts `PublishVerified` once a task is back there.
+/// - It does not: the push never reached the remote, so retrying it carries
+///   no double-publish risk. [`Recovery::Resume`] is recorded through the
+///   same `Interrupted`/`RecoveryDecision` pair every other interruptible
+///   state uses ([`reconcile_interrupted`]'s shape, inlined here since this
+///   state's decision cannot come from [`decide`]), landing the task back at
+///   `Publishing` to retry — never a blind re-push, since the comparison
+///   above already ruled out the dangerous case.
+///
+/// # Errors
+///
+/// Returns [`Error::Corrupt`] if `task`'s journal has no `PublishStarted`
+/// event for `attempt`, and [`Error::Git`] if `config.mainline_remote`
+/// cannot be fetched into `project.root`.
+fn reconcile_publishing(
+    journal: &mut Journal,
+    project: &Project,
+    config: &Config,
+    task: TaskId,
+    attempt: AttemptId,
+    already_paused: bool,
+) -> Result<Option<RecoveryDecision>> {
+    let candidate_sha = publish_started_candidate(journal, task, attempt)?;
+    let remote_sha = fetch_remote_tip(project, config)?;
+
+    if remote_sha == candidate_sha {
+        let detail = format!(
+            "candidate {candidate_sha} matches {}/{}'s freshly fetched tip; the push landed \
+             before the crash",
+            config.mainline_remote, config.mainline_branch,
+        );
+        if already_paused {
+            journal.append(
+                Some(task),
+                &EventKind::RecoveryDecision {
+                    decision: Recovery::AlreadyApplied,
+                    detail: detail.clone(),
+                },
+            )?;
+        }
+        journal.append(
+            Some(task),
+            &EventKind::PublishVerified {
+                commit: candidate_sha.clone(),
+                remote_sha,
+            },
+        )?;
+        journal.put_state(
+            task,
+            &TaskState::PublishedVerified {
+                commit: candidate_sha,
+            },
+        )?;
+        return Ok(Some(RecoveryDecision::Task {
+            task,
+            decision: Recovery::AlreadyApplied,
+            detail,
+        }));
+    }
+
+    let detail = format!(
+        "candidate {candidate_sha} does not match {}/{}'s freshly fetched tip {remote_sha}; the \
+         push never landed, so publication is retried",
+        config.mainline_remote, config.mainline_branch,
+    );
+
+    if !already_paused {
+        journal.append(
+            Some(task),
+            &EventKind::Interrupted {
+                phase: Phase::Publish,
+            },
+        )?;
+        journal.put_state(
+            task,
+            &TaskState::Paused {
+                reason: PauseReason::Interrupted,
+                resume_to: Box::new(TaskState::Publishing { attempt }),
+            },
+        )?;
+    }
+    journal.append(
+        Some(task),
+        &EventKind::RecoveryDecision {
+            decision: Recovery::Resume,
+            detail: detail.clone(),
+        },
+    )?;
+    journal.put_state(task, &TaskState::Publishing { attempt })?;
+
+    Ok(Some(RecoveryDecision::Task {
+        task,
+        decision: Recovery::Resume,
+        detail,
+    }))
+}
+
+/// The `candidate_sha` [`EventKind::PublishStarted`] recorded for `attempt`.
+///
+/// # Errors
+///
+/// Returns [`Error::Corrupt`] if `task`'s journal has no such event: every
+/// `Publishing` state is reached through [`EventKind::PublishStarted`]
+/// first, so its absence means the journal does not actually support the
+/// state `reconcile` is trying to resolve.
+fn publish_started_candidate(
+    journal: &Journal,
+    task: TaskId,
+    attempt: AttemptId,
+) -> Result<String> {
+    journal
+        .events_for(task)?
+        .into_iter()
+        .find_map(|event| match event.kind {
+            EventKind::PublishStarted {
+                attempt: started,
+                candidate_sha,
+            } if started == attempt => Some(candidate_sha),
+            _ => None,
+        })
+        .ok_or_else(|| Error::Corrupt {
+            detail: format!(
+                "task {task} is mid attempt {attempt}'s publication but its journal has no \
+                 PublishStarted event recording the candidate SHA"
+            ),
+        })
+}
+
+/// Fetches `config.mainline_remote` into `project.root` and returns the
+/// freshly fetched tip of `config.mainline_branch` — never pushing anything,
+/// so the caller can decide what actually happened before touching the
+/// remote itself (`VISION.md` §10: "never blindly re-push").
+///
+/// # Errors
+///
+/// Returns [`Error::Git`] if `config.mainline_remote` cannot be fetched or
+/// `config.mainline_branch`'s remote-tracking ref cannot be resolved.
+fn fetch_remote_tip(project: &Project, config: &Config) -> Result<String> {
+    fetch(&project.root, &config.mainline_remote)?;
+    let remote_ref = format!(
+        "refs/remotes/{}/{}",
+        config.mainline_remote, config.mainline_branch
+    );
+    git(&project.root, &["rev-parse", &remote_ref])
 }
 
 /// The shared decision for `Running`, `Remediating` and `Verifying`: a
@@ -455,7 +633,8 @@ mod tests {
         // which disagrees with the journal's replayed `Preflight`.
         assert_eq!(journal.all_states().expect("all_states"), BTreeMap::new());
 
-        let decisions = reconcile(&mut journal, &dummy_project()).expect("reconcile");
+        let decisions =
+            reconcile(&mut journal, &dummy_project(), &Config::default()).expect("reconcile");
 
         assert_eq!(decisions.first(), Some(&RecoveryDecision::StateRebuilt));
         assert!(
@@ -491,7 +670,8 @@ mod tests {
             .put_state(task, &TaskState::Cancelled)
             .expect("put_state matches the journal already");
 
-        let decisions = reconcile(&mut journal, &dummy_project()).expect("reconcile");
+        let decisions =
+            reconcile(&mut journal, &dummy_project(), &Config::default()).expect("reconcile");
 
         assert_eq!(
             decisions,
@@ -517,7 +697,8 @@ mod tests {
             .put_state(task, &TaskState::Queued)
             .expect("put_state matches already");
 
-        let decisions = reconcile(&mut journal, &dummy_project()).expect("reconcile");
+        let decisions =
+            reconcile(&mut journal, &dummy_project(), &Config::default()).expect("reconcile");
 
         assert_eq!(decisions, Vec::new());
         assert_eq!(journal.events_for(task).expect("events_for").len(), 1);
@@ -545,7 +726,8 @@ mod tests {
             )
             .expect("Paused(Input)");
 
-        let decisions = reconcile(&mut journal, &dummy_project()).expect("reconcile");
+        let decisions =
+            reconcile(&mut journal, &dummy_project(), &Config::default()).expect("reconcile");
 
         assert!(
             decisions
@@ -577,7 +759,8 @@ mod tests {
             .append(Some(task), &EventKind::PreflightStarted)
             .expect("PreflightStarted");
 
-        let decisions = reconcile(&mut journal, &dummy_project()).expect("reconcile");
+        let decisions =
+            reconcile(&mut journal, &dummy_project(), &Config::default()).expect("reconcile");
 
         assert_eq!(
             decisions,
@@ -628,7 +811,8 @@ mod tests {
             journal.append(Some(task), &kind).expect("append");
         }
 
-        let decisions = reconcile(&mut journal, &dummy_project()).expect("reconcile");
+        let decisions =
+            reconcile(&mut journal, &dummy_project(), &Config::default()).expect("reconcile");
 
         let Some(RecoveryDecision::Task {
             decision, detail, ..
@@ -687,7 +871,7 @@ mod tests {
             journal.append(Some(task), &kind).expect("append");
         }
 
-        let decisions = reconcile(&mut journal, &project).expect("reconcile");
+        let decisions = reconcile(&mut journal, &project, &Config::default()).expect("reconcile");
 
         remove_worktree(&repo.path, &worktree).expect("clean up the worktree");
 
@@ -741,7 +925,7 @@ mod tests {
         }
         let before = journal.events_for(task).expect("events_for");
 
-        let err = reconcile(&mut journal, &project)
+        let err = reconcile(&mut journal, &project, &Config::default())
             .expect_err("a dead process with no surviving worktree must not be guessed at");
 
         assert!(matches!(err, Error::Corrupt { .. }), "got {err:?}");
@@ -754,24 +938,24 @@ mod tests {
         );
     }
 
-    #[test]
-    fn reconcile_marks_publishing_interrupted_regardless_of_the_process() {
-        let (_dir, mut journal) = open_journal();
-        let task = TaskId::new(1);
-        journal.put_tasks(&[sample_task(1)]).expect("put_tasks");
-        for kind in [
+    /// The shared journal prefix for a task caught mid publication:
+    /// `TaskQueued` through `PublishStarted` naming `candidate_sha`, at base
+    /// `base_sha`. No `PublishVerified` — that is exactly the event the
+    /// crash struck before.
+    fn publishing_events(base_sha: &str, candidate_sha: &str) -> Vec<EventKind> {
+        vec![
             EventKind::TaskQueued {
                 title: "t".to_string(),
             },
             EventKind::PreflightStarted,
             EventKind::PreflightPassed {
-                base_sha: "base".to_string(),
+                base_sha: base_sha.to_string(),
             },
             EventKind::AttemptStarted {
                 attempt: AttemptId::new(1),
                 protocol: "direct".to_string(),
                 pid: std::process::id(),
-                base_sha: "base".to_string(),
+                base_sha: base_sha.to_string(),
             },
             EventKind::PhaseEntered {
                 attempt: AttemptId::new(1),
@@ -782,24 +966,135 @@ mod tests {
             },
             EventKind::PublishStarted {
                 attempt: AttemptId::new(1),
-                candidate_sha: "cand".to_string(),
+                candidate_sha: candidate_sha.to_string(),
             },
-        ] {
+        ]
+    }
+
+    #[test]
+    fn reconcile_advances_to_published_verified_when_a_fresh_fetch_shows_the_push_landed() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = Project {
+            root: repo.path.clone(),
+            id: "recovery-publish-landed-test".to_string(),
+            state_dir: state_dir.path().to_path_buf(),
+        };
+        let (_dir, mut journal) = open_journal();
+        let task = TaskId::new(1);
+        journal.put_tasks(&[sample_task(1)]).expect("put_tasks");
+
+        // The push that crashed before `PublishVerified` could be journaled
+        // actually landed on `origin/main` — simulated directly, since
+        // `crate::publish` itself is exercised elsewhere.
+        let candidate_sha = repo.commit("candidate.txt", "published\n").expect("commit");
+        git(&repo.path, &["push", "--quiet", "origin", "main"]).expect("push candidate");
+
+        for kind in publishing_events(&repo.seed_sha, &candidate_sha) {
             journal.append(Some(task), &kind).expect("append");
         }
 
-        let decisions = reconcile(&mut journal, &dummy_project()).expect("reconcile");
+        let decisions = reconcile(&mut journal, &project, &Config::default()).expect("reconcile");
 
-        let Some(RecoveryDecision::Task {
-            decision, detail, ..
-        }) = decisions
-            .iter()
-            .find(|d| matches!(d, RecoveryDecision::Task { task: t, .. } if *t == task))
-        else {
-            panic!("expected a decision for task {task}, got {decisions:?}");
+        assert_eq!(
+            decisions,
+            vec![
+                RecoveryDecision::StateRebuilt,
+                RecoveryDecision::Task {
+                    task,
+                    decision: Recovery::AlreadyApplied,
+                    detail: format!(
+                        "candidate {candidate_sha} matches origin/main's freshly fetched tip; \
+                         the push landed before the crash"
+                    ),
+                }
+            ]
+        );
+        assert_eq!(
+            journal.get_state(task).expect("get_state"),
+            Some(TaskState::PublishedVerified {
+                commit: candidate_sha.clone(),
+            }),
+            "a confirmed-landed push must advance straight to PublishedVerified"
+        );
+        let events = journal.events_for(task).expect("events_for");
+        assert_eq!(
+            events.last().expect("last event").kind.discriminant(),
+            "PublishVerified",
+            "no Interrupted/RecoveryDecision pair for a push that is already confirmed landed"
+        );
+        let EventKind::PublishVerified { commit, remote_sha } = &events.last().unwrap().kind else {
+            panic!(
+                "expected PublishVerified, got {:?}",
+                events.last().unwrap().kind
+            );
         };
-        assert_eq!(*decision, Recovery::MarkInterrupted);
-        assert!(detail.contains("mainline"), "detail: {detail}");
+        assert_eq!(commit, &candidate_sha);
+        assert_eq!(remote_sha, &candidate_sha);
+    }
+
+    #[test]
+    fn reconcile_retries_publication_when_a_fresh_fetch_shows_the_push_never_landed() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = Project {
+            root: repo.path.clone(),
+            id: "recovery-publish-missing-test".to_string(),
+            state_dir: state_dir.path().to_path_buf(),
+        };
+        let (_dir, mut journal) = open_journal();
+        let task = TaskId::new(1);
+        journal.put_tasks(&[sample_task(1)]).expect("put_tasks");
+
+        // A candidate commit exists locally (as `crate::publish` would leave
+        // one, committed inside the task's worktree) but was never pushed:
+        // `origin/main` is still at the seed commit.
+        let candidate_sha = repo
+            .commit("candidate.txt", "never published\n")
+            .expect("commit");
+
+        for kind in publishing_events(&repo.seed_sha, &candidate_sha) {
+            journal.append(Some(task), &kind).expect("append");
+        }
+
+        let decisions = reconcile(&mut journal, &project, &Config::default()).expect("reconcile");
+
+        assert_eq!(
+            decisions,
+            vec![
+                RecoveryDecision::StateRebuilt,
+                RecoveryDecision::Task {
+                    task,
+                    decision: Recovery::Resume,
+                    detail: format!(
+                        "candidate {candidate_sha} does not match origin/main's freshly \
+                         fetched tip {}; the push never landed, so publication is retried",
+                        repo.seed_sha,
+                    ),
+                }
+            ]
+        );
+        assert_eq!(
+            journal.get_state(task).expect("get_state"),
+            Some(TaskState::Publishing {
+                attempt: AttemptId::new(1),
+            }),
+            "a push that never landed must return to Publishing to retry, not stay parked"
+        );
+        let events = journal.events_for(task).expect("events_for");
+        assert_eq!(
+            events.len(),
+            9,
+            "TaskQueued .. PublishStarted (7), Interrupted, RecoveryDecision"
+        );
+        assert_eq!(events[7].kind.discriminant(), "Interrupted");
+        assert_eq!(events[8].kind.discriminant(), "RecoveryDecision");
+
+        let origin_tip = git(&repo.origin, &["rev-parse", "main"]).expect("rev-parse bare origin");
+        assert_eq!(
+            origin_tip, repo.seed_sha,
+            "reconcile must never push on its own -- the remote must be untouched"
+        );
     }
 
     #[test]
@@ -840,7 +1135,8 @@ mod tests {
             journal.append(Some(task), &kind).expect("append");
         }
 
-        let decisions = reconcile(&mut journal, &dummy_project()).expect("reconcile");
+        let decisions =
+            reconcile(&mut journal, &dummy_project(), &Config::default()).expect("reconcile");
 
         assert_eq!(
             decisions,
@@ -922,7 +1218,7 @@ mod tests {
             "sanity: the task starts out already parked on Interrupted"
         );
 
-        let decisions = reconcile(&mut journal, &project).expect("reconcile");
+        let decisions = reconcile(&mut journal, &project, &Config::default()).expect("reconcile");
 
         remove_worktree(&repo.path, &worktree).expect("clean up the worktree");
 
@@ -943,5 +1239,73 @@ mod tests {
         // Exactly one new event -- the `RecoveryDecision` -- was appended;
         // no second `Interrupted` was journaled on top of the first.
         assert_eq!(journal.events_for(task).expect("events_for").len(), 6);
+    }
+
+    #[test]
+    fn reconcile_advances_a_task_already_parked_on_interrupted_publishing_when_the_push_landed() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = Project {
+            root: repo.path.clone(),
+            id: "recovery-publish-reeval-test".to_string(),
+            state_dir: state_dir.path().to_path_buf(),
+        };
+        let (_dir, mut journal) = open_journal();
+        let task = TaskId::new(1);
+        journal.put_tasks(&[sample_task(1)]).expect("put_tasks");
+
+        let candidate_sha = repo.commit("candidate.txt", "published\n").expect("commit");
+        git(&repo.path, &["push", "--quiet", "origin", "main"]).expect("push candidate");
+
+        // A previous, already-completed reconciliation already recorded
+        // `Interrupted`: this task starts out `Paused` on it, exactly as an
+        // earlier restart -- one that never got as far as fetching -- would
+        // have left it.
+        let mut events = publishing_events(&repo.seed_sha, &candidate_sha);
+        events.push(EventKind::Interrupted {
+            phase: Phase::Publish,
+        });
+        for kind in &events {
+            journal.append(Some(task), kind).expect("append");
+        }
+        assert_eq!(
+            journal
+                .events_for(task)
+                .expect("events_for")
+                .into_iter()
+                .try_fold(TaskState::Queued, |s, e| apply(&s, &e.kind))
+                .expect("apply"),
+            TaskState::Paused {
+                reason: PauseReason::Interrupted,
+                resume_to: Box::new(TaskState::Publishing {
+                    attempt: AttemptId::new(1),
+                }),
+            },
+            "sanity: the task starts out already parked on Interrupted"
+        );
+
+        let decisions = reconcile(&mut journal, &project, &Config::default()).expect("reconcile");
+
+        let Some(RecoveryDecision::Task { decision, .. }) = decisions
+            .iter()
+            .find(|d| matches!(d, RecoveryDecision::Task { task: t, .. } if *t == task))
+        else {
+            panic!("expected a decision for task {task}, got {decisions:?}");
+        };
+        assert_eq!(*decision, Recovery::AlreadyApplied);
+        assert_eq!(
+            journal.get_state(task).expect("get_state"),
+            Some(TaskState::PublishedVerified {
+                commit: candidate_sha,
+            }),
+            "an already-parked task must still advance to PublishedVerified once a fresh fetch \
+             confirms the push landed"
+        );
+        // Two new events: the bridging `RecoveryDecision` back to
+        // `Publishing`, then `PublishVerified`. No second `Interrupted`.
+        let events_after = journal.events_for(task).expect("events_for");
+        assert_eq!(events_after.len(), 10);
+        assert_eq!(events_after[8].kind.discriminant(), "RecoveryDecision");
+        assert_eq!(events_after[9].kind.discriminant(), "PublishVerified");
     }
 }
