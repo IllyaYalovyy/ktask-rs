@@ -296,7 +296,8 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. }
-        | EventKind::AttemptRecorded { .. } => Err(invalid("Queued", event)),
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::SelfHealingReport { .. } => Err(invalid("Queued", event)),
     }
 }
 
@@ -339,7 +340,8 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. }
-        | EventKind::AttemptRecorded { .. } => Err(invalid("Preflight", event)),
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::SelfHealingReport { .. } => Err(invalid("Preflight", event)),
     }
 }
 
@@ -396,12 +398,19 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
         | EventKind::TaskDone { .. }
         | EventKind::Resumed
         | EventKind::RecoveryDecision { .. }
-        | EventKind::GateAcknowledged { .. } => Err(invalid("Running", event)),
+        | EventKind::GateAcknowledged { .. }
+        | EventKind::SelfHealingReport { .. } => Err(invalid("Running", event)),
     }
 }
 
 /// Transitions from [`TaskState::Remediating`]: a bounded retry executing
 /// `phase`, entered only from [`TaskState::Verifying`] on `VerifyFailed`.
+///
+/// `SelfHealingReport` is accepted here, and only here, as a no-op alongside
+/// `AttemptRecorded`: `VISION.md` §7's "every recovery produces a
+/// self-healing report" describes a remediation attempt, so the report is
+/// evidence for the attempt still in flight in this state, recorded without
+/// moving custody, just as `AttemptRecorded` is.
 ///
 /// Mirrors [`from_running`]: whether another remediation attempt is even
 /// allowed is a bound the runner checks before emitting the next event, not
@@ -421,7 +430,8 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
         | EventKind::AttemptRecorded { .. }
-        | EventKind::TddExceptionUsed { .. } => Ok(TaskState::Remediating { attempt, phase }),
+        | EventKind::TddExceptionUsed { .. }
+        | EventKind::SelfHealingReport { .. } => Ok(TaskState::Remediating { attempt, phase }),
         EventKind::TaskFailed { class, detail } => Ok(TaskState::Failed {
             class: *class,
             detail: detail.clone(),
@@ -495,7 +505,8 @@ fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
-        | EventKind::GateAcknowledged { .. } => Err(invalid("Verifying", event)),
+        | EventKind::GateAcknowledged { .. }
+        | EventKind::SelfHealingReport { .. } => Err(invalid("Verifying", event)),
     }
 }
 
@@ -543,7 +554,8 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
-        | EventKind::GateAcknowledged { .. } => Err(invalid("Publishing", event)),
+        | EventKind::GateAcknowledged { .. }
+        | EventKind::SelfHealingReport { .. } => Err(invalid("Publishing", event)),
     }
 }
 
@@ -582,7 +594,8 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. }
-        | EventKind::AttemptRecorded { .. } => {
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::SelfHealingReport { .. } => {
             Err(invalid(&format!("PublishedVerified({commit})"), event))
         }
     }
@@ -657,7 +670,8 @@ fn from_paused(
         | EventKind::Interrupted { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
-        | EventKind::AttemptRecorded { .. } => Err(invalid("Paused", event)),
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::SelfHealingReport { .. } => Err(invalid("Paused", event)),
     }
 }
 
@@ -1073,6 +1087,15 @@ mod tests {
             protocol: "direct".to_string(),
             pid: 4242,
             base_sha: "base".to_string(),
+        }
+    }
+
+    fn self_healing_report(attempt: AttemptId) -> EventKind {
+        EventKind::SelfHealingReport {
+            attempt,
+            class: FailureClass::VerificationFailure,
+            repairs: vec!["reran the failing test after a targeted fix".to_string()],
+            outcome: "verification passed on retry".to_string(),
         }
     }
 
@@ -1686,6 +1709,38 @@ mod tests {
         };
         let state = apply(&remediating, &attempt_recorded(attempt)).expect("legal");
         assert_eq!(state, remediating);
+    }
+
+    #[test]
+    fn from_remediating_accepts_self_healing_report_without_changing_phase() {
+        let attempt = AttemptId::new(2);
+        let remediating = TaskState::Remediating {
+            attempt,
+            phase: Phase::Harden,
+        };
+        let state = apply(&remediating, &self_healing_report(attempt)).expect("legal");
+        assert_eq!(state, remediating);
+    }
+
+    #[test]
+    fn from_running_rejects_self_healing_report() {
+        // A self-healing report describes a remediation attempt, per
+        // VISION.md §7; an ordinary (non-remediating) run never produces
+        // one, so `Running` must reject it just as it rejects any other
+        // event that only applies to `Remediating`.
+        let attempt = AttemptId::new(1);
+        let running = TaskState::Running {
+            attempt,
+            phase: Phase::Implement,
+        };
+        let err = apply(&running, &self_healing_report(attempt)).expect_err("illegal");
+        match err {
+            Error::InvalidTransition { from, event } => {
+                assert_eq!(from, "Running");
+                assert_eq!(event, "SelfHealingReport");
+            }
+            other => panic!("expected InvalidTransition, got {other:?}"),
+        }
     }
 
     #[test]
@@ -2450,6 +2505,7 @@ mod tests {
                     recommended: None,
                 },
             },
+            self_healing_report(attempt),
         ]
     }
 
@@ -2483,6 +2539,7 @@ mod tests {
             ("Remediating", "AgentOutput"),
             ("Remediating", "AttemptRecorded"),
             ("Remediating", "TddExceptionUsed"),
+            ("Remediating", "SelfHealingReport"),
             ("Remediating", "TaskFailed"),
             ("Remediating", "DecisionRaised"),
             ("Remediating", "Paused"),
@@ -2519,7 +2576,7 @@ mod tests {
         let states = representative_states();
         let events = representative_events();
         assert_eq!(states.len(), 16, "expected one row per distinguished state");
-        assert_eq!(events.len(), 22, "expected one row per distinguished event");
+        assert_eq!(events.len(), 23, "expected one row per distinguished event");
 
         let mut checked = 0;
         for (state_label, state) in &states {
@@ -2547,7 +2604,7 @@ mod tests {
         assert_eq!(checked, states.len() * events.len());
         assert_eq!(
             ALLOWED.len(),
-            52,
+            53,
             "the allowed list itself changed size; update this guard deliberately"
         );
     }

@@ -125,7 +125,8 @@ fn level_for(kind: &EventKind) -> Level {
         | EventKind::RecoveryDecision { .. }
         | EventKind::TddExceptionUsed { .. }
         | EventKind::GateAcknowledged { .. }
-        | EventKind::AttemptRecorded { .. } => Level::Info,
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::SelfHealingReport { .. } => Level::Info,
     }
 }
 
@@ -138,7 +139,8 @@ fn attempt_of(kind: &EventKind) -> Option<AttemptId> {
         | EventKind::AttemptFinished { attempt, .. }
         | EventKind::VerifyPassed { attempt }
         | EventKind::VerifyFailed { attempt, .. }
-        | EventKind::PublishStarted { attempt, .. } => Some(*attempt),
+        | EventKind::PublishStarted { attempt, .. }
+        | EventKind::SelfHealingReport { attempt, .. } => Some(*attempt),
         EventKind::AttemptRecorded { record } => Some(record.id),
         EventKind::TaskQueued { .. }
         | EventKind::PreflightStarted
@@ -186,7 +188,8 @@ fn phase_of(kind: &EventKind) -> Option<Phase> {
         | EventKind::TddExceptionUsed { .. }
         | EventKind::DecisionRaised { .. }
         | EventKind::GateAcknowledged { .. }
-        | EventKind::AttemptRecorded { .. } => None,
+        | EventKind::AttemptRecorded { .. }
+        | EventKind::SelfHealingReport { .. } => None,
     }
 }
 
@@ -251,6 +254,9 @@ fn message_for(kind: &EventKind) -> String {
         EventKind::GateAcknowledged { by, .. } => format!("gate acknowledged by {by}"),
         EventKind::AttemptRecorded { record } => {
             format!("attempt recorded: exit_reason={}", record.exit_reason)
+        }
+        EventKind::SelfHealingReport { class, outcome, .. } => {
+            format!("self-healing report ({class:?}): {outcome}")
         }
     }
 }

@@ -11,12 +11,24 @@
 //! Both are pure: no I/O, no clock. Recording that a breaker tripped in the
 //! journal is the caller's job, using the existing [`crate::EventKind`]
 //! catalog — this module only supplies the signature and the count.
+//!
+//! [`report_self_healing`] is the one exception that performs I/O directly:
+//! `VISION.md` §7's "every recovery produces a self-healing report ... the
+//! report is retrievable through the journal" and, per this task, written
+//! into the attempt's own evidence directory, are durability requirements
+//! this module can discharge itself the same way [`crate::write_evidence`]
+//! does for [`AttemptRecord`], rather than handing an unwritten value back
+//! for every future caller to persist identically.
 
-use crate::{AttemptRecord, Error, FailureClass, GateResult, Result, Task, parse_cargo, redact};
+use crate::{
+    AttemptId, AttemptRecord, Error, EventKind, FailureClass, GateResult, Journal, Project, Result,
+    Task, TaskId, parse_cargo, redact,
+};
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -494,6 +506,90 @@ pub fn check_no_policy_edit(diff_paths: &[PathBuf]) -> Result<()> {
         detail: "diff touches protected gate configuration".to_string(),
         paths: offending,
     })
+}
+
+/// Restricts `dir` to owner-only access. A no-op on non-Unix targets, since
+/// there is no equivalent mode bit to set. Mirrors the private helper of the
+/// same name and shape in `attempt.rs` and `runner.rs`, each scoped to the
+/// evidence directory the module that needs it writes into.
+#[cfg(unix)]
+fn set_private(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_private(_dir: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// Records one remediation attempt's conclusion, per `VISION.md` §7: "every
+/// recovery produces a self-healing report: classification, attempted
+/// repairs, final result."
+///
+/// Appends `EventKind::SelfHealingReport` to `journal`, so the report is
+/// retrievable through [`Journal::events_for`] like any other event, and
+/// writes the same content, redacted, to
+/// `<state_dir>/attempts/<task>/<attempt>/self_healing_report.json` — the
+/// same directory [`crate::write_evidence`] fills for `attempt`'s other
+/// evidence, per `VISION.md` §6.
+///
+/// `class` is the failure classification remediation was responding to;
+/// `repairs` lists every repair the attempt tried, in the order tried; and
+/// `outcome` is a short, human-readable description of how the attempt
+/// concluded (for example, "verification passed on retry" or "circuit
+/// breaker tripped after 3 identical failures").
+///
+/// Every string in `repairs` and `outcome` is passed through [`redact()`]
+/// before it is written to the evidence file, so a secret that leaked into a
+/// repair's description or the outcome text never reaches disk — matching
+/// [`crate::write_evidence`]'s own guarantee for the rest of an attempt's
+/// evidence. The journal copy is redacted independently by
+/// [`Journal::append`] itself.
+///
+/// # Errors
+///
+/// Returns whatever [`Journal::append`] returns if the journal write fails,
+/// [`Error::Io`] if the evidence directory or file cannot be created or
+/// written, and [`Error::Serde`] if the report cannot be serialized to JSON.
+pub fn report_self_healing(
+    journal: &mut Journal,
+    project: &Project,
+    task: TaskId,
+    attempt: AttemptId,
+    class: FailureClass,
+    repairs: &[String],
+    outcome: &str,
+) -> Result<()> {
+    let kind = EventKind::SelfHealingReport {
+        attempt,
+        class,
+        repairs: repairs.to_vec(),
+        outcome: outcome.to_string(),
+    };
+    journal.append(Some(task), &kind)?;
+
+    let dir = project
+        .state_dir
+        .join("attempts")
+        .join(task.get().to_string())
+        .join(attempt.get().to_string());
+    fs::create_dir_all(&dir)?;
+    set_private(&dir)?;
+
+    let redacted = EventKind::SelfHealingReport {
+        attempt,
+        class,
+        repairs: repairs.iter().map(|repair| redact(repair, &[])).collect(),
+        outcome: redact(outcome, &[]),
+    };
+    fs::write(
+        dir.join("self_healing_report.json"),
+        serde_json::to_vec_pretty(&redacted)?,
+    )?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1251,7 +1347,7 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
 
             let task = TaskId::new(1);
             let kind = EventKind::VerifyFailed {
-                attempt: crate::AttemptId::new(1),
+                attempt: AttemptId::new(1),
                 class: FailureClass::PolicyFailure,
                 detail: format!("{detail} ({paths:?})"),
             };
@@ -1272,6 +1368,240 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
                     ..
                 }
             ));
+        }
+    }
+
+    mod self_healing_tests {
+        use super::*;
+
+        fn project_at(state_dir: &Path) -> Project {
+            Project {
+                root: PathBuf::from("/repo"),
+                id: "test-project".to_string(),
+                state_dir: state_dir.to_path_buf(),
+            }
+        }
+
+        fn evidence_dir(project: &Project, task: TaskId, attempt: AttemptId) -> PathBuf {
+            project
+                .state_dir
+                .join("attempts")
+                .join(task.get().to_string())
+                .join(attempt.get().to_string())
+        }
+
+        fn open_journal(state_dir: &Path) -> Journal {
+            Journal::open(&state_dir.join("journal.db")).expect("open journal")
+        }
+
+        #[test]
+        fn report_self_healing_appends_exactly_one_journal_event_carrying_the_given_fields() {
+            let state = tempfile::tempdir().expect("tempdir");
+            let project = project_at(state.path());
+            let mut journal = open_journal(state.path());
+            let task = TaskId::new(1);
+            let attempt = AttemptId::new(1);
+            let repairs = vec!["reran cargo test".to_string()];
+
+            report_self_healing(
+                &mut journal,
+                &project,
+                task,
+                attempt,
+                FailureClass::VerificationFailure,
+                &repairs,
+                "verification passed on retry",
+            )
+            .expect("report_self_healing");
+
+            let stored = journal.events_for(task).expect("events_for");
+            assert_eq!(stored.len(), 1);
+            match &stored[0].kind {
+                EventKind::SelfHealingReport {
+                    attempt: got_attempt,
+                    class,
+                    repairs: got_repairs,
+                    outcome,
+                } => {
+                    assert_eq!(*got_attempt, attempt);
+                    assert_eq!(*class, FailureClass::VerificationFailure);
+                    assert_eq!(got_repairs, &repairs);
+                    assert_eq!(outcome, "verification passed on retry");
+                }
+                other => panic!("expected SelfHealingReport, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn report_self_healing_is_retrievable_through_the_journal_after_a_reopen() {
+            let state = tempfile::tempdir().expect("tempdir");
+            let project = project_at(state.path());
+            let task = TaskId::new(1);
+            let attempt = AttemptId::new(1);
+
+            {
+                let mut journal = open_journal(state.path());
+                report_self_healing(
+                    &mut journal,
+                    &project,
+                    task,
+                    attempt,
+                    FailureClass::AgentFailure,
+                    &["adjusted the prompt".to_string()],
+                    "circuit breaker tripped after 3 identical failures",
+                )
+                .expect("report_self_healing");
+            }
+
+            // Reopened independently of the handle that wrote it, so this
+            // proves the report actually landed on disk rather than only in
+            // an in-memory connection.
+            let reopened = open_journal(state.path());
+            let stored = reopened.events_for(task).expect("events_for");
+            assert_eq!(stored.len(), 1);
+            assert!(matches!(
+                &stored[0].kind,
+                EventKind::SelfHealingReport { .. }
+            ));
+        }
+
+        #[test]
+        fn report_self_healing_writes_the_report_into_the_attempt_evidence_directory() {
+            let state = tempfile::tempdir().expect("tempdir");
+            let project = project_at(state.path());
+            let mut journal = open_journal(state.path());
+            let task = TaskId::new(1);
+            let attempt = AttemptId::new(1);
+            let repairs = vec!["fixed the off-by-one".to_string()];
+
+            report_self_healing(
+                &mut journal,
+                &project,
+                task,
+                attempt,
+                FailureClass::VerificationFailure,
+                &repairs,
+                "verification passed on retry",
+            )
+            .expect("report_self_healing");
+
+            let path = evidence_dir(&project, task, attempt).join("self_healing_report.json");
+            let content = fs::read_to_string(&path).expect("read self_healing_report.json");
+            let parsed: EventKind = serde_json::from_str(&content).expect("parse json");
+            match parsed {
+                EventKind::SelfHealingReport {
+                    attempt: got_attempt,
+                    class,
+                    repairs: got_repairs,
+                    outcome,
+                } => {
+                    assert_eq!(got_attempt, attempt);
+                    assert_eq!(class, FailureClass::VerificationFailure);
+                    assert_eq!(got_repairs, repairs);
+                    assert_eq!(outcome, "verification passed on retry");
+                }
+                other => panic!("expected SelfHealingReport, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn report_self_healing_redacts_a_secret_in_repairs_and_outcome_before_writing_the_evidence_file()
+         {
+            let state = tempfile::tempdir().expect("tempdir");
+            let project = project_at(state.path());
+            let mut journal = open_journal(state.path());
+            let task = TaskId::new(1);
+            let attempt = AttemptId::new(1);
+            let secret = "sk-abcdefghijklmnopqrstuvwxyz0123456789";
+
+            report_self_healing(
+                &mut journal,
+                &project,
+                task,
+                attempt,
+                FailureClass::VerificationFailure,
+                &[format!("removed leaked credential {secret}")],
+                &format!("outcome mentions {secret}"),
+            )
+            .expect("report_self_healing");
+
+            let path = evidence_dir(&project, task, attempt).join("self_healing_report.json");
+            let content = fs::read_to_string(&path).expect("read self_healing_report.json");
+            assert!(!content.contains(secret));
+            assert!(content.contains("[redacted]"));
+        }
+
+        #[test]
+        fn a_second_attempts_report_does_not_overwrite_the_firsts() {
+            let state = tempfile::tempdir().expect("tempdir");
+            let project = project_at(state.path());
+            let mut journal = open_journal(state.path());
+            let task = TaskId::new(1);
+            let first = AttemptId::new(1);
+            let second = AttemptId::new(2);
+
+            report_self_healing(
+                &mut journal,
+                &project,
+                task,
+                first,
+                FailureClass::VerificationFailure,
+                &["first repair".to_string()],
+                "first outcome",
+            )
+            .expect("first report");
+            report_self_healing(
+                &mut journal,
+                &project,
+                task,
+                second,
+                FailureClass::AgentFailure,
+                &["second repair".to_string()],
+                "second outcome",
+            )
+            .expect("second report");
+
+            let first_path = evidence_dir(&project, task, first).join("self_healing_report.json");
+            let second_path = evidence_dir(&project, task, second).join("self_healing_report.json");
+            assert_ne!(first_path, second_path);
+            let first_content = fs::read_to_string(first_path).expect("read first");
+            let second_content = fs::read_to_string(second_path).expect("read second");
+            assert!(first_content.contains("first outcome"));
+            assert!(second_content.contains("second outcome"));
+
+            let stored = journal.events_for(task).expect("events_for");
+            assert_eq!(
+                stored.len(),
+                2,
+                "each remediation attempt gets its own report"
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn report_self_healing_creates_the_evidence_directory_with_owner_only_permissions() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let state = tempfile::tempdir().expect("tempdir");
+            let project = project_at(state.path());
+            let mut journal = open_journal(state.path());
+            let task = TaskId::new(1);
+            let attempt = AttemptId::new(1);
+
+            report_self_healing(
+                &mut journal,
+                &project,
+                task,
+                attempt,
+                FailureClass::VerificationFailure,
+                &[],
+                "no repairs needed",
+            )
+            .expect("report_self_healing");
+
+            let dir = evidence_dir(&project, task, attempt);
+            let mode = fs::metadata(&dir).expect("stat").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
         }
     }
 }

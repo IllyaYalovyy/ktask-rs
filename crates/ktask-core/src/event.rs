@@ -4,10 +4,10 @@
 //! listed here, `#[serde(tag = "kind")]` so a stored event's `kind` column
 //! names its variant. Nothing may emit an event this enum does not contain.
 //!
-//! Three variants are deliberately absent because their payload names a type
-//! no earlier task has defined: `ProviderDetected`, `DecisionResolved` and
-//! `SelfHealingReport`. Each is added by the task that defines its payload
-//! type, which also adds its arm to the transition function.
+//! Two variants are deliberately absent because their payload names a type
+//! no earlier task has defined: `ProviderDetected` and `DecisionResolved`.
+//! Each is added by the task that defines its payload type, which also adds
+//! its arm to the transition function.
 
 use crate::gate::{GateKind, GateResult};
 use crate::{
@@ -215,6 +215,19 @@ pub enum EventKind {
         /// The evidence recorded.
         record: Box<AttemptRecord>,
     },
+    /// A remediation attempt concluded: `VISION.md` §7, "every recovery
+    /// produces a self-healing report: classification, attempted repairs,
+    /// final result."
+    SelfHealingReport {
+        /// The attempt the remediation was recovering.
+        attempt: AttemptId,
+        /// The failure classification remediation was responding to.
+        class: FailureClass,
+        /// Every repair attempted, in the order they were tried.
+        repairs: Vec<String>,
+        /// The remediation attempt's final result.
+        outcome: String,
+    },
 }
 
 impl EventKind {
@@ -248,6 +261,7 @@ impl EventKind {
             EventKind::DecisionRaised { .. } => "DecisionRaised",
             EventKind::GateAcknowledged { .. } => "GateAcknowledged",
             EventKind::AttemptRecorded { .. } => "AttemptRecorded",
+            EventKind::SelfHealingReport { .. } => "SelfHealingReport",
         }
     }
 }
@@ -431,13 +445,19 @@ mod tests {
                     candidate_sha: None,
                 }),
             },
+            EventKind::SelfHealingReport {
+                attempt: AttemptId::new(1),
+                class: FailureClass::VerificationFailure,
+                repairs: vec!["reran the failing test after a targeted fix".to_string()],
+                outcome: "verification passed on retry".to_string(),
+            },
         ]
     }
 
     #[test]
-    fn event_kind_has_exactly_twenty_five_variants() {
+    fn event_kind_has_exactly_twenty_six_variants() {
         let variants = all_events();
-        assert_eq!(variants.len(), 25);
+        assert_eq!(variants.len(), 26);
 
         // Exhaustive, wildcard-free match: a variant added to `EventKind`
         // without being listed here fails to compile instead of silently
@@ -468,7 +488,8 @@ mod tests {
                 | EventKind::TddExceptionUsed { .. }
                 | EventKind::DecisionRaised { .. }
                 | EventKind::GateAcknowledged { .. }
-                | EventKind::AttemptRecorded { .. } => {}
+                | EventKind::AttemptRecorded { .. }
+                | EventKind::SelfHealingReport { .. } => {}
             }
         }
     }
@@ -511,6 +532,7 @@ mod tests {
             "DecisionRaised",
             "GateAcknowledged",
             "AttemptRecorded",
+            "SelfHealingReport",
         ]
     }
 

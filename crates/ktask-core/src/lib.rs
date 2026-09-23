@@ -69,7 +69,7 @@ pub use queue::{load, next_runnable};
 pub use redact::redact;
 pub use remediate::{
     Bounds, Breaker, BreakerState, Decision, StopReason, bundle, check_no_policy_edit,
-    should_continue, signature,
+    report_self_healing, should_continue, signature,
 };
 pub use report::{ReportResult, ensure_report_dir, parse_report, read_report, report_path};
 pub use runner::{PhaseOutcome, PreflightReport, Prepared, Runner, preflight};
