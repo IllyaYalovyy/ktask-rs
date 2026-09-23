@@ -119,6 +119,15 @@ pub enum EventKind {
         /// What it found.
         result: GateResult,
     },
+    /// An operator re-ran a gate on demand (`ktask-rs rerun-gate`) against
+    /// the task's worktree as it stands now. An observation, not a
+    /// transition: it is legal in every state that is not terminal and
+    /// leaves the state as it found it, so it can never disturb the task's
+    /// custody (`docs/adr/0012-*`).
+    GateRerun {
+        /// What the gate found.
+        result: GateResult,
+    },
     /// The completion gates passed for an attempt.
     VerifyPassed {
         /// The attempt that passed.
@@ -266,6 +275,7 @@ impl EventKind {
             EventKind::AttemptFinished { .. } => "AttemptFinished",
             EventKind::GateStarted { .. } => "GateStarted",
             EventKind::GateFinished { .. } => "GateFinished",
+            EventKind::GateRerun { .. } => "GateRerun",
             EventKind::VerifyPassed { .. } => "VerifyPassed",
             EventKind::VerifyFailed { .. } => "VerifyFailed",
             EventKind::PublishStarted { .. } => "PublishStarted",
@@ -392,6 +402,18 @@ mod tests {
                     timed_out: false,
                 },
             },
+            EventKind::GateRerun {
+                result: GateResult {
+                    kind: GateKind::Verify,
+                    passed: true,
+                    exit_code: Some(0),
+                    signal: None,
+                    duration_ms: 30,
+                    stdout: "ok".to_string(),
+                    stderr: String::new(),
+                    timed_out: false,
+                },
+            },
         ]
     }
 
@@ -484,9 +506,9 @@ mod tests {
     }
 
     #[test]
-    fn event_kind_has_exactly_twenty_eight_variants() {
+    fn event_kind_has_exactly_twenty_nine_variants() {
         let variants = all_events();
-        assert_eq!(variants.len(), 28);
+        assert_eq!(variants.len(), 29);
 
         // Exhaustive, wildcard-free match: a variant added to `EventKind`
         // without being listed here fails to compile instead of silently
@@ -503,6 +525,7 @@ mod tests {
                 | EventKind::AttemptFinished { .. }
                 | EventKind::GateStarted { .. }
                 | EventKind::GateFinished { .. }
+                | EventKind::GateRerun { .. }
                 | EventKind::VerifyPassed { .. }
                 | EventKind::VerifyFailed { .. }
                 | EventKind::PublishStarted { .. }
@@ -548,6 +571,7 @@ mod tests {
             "AttemptFinished",
             "GateStarted",
             "GateFinished",
+            "GateRerun",
             "VerifyPassed",
             "VerifyFailed",
             "PublishStarted",

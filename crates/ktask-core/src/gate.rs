@@ -555,6 +555,24 @@ fn with_base_sha(gate: &Gate, base_sha: &str) -> Gate {
     gate
 }
 
+/// Runs `gate` once, exactly as [`run_completion_set`] runs each of its
+/// gates: rooted at `root` with `base_sha` exported as `KTASK_BASE_SHA`. For
+/// a caller that needs a single gate — one the completion set does not
+/// include, or one run alone — to see what the runner would have seen.
+///
+/// # Errors
+///
+/// Returns whatever [`Error`] [`run_gate`] returns when the gate's command
+/// cannot start.
+pub fn run_gate_at(
+    gate: &Gate,
+    root: &Path,
+    base_sha: &str,
+    bus: Option<&Bus>,
+) -> Result<GateResult> {
+    run_gate(&with_base_sha(gate, base_sha), root, bus)
+}
+
 /// Runs the gates that decide whether a task is done: VISION.md §3
 /// invariant 7 ("completion of an executable task requires local
 /// verification, clean publication, and fetched remote-mainline equality")
@@ -610,8 +628,7 @@ pub fn run_completion_set(
         let Some(gate) = profile.get(kind) else {
             continue;
         };
-        let gate = with_base_sha(gate, base_sha);
-        let result = run_gate(&gate, root, bus)?;
+        let result = run_gate_at(gate, root, base_sha, bus)?;
         let passed = result.passed;
         results.push(result);
         if !passed {
@@ -1472,6 +1489,27 @@ error: could not compile `cargoscratch` (lib test) due to 1 previous error
                 .expect("completion set");
 
             assert_eq!(results[0].stdout, "deadbeef");
+        }
+
+        #[test]
+        fn run_gate_at_exports_the_base_sha_to_a_single_gate() {
+            let root = tempfile::tempdir().expect("tempdir");
+            let gate = Gate {
+                kind: GateKind::Targeted,
+                command: vec![
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    "printf '%s' \"$KTASK_BASE_SHA\"".to_string(),
+                ],
+                timeout_secs: 10,
+                working_dir: None,
+                env: BTreeMap::new(),
+            };
+
+            let result = run_gate_at(&gate, root.path(), "cafef00d", None).expect("gate runs");
+
+            assert_eq!(result.kind, GateKind::Targeted);
+            assert_eq!(result.stdout, "cafef00d");
         }
 
         #[test]

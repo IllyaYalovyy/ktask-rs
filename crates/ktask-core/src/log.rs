@@ -103,7 +103,9 @@ fn level_for(kind: &EventKind) -> Level {
         EventKind::PreflightFailed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::TaskFailed { .. } => Level::Error,
-        EventKind::GateFinished { result } if !result.passed => Level::Error,
+        EventKind::GateFinished { result } | EventKind::GateRerun { result } if !result.passed => {
+            Level::Error
+        }
         EventKind::Paused { .. }
         | EventKind::Interrupted { .. }
         | EventKind::DecisionRaised { .. }
@@ -117,6 +119,7 @@ fn level_for(kind: &EventKind) -> Level {
         | EventKind::AttemptFinished { .. }
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
+        | EventKind::GateRerun { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::PublishStarted { .. }
         | EventKind::PublishVerified { .. }
@@ -151,6 +154,7 @@ fn attempt_of(kind: &EventKind) -> Option<AttemptId> {
         | EventKind::PreflightFailed { .. }
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
+        | EventKind::GateRerun { .. }
         | EventKind::PublishVerified { .. }
         | EventKind::TaskDone { .. }
         | EventKind::TaskFailed { .. }
@@ -179,6 +183,7 @@ fn phase_of(kind: &EventKind) -> Option<Phase> {
         | EventKind::AttemptFinished { .. }
         | EventKind::GateStarted { .. }
         | EventKind::GateFinished { .. }
+        | EventKind::GateRerun { .. }
         | EventKind::VerifyPassed { .. }
         | EventKind::VerifyFailed { .. }
         | EventKind::PublishStarted { .. }
@@ -230,6 +235,12 @@ fn message_for(kind: &EventKind) -> String {
         EventKind::GateStarted { gate } => format!("gate started: {gate:?}"),
         EventKind::GateFinished { result } => format!(
             "gate finished: {:?} {} (exit_code={:?})",
+            result.kind,
+            if result.passed { "passed" } else { "failed" },
+            result.exit_code
+        ),
+        EventKind::GateRerun { result } => format!(
+            "gate rerun: {:?} {} (exit_code={:?})",
             result.kind,
             if result.passed { "passed" } else { "failed" },
             result.exit_code
@@ -587,6 +598,28 @@ mod tests {
             result: sample_gate_result(false),
         });
         assert!(failed.contains("failed"));
+    }
+
+    #[test]
+    fn a_rerun_gate_is_logged_by_its_outcome_and_carries_neither_attempt_nor_phase() {
+        let passed = EventKind::GateRerun {
+            result: sample_gate_result(true),
+        };
+        let failed = EventKind::GateRerun {
+            result: sample_gate_result(false),
+        };
+
+        assert_eq!(level_for(&passed), Level::Info);
+        assert_eq!(level_for(&failed), Level::Error);
+        assert_eq!(attempt_of(&passed), None);
+        assert_eq!(phase_of(&passed), None);
+        let message = message_for(&failed);
+        assert!(
+            message.contains("gate rerun") && message.contains("Targeted"),
+            "got {message}"
+        );
+        assert!(message.contains("failed"), "got {message}");
+        assert!(message_for(&passed).contains("passed"));
     }
 
     #[test]

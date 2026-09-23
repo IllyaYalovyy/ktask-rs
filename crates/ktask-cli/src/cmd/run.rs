@@ -490,8 +490,11 @@ fn progress_line(event: &Event) -> Option<String> {
             outcome,
             ..
         } => format!("attempt {attempt}: remediation after {class:?}: {outcome}"),
+        // `GateRerun` is recorded by `rerun-gate`, which prints its own
+        // result; no run is there to narrate it.
         EventKind::TaskQueued { .. }
         | EventKind::GateAcknowledged { .. }
+        | EventKind::GateRerun { .. }
         | EventKind::AttemptRecorded { .. } => return None,
     };
     Some(format!("{who}: {text}"))

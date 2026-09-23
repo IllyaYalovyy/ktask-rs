@@ -254,6 +254,17 @@ fn invalid(from: &str, event: &EventKind) -> Error {
 /// Returns [`Error::InvalidTransition`] if `event` does not apply to
 /// `state`, including every event given to a terminal state.
 pub fn apply(state: &TaskState, event: &EventKind) -> Result<TaskState> {
+    // A gate an operator re-ran on demand is an observation of the task's
+    // worktree, not a step in its custody: any state that is not final
+    // leaves it as it was (`docs/adr/0012-*`).
+    if matches!(event, EventKind::GateRerun { .. }) {
+        return match state {
+            TaskState::Done | TaskState::Acknowledged { .. } | TaskState::Cancelled => {
+                Err(invalid(state.name(), event))
+            }
+            _ => Ok(state.clone()),
+        };
+    }
     match state {
         TaskState::Queued => from_queued(event),
         TaskState::Preflight => from_preflight(event),
@@ -310,7 +321,8 @@ fn from_queued(event: &EventKind) -> Result<TaskState> {
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::RetryStarted { .. }
-        | EventKind::SelfHealingReport { .. } => Err(invalid("Queued", event)),
+        | EventKind::SelfHealingReport { .. }
+        | EventKind::GateRerun { .. } => Err(invalid("Queued", event)),
     }
 }
 
@@ -356,7 +368,8 @@ fn from_preflight(event: &EventKind) -> Result<TaskState> {
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::RetryStarted { .. }
-        | EventKind::SelfHealingReport { .. } => Err(invalid("Preflight", event)),
+        | EventKind::SelfHealingReport { .. }
+        | EventKind::GateRerun { .. } => Err(invalid("Preflight", event)),
     }
 }
 
@@ -416,7 +429,8 @@ fn from_running(attempt: AttemptId, phase: Phase, event: &EventKind) -> Result<T
         | EventKind::DecisionResolved { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::RetryStarted { .. }
-        | EventKind::SelfHealingReport { .. } => Err(invalid("Running", event)),
+        | EventKind::SelfHealingReport { .. }
+        | EventKind::GateRerun { .. } => Err(invalid("Running", event)),
     }
 }
 
@@ -483,7 +497,8 @@ fn from_remediating(attempt: AttemptId, phase: Phase, event: &EventKind) -> Resu
         | EventKind::RecoveryDecision { .. }
         | EventKind::RetryStarted { .. }
         | EventKind::DecisionResolved { .. }
-        | EventKind::GateAcknowledged { .. } => Err(invalid("Remediating", event)),
+        | EventKind::GateAcknowledged { .. }
+        | EventKind::GateRerun { .. } => Err(invalid("Remediating", event)),
     }
 }
 
@@ -527,7 +542,8 @@ fn from_verifying(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::DecisionResolved { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::RetryStarted { .. }
-        | EventKind::SelfHealingReport { .. } => Err(invalid("Verifying", event)),
+        | EventKind::SelfHealingReport { .. }
+        | EventKind::GateRerun { .. } => Err(invalid("Verifying", event)),
     }
 }
 
@@ -578,7 +594,8 @@ fn from_publishing(attempt: AttemptId, event: &EventKind) -> Result<TaskState> {
         | EventKind::DecisionResolved { .. }
         | EventKind::GateAcknowledged { .. }
         | EventKind::RetryStarted { .. }
-        | EventKind::SelfHealingReport { .. } => Err(invalid("Publishing", event)),
+        | EventKind::SelfHealingReport { .. }
+        | EventKind::GateRerun { .. } => Err(invalid("Publishing", event)),
     }
 }
 
@@ -620,6 +637,7 @@ fn from_published_verified(commit: &str, event: &EventKind) -> Result<TaskState>
         | EventKind::GateAcknowledged { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::RetryStarted { .. }
+        | EventKind::GateRerun { .. }
         | EventKind::SelfHealingReport { .. } => {
             Err(invalid(&format!("PublishedVerified({commit})"), event))
         }
@@ -707,7 +725,8 @@ fn from_paused(
         | EventKind::DecisionRaised { .. }
         | EventKind::AttemptRecorded { .. }
         | EventKind::RetryStarted { .. }
-        | EventKind::SelfHealingReport { .. } => Err(invalid("Paused", event)),
+        | EventKind::SelfHealingReport { .. }
+        | EventKind::GateRerun { .. } => Err(invalid("Paused", event)),
     }
 }
 
@@ -2646,7 +2665,39 @@ mod tests {
             },
             decision_resolved(),
             self_healing_report(attempt),
+            EventKind::GateRerun {
+                result: sample_gate_result(),
+            },
         ]
+    }
+
+    #[test]
+    fn a_rerun_gate_leaves_every_state_that_is_not_final_exactly_as_it_was() {
+        let rerun = EventKind::GateRerun {
+            result: sample_gate_result(),
+        };
+        let states = representative_states();
+        let mut accepted = 0;
+        for (label, state) in &states {
+            let result = apply(state, &rerun);
+            if state.is_terminal() && !matches!(state, TaskState::Failed { .. }) {
+                assert!(
+                    matches!(result, Err(Error::InvalidTransition { .. })),
+                    "{label} is final and must reject GateRerun, got {result:?}"
+                );
+            } else {
+                assert_eq!(
+                    result.expect("accepted"),
+                    *state,
+                    "{label} must be unchanged"
+                );
+                accepted += 1;
+            }
+        }
+        assert_eq!(
+            accepted, 13,
+            "every non-final representative state accepts it"
+        );
     }
 
     #[test]
@@ -2712,6 +2763,19 @@ mod tests {
             ("Paused/Blocked", "TaskCancelled"),
             ("Failed", "RetryStarted"),
             ("Failed", "TaskCancelled"),
+            ("Queued", "GateRerun"),
+            ("Preflight", "GateRerun"),
+            ("Running", "GateRerun"),
+            ("Remediating", "GateRerun"),
+            ("Verifying", "GateRerun"),
+            ("Publishing", "GateRerun"),
+            ("PublishedVerified", "GateRerun"),
+            ("Paused/Limit", "GateRerun"),
+            ("Paused/Input", "GateRerun"),
+            ("Paused/HumanGate", "GateRerun"),
+            ("Paused/Interrupted", "GateRerun"),
+            ("Paused/Blocked", "GateRerun"),
+            ("Failed", "GateRerun"),
             // Done, Acknowledged and Cancelled are terminal: no event is
             // legal against them, so they contribute no rows. Failed is
             // terminal too, except that a human's `retry` or `cancel` may
@@ -2721,7 +2785,7 @@ mod tests {
         let states = representative_states();
         let events = representative_events();
         assert_eq!(states.len(), 16, "expected one row per distinguished state");
-        assert_eq!(events.len(), 25, "expected one row per distinguished event");
+        assert_eq!(events.len(), 26, "expected one row per distinguished event");
 
         let mut checked = 0;
         for (state_label, state) in &states {
@@ -2749,7 +2813,7 @@ mod tests {
         assert_eq!(checked, states.len() * events.len());
         assert_eq!(
             ALLOWED.len(),
-            56,
+            69,
             "the allowed list itself changed size; update this guard deliberately"
         );
     }

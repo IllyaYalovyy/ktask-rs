@@ -136,6 +136,11 @@ Each exits 2 when nothing is in a state the command applies to.
 
 Re-runs a gate against the current worktree, discarding any cached result, and
 prints the structured outcome. Without `--gate`, runs the whole completion set.
+Runs in the task's own worktree, journals each result as a `GateRerun`, and
+never changes the task's state. Exits 0 when every gate that ran passed, 1 when
+one failed, and 2 when there is nothing to run against: no such task, a
+finished task, a supervisor still working it, no worktree, or a gate the
+profile does not configure.
 
 ### `ktask-rs tui`
 

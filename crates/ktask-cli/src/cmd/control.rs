@@ -231,7 +231,7 @@ fn plan_cancel(state: &TaskState) -> CancelPlan {
 /// flight, and it is the supervisor's to finish or stop, not the journal's.
 /// `PublishedVerified` is not: the change is already on mainline, and only
 /// the bookkeeping that follows is left.
-fn in_flight(state: &TaskState) -> bool {
+pub(super) fn in_flight(state: &TaskState) -> bool {
     matches!(
         state,
         TaskState::Preflight

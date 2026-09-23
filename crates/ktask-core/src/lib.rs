@@ -47,7 +47,7 @@ pub use event::{Event, EventKind};
 pub use events::{Bus, Recorder, Subscription};
 pub use gate::{
     Gate, GateKind, GateResult, Profile, TestSummary, parse_cargo, profile_from,
-    run_completion_set, run_gate,
+    run_completion_set, run_gate, run_gate_at,
 };
 pub use git::{
     RebaseOutcome, Worktree, changed_paths, commit_all, create_worktree, current_branch,

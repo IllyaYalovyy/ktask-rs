@@ -1395,3 +1395,124 @@ fn cli_interrupt_stops_a_retry_and_leaves_the_task_parked() {
     assert!(gone_soon(agent_pid), "the agent outlived the interrupt");
     assert_eq!(task_states(&scenario).expect("states"), vec!["Paused"]);
 }
+
+/// Rewrites the project config so the mandatory verify gate is `command`,
+/// leaving the provider and scenario wiring as [`support::build`] wrote it.
+fn set_verify(scenario: &support::Scenario, command: &str) -> std::io::Result<()> {
+    std::fs::write(
+        scenario.state_dir().join("config.toml"),
+        format!(
+            "provider = \"dummy\"\ndummy_scenario_path = \"{}\"\nverify_command = [\"{command}\"]\n",
+            scenario.state_dir().join("scenario.toml").display()
+        ),
+    )
+}
+
+/// `rerun-gate` runs the gate afresh every time: a gate that passed, then
+/// fails once the world changes, is reported failing on the second call — in
+/// the exit code, the printed result and the journal alike — and the task's
+/// own state is untouched throughout.
+#[test]
+fn cli_rerun_gate_never_reuses_a_cached_pass() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(1)).expect("build scenario");
+    let head = git_in(scenario.project_dir(), &["rev-parse", "HEAD"]).expect("git rev-parse");
+    let mut events = up_to_publishing(&head, dead_pid().expect("dead pid"));
+    events.truncate(3);
+    events.push(ktask_core::EventKind::TaskFailed {
+        class: ktask_core::FailureClass::VerificationFailure,
+        detail: "red".to_string(),
+    });
+    journal_as_killed(&scenario, 1, &events).expect("journal");
+    let worktrees = tempfile::tempdir().expect("tempdir");
+    let worktree = worktrees.path().join("task-1");
+    git_in(
+        scenario.project_dir(),
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            worktree.to_str().expect("utf-8 path"),
+            "HEAD",
+        ],
+    )
+    .expect("git worktree add");
+
+    set_verify(&scenario, "true").expect("write config");
+    let passing = scenario
+        .run(&["rerun-gate", "--task", "1", "--gate", "verify", "--json"])
+        .expect("rerun-gate");
+    set_verify(&scenario, "false").expect("write config");
+    let failing = scenario
+        .run(&["rerun-gate", "--task", "1", "--gate", "verify", "--json"])
+        .expect("rerun-gate again");
+
+    assert_eq!(passing.status.code(), Some(0), "{}", stderr_of(&passing));
+    assert_eq!(failing.status.code(), Some(1), "{}", stderr_of(&failing));
+    let printed = |output: &std::process::Output| -> serde_json::Value {
+        serde_json::from_str(stdout_of(output).trim()).expect("one JSON object on stdout")
+    };
+    let (first, second) = (printed(&passing), printed(&failing));
+    assert_eq!(
+        (&first["task"], &first["passed"]),
+        (&1.into(), &true.into())
+    );
+    assert_eq!(
+        (&second["task"], &second["passed"]),
+        (&1.into(), &false.into())
+    );
+    assert_eq!(second["kind"], "Verify");
+    assert_eq!(second["exit_code"], 1);
+
+    let journal = ktask_core::Journal::open(&ktask_core::journal_path(scenario.state_dir()))
+        .expect("journal");
+    let recorded: Vec<bool> = journal
+        .events_for(ktask_core::TaskId::new(1))
+        .expect("events")
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            ktask_core::EventKind::GateRerun { result } => Some(result.passed),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(recorded, vec![true, false]);
+    assert_eq!(task_states(&scenario).expect("states"), vec!["Failed"]);
+    git_in(
+        scenario.project_dir(),
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            worktree.to_str().expect("utf-8 path"),
+        ],
+    )
+    .expect("git worktree remove");
+}
+
+/// Without a worktree for the task there is nothing to run a gate against:
+/// exit 2, nothing printed on stdout, nothing journaled.
+#[test]
+fn cli_rerun_gate_exits_2_for_a_task_with_no_worktree() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(1)).expect("build scenario");
+    let head = git_in(scenario.project_dir(), &["rev-parse", "HEAD"]).expect("git rev-parse");
+    journal_as_killed(
+        &scenario,
+        1,
+        &[
+            ktask_core::EventKind::PreflightStarted,
+            ktask_core::EventKind::PreflightPassed { base_sha: head },
+            ktask_core::EventKind::Paused {
+                reason: ktask_core::PauseReason::Blocked,
+            },
+        ],
+    )
+    .expect("journal");
+
+    let rerun = scenario
+        .run(&["rerun-gate", "--task", "1"])
+        .expect("rerun-gate");
+
+    assert_eq!(rerun.status.code(), Some(2), "{}", stderr_of(&rerun));
+    assert!(stdout_of(&rerun).is_empty(), "{}", stdout_of(&rerun));
+    let kinds = journaled_kinds(&scenario, 1).expect("read journal");
+    assert!(!kinds.contains(&"GateRerun"), "got {kinds:?}");
+}
