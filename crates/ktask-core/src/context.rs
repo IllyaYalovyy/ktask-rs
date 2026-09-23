@@ -114,6 +114,38 @@ fn load_template_with(project: &Project, env: &dyn Fn(&str) -> Option<String>) -
     Ok(std::fs::read_to_string(default_path)?)
 }
 
+/// Loads the static context document for `project`'s attempts (VISION.md
+/// §6: "a static context document from the private prompt library").
+///
+/// Prefers a per-project override at `<project.state_dir>/context.md`;
+/// falls back to the global default in [`paths::prompt_library`], creating
+/// it via [`ensure_defaults`] first if this is the first run. Neither file
+/// is ever read from inside the repository (VISION.md §11), mirroring
+/// [`load_template`]'s own precedence for the task template.
+///
+/// # Errors
+///
+/// Returns [`Error::Io`] when a present file cannot be read, and
+/// [`Error::Config`] when the global prompt library's path cannot be
+/// resolved.
+pub fn load_context_doc(project: &Project) -> Result<String> {
+    load_context_doc_with(project, &|key| std::env::var(key).ok())
+}
+
+fn load_context_doc_with(
+    project: &Project,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<String> {
+    let override_path = project.state_dir.join(CONTEXT_DOC_FILE);
+    if override_path.is_file() {
+        return Ok(std::fs::read_to_string(override_path)?);
+    }
+
+    ensure_defaults_with(env)?;
+    let default_path = paths::prompt_library_with(env)?.join(CONTEXT_DOC_FILE);
+    Ok(std::fs::read_to_string(default_path)?)
+}
+
 /// Reads every recorded architecture decision record out of a repository, in
 /// filename order, for [`assemble`]'s `adrs` argument.
 ///
@@ -462,6 +494,53 @@ mod tests {
         let template = load_template_with(&project, &env).expect("load template");
 
         assert!(template.contains("{{TASK}}"));
+    }
+
+    #[test]
+    fn load_context_doc_creates_the_defaults_on_a_first_run_instead_of_failing() {
+        let config_home = tempfile::tempdir().expect("tempdir");
+        let env = env_with(&config_home);
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_with_state_dir(state_dir.path().to_path_buf());
+
+        let doc = load_context_doc_with(&project, &env).expect("load context doc");
+
+        assert!(doc.contains("No project-specific context"));
+        let dir = paths::prompt_library_with(&env).expect("prompt library path");
+        assert!(dir.join(CONTEXT_DOC_FILE).is_file());
+    }
+
+    #[test]
+    fn load_context_doc_prefers_the_per_project_override_over_the_global_default() {
+        let config_home = tempfile::tempdir().expect("tempdir");
+        let env = env_with(&config_home);
+        let state_dir = tempfile::tempdir().expect("state dir");
+        std::fs::write(
+            state_dir.path().join(CONTEXT_DOC_FILE),
+            "this project's own context",
+        )
+        .expect("write override");
+        let project = project_with_state_dir(state_dir.path().to_path_buf());
+
+        let doc = load_context_doc_with(&project, &env).expect("load context doc");
+
+        assert_eq!(doc, "this project's own context");
+    }
+
+    #[test]
+    fn load_context_doc_never_reads_from_inside_the_repository() {
+        let config_home = tempfile::tempdir().expect("tempdir");
+        let env = env_with(&config_home);
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = Project {
+            root: std::path::PathBuf::from("/nonexistent/repo/root"),
+            id: "abc123".to_string(),
+            state_dir: state_dir.path().to_path_buf(),
+        };
+
+        let doc = load_context_doc_with(&project, &env).expect("load context doc");
+
+        assert!(doc.contains("No project-specific context"));
     }
 
     #[test]
