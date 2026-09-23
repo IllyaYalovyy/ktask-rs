@@ -25,6 +25,7 @@ mod queue;
 mod redact;
 mod remediate;
 mod report;
+mod runner;
 mod state;
 mod task;
 #[cfg(any(test, feature = "testing"))]
@@ -71,5 +72,6 @@ pub use remediate::{
     should_continue, signature,
 };
 pub use report::{ReportResult, parse_report};
+pub use runner::{PreflightReport, preflight};
 pub use state::{PauseReason, Phase, TaskState, apply, check_one_active, check_predecessor};
 pub use task::{Task, TaskStatus, parse_plan, validate};
