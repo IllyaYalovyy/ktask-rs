@@ -1516,3 +1516,194 @@ fn cli_rerun_gate_exits_2_for_a_task_with_no_worktree() {
     let kinds = journaled_kinds(&scenario, 1).expect("read journal");
     assert!(!kinds.contains(&"GateRerun"), "got {kinds:?}");
 }
+
+/// Every event a successful first attempt at `task` journals, in order, as
+/// `(task, event)` pairs. `base` is the commit the attempt starts from and
+/// `tip` the commit it publishes; the agent's pid is normalised to 0 by the
+/// caller. The two task-less preflight events are the project-level probe the
+/// runner journals between the task's own preflight events.
+fn success_events(
+    task: u32,
+    base: &str,
+    tip: &str,
+) -> Vec<(Option<ktask_core::TaskId>, ktask_core::EventKind)> {
+    use ktask_core::{AttemptId, EventKind, Phase, Stream, TaskId};
+    let id = Some(TaskId::new(task));
+    let attempt = AttemptId::new(1);
+    vec![
+        (id, EventKind::PreflightStarted),
+        (None, EventKind::PreflightStarted),
+        (
+            None,
+            EventKind::PreflightPassed {
+                base_sha: base.to_string(),
+            },
+        ),
+        (
+            id,
+            EventKind::PreflightPassed {
+                base_sha: base.to_string(),
+            },
+        ),
+        (
+            id,
+            EventKind::AttemptStarted {
+                attempt,
+                protocol: "direct".to_string(),
+                pid: 0,
+                base_sha: base.to_string(),
+            },
+        ),
+        (
+            id,
+            EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Implement,
+            },
+        ),
+        (
+            id,
+            EventKind::AgentOutput {
+                attempt,
+                stream: Stream::Stdout,
+                text: format!("implemented thing {task}\n"),
+            },
+        ),
+        (
+            id,
+            EventKind::AttemptFinished {
+                attempt,
+                exit_code: 0,
+                usage: None,
+                session_id: None,
+                model_reported: None,
+            },
+        ),
+        (
+            id,
+            EventKind::PhaseEntered {
+                attempt,
+                phase: Phase::Verify,
+            },
+        ),
+        (id, EventKind::VerifyPassed { attempt }),
+        (
+            id,
+            EventKind::PublishStarted {
+                attempt,
+                candidate_sha: tip.to_string(),
+            },
+        ),
+        (
+            id,
+            EventKind::PublishVerified {
+                commit: tip.to_string(),
+                remote_sha: tip.to_string(),
+            },
+        ),
+        (
+            id,
+            EventKind::TaskDone {
+                commit: tip.to_string(),
+            },
+        ),
+    ]
+}
+
+/// The happy path, asserted end to end: `run` drains a three-task queue
+/// against the dummy provider and exits 0; each task's own events fold
+/// through `PublishedVerified` to `Done`; the origin's tip is the last
+/// task's candidate; and the journal is checked event for event — every
+/// event, in order, with its payload — rather than sampled.
+#[test]
+fn scenarios_success_drains_three_tasks_and_journals_every_step() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(3)).expect("build scenario");
+    scenario
+        .set_scenario(&all_succeed(&scenario, 3))
+        .expect("write scenario");
+    let base = git_in(scenario.project_dir(), &["rev-parse", "HEAD"]).expect("base commit");
+    let origin = std::path::PathBuf::from(
+        git_in(scenario.project_dir(), &["remote", "get-url", "origin"]).expect("origin url"),
+    );
+
+    let run = scenario.run(&["run"]).expect("run");
+
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&run),
+        stderr_of(&run)
+    );
+
+    let journal = ktask_core::Journal::open(&ktask_core::journal_path(scenario.state_dir()))
+        .expect("open journal");
+
+    // The remote tip is the last task's candidate.
+    let origin_tip = git_in(&origin, &["rev-parse", "HEAD"]).expect("origin tip");
+    let events = journal.events().expect("all events");
+    let last_candidate = events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.kind {
+            ktask_core::EventKind::PublishStarted { candidate_sha, .. } => {
+                Some(candidate_sha.clone())
+            }
+            _ => None,
+        })
+        .expect("a publish was started");
+    assert_eq!(
+        origin_tip, last_candidate,
+        "the remote tip must equal the last candidate"
+    );
+
+    // Three tasks, each Done, each having passed through PublishedVerified
+    // exactly once, immediately before Done.
+    assert_eq!(
+        task_states(&scenario).expect("task states"),
+        vec!["Done"; 3],
+        "every task ends Done"
+    );
+    for task in journal.tasks().expect("queue tasks") {
+        let mut state = ktask_core::TaskState::Queued;
+        let mut visited = Vec::new();
+        for event in journal.events_for(task.id).expect("task events") {
+            state = ktask_core::apply(&state, &event.kind).expect("legal transition");
+            visited.push(state.name());
+        }
+        assert_eq!(
+            visited,
+            [
+                "Preflight",
+                "Preflight",
+                "Running",
+                "Running",
+                "Running",
+                "Running",
+                "Verifying",
+                "Verifying",
+                "Publishing",
+                "PublishedVerified",
+                "Done",
+            ],
+            "task {} state trail",
+            task.id
+        );
+    }
+
+    // The whole journal: three tasks' events, in queue order, nothing else.
+    let mut actual: Vec<(Option<ktask_core::TaskId>, ktask_core::EventKind)> = events
+        .into_iter()
+        .map(|event| (event.task_id, event.kind))
+        .collect();
+    for (_, kind) in &mut actual {
+        if let ktask_core::EventKind::AttemptStarted { pid, .. } = kind {
+            assert_ne!(*pid, 0, "an attempt records the agent's real pid");
+            *pid = 0;
+        }
+    }
+    let expected: Vec<_> = (1..=3)
+        .flat_map(|task| success_events(task, &base, &origin_tip))
+        .collect();
+    assert_eq!(actual, expected, "the journal, in full");
+}
