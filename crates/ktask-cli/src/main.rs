@@ -81,5 +81,10 @@ fn run(cli: &Cli) -> Result<RunOutcome> {
     };
 
     let config = ktask_core::load_for(&project)?;
-    Ok(cmd::dispatch(&cli.command, &project, &config))
+    Ok(cmd::dispatch(
+        &cli.command,
+        &project,
+        &config,
+        cli.output.json,
+    ))
 }
