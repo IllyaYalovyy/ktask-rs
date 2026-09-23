@@ -6,6 +6,7 @@
 //! `begin_attempt`, the entry points those tasks have needed so far.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::process;
 use std::time::Duration;
 
@@ -13,11 +14,17 @@ use nix::sys::statvfs::statvfs;
 use time::OffsetDateTime;
 
 use crate::{
-    AttemptId, AttemptRecord, Bus, Config, EventKind, FailureClass, Gate, GateKind, Invocation,
-    Journal, Outcome, Profile, Project, Provider, Recorder, Result, Task, TaskId, acquire, build,
-    classify, fetch, for_task, head_sha, load_for, profile_from, require_clean, run_gate,
-    write_evidence,
+    AttemptId, AttemptRecord, Bus, Config, Error, EventKind, FailureClass, Gate, GateKind,
+    Invocation, Journal, Outcome, Profile, Project, Provider, Recorder, RepoLock, Result, Task,
+    TaskId, acquire, build, classify, create_worktree, fetch, for_task, head_sha, load_for,
+    profile_from, require_clean, run_gate, write_evidence,
 };
+
+/// How long [`Runner::prepare`] waits for the repository lock ([`acquire`])
+/// to become free before giving up. [`preflight`]'s own last check has
+/// already confirmed no live holder was found a moment earlier, so this only
+/// has to cover the narrow window between that check and this acquisition.
+const PREPARE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The supervisor for one project: everything an attempt runs against, held
 /// together so nothing that drives an attempt has to reassemble it from
@@ -73,8 +80,8 @@ impl Runner {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Database`](crate::Error::Database) if `project`'s
-    /// journal cannot be opened, [`Error::Config`](crate::Error::Config) if
+    /// Returns [`Error::Database`] if `project`'s
+    /// journal cannot be opened, [`Error::Config`] if
     /// its configuration cannot be loaded, if the resulting profile has no
     /// `verify_command`, or if `config.provider` cannot be built, and
     /// whatever else [`load_for`] or [`build`] themselves return.
@@ -110,7 +117,7 @@ impl Runner {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Policy`](crate::Error::Policy) if `task`'s protocol
+    /// Returns [`Error::Policy`] if `task`'s protocol
     /// cannot be resolved, whatever [`head_sha`] returns if `project.root`'s
     /// current commit cannot be read, and whatever [`Recorder::record`] or
     /// [`write_evidence`] return on failure to persist.
@@ -148,6 +155,90 @@ impl Runner {
 
         Ok(attempt)
     }
+
+    /// Brings `task` to the point an agent could start (`VISION.md` §6, §10):
+    /// proves the world is sane ([`preflight`]), serializes against every
+    /// other process working this repository ([`acquire`]), and creates
+    /// `task`'s isolated worktree from the commit preflight just proved was
+    /// freshly fetched ([`create_worktree`]).
+    ///
+    /// Unlike the project-wide [`preflight`] itself, `prepare` journals
+    /// `task`'s own [`EventKind::PreflightStarted`] before calling it and
+    /// `task`'s own [`EventKind::PreflightPassed`] or
+    /// [`EventKind::PreflightFailed`] once it returns, so `task`'s pipeline
+    /// state (`VISION.md` §6) actually advances into `Preflight` rather than
+    /// preflight remaining an event only the repository as a whole
+    /// experienced.
+    ///
+    /// The repository lock is only acquired once preflight has reported
+    /// success: a failed preflight never held it, so there is nothing to
+    /// release on that path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Preflight`] carrying the failed check's
+    /// [`FailureClass`] and detail when preflight itself reports
+    /// [`PreflightReport::Failed`]; whatever [`Recorder::record`] returns on
+    /// failure to journal; [`Error::LockTimeout`] if the repository lock
+    /// cannot be acquired within a bounded timeout; and whatever
+    /// [`create_worktree`] returns if the worktree cannot be created.
+    pub fn prepare(&mut self, task: &Task) -> Result<Prepared> {
+        self.recorder
+            .record(Some(task.id), EventKind::PreflightStarted)?;
+
+        let report = preflight(&self.project, &self.config, self.provider.as_ref())?;
+
+        let base_sha = match report {
+            PreflightReport::Passed { base_sha } => {
+                self.recorder.record(
+                    Some(task.id),
+                    EventKind::PreflightPassed {
+                        base_sha: base_sha.clone(),
+                    },
+                )?;
+                base_sha
+            }
+            PreflightReport::Failed { class, detail } => {
+                self.recorder.record(
+                    Some(task.id),
+                    EventKind::PreflightFailed {
+                        class,
+                        detail: detail.clone(),
+                    },
+                )?;
+                return Err(Error::Preflight { class, detail });
+            }
+        };
+
+        let lock = acquire(&self.project.state_dir, PREPARE_LOCK_TIMEOUT)?;
+        let worktree =
+            create_worktree(&self.project.root, &format!("task-{}", task.id), &base_sha)?;
+
+        Ok(Prepared {
+            worktree,
+            base_sha,
+            lock,
+        })
+    }
+}
+
+/// Everything an attempt needs to actually start: the isolated worktree
+/// [`Runner::prepare`] created for a task, the commit it was created from,
+/// and the repository lock serializing this run against every other process
+/// working the same repository.
+///
+/// Dropping `Prepared` releases the repository lock, since [`RepoLock`]'s
+/// own `Drop` impl is what does that — nothing here has to remember to
+/// release it explicitly.
+#[derive(Debug)]
+pub struct Prepared {
+    /// The task's isolated worktree, checked out at `base_sha`.
+    pub worktree: PathBuf,
+    /// The commit `worktree` was created from: the mainline remote's tip
+    /// once [`preflight`] confirmed it was freshly fetched.
+    pub base_sha: String,
+    /// The repository lock, held for as long as `Prepared` lives.
+    pub lock: RepoLock,
 }
 
 /// The next [`AttemptId`] for `task`: one past the highest `attempt` any
@@ -895,5 +986,104 @@ mod tests {
             panic!("expected AttemptStarted, got {:?}", events[0].kind);
         };
         assert_eq!(protocol, "tdd");
+    }
+
+    /// Writes a project config naming the `dummy` provider with a scenario
+    /// containing exactly one `success` step, plus the trivial
+    /// `verify_command` `profile_from` requires: enough for `Runner::new` to
+    /// build, and for `preflight`'s `check_provider_available` to succeed by
+    /// actually invoking the provider, without any real agent binary
+    /// installed (`VISION.md` §12).
+    fn write_config_with_an_available_dummy_provider(
+        project: &Project,
+        scenario_dir: &std::path::Path,
+    ) {
+        let scenario_path = scenario_dir.join("scenario.toml");
+        std::fs::write(&scenario_path, "[[steps]]\noutcome = \"success\"\n")
+            .expect("write scenario file");
+        std::fs::write(
+            project_config_path(project),
+            format!(
+                "provider = \"dummy\"\ndummy_scenario_path = \"{}\"\nverify_command = [\"true\"]\n",
+                scenario_path.display()
+            ),
+        )
+        .expect("write project config");
+    }
+
+    #[test]
+    fn prepare_creates_a_worktree_checked_out_at_the_fetched_remote_sha_and_holds_the_lock() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        write_config_with_an_available_dummy_provider(&project, state_dir.path());
+        let task = sample_task(1);
+
+        let mut runner = Runner::new(project.clone()).expect("build runner");
+        let prepared = runner.prepare(&task).expect("prepare");
+
+        assert_eq!(prepared.base_sha, repo.seed_sha);
+        assert!(
+            prepared.worktree.is_dir(),
+            "worktree must actually exist on disk"
+        );
+        assert_eq!(
+            head_sha(&prepared.worktree).expect("head_sha of worktree"),
+            repo.seed_sha,
+            "the worktree must be checked out at the fetched remote sha, not merely named after it"
+        );
+
+        let contended = acquire(&project.state_dir, Duration::from_secs(0))
+            .expect_err("the repository lock must already be held while `prepared` is alive");
+        assert!(matches!(contended, Error::LockTimeout { .. }));
+
+        let journal = Journal::open_for(&project).expect("open journal");
+        let events = journal.events_for(task.id).expect("events_for");
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|event| event.kind.discriminant())
+            .collect();
+        assert_eq!(kinds, vec!["PreflightStarted", "PreflightPassed"]);
+
+        let worktree = prepared.worktree.clone();
+        drop(prepared);
+        drop(
+            acquire(&project.state_dir, Duration::from_secs(0))
+                .expect("dropping `Prepared` must release the repository lock"),
+        );
+        crate::remove_worktree(&repo.path, &worktree).expect("clean up the created worktree");
+    }
+
+    #[test]
+    fn prepare_never_acquires_the_lock_when_preflight_fails() {
+        let repo = scratch_repo().expect("scratch_repo");
+        std::fs::write(repo.path.join("untracked.txt"), "dirty\n").expect("write untracked file");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        write_config_with_an_available_dummy_provider(&project, state_dir.path());
+        let task = sample_task(1);
+
+        let mut runner = Runner::new(project.clone()).expect("build runner");
+        let err = runner
+            .prepare(&task)
+            .expect_err("a dirty tree must fail preflight");
+
+        match err {
+            Error::Preflight { class, .. } => assert_eq!(class, FailureClass::PolicyFailure),
+            other => panic!("expected Error::Preflight, got {other:?}"),
+        }
+
+        drop(
+            acquire(&project.state_dir, Duration::from_secs(0))
+                .expect("a failed preflight must not leave the repository lock held"),
+        );
+
+        let journal = Journal::open_for(&project).expect("open journal");
+        let events = journal.events_for(task.id).expect("events_for");
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|event| event.kind.discriminant())
+            .collect();
+        assert_eq!(kinds, vec!["PreflightStarted", "PreflightFailed"]);
     }
 }

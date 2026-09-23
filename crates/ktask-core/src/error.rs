@@ -5,6 +5,7 @@
 //! string. No variant carries a secret: git and provider failures carry
 //! their process's stderr or a description, never credentials.
 
+use crate::classify::FailureClass;
 use std::path::PathBuf;
 
 /// Everything that can go wrong inside ktask-core.
@@ -109,6 +110,18 @@ pub enum Error {
         detail: String,
     },
 
+    /// [`crate::Runner::prepare`]'s call to [`crate::preflight`] reported a
+    /// failure: `task` was never actually attempted, and no lock or worktree
+    /// was created for it.
+    #[error("preflight failed ({class:?}): {detail}")]
+    Preflight {
+        /// The class of failure, exactly as
+        /// [`crate::PreflightReport::Failed`] classified it.
+        class: FailureClass,
+        /// A human-readable description of what failed.
+        detail: String,
+    },
+
     /// [`crate::acquire`] could not create the lock file before its
     /// timeout elapsed; another live process still holds it.
     #[error("lock at {path} not acquired within {timeout_secs}s: held by pid {holder_pid}")]
@@ -182,6 +195,17 @@ mod tests {
         let serde_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
         let err: Error = serde_err.into();
         assert!(matches!(err, Error::Serde(_)));
+    }
+
+    #[test]
+    fn preflight_error_names_the_class_and_detail() {
+        let err = Error::Preflight {
+            class: FailureClass::PolicyFailure,
+            detail: "dirty working tree".to_string(),
+        };
+        let message = err.to_string();
+        assert!(message.contains("PolicyFailure"));
+        assert!(message.contains("dirty working tree"));
     }
 
     #[test]
