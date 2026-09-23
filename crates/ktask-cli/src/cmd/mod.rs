@@ -4,10 +4,10 @@
 //! Each command gets its own file, named for the command (`control` covers
 //! the three run-control commands — pause, interrupt, cancel — together,
 //! since `docs/CONTRACT.md` section 3 and a later task treat them as one
-//! unit). `init` (T108), `doctor` (T110), `status` (T111), `add` (T112) and
-//! `plan lint` (T113) have their real behavior; every other module still
-//! only returns [`RunOutcome::Drained`] as a placeholder for later,
-//! per-command work: T115 (run), T116 (resume, retry), T117 (resolve, ack),
+//! unit). `init` (T108), `doctor` (T110), `status` (T111), `add` (T112),
+//! `plan lint` (T113) and `run` (T115) have their real behavior; every
+//! other module still only returns [`RunOutcome::Drained`] as a placeholder for later,
+//! per-command work: T116 (resume, retry), T117 (resolve, ack),
 //! T119 (pause, interrupt, cancel), T120 (rerun-gate) and T131 (tui). What
 //! this module is responsible for is that [`dispatch`] itself is real: the
 //! match below is exhaustive, so a `Command` variant added without a
@@ -50,7 +50,7 @@ pub(crate) fn dispatch(
         Command::Add { file } => add::run(project, config, file.as_deref()),
         Command::Plan { command } => plan::run(project, config, command),
         Command::Status => status::run(project, config, json),
-        Command::Run { task, from } => run::run(project, config, *task, *from),
+        Command::Run { task, from } => run::run(project, *task, *from, json),
         Command::Resume => resume::run(project, config),
         Command::Retry { task } => retry::run(project, config, *task),
         Command::Resolve { task, note } => resolve::run(project, config, *task, note.as_deref()),
@@ -149,11 +149,13 @@ mod tests {
                 continue;
             }
 
-            // `add` (T112) has real behavior too: the fixture's `--file`
-            // names a path that does not exist, so reading it fails before
-            // `add` ever touches the journal, reaching `RunOutcome::Usage`
-            // rather than the placeholder `Drained`.
-            if matches!(command, Command::Add { .. }) {
+            // `add` (T112) and `run` (T115) have real behavior too: the
+            // fixture's `--file` names a path that does not exist, so
+            // reading it fails before `add` ever touches the journal, and
+            // `run` cannot build a runner over a state directory that does
+            // not exist. Both reach `RunOutcome::Usage` rather than the
+            // placeholder `Drained`.
+            if matches!(command, Command::Add { .. } | Command::Run { .. }) {
                 assert!(
                     matches!(outcome, RunOutcome::Usage { .. }),
                     "{command:?} did not reach its cmd:: module's real behavior: {outcome:?}"

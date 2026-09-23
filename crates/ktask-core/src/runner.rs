@@ -19,11 +19,11 @@ use crate::{
     AttemptId, AttemptRecord, Bounds, Breaker, BreakerState, Bus, Config, Decision, Error,
     EventKind, FailureClass, Gate, GateKind, GateResult, Invocation, Journal, Outcome, PauseReason,
     Phase, PhaseSpec, Profile, Project, Provider, RebaseOutcome, Recorder, RepoLock, ReportResult,
-    Result, Stream, Task, TaskId, TaskState, TaskStatus, TestSummary, WaitPlan, acquire, apply,
-    assemble, build, bundle, changed_paths, check_model, check_no_policy_edit, check_scope,
-    claim_tdd_exception, classify, collect_adrs, commit_all, create_worktree, ensure_report_dir,
-    fetch, for_task, head_sha, load, load_context_doc, load_for, load_template, next_runnable,
-    parse_cargo, parse_reset, profile_from, publish, read_evidence, read_report,
+    Result, Stream, Subscription, Task, TaskId, TaskState, TaskStatus, TestSummary, WaitPlan,
+    acquire, apply, assemble, build, bundle, changed_paths, check_model, check_no_policy_edit,
+    check_scope, claim_tdd_exception, classify, collect_adrs, commit_all, create_worktree,
+    ensure_report_dir, fetch, for_task, head_sha, load, load_context_doc, load_for, load_template,
+    next_runnable, parse_cargo, parse_reset, profile_from, publish, read_evidence, read_report,
     rebase_onto_remote, redact, remove_worktree, require_clean, run_completion_set, run_gate,
     should_continue, signature, verify_green, verify_red, wait_plan, write_evidence,
 };
@@ -142,6 +142,19 @@ impl Runner {
             provider,
             interrupt,
         })
+    }
+
+    /// Attaches a new subscriber to this runner's bus, so a frontend can
+    /// observe every event the runner journals from here on
+    /// (`docs/CONTRACT.md` section 0 rule 2: both frontends consume the
+    /// same event stream).
+    ///
+    /// The subscriber sees only events recorded after this call; a
+    /// [`Subscription`] is independent of the runner's borrow, so it can be
+    /// drained from another thread while [`Runner::run_queue`] runs.
+    #[must_use]
+    pub fn subscribe(&self) -> Subscription {
+        self.recorder.subscribe()
     }
 
     /// True once this process has received `SIGINT` since [`interrupt_flag`]
@@ -2360,6 +2373,25 @@ mod tests {
         assert_eq!(protocol, "direct");
         assert_eq!(pid, process::id());
         assert_eq!(base_sha, repo.seed_sha);
+    }
+
+    #[test]
+    fn a_subscription_taken_from_the_runner_sees_the_events_it_records() {
+        let repo = scratch_repo().expect("scratch_repo");
+        let state_dir = tempfile::tempdir().expect("state dir");
+        let project = project_for(&repo.path, state_dir.path());
+        write_runnable_config(&project);
+        let task = sample_task(1);
+
+        let mut runner = Runner::new(project).expect("build runner");
+        let mut subscription = runner.subscribe();
+        runner.begin_attempt(&task).expect("begin_attempt");
+
+        let (events, dropped) = subscription.drain();
+        assert_eq!(dropped, 0);
+        let kinds: Vec<_> = events.iter().map(|e| e.kind.discriminant()).collect();
+        assert_eq!(kinds, vec!["AttemptStarted"]);
+        assert_eq!(events[0].task_id, Some(task.id));
     }
 
     #[test]

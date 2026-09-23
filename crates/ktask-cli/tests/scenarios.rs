@@ -109,3 +109,310 @@ fn scenarios_harness_dropping_it_removes_everything_it_created() {
         "the scenario's project directory must be removed once dropped"
     );
 }
+
+/// A plan of `count` valid tasks, titled "Task 1" .. "Task N".
+fn plan_of(count: u32) -> String {
+    let blocks: Vec<String> = (1..=count)
+        .map(|n| {
+            format!(
+                "## Task {n}\n\n**Outcome:** thing {n} exists.\n\n\
+                 **Done-when:** thing {n} is visible.\n\n**Verify:** `true`\n\n**Refs:** none\n\n"
+            )
+        })
+        .collect();
+    blocks.concat()
+}
+
+/// A dummy scenario in which every task in `1..=count` succeeds on its first
+/// attempt: one preflight probe step, then an implementation step that
+/// writes a `DONE` report where `scenario` expects attempt 1's report.
+fn all_succeed(scenario: &support::Scenario, count: u32) -> String {
+    (1..=count)
+        .map(|task| succeed_step(scenario, task))
+        .collect()
+}
+
+/// The two dummy steps a successful first attempt at `task` consumes.
+fn succeed_step(scenario: &support::Scenario, task: u32) -> String {
+    let report = scenario
+        .state_dir()
+        .join("attempts")
+        .join(task.to_string())
+        .join("1")
+        .join("report.md");
+    format!(
+        "[[steps]]\noutcome = \"success\"\nexit_code = 0\n\n\
+         [[steps]]\noutcome = \"success\"\nexit_code = 0\nstdout = \"implemented thing {task}\\n\"\n\n\
+         [[steps.files]]\npath = \"{}\"\ncontent = \"KTASK_RESULT: DONE\\nSummary: it worked.\\n\"\n\n",
+        report.display()
+    )
+}
+
+fn stdout_of(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn stderr_of(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+/// `run` drains a three-task queue against the dummy provider: exit 0, one
+/// result line per task on stdout — and nothing else there — and progress
+/// (attempts, phases, agent output) on stderr.
+#[test]
+fn cli_run_drains_the_queue() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(3)).expect("build scenario");
+    scenario
+        .set_scenario(&all_succeed(&scenario, 3))
+        .expect("write scenario");
+
+    let run = scenario.run(&["run"]).expect("run");
+
+    let stdout = stdout_of(&run);
+    let stderr = stderr_of(&run);
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 3, "one result line per task, got: {stdout:?}");
+    for (index, line) in lines.iter().enumerate() {
+        let n = index + 1;
+        assert!(
+            line.starts_with(&format!("task {n}: done")),
+            "line {n} must report task {n} done, got {line:?}"
+        );
+    }
+    assert!(
+        stderr.contains("implemented thing 2"),
+        "the agent's output must be streamed to stderr, got: {stderr}"
+    );
+    assert!(
+        !stdout.contains("implemented thing"),
+        "progress must never reach stdout, got: {stdout}"
+    );
+
+    // The journal, not the printed lines, is the record: running again finds
+    // nothing left to do.
+    let again = scenario.run(&["run"]).expect("second run");
+    assert_eq!(
+        again.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_of(&again)
+    );
+    assert_eq!(
+        stdout_of(&again),
+        "",
+        "a drained queue has no results to print"
+    );
+}
+
+/// `--json` turns each result line into one compact JSON object.
+#[test]
+fn cli_run_json_prints_one_object_per_task_on_stdout() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+    scenario
+        .set_scenario(&all_succeed(&scenario, 2))
+        .expect("write scenario");
+
+    let run = scenario.run(&["run", "--json"]).expect("run");
+
+    assert_eq!(run.status.code(), Some(0), "stderr: {}", stderr_of(&run));
+    let objects: Vec<serde_json::Value> = stdout_of(&run)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("each stdout line is JSON"))
+        .collect();
+    assert_eq!(objects.len(), 2);
+    assert_eq!(objects[0]["task"], 1);
+    assert_eq!(objects[0]["result"], "done");
+    assert_eq!(objects[1]["task"], 2);
+    assert_eq!(objects[1]["result"], "done");
+}
+
+/// `run` stops at the first task that fails, exits 1, and never touches the
+/// task behind it.
+#[test]
+fn cli_run_stops_at_a_failed_task_and_exits_1() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(3)).expect("build scenario");
+    // Task 2 gets a preflight probe, then an agent that fails outright; the
+    // dummy provider has nothing left for a remediation attempt.
+    let failing = "[[steps]]\noutcome = \"success\"\nexit_code = 0\n\n\
+                   [[steps]]\noutcome = \"failure\"\nexit_code = 1\n\n";
+    scenario
+        .set_scenario(&format!(
+            "{}{failing}{}",
+            succeed_step(&scenario, 1),
+            succeed_step(&scenario, 3)
+        ))
+        .expect("write scenario");
+
+    let run = scenario.run(&["run"]).expect("run");
+
+    let stdout = stdout_of(&run);
+    assert_eq!(
+        run.status.code(),
+        Some(1),
+        "stdout: {stdout}\nstderr: {}",
+        stderr_of(&run)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "task 3 must never be reported: {stdout:?}");
+    assert!(lines[0].starts_with("task 1: done"), "got {:?}", lines[0]);
+    assert!(lines[1].starts_with("task 2: failed"), "got {:?}", lines[1]);
+
+    // Task 3 was never started: it is still queued, so `--task 3` would be
+    // refused only because task 2 is unfinished — and it names task 2.
+    let third = scenario.run(&["run", "--task", "3"]).expect("run task 3");
+    assert_eq!(third.status.code(), Some(2));
+    assert!(
+        stderr_of(&third).contains("predecessor 2"),
+        "got {}",
+        stderr_of(&third)
+    );
+}
+
+/// A queue whose earlier run failed mid-attempt is not "drained": running it
+/// again must not exit 0 — it reports the task as an unfinished, resumable
+/// attempt (130), starts nothing, and points at `resume`.
+#[test]
+fn cli_run_again_after_a_failure_does_not_claim_the_queue_drained() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+    scenario
+        .set_scenario(
+            "[[steps]]\noutcome = \"success\"\nexit_code = 0\n\n\
+             [[steps]]\noutcome = \"failure\"\nexit_code = 1\n",
+        )
+        .expect("write scenario");
+    let first = scenario.run(&["run"]).expect("first run");
+    assert_eq!(
+        first.status.code(),
+        Some(1),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&first),
+        stderr_of(&first)
+    );
+    assert!(
+        stdout_of(&first).starts_with("task 1: failed"),
+        "a failure the runner could not journal still gets its result line, got {:?}",
+        stdout_of(&first)
+    );
+
+    let second = scenario.run(&["run"]).expect("second run");
+
+    assert_eq!(second.status.code(), Some(130), "{}", stderr_of(&second));
+    assert_eq!(
+        stdout_of(&second),
+        "",
+        "nothing ran, so nothing is reported"
+    );
+    assert!(
+        stderr_of(&second).contains("ktask-rs resume"),
+        "got {}",
+        stderr_of(&second)
+    );
+}
+
+/// `--task` runs exactly that task, even with successors queued behind it.
+#[test]
+fn cli_run_task_runs_exactly_one_task() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+    scenario
+        .set_scenario(&all_succeed(&scenario, 2))
+        .expect("write scenario");
+
+    let run = scenario.run(&["run", "--task", "1"]).expect("run");
+
+    assert_eq!(run.status.code(), Some(0), "stderr: {}", stderr_of(&run));
+    let stdout = stdout_of(&run);
+    assert_eq!(stdout.lines().count(), 1, "got {stdout:?}");
+    assert!(stdout.starts_with("task 1: done"));
+    // Task 2 is untouched: it is the one a follow-up run picks up.
+    scenario
+        .set_scenario(&succeed_step(&scenario, 2))
+        .expect("write scenario");
+    let rest = scenario.run(&["run"]).expect("run the rest");
+    assert_eq!(rest.status.code(), Some(0), "stderr: {}", stderr_of(&rest));
+    assert!(stdout_of(&rest).starts_with("task 2: done"));
+    assert_eq!(stdout_of(&rest).lines().count(), 1);
+}
+
+/// `--task` cannot skip over a predecessor that is not yet published: the
+/// queue is strictly ordered.
+#[test]
+fn cli_run_task_refuses_to_jump_ahead_of_an_unfinished_predecessor() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+
+    let run = scenario.run(&["run", "--task", "2"]).expect("run");
+
+    assert_eq!(run.status.code(), Some(2), "stderr: {}", stderr_of(&run));
+    assert!(
+        stderr_of(&run).contains("predecessor 1"),
+        "the refusal must name the blocking predecessor, got: {}",
+        stderr_of(&run)
+    );
+    assert_eq!(stdout_of(&run), "");
+}
+
+/// `--from` starts at the named id, leaving earlier tasks alone.
+#[test]
+fn cli_run_from_starts_at_the_named_task() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(2)).expect("build scenario");
+    scenario
+        .set_scenario(&succeed_step(&scenario, 2))
+        .expect("write scenario");
+
+    let run = scenario.run(&["run", "--from", "2"]).expect("run");
+
+    assert_eq!(run.status.code(), Some(0), "stderr: {}", stderr_of(&run));
+    let stdout = stdout_of(&run);
+    assert_eq!(stdout.lines().count(), 1, "got {stdout:?}");
+    assert!(stdout.starts_with("task 2: done"));
+}
+
+/// Naming a task that is not in the queue is a usage error.
+#[test]
+fn cli_run_unknown_task_is_a_usage_error() {
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan_of(1)).expect("build scenario");
+
+    for flag in ["--task", "--from"] {
+        let run = scenario.run(&["run", flag, "9"]).expect("run");
+        assert_eq!(run.status.code(), Some(2), "{flag}: {}", stderr_of(&run));
+        assert!(
+            stderr_of(&run).contains("no task 9"),
+            "{flag}: got {}",
+            stderr_of(&run)
+        );
+    }
+}
+
+/// A human gate stops the queue with exit 4, reports the pause on stdout,
+/// and does not mark anything failed; the task behind it never starts.
+#[test]
+fn cli_run_stops_at_a_human_gate_with_exit_4() {
+    let plan = format!(
+        "{}## Approve\n\n**Outcome:** approved.\n\n**Done-when:** a human approved.\n\n**Verify:** `true`\n\n**Refs:** none\n\n**Gate:** a human approves.\n\n{}",
+        plan_of(1),
+        "## After\n\n**Outcome:** after.\n\n**Done-when:** after.\n\n**Verify:** `true`\n\n**Refs:** none\n"
+    );
+    let scenario = support::build(ONE_SUCCESS_STEP, &plan).expect("build scenario");
+    scenario
+        .set_scenario(&succeed_step(&scenario, 1))
+        .expect("write scenario");
+
+    let run = scenario.run(&["run"]).expect("run");
+
+    let stdout = stdout_of(&run);
+    assert_eq!(
+        run.status.code(),
+        Some(4),
+        "stdout: {stdout}\nstderr: {}",
+        stderr_of(&run)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "got {stdout:?}");
+    assert!(lines[0].starts_with("task 1: done"));
+    assert!(lines[1].starts_with("task 2: paused"), "got {:?}", lines[1]);
+    assert!(lines[1].contains("human gate"), "got {:?}", lines[1]);
+}

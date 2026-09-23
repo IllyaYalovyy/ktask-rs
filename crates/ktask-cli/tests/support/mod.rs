@@ -30,6 +30,7 @@ pub(crate) struct Scenario {
     repo: ScratchRepo,
     state_home: tempfile::TempDir,
     config_home: tempfile::TempDir,
+    state_dir: PathBuf,
 }
 
 impl Scenario {
@@ -37,6 +38,25 @@ impl Scenario {
     /// operates on in this scenario.
     pub(crate) fn project_dir(&self) -> &Path {
         &self.repo.path
+    }
+
+    /// The project's private state directory, where the journal, config,
+    /// scenario file and per-attempt reports live.
+    pub(crate) fn state_dir(&self) -> &Path {
+        &self.state_dir
+    }
+
+    /// Replaces the `dummy` provider's scenario file with `scenario_toml`.
+    ///
+    /// [`build`] needs a scenario up front, before the state directory it
+    /// lives in is known; a test whose scenario must name paths inside that
+    /// directory (an attempt's report, say) rewrites it here afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the scenario file cannot be written.
+    pub(crate) fn set_scenario(&self, scenario_toml: &str) -> io::Result<()> {
+        std::fs::write(self.state_dir.join("scenario.toml"), scenario_toml)
     }
 
     /// Runs the compiled `ktask-rs` binary with `args`, rooted at this
@@ -80,10 +100,11 @@ pub(crate) fn build(scenario_toml: &str, plan: &str) -> io::Result<Scenario> {
     let repo = scratch_repo().map_err(io::Error::other)?;
     let state_home = tempfile::tempdir()?;
     let config_home = tempfile::tempdir()?;
-    let scenario = Scenario {
+    let mut scenario = Scenario {
         repo,
         state_home,
         config_home,
+        state_dir: PathBuf::new(),
     };
 
     let init = scenario.run(&["init"])?;
@@ -100,8 +121,9 @@ pub(crate) fn build(scenario_toml: &str, plan: &str) -> io::Result<Scenario> {
         .map(PathBuf::from)
         .ok_or_else(|| io::Error::other("init did not report a state directory"))?;
 
+    scenario.state_dir.clone_from(&state_dir);
+    scenario.set_scenario(scenario_toml)?;
     let scenario_path = state_dir.join("scenario.toml");
-    std::fs::write(&scenario_path, scenario_toml)?;
 
     std::fs::write(
         state_dir.join("config.toml"),
