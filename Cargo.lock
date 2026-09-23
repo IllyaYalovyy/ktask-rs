@@ -392,6 +392,9 @@ dependencies = [
 [[package]]
 name = "ktask-tui"
 version = "0.1.0"
+dependencies = [
+ "ktask-core",
+]
 
 [[package]]
 name = "libc"
