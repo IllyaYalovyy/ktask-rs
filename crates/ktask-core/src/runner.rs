@@ -10,11 +10,11 @@
 //! adapter as arguments is that a run assembled from what its caller happened to
 //! carry is a run whose gates and journal somebody else chose.
 //!
-//! Its five jobs so far are [`Runner::prepare`], [`Runner::begin_attempt`],
-//! [`Runner::run_phase`], [`Runner::gate_phase`] and the round trip an attempt's
-//! report makes. The first takes a queued task as far as the ground it stands on;
-//! the second is the transition that spends a token, and three things about it are
-//! not free to change:
+//! Its six jobs so far are [`Runner::prepare`], [`Runner::begin_attempt`],
+//! [`Runner::run_phase`], [`Runner::gate_phase`], [`Runner::verify_and_publish`] and
+//! the round trip an attempt's report makes. The first takes a queued task as far as
+//! the ground it stands on; the second is the transition that spends a token, and
+//! three things about it are not free to change:
 //!
 //! - The [`crate::EventKind::AttemptStarted`] row is appended before the attempt's
 //!   evidence is filed, because VISION.md §3's third invariant makes the journal the
@@ -69,9 +69,17 @@
 //! rather than the agent's claims, so the gate the phase declares is run here, the
 //! verdict is read out of the two test summaries the phase ran between, and the command,
 //! the output and the tree hash are filed beside the attempt as its evidence. What is
-//! still not here is the state a verdict moves, the publication it earns and the
-//! remediation a refusal earns: this module runs, records and refuses, and starts no
-//! state transition of its own.
+//! still not here is the state a verdict moves and the remediation a refusal earns:
+//! this module runs, records and refuses, and starts no state transition of its own.
+//!
+//! [`Runner::verify_and_publish`] is where the run stops merely measuring. VISION.md
+//! §10 makes publication the one place a task's whole story has to add up by itself:
+//! the work is committed, the completion set runs against that commit, and only a
+//! candidate the remote is read back holding earns
+//! [`crate::TaskState::PublishedVerified`]. Two of its refusals are decisions rather
+//! than measurements — a tree holding uncommitted work, and a replay that stops on
+//! conflicting content — and both end the attempt in the journal rather than handing
+//! the work back to an agent to sort out.
 //!
 //! # Preflight: the checks that prove the world is sane before a token is spent
 //!
@@ -166,7 +174,7 @@ use crate::{
     AttemptId, AttemptRecord, Bus, Capabilities, Config, Error, EventKind, FailureClass, Gate,
     GateKind, GateResult, Invocation, Journal, Phase, PhaseSpec, Profile, Project, Provider,
     Recorder, ReportClaim, ReportResult, Result, Stream, Subscription, Task, TaskId, TestSummary,
-    evidence_dir, parse_cargo, profile_from, run_gate, write_evidence,
+    evidence_dir, parse_cargo, profile_from, run_completion_set, run_gate, write_evidence,
 };
 use crate::{context, queue};
 
@@ -876,6 +884,331 @@ impl Runner {
         append_private(&path, &line)
     }
 
+    /// Verify one task's work mechanically, and publish exactly what was verified.
+    ///
+    /// This is VISION.md §10's steps 3 through 7, and the only door a task has to
+    /// [`crate::TaskState::PublishedVerified`]: a task becomes publishable on
+    /// mechanical evidence and never on an agent's account of itself. Five things about
+    /// it are not free to change:
+    ///
+    /// - **The candidate is committed before it is verified.** §10's step 4 has the
+    ///   final verification run "against the exact candidate commit", which can only be
+    ///   true if the candidate exists first. [`git::commit_all`] writes what the
+    ///   session changed, [`git::require_clean`] then insists nothing else is left
+    ///   unwritten (§10's step 3), and the completion set runs against the tree that
+    ///   commit is — so the SHA [`crate::EventKind::PublishStarted`] names, the SHA
+    ///   every gate agreed to, and the SHA
+    ///   [`crate::EventKind::PublishVerified`] compares with the fetched tip are one
+    ///   SHA. ADR-0089 records why the order this task's text prints — clean, then
+    ///   verify, then commit — cannot be run as written: uncommitted work is what a
+    ///   session always leaves, so [`git::require_clean`] would refuse every task that
+    ///   did its job, and a task that changed nothing would have an empty commit
+    ///   "proved" by gates that proved only themselves.
+    /// - **A dirty tree is a policy failure**, which is §10's own word for it. The
+    ///   [`crate::EventKind::VerifyFailed`] row carries
+    ///   [`FailureClass::PolicyFailure`] with the paths [`git::require_clean`] named,
+    ///   rather than a class [`crate::classify()`] would have to re-derive (ADR-0057).
+    ///   No gate is spent and nothing is offered: uncommitted work is not a candidate,
+    ///   and a tree that cannot be published must not collect green rows on the way to
+    ///   being refused.
+    /// - **No path reaches publication without a passing completion set.** Every
+    ///   [`crate::EventKind::PublishStarted`] sits behind a
+    ///   [`crate::EventKind::VerifyPassed`] for the same attempt, and the retry below
+    ///   earns its offer by running the set again rather than by reusing evidence
+    ///   gathered against a commit that no longer exists.
+    /// - **A rejected push is repaired with git, not with an agent.** Nothing is pushed
+    ///   by force, so a branch the remote will not fast-forward comes back as the
+    ///   push's own [`Error::Git`]. [`git::rebase_onto_remote`] replays this candidate
+    ///   onto the fetched tip and, when the replay applies, the completion set runs from
+    ///   scratch against the replayed SHA and the push is tried once more. One retry
+    ///   only: a remote another process keeps moving is recovery's problem — the next
+    ///   attempt re-preflights and re-bases — and looping here would spend a task's
+    ///   whole gate budget on a race this run cannot win.
+    /// - **A conflicting divergence stops for a human.**
+    ///   [`git::RebaseOutcome::Conflict`] is the one refusal no gate can decide: two
+    ///   people's content disagrees, and choosing between them is a decision. The task
+    ///   ends with [`crate::EventKind::TaskFailed`] as
+    ///   [`FailureClass::GitConflict`] (§7), naming every path the replay could not
+    ///   resolve, and no session is started to argue about it.
+    ///
+    /// Which rows are *not* written here is shaped by the same care. A rejected push
+    /// leaves the task in [`crate::TaskState::Publishing`], and that state refuses a
+    /// [`crate::EventKind::VerifyFailed`], so a completion set that refuses on the
+    /// rerun returns its error with no verdict row: an illegal row is a journal that
+    /// cannot replay, which is worse than the hole a dangling gate pair already marks.
+    /// For the same reason no [`crate::EventKind::PhaseEntered`] is appended here —
+    /// [`Runner::run_phase`] owns entering a phase, and `Publishing` takes a gates
+    /// entry only for a later attempt. A gate that could not be started, a tree that
+    /// could not be read, and a git call that refused for a reason other than
+    /// divergence journal nothing either: nothing was measured, so there is no verdict
+    /// to record.
+    ///
+    /// The last row is worth having because [`git::publish`] does not stop at pushing:
+    /// it fetches again and requires the remote's tip to *be* the candidate, so
+    /// [`crate::EventKind::PublishVerified`] means §10's step 6 was read rather than
+    /// hoped, and the privacy scan ran over this task's range before the push (§11).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Policy`] when the checkout holds work nobody committed, or holds
+    /// nothing worth committing — both journalled as the policy verdict §10 names.
+    /// [`Error::Gate`] when a completion gate refused, or when the rerun after a replay
+    /// refused; a gate that could not be started propagates the refusal from
+    /// [`run_completion_set`] with its [`crate::EventKind::GateStarted`] row and no
+    /// [`crate::EventKind::GateFinished`] after it. [`Error::Git`] when git refused
+    /// something this step cannot repair — an unreadable tree, a refused commit, a
+    /// fetch, a push — and for a conflict, as the rebase's own refusal naming the
+    /// paths. [`Error::Database`] as [`Recorder::record`], and as
+    /// [`run_completion_set`] for the rows it writes.
+    pub fn verify_and_publish(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+    ) -> Result<String> {
+        let candidate = self.commit_candidate(prep, task, attempt)?;
+        self.verify_completion(prep, task, attempt, VerdictRow::Append)?;
+        match self.offer(prep, task, attempt, &candidate) {
+            Ok(published) => Ok(published),
+            Err(refusal) if is_push_refusal(&refusal) => {
+                self.republish_after_rebase(prep, task, attempt)
+            }
+            Err(refusal) => Err(refusal),
+        }
+    }
+
+    /// Make the commit the completion set is measured against.
+    ///
+    /// [`git::commit_all`] stages what the session changed and writes it under the
+    /// task's own message — tracked files only, which is why a new file nobody staged
+    /// stays the §10 policy failure it reads as instead of becoming part of a candidate
+    /// by accident. [`git::require_clean`] then insists the tree holds nothing else: no
+    /// half-written file, no build artifact, no scratch note.
+    ///
+    /// Both refusals are the run's own rule broken, so both are journalled as verdicts.
+    /// A git refusal — an index a human has locked, a hook that would not sign, a tree
+    /// that could not be read at all — is not a finding about the work: it comes back
+    /// unchanged, with no row, because nothing was measured.
+    fn commit_candidate(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+    ) -> Result<String> {
+        let candidate = self.policy_verdict(
+            task.id,
+            attempt,
+            git::commit_all(&prep.worktree, &task_commit_message(task)),
+        )?;
+        self.policy_verdict(task.id, attempt, git::require_clean(&prep.worktree))?;
+        Ok(candidate)
+    }
+
+    /// Run the completion set over the candidate and journal what it decided.
+    ///
+    /// [`run_completion_set`] is §8's set in the profile's own order, and it journals
+    /// its own gate pairs as it runs them (ADR-0080). It is handed [`Prepared::base_sha`]
+    /// rather than the candidate because the privacy scan reads the range this task
+    /// added: a scan pointed at the whole repository would report every secret the
+    /// mainline already holds and say nothing about this diff.
+    ///
+    /// A gate that ran and refused has answered, so the answer is journalled and
+    /// returned in the same words. The class comes from the run rather than from a
+    /// guess, and the detail is every refusing gate's own line — unless the state the
+    /// journal stands in would refuse that row, which is what `verdict` says.
+    fn verify_completion(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+        verdict: VerdictRow,
+    ) -> Result<()> {
+        let results = run_completion_set(
+            &self.profile,
+            &prep.worktree,
+            &prep.base_sha,
+            Some(&mut self.recorder),
+        )?;
+        if let Some(refused) = completion_refusal(&self.profile, &results) {
+            if verdict == VerdictRow::Append {
+                self.verdict(task.id, attempt, refused.class, &refused.detail)?;
+            }
+            return Err(Error::Gate {
+                kind: refused.kind,
+                detail: refused.detail,
+            });
+        }
+        self.recorder
+            .record(Some(task.id), EventKind::VerifyPassed { attempt })?;
+        Ok(())
+    }
+
+    /// Offer one candidate to the remote: the offer journalled before the push, the
+    /// proof after the read-back.
+    ///
+    /// [`crate::EventKind::PublishStarted`] comes first because §3's third invariant
+    /// puts the row in front of the side effect — a run that died between the two is
+    /// found with a commit in the air, which is exactly what
+    /// [`crate::TaskState::Publishing`] exists to say. [`git::publish`] then refuses
+    /// unless the fetched tip is the candidate, so
+    /// [`crate::EventKind::PublishVerified`] can carry that SHA as both the commit and
+    /// the remote's SHA, and be checked by anyone who replays the row.
+    fn offer(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+        candidate: &str,
+    ) -> Result<String> {
+        self.recorder.record(
+            Some(task.id),
+            EventKind::PublishStarted {
+                attempt,
+                candidate_sha: candidate.to_owned(),
+            },
+        )?;
+        git::publish(
+            &prep.worktree,
+            &self.config.mainline_remote,
+            &self.config.mainline_branch,
+            candidate,
+        )?;
+        self.recorder.record(
+            Some(task.id),
+            EventKind::PublishVerified {
+                commit: candidate.to_owned(),
+                remote_sha: candidate.to_owned(),
+            },
+        )?;
+        Ok(candidate.to_owned())
+    }
+
+    /// Repair a push the remote refused: replay, gate again, offer once more.
+    ///
+    /// Nothing is committed or re-checked on this path. The candidate is already a
+    /// commit, and [`git::rebase_onto_remote`] runs with `--no-autostash`, so a tree
+    /// holding uncommitted work is a refusal rather than a silent move of that work into
+    /// no ref at all: the check [`Self::commit_candidate`] made still stands, and
+    /// [`git::commit_all`] would refuse here only because the index is empty.
+    ///
+    /// The set runs again from scratch, because a replay writes a different commit and
+    /// nothing proved against the old tip carries over. The offer that follows is the
+    /// second and last — the bound and the reason for it are in
+    /// [`Self::verify_and_publish`]. A refusal on this path is the one verdict that
+    /// cannot be journalled: the rejected push already moved the task to `Publishing`,
+    /// which holds no `VerifyFailed` (see [`VerdictRow`]), so the error is all the
+    /// record there is and the dangling gate pair is the hole a reader sees.
+    fn republish_after_rebase(
+        &mut self,
+        prep: &Prepared,
+        task: &Task,
+        attempt: AttemptId,
+    ) -> Result<String> {
+        let replayed = match self.rebase(prep)? {
+            git::RebaseOutcome::Applied { new_sha } => new_sha,
+            git::RebaseOutcome::Conflict { paths } => {
+                return self.stop_on_conflict(task, &paths);
+            }
+        };
+        self.verify_completion(prep, task, attempt, VerdictRow::Withhold)?;
+        self.offer(prep, task, attempt, &replayed)
+    }
+
+    /// Replay this checkout onto the remote's tip, using the run's own remote and
+    /// branch rather than whatever the checkout tracks.
+    ///
+    /// Both names come out of [`Config`] because a rebase onto a branch the project
+    /// never named is how a run integrates into somebody else's line of work — the rule
+    /// ADR-0041 keeps for every call in [`crate::git`] that could ask a repository what
+    /// it means.
+    fn rebase(&self, prep: &Prepared) -> Result<git::RebaseOutcome> {
+        git::rebase_onto_remote(
+            &prep.worktree,
+            &self.config.mainline_remote,
+            &self.config.mainline_branch,
+        )
+    }
+
+    /// Stop the task on a divergence git could not replay, naming every path in it.
+    ///
+    /// This is the refusal with a human in it. The tree is clean, every rule held, and
+    /// what stopped the run is two sides wanting different content — so §7's class is
+    /// `git_conflict`, the row is [`crate::EventKind::TaskFailed`] (which
+    /// [`crate::TaskState::Publishing`] accepts, so the journal replays to `Failed`
+    /// rather than leaving a task that an agent will be called back to), and no session
+    /// starts to choose. [`git::rebase_onto_remote`] has already aborted the replay, so
+    /// the checkout is as it was found for whoever does resolve it.
+    ///
+    /// The error keeps git's shape rather than becoming [`Error::Policy`]: its argument
+    /// vector is the rebase this step attempted and its message names the paths, which
+    /// is what a reader acts on. It also avoids the words [`crate::classify()`] reads as
+    /// a git that never started — this one started, ran, and stopped on content.
+    fn stop_on_conflict(&mut self, task: &Task, paths: &[PathBuf]) -> Result<String> {
+        let detail = conflict_words(
+            &self.config.mainline_remote,
+            &self.config.mainline_branch,
+            paths,
+        );
+        self.recorder.record(
+            Some(task.id),
+            EventKind::TaskFailed {
+                class: FailureClass::GitConflict,
+                detail: detail.clone(),
+            },
+        )?;
+        Err(Error::Git {
+            args: vec![
+                "rebase".to_owned(),
+                "--no-autostash".to_owned(),
+                upstream_ref(&self.config.mainline_remote, &self.config.mainline_branch),
+            ],
+            stderr: detail,
+        })
+    }
+
+    /// Append the verdict a verification run reached, under the task it was for.
+    fn verdict(
+        &mut self,
+        work: TaskId,
+        attempt: AttemptId,
+        class: FailureClass,
+        detail: &str,
+    ) -> Result<()> {
+        self.recorder.record(
+            Some(work),
+            EventKind::VerifyFailed {
+                attempt,
+                class,
+                detail: detail.to_owned(),
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Journal the verdict a broken rule carries, and hand the caller back the error it
+    /// handed in.
+    ///
+    /// [`Error::Policy`] is a rule of the run's own broken, and §10 names the class for
+    /// a dirty tree at verification time, so the class arrives here as data instead of
+    /// waiting to be re-derived from the error's words (ADR-0057). Any other error is
+    /// not a broken rule, and nothing is journalled for it.
+    fn policy_verdict<T>(
+        &mut self,
+        work: TaskId,
+        attempt: AttemptId,
+        outcome: Result<T>,
+    ) -> Result<T> {
+        match outcome {
+            Ok(value) => Ok(value),
+            Err(refusal) => {
+                if let Error::Policy { detail, .. } = &refusal {
+                    self.verdict(work, attempt, FailureClass::PolicyFailure, detail)?;
+                }
+                Err(refusal)
+            }
+        }
+    }
+
     /// What an attempt looks like at the instant it started: everything that was
     /// decided before the agent was called, and nothing that was observed after.
     fn opened(&self, attempt: AttemptId, task: TaskId, pid: u32, base_sha: &str) -> AttemptRecord {
@@ -1016,6 +1349,52 @@ pub enum PhaseOutcome {
 /// [`crate::git::create_worktree`] accepts.
 fn worktree_name(task: TaskId) -> String {
     format!("task-{task}")
+}
+
+/// The message one task's candidate carries: the queue position it delivers and the
+/// title it was queued under, so `git log` on the mainline says which task a commit is
+/// for without opening a journal.
+fn task_commit_message(task: &Task) -> String {
+    format!("Task {}: {}", task.id, task.title())
+}
+
+/// Whether a refusal is the push itself saying no, which is the one refusal §10's step 5
+/// has a repair for.
+///
+/// [`crate::git::publish`] runs three commands and says which one refused, so a fetch
+/// that could not reach the remote, a read-back that disagrees after a push that
+/// worked, and a push the remote would not fast-forward are three different facts that
+/// reach this call the same way. Only the third is a divergence a replay can settle; the
+/// other two come back as they are rather than being followed by a rebase that could not
+/// help.
+fn is_push_refusal(refusal: &Error) -> bool {
+    matches!(refusal, Error::Git { args, .. }
+        if args.first().is_some_and(|word| word == "push"))
+}
+
+/// The ref a repair replays onto, spelled the way [`crate::git`] spells it.
+fn upstream_ref(remote: &str, branch: &str) -> String {
+    format!("refs/remotes/{remote}/{branch}")
+}
+
+/// The sentence a replay that stopped on content leaves behind, in the row and in the
+/// error alike: which ref was replayed onto, and every path the two sides want
+/// differently.
+///
+/// The paths are git's own listing, quoting and all (ADR-0041), because the reader's
+/// next command is a git command in that checkout. The wording is chosen to keep
+/// [`crate::classify()`]'s phrase for a git that never started out of it: this replay
+/// started, ran, and stopped on content.
+fn conflict_words(remote: &str, branch: &str, paths: &[PathBuf]) -> String {
+    let listed = paths
+        .iter()
+        .map(|path| format!("`{}`", path.display()))
+        .collect::<Vec<String>>()
+        .join(", ");
+    format!(
+        "the replay onto `{remote}/{branch}` stopped on a conflict in {listed}, which is a \
+         decision this run is not allowed to make"
+    )
 }
 
 /// The lines a session printed, one per row: a break ends a line rather than
@@ -1635,14 +2014,9 @@ fn baseline_verdict(gate: &Gate, result: &GateResult) -> CheckOutcome {
     }
     CheckOutcome::Refused {
         check: PreflightCheck::Baseline,
-        // A run out of budget is no verdict about the code. It is the same answer
-        // [`crate::classify()`] gives a gate that never reached a verdict, so the
-        // two halves of the supervisor cannot disagree about a timeout.
-        class: if result.timed_out {
-            FailureClass::EnvironmentFailure
-        } else {
-            FailureClass::VerificationFailure
-        },
+        // The same class a completion gate earns for the same run, so the two halves
+        // of the supervisor cannot disagree about a timeout.
+        class: verdict_class(result),
         detail,
     }
 }
@@ -1650,12 +2024,23 @@ fn baseline_verdict(gate: &Gate, result: &GateResult) -> CheckOutcome {
 /// The one line a baseline run's evidence fits into: the command, how long it ran,
 /// how it ended, and the last thing it said.
 fn baseline_detail(gate: &Gate, result: &GateResult) -> String {
+    gate_detail("baseline gate", gate, result)
+}
+
+/// The one line one gate's run fits into: what it was called, how long it ran, how it
+/// ended, and the last thing it said.
+///
+/// `noun` is what the caller calls the gate — the baseline, a phase's own check, a
+/// member of the completion set — because a report that says only "the gate" is no use
+/// to a reader who cannot tell which of the five ran. The other four facts are what
+/// every gate answers with, which is why a refusal reads the same wherever it came from.
+fn gate_detail(noun: &str, gate: &Gate, result: &GateResult) -> String {
     let said = match last_words(result) {
         Some(line) => format!(", and its last line was `{line}`"),
         None => String::new(),
     };
     format!(
-        "the baseline gate `{}` ran for {} ms and {}{said}",
+        "the {noun} `{}` ran for {} ms and {}{said}",
         command_words(gate),
         result.duration_ms,
         ended_words(result, gate.timeout_secs)
@@ -1696,6 +2081,77 @@ fn last_words(result: &GateResult) -> Option<&str> {
 /// A gate's command as the one string a report line names it by.
 fn command_words(gate: &Gate) -> String {
     gate.command.join(" ")
+}
+
+/// The class a gate's run earns, which is the same answer for a baseline, a phase's own
+/// check and a member of the completion set: a command that ran out of its budget is no
+/// verdict about the code but the machine's answer about itself, and anything that ran
+/// to a verdict and refused is the code's. ADR-0082 sets the rule, and
+/// [`crate::classify()`] applies the same one, so the two halves of the supervisor
+/// cannot disagree about a timeout.
+fn verdict_class(result: &GateResult) -> FailureClass {
+    if result.timed_out {
+        FailureClass::EnvironmentFailure
+    } else {
+        FailureClass::VerificationFailure
+    }
+}
+
+/// Whether a refusing completion set is allowed to journal its verdict.
+///
+/// The answer is the state the journal stands in, not a preference: `Running` holds a
+/// [`crate::EventKind::VerifyFailed`] and hands it to `Failed`, while `Publishing`
+/// refuses one — a rejected push leaves the task in `Publishing`, and the only rows it
+/// accepts besides its own are a gate pair, a passing verdict, and
+/// [`crate::EventKind::TaskFailed`]. A row the projection cannot apply is a journal that
+/// no longer replays, which is the far worse outcome: the run would have written its own
+/// evidence out of existence. So the rerun after a replayed push reports its refusal as
+/// the returned error and lets the dangling [`crate::EventKind::GateStarted`] mark where
+/// it stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerdictRow {
+    /// A verdict about the code: append the row the attempt's state holds.
+    Append,
+    /// The state would refuse the row: return the refusal with nothing appended.
+    Withhold,
+}
+
+/// What a completion-set run that refused decided, in the three forms the run needs:
+/// which gate the error names, which class the row carries, and the one line both hold.
+struct CompletionRefusal {
+    /// The lower-case word the first refusing gate calls itself, as [`Error::Gate`]
+    /// holds it.
+    kind: String,
+    /// The class that first refusing run earns.
+    class: FailureClass,
+    /// Every refusing gate's own line, in the order they refused.
+    detail: String,
+}
+
+/// Pick the refusing gates out of a completion set's results and say what their run
+/// decided, or [`None`] when every gate agreed.
+///
+/// Each result is matched with the profile's own copy of the gate that produced it,
+/// because a [`GateResult`] carries no command and no budget: a refusal that cannot name
+/// the command that refused or the budget it ran out of tells a reader nothing to act
+/// on. Every refusal is described, not only the first, since a set that stopped early
+/// still answers for the mandatory gate it ran behind the refusal.
+fn completion_refusal(profile: &Profile, results: &[GateResult]) -> Option<CompletionRefusal> {
+    let refused: Vec<(&Gate, &GateResult)> = results
+        .iter()
+        .filter(|result| !result.passed)
+        .filter_map(|result| profile.get(result.kind).map(|gate| (gate, result)))
+        .collect();
+    let (gate, result) = *refused.first()?;
+    Some(CompletionRefusal {
+        kind: gate.kind.to_string(),
+        class: verdict_class(result),
+        detail: refused
+            .iter()
+            .map(|(gate, result)| gate_detail("completion gate", gate, result))
+            .collect::<Vec<String>>()
+            .join("; "),
+    })
 }
 
 /// The directory of one attempt's phase evidence, inside its evidence directory.
@@ -1809,18 +2265,9 @@ fn decided_by_gate(gate: &Gate, result: &GateResult) -> Result<()> {
 /// line already uses for the same facts: which command, how long, how it ended, and the
 /// last thing it said.
 fn gate_refused(gate: &Gate, result: &GateResult) -> Error {
-    let said = match last_words(result) {
-        Some(line) => format!(", and its last line was `{line}`"),
-        None => String::new(),
-    };
     Error::Gate {
         kind: gate.kind.to_string(),
-        detail: format!(
-            "the gate `{}` ran for {} ms and {}{said}",
-            command_words(gate),
-            result.duration_ms,
-            ended_words(result, gate.timeout_secs)
-        ),
+        detail: gate_detail("gate", gate, result),
     }
 }
 
@@ -5840,6 +6287,1172 @@ mod gate_phase {
         assert!(
             text.contains(crate::redact::MASK),
             "what it replaced is marked as redacted: {text}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod verify_and_publish {
+    //! Verification and publication: the only way a task has to
+    //! `published_verified`, and the one step of a run whose whole job is to
+    //! refuse. The order it follows is VISION.md §10's — commit, then verify the
+    //! commit, then publish it — which ADR-0089 records as the reason §10 step 4's
+    //! "final verification runs against the exact candidate commit" can be true at
+    //! all: a candidate that does not exist yet cannot be verified against.
+    //!
+    //! Two kinds of evidence run through these tests. The journal rows say what the
+    //! run claimed, in order, and a test replays them through
+    //! [`crate::Journal::rebuild_state`] whenever it needs to know the rows were
+    //! *legal* as well as present — an illegal row is a state machine that cannot
+    //! recover, and the projection is the only thing that says so. The gates' own log
+    //! file says what actually ran: each of the five commands appends its name to
+    //! one file outside every checkout, so "every gate reran from scratch after the
+    //! replay" is a count of names in an order rather than an inference from a row.
+    //! A row can be written by a step that ran nothing; a line in that file cannot.
+    //!
+    //! The completion set is configured as five `/bin/sh` calls into one script,
+    //! because what this step decides is *which* gates ran, in what order, and what
+    //! the run did with their answers. Reading a real suite's counts is
+    //! [`crate::parse_cargo`]'s coverage, and running one would make every test here
+    //! depend on this workspace compiling at the instant it ran.
+
+    use super::{Prepared, Runner};
+    use crate::testing::{ScratchRepo, scratch_repo};
+    use crate::{
+        AttemptId, Error, Event, EventKind, FailureClass, Journal, Phase, Project, Task, TaskId,
+        TaskState, git, parse_plan, project_config_path,
+    };
+    use std::fmt::Write as _;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::{Path, PathBuf};
+
+    /// The identity every fixture gives its registered project.
+    const PROJECT_ID: &str = "0123456789abcdef";
+
+    /// The queue position [`parse_plan`] gives the one-row plan below.
+    const TASK: u32 = 1;
+
+    /// The attempt [`Runner::begin_attempt`] numbers for a task that has never been
+    /// attempted, which is every fixture here.
+    const ATTEMPT: u32 = 1;
+
+    /// The branch every fixture publishes to, and the `mainline_branch` default.
+    const BRANCH: &str = "main";
+
+    /// The file the scratch repository's seed commit added: the path a task edits.
+    const SEED_FILE: &str = "seed.txt";
+
+    /// The file [`ScratchRepo::diverge`] rewrites on both sides, and the file a
+    /// conflicting divergence is therefore about.
+    const DIVERGED_FILE: &str = "diverged.txt";
+
+    /// The content every fixture leaves as the work the agent did.
+    const WORK: &str = "the work";
+
+    /// The five gates of the completion set, in the order the set runs them.
+    const SET: [&str; 5] = ["format", "lint", "build", "verify", "privacy"];
+
+    /// The same set as it runs when a gate before `verify` refused:
+    /// [`crate::run_completion_set`] skips what follows a refusal except the
+    /// mandatory gate, so a refusal at `build` still spends `verify`.
+    const PARTIAL: [&str; 4] = ["format", "lint", "build", "verify"];
+
+    /// The set as it runs when `lint` refused.
+    const PARTIAL_FROM_LINT: [&str; 3] = ["format", "lint", "verify"];
+
+    /// The rows the task holds when the step is called: the preflight `prepare`
+    /// journalled, the attempt `begin_attempt` opened, and the `Verify` phase the driver
+    /// entered before handing the run over — see [`opened`], which explains why that row
+    /// has to be there for the journal to replay at all.
+    const OPENED: [&str; 4] = [
+        "PreflightStarted",
+        "PreflightPassed",
+        "AttemptStarted",
+        "PhaseEntered",
+    ];
+
+    /// The rows one completion-set run leaves: a start and a finish for each of the
+    /// `gates` gates the profile configured. Counted in gates rather than in runs
+    /// because a gate that could not be started leaves its start alone, so the number
+    /// a test names is the number of gates it watched.
+    fn set_rows(gates: usize) -> Vec<&'static str> {
+        (0..gates)
+            .flat_map(|_| ["GateStarted", "GateFinished"])
+            .collect()
+    }
+
+    /// The fixture's repository, its registered project, and the three files the gate
+    /// script is driven by: the log of what ran, the base the privacy gate was
+    /// handed, and the markers that decide what each gate does.
+    struct Fixture {
+        repo: ScratchRepo,
+        project: Project,
+        log: PathBuf,
+        base_seen: PathBuf,
+        markers: PathBuf,
+        peer: PathBuf,
+    }
+
+    impl Fixture {
+        /// A project whose five completion gates all pass.
+        fn new() -> Self {
+            Self::built("", "")
+        }
+
+        /// A project with `extra` beside its base settings — how one test shortens
+        /// `gate_timeout_secs` where a gate is made to outlive it.
+        fn with_settings(extra: &str) -> Self {
+            Self::built(extra, "")
+        }
+
+        /// A project whose named gate is configured with a program that is not
+        /// there: the one gate refusal that leaves a started row and no finished
+        /// one, because there was never a command to finish.
+        fn with_unspawnable_gate(gate: &str) -> Self {
+            Self::built("", gate)
+        }
+
+        /// A project with the five gates configured as calls into one script, with
+        /// `extra` added to its settings and one gate — when `broken` names it —
+        /// configured with an unspawnable command instead.
+        fn built(extra: &str, broken: &str) -> Self {
+            let repo = scratch_repo().expect("a scratch repository is buildable");
+            let state_dir = repo.path().join("state").join(PROJECT_ID);
+            fs::create_dir_all(&state_dir).expect("a state directory is creatable");
+            let markers = repo.path().join("markers");
+            fs::create_dir_all(&markers).expect("a marker directory is creatable");
+            let fixture = Self {
+                log: repo.path().join("gates.log"),
+                base_seen: repo.path().join("privacy-base"),
+                markers,
+                peer: repo.path().join("peer-move.sh"),
+                project: Project {
+                    root: repo.work().to_path_buf(),
+                    id: PROJECT_ID.to_owned(),
+                    state_dir,
+                },
+                repo,
+            };
+            let script = fixture.repo.path().join("gate.sh");
+            fs::write(
+                &script,
+                gate_script(
+                    &fixture.log,
+                    &fixture.base_seen,
+                    &fixture.markers,
+                    &fixture.peer,
+                ),
+            )
+            .expect("a gate script is writable");
+            fs::write(&fixture.peer, peer_move(&fixture.repo))
+                .expect("a peer-move script is writable");
+            fs::set_permissions(&fixture.peer, fs::Permissions::from_mode(0o755))
+                .expect("a script is made executable");
+            let document = settings(&script, extra, broken);
+            fs::write(project_config_path(&fixture.project), document)
+                .expect("a project settings document is writable");
+            fixture
+        }
+
+        /// The run this project is configured to have.
+        fn run(&self) -> Runner {
+            Runner::new(self.project.clone()).expect("a registered, configured project opens a run")
+        }
+
+        /// Make the named gate refuse every time it is asked.
+        fn refuse(&self, gate: &str) {
+            self.touch(&format!("refuse-{gate}"));
+        }
+
+        /// Make the named gate pass once and refuse on its second run: how a test
+        /// reaches the publication that the second refusal is reached by.
+        fn refuse_the_second_time(&self, gate: &str) {
+            self.touch(&format!("refuse-{gate}-again"));
+        }
+
+        /// Make the named gate outlive any budget a test can configure.
+        fn outlive_its_budget(&self, gate: &str) {
+            self.touch(&format!("slow-{gate}"));
+        }
+
+        /// Move the remote's branch once, during the second run of the format gate.
+        /// That window — after a push was refused, before the retry the replay leads
+        /// to — is the only place a second refusal can come from, and a second
+        /// refusal is the only way to ask whether the retry is bounded.
+        fn move_the_remote_again(&self) {
+            self.touch("peer-move");
+        }
+
+        fn touch(&self, marker: &str) {
+            fs::write(self.markers.join(marker), "").expect("a marker file is writable");
+        }
+
+        /// What the gate commands appended, in the order they appended it.
+        fn ran(&self) -> Vec<String> {
+            let text = fs::read_to_string(&self.log).unwrap_or_default();
+            text.lines().map(str::to_owned).collect()
+        }
+
+        /// What the privacy gate had in `KTASK_BASE_SHA`, or [`None`] when it never
+        /// ran.
+        fn base_the_scan_saw(&self) -> Option<String> {
+            fs::read_to_string(&self.base_seen).ok()
+        }
+
+        /// The tip the origin itself holds, read from the remote rather than from any
+        /// checkout's opinion of it.
+        fn origin_tip(&self) -> String {
+            git::git(self.repo.origin(), &["rev-parse", BRANCH])
+                .expect("the origin holds its branch")
+        }
+    }
+
+    /// The settings the completion set runs under: an adapter this build has, the
+    /// five gates as calls into `script`, and a disk floor no test machine breaches.
+    /// `baseline_command` is left unset — a baseline nobody configured passes, and a
+    /// gate pair for one would sit between the rows these tests count. `broken` names
+    /// one gate to configure with a program that cannot be started.
+    fn settings(script: &Path, extra: &str, broken: &str) -> String {
+        let mut gates = String::new();
+        for gate in SET {
+            let words: Vec<String> = if gate == broken {
+                vec!["/nonexistent/ktask-gate-program".to_owned()]
+            } else {
+                vec![
+                    "/bin/sh".to_owned(),
+                    script.display().to_string(),
+                    (*gate).to_owned(),
+                ]
+            };
+            let quoted = words
+                .iter()
+                .map(|word| format!("{word:?}"))
+                .collect::<Vec<String>>()
+                .join(", ");
+            writeln!(&mut gates, "{gate}_command = [{quoted}]")
+                .expect("a String is a writer that never refuses");
+        }
+        format!("provider = \"claude\"\nmin_free_disk_bytes = 1\n{extra}{gates}")
+    }
+
+    /// The gate every fixture runs: log that it ran, count how many times it has,
+    /// hand the privacy scan nothing beyond its own environment, and refuse or loiter
+    /// as the marker files say.
+    ///
+    /// The markers directory is named once, in a variable every marker test expands
+    /// inside double quotes. A path written inside single quotes cannot expand `$name`,
+    /// and a gate that cannot see its own marker passes for the wrong reason — which is
+    /// how a fixture that looks like it refuses ends up publishing.
+    ///
+    /// The counter is what makes "refused the second time" and "the remote moved
+    /// during the rerun" expressible from outside the step, which is the only way to
+    /// test a rerun and a retry bound as behavior rather than as a claim.
+    fn gate_script(log: &Path, base_seen: &Path, markers: &Path, peer: &Path) -> String {
+        format!(
+            "#!/bin/sh\n\
+             name=\"$1\"\n\
+             m='{}'\n\
+             echo \"$name\" >> '{}'\n\
+             counter=\"$m/count-$name\"\n\
+             seen=0\n\
+             if [ -f \"$counter\" ]; then seen=$(cat \"$counter\"); fi\n\
+             echo $((seen + 1)) > \"$counter\"\n\
+             if [ \"$name\" = privacy ]; then printf '%s' \"$KTASK_BASE_SHA\" > '{}'; fi\n\
+             if [ \"$name\" = format ] && [ -f \"$m/peer-move\" ] && [ \"$seen\" -ge 1 ] \\\n\
+                 && [ ! -f \"$m/peer-moved\" ]; then\n\
+             '{}'\n\
+             touch \"$m/peer-moved\"\n\
+             fi\n\
+             if [ -f \"$m/slow-$name\" ]; then sleep 30; fi\n\
+             if [ -f \"$m/refuse-$name\" ]; then echo \"$name refused\" >&2; exit 1; fi\n\
+             if [ \"$seen\" -ge 1 ] && [ -f \"$m/refuse-$name-again\" ]; then\n\
+             echo \"$name refused the second time\" >&2; exit 1\n\
+             fi\n\
+             exit 0\n",
+            markers.display(),
+            log.display(),
+            base_seen.display(),
+            peer.display(),
+        )
+    }
+
+    /// A script that moves the origin's branch forward by one commit, from a fresh
+    /// clone of it. The clone is what makes the push always a fast-forward: whoever
+    /// runs this holds the remote's tip at that moment, which is exactly the state a
+    /// task that was too slow to publish finds.
+    fn peer_move(repo: &ScratchRepo) -> String {
+        format!(
+            "#!/bin/sh\n\
+             set -e\n\
+             clone='{}/peer-clone'\n\
+             rm -rf \"$clone\"\n\
+             git clone -q '{}' \"$clone\"\n\
+             git -C \"$clone\" -c user.name=ktask -c user.email=ktask@example.invalid \\\n\
+                 -c commit.gpgsign=false -c core.hooksPath='{}/no-hooks' \\\n\
+                 commit -q --allow-empty -m 'the peer moved again'\n\
+             git -C \"$clone\" push -q origin '{}'\n",
+            repo.path().display(),
+            repo.origin().display(),
+            repo.path().display(),
+            BRANCH,
+        )
+    }
+
+    /// The queue's one task, spelled as the plan document that would have produced
+    /// it — so its id, title and body are the ones a real run would hand this step.
+    fn task() -> Task {
+        let document = "\
+## T093 Runner step: verification and publication
+
+**Outcome:** a task becomes publishable only on mechanical evidence.
+**Done-when:** no path reaches publication without a passing completion set.
+**Verify:** `cargo nextest run -p ktask-core -E 'test(/runner::verify_and_publish/)'`
+**Refs:** VISION.md sections 3, 8 and 10
+";
+        let parsed = parse_plan(document)
+            .expect("a task block with the four mandatory sections is a parseable plan");
+        let row = parsed
+            .into_iter()
+            .next()
+            .expect("the fixture plan holds one row");
+        assert_eq!(row.id, TaskId::new(TASK), "every fixture works task {TASK}");
+        row
+    }
+
+    /// Take the queue's task as far as an attempt is open, so the step has a
+    /// checkout, a base to be measured against, and an attempt to publish under.
+    ///
+    /// The driver's own [`crate::EventKind::PhaseEntered`] row is written by hand,
+    /// because entering a phase is the driver's move and not this step's —
+    /// `verify_and_publish` never writes one, and a test that reached the state by
+    /// calling [`Runner::run_phase`] would spend a provider session to get there. It
+    /// cannot be left out: `Preflight` refuses a verdict row, so a journal without a
+    /// phase entry is a journal [`crate::Journal::rebuild_state`] cannot project, and the
+    /// step would look like it had corrupted the log it was only appending to. The phase
+    /// is `Verify` because that is the phase a driver is in when it calls this step: it
+    /// lands the task in `Verifying`, which is where a verdict row belongs and where the
+    /// [`crate::EventKind::VerifyPassed`] that follows moves it to `Publishing`.
+    fn opened(run: &mut Runner) -> (Prepared, AttemptId) {
+        let row = task();
+        let ready = run
+            .prepare(&row)
+            .expect("nothing in this fixture gives preflight a reason to refuse");
+        let attempt = run
+            .begin_attempt(&row)
+            .expect("the base the preflight recorded opens an attempt");
+        assert_eq!(
+            attempt,
+            AttemptId::new(ATTEMPT),
+            "one attempt has been opened"
+        );
+        run.recorder
+            .record(
+                Some(row.id),
+                EventKind::PhaseEntered {
+                    attempt,
+                    phase: Phase::Verify,
+                },
+            )
+            .expect("the driver's phase entry is journalled");
+        (ready, attempt)
+    }
+
+    /// Leave `text` at `path` inside the task's checkout, as a session that wrote
+    /// there would have.
+    fn write_in(ready: &Prepared, path: &str, text: &str) {
+        fs::write(ready.worktree.join(path), text).expect("a checkout file is writable");
+    }
+
+    /// Leave the work an ordinary task's session left: one tracked file rewritten.
+    fn work(ready: &Prepared) {
+        write_in(ready, SEED_FILE, WORK);
+    }
+
+    /// Publish what the task's checkout holds.
+    fn publish(run: &mut Runner, ready: &Prepared, attempt: AttemptId) -> crate::Result<String> {
+        run.verify_and_publish(ready, &task(), attempt)
+    }
+
+    /// Run the step and insist it publishes, for the tests whose subject is
+    /// something other than the refusal.
+    fn published(run: &mut Runner, ready: &Prepared, attempt: AttemptId) -> String {
+        publish(run, ready, attempt).expect("nothing here gives verification a reason to refuse")
+    }
+
+    /// The commit a checkout stands at.
+    fn head(checkout: &Path) -> String {
+        git::git(checkout, &["rev-parse", "HEAD"]).expect("a checkout stands on a commit")
+    }
+
+    /// The subject line of one commit, which is where a candidate says what it is
+    /// for.
+    fn subject(checkout: &Path, sha: &str) -> String {
+        git::git(checkout, &["log", "-1", "--format=%s", sha]).expect("the candidate is a commit")
+    }
+
+    /// The commit one commit was written on top of, which is where a test can see what
+    /// a candidate was actually built against.
+    fn parent(checkout: &Path, sha: &str) -> String {
+        git::git(checkout, &["rev-parse", &format!("{sha}^")])
+            .expect("every candidate is written on top of something")
+    }
+
+    /// The task's own rows, oldest first, read on a second connection because that is
+    /// who asks this question in real life: the TUI, `status`, and the process that
+    /// comes after a run that died.
+    fn rows(project: &Project) -> Vec<Event> {
+        Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events_for(TaskId::new(TASK))
+            .expect("the rows this run wrote are readable")
+    }
+
+    /// The kinds the journal holds for the task, oldest first — not the completion
+    /// set's, which belong to no task.
+    fn kinds(project: &Project) -> Vec<&'static str> {
+        rows(project)
+            .iter()
+            .map(|row| row.kind.discriminant())
+            .collect()
+    }
+
+    /// Every row in the journal, the task's and the gates' alike, in the order the
+    /// journal numbered them — the only reading that can show a gate ran between two
+    /// of the task's own rows.
+    fn all_kinds(project: &Project) -> Vec<&'static str> {
+        Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events()
+            .expect("the rows this run wrote are readable")
+            .iter()
+            .map(|row| row.kind.discriminant())
+            .collect()
+    }
+
+    /// Whether the journal holds a row of this kind for the task.
+    fn holds(project: &Project, kind: &str) -> bool {
+        kinds(project).contains(&kind)
+    }
+
+    /// The `VerifyFailed` row the step left, as the attempt and class it named and the
+    /// detail it carried.
+    fn verdict(project: &Project) -> (AttemptId, FailureClass, String) {
+        for row in rows(project) {
+            if let EventKind::VerifyFailed {
+                attempt,
+                class,
+                detail,
+            } = row.kind
+            {
+                return (attempt, class, detail);
+            }
+        }
+        panic!("a refused verification leaves the row that says so");
+    }
+
+    /// The candidate SHAs the step offered for publication, in the order it offered
+    /// them.
+    fn candidates(project: &Project) -> Vec<String> {
+        let mut offered = Vec::new();
+        for row in rows(project) {
+            if let EventKind::PublishStarted { candidate_sha, .. } = row.kind {
+                offered.push(candidate_sha);
+            }
+        }
+        offered
+    }
+
+    /// The state the journal replays to, with an illegal row reported as the failure
+    /// it is rather than as a state that was never reached.
+    fn replayed(project: &Project) -> Option<TaskState> {
+        let mut journal =
+            Journal::open_for(project).expect("a registered project's journal is openable");
+        journal
+            .rebuild_state()
+            .expect("every row this step wrote is one the state machine accepts");
+        journal
+            .get_state(TaskId::new(TASK))
+            .expect("the projection is readable")
+    }
+
+    /// The gate names one test expects to have run, as the strings the log holds.
+    fn ran_words(runs: &[&[&'static str]]) -> Vec<String> {
+        runs.iter()
+            .flat_map(|names| names.iter().map(|name| (*name).to_owned()))
+            .collect()
+    }
+
+    /// Where a directory's mode was taken away, put back when dropped so the scratch
+    /// directory can still be deleted.
+    struct Unreadable {
+        path: PathBuf,
+    }
+
+    impl Drop for Unreadable {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    /// Make `path` unreadable even to its owner, until the returned guard goes away:
+    /// the one refusal a fixture cannot be handed by any shorter route, and the
+    /// difference between a tree that is clean and a tree that was never read.
+    fn unreadable(path: &Path) -> Unreadable {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap_or_else(|why| {
+            panic!("`{}` should take mode 000: {why}", path.display());
+        });
+        Unreadable {
+            path: path.to_path_buf(),
+        }
+    }
+
+    #[test]
+    fn a_passing_completion_set_publishes_the_candidate_it_was_verified_against() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        work(&ready);
+
+        let published = published(&mut run, &ready, attempt);
+
+        assert_eq!(
+            published,
+            head(&ready.worktree),
+            "the commit the run published is the commit the checkout stands on"
+        );
+        assert_eq!(
+            published,
+            fixture.origin_tip(),
+            "the remote holds the very commit the step returned"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ran_words(&[&SET]),
+            "every gate of the completion set ran, in the set's own order"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            [
+                OPENED.to_vec(),
+                vec!["VerifyPassed", "PublishStarted", "PublishVerified"]
+            ]
+            .concat(),
+            "the task's rows are the verdict, the offer and the proof — and nothing else"
+        );
+        let mut expected = OPENED.to_vec();
+        expected.extend(set_rows(SET.len()));
+        expected.extend(["VerifyPassed", "PublishStarted", "PublishVerified"]);
+        assert_eq!(
+            all_kinds(&fixture.project),
+            expected,
+            "the gate pair for each of the five sits between the attempt and its verdict"
+        );
+    }
+
+    #[test]
+    fn the_candidate_commit_says_which_task_it_delivers() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        work(&ready);
+
+        let published = published(&mut run, &ready, attempt);
+
+        assert_eq!(
+            subject(&ready.worktree, &published),
+            format!("Task {TASK}: {}", task().title()),
+            "the subject line names the task the commit was made for"
+        );
+    }
+
+    #[test]
+    fn a_published_task_replays_to_published_verified_holding_the_candidate() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        work(&ready);
+
+        let published = published(&mut run, &ready, attempt);
+
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::PublishedVerified { commit: published }),
+            "the journal alone puts the task where publication proved it"
+        );
+    }
+
+    #[test]
+    fn a_refusing_gate_is_a_verification_failure_and_reaches_no_publication() {
+        let fixture = Fixture::new();
+        fixture.refuse("lint");
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        work(&ready);
+
+        let refusal = publish(&mut run, &ready, attempt)
+            .expect_err("a gate that refused cannot publish the task it gated");
+
+        let Error::Gate { kind, detail } = refusal else {
+            panic!("a refused completion gate is a gate refusal, not {refusal:?}");
+        };
+        assert_eq!(kind, "lint", "the refusal names the gate that refused");
+        assert!(
+            detail.contains("lint refused") && detail.contains("exited with code 1"),
+            "the refusal carries what the gate said and how it ended: {detail}"
+        );
+        let (attempt_of, class, row) = verdict(&fixture.project);
+        assert_eq!(
+            attempt_of,
+            AttemptId::new(ATTEMPT),
+            "the verdict is its attempt's"
+        );
+        assert_eq!(
+            class,
+            FailureClass::VerificationFailure,
+            "a gate that ran and refused is a verdict about the code"
+        );
+        assert!(
+            row.contains("lint refused"),
+            "the row carries the gate's own words: {row}"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ran_words(&[&PARTIAL_FROM_LINT]),
+            "the set stops spending gates behind a refusal except its mandatory one"
+        );
+        assert_eq!(
+            all_kinds(&fixture.project),
+            [
+                OPENED.to_vec(),
+                set_rows(PARTIAL_FROM_LINT.len()),
+                vec!["VerifyFailed"]
+            ]
+            .concat(),
+            "three gate pairs and the refusal: no offer of publication anywhere"
+        );
+        assert!(
+            !holds(&fixture.project, "PublishStarted"),
+            "a refused set offers nothing"
+        );
+        assert_eq!(
+            fixture.origin_tip(),
+            fixture.repo.seed_sha(),
+            "the remote never moved: nothing was published"
+        );
+        assert_ne!(
+            head(&ready.worktree),
+            ready.base_sha,
+            "the refused task's work is still committed where the next attempt reads it"
+        );
+    }
+
+    #[test]
+    fn a_completion_gate_that_outlives_its_budget_is_an_environment_failure() {
+        let fixture = Fixture::with_settings("gate_timeout_secs = 1\n");
+        fixture.outlive_its_budget("verify");
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        work(&ready);
+
+        publish(&mut run, &ready, attempt).expect_err("a gate that never answers decides nothing");
+
+        let (_attempt, class, detail) = verdict(&fixture.project);
+        assert_eq!(
+            class,
+            FailureClass::EnvironmentFailure,
+            "a command that ran out of its budget is the machine's answer, not the code's"
+        );
+        assert!(
+            detail.contains("ran out of its 1 s budget"),
+            "the row says the budget is what was exceeded: {detail}"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ran_words(&[&PARTIAL]),
+            "the mandatory gate is the last thing the set spends, and it is the one that loitered"
+        );
+    }
+
+    #[test]
+    fn a_gate_that_cannot_be_started_records_no_verdict() {
+        let fixture = Fixture::with_unspawnable_gate("build");
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        work(&ready);
+
+        let refusal = publish(&mut run, &ready, attempt)
+            .expect_err("a gate whose program is not there cannot decide a task");
+
+        let Error::Gate { kind, .. } = refusal else {
+            panic!("a gate that could not be started is a gate refusal, not {refusal:?}");
+        };
+        assert_eq!(kind, "build", "the refusal names the gate that never ran");
+        assert!(
+            !holds(&fixture.project, "VerifyFailed"),
+            "nothing was measured, so there is no verdict to journal"
+        );
+        assert!(
+            !holds(&fixture.project, "VerifyPassed"),
+            "and nothing passed either"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ran_words(&[&["format", "lint"]]),
+            "the set stopped at the gate that could not be started"
+        );
+        assert_eq!(
+            all_kinds(&fixture.project),
+            [
+                OPENED.to_vec(),
+                vec![
+                    "GateStarted",
+                    "GateFinished",
+                    "GateStarted",
+                    "GateFinished",
+                    "GateStarted"
+                ]
+            ]
+            .concat(),
+            "a started row with no finished one after it is what an unstarted gate leaves"
+        );
+    }
+
+    #[test]
+    fn uncommitted_work_at_verification_is_a_policy_failure_naming_every_path() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        work(&ready);
+        write_in(&ready, "scratch-notes.md", "a file nobody staged");
+
+        let refusal = publish(&mut run, &ready, attempt)
+            .expect_err("work nobody committed is not a candidate");
+
+        let Error::Policy { detail, paths } = refusal else {
+            panic!("a dirty tree is a policy failure, not {refusal:?}");
+        };
+        assert!(
+            detail.contains("uncommitted work"),
+            "the refusal says the rule that was broken: {detail}"
+        );
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("scratch-notes.md")],
+            "every path that broke the rule is named, and only it"
+        );
+        let (_attempt, class, row) = verdict(&fixture.project);
+        assert_eq!(
+            class,
+            FailureClass::PolicyFailure,
+            "§10 calls a dirty tree at verification a policy failure, and so does the row"
+        );
+        assert!(
+            row.contains("scratch-notes.md"),
+            "the row names the file a human has to deal with: {row}"
+        );
+        assert!(
+            fixture.ran().is_empty(),
+            "a dirty tree is refused before a single gate is spent"
+        );
+        assert!(
+            !holds(&fixture.project, "PublishStarted"),
+            "and nothing is offered"
+        );
+    }
+
+    #[test]
+    fn a_tree_that_cannot_be_read_is_not_reported_as_a_policy_failure() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        work(&ready);
+        let unreadable = unreadable(&ready.worktree);
+
+        let refusal = publish(&mut run, &ready, attempt)
+            .expect_err("a tree the run cannot read decides nothing");
+
+        drop(unreadable);
+        assert!(
+            !matches!(refusal, Error::Policy { .. }),
+            "nothing was measured, so no rule was broken: {refusal}"
+        );
+        assert!(
+            matches!(refusal, Error::Git { .. }),
+            "git's own refusal is the honest answer, not a policy verdict: {refusal}"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            OPENED.to_vec(),
+            "an unreadable tree leaves no verdict of any kind"
+        );
+        assert!(fixture.ran().is_empty(), "and it spends no gate either");
+    }
+
+    #[test]
+    fn a_task_that_changed_nothing_publishes_nothing() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+
+        let refusal = publish(&mut run, &ready, attempt)
+            .expect_err("a candidate with no work in it is not a delivery");
+
+        let Error::Policy { detail, .. } = refusal else {
+            panic!("nothing to commit is the rule, not a git refusal: {refusal:?}");
+        };
+        assert!(
+            detail.contains("nothing is staged to commit"),
+            "the refusal says there was no work to commit: {detail}"
+        );
+        let (_attempt, class, row) = verdict(&fixture.project);
+        assert_eq!(
+            class,
+            FailureClass::PolicyFailure,
+            "a task that delivered nothing is a policy failure, not a passing verification"
+        );
+        assert!(
+            row.contains("nothing is staged to commit"),
+            "and the row says so: {row}"
+        );
+        assert!(
+            fixture.ran().is_empty(),
+            "no gate is spent proving an empty commit"
+        );
+        assert!(
+            !holds(&fixture.project, "PublishStarted"),
+            "and it is never offered"
+        );
+        assert_eq!(
+            head(&ready.worktree),
+            ready.base_sha,
+            "the checkout still stands where the preflight based it"
+        );
+    }
+
+    #[test]
+    fn the_privacy_gate_is_handed_the_commit_the_candidate_builds_on() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        work(&ready);
+
+        let published = published(&mut run, &ready, attempt);
+
+        assert_eq!(
+            fixture.base_the_scan_saw(),
+            Some(ready.base_sha.clone()),
+            "the scan is told the base the preflight recorded, which is the range it reads"
+        );
+        assert_ne!(
+            fixture.base_the_scan_saw(),
+            Some(published),
+            "and not the candidate it is scanning the difference to"
+        );
+    }
+
+    #[test]
+    fn a_refused_push_that_replays_cleanly_reruns_every_gate_and_publishes_the_replay() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        work(&ready);
+        let divergence = fixture
+            .repo
+            .diverge(BRANCH)
+            .expect("the peer's commit reaches the origin");
+
+        let published = published(&mut run, &ready, attempt);
+
+        let offered = candidates(&fixture.project);
+        assert_eq!(
+            offered.len(),
+            2,
+            "the replay was offered as its own candidate"
+        );
+        assert_eq!(
+            published, offered[1],
+            "what published is what the replay made"
+        );
+        assert_eq!(published, fixture.origin_tip(), "and the remote holds it");
+        assert_eq!(
+            parent(&ready.worktree, &offered[0]),
+            ready.base_sha,
+            "the first candidate stands on the base the preflight recorded, which is the \
+             commit the peer's push moved past"
+        );
+        assert_ne!(
+            offered[0], divergence.remote,
+            "the peer's commit is what the remote refused the candidate for"
+        );
+        assert_eq!(
+            parent(&ready.worktree, &published),
+            divergence.remote,
+            "the replayed candidate stands on the peer's commit: the divergence is \
+             history rather than something still to reconcile"
+        );
+        assert_ne!(offered[0], offered[1], "the replay is a different commit");
+        assert_eq!(
+            fixture.ran(),
+            ran_words(&[&SET, &SET]),
+            "every gate ran again from scratch on the replayed commit: no cached evidence"
+        );
+        let mut expected = OPENED.to_vec();
+        expected.extend(set_rows(SET.len()));
+        expected.extend(["VerifyPassed", "PublishStarted"]);
+        expected.extend(set_rows(SET.len()));
+        expected.extend(["VerifyPassed", "PublishStarted", "PublishVerified"]);
+        assert_eq!(
+            all_kinds(&fixture.project),
+            expected,
+            "the journal holds two complete gate runs, each closed by its own verdict"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::PublishedVerified { commit: published }),
+            "a clean divergence recovers mechanically to the same place a first-time push lands"
+        );
+    }
+
+    #[test]
+    fn a_divergence_that_conflicts_stops_for_a_human_and_names_the_path_it_could_not_resolve() {
+        let fixture = Fixture::new();
+        fixture
+            .repo
+            .commit(DIVERGED_FILE, "both sides will want this file")
+            .expect("a tracked file the two sides disagree about is committable");
+        fixture
+            .repo
+            .push(BRANCH)
+            .expect("and it is on the remote before the task is based on it");
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        write_in(&ready, DIVERGED_FILE, WORK);
+        let divergence = fixture
+            .repo
+            .diverge(BRANCH)
+            .expect("the remote moves under the task, rewriting the same file");
+
+        let refusal = publish(&mut run, &ready, attempt)
+            .expect_err("a replay that stops on content cannot be published");
+
+        let Error::Git { stderr, .. } = refusal else {
+            panic!("a conflict is git refusing the same branch, not {refusal:?}");
+        };
+        assert!(
+            stderr.contains(DIVERGED_FILE),
+            "the refusal names the path the two sides disagree about: {stderr}"
+        );
+        let class = FailureClass::GitConflict;
+        let failed = rows(&fixture.project)
+            .iter()
+            .find_map(|row| match &row.kind {
+                EventKind::TaskFailed {
+                    class: found,
+                    detail,
+                } => Some((*found, detail.clone())),
+                _ => None,
+            })
+            .expect("a conflict stops the task, and says so in the journal");
+        assert_eq!(failed.0, class, "§7's class for a conflicting publication");
+        assert!(
+            failed.1.contains(DIVERGED_FILE),
+            "the row names the path a human has to resolve: {}",
+            failed.1
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::Failed {
+                class,
+                detail: failed.1
+            }),
+            "and the task replays as failed rather than as work an agent will be called back to"
+        );
+        assert!(
+            !holds(&fixture.project, "AgentOutput"),
+            "no session was started"
+        );
+        assert!(
+            !holds(&fixture.project, "PublishVerified"),
+            "the refused candidate was never proved"
+        );
+        assert_eq!(
+            fixture.origin_tip(),
+            divergence.remote,
+            "the remote is exactly where the peer left it: nothing was forced"
+        );
+        let dirty = git::git(&ready.worktree, &["status", "--porcelain"])
+            .expect("the checkout answers its own status");
+        assert!(
+            dirty.is_empty(),
+            "the conflicted rebase was aborted, not left in the tree: {dirty}"
+        );
+        let bookkeeping = git::git(
+            &ready.worktree,
+            &["rev-parse", "--git-path", "rebase-merge"],
+        )
+        .expect("git says where its rebase bookkeeping would live");
+        let inside = PathBuf::from(&bookkeeping);
+        let bookkeeping = if inside.is_absolute() {
+            inside
+        } else {
+            ready.worktree.join(inside)
+        };
+        assert!(
+            !bookkeeping.exists(),
+            "the checkout was left standing inside an unfinished replay: {bookkeeping:?}"
+        );
+    }
+
+    #[test]
+    fn a_publication_the_remote_refuses_twice_is_not_offered_a_third_time() {
+        let fixture = Fixture::new();
+        fixture.move_the_remote_again();
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        work(&ready);
+        fixture
+            .repo
+            .diverge(BRANCH)
+            .expect("the remote moves once before the task tries to publish");
+
+        let refusal = publish(&mut run, &ready, attempt)
+            .expect_err("the peer moves again while the replay is being gated");
+
+        assert!(
+            matches!(refusal, Error::Git { .. }),
+            "a remote that will not take the replay is git refusing: {refusal:?}"
+        );
+        let offered = candidates(&fixture.project);
+        assert_eq!(
+            offered.len(),
+            2,
+            "one candidate and one replay were offered, and no third: {offered:?}"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ran_words(&[&SET, &SET]),
+            "the retry was earned by a complete rerun of the set"
+        );
+        assert!(
+            holds(&fixture.project, "VerifyPassed"),
+            "the replay was gated before it was offered again"
+        );
+        assert!(
+            !holds(&fixture.project, "PublishVerified"),
+            "and it was not proved, so the task is not published"
+        );
+        assert!(
+            !holds(&fixture.project, "TaskFailed"),
+            "a second refusal is a refusal, not the last word about the task"
+        );
+        assert!(
+            !offered.contains(&fixture.origin_tip()),
+            "what the remote holds is neither candidate: {offered:?}"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::Publishing {
+                attempt: AttemptId::new(ATTEMPT)
+            }),
+            "the journal leaves the task where an unfinished push is found: with a commit in the air"
+        );
+    }
+
+    #[test]
+    fn a_refusal_that_cannot_be_repaired_reports_the_fetch_that_refused() {
+        let fixture = Fixture::new();
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        work(&ready);
+        fs::remove_dir_all(fixture.repo.origin()).expect("the remote is taken away mid-run");
+
+        let refusal = publish(&mut run, &ready, attempt)
+            .expect_err("a remote that is gone cannot take a candidate");
+
+        let Error::Git { args, .. } = refusal else {
+            panic!("a remote that is gone is git refusing: {refusal:?}");
+        };
+        assert_eq!(
+            args.first().map(String::as_str),
+            Some("fetch"),
+            "the repair was attempted, and the fetch it opens with is what refused: {args:?}"
+        );
+        assert_eq!(
+            candidates(&fixture.project).len(),
+            1,
+            "one candidate was offered, and the refusal is about the remote, not the gates"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ran_words(&[&SET]),
+            "the set ran once, before the push"
+        );
+        assert!(
+            !holds(&fixture.project, "VerifyFailed"),
+            "the gates passed; saying otherwise would blame the code for a missing remote"
+        );
+        assert!(
+            !holds(&fixture.project, "TaskFailed"),
+            "and it ends no task"
+        );
+        assert!(
+            !holds(&fixture.project, "PublishVerified"),
+            "nothing was proved"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::Publishing {
+                attempt: AttemptId::new(ATTEMPT)
+            }),
+            "a run that dies with a push in the air is found there, not back at the gates"
+        );
+    }
+
+    #[test]
+    fn a_replay_that_refuses_the_rerun_is_never_published() {
+        let fixture = Fixture::new();
+        fixture.refuse_the_second_time("build");
+        let mut run = fixture.run();
+        let (ready, attempt) = opened(&mut run);
+        work(&ready);
+        fixture
+            .repo
+            .diverge(BRANCH)
+            .expect("the remote moves, so the first candidate is refused");
+
+        let refusal = publish(&mut run, &ready, attempt)
+            .expect_err("a replayed commit that fails a gate cannot be published");
+
+        let Error::Gate { kind, .. } = refusal else {
+            panic!("the rerun refused on a gate, which is a gate refusal: {refusal:?}");
+        };
+        assert_eq!(kind, "build", "the gate that refused the replay is named");
+        assert_eq!(
+            fixture.ran(),
+            ran_words(&[&SET, &PARTIAL]),
+            "the set ran in full, and again until the gate that refused the replay"
+        );
+        assert_eq!(
+            candidates(&fixture.project).len(),
+            1,
+            "the replayed commit was never offered, because it was never proved"
+        );
+        assert!(
+            !holds(&fixture.project, "VerifyFailed"),
+            "the state a rejected push leaves has no room for a verification verdict, and an \
+             illegal row is worse than none"
+        );
+        assert!(
+            !holds(&fixture.project, "PublishVerified"),
+            "nothing was published"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(TaskState::Publishing {
+                attempt: AttemptId::new(ATTEMPT)
+            }),
+            "the task stays where a refused push left it, for whoever reads the dangling pair"
         );
     }
 }
