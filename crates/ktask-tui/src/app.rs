@@ -6,7 +6,9 @@
 //! presents the frame, so everything here runs the same under a test backend.
 
 use crate::event::AppEvent;
+use crate::keys::{KeyAction, lookup};
 use crate::types::{Overlay, Screen, TaskView};
+use crossterm::event::KeyEvent;
 use ktask_core::{Event, EventKind};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -63,18 +65,47 @@ impl App {
 
 /// Advances the interface by one event.
 ///
-/// Only the key map overlay's keys are wired so far (`?`, `F1`, `Esc`, `q`;
-/// see [`screen::help`](crate::screen::help)); any other key press leaves the
-/// state as it was.
+/// Only the key map overlay's keys (`?`, `F1`, `Esc`, `q`; see
+/// [`screen::help`](crate::screen::help)) and screen navigation (`1`..`9`,
+/// `Tab`, `Shift-Tab`) are wired so far; any other key press leaves the state
+/// as it was.
 #[must_use]
 pub fn update(mut app: App, ev: AppEvent) -> App {
     match ev {
         AppEvent::Resize(columns, rows) => app.size = (columns, rows),
         AppEvent::Core(event) => apply_core(&mut app, event),
-        AppEvent::Key(key) => crate::screen::help::handle_key(&mut app, &key),
+        AppEvent::Key(key) => {
+            crate::screen::help::handle_key(&mut app, &key);
+            navigate(&mut app, &key);
+        }
         AppEvent::Tick => {}
     }
     app
+}
+
+/// Switches screens for `1`..`9`, `Tab` and `Shift-Tab`, unless an overlay is
+/// open: it takes every key while it is drawn, so nothing behind it moves.
+///
+/// Only [`App::screen`] changes. Selection and scroll live in per-screen maps
+/// that this never touches, so a screen shows the same row and offset when
+/// the operator returns to it.
+fn navigate(app: &mut App, key: &KeyEvent) {
+    if app.overlay.is_some() {
+        return;
+    }
+    let target = match lookup(app.screen, key).map(|binding| binding.action) {
+        Some(KeyAction::Jump(screen)) => screen,
+        Some(KeyAction::NextScreen) => step(app.screen, 1),
+        Some(KeyAction::PrevScreen) => step(app.screen, Screen::ALL.len() - 1),
+        _ => return,
+    };
+    app.screen = target;
+}
+
+/// The screen `by` places after `from` in number-key order, wrapping.
+fn step(from: Screen, by: usize) -> Screen {
+    let at = Screen::ALL.iter().position(|s| *s == from).unwrap_or(0);
+    Screen::ALL.into_iter().cycle().nth(at + by).unwrap_or(from)
 }
 
 /// Folds one journal event into the run state the interface displays.
@@ -241,6 +272,164 @@ mod tests {
         let before = App::new((80, 24));
         let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
         assert_eq!(update(before.clone(), AppEvent::Key(key)), before);
+    }
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> AppEvent {
+        AppEvent::Key(KeyEvent::new(code, modifiers))
+    }
+
+    fn digit(screen: Screen) -> AppEvent {
+        let c = char::from_digit(screen as u32, 10).expect("digit");
+        key(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    fn tab() -> AppEvent {
+        key(KeyCode::Tab, KeyModifiers::NONE)
+    }
+
+    fn back_tab() -> AppEvent {
+        key(KeyCode::BackTab, KeyModifiers::SHIFT)
+    }
+
+    fn header(app: &App) -> String {
+        screen_text(app)[0].trim_end().to_owned()
+    }
+
+    #[test]
+    fn navigation_number_keys_reach_every_screen_and_show_its_title() {
+        let mut app = App::new((80, 24));
+        for screen in Screen::ALL.into_iter().rev() {
+            app = update(app, digit(screen));
+            assert_eq!(app.screen, screen);
+            let expected = format!("{} {}", screen as u8, crate::screen::title(screen));
+            assert_eq!(header(&app), expected);
+        }
+    }
+
+    #[test]
+    fn navigation_tab_visits_every_screen_in_order_and_wraps_to_the_first() {
+        let mut app = App::new((80, 24));
+        for screen in Screen::ALL.into_iter().skip(1).chain([Screen::Queue]) {
+            app = update(app, tab());
+            assert_eq!(app.screen, screen);
+            assert!(header(&app).ends_with(crate::screen::title(screen)));
+        }
+    }
+
+    #[test]
+    fn navigation_shift_tab_visits_every_screen_in_reverse_and_wraps_to_the_last() {
+        let mut app = App::new((80, 24));
+        let backwards = Screen::ALL.into_iter().rev();
+        for screen in backwards.chain([Screen::Config]) {
+            app = update(app, back_tab());
+            assert_eq!(app.screen, screen);
+            assert!(header(&app).ends_with(crate::screen::title(screen)));
+        }
+    }
+
+    #[test]
+    fn navigation_shift_tab_reported_as_tab_with_shift_goes_back() {
+        let app = update(App::new((80, 24)), key(KeyCode::Tab, KeyModifiers::SHIFT));
+        assert_eq!(app.screen, Screen::Config);
+    }
+
+    #[test]
+    fn navigation_returning_to_a_screen_restores_its_selection_and_scroll() {
+        let mut start = App::new((80, 24));
+        for (n, screen) in Screen::ALL.into_iter().enumerate() {
+            start.selected.insert(screen, n + 10);
+            start.scroll.insert(screen, n + 100);
+        }
+        let start = start;
+        // By number key: leave each screen for another and come back.
+        for screen in Screen::ALL {
+            let away = if screen == Screen::Queue {
+                Screen::Git
+            } else {
+                Screen::Queue
+            };
+            let app = update(
+                App {
+                    screen,
+                    ..start.clone()
+                },
+                digit(away),
+            );
+            let app = update(app, digit(screen));
+            assert_eq!(
+                app,
+                App {
+                    screen,
+                    ..start.clone()
+                },
+                "{screen:?}"
+            );
+        }
+        // By Tab: a full lap comes back to every screen with all state intact.
+        let mut app = start.clone();
+        for _ in Screen::ALL {
+            app = update(app, tab());
+        }
+        assert_eq!(app, start);
+        // By Shift-Tab, the same.
+        for _ in Screen::ALL {
+            app = update(app, back_tab());
+        }
+        assert_eq!(app, start);
+    }
+
+    #[test]
+    fn navigation_leaves_other_screens_state_alone_when_switching() {
+        let mut app = App::new((80, 24));
+        app.selected.insert(Screen::Logs, 4);
+        app = update(app, digit(Screen::Logs));
+        app.selected.insert(Screen::Logs, 9);
+        app.scroll.insert(Screen::Logs, 30);
+        app = update(app, digit(Screen::Git));
+        app.selected.insert(Screen::Git, 2);
+        app = update(app, digit(Screen::Logs));
+        assert_eq!(app.selected.get(&Screen::Logs), Some(&9));
+        assert_eq!(app.scroll.get(&Screen::Logs), Some(&30));
+        assert_eq!(app.selected.get(&Screen::Git), Some(&2));
+    }
+
+    #[test]
+    fn navigation_is_blocked_while_an_overlay_is_open() {
+        for overlay in [
+            Overlay::KeyMap,
+            Overlay::Confirm {
+                action: crate::Action::Pause,
+                prompt: "Pause?".into(),
+            },
+        ] {
+            for event in [digit(Screen::Git), tab(), back_tab()] {
+                let before = App {
+                    overlay: Some(overlay.clone()),
+                    ..App::new((80, 24))
+                };
+                assert_eq!(update(before.clone(), event), before);
+            }
+        }
+    }
+
+    #[test]
+    fn navigation_keys_work_again_once_the_overlay_is_closed() {
+        let app = update(
+            App::new((80, 24)),
+            key(KeyCode::Char('?'), KeyModifiers::NONE),
+        );
+        let app = update(app, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(
+            update(app, digit(Screen::Failures)).screen,
+            Screen::Failures
+        );
+    }
+
+    #[test]
+    fn navigation_unbound_digit_zero_stays_put() {
+        let before = App::new((80, 24));
+        let after = update(before.clone(), key(KeyCode::Char('0'), KeyModifiers::NONE));
+        assert_eq!(after, before);
     }
 
     #[test]
