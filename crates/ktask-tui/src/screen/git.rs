@@ -2086,10 +2086,37 @@ mod tests {
         assert_eq!(selected(&app), 1);
         let app = key(app, 'G');
         assert_eq!(selected(&app), 3);
+        assert_eq!(app.git.selected, 3, "the last file, not past it");
         let app = key(app, 'j');
         assert_eq!(selected(&app), 3, "no wrapping below the last");
         let app = key(app, 'g');
         assert_eq!(selected(&app), 0);
+    }
+
+    #[test]
+    fn git_a_diff_page_of_another_file_or_task_is_never_shown_for_this_one() {
+        let f = fixture();
+        f.change_everything();
+        let mut app = feed(
+            app_on_git((80, 24), 2),
+            &[attempt(1, &f.base), attempt(2, &f.base)],
+        );
+        settle(&mut app, &f.repo());
+        let loading = |app: &App| {
+            let lines = body(app);
+            lines.contains(&DIFF_NOT_LOADED.to_owned())
+                && !lines.iter().any(|l| l.starts_with("+brand"))
+        };
+        assert!(!loading(&app));
+        // Another file of the same task, before its diff is read.
+        let other_file = key(app.clone(), 'j');
+        assert!(body(&other_file).contains(&"Diff · deleted.txt".to_owned()));
+        assert!(loading(&other_file));
+        // The same file of another task, once only its snapshot is read.
+        let mut other_task = app;
+        other_task.selected.insert(Screen::Queue, 1);
+        assert!(backfill(&mut other_task, &|_| Some(f.repo())));
+        assert!(loading(&other_task));
     }
 
     #[test]
