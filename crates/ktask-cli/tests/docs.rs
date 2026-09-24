@@ -14,6 +14,12 @@
 //! Three things differ from one machine, or one run, to the next and are
 //! compared as placeholders on both sides: project ids, commit ids and
 //! timestamps (see [`guide::normalize`]). Nothing else is matched loosely.
+//!
+//! The operator guide (`docs/OPERATING.md`, T158) is checked differently: it
+//! is prose, so [`operating`] checks that it has an entry for every failure
+//! class and every pause reason `ktask-core` defines, that each entry's exit
+//! code is the one the contract gives it, that each names the command a
+//! human runs, and that every command it names exists.
 
 mod docs {
     mod guide {
@@ -342,7 +348,7 @@ mod docs {
         /// Everything that follows `ktask-rs` wherever the guide writes an
         /// invocation, in document order: inline code in prose and the
         /// commands of console blocks.
-        fn invocations(guide: &str) -> Vec<String> {
+        pub(super) fn invocations(guide: &str) -> Vec<String> {
             let mut snippets: Vec<String> = Vec::new();
             let mut fence: Option<&str> = None;
             for line in guide.lines() {
@@ -366,7 +372,7 @@ mod docs {
 
         /// What follows `ktask-rs` in an invocation: the command path (`run`,
         /// `plan lint`) and the long flags, up to the first shell operator.
-        fn command_and_flags(after: &str) -> (Vec<String>, Vec<String>) {
+        pub(super) fn command_and_flags(after: &str) -> (Vec<String>, Vec<String>) {
             let mut path: Vec<String> = Vec::new();
             let mut flags = Vec::new();
             let mut path_done = false;
@@ -392,7 +398,7 @@ mod docs {
             (path, flags)
         }
 
-        fn help_of(args: &[String]) -> Result<String, String> {
+        pub(super) fn help_of(args: &[String]) -> Result<String, String> {
             let output = Command::new(env!("CARGO_BIN_EXE_ktask-rs"))
                 .args(args)
                 .arg("--help")
@@ -639,6 +645,382 @@ mod docs {
         #[test]
         fn guide_replay_of_prose_alone_runs_nothing() {
             assert_eq!(replay("# Title\n\nJust words.\n", &bin_dir()), Ok(0));
+        }
+    }
+
+    mod operating {
+        use super::guide::{command_and_flags, help_of, invocations};
+        use ktask_core::{FailureClass, PauseReason};
+
+        const OPERATING: &str = include_str!("../../../docs/OPERATING.md");
+        const CONTRACT: &str = include_str!("../../../docs/CONTRACT.md");
+
+        /// The command the task, and the guide's own introduction, name for
+        /// running these tests.
+        const VERIFY: &str = "cargo nextest run -p ktask-cli -E 'test(/docs::operating/)'";
+
+        /// What one entry of the operator guide must say: its name, the exit
+        /// code, and a command the human runs.
+        struct Expect {
+            name: &'static str,
+            code: u16,
+            remedy: &'static str,
+        }
+
+        /// The name, exit code and remedy for `class`. Exhaustive, so a class
+        /// added to `ktask-core` fails to compile here until the guide has an
+        /// entry for it. Two classes are pauses (`provider_limit` is 3,
+        /// `needs_input` is 5); the rest end the task `failed`, exit 1.
+        fn failure_class(class: FailureClass) -> Expect {
+            let (name, code, remedy) = match class {
+                FailureClass::AgentFailure => ("agent_failure", 1, "ktask-rs retry --task"),
+                FailureClass::VerificationFailure => {
+                    ("verification_failure", 1, "ktask-rs rerun-gate --task")
+                }
+                FailureClass::ProviderLimit => ("provider_limit", 3, "ktask-rs resume"),
+                FailureClass::ProviderTransient => {
+                    ("provider_transient", 1, "ktask-rs retry --task")
+                }
+                FailureClass::ProviderConfiguration => {
+                    ("provider_configuration", 1, "ktask-rs doctor")
+                }
+                FailureClass::GitConflict => ("git_conflict", 1, "ktask-rs retry --task"),
+                FailureClass::EnvironmentFailure => ("environment_failure", 1, "ktask-rs doctor"),
+                FailureClass::PolicyFailure => ("policy_failure", 1, "ktask-rs retry --task"),
+                FailureClass::NeedsInput => ("needs_input", 5, "ktask-rs resolve --task"),
+            };
+            Expect { name, code, remedy }
+        }
+
+        /// The same for a pause reason, under the name VISION.md section 6
+        /// gives its state. Exhaustive for the same reason.
+        fn pause_reason(reason: &PauseReason) -> Expect {
+            let (name, code, remedy) = match reason {
+                PauseReason::Limit { .. } => ("waiting_limit", 3, "ktask-rs resume"),
+                PauseReason::Input => ("waiting_input", 5, "ktask-rs resolve --task"),
+                PauseReason::HumanGate => ("human_gate", 4, "ktask-rs ack --task"),
+                PauseReason::Interrupted => ("interrupted", 130, "ktask-rs resume"),
+                PauseReason::Blocked => ("blocked", 130, "ktask-rs resume"),
+            };
+            Expect { name, code, remedy }
+        }
+
+        fn all_failure_classes() -> Vec<Expect> {
+            [
+                FailureClass::AgentFailure,
+                FailureClass::VerificationFailure,
+                FailureClass::ProviderLimit,
+                FailureClass::ProviderTransient,
+                FailureClass::ProviderConfiguration,
+                FailureClass::GitConflict,
+                FailureClass::EnvironmentFailure,
+                FailureClass::PolicyFailure,
+                FailureClass::NeedsInput,
+            ]
+            .into_iter()
+            .map(failure_class)
+            .collect()
+        }
+
+        fn all_pause_reasons() -> Vec<Expect> {
+            [
+                PauseReason::Limit { until: None },
+                PauseReason::Input,
+                PauseReason::HumanGate,
+                PauseReason::Interrupted,
+                PauseReason::Blocked,
+            ]
+            .iter()
+            .map(pause_reason)
+            .collect()
+        }
+
+        /// One `###` entry of the guide with the three fields each has.
+        struct Entry {
+            name: String,
+            code: String,
+            automatically: String,
+            you: String,
+        }
+
+        /// The text of the `##` section whose heading contains `title`, up to
+        /// the next `##` heading.
+        fn section<'a>(text: &'a str, title: &str) -> Result<Vec<&'a str>, String> {
+            let mut lines = text.lines();
+            lines
+                .by_ref()
+                .find(|line| line.starts_with("## ") && line.contains(title))
+                .ok_or_else(|| format!("no section titled {title:?}"))?;
+            Ok(lines.take_while(|line| !line.starts_with("## ")).collect())
+        }
+
+        /// The entries of `section`: a heading of level three naming the entry in
+        /// backticks, followed by `- **Label:** text` fields, each continued by
+        /// indented lines.
+        fn entries(section: &[&str]) -> Vec<Entry> {
+            let mut found: Vec<Entry> = Vec::new();
+            let mut field: Option<&'static str> = None;
+            for line in section {
+                if let Some(heading) = line.strip_prefix("### ") {
+                    found.push(Entry {
+                        name: heading.trim().trim_matches('`').to_string(),
+                        code: String::new(),
+                        automatically: String::new(),
+                        you: String::new(),
+                    });
+                    field = None;
+                    continue;
+                }
+                let Some(entry) = found.last_mut() else {
+                    continue;
+                };
+                if let Some(rest) = line.strip_prefix("- **") {
+                    field = None;
+                    for (label, target) in [
+                        ("Exit code:**", &mut entry.code),
+                        ("Automatically:**", &mut entry.automatically),
+                        ("You:**", &mut entry.you),
+                    ] {
+                        if let Some(text) = rest.strip_prefix(label) {
+                            target.push_str(text.trim());
+                            field = Some(label);
+                        }
+                    }
+                } else if line.starts_with("  ")
+                    && let Some(label) = field
+                {
+                    let target = match label {
+                        "Exit code:**" => &mut entry.code,
+                        "Automatically:**" => &mut entry.automatically,
+                        _ => &mut entry.you,
+                    };
+                    target.push(' ');
+                    target.push_str(line.trim());
+                }
+            }
+            found
+        }
+
+        /// Whether every one of `expected` has an entry in `found`, no entry
+        /// is left over, and each says the right exit code, says what the
+        /// supervisor does and what the human does, and names the command the
+        /// human runs. Describes the first thing that is wrong.
+        fn check(found: &[Entry], expected: &[Expect]) -> Result<(), String> {
+            let names: Vec<&str> = found.iter().map(|e| e.name.as_str()).collect();
+            let wanted: Vec<&str> = expected.iter().map(|e| e.name).collect();
+            if names != wanted {
+                return Err(format!("entries are {names:?}, expected {wanted:?}"));
+            }
+            for (entry, want) in found.iter().zip(expected) {
+                if entry.code != want.code.to_string() {
+                    return Err(format!(
+                        "{}: exit code is {:?}, expected {}",
+                        entry.name, entry.code, want.code
+                    ));
+                }
+                if entry.automatically.is_empty() {
+                    return Err(format!(
+                        "{}: does not say what happens by itself",
+                        entry.name
+                    ));
+                }
+                if entry.you.is_empty() {
+                    return Err(format!("{}: does not say what the human does", entry.name));
+                }
+                if !entry.you.contains(want.remedy) {
+                    return Err(format!(
+                        "{}: the human's part does not name `{}`",
+                        entry.name, want.remedy
+                    ));
+                }
+            }
+            Ok(())
+        }
+
+        /// Whether the contract's exit-code table has a row for `code`.
+        fn contract_has_code(code: u16) -> bool {
+            section(CONTRACT, "Exit codes")
+                .unwrap_or_default()
+                .iter()
+                .any(|line| line.starts_with(&format!("| {code} |")))
+        }
+
+        // ---- the tests ---------------------------------------------------
+
+        /// The task's verify command selects these tests only because they
+        /// live in `docs::operating`; the guide names that command.
+        #[test]
+        fn operating_tests_are_found_by_the_verify_command() {
+            assert!(
+                module_path!().contains("docs::operating"),
+                "{}",
+                module_path!()
+            );
+            assert!(
+                OPERATING.contains(VERIFY),
+                "the guide names the command that verifies it"
+            );
+        }
+
+        /// All nine failure classes have an entry, in the order the taxonomy
+        /// lists them, with the exit code the contract gives them.
+        #[test]
+        fn operating_covers_every_failure_class_with_its_exit_code() {
+            let classes = section(OPERATING, "Failure classes").expect("a failure section");
+            let expected = all_failure_classes();
+
+            assert_eq!(expected.len(), 9, "VISION.md section 7 lists nine classes");
+            let entries = entries(&classes);
+            check(&entries, &expected).expect("every class entry is complete");
+        }
+
+        /// All five pause reasons have an entry with their exit code.
+        #[test]
+        fn operating_covers_every_pause_state_with_its_exit_code() {
+            let pauses = section(OPERATING, "Pause states").expect("a pause section");
+            let expected = all_pause_reasons();
+
+            assert_eq!(expected.len(), 5, "VISION.md section 6 lists five pauses");
+            check(&entries(&pauses), &expected).expect("every pause entry is complete");
+        }
+
+        /// The codes the guide gives are rows of the contract's table, and
+        /// the pauses are the ones the contract says are not failures.
+        #[test]
+        fn operating_exit_codes_are_the_contracts() {
+            for want in all_failure_classes().iter().chain(&all_pause_reasons()) {
+                assert!(
+                    contract_has_code(want.code),
+                    "{}: exit code {} is not in docs/CONTRACT.md section 1",
+                    want.name,
+                    want.code
+                );
+            }
+            let pause_codes: Vec<u16> = all_pause_reasons().iter().map(|e| e.code).collect();
+            assert!(
+                pause_codes.iter().all(|code| [3, 4, 5, 130].contains(code)),
+                "a pause exits 3, 4, 5 or 130, never 1: {pause_codes:?}"
+            );
+            let failing: Vec<&str> = all_failure_classes()
+                .iter()
+                .filter(|e| e.code == 1)
+                .map(|e| e.name)
+                .collect();
+            assert_eq!(
+                failing.len(),
+                7,
+                "seven classes end a task failed: {failing:?}"
+            );
+        }
+
+        /// Every command and long flag the operator guide tells a reader to
+        /// use exists in the binary's own help.
+        #[test]
+        fn operating_names_only_commands_and_flags_that_exist() {
+            let top = help_of(&[]).expect("top-level help");
+            let mut checked = 0;
+            for after in invocations(OPERATING) {
+                let (path, flags) = command_and_flags(&after);
+                let help = if path.is_empty() {
+                    top.clone()
+                } else {
+                    help_of(&path).unwrap_or_else(|why| panic!("{why}"))
+                };
+                for flag in &flags {
+                    assert!(
+                        help.contains(flag.as_str()) || top.contains(flag.as_str()),
+                        "`ktask-rs {}` has no {flag}: {after:?}",
+                        path.join(" ")
+                    );
+                    checked += 1;
+                }
+                checked += usize::from(!path.is_empty());
+            }
+
+            assert!(
+                checked >= 15,
+                "the guide names many commands, got {checked}"
+            );
+        }
+
+        /// The guide is reachable: the README lists it and the file exists.
+        #[test]
+        fn operating_is_linked_from_the_readme() {
+            let readme = include_str!("../../../README.md");
+            assert!(
+                readme.contains("docs/OPERATING.md"),
+                "README lists the guide"
+            );
+        }
+
+        // ---- the checker checks ------------------------------------------
+
+        fn sample(code: &str, automatically: &str, you: &str) -> Vec<Entry> {
+            let text = format!(
+                "### `blocked`\n\n- **Exit code:** {code}\n- **Automatically:** {automatically}\n  and more\n- **You:** {you}\n"
+            );
+            entries(&text.lines().collect::<Vec<_>>())
+        }
+
+        fn blocked() -> Vec<Expect> {
+            vec![Expect {
+                name: "blocked",
+                code: 130,
+                remedy: "ktask-rs resume",
+            }]
+        }
+
+        /// A complete entry passes, and a continuation line joins its field.
+        #[test]
+        fn operating_check_accepts_a_complete_entry() {
+            let found = sample("130", "parks", "run `ktask-rs resume`");
+
+            assert_eq!(check(&found, &blocked()), Ok(()));
+            assert_eq!(found[0].automatically, "parks and more");
+        }
+
+        /// Each way an entry can be wrong is reported, so a `check` that
+        /// compared nothing would not pass the tests above.
+        #[test]
+        fn operating_check_rejects_each_way_an_entry_is_wrong() {
+            let wrong_code = check(&sample("1", "parks", "`ktask-rs resume`"), &blocked());
+            assert!(wrong_code.expect_err("code").contains("exit code"));
+
+            let mut bare = sample("130", "parks", "`ktask-rs resume`");
+            bare[0].automatically.clear();
+            let no_auto = check(&bare, &blocked());
+            assert!(no_auto.expect_err("auto").contains("by itself"));
+
+            let no_you = check(&sample("130", "parks", ""), &blocked());
+            assert!(no_you.expect_err("you").contains("what the human does"));
+
+            let no_remedy = check(&sample("130", "parks", "wait"), &blocked());
+            assert!(no_remedy.expect_err("remedy").contains("ktask-rs resume"));
+
+            let missing = check(&[], &blocked());
+            assert!(missing.expect_err("missing").contains("blocked"));
+
+            let mut extra = sample("130", "parks", "`ktask-rs resume`");
+            extra.extend(sample("130", "parks", "`ktask-rs resume`"));
+            assert!(check(&extra, &blocked()).is_err());
+        }
+
+        /// A section is found by its title and ends at the next `##`.
+        #[test]
+        fn operating_section_stops_at_the_next_heading() {
+            let text = "## 1. One\na\n## 2. Two\nb\nc\n## 3. Three\nd\n";
+
+            assert_eq!(section(text, "Two"), Ok(vec!["b", "c"]));
+            assert!(section(text, "Four").is_err());
+        }
+
+        /// The contract lookup finds a code's row and only that code's.
+        #[test]
+        fn operating_contract_table_has_rows_for_the_pause_codes() {
+            for code in [0, 1, 2, 3, 4, 5, 130] {
+                assert!(contract_has_code(code), "{code}");
+            }
+            assert!(!contract_has_code(6));
         }
     }
 }

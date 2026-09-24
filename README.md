@@ -43,6 +43,7 @@ markers that the first tasks replace.
 | `scripts/check-prereqs.sh` | reports what must be installed before any task can run |
 | `scripts/quality.sh` | the single entry point for every mechanical gate |
 | `docs/GUIDE.md` | getting started: install, init, add, plan lint, run, status |
+| `docs/OPERATING.md` | every failure class and pause state: exit code, what happens, what you do |
 | `docs/CONTRACT.md` | the CLI and TUI surface: commands, exit codes, screens, keys |
 | `docs/QUALITY.md` | what each gate enforces, and why |
 | `rustfmt.toml`, `clippy.toml`, `_typos.toml` | static analysis configuration |
