@@ -1723,4 +1723,57 @@ mod tests {
         assert!(!rows[21].contains("p pause"), "{rows:?}");
         assert!(!text.contains("a attach"));
     }
+
+    #[test]
+    fn queue_actions_bar_rows_never_hold_more_than_the_width_or_more_rows_than_allowed() {
+        let app = app_with(mixed_queue(), (80, 24));
+        for max_rows in 0..=3 {
+            for width in 0..=110 {
+                let rows = action_bar(&app, width, max_rows);
+                assert!(rows.len() <= max_rows, "{width} wide, {max_rows} rows");
+                for row in &rows {
+                    assert!(row.width() <= width, "{width} wide: {row:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn queue_actions_bar_wraps_whole_entries_onto_the_second_row() {
+        let app = app_with(mixed_queue(), (80, 24));
+        let text = |rows: Vec<Line<'static>>| -> Vec<String> {
+            rows.iter().map(ToString::to_string).collect()
+        };
+        assert_eq!(
+            text(action_bar(&app, 80, 2)),
+            [
+                "p pause  i interrupt  r retry  c cancel  Enter inspect  R resume  A ack  x rerun",
+                "a attach  d diff"
+            ]
+        );
+        assert_eq!(
+            text(action_bar(&app, 120, 2)),
+            [
+                "p pause  i interrupt  r retry  c cancel  Enter inspect  R resume  A ack  x rerun  \
+              a attach  d diff"
+            ]
+        );
+        // Out of rows, the last entry that fits is cut, and none after it shows.
+        assert_eq!(
+            text(action_bar(&app, 60, 1)),
+            ["p pause  i interrupt  r retry  c cancel  Enter inspect  R re"]
+        );
+        assert!(action_bar(&app, 80, 0).is_empty());
+    }
+
+    #[test]
+    fn queue_actions_notice_leaves_the_footer_alone() {
+        let mut harness = harness_with(vec![view(1, "Done", None, 1)]);
+        harness.key('x');
+        let text = harness.text();
+        let rows: Vec<&str> = text.lines().collect();
+        assert!(rows[22].starts_with("rerun-gate:"), "{rows:?}");
+        assert_eq!(rows[23].trim_end(), "Press ? for the key map");
+        assert_eq!(rows[21].trim_end(), "");
+    }
 }
