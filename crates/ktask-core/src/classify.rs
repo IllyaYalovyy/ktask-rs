@@ -169,8 +169,9 @@ static CONFIGURATION: Table = Table::new(&[
 /// and `LIMIT_FIXTURES` in the tests holds the line each was written for. That
 /// upkeep is worth paying because a limit is the class reached only by reading
 /// text: miss the wording and the same evidence lands on the fallback, which
-/// spends a bounded remediation on what should have been a pause and reports
-/// exit 1 where `docs/CONTRACT.md` §1 says a parked queue exits 3.
+/// spends a bounded remediation on what should have been a pause and answers
+/// [`crate::RunOutcome::TaskFailed`] where `docs/CONTRACT.md` §1 asks for
+/// [`crate::RunOutcome::ProviderLimit`].
 ///
 /// Both CLIs say it twice over — a sentence for whoever is watching the run, and
 /// a machine-readable error `type` for the log — so the table reads both. A JSON

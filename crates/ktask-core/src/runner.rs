@@ -1404,8 +1404,10 @@ impl Runner {
     /// instead — a provider limit, a report that asked a human a question, and a task
     /// that is itself a gate — and each of them is journaled and returned as
     /// [`TaskState::Paused`] rather than run out of a budget or ended as
-    /// [`TaskState::Failed`], which is what `docs/CONTRACT.md` §1's exit codes 3, 4
-    /// and 5 are the exit codes of. See `Runner::answer_the_refusal` and
+    /// [`TaskState::Failed`]. Those three are the pauses §1 refuses to call a
+    /// failure, and a run answers them as [`RunOutcome::ProviderLimit`],
+    /// [`RunOutcome::HumanGate`] and [`RunOutcome::NeedsInput`] rather than as one.
+    /// See `Runner::answer_the_refusal` and
     /// `Runner::park_at_the_gate`, both of which this step hands the question to.
     ///
     /// What is still not here is the attempt's own record being closed over what its
@@ -1565,8 +1567,9 @@ impl Runner {
     /// Eight steps, and every one of them is in this order for a reason a rerun can
     /// check. Three of them end the run with a pause instead of an attempt, and none
     /// of the three ends the task: `docs/CONTRACT.md` §1 counts a limit, a gate and a
-    /// question as pauses whose exit codes are 3, 4 and 5, and marks none of them a
-    /// failure.
+    /// question as the pauses [`RunOutcome::ProviderLimit`],
+    /// [`RunOutcome::HumanGate`] and [`RunOutcome::NeedsInput`] answer for, and marks
+    /// none of them a failure.
     ///
     /// 1. **A protected path is looked at before a single bound is spent.** An
     ///    attempt that edited `clippy.toml` or `scripts/` rewrote the examination it
@@ -2357,9 +2360,9 @@ trait Clock {
     ///
     /// `false` means the plan was not waited out and is still owed: the pause stays
     /// where its row put it, and whoever resumes the run later wakes at the instant the
-    /// journal already holds. A caller that must answer now — a CLI whose exit code says
-    /// the work is paused (CONTRACT.md §1's code 3) rather than showing that it is
-    /// asleep — installs a clock that says no.
+    /// journal already holds. A caller that must answer now — a CLI whose answer is
+    /// [`RunOutcome::ProviderLimit`] the moment the row is written, rather than one
+    /// that showed the work asleep first — installs a clock that says no.
     fn sit_out(&self, plan: WaitPlan) -> bool;
 }
 
@@ -2719,7 +2722,7 @@ pub enum PhaseOutcome {
 /// this crate produces one: `run`, `retry` and the rest say *what happened*, and
 /// the process boundary that turns that into a status is the CLI alone. A core
 /// that returned `3` had already chosen which interface it was answering, and the
-/// TUI — the primary interface — has no exit code to show a paused queue with.
+/// TUI — the primary interface — has no process status to show a paused queue with.
 ///
 /// The division that carries the weight is §1's own: [`RunOutcome::Drained`] is
 /// the only answer that says the work finished, [`RunOutcome::TaskFailed`] the
@@ -10993,8 +10996,8 @@ mod remediation {
 mod pause {
     //! The three stops that are not failures: a limit, a gate, a question.
     //!
-    //! `docs/CONTRACT.md` §1 gives a provider limit, a human gate and a decision
-    //! request three exit codes — 3, 4 and 5 — and says of all three that they "are
+    //! `docs/CONTRACT.md` §1 stops a run on a provider limit, a human gate and a
+    //! decision request, and says of all three that they "are
     //! not failures and must never mark a task `failed`". VISION.md §6 names the
     //! states they park in (`waiting_limit`, `waiting_input`, `human_gate`), and §3's
     //! eighth invariant makes the last of the three the mechanism behind "nothing is
@@ -11715,7 +11718,8 @@ mod pause {
         );
         assert!(
             !holds(&fixture.project, "TaskFailed"),
-            "a limit is exit 3, not exit 1"
+            "a provider limit is a pause, and a pause is never the answer that says a \
+             task failed"
         );
         assert_eq!(
             replayed(&fixture.project),
@@ -11983,7 +11987,7 @@ mod pause {
         );
         assert!(
             !holds(&fixture.project, "TaskFailed"),
-            "a bound spent on a limit is still exit 3"
+            "a bound spent on a limit is still the pause answer, not the failure one"
         );
     }
 
