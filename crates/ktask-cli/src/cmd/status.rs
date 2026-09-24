@@ -2,12 +2,13 @@
 //!
 //! Reads the queue and every task's current state straight from the
 //! journal and prints them — one line per task, then a summary line of
-//! counts by state — without ever recording anything: [`Journal::tasks`],
-//! [`Journal::all_states`] and [`Journal::events_for`], the only journal
-//! methods this module calls, are all read-only. `--json` emits the same
-//! data as the `{project, tasks: [...], summary: {...}}` shape
-//! `docs/CONTRACT.md` documents, through [`json::emit_json`] so it lands on
-//! stdout as a single compact line.
+//! counts by state — without ever recording anything: [`Journal::tasks`]
+//! and [`Journal::events_for`], the only journal methods this module
+//! calls, are both read-only. A task's state is what its events fold to,
+//! never the `task_state` projection, which a running supervisor does not
+//! keep current. `--json` emits the same data as the `{project, tasks:
+//! [...], summary: {...}}` shape `docs/CONTRACT.md` documents, through
+//! [`json::emit_json`] so it lands on stdout as a single compact line.
 //!
 //! As in `cmd::doctor`, every function below [`run`] is pure: it takes
 //! already-read tasks, states and events (or, for rendering, an explicit
@@ -16,7 +17,7 @@
 //! journal and touches the clock.
 
 use ktask_core::{
-    Config, Event, EventKind, Journal, Phase, Project, RunOutcome, Task, TaskId, TaskState,
+    Config, Event, EventKind, Journal, Phase, Project, RunOutcome, Task, TaskId, TaskState, apply,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -128,19 +129,19 @@ pub(crate) fn run(project: &Project, config: &Config, json_output: bool) -> RunO
 /// recorded against it, and reduces all three to one [`RowData`] per task,
 /// in queue order.
 ///
-/// A task with no entry in the journal's `task_state` projection has not
-/// yet had a `TaskQueued` event recorded against it (matching
-/// [`ktask_core::next_runnable`]'s own reading of a missing entry) but is
-/// still queued, not started: it is displayed as [`TaskState::Queued`]
-/// rather than causing an error or a blank row.
+/// A task's state is folded from its events, as [`ktask_core::apply`]
+/// defines it. A task with no events has not yet had a `TaskQueued` event
+/// recorded against it but is still queued, not started: it is displayed
+/// as [`TaskState::Queued`] rather than causing an error or a blank row.
 fn collect_rows(journal: &Journal, config: &Config) -> ktask_core::Result<Vec<RowData>> {
     let tasks = journal.tasks()?;
-    let states = journal.all_states()?;
 
     let mut rows = Vec::with_capacity(tasks.len());
     for task in &tasks {
-        let state = states.get(&task.id).cloned().unwrap_or(TaskState::Queued);
         let events = journal.events_for(task.id)?;
+        let state = events
+            .iter()
+            .try_fold(TaskState::Queued, |state, event| apply(&state, &event.kind))?;
         rows.push(build_row(task, state, &events, config));
     }
     Ok(rows)
@@ -651,6 +652,29 @@ mod tests {
         let rows = collect_rows(&journal, &Config::default()).expect("collect_rows");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].state, TaskState::Queued);
+    }
+
+    /// The live supervisor journals events without keeping the `task_state`
+    /// projection current, so a dashboard that trusted the projection would
+    /// show a finished task as `Queued`. The journal is the source of truth:
+    /// the state shown is what its events fold to.
+    #[test]
+    fn collect_rows_folds_the_journal_rather_than_trusting_a_stale_projection() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = journal_project(dir.path());
+        let mut journal = Journal::open_for(&project).expect("open journal");
+        journal
+            .put_tasks(&[sample_task(1, None)])
+            .expect("put_tasks");
+        let task_id = TaskId::new(1);
+        seed_completed_task(&mut journal, task_id);
+        journal
+            .put_state(task_id, &TaskState::Queued)
+            .expect("put a stale state");
+
+        let rows = collect_rows(&journal, &Config::default()).expect("collect_rows");
+
+        assert_eq!(rows[0].state, TaskState::Done);
     }
 
     #[test]
