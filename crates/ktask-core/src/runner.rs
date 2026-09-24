@@ -10,11 +10,12 @@
 //! adapter as arguments is that a run assembled from what its caller happened to
 //! carry is a run whose gates and journal somebody else chose.
 //!
-//! Its seven jobs so far are [`Runner::prepare`], [`Runner::begin_attempt`],
-//! [`Runner::run_phase`], [`Runner::gate_phase`], [`Runner::verify_and_publish`] and
-//! [`Runner::run_task`] and the round trip an attempt's report makes. The first takes
-//! a queued task as far as the ground it stands on; the second is the transition that
-//! spends a token, and three things about it are not free to change:
+//! Its eight jobs so far are [`Runner::prepare`], [`Runner::begin_attempt`],
+//! [`Runner::run_phase`], [`Runner::gate_phase`], [`Runner::verify_and_publish`],
+//! [`Runner::run_task`] and [`Runner::run_queue`], besides the round trip an attempt's
+//! report makes. The first takes a queued task as far as the ground it stands on; the
+//! second is the transition that spends a token, and three things about it are not
+//! free to change:
 //!
 //! - The [`crate::EventKind::AttemptStarted`] row is appended before the attempt's
 //!   evidence is filed, because VISION.md §3's third invariant makes the journal the
@@ -165,6 +166,7 @@
 //! `docs/CONTRACT.md` §1 documents — with no number in it, because the number a
 //! process leaves behind belongs to the CLI that runs one (T105 maps them).
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, OpenOptions, Permissions};
 use std::io::{self, Write as _};
@@ -1472,6 +1474,130 @@ impl Runner {
         }
     }
 
+    /// Drain a queue in order, and stop at the first thing that stops it.
+    ///
+    /// VISION.md §3's second invariant is what this holds: tasks run strictly
+    /// serially, in id order, and a successor cannot start until its predecessor's
+    /// completion has been proved. Nothing here enforces that by remembering what it
+    /// ran. Every round re-reads the queue's projection and asks
+    /// [`crate::queue::next_runnable`], which names a task only when every lower id
+    /// clears the way (ADR-0028, ADR-0031). The order a drain keeps is thus the same
+    /// fact the queue screen displays and a recovery walk re-checks, so none of the
+    /// three can drift from the other two. Four things about it are not free to
+    /// change, each recorded as ADR-0095:
+    ///
+    /// - **The selector picks, this loop does not.** Nothing here reads a state to
+    ///   choose a task, and nothing reaches past a task it could not start.
+    ///   [`crate::queue::next_runnable`] answers for the head of the queue alone, and
+    ///   a queue whose head is held is a queue that is not going anywhere: starting
+    ///   the second candidate instead is the invariant, not the schedule.
+    /// - **The journal decides what a refusal meant.** [`Runner::run_task`] ends a
+    ///   failed task by appending [`crate::EventKind::TaskFailed`] *and* handing back
+    ///   the refusal that earned it, so a failed task and a fault of the run's own
+    ///   arrive here looking alike. The rows say which happened. A task its own rows
+    ///   leave `Failed`, or parked at a limit, a gate or a question, is answered with
+    ///   the §1 stop it stopped in; anything else — a journal that would not open, a
+    ///   checkout git would not make, an evidence directory that could not be
+    ///   written — is a fault and comes back as one. Swallowing either into
+    ///   [`RunOutcome::Drained`] would be the worst answer this type can carry: the
+    ///   one that says the work finished.
+    /// - **A gate is handed to [`Runner::run_task`] all the same.** A gate is never
+    ///   the selector's answer (VISION.md §6: it is never handed to an agent), so its
+    ///   silence has two readings — nothing left to run, or a gate holding the queue —
+    ///   and only this loop can tell them apart. When it is a gate, the drain runs
+    ///   that task, whose only path is its own `park_at_the_gate` step, because
+    ///   `apply` refuses [`crate::EventKind::GateAcknowledged`] for a task still in
+    ///   `Queued` (ADR-0026): a gate this drain did not park is a gate `ack` can
+    ///   never reach, and the work behind it would wait forever.
+    /// - **`from` narrows the projection as well as the slice.** It is `run --from`
+    ///   and `resume` (docs/CONTRACT.md §1), which is the operator saying *start
+    ///   here* about a queue this run has not finished. Ordering is then enforced
+    ///   among the ids that were asked for, and the head's predecessor is whatever the
+    ///   operator left it as. A drain that checked the ids *behind* `from` would make
+    ///   `resume` refuse the very queue `resume` exists for.
+    ///
+    /// What the answer carries is the stop, not a tally. [`RunOutcome`] names the
+    /// task each stop belongs to and no numbers (ADR-0094): how far the drain got is
+    /// in the journal, which is where a screen reads it and a replay checks it, and a
+    /// count in the return value would be a second account of the same facts, free to
+    /// disagree.
+    ///
+    /// `tasks` is the queue — [`crate::queue::load`] read it, or a caller read the
+    /// same rows — and this takes no journal of its own, so a drain runs over the
+    /// queue its caller decided to run rather than over whichever rows are on disk by
+    /// the time it got there.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when `from` names an id this queue does not hold, which is
+    /// refused rather than read as a drain with no `from`. Every refusal of the reads
+    /// this loop makes: [`Error::Database`] and [`crate::Error::Corrupt`] from
+    /// [`Journal::open_for`] and the fold of each task's rows, and
+    /// [`Error::Policy`] from [`crate::queue::next_runnable`] when the projection
+    /// claims two tasks active at once — damage in the durable record that has to be
+    /// repaired rather than started around. A task's own refusal comes back as the §1
+    /// answer instead, except where its rows show nothing ended it: see the second
+    /// bullet above.
+    pub fn run_queue(&mut self, tasks: &[Task], from: Option<TaskId>) -> Result<RunOutcome> {
+        self.run_queue_with(&crate::paths::process_env, tasks, from, &Machine)
+    }
+
+    /// [`Runner::run_queue`] with the prompt's environment and the clock supplied by
+    /// the caller.
+    ///
+    /// Threaded out for the reasons [`Runner::run_task_with`] gives, and for a whole
+    /// drain rather than one task: a queue cannot be aimed at a scratch configuration
+    /// home unless the accessor reaches every phase of every task it starts, and a
+    /// pause aimed at a reset the provider named cannot be tested by a test that
+    /// either sleeps for it or does not.
+    fn run_queue_with(
+        &mut self,
+        env: &dyn Fn(&str) -> Option<String>,
+        tasks: &[Task],
+        from: Option<TaskId>,
+        clock: &dyn Clock,
+    ) -> Result<RunOutcome> {
+        let queue = drain_from(tasks, from)?;
+        loop {
+            let states = self.projection(&queue)?;
+            let next = match queue::next_runnable(&queue, &states)? {
+                Some(next) => Some(next),
+                None => waiting_at_a_gate(&queue, &states),
+            };
+            let Some(work) = next else {
+                return stopped_short(&queue, &states);
+            };
+            if let Some(answer) = self.drive_one(env, queued_task(&queue, work)?, clock)? {
+                return Ok(answer);
+            }
+        }
+    }
+
+    /// Drive one queue entry, and say whether the drain stops on it.
+    ///
+    /// The whole of the answer comes out of [`stopped_on`] in both arms, which is the
+    /// reason this is a step of its own: a task that failed and a task that faulted
+    /// are read the same way — from what its rows now reach — so the two cannot be
+    /// given two rules and drift apart. An ending that is neither a failure nor a
+    /// pause is no reason to stop (`Done` means go on), and a refusal the rows cannot
+    /// account for is a fault of the run's own, handed back untouched.
+    fn drive_one(
+        &mut self,
+        env: &dyn Fn(&str) -> Option<String>,
+        work: &Task,
+        clock: &dyn Clock,
+    ) -> Result<Option<RunOutcome>> {
+        match self.run_task_with(env, work, clock) {
+            Ok(state) => stopped_on(work.id, &state),
+            Err(refusal) => {
+                if let Some(answer) = stopped_on(work.id, &self.folded(work.id)?)? {
+                    return Ok(Some(answer));
+                }
+                Err(refusal)
+            }
+        }
+    }
+
     /// Work the task's attempts until one of them finishes it or §7's bounds are spent.
     ///
     /// One loop holds both halves of §7 because neither means anything alone: the
@@ -2153,13 +2279,212 @@ impl Runner {
     /// whole journal's — and the rows whose task is `NULL` are left out here too, for
     /// the same reason: they are about the queue, and they move no task.
     fn folded(&self, work: TaskId) -> Result<TaskState> {
-        let journal = Journal::open_for(&self.project)?;
-        let mut state = TaskState::Queued;
-        for row in journal.events_for(work)? {
-            state = apply(&state, &row.kind)?;
-        }
-        Ok(state)
+        folded_in(&Journal::open_for(&self.project)?, work)
     }
+
+    /// The queue's own projection: every entry's state as its own rows fold it.
+    ///
+    /// Built from the events rather than from the `task_state` table, because nothing
+    /// appends a row and updates that table in one step: [`Journal::append`] moves the
+    /// events and [`Journal::rebuild_state`] is the separate pass that recomputes the
+    /// table from them. A drain that read the table would be asking a question about
+    /// the last time somebody else rebuilt it, and the task it started a moment ago
+    /// would still look `Queued` — which is how a drain starts one task twice. The
+    /// fold is the same one [`Runner::folded`] does for one task, over one open
+    /// journal rather than one open per task: a queue of thirty is thirty folds, and
+    /// a drain asks again after every task.
+    ///
+    /// A task with no rows folds to [`TaskState::Queued`], which is what makes a
+    /// freshly imported plan runnable here exactly as it is runnable by
+    /// [`crate::queue::next_runnable`] — an import writes queue rows and appends no
+    /// events.
+    fn projection(&self, tasks: &[Task]) -> Result<BTreeMap<TaskId, TaskState>> {
+        let journal = Journal::open_for(&self.project)?;
+        let mut states = BTreeMap::new();
+        for task in tasks {
+            states.insert(task.id, folded_in(&journal, task.id)?);
+        }
+        Ok(states)
+    }
+}
+
+/// The queue one drain works: the entries at or after `from`, in id order.
+///
+/// Sorted here rather than trusted from the caller, because the queue's order is its
+/// ids (ADR-0031 says so of the `tasks` table, whose rows come back in document
+/// order) and a drain that took a shuffled slice would be a drain with an order that
+/// depended on who read the rows. Cloned because the drain holds its queue for its
+/// whole length: an `Err` halfway through a task must not be able to arrive at a slice
+/// whose owner moved on.
+///
+/// # Errors
+///
+/// [`Error::NotFound`] when `from` names an id no entry holds, naming both the id and
+/// the range the queue does hold. Refusing is the point: an id past the end read as
+/// "no `from`" would drain the whole queue under a command that asked for the tail of
+/// it.
+fn drain_from(tasks: &[Task], from: Option<TaskId>) -> Result<Vec<Task>> {
+    let mut queue: Vec<Task> = tasks
+        .iter()
+        .filter(|task| from.is_none_or(|first| task.id >= first))
+        .cloned()
+        .collect();
+    queue.sort_unstable_by_key(|task| task.id);
+    if let Some(first) = from
+        && !queue.iter().any(|task| task.id == first)
+    {
+        let held = match (queue.first(), queue.last()) {
+            (Some(head), Some(tail)) => format!(
+                "the queue runs from {head} to {tail}",
+                head = head.id,
+                tail = tail.id
+            ),
+            _ => "the queue holds nothing".to_owned(),
+        };
+        return Err(Error::NotFound {
+            what: format!("task {first}, which the drain was asked to start at: {held}"),
+        });
+    }
+    Ok(queue)
+}
+
+/// The task among `tasks` that `work` names.
+///
+/// Unreachable in practice — every id this loop holds came out of this same slice —
+/// and written as a refusal anyway, because a supervisor that panics to find out it
+/// was wrong loses the run it was supervising.
+///
+/// # Errors
+///
+/// [`Error::NotFound`] naming the id it could not find an entry for.
+fn queued_task(tasks: &[Task], work: TaskId) -> Result<&Task> {
+    tasks
+        .iter()
+        .find(|task| task.id == work)
+        .ok_or_else(|| Error::NotFound {
+            what: format!("task {work}, which the selector named and the queue does not hold"),
+        })
+}
+
+/// The gate whose silence the selector answered with, when that is what it answered.
+///
+/// [`crate::queue::next_runnable`] returns `None` both for a queue that has nothing
+/// left to start and for a gate holding one, because a gate is never something to
+/// start (VISION.md §6). Only the drain can tell the two apart, and it has to: a gate
+/// left unjournaled is a gate `ack` cannot reach, since `apply` refuses
+/// [`crate::EventKind::GateAcknowledged`] for a task still in [`TaskState::Queued`].
+///
+/// The first entry still waiting decides this the same way the selector's head
+/// decides that: a queue is not going past the entry it is waiting on, so this looks
+/// at that one entry and no further.
+fn waiting_at_a_gate(tasks: &[Task], states: &BTreeMap<TaskId, TaskState>) -> Option<TaskId> {
+    let waiting = tasks.iter().find(|task| awaits_a_start(states, task.id))?;
+    waiting.gate.is_some().then_some(waiting.id)
+}
+
+/// Whether `work` is still waiting its turn: [`TaskState::Queued`], or no row at all.
+///
+/// The same reading [`crate::queue::next_runnable`] uses for the same question,
+/// spelled here because that one is private to `queue.rs` and this is the one place
+/// outside it that has to ask. A task a projection holds no row for is queued: an
+/// import writes queue rows without appending any events, and a rule that called such
+/// a task started would make every freshly imported plan unrunnable.
+fn awaits_a_start(states: &BTreeMap<TaskId, TaskState>, work: TaskId) -> bool {
+    matches!(states.get(&work), None | Some(TaskState::Queued))
+}
+
+/// What a drain that found nothing to start answers with.
+///
+/// Nothing to start is not the same fact as everything finished, and the difference
+/// matters: [`RunOutcome::Drained`] is §1's exit 0, the one answer that says the work
+/// is over. So the queue is walked in id order and every row that means a stop is
+/// answered before the drained answer is allowed, which covers the stops this loop
+/// was not the one that met — a task that failed on an earlier run, a pause
+/// `resume` has not been asked to lift, an entry another run is still holding. The
+/// last of those is the one case where `Drained` is said while the queue is not
+/// empty: it means *nothing further may start in this run*, which is what an
+/// operator has to know, while the row the other run is standing in is what a screen
+/// shows.
+///
+/// # Errors
+///
+/// As [`stopped_on`], for the first row that stops the queue.
+fn stopped_short(queue: &[Task], states: &BTreeMap<TaskId, TaskState>) -> Result<RunOutcome> {
+    for task in queue {
+        if let Some(state) = states.get(&task.id)
+            && let Some(answer) = stopped_on(task.id, state)?
+        {
+            return Ok(answer);
+        }
+    }
+    Ok(RunOutcome::Drained)
+}
+
+/// The stop a task's state means for the drain, or `None` to go on with the queue.
+///
+/// The one mapping from the durable record to §1's answers, used whether the task
+/// returned this state or the journal was read back to find it — which is what keeps
+/// a pause and a failure from being decided twice, differently, in two places. Every
+/// other state means go on: a terminal success because the task is finished, and a
+/// live state because a state a session is standing in is not the drain's to stop on.
+///
+/// # Errors
+///
+/// [`Error::Policy`] for [`PauseReason::Blocked`], which is §6's pause for something
+/// outside the supervisor that no §1 answer fits: it is neither a limit with a
+/// deadline, nor a gate a person passes, nor a question `resolve` answers. See
+/// ADR-0095 — reporting it is the honest option, and a stop no exit code describes
+/// cannot be invented here either.
+fn stopped_on(work: TaskId, state: &TaskState) -> Result<Option<RunOutcome>> {
+    let answer = match state {
+        TaskState::Failed { .. } => RunOutcome::TaskFailed { task: work },
+        TaskState::Paused { reason, .. } => match reason {
+            PauseReason::Limit { until } => RunOutcome::ProviderLimit { until: *until },
+            PauseReason::Input => RunOutcome::NeedsInput { task: work },
+            PauseReason::HumanGate => RunOutcome::HumanGate { task: work },
+            PauseReason::Interrupted => RunOutcome::Interrupted,
+            PauseReason::Blocked => {
+                return Err(Error::Policy {
+                    detail: format!(
+                        "task {work} is blocked on something outside this supervisor, and no \
+                         answer this run can give describes it: the pause has to be resolved, \
+                         not resumed around"
+                    ),
+                    paths: Vec::new(),
+                });
+            }
+        },
+        TaskState::Queued
+        | TaskState::Preflight
+        | TaskState::Running { .. }
+        | TaskState::Remediating { .. }
+        | TaskState::Verifying { .. }
+        | TaskState::Publishing { .. }
+        | TaskState::PublishedVerified { .. }
+        | TaskState::Done
+        | TaskState::Acknowledged { .. }
+        | TaskState::Cancelled => return Ok(None),
+    };
+    Ok(Some(answer))
+}
+
+/// One task's state, folded from the rows of a journal the caller already has open.
+///
+/// [`Runner::folded`] over a journal it does not open, so a caller folding a whole
+/// queue pays for one open rather than one per entry. The rows whose task is `NULL`
+/// are still left out, for the reason [`Runner::folded`] gives: they are about the
+/// queue, and they move no task.
+///
+/// # Errors
+///
+/// [`crate::Error::Corrupt`] as [`Journal::events_for`] gives it, and
+/// [`Error::InvalidTransition`] as [`apply`] gives it for a row the machine refuses.
+fn folded_in(journal: &Journal, work: TaskId) -> Result<TaskState> {
+    let mut state = TaskState::Queued;
+    for row in journal.events_for(work)? {
+        state = apply(&state, &row.kind)?;
+    }
+    Ok(state)
 }
 
 /// Whether `phase` is part of the ending every protocol ends with — and which the run
@@ -12446,5 +12771,1075 @@ mod outcome {
                 meaning(stop)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod run_queue {
+    //! The drain: what the queue's order costs, and what stops a run short of it.
+    //!
+    //! VISION.md §3's second invariant is the promise these tests hold — the queue
+    //! is drained strictly serially, in id order, and a successor cannot start
+    //! until its predecessor's completion has been proved. `docs/CONTRACT.md` §1
+    //! adds the stops: a terminal failure, a human gate, a question owed a person,
+    //! a provider's ceiling, and the rule that a run "never continues past a
+    //! failed task". So every test here asks one of two questions: did every task
+    //! run, in order, or did the drain stop at the first thing that stops it *and*
+    //! leave everything behind it untouched?
+    //!
+    //! "Untouched" is measured rather than assumed. A task behind a stop has no
+    //! rows in the journal, no checkout in the repository and no commit on the
+    //! origin, and all three are read from records a third party keeps
+    //! ([`crate::Journal`], `git` itself, the origin's own log) rather than from
+    //! anything the drain returned. The order is measured the same way: the
+    //! origin's commit subjects, oldest first, are the drain's order seen from
+    //! behind, and they cannot be written by a step that ran nothing.
+    //!
+    //! Every fixture here sets the project's ceiling on repairs to zero
+    //! ([`Fixture::no_repairs`]) for the reason `mod run_task` gives: §7's
+    //! remediation is `mod remediation`'s subject, and a budget left here would
+    //! make every stopped run start a second session and run its scenario out of
+    //! steps on the way to the stop being examined.
+    //!
+    //! A session's report is staged by hand at the path the prompt names, per task
+    //! ([`Fixture::report`]), because that is what lets one queue hold three
+    //! sessions with three different claims — which is the whole of the middle task
+    //! that fails. Only the tasks a drain is expected to start get one staged: a
+    //! task left behind owes a report, and writing it anyway would be the fixture
+    //! writing the evidence the test is there to look for.
+
+    use super::{Clock, Machine, RunOutcome, Runner};
+    use crate::testing::{ScratchRepo, scratch_repo};
+    use crate::{
+        Error, Event, EventKind, Journal, PauseReason, Project, Task, TaskId, TaskState, WaitPlan,
+        git, lock, parse_plan, project_config_path,
+    };
+    use std::collections::BTreeMap;
+    use std::fmt::Write as _;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+    use time::OffsetDateTime;
+
+    /// The identity every fixture gives its registered project.
+    const PROJECT_ID: &str = "0123456789abcdef";
+
+    /// The three queue positions [`parse_plan`] gives a three-block plan.
+    const FIRST: u32 = 1;
+    const SECOND: u32 = 2;
+    const THIRD: u32 = 3;
+
+    /// The attempt a task that has never been attempted is opened at.
+    const ATTEMPT: u32 = 1;
+
+    /// The file the scratch repository's seed commit tracks — the only path a
+    /// scripted session can change and the run can then commit and publish, because
+    /// [`crate::git::commit_all`] stages tracked paths and no one stages the rest.
+    const SEED_FILE: &str = "seed.txt";
+
+    /// What a session that finished leaves in the report the prompt named.
+    const DONE: &str = "KTASK_RESULT: DONE\nSummary: every step the task had is worked.\n";
+
+    /// What a session that stopped short leaves there instead.
+    const FAILED: &str =
+        "KTASK_RESULT: FAILED\nSummary: what is left is more than the remainder.\n";
+
+    /// What every scripted session prints, as two lines so a row per line is
+    /// observable rather than assumed.
+    const PRINTED: &str = "reading the seed\nwriting the fix\n";
+
+    /// The limit as a provider prints it when it names no reset, which is the half
+    /// of §7's table that parks with no deadline attached.
+    const UNNAMED: &str = "ERROR: usage limit reached; try again later";
+
+    /// The cargo report a phase's gate prints when the work it was asked to run
+    /// passes, which is what lets a session's own claim be judged rather than taken.
+    const GREEN: &str = "running 1 tests\ntest the_fix ... ok\n\ntest result: ok. 1 passed; 0 \
+                        failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n";
+
+    /// The rows one task leaves when its session, gate and ending all passed, oldest
+    /// first — the same shape `mod run_task` fixes for one task, because a drain
+    /// drives the very same steps. The completion set's own pairs are absent because
+    /// [`crate::run_completion_set`] attributes them to no task.
+    const DIRECT_DONE: [&str; 14] = [
+        "PreflightStarted",
+        "PreflightPassed",
+        "AttemptStarted",
+        "PhaseEntered",
+        "AgentOutput",
+        "AgentOutput",
+        "AttemptFinished",
+        "GateStarted",
+        "GateFinished",
+        "PhaseEntered",
+        "VerifyPassed",
+        "PublishStarted",
+        "PublishVerified",
+        "TaskDone",
+    ];
+
+    /// The gate script one drain runs: logs each command it is asked to run, prints
+    /// the next planned report for `targeted`, and fails `verify` on a marker.
+    ///
+    /// Copied from `mod run_task` deliberately: the drain's claim is that it drives
+    /// `run_task` over a queue, so it is tested over the identical instrument.
+    fn gate_script(log: &Path, markers: &Path) -> String {
+        format!(
+            "#!/bin/sh\n\
+             name=\"$1\"\n\
+             m='{}'\n\
+             echo \"$name\" >> '{}'\n\
+             if [ \"$name\" = verify ]; then\n\
+             if [ -f \"$m/refuse-verify\" ]; then echo 'verify refused' >&2; exit 1; fi\n\
+             exit 0\n\
+             fi\n\
+             seen=0\n\
+             if [ -f \"$m/targeted-seen\" ]; then seen=$(cat \"$m/targeted-seen\"); fi\n\
+             echo $((seen + 1)) > \"$m/targeted-seen\"\n\
+             report=\"$m/report-$((seen + 1)).txt\"\n\
+             if [ ! -f \"$report\" ]; then echo 'targeted: the plan holds no further report' >&2; exit 2; fi\n\
+             cat \"$report\"\n\
+             if grep -q '^test result: FAILED' \"$report\"; then exit 1; fi\n\
+             exit 0\n",
+            markers.display(),
+            log.display()
+        )
+    }
+
+    /// The settings document of a project whose gates are scripts and whose disk
+    /// floor is one byte.
+    fn settings(scenario: &Path, script: &Path, extra: &str) -> String {
+        format!(
+            "provider = \"dummy\"\n\
+             dummy_scenario_path = \"{}\"\n\
+             min_free_disk_bytes = 1\n\
+             targeted_test_command = [\"/bin/sh\", \"{}\", \"targeted\"]\n\
+             verify_command = [\"/bin/sh\", \"{}\", \"verify\"]\n\
+             {extra}",
+            scenario.display(),
+            script.display(),
+            script.display()
+        )
+    }
+
+    /// A registered project, the scenario its adapter replays, the script its two
+    /// gates run, and the log and marker directory that script is driven by.
+    struct Fixture {
+        repo: ScratchRepo,
+        project: Project,
+        scenario: PathBuf,
+        markers: PathBuf,
+        log: PathBuf,
+        config_home: PathBuf,
+    }
+
+    impl Fixture {
+        /// A project whose own settings refuse its refusals no repair.
+        fn no_repairs() -> Self {
+            Self::built("max_remediation_attempts = 0\n")
+        }
+
+        /// A project with `extra` appended to its settings document.
+        fn built(extra: &str) -> Self {
+            let repo = scratch_repo().expect("a scratch repository is buildable");
+            let state_dir = repo.path().join("state").join(PROJECT_ID);
+            let project = Project {
+                root: repo.work().to_path_buf(),
+                id: PROJECT_ID.to_owned(),
+                state_dir,
+            };
+            let scenario = repo.path().join("scenario.toml");
+            let script = repo.path().join("gate.sh");
+            let log = repo.path().join("gate.log");
+            let markers = repo.path().join("markers");
+            fs::create_dir_all(&project.state_dir).expect("a state directory is creatable");
+            fs::create_dir_all(&markers).expect("a marker directory is creatable");
+            fs::write(&script, gate_script(&log, &markers)).expect("a gate script is writable");
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
+                .expect("a gate script is made executable");
+            let config_home = repo.path().join("config-home");
+            fs::write(
+                project_config_path(&project),
+                settings(&scenario, &script, extra),
+            )
+            .expect("a project settings document is writable");
+            Self {
+                repo,
+                project,
+                scenario,
+                markers,
+                log,
+                config_home,
+            }
+        }
+
+        /// The script the adapter replays, written before the run is opened:
+        /// [`crate::provider::build`] reads the file once, so a scenario written
+        /// after the run was built is a scenario the run never saw.
+        fn script(&self, document: &str) {
+            fs::write(&self.scenario, document).expect("a scenario document is writable");
+        }
+
+        /// The reports the targeted gate prints, one per run, in order. A drain that
+        /// gates more often than it was planned runs out and is refused rather than
+        /// repeating the last report and looking correct.
+        fn plan(&self, runs: usize) {
+            for number in 1..=runs {
+                fs::write(self.markers.join(format!("report-{number}.txt")), GREEN)
+                    .expect("a planned report is writable");
+            }
+        }
+
+        /// Leave `words` as the report attempt `attempt` of `work` will find, written
+        /// by hand rather than through [`Runner::prepare_report`] because the drain
+        /// under test is what calls that step.
+        fn report(&self, work: TaskId, attempt: u32, words: &str) {
+            let path = self
+                .project
+                .state_dir
+                .join("attempts")
+                .join(work.to_string())
+                .join(attempt.to_string())
+                .join("agent-report.md");
+            fs::create_dir_all(
+                path.parent()
+                    .expect("a report is spelled below an attempt directory"),
+            )
+            .expect("an attempt's report directory is creatable");
+            fs::write(&path, words).expect("a report is writable");
+        }
+
+        /// The run this project is configured to have.
+        fn run(&self) -> Runner {
+            Runner::new(self.project.clone()).expect("a registered, configured project opens a run")
+        }
+
+        /// The environment a phase's prompt is read from: a configuration home of the
+        /// fixture's own, so no test aims the prompt library at the machine running
+        /// it.
+        fn env(&self) -> impl Fn(&str) -> Option<String> {
+            let home = self.config_home.clone();
+            move |key: &str| (key == "XDG_CONFIG_HOME").then(|| home.display().to_string())
+        }
+
+        /// The gate names that actually ran, in the order they ran.
+        fn ran(&self) -> Vec<String> {
+            let text = fs::read_to_string(&self.log).unwrap_or_default();
+            text.lines().map(str::to_owned).collect()
+        }
+
+        /// Every checkout the repository registers, the user's own included.
+        fn checkouts(&self) -> Vec<git::Worktree> {
+            git::list_worktrees(&self.project.root).expect("the repository answers what it holds")
+        }
+
+        /// The managed checkouts, by the name the run registers them under.
+        fn checkout_names(&self) -> Vec<String> {
+            self.checkouts()
+                .into_iter()
+                .filter(|entry| entry.path != self.project.root)
+                .map(|entry| {
+                    entry
+                        .path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect()
+        }
+
+        /// The tip the origin itself holds.
+        fn origin_tip(&self) -> String {
+            git::git(self.repo.origin(), &["rev-parse", "main"])
+                .expect("the origin holds its branch")
+        }
+
+        /// The subjects the origin's branch carries, oldest first, minus the seed
+        /// commit the scratch repository started with.
+        fn published(&self) -> Vec<String> {
+            git::git(self.repo.origin(), &["log", "--format=%s", "main"])
+                .expect("the origin holds its branch")
+                .lines()
+                .rev()
+                .skip(1)
+                .map(str::to_owned)
+                .collect()
+        }
+    }
+
+    /// One scripted session: the outcome word it answers with, what it printed, the
+    /// status it reported, and the contents it left in the one tracked file.
+    struct Script {
+        outcome: &'static str,
+        printed: &'static str,
+        exit_code: Option<u32>,
+        /// What the session wrote into [`SEED_FILE`], or `None` for a session that
+        /// touched nothing. `seed.txt` is the only path the scratch repository
+        /// tracks, so it is the only path a scripted edit can be published from.
+        seed: Option<&'static str>,
+    }
+
+    impl Script {
+        /// A session that did its work, writing `words` into `seed.txt`.
+        fn done(words: &'static str) -> Self {
+            Self {
+                outcome: "success",
+                printed: PRINTED,
+                exit_code: None,
+                seed: Some(words),
+            }
+        }
+
+        /// A session the provider refused for a ceiling it gave no time for.
+        ///
+        /// The status is declared rather than left to the outcome word, for the
+        /// reason `mod pause` gives: a limit is read out of what a session printed,
+        /// and [`crate::classify`] only believes a session's prose when the session
+        /// did not also claim it finished.
+        fn limit() -> Self {
+            Self {
+                outcome: "limit",
+                printed: UNNAMED,
+                exit_code: Some(1),
+                seed: None,
+            }
+        }
+    }
+
+    /// The scenario document a drain replays: one step per entry, in the order the
+    /// sessions run. The drain starts one session per task, so entry *n* answers the
+    /// *n*th session it begins — the adapter counts sessions, not tasks, which is
+    /// also why a run that started a session it was not owed runs out of steps.
+    fn scenario(steps: &[Script]) -> String {
+        let mut document = String::new();
+        for (index, step) in steps.iter().enumerate() {
+            let position = index + 1;
+            writeln!(
+                document,
+                "[[steps]]\non_task = {position}\noutcome = \"{}\"\nstdout = \"{}\"",
+                step.outcome,
+                toml_text(step.printed)
+            )
+            .expect("a String always has room for what is written into it");
+            if let Some(code) = step.exit_code {
+                writeln!(document, "\nexit_code = {code}")
+                    .expect("a String always has room for what is written into it");
+            }
+            document.push('\n');
+            if let Some(contents) = step.seed {
+                document.push_str("[steps.files]\n");
+                writeln!(document, "\"{SEED_FILE}\" = \"{}\"", toml_text(contents))
+                    .expect("a String always has room for what is written into it");
+            }
+            document.push('\n');
+        }
+        document
+    }
+
+    /// A scenario document's string, escaped the way TOML wants the breaks agent text
+    /// is full of.
+    fn toml_text(text: &str) -> String {
+        text.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+    }
+
+    /// A plan of `count` blocks, with a `**Gate:**` section on the position `gated`
+    /// names, parsed rather than assembled: a queue row is what [`parse_plan`]
+    /// produces, and a drain tested against a hand-shaped [`Task`] would be tested
+    /// against something the queue never holds.
+    fn plan(count: usize, gated: Option<usize>) -> Vec<Task> {
+        let rows = parse_plan(&document(count, gated))
+            .expect("a plan whose blocks each hold the four mandatory sections parses");
+        assert_eq!(rows.len(), count, "one queue row per block");
+        rows.into_iter()
+            .enumerate()
+            .map(|(index, row)| {
+                assert_eq!(
+                    row.id,
+                    TaskId::new(u32::try_from(index + 1).unwrap_or(u32::MAX))
+                );
+                row
+            })
+            .collect()
+    }
+
+    /// `count` task blocks, in the order a drain has to honour them. Each block's
+    /// first body line — the line [`Task::title`] takes — names its own position, so
+    /// the commit subjects the origin ends up holding say which task wrote which.
+    fn document(count: usize, gated: Option<usize>) -> String {
+        let mut text = String::new();
+        for position in 1..=count {
+            write!(
+                text,
+                "## T099 Queue drain {position}\n\n\
+                 **Outcome:** drain position {position} lands.\n\
+                 **Done-when:** a test asserts it.\n\
+                 **Verify:** `cargo nextest run -p ktask-core -E 'test(/runner::/)'`\n\
+                 **Refs:** VISION.md section 3\n"
+            )
+            .expect("a String always has room for what is written into it");
+            if gated == Some(position) {
+                text.push_str("**Gate:** a person, not the supervisor, decides.\n");
+            }
+            text.push('\n');
+        }
+        text
+    }
+
+    /// The commit subject the queue's order says `work`'s publication carries.
+    fn subject(work: &Task) -> String {
+        format!("Task {}: {}", work.id, work.title())
+    }
+
+    /// The task's own rows, oldest first, read on a second connection because that
+    /// is who asks this question in real life.
+    fn rows(project: &Project, work: TaskId) -> Vec<Event> {
+        Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events_for(work)
+            .expect("the rows this run wrote are readable")
+    }
+
+    /// The kinds the journal holds for one task, oldest first.
+    fn kinds(project: &Project, work: TaskId) -> Vec<&'static str> {
+        rows(project, work)
+            .iter()
+            .map(|row| row.kind.discriminant())
+            .collect()
+    }
+
+    /// The state one task's own rows replay to, with an illegal row reported as the
+    /// failure it is rather than as a state that was never reached.
+    fn replayed(project: &Project, work: TaskId) -> Option<TaskState> {
+        let mut journal =
+            Journal::open_for(project).expect("a registered project's journal is openable");
+        journal
+            .rebuild_state()
+            .expect("every row this run wrote is one the state machine accepts");
+        journal.get_state(work).expect("the projection is readable")
+    }
+
+    /// Every task the projection holds a row for, which is empty exactly when the
+    /// journal holds no task-attributed row at all.
+    fn projected(project: &Project) -> BTreeMap<TaskId, TaskState> {
+        let mut journal =
+            Journal::open_for(project).expect("a registered project's journal is openable");
+        journal
+            .rebuild_state()
+            .expect("every row this run wrote is one the state machine accepts");
+        journal.all_states().expect("the projection is readable")
+    }
+
+    /// Acknowledge a parked gate, as `ktask-rs ack` would: the row a person's
+    /// decision is, appended to the journal and nothing else.
+    fn acknowledge(fixture: &Fixture, work: TaskId, at: OffsetDateTime) {
+        Journal::open_for(&fixture.project)
+            .expect("a registered project's journal is openable")
+            .append(
+                Some(work),
+                &EventKind::GateAcknowledged {
+                    by: "operator".to_owned(),
+                    at,
+                },
+            )
+            .expect("a parked gate is acknowledged by a person");
+    }
+
+    /// Take the project's lock from a test, as an outsider would, and give it back.
+    fn lock_is_free(project: &Project) -> bool {
+        let Ok(held) = lock::acquire(&project.state_dir, Duration::ZERO) else {
+            return false;
+        };
+        held.release().expect("a lock this test took is given back");
+        true
+    }
+
+    /// The clock a limit is measured against: one instant forever, and no sleep at
+    /// all, so a ceiling is seen as the pause it is rather than as a wait this run
+    /// sat through.
+    struct NoWait(OffsetDateTime);
+
+    impl Clock for NoWait {
+        fn now(&self) -> OffsetDateTime {
+            self.0
+        }
+
+        fn sit_out(&self, _plan: WaitPlan) -> bool {
+            false
+        }
+    }
+
+    /// The instant the fixture's clock reads, so a pause aimed at a reset is a
+    /// distance from a point the test chose rather than from whenever it ran.
+    fn now() -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(1_758_638_400).expect("a whole epoch second")
+    }
+
+    /// Drain the queue, with the prompts read from the fixture's own configuration
+    /// home and the production clock.
+    fn drain(
+        fixture: &Fixture,
+        run: &mut Runner,
+        tasks: &[Task],
+        from: Option<TaskId>,
+    ) -> RunOutcome {
+        drain_with(fixture, run, tasks, from, &Machine)
+    }
+
+    /// As [`drain`], on a clock the test decides.
+    fn drain_with(
+        fixture: &Fixture,
+        run: &mut Runner,
+        tasks: &[Task],
+        from: Option<TaskId>,
+        clock: &dyn Clock,
+    ) -> RunOutcome {
+        run.run_queue_with(&fixture.env(), tasks, from, clock)
+            .expect("nothing here gives the drain itself a reason to fault")
+    }
+
+    /// Drain the queue and hand back the fault it stopped on.
+    fn fault(fixture: &Fixture, run: &mut Runner, tasks: &[Task], from: Option<TaskId>) -> Error {
+        match run.run_queue_with(&fixture.env(), tasks, from, &Machine) {
+            Err(why) => why,
+            Ok(answer) => {
+                panic!("this fixture is built to make the drain fault, and it said {answer:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn three_tasks_drain_in_order_and_the_answer_says_the_queue_emptied() {
+        let fixture = Fixture::no_repairs();
+        fixture.script(&scenario(&[
+            Script::done("the first fix"),
+            Script::done("the second fix"),
+            Script::done("the third fix"),
+        ]));
+        fixture.plan(3);
+        let queue = plan(3, None);
+        for work in &queue {
+            fixture.report(work.id, ATTEMPT, DONE);
+        }
+        let mut run = fixture.run();
+
+        let answer = drain(&fixture, &mut run, &queue, None);
+
+        assert_eq!(
+            answer,
+            RunOutcome::Drained,
+            "three tasks that each finished are the one answer that says the queue emptied"
+        );
+        for work in &queue {
+            assert_eq!(
+                kinds(&fixture.project, work.id),
+                DIRECT_DONE,
+                "task {} was driven by the same steps `run_task` drives, in their order",
+                work.id
+            );
+            assert_eq!(
+                replayed(&fixture.project, work.id),
+                Some(TaskState::Done),
+                "task {} replays to done, so its successor's order check had something to clear",
+                work.id
+            );
+        }
+        assert_eq!(
+            fixture.ran(),
+            [
+                "targeted", "verify", "targeted", "verify", "targeted", "verify"
+            ],
+            "one phase gate and one completion set per task, and none shared between them"
+        );
+        let expected: Vec<String> = queue.iter().map(subject).collect();
+        assert_eq!(
+            fixture.published(),
+            expected,
+            "the mainline carries the drain's order, oldest first: one commit per task, each \
+             naming the task it delivers"
+        );
+        assert!(
+            fixture.checkout_names().is_empty(),
+            "every finished task's checkout is swept: {:?}",
+            fixture.checkout_names()
+        );
+        assert!(
+            lock_is_free(&fixture.project),
+            "the drain gives the repository lock back whatever it did"
+        );
+    }
+
+    #[test]
+    fn a_failing_middle_task_stops_the_drain_and_leaves_the_third_untouched() {
+        let fixture = Fixture::no_repairs();
+        fixture.script(&scenario(&[
+            Script::done("the first fix"),
+            Script::done("half of the second"),
+            Script::done("the third fix"),
+        ]));
+        fixture.plan(3);
+        fixture.report(TaskId::new(FIRST), ATTEMPT, DONE);
+        fixture.report(TaskId::new(SECOND), ATTEMPT, FAILED);
+        fixture.report(TaskId::new(THIRD), ATTEMPT, DONE);
+        let queue = plan(3, None);
+        let mut run = fixture.run();
+
+        let answer = drain(&fixture, &mut run, &queue, None);
+
+        assert_eq!(
+            answer,
+            RunOutcome::TaskFailed {
+                task: TaskId::new(SECOND)
+            },
+            "the answer names the task that failed, which is the one `retry --task` is aimed at"
+        );
+        assert_eq!(
+            replayed(&fixture.project, TaskId::new(FIRST)),
+            Some(TaskState::Done),
+            "the task before the failure is finished, not rolled back"
+        );
+        assert!(
+            matches!(
+                replayed(&fixture.project, TaskId::new(SECOND)),
+                Some(TaskState::Failed { .. })
+            ),
+            "and the failing task is failed in the journal, not merely in the answer: {:?}",
+            replayed(&fixture.project, TaskId::new(SECOND))
+        );
+        assert!(
+            kinds(&fixture.project, TaskId::new(THIRD)).is_empty(),
+            "§1's rule is that a run never continues past a failed task, and the third task \
+             shows it: {:?}",
+            kinds(&fixture.project, TaskId::new(THIRD))
+        );
+        assert_eq!(
+            fixture.ran(),
+            ["targeted", "verify"],
+            "the gates that ran are the first task's, and no others"
+        );
+        assert_eq!(
+            fixture.published(),
+            vec![subject(&queue[0])],
+            "nothing behind the failure was published"
+        );
+        assert_eq!(
+            fixture.origin_tip(),
+            closed_on(&fixture.project, TaskId::new(FIRST)),
+            "the origin stands where the last completed task left it"
+        );
+        assert_eq!(
+            fixture.checkout_names(),
+            [format!("task-{SECOND}")],
+            "the failed task's half-finished work is kept with its checkout, and the third \
+             task never got one"
+        );
+        assert!(
+            !kinds(&fixture.project, TaskId::new(SECOND)).contains(&"PublishStarted"),
+            "a candidate no completion set proved was never offered"
+        );
+        assert!(
+            lock_is_free(&fixture.project),
+            "and the lock comes back even on a drain that stopped short"
+        );
+    }
+
+    /// The commit a finished task's own `TaskDone` row closed it on.
+    fn closed_on(project: &Project, work: TaskId) -> String {
+        for row in rows(project, work) {
+            if let EventKind::TaskDone { commit } = row.kind {
+                return commit;
+            }
+        }
+        panic!("a finished task is closed on the commit it was published as")
+    }
+
+    #[test]
+    fn a_gate_stops_the_drain_and_parks_itself_where_ack_can_reach_it() {
+        let fixture = Fixture::no_repairs();
+        fixture.script(&scenario(&[Script::done("the first fix")]));
+        fixture.plan(1);
+        let queue = plan(3, Some(SECOND as usize));
+        fixture.report(TaskId::new(FIRST), ATTEMPT, DONE);
+        let mut run = fixture.run();
+
+        let answer = drain(&fixture, &mut run, &queue, None);
+
+        assert_eq!(
+            answer,
+            RunOutcome::HumanGate {
+                task: TaskId::new(SECOND)
+            },
+            "a gate stops the queue, and the answer names it for `ack`"
+        );
+        assert_eq!(
+            replayed(&fixture.project, TaskId::new(SECOND)),
+            Some(TaskState::Paused {
+                reason: PauseReason::HumanGate,
+                resume_to: Box::new(TaskState::Queued),
+            }),
+            "§6 gives a gate to a person, so it is parked in the state `ack` applies to — \
+             a gate left in `Queued` could never be acknowledged and the queue behind it \
+             would wait forever"
+        );
+        assert_eq!(
+            kinds(&fixture.project, TaskId::new(SECOND)),
+            ["Paused"],
+            "one row, and no preflight, lock, checkout or session behind it"
+        );
+        assert!(
+            kinds(&fixture.project, TaskId::new(THIRD)).is_empty(),
+            "the work a gate holds waits: {:?}",
+            kinds(&fixture.project, TaskId::new(THIRD))
+        );
+        assert_eq!(
+            fixture.published(),
+            vec![subject(&queue[0])],
+            "a gate produces no commit, and nothing past it was published"
+        );
+        assert!(
+            fixture.checkout_names().is_empty(),
+            "and it holds no checkout"
+        );
+        assert!(
+            lock_is_free(&fixture.project),
+            "nor the lock, which is what a human's decision is spent waiting behind"
+        );
+    }
+
+    #[test]
+    fn a_drain_resumes_past_a_gate_a_person_has_passed() {
+        let fixture = Fixture::no_repairs();
+        fixture.script(&scenario(&[Script::done("the first fix")]));
+        fixture.plan(1);
+        let queue = plan(3, Some(SECOND as usize));
+        fixture.report(TaskId::new(FIRST), ATTEMPT, DONE);
+        let mut run = fixture.run();
+
+        let stopped = drain(&fixture, &mut run, &queue, None);
+        assert_eq!(
+            stopped,
+            RunOutcome::HumanGate {
+                task: TaskId::new(SECOND)
+            },
+            "the first drain stops at the gate"
+        );
+
+        acknowledge(&fixture, TaskId::new(SECOND), now());
+        // A fresh run reads its scenario from the top, so the scenario the next
+        // session replays is the one that is in the file when that run starts.
+        fixture.script(&scenario(&[Script::done("the third fix")]));
+        fixture.plan(2);
+        fixture.report(TaskId::new(THIRD), ATTEMPT, DONE);
+        let mut again = fixture.run();
+
+        let answer = drain(&fixture, &mut again, &queue, None);
+
+        assert_eq!(
+            answer,
+            RunOutcome::Drained,
+            "a passed gate is a terminal success that clears the way, so the queue goes on"
+        );
+        assert_eq!(
+            kinds(&fixture.project, TaskId::new(THIRD)),
+            DIRECT_DONE,
+            "and the work it was holding runs to the end"
+        );
+        assert_eq!(
+            kinds(&fixture.project, TaskId::new(SECOND)),
+            ["Paused", "GateAcknowledged"],
+            "the gate's own rows are the person's decision and nothing else"
+        );
+        assert_eq!(
+            replayed(&fixture.project, TaskId::new(SECOND)),
+            Some(TaskState::Acknowledged {
+                by: "operator".to_owned(),
+                at: now(),
+            }),
+            "ADR-0031: an acknowledged gate is a terminal success the ordering check clears"
+        );
+        assert_eq!(
+            fixture.published(),
+            vec![subject(&queue[0]), subject(&queue[2])],
+            "the mainline holds the two tasks that ran, in order, with the gate where it was"
+        );
+    }
+
+    #[test]
+    fn a_provider_limit_stops_the_drain_without_failing_its_task() {
+        let fixture = Fixture::no_repairs();
+        fixture.script(&scenario(&[Script::limit()]));
+        let queue = plan(3, None);
+        let mut run = fixture.run();
+
+        let answer = drain_with(&fixture, &mut run, &queue, None, &NoWait(now()));
+
+        assert_eq!(
+            answer,
+            RunOutcome::ProviderLimit { until: None },
+            "a ceiling that named no reset is a pause with no deadline, not a failure and \
+             not an invented instant"
+        );
+        assert!(
+            matches!(
+                replayed(&fixture.project, TaskId::new(FIRST)),
+                Some(TaskState::Paused {
+                    reason: PauseReason::Limit { until: None },
+                    ..
+                })
+            ),
+            "§1: a limit is not a failure and must never mark a task failed: {:?}",
+            replayed(&fixture.project, TaskId::new(FIRST))
+        );
+        assert!(
+            !kinds(&fixture.project, TaskId::new(FIRST)).contains(&"TaskFailed"),
+            "and the journal agrees: {:?}",
+            kinds(&fixture.project, TaskId::new(FIRST))
+        );
+        for work in [TaskId::new(SECOND), TaskId::new(THIRD)] {
+            assert!(
+                kinds(&fixture.project, work).is_empty(),
+                "a ceiling pauses the whole queue, so task {work} was never started: {:?}",
+                kinds(&fixture.project, work)
+            );
+        }
+        assert!(
+            fixture.ran().is_empty() && fixture.published().is_empty(),
+            "nothing was gated or published on the way to the pause"
+        );
+        assert!(fixture.checkout_names().is_empty(), "and nothing was kept");
+        assert!(lock_is_free(&fixture.project), "and the lock came back");
+    }
+
+    #[test]
+    fn from_narrows_the_drain_to_the_ids_at_or_after_it() {
+        let fixture = Fixture::no_repairs();
+        fixture.script(&scenario(&[
+            Script::done("the second fix"),
+            Script::done("the third fix"),
+        ]));
+        fixture.plan(2);
+        let queue = plan(3, None);
+        for work in &queue {
+            fixture.report(work.id, ATTEMPT, DONE);
+        }
+        let mut run = fixture.run();
+
+        let answer = drain(&fixture, &mut run, &queue, Some(TaskId::new(SECOND)));
+
+        assert_eq!(
+            answer,
+            RunOutcome::Drained,
+            "`--from` is the operator's decision about where the drain starts, and it \
+             reaches past an unfinished head"
+        );
+        assert!(
+            kinds(&fixture.project, TaskId::new(FIRST)).is_empty(),
+            "the id behind the one the operator named is left alone: {:?}",
+            kinds(&fixture.project, TaskId::new(FIRST))
+        );
+        for work in [TaskId::new(SECOND), TaskId::new(THIRD)] {
+            assert_eq!(
+                kinds(&fixture.project, work),
+                DIRECT_DONE,
+                "task {work} ran the whole protocol"
+            );
+        }
+        assert_eq!(
+            fixture.published(),
+            vec![subject(&queue[1]), subject(&queue[2])],
+            "and the mainline holds exactly the two tasks that were asked for, in order"
+        );
+    }
+
+    #[test]
+    fn an_empty_queue_drains_without_writing_anything_at_all() {
+        let fixture = Fixture::no_repairs();
+        fixture.script(&scenario(&[Script::done("a fix nobody asked for")]));
+        let before = fixture.origin_tip();
+        let mut run = fixture.run();
+
+        let answer = drain(&fixture, &mut run, &[], None);
+
+        assert_eq!(
+            answer,
+            RunOutcome::Drained,
+            "a queue with nothing in it emptied, which is what §1's exit 0 means here"
+        );
+        assert!(
+            projected(&fixture.project).is_empty(),
+            "and it journalled nothing to have to reconcile afterwards: {:?}",
+            projected(&fixture.project)
+        );
+        assert!(fixture.ran().is_empty(), "no gate ran");
+        assert_eq!(fixture.origin_tip(), before, "nothing was published");
+        assert!(
+            fixture.checkout_names().is_empty(),
+            "nothing was checked out"
+        );
+    }
+
+    #[test]
+    fn a_from_the_queue_does_not_hold_is_refused_rather_than_started_from_the_top() {
+        let fixture = Fixture::no_repairs();
+        fixture.script(&scenario(&[Script::done("the first fix")]));
+        let queue = plan(3, None);
+        let before = fixture.origin_tip();
+        let mut run = fixture.run();
+
+        let why = fault(&fixture, &mut run, &queue, Some(TaskId::new(9)));
+
+        assert!(
+            matches!(&why, Error::NotFound { what } if what.contains('9')),
+            "an id the queue does not hold is refused, not read as `no --from`, and the \
+             refusal names it: {why}"
+        );
+        assert!(
+            projected(&fixture.project).is_empty(),
+            "a refused drain writes nothing: {:?}",
+            projected(&fixture.project)
+        );
+        assert!(fixture.ran().is_empty(), "and starts nothing");
+        assert_eq!(fixture.origin_tip(), before, "and publishes nothing");
+    }
+
+    #[test]
+    fn a_drained_queue_drains_again_without_touching_the_work_it_left() {
+        let fixture = Fixture::no_repairs();
+        fixture.script(&scenario(&[
+            Script::done("the first fix"),
+            Script::done("the second fix"),
+        ]));
+        fixture.plan(2);
+        let queue = plan(2, None);
+        for work in &queue {
+            fixture.report(work.id, ATTEMPT, DONE);
+        }
+        let mut run = fixture.run();
+        assert_eq!(
+            drain(&fixture, &mut run, &queue, None),
+            RunOutcome::Drained,
+            "the first drain empties the queue"
+        );
+        let tip = fixture.origin_tip();
+        let gated = fixture.ran();
+        let rows_before: Vec<Vec<&'static str>> = queue
+            .iter()
+            .map(|work| kinds(&fixture.project, work.id))
+            .collect();
+        let mut again = fixture.run();
+
+        let answer = drain(&fixture, &mut again, &queue, None);
+
+        assert_eq!(
+            answer,
+            RunOutcome::Drained,
+            "a second run over a drained queue is the same answer, and an operator pressing \
+             run twice is not a corrupted journal"
+        );
+        let rows_after: Vec<Vec<&'static str>> = queue
+            .iter()
+            .map(|work| kinds(&fixture.project, work.id))
+            .collect();
+        assert_eq!(
+            rows_after, rows_before,
+            "with no row appended to any task it had finished"
+        );
+        assert_eq!(fixture.ran(), gated, "and no gate run a second time");
+        assert_eq!(fixture.origin_tip(), tip, "and no commit added");
+    }
+
+    #[test]
+    fn a_drain_never_walks_past_a_task_that_failed_on_an_earlier_run() {
+        let fixture = Fixture::no_repairs();
+        fixture.script(&scenario(&[
+            Script::done("the first fix"),
+            Script::done("half of the second"),
+        ]));
+        fixture.plan(3);
+        fixture.report(TaskId::new(FIRST), ATTEMPT, DONE);
+        fixture.report(TaskId::new(SECOND), ATTEMPT, FAILED);
+        let queue = plan(3, None);
+        let mut run = fixture.run();
+        assert_eq!(
+            drain(&fixture, &mut run, &queue, None),
+            RunOutcome::TaskFailed {
+                task: TaskId::new(SECOND)
+            },
+            "the first drain stops where the failure is"
+        );
+        let gated = fixture.ran();
+        let tip = fixture.origin_tip();
+        let mut again = fixture.run();
+
+        let answer = drain(&fixture, &mut again, &queue, None);
+
+        assert_eq!(
+            answer,
+            RunOutcome::TaskFailed {
+                task: TaskId::new(SECOND)
+            },
+            "a drain that starts on a queue already holding a failure answers with that \
+             failure, which is what makes `run` idempotent over a stopped queue"
+        );
+        assert_eq!(fixture.ran(), gated, "and it starts nothing to find it");
+        assert_eq!(fixture.origin_tip(), tip, "and publishes nothing");
+        assert!(
+            kinds(&fixture.project, TaskId::new(THIRD)).is_empty(),
+            "still no third task: {:?}",
+            kinds(&fixture.project, TaskId::new(THIRD))
+        );
+    }
+
+    #[test]
+    fn a_projection_claiming_two_active_tasks_comes_back_as_a_fault_rather_than_as_an_answer() {
+        let fixture = Fixture::no_repairs();
+        fixture.script(&scenario(&[Script::done("the first fix")]));
+        fixture.plan(3);
+        let queue = plan(3, None);
+        for work in &queue {
+            fixture.report(work.id, ATTEMPT, DONE);
+        }
+        // Damage in the durable record rather than anything about the work: two tasks
+        // the journal claims it started. [`TaskState::Preflight`] is the first state
+        // that occupies the one active slot (ADR-0027), so two `PreflightStarted`
+        // rows are the whole of the impossibility, and no run could have written them.
+        let mut journal = Journal::open_for(&fixture.project)
+            .expect("a registered project's journal is openable");
+        for work in [FIRST, SECOND] {
+            journal
+                .append(Some(TaskId::new(work)), &EventKind::PreflightStarted)
+                .expect("a queued task accepts the start of its checks");
+        }
+        drop(journal);
+        let mut run = fixture.run();
+
+        let why = fault(&fixture, &mut run, &queue, None);
+
+        assert!(
+            matches!(why, Error::Policy { .. }),
+            "a projection that claims two runners is damage to repair, not a stop with an \
+             exit code of its own and not a queue that emptied: {why}"
+        );
+        for work in [FIRST, SECOND] {
+            assert_eq!(
+                kinds(&fixture.project, TaskId::new(work)),
+                ["PreflightStarted"],
+                "task {work} holds exactly the damaged row this test wrote and nothing the \
+                 drain added while refusing"
+            );
+        }
+        assert!(
+            kinds(&fixture.project, TaskId::new(THIRD)).is_empty(),
+            "and the refusal reached every task behind it: {:?}",
+            kinds(&fixture.project, TaskId::new(THIRD))
+        );
+        assert!(
+            fixture.published().is_empty(),
+            "and a drain that refused publishes nothing: {:?}",
+            fixture.published()
+        );
     }
 }
