@@ -181,11 +181,12 @@ use crate::redact::redact_json;
 use crate::remediate::{Bounds, Breaker, BreakerState, Decision, RecoveryReport};
 use crate::{
     AttemptId, AttemptRecord, Bus, Capabilities, Config, Error, EventKind, FailureClass, Gate,
-    GateKind, GateResult, Invocation, Journal, Outcome, Phase, PhaseSpec, Profile, Project,
-    Provider, Recorder, ReportClaim, ReportResult, Result, Stream, Subscription, Task, TaskId,
-    TaskState, TestSummary, Usage, apply, bundle, check_no_policy_edit, classify, evidence_dir,
-    file_report, parse_cargo, policy_edit_event, profile_from, read_evidence, run_completion_set,
-    run_gate, should_continue, signature, trip_event, write_evidence,
+    GateKind, GateResult, Invocation, Journal, Outcome, PauseReason, Phase, PhaseSpec, Profile,
+    Project, Provider, Recorder, ReportClaim, ReportResult, Result, Stream, Subscription, Task,
+    TaskId, TaskState, TestSummary, Usage, WaitPlan, apply, bundle, check_no_policy_edit, classify,
+    decision_event, evidence_dir, file_report, limit_message, parse_cargo, parse_reset,
+    policy_edit_event, profile_from, read_evidence, run_completion_set, run_gate, should_continue,
+    signature, trip_event, wait_plan, write_evidence,
 };
 use crate::{context, queue};
 
@@ -694,6 +695,14 @@ impl Runner {
             },
         )?;
         let claim = self.read_report(task.id, attempt)?;
+        if let ReportClaim::Claimed {
+            result: ReportResult::NeedsInput,
+            text,
+            ..
+        } = &claim
+        {
+            under.seen.asked = Some(text.clone());
+        }
         let changed = git::changed_paths(&prep.worktree, &prep.base_sha)?;
         if let Err(refusal) = check_no_policy_edit(&changed) {
             if let Error::Policy { paths, .. } = &refusal {
@@ -1386,10 +1395,17 @@ impl Runner {
     /// what the run was holding whatever the attempts did, and the loop's job is to
     /// decide whether there is another attempt to give it back after.
     ///
-    /// What is *not* here: the pause a `NEEDS_INPUT` asks for (§3's eighth invariant),
-    /// and the attempt's own record being closed over what its phases did. Those are the
-    /// tasks after this one, and each of them arrives at a journal this one leaves in a
-    /// state recovery can read.
+    /// What a refusal does *not* always earn is a repair. Three refusals are pauses
+    /// instead — a provider limit, a report that asked a human a question, and a task
+    /// that is itself a gate — and each of them is journaled and returned as
+    /// [`TaskState::Paused`] rather than run out of a budget or ended as
+    /// [`TaskState::Failed`], which is what `docs/CONTRACT.md` §1's exit codes 3, 4
+    /// and 5 are the exit codes of. See `Runner::answer_the_refusal` and
+    /// `Runner::park_at_the_gate`, both of which this step hands the question to.
+    ///
+    /// What is still not here is the attempt's own record being closed over what its
+    /// phases did: that is a task after this one, and it arrives at a journal this one
+    /// leaves in a state recovery can read.
     ///
     /// # Errors
     ///
@@ -1402,7 +1418,7 @@ impl Runner {
     /// [`Error::NotFound`]: a phase whose session left no report, named by the path the
     /// prompt told it to write, and a phase whose session named the claim it ended on.
     pub fn run_task(&mut self, task: &Task) -> Result<TaskState> {
-        self.run_task_with(&crate::paths::process_env, task)
+        self.run_task_with(&crate::paths::process_env, task, &Machine)
     }
 
     /// [`Runner::run_task`] with the environment the phases' prompts are read from
@@ -1413,13 +1429,26 @@ impl Runner {
     /// process environment and out of the operator's real configuration home, and a
     /// task driven end to end cannot be aimed at a scratch configuration home unless
     /// the accessor reaches the run that hands it to every phase it works.
+    ///
+    /// `clock` is threaded out for the same reason and answers the other half of the
+    /// same problem: a wait aimed at a reset the provider named cannot be tested by a
+    /// test that either sleeps for it or does not. It is the instant the run is at and
+    /// the run's willingness to sit a wait out — see [`Clock`].
+    ///
+    /// A task that is itself a human gate never reaches [`Runner::prepare`] at all: it
+    /// is parked first, because a gate that had taken the repository lock would hold it
+    /// for the length of a human's decision.
     fn run_task_with(
         &mut self,
         env: &dyn Fn(&str) -> Option<String>,
         task: &Task,
+        clock: &dyn Clock,
     ) -> Result<TaskState> {
+        if task.gate.is_some() {
+            return self.park_at_the_gate(task);
+        }
         let ground = self.prepare(task)?;
-        match self.work_the_attempts(env, task, &ground) {
+        match self.work_the_attempts(env, task, &ground, clock) {
             Ok(state) => {
                 self.clear_ground(ground)?;
                 Ok(state)
@@ -1459,6 +1488,7 @@ impl Runner {
         env: &dyn Fn(&str) -> Option<String>,
         task: &Task,
         ground: &Prepared,
+        clock: &dyn Clock,
     ) -> Result<TaskState> {
         let mut repair: Option<Remediation> = None;
         let mut budget = self.budget();
@@ -1468,8 +1498,10 @@ impl Runner {
             match self.work_the_attempt(env, task, &mut under) {
                 Ok(state) => return Ok(state),
                 Err(refusal) => {
-                    repair =
-                        Some(self.answer_the_refusal(task, &mut under, refusal, &mut budget)?);
+                    match self.answer_the_refusal(task, &mut under, refusal, &mut budget, clock)? {
+                        Answer::Repair(next) => repair = Some(next),
+                        Answer::Parked(state) => return Ok(state),
+                    }
                 }
             }
         }
@@ -1518,14 +1550,18 @@ impl Runner {
             refused: 0,
             tokens: 0,
             started: Instant::now(),
+            limits_waited: 0,
         }
     }
 
     /// Answer a refused attempt the way §7 answers one: classify, then bound, then
     /// break, then bundle — and only then let a fresh session be started.
     ///
-    /// Six steps, and every one of them is in this order for a reason a rerun can
-    /// check:
+    /// Eight steps, and every one of them is in this order for a reason a rerun can
+    /// check. Three of them end the run with a pause instead of an attempt, and none
+    /// of the three ends the task: `docs/CONTRACT.md` §1 counts a limit, a gate and a
+    /// question as pauses whose exit codes are 3, 4 and 5, and marks none of them a
+    /// failure.
     ///
     /// 1. **A protected path is looked at before a single bound is spent.** An
     ///    attempt that edited `clippy.toml` or `scripts/` rewrote the examination it
@@ -1534,31 +1570,42 @@ impl Runner {
     ///    `attempts 1 past the 1 bound` over a refusal whose cause is a forbidden
     ///    path: the row would be true about the counter and useless to whoever reads
     ///    it.
-    /// 2. **Everything else is classified**, including a session that never ran —
+    /// 2. **A report that asked a human something parks the attempt that wrote it**,
+    ///    read out of the report rather than out of the session's output: an agent
+    ///    that stopped at a decision often prints nothing at all, and §3's eighth
+    ///    invariant pauses the run on that answer. Nothing is classified first,
+    ///    because the ask is the fact and a class derived from it could only agree.
+    /// 3. **Everything else is classified**, including a session that never ran —
     ///    §7's first sentence carries no exception for a provider that could not be
     ///    reached, and [`Witness::as_a_session`] is how that case is asked at all.
-    /// 3. **The classes that may not loop are handed straight back.** §7 names
+    /// 4. **A provider limit is waited out or parked with**, with the reset the
+    ///    provider named read from what it printed and journalled *before* anybody
+    ///    sleeps ([`Runner::wait_or_park_on_the_limit`]). A limit spends no bound: it
+    ///    is what the provider asked for and not a repair the task earned.
+    /// 5. **The classes that may not loop are answered.** §7 names
     ///    [`FailureClass::ProviderConfiguration`] and [`FailureClass::NeedsInput`] as
-    ///    the ones that "pause for the human immediately", and a pause is not a
-    ///    failure: the refusal returns with **no row added**, because the journal is
-    ///    what a screen reads the pause from and a `TaskFailed` invented here would
-    ///    be read as a task that was refused rather than one that asked. A recovery
-    ///    that stopped this way still accounts for itself, because it did try a
-    ///    session. [`FailureClass::GitConflict`] is handed back for a different
-    ///    reason and files nothing: [`Runner::stop_on_conflict`] has already journalled
-    ///    the [`EventKind::TaskFailed`] that ends the task, and an account after that
-    ///    row is one the machine has no state to hold.
-    /// 4. **The bounds are spent and then consulted.** The refusal is charged whether
+    ///    the ones that "pause for the human immediately". `needs_input` is §3's
+    ///    eighth invariant and parks like step two, from the session's own words when
+    ///    no report asked. [`FailureClass::ProviderConfiguration`] is an invalid
+    ///    model or a missing executable that no retry can fix, and the run hands the
+    ///    refusal back with **no row added** rather than inventing a `TaskFailed` for
+    ///    what `docs/CONTRACT.md` calls a pause; a recovery that stopped this way
+    ///    still accounts for itself, because it did try a session.
+    ///    [`FailureClass::GitConflict`] is handed back for a different reason and
+    ///    files nothing: [`Runner::stop_on_conflict`] has already journalled the
+    ///    [`EventKind::TaskFailed`] that ends the task, and an account after that row
+    ///    is one the machine has no state to hold.
+    /// 6. **The bounds are spent and then consulted.** The refusal is charged whether
     ///    or not it had a session, and the run stops at the bound that says so.
-    /// 5. **The breaker is consulted on the signature**, so two different failures
+    /// 7. **The breaker is consulted on the signature**, so two different failures
     ///    spend two counts and one failure twice spends one ([`signature`]).
-    /// 6. **The bundle is gathered last, from disk.** [`read_evidence`] is asked here
+    /// 8. **The bundle is gathered last, from disk.** [`read_evidence`] is asked here
     ///    rather than at the top of the step precisely because the next
     ///    [`Runner::begin_attempt`] files a record of its own: the bundle has to say
     ///    how many attempts *there were*, and a bundle that counted the repair it is
     ///    about to launch is off by one in the one line a session reads first.
     ///
-    /// A refusal anywhere in step six is a fault of the run's own — evidence it could
+    /// A refusal anywhere in the last step is a fault of the run's own — evidence it could
     /// not read, a tree it could not diff — and comes back as it came. It is not
     /// classified and not repaired: a supervisor that retried its own inability to
     /// read the journal would be spending the budget it is out of.
@@ -1568,13 +1615,27 @@ impl Runner {
         under: &mut UnderAttempt<'_>,
         refusal: Error,
         budget: &mut Budget,
-    ) -> Result<Remediation> {
+        clock: &dyn Clock,
+    ) -> Result<Answer> {
         if !under.seen.policy_edit.is_empty() {
             return self.end_for_policy_edit(task.id, under, refusal);
         }
+        if let Some(ask) = under.seen.asked.clone() {
+            return Ok(Answer::Parked(self.park_for_input(
+                task.id,
+                under,
+                Some(&ask),
+            )?));
+        }
         let session = under.seen.as_a_session();
         let class = classify(&session, &under.seen.gates, Some(&refusal));
+        if class == FailureClass::ProviderLimit {
+            return self.wait_or_park_on_the_limit(task, under, budget, clock);
+        }
         if never_looped(class) {
+            if class == FailureClass::NeedsInput {
+                return Ok(Answer::Parked(self.park_for_input(task.id, under, None)?));
+            }
             if class != FailureClass::GitConflict {
                 self.file_the_account(task.id, under, PAUSED_ACCOUNT)?;
             }
@@ -1589,7 +1650,136 @@ impl Runner {
         if let BreakerState::Tripped { signature, seen } = budget.breaker.record(&key) {
             return self.end_for_the_breaker(task.id, under, refusal, class, &signature, seen);
         }
-        self.bundle_the_repair(task, under, class)
+        Ok(Answer::Repair(self.bundle_the_repair(task, under, class)?))
+    }
+
+    /// Park the run at the human gate `task` is, before anything is started.
+    ///
+    /// VISION.md §6 gives a gate to a person and not to an agent: it "is never handed
+    /// to an agent, produces no commit, and reaches `acknowledged` through
+    /// `ktask-rs ack` rather than through publication". So the row comes first and
+    /// nothing after it happens — no preflight, no lock, no checkout, no session —
+    /// which is the whole of why this is asked before [`Runner::prepare`] rather than
+    /// after it: a gate that had taken the repository lock would hold it while a
+    /// human decided, and §10 makes that lock the thing the rest of the queue waits
+    /// behind.
+    ///
+    /// The pause is journaled once. A second run over the same gate reads the state
+    /// its own rows already reach and answers with it, because [`crate::apply`]
+    /// refuses a `Paused` row below a task that is already paused (ADR-0026) and an
+    /// operator pressing `run` twice is not a corrupted journal.
+    fn park_at_the_gate(&mut self, task: &Task) -> Result<TaskState> {
+        let already = self.folded(task.id)?;
+        if already.is_paused() {
+            return Ok(already);
+        }
+        self.recorder.record(
+            Some(task.id),
+            EventKind::Paused {
+                reason: PauseReason::HumanGate,
+            },
+        )?;
+        self.folded(task.id)
+    }
+
+    /// Park the attempt that asked a human something, and journal the asking.
+    ///
+    /// The row is the ask when there is one to journal. [`decision_event`] reads a
+    /// report that wrote the four parts of a decision request, and its
+    /// [`EventKind::DecisionRaised`] is the row the catalog already answers by parking
+    /// the attempt at [`PauseReason::Input`] — a second [`EventKind::Paused`] row under
+    /// it would be the nested pause ADR-0026 refuses. Everything else takes the plain
+    /// row: a session that only said it in its output, and a report whose body was
+    /// short of a section, are both an agent stopping at a decision it is not
+    /// authorised to make, and §3's eighth invariant pauses the run on that answer
+    /// whatever the asking's shape. The words it did write are not lost — the report
+    /// is filed in the attempt's own evidence directory and its output is in the rows
+    /// above this one.
+    ///
+    /// §7's account comes before either row for the reason ADR-0091 files it before
+    /// any ending: [`EventKind::SelfHealingReport`] belongs to the remediation that
+    /// is being worked, and a paused state admits no such row at all.
+    fn park_for_input(
+        &mut self,
+        work: TaskId,
+        under: &mut UnderAttempt<'_>,
+        ask: Option<&str>,
+    ) -> Result<TaskState> {
+        let raised = ask.and_then(|words| decision_event(words).ok().flatten());
+        self.file_the_account(work, under, PAUSED_ACCOUNT)?;
+        self.recorder.record(
+            Some(work),
+            raised.unwrap_or(EventKind::Paused {
+                reason: PauseReason::Input,
+            }),
+        )?;
+        self.folded(work)
+    }
+
+    /// Answer a provider limit the way §7 answers one: wait it out, or park with the
+    /// wait still owed — and never fail the task over it.
+    ///
+    /// The instant to wake at is read rather than guessed ([`parse_reset`]), and
+    /// [`wait_plan`] chooses between waiting to that instant and a bounded backoff,
+    /// from this project's own two ceilings. Then the row: a pause naming the
+    /// deadline is written *before* anybody sleeps, because VISION.md §3's third
+    /// invariant makes the journal the account of what happened and ADR-0009 makes the
+    /// instant in that row the one a restarted run wakes at. Nothing here invents an
+    /// instant the provider did not name: a limit that named no reset parks with
+    /// `until: None`, which is what the pause state has instead of a lie.
+    ///
+    /// Three things stop a wait, and all three leave the same parked state rather
+    /// than a failure: this run has already waited once ([`Budget::a_wait_is_left`]),
+    /// the remediation budget is spent, and the clock will not sit out the plan
+    /// ([`Clock::sit_out`] — the answer a caller that must return now installs).
+    /// Waiting is not remediation, so it spends none of §7's bounds, and that is
+    /// deliberate: a limit charged to the attempt budget would end the task as
+    /// `TaskFailed` at a bound its own provider refusal had nothing to do with, and
+    /// `docs/CONTRACT.md` §1 makes a limit a pause that must never mark a task failed.
+    fn wait_or_park_on_the_limit(
+        &mut self,
+        task: &Task,
+        under: &mut UnderAttempt<'_>,
+        budget: &mut Budget,
+        clock: &dyn Clock,
+    ) -> Result<Answer> {
+        self.file_the_account(task.id, under, LIMIT_ACCOUNT)?;
+        let now = clock.now();
+        let session = under.seen.as_a_session();
+        let printed = format!("{}\n{}", session.stderr, session.stdout);
+        let reset = limit_message(&printed, &[])
+            .as_deref()
+            .and_then(|line| parse_reset(line, now));
+        let plan = wait_plan(
+            reset,
+            now,
+            whole_seconds(self.config.limit_wait_margin_secs),
+            whole_seconds(self.config.limit_max_wait_secs),
+        );
+        let until = match plan {
+            WaitPlan::Deadline { at } => Some(at),
+            WaitPlan::Backoff { .. } => None,
+        };
+        self.recorder.record(
+            Some(task.id),
+            EventKind::Paused {
+                reason: PauseReason::Limit { until },
+            },
+        )?;
+        let parked = self.folded(task.id)?;
+        if !budget.a_wait_is_left()
+            || matches!(budget.consult(), Decision::Stop(_))
+            || !clock.sit_out(plan)
+        {
+            return Ok(Answer::Parked(parked));
+        }
+        budget.sat_out_a_limit();
+        self.recorder.record(Some(task.id), EventKind::Resumed)?;
+        Ok(Answer::Repair(self.bundle_the_repair(
+            task,
+            under,
+            FailureClass::ProviderLimit,
+        )?))
     }
 
     /// End the task whose attempt edited the rules it is judged by.
@@ -1607,7 +1797,7 @@ impl Runner {
         work: TaskId,
         under: &mut UnderAttempt<'_>,
         refusal: Error,
-    ) -> Result<Remediation> {
+    ) -> Result<Answer> {
         let paths = under.seen.policy_edit.clone();
         self.file_the_account(work, under, PROTECTED_PATH_ACCOUNT)?;
         self.recorder
@@ -1627,7 +1817,7 @@ impl Runner {
         refusal: Error,
         class: FailureClass,
         detail: &str,
-    ) -> Result<Remediation> {
+    ) -> Result<Answer> {
         self.file_the_account(work, under, detail)?;
         self.recorder.record(
             Some(work),
@@ -1654,7 +1844,7 @@ impl Runner {
         class: FailureClass,
         signature: &str,
         seen: u32,
-    ) -> Result<Remediation> {
+    ) -> Result<Answer> {
         self.file_the_account(work, under, BREAKER_ACCOUNT)?;
         self.recorder
             .record(Some(work), trip_event(class, signature, seen))?;
@@ -1849,9 +2039,11 @@ impl Runner {
     ///
     /// Nothing is journalled here. What a phase that stopped has is the rows it reached
     /// itself — [`Runner::run_phase`] wrote its entry, its output and its end — and a
-    /// verdict belongs to a gate that did not run. The pause VISION.md §3's eighth
-    /// invariant makes `NEEDS_INPUT` is a later task's; what belongs to this one is that
-    /// such an answer neither publishes a task nor closes it.
+    /// verdict belongs to a gate that did not run. What such an answer does *not* get is
+    /// what this step is for: it neither publishes a task nor closes it. Where the run
+    /// goes next is the question §3's eighth invariant answers, and
+    /// `Runner::answer_the_refusal` answers it — a `NEEDS_INPUT` parks the attempt, and
+    /// no refusal invented here is what makes that true.
     fn earned_its_gate(outcome: &PhaseOutcome) -> Result<()> {
         match outcome {
             PhaseOutcome::Claimed {
@@ -2031,6 +2223,15 @@ const GREEN_ACCOUNT: &str = "every gate this repair ran came back green; the com
 const PAUSED_ACCOUNT: &str = "the repair stopped to put a question to a human, and the run paused on \
                               that answer instead of launching another session after it";
 
+/// What the account of a repair says when the refusal it earned was a provider limit.
+///
+/// It says nothing about *when* the run goes on, because the account is filed before
+/// the wait is planned and, more than that, before anyone knows whether this run is
+/// the one that waits: an account that promised a wait the run then parked instead of
+/// taking would be a record of something that did not happen.
+const LIMIT_ACCOUNT: &str = "the provider refused for a usage limit, and the run stopped to wait it \
+                             out rather than launch another session against it";
+
 /// What the account of a repair says when the refusal it earned was a protected path.
 const PROTECTED_PATH_ACCOUNT: &str = "the repair touched a path it is judged by, and the task ended \
                                       before anything was measured against the edited rule";
@@ -2084,6 +2285,15 @@ struct Witness {
     /// refusal so the row that ends the task can send a human to those files rather
     /// than to the attempt's whole diff.
     policy_edit: Vec<PathBuf>,
+    /// The report this attempt's session wrote when the report asked a human for a
+    /// decision, in the agent's own words.
+    ///
+    /// Held apart from [`Witness::session`] because a report is not session output,
+    /// and [`classify()`] reads only the latter: a session that wrote a
+    /// `NEEDS_INPUT` report and printed nothing is the ordinary shape of an agent
+    /// that stopped at a decision, and reading it out of the report is the only way
+    /// to see it. [`decision_event`] turns the text into the row the pause is.
+    asked: Option<String>,
 }
 
 impl Witness {
@@ -2101,6 +2311,72 @@ impl Witness {
             session_id: None,
             model_reported: None,
         })
+    }
+}
+
+/// What one refused attempt got back from §7's round of questions.
+///
+/// Two answers, because a refusal has two endings and they are not the same kind of
+/// thing: §7's repair — a fresh session told what the last one was refused for — and a
+/// pause, which is the run stopping somewhere on purpose with the state it stopped at
+/// already journalled. Naming both here is what keeps a pause from being spelled as a
+/// refusal: an [`Error`] out of that round is a fault, and VISION.md §3's eighth
+/// invariant and `docs/CONTRACT.md` §1 both insist that a limit, a gate and a question
+/// are not faults.
+enum Answer {
+    /// Another attempt, seeded with this bundle.
+    Repair(Remediation),
+    /// The run stops here, at the state its own journal already reaches.
+    Parked(TaskState),
+}
+
+/// The instant a run is at, and the waiting it is willing to do.
+///
+/// VISION.md §7's response to a provider limit is a wait aimed at an instant, and an
+/// instant is not something a run can be tested against: a test that slept for the
+/// margin would take the margin, and a test that did not sleep would not have tested
+/// the wait. So the two halves of a wait are asked separately — what time is it, and
+/// will you sit this out — and a run is handed the answers rather than reading a clock
+/// of its own.
+///
+/// It is a parameter of [`Runner::run_task_with`] and not a sixth field of a
+/// [`Runner`], because a run is made of five things and no more. A clock the run held
+/// would be a clock whose answer belonged to whichever step happened to ask, and the
+/// instant a pause is planned against and the instant it sleeps to have to be the same
+/// one the caller decided.
+trait Clock {
+    /// The instant now, which is what a reset the provider named is measured against.
+    fn now(&self) -> OffsetDateTime;
+
+    /// Sit `plan` out, and report whether this run actually waited.
+    ///
+    /// `false` means the plan was not waited out and is still owed: the pause stays
+    /// where its row put it, and whoever resumes the run later wakes at the instant the
+    /// journal already holds. A caller that must answer now — a CLI whose exit code says
+    /// the work is paused (CONTRACT.md §1's code 3) rather than showing that it is
+    /// asleep — installs a clock that says no.
+    fn sit_out(&self, plan: WaitPlan) -> bool;
+}
+
+/// The machine's own clock: the real instant, and a thread that really sleeps.
+struct Machine;
+
+impl Clock for Machine {
+    fn now(&self) -> OffsetDateTime {
+        OffsetDateTime::now_utc()
+    }
+
+    fn sit_out(&self, plan: WaitPlan) -> bool {
+        let until = match plan {
+            WaitPlan::Deadline { at } => at,
+            WaitPlan::Backoff { wait } => OffsetDateTime::now_utc().saturating_add(wait),
+        };
+        let mut left = until - OffsetDateTime::now_utc();
+        while left.is_positive() {
+            std::thread::sleep(Duration::try_from(left).unwrap_or(Duration::MAX));
+            left = until - OffsetDateTime::now_utc();
+        }
+        true
     }
 }
 
@@ -2250,6 +2526,16 @@ struct Budget {
     tokens: u64,
     /// When this run started spending, for the elapsed bound.
     started: Instant,
+    /// Provider limits this run has already waited out, against
+    /// [`LIMIT_WAITS_PER_RUN`].
+    ///
+    /// Deliberately not one of §7's three bounds and never handed to
+    /// [`should_continue`]: a wait is what the provider asked for, not a repair the
+    /// task earned, and charging it to the attempt budget would let a limit spend the
+    /// retries a later genuine failure needs and end that failure's task at a bound
+    /// nothing refused. It exists because a run that re-hit its limit the instant it
+    /// woke would otherwise wait again, and again, inside one run.
+    limits_waited: u32,
 }
 
 impl Budget {
@@ -2283,7 +2569,31 @@ impl Budget {
             self.tokens,
         )
     }
+
+    /// Whether this run may still sit out a provider limit.
+    ///
+    /// One wait per run is the hard limit VISION.md §7's "within hard limits" asks
+    /// for: the second limit in one run is the provider saying the reset the first
+    /// wait was planned around was wrong, which is a fact about the provider a
+    /// waiting supervisor cannot settle and a screen can.
+    fn a_wait_is_left(&self) -> bool {
+        self.limits_waited < LIMIT_WAITS_PER_RUN
+    }
+
+    /// Charge the wait this run just sat out to this budget.
+    fn sat_out_a_limit(&mut self) {
+        self.limits_waited = self.limits_waited.saturating_add(1);
+    }
 }
+
+/// How many provider limits one run may sit out before it parks with the wait still
+/// owed instead of sitting out another.
+///
+/// One, because the point of the wait is VISION.md §7's "waits until the exact reset
+/// time": a limit that came back after its own promised reset had passed is not the
+/// same promise being kept, and a run that re-waits every time it is refused would
+/// look, from a screen, exactly like a run that is working.
+const LIMIT_WAITS_PER_RUN: u32 = 1;
 
 /// `spent` whole seconds, in the signed span [`Bounds`] is spelled in.
 ///
@@ -8672,7 +8982,7 @@ mod run_task {
     //! would only make every one of these runs start a second session and have its
     //! scenario run out of steps on the way to the ending being examined.
 
-    use super::Runner;
+    use super::{Machine, Runner};
     use crate::testing::{ScratchRepo, scratch_repo};
     use crate::{
         AttemptId, Error, Event, EventKind, FailureClass, Journal, Phase, Project, Task, TaskId,
@@ -9162,13 +9472,13 @@ mod run_task {
     /// Drive the queue's task to the end, with the prompt read from the fixture's
     /// own configuration home.
     fn finish(fixture: &Fixture, run: &mut Runner, work: &Task) -> TaskState {
-        run.run_task_with(&fixture.env(), work)
+        run.run_task_with(&fixture.env(), work, &Machine)
             .expect("nothing here gives a step a reason to refuse")
     }
 
     /// Drive the queue's task and hand back the refusal it stopped on.
     fn refusal(fixture: &Fixture, run: &mut Runner, work: &Task) -> Error {
-        match run.run_task_with(&fixture.env(), work) {
+        match run.run_task_with(&fixture.env(), work, &Machine) {
             Err(why) => why,
             Ok(state) => panic!("this fixture is built to stop the run, and it reached {state:?}"),
         }
@@ -9533,12 +9843,13 @@ mod remediation {
     //! remembers in memory, because a memory a rerun cannot check is exactly what
     //! §7 refuses to rely on.
 
-    use super::Runner;
+    use super::{Machine, Runner};
     use crate::testing::{ScratchRepo, scratch_repo};
     use crate::{
-        AttemptId, Bus, Capabilities, Error, Event, EventKind, Invocation, Journal, Outcome, Phase,
-        Project, Provider, Result, Task, TaskId, TaskState, Usage, UsageSource, evidence_dir, git,
-        lock, parse_plan, project_config_path, provider, read_evidence, report_path,
+        AttemptId, Bus, Capabilities, Error, Event, EventKind, Invocation, Journal, Outcome,
+        PauseReason, Phase, Project, Provider, Result, Task, TaskId, TaskState, Usage, UsageSource,
+        apply, evidence_dir, git, lock, parse_plan, project_config_path, provider, read_evidence,
+        report_path,
     };
     use std::cell::{Cell, RefCell};
     use std::collections::BTreeMap;
@@ -10002,16 +10313,34 @@ mod remediation {
     /// Drive the queue's task to the end, with the prompt read from the fixture's
     /// own configuration home.
     fn finish(fixture: &Fixture, run: &mut Runner, work: &Task) -> TaskState {
-        run.run_task_with(&fixture.env(), work)
+        run.run_task_with(&fixture.env(), work, &Machine)
             .expect("nothing here gives a step a reason to refuse")
     }
 
     /// Drive the queue's task and hand back the refusal it stopped on.
     fn refusal(fixture: &Fixture, run: &mut Runner, work: &Task) -> Error {
-        match run.run_task_with(&fixture.env(), work) {
+        match run.run_task_with(&fixture.env(), work, &Machine) {
             Err(why) => why,
             Ok(state) => panic!("this fixture is built to stop the run, and it reached {state:?}"),
         }
+    }
+
+    /// Drive the queue's task to the stop that is not a refusal, and hand back the
+    /// state its own journal says it stopped in.
+    ///
+    /// Kept apart from [`refusal`] because the two answer different questions, and a
+    /// pause is the one stop `docs/CONTRACT.md` §1 insists is not a refusal: an
+    /// assertion written against the wrong one of the two fails loudly rather than
+    /// agreeing with a run that had turned a question into a fault.
+    fn stopped(fixture: &Fixture, run: &mut Runner, work: &Task) -> TaskState {
+        let state = run
+            .run_task_with(&fixture.env(), work, &Machine)
+            .expect("a question asked of a human is a pause, and a pause is not a refusal");
+        assert!(
+            state.is_paused(),
+            "the run stopped somewhere on purpose: {state:?}"
+        );
+        state
     }
 
     /// One session an adapter was asked to run, as the adapter saw it.
@@ -10507,11 +10836,19 @@ mod remediation {
         fixture.report(FIRST, NEEDS_INPUT);
         let mut run = fixture.run();
 
-        let why = refusal(&fixture, &mut run, &task());
+        let state = stopped(&fixture, &mut run, &task());
 
-        assert!(
-            matches!(&why, Error::NotFound { what } if what.contains("NEEDS_INPUT")),
-            "the refusal is the session's own claim, quoted, and it was {why}"
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::Input,
+                resume_to: Box::new(TaskState::Running {
+                    attempt: AttemptId::new(FIRST),
+                    phase: Phase::Implement,
+                }),
+            },
+            "§3's eighth invariant makes the question a pause, and the pause holds where \
+             the run stood: {state:?}"
         );
         assert_eq!(
             fixture.ran(),
@@ -10527,13 +10864,23 @@ mod remediation {
             failure(&fixture.project).is_none(),
             "and the task is not marked failed for asking the question §3 makes a pause"
         );
+        assert!(
+            holds(&fixture.project, "Paused"),
+            "the pause is a row and not only a return value: {:?}",
+            kinds(&fixture.project)
+        );
         assert_eq!(
             replayed(&fixture.project),
-            Some(TaskState::Running {
+            Some(state.clone()),
+            "the journal says honestly where the run stopped, for whoever resumes it"
+        );
+        assert_eq!(
+            apply(&state, &EventKind::Resumed).expect("a paused task accepts a resume"),
+            TaskState::Running {
                 attempt: AttemptId::new(FIRST),
                 phase: Phase::Implement,
-            }),
-            "the journal says honestly where the run stopped, for whoever pauses it"
+            },
+            "and the state it stopped in is one a resume goes back to"
         );
         assert!(
             lock_is_free(&fixture.project),
@@ -10574,5 +10921,1174 @@ mod remediation {
         );
         assert!(fixture.account(SECOND).is_file());
         assert!(lock_is_free(&fixture.project));
+    }
+}
+
+#[cfg(test)]
+mod pause {
+    //! The three stops that are not failures: a limit, a gate, a question.
+    //!
+    //! `docs/CONTRACT.md` §1 gives a provider limit, a human gate and a decision
+    //! request three exit codes — 3, 4 and 5 — and says of all three that they "are
+    //! not failures and must never mark a task `failed`". VISION.md §6 names the
+    //! states they park in (`waiting_limit`, `waiting_input`, `human_gate`), and §3's
+    //! eighth invariant makes the last of the three the mechanism behind "nothing is
+    //! done on an agent's say-so". So every test here asks the same question in a
+    //! different costume: did the run *stop* without the journal saying the task was
+    //! refused, and is where it stopped somewhere a later run can pick up from?
+    //!
+    //! The assertions are read out of records a third party keeps, the way
+    //! [`mod@remediation`] reads its own: the journal replayed through
+    //! [`crate::Journal::rebuild_state`] so an illegal row cannot pass, the gate
+    //! script's log of which commands actually ran, the evidence directory's attempt
+    //! count, and the origin's own tip for whether anything was published. What the
+    //! run *returned* is asserted too — for a caller the pause *is* the return value —
+    //! but never instead of the journal, because a screen reads the rows.
+    //!
+    //! The clock is the one thing here that cannot be a real one. A pause aimed at a
+    //! reset the provider named is only testable against an instant the test decided,
+    //! which is why [`Clock`] is a parameter of the run: [`Counted`] answers with one
+    //! instant forever and keeps every plan it was asked to sit out, so a test can say
+    //! both what time it was and whether this run slept. [`Machine`], the clock
+    //! production uses, gets the two tests at the end: a fake clock proves nothing
+    //! about the thread that really waits.
+
+    use super::{Clock, Machine, Runner};
+    use crate::testing::{ScratchRepo, scratch_repo};
+    use crate::{
+        AttemptId, Bus, Capabilities, Event, EventKind, Invocation, Journal, Outcome, PauseReason,
+        Phase, Project, Provider, Result, Task, TaskId, TaskState, WaitPlan, apply, evidence_dir,
+        git, lock, parse_plan, project_config_path, provider, read_evidence, report_path,
+    };
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+    use std::fmt::Write as _;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::{Path, PathBuf};
+    use std::rc::Rc;
+    use std::time::{Duration, Instant};
+    use time::OffsetDateTime;
+    use time::macros::datetime;
+
+    /// The identity every fixture gives its registered project.
+    const PROJECT_ID: &str = "0123456789abcdef";
+
+    /// The queue position [`parse_plan`] gives the one-row plan below, and so the
+    /// task every run here is driven for.
+    const TASK: u32 = 1;
+
+    /// The attempt a task that has never been attempted is opened at.
+    const FIRST: u32 = 1;
+
+    /// The attempt after a waited-out limit, which is a repair and so owes an account.
+    const SECOND: u32 = 2;
+
+    /// The file the scratch repository's seed commit tracks — the only path a
+    /// scripted session can change and the run can then publish.
+    const SEED_FILE: &str = "seed.txt";
+
+    /// What every session that did its work prints, as two lines so a row per line is
+    /// observable rather than assumed.
+    const PRINTED: &str = "reading the seed\nwriting the fix\n";
+
+    /// What a session that finished leaves in the report the prompt named.
+    const DONE: &str = "KTASK_RESULT: DONE\nSummary: every step the task had is worked.\n";
+
+    /// An ask whose body is short of every section a decision is made from, written
+    /// both ways a run meets it: as the report an agent filed, and as the words a
+    /// session printed instead of filing anything.
+    const SHORT_ASK: &str =
+        "KTASK_RESULT: NEEDS_INPUT\nSummary: which of the two readings is meant?\n";
+
+    /// The complete ask: the same shortage, answered. The four parts
+    /// [`crate::decision_request`] requires are all filled, which is what makes the
+    /// row it asks for a [`EventKind::DecisionRaised`] rather than a plain pause.
+    const FULL_ASK: &str = "KTASK_RESULT: NEEDS_INPUT\nSummary: which of the two readings \
+                            is meant?\nQuestion: keep the pause's reason as text or as a \
+                            table?\nOptions:\n- text\n- table\nTrade-offs: text costs no \
+                            migration; a table costs one and buys a query.\nImpact: every \
+                            later task that reads a pause reads this field.\n";
+
+    /// The margin every fixture's settings ask a limit to be padded by, in seconds.
+    const MARGIN_SECS: u64 = 30;
+
+    /// The ceiling every fixture's settings ask a run to sit through, in seconds.
+    const CEILING_SECS: u64 = 3600;
+
+    /// A limit that names the instant it clears, as one provider prints it.
+    const NAMED: &str = "ERROR: usage limit reached; resets at 2026-09-23T12:20:00Z";
+
+    /// The same refusal with no instant in it, which is the other half of §7's table.
+    const UNNAMED: &str = "ERROR: usage limit reached; try again later";
+
+    /// The gate report the scripted gate prints once the fix is in the tree.
+    const GREEN: &str = "running 1 tests\ntest the_fix ... ok\n\ntest result: ok. 1 passed; 0 \
+                        failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n";
+
+    /// The instant every fixture's clock reads, so a reset the provider named is a
+    /// distance from a point the test chose rather than from whenever it ran.
+    fn now() -> OffsetDateTime {
+        datetime!(2026-09-23 12:00:00 UTC)
+    }
+
+    /// The instant a run plans to wake at: the reset [`NAMED`] gives, twenty minutes
+    /// after [`now`], plus the margin its settings ask for. Written out rather than
+    /// added up from those two numbers, because a sum computed the way the code computes
+    /// one would agree with the code whatever the code did.
+    fn wake() -> OffsetDateTime {
+        datetime!(2026-09-23 12:20:30 UTC)
+    }
+
+    /// The two rows a run writes once, before the first attempt it opens.
+    const PREFLIGHT: [&str; 2] = ["PreflightStarted", "PreflightPassed"];
+
+    /// The rows the attempt of a session that printed `words` leaves and no more:
+    /// its entry, its phase, one output row per line it printed, its end.
+    ///
+    /// Nothing of a gate appears, because a session that was refused, or that asked a
+    /// human something, claimed no finished work for a gate to judge. The output rows
+    /// are counted from the session's own words rather than fixed, so the expectation
+    /// says what the run is doing — journalling the output a session produced, line by
+    /// line — instead of memorising one scenario's length.
+    fn a_session_that_printed(words: &str) -> Vec<&'static str> {
+        let mut rows = vec!["AttemptStarted", "PhaseEntered"];
+        rows.extend((0..words.lines().count()).map(|_| "AgentOutput"));
+        rows.push("AttemptFinished");
+        rows
+    }
+
+    /// The gate script both of the project's gates call.
+    ///
+    /// It answers from what is in the tree rather than from a counter, so a gate can
+    /// only come back green over work that is actually there: a run that paused, and
+    /// was resumed into a session that wrote the fix, is proved by the second gate
+    /// passing and not by a script that had already decided to pass.
+    fn gate_script(log: &Path, markers: &Path) -> String {
+        format!(
+            "#!/bin/sh\n\
+             m='{}'\n\
+             echo \"$1\" >> '{}'\n\
+             if [ \"$1\" = verify ]; then\n\
+             grep -qs '^fixed' seed.txt || {{ echo 'verify: nothing is proved yet' >&2; exit 1; \
+             }}\n\
+             exit 0\n\
+             fi\n\
+             if grep -qs '^fixed' seed.txt; then cat \"$m/green\"; exit 0; fi\n\
+             echo 'targeted: nothing to gate yet' >&2\n\
+             exit 1\n",
+            markers.display(),
+            log.display()
+        )
+    }
+
+    /// A registered project, the scenario its adapter replays, and the script its two
+    /// gates run.
+    ///
+    /// The last two fields belong to the adapter rather than to the project: the
+    /// reports it is to file, and the prompts it was handed. They are shared rather
+    /// than owned because the adapter is installed in the [`Runner`], and a test reads
+    /// back what it saw from here.
+    struct Fixture {
+        repo: ScratchRepo,
+        project: Project,
+        scenario: PathBuf,
+        log: PathBuf,
+        config_home: PathBuf,
+        reports: Rc<RefCell<BTreeMap<u32, String>>>,
+        asked: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl Fixture {
+        /// A project whose settings give a limit a named margin and a named ceiling,
+        /// so the deadline a pause carries is a number a test can spell out.
+        fn new() -> Self {
+            Self::built(&limits())
+        }
+
+        /// As [`Fixture::new`], on a project whose §7 bounds are already spent.
+        ///
+        /// `max_attempts = 0` makes the elapsed bound zero seconds, which is how a
+        /// test asks whether a limit met by a run that has nothing left to spend still
+        /// parks rather than launches an attempt past its own bound — and still parks
+        /// with its deadline, because a spent budget is not a different limit.
+        fn spent() -> Self {
+            Self::built(&format!("{}\nmax_attempts = 0\n", limits()))
+        }
+
+        /// As [`Fixture::new`], with `extra` appended to its settings document.
+        fn built(extra: &str) -> Self {
+            let repo = scratch_repo().expect("a scratch repository is buildable");
+            let state_dir = repo.path().join("state").join(PROJECT_ID);
+            let project = Project {
+                root: repo.work().to_path_buf(),
+                id: PROJECT_ID.to_owned(),
+                state_dir,
+            };
+            let scenario = repo.path().join("scenario.toml");
+            let script = repo.path().join("gate.sh");
+            let log = repo.path().join("gate.log");
+            let markers = repo.path().join("markers");
+            fs::create_dir_all(&project.state_dir).expect("a state directory is creatable");
+            fs::create_dir_all(&markers).expect("a marker directory is creatable");
+            fs::write(&script, gate_script(&log, &markers)).expect("a gate script is writable");
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
+                .expect("a gate script is made executable");
+            let config_home = repo.path().join("config-home");
+            fs::write(markers.join("green"), GREEN).expect("a gate report is writable");
+            fs::write(
+                project_config_path(&project),
+                settings(&scenario, &script, extra),
+            )
+            .expect("a project settings document is writable");
+            Self {
+                repo,
+                project,
+                scenario,
+                log,
+                config_home,
+                reports: Rc::default(),
+                asked: Rc::default(),
+            }
+        }
+
+        /// The script the adapter replays, written before the run is opened:
+        /// [`crate::provider::build`] reads the file once.
+        fn script(&self, document: &str) {
+            fs::write(&self.scenario, document).expect("a scenario document is writable");
+        }
+
+        /// Hold `words` back as the report the session of attempt `attempt` leaves.
+        ///
+        /// Held rather than pre-written where it belongs, for the reason
+        /// `mod remediation` spells out: the run owns that directory and treats a
+        /// record-less attempt directory as an interrupted write. The adapter files it
+        /// at the path the prompt named, which is what a session does.
+        fn report(&self, attempt: u32, words: &str) {
+            self.reports.borrow_mut().insert(attempt, words.to_owned());
+        }
+
+        /// Where one attempt's report would be, whether or not a session filed one.
+        fn report_of(&self, attempt: u32) -> PathBuf {
+            report_path(&self.project, TaskId::new(TASK), AttemptId::new(attempt))
+        }
+
+        /// The run this project is configured to have, with its sessions answered
+        /// through [`Scripted`].
+        fn run(&self) -> Runner {
+            let mut run = Runner::new(self.project.clone())
+                .expect("a registered, configured project opens a run");
+            let answer = provider::build(&run.config).expect("the configured adapter is buildable");
+            run.provider = Box::new(Scripted {
+                inner: answer,
+                asked: Rc::clone(&self.asked),
+                reports: Rc::clone(&self.reports),
+            });
+            run
+        }
+
+        /// Every prompt the installed adapter was handed, in order.
+        fn asked(&self) -> Vec<String> {
+            self.asked.borrow().clone()
+        }
+
+        /// The environment a phase's prompt is read from: a configuration home of the
+        /// fixture's own, so no test aims the prompt library at the machine running it.
+        fn env(&self) -> impl Fn(&str) -> Option<String> {
+            let home = self.config_home.clone();
+            move |key: &str| (key == "XDG_CONFIG_HOME").then(|| home.display().to_string())
+        }
+
+        /// The gate names that actually ran, in the order they ran.
+        fn ran(&self) -> Vec<String> {
+            let text = fs::read_to_string(&self.log).unwrap_or_default();
+            text.lines().map(str::to_owned).collect()
+        }
+
+        /// Every checkout the repository registers, the user's own included.
+        fn checkouts(&self) -> Vec<git::Worktree> {
+            git::list_worktrees(&self.project.root).expect("the repository answers what it holds")
+        }
+
+        /// The account §7 makes a recovery leave beside its own evidence.
+        fn account(&self, attempt: u32) -> PathBuf {
+            evidence_dir(&self.project, TaskId::new(TASK), AttemptId::new(attempt))
+                .join("self-healing.md")
+        }
+
+        /// The tip the origin itself holds.
+        fn origin_tip(&self) -> String {
+            git::git(self.repo.origin(), &["rev-parse", "main"])
+                .expect("the origin holds its branch")
+        }
+    }
+
+    /// The two settings a limit is waited out under, as one §7 document's text.
+    fn limits() -> String {
+        format!("limit_wait_margin_secs = {MARGIN_SECS}\nlimit_max_wait_secs = {CEILING_SECS}\n")
+    }
+
+    /// The settings a whole run is opened with: the scripted adapter and its scenario
+    /// file, the two gates as calls into one script, and `extra` appended.
+    fn settings(scenario: &Path, script: &Path, extra: &str) -> String {
+        format!(
+            "provider = \"dummy\"\n\
+             dummy_scenario_path = \"{}\"\n\
+             min_free_disk_bytes = 1\n\
+             targeted_test_command = [\"/bin/sh\", \"{}\", \"targeted\"]\n\
+             verify_command = [\"/bin/sh\", \"{}\", \"verify\"]\n\
+             {extra}",
+            scenario.display(),
+            script.display(),
+            script.display()
+        )
+    }
+
+    /// The queue's one task, worked by the project's default protocol.
+    fn task() -> Task {
+        parse_plan(&block("T097 Pause handling in the runner", ""))
+            .expect("a task block with the four mandatory sections is a parseable plan")
+            .into_iter()
+            .next()
+            .expect("the fixture plan holds one row")
+    }
+
+    /// The same queue entry written as a human gate: the same four sections, and the
+    /// `**Gate:**` section that makes the task a decision a person owes.
+    fn gate_task() -> Task {
+        parse_plan(&block(
+            "T097 Decide the schema",
+            "**Gate:** approve the schema before any task is written against it.\n",
+        ))
+        .expect("a gate block with the four mandatory sections is a parseable plan")
+        .into_iter()
+        .next()
+        .expect("the fixture plan holds one row")
+    }
+
+    /// A one-row plan document for a task titled `title`, with `extra` appended to the
+    /// four mandatory sections.
+    fn block(title: &str, extra: &str) -> String {
+        format!(
+            "## {title}\n\n\
+             **Outcome:** limits, gates and input requests pause rather than fail.\n\
+             **Done-when:** a dummy scenario reaches a resumable pause.\n\
+             **Verify:** `cargo nextest run -p ktask-core -E 'test(/runner::/)'`\n\
+             **Refs:** VISION.md section 6\n\
+             {extra}"
+        )
+    }
+
+    /// One session the scripted provider answers with, spelled as a scenario file
+    /// spells it.
+    struct Script {
+        /// The outcome word the step declares.
+        outcome: &'static str,
+        /// Everything the session prints.
+        printed: &'static str,
+        /// The status it reports, or `None` for the one the word implies.
+        exit_code: Option<i32>,
+        /// How long it waits before answering, or `None` for no delay.
+        delay_ms: Option<u64>,
+        /// The files it leaves in the checkout it ran in.
+        files: &'static [(&'static str, &'static str)],
+    }
+
+    impl Script {
+        /// A session that did its work, printed `PRINTED` and left `files`.
+        fn done(files: &'static [(&'static str, &'static str)]) -> Self {
+            Self {
+                outcome: "success",
+                printed: PRINTED,
+                exit_code: None,
+                delay_ms: None,
+                files,
+            }
+        }
+
+        /// A session the provider refused for a limit, printing `words`.
+        ///
+        /// The status is declared rather than left to the outcome word, because a
+        /// limit is read out of what a session printed and [`crate::classify`] only
+        /// believes a session's prose when the session did not also claim it finished.
+        fn limit(words: &'static str) -> Self {
+            Self {
+                outcome: "limit",
+                printed: words,
+                exit_code: Some(1),
+                delay_ms: None,
+                files: &[],
+            }
+        }
+
+        /// A session that asked a human a question in its own output.
+        fn spoken(words: &'static str) -> Self {
+            Self {
+                outcome: "needs_input",
+                printed: words,
+                exit_code: None,
+                delay_ms: None,
+                files: &[],
+            }
+        }
+
+        /// Wait `millis` before answering, which is how a test gives a run an elapsed
+        /// bound to notice.
+        fn taking(self, millis: u64) -> Self {
+            Self {
+                delay_ms: Some(millis),
+                ..self
+            }
+        }
+    }
+
+    /// The scenario document `scripts` replay, one step per session in order.
+    fn scenario(scripts: &[Script]) -> String {
+        let mut document = String::new();
+        for step in scripts {
+            writeln!(
+                document,
+                "[[steps]]\non_task = {TASK}\noutcome = \"{}\"\nstdout = \"{}\"",
+                step.outcome,
+                toml_text(step.printed)
+            )
+            .expect("a String always has room for what is written into it");
+            if let Some(code) = step.exit_code {
+                writeln!(document, "\nexit_code = {code}")
+                    .expect("a String always has room for what is written into it");
+            }
+            if let Some(delay) = step.delay_ms {
+                writeln!(document, "\ndelay_ms = {delay}")
+                    .expect("a String always has room for what is written into it");
+            }
+            document.push('\n');
+            if !step.files.is_empty() {
+                document.push_str("[steps.files]\n");
+                for (path, contents) in step.files {
+                    writeln!(document, "\"{path}\" = \"{}\"", toml_text(contents))
+                        .expect("a String always has room for what is written into it");
+                }
+            }
+            document.push('\n');
+        }
+        document
+    }
+
+    /// A scenario document's string, escaped the way TOML wants the breaks agent text
+    /// is full of.
+    fn toml_text(text: &str) -> String {
+        text.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+    }
+
+    /// The adapter every session of every fixture run here goes through.
+    ///
+    /// Two jobs the scripted provider cannot do on its own: it files the report the
+    /// prompt said its session owed, because the path a session was *told* to write to
+    /// is the only thing a report can be reached through; and it remembers every
+    /// prompt, because §7's account of what the next session was told is unaskable of
+    /// the journal. The answers themselves come from the configured dummy adapter
+    /// unchanged — a pause is a fact about what the run did with an answer, and this
+    /// adapter must not edit the answer.
+    struct Scripted {
+        inner: Box<dyn Provider>,
+        asked: Rc<RefCell<Vec<String>>>,
+        reports: Rc<RefCell<BTreeMap<u32, String>>>,
+    }
+
+    impl Scripted {
+        /// Leave this session's report at the path its prompt named, if the fixture
+        /// staged words for the attempt that prompt is for.
+        fn file_report(&self, inv: &Invocation) {
+            let (attempt, path) = told_by(&inv.prompt);
+            let Some(words) = self.reports.borrow().get(&attempt).cloned() else {
+                return;
+            };
+            fs::write(&path, words)
+                .unwrap_or_else(|why| panic!("a session was told to report at {path:?}: {why}"));
+        }
+    }
+
+    impl Provider for Scripted {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+
+        fn capabilities(&self) -> Capabilities {
+            self.inner.capabilities()
+        }
+
+        fn invoke(&self, inv: &Invocation, bus: Option<&Bus>) -> Result<Outcome> {
+            self.asked.borrow_mut().push(inv.prompt.clone());
+            let answer = self.inner.invoke(inv, bus)?;
+            self.file_report(inv);
+            Ok(answer)
+        }
+    }
+
+    /// Which attempt a prompt is for, and the path it says its report goes at.
+    ///
+    /// Read out of the prompt rather than recomputed: what a session can act on is
+    /// what it was told, and a fixture that called [`report_path`] itself would agree
+    /// with the header whatever the header said.
+    fn told_by(prompt: &str) -> (u32, PathBuf) {
+        let named = prompt
+            .split_once("Report: `")
+            .expect("the prompt names the path its report goes at")
+            .1;
+        let path = PathBuf::from(
+            named
+                .split('`')
+                .next()
+                .expect("the path the prompt names is closed by a backtick"),
+        );
+        let directory = path
+            .parent()
+            .expect("a report is named below the directory it is filed in");
+        let attempt = directory
+            .file_name()
+            .expect("the attempt's own directory name")
+            .to_string_lossy()
+            .parse::<u32>()
+            .expect("that name is the attempt number");
+        (attempt, path)
+    }
+
+    /// The clock a test decides the time with.
+    ///
+    /// One instant for every reading, so a deadline planned against it is exact rather
+    /// than a window around whenever the test happened to run; and a recorded answer to
+    /// *will this run sleep*, so a test can assert both that the wait was planned and
+    /// that this run was, or was not, the one that sat it out.
+    struct Counted {
+        /// The instant every reading of [`Clock::now`] gives.
+        instant: OffsetDateTime,
+        /// Whether this clock sits a plan out, or answers that the run must return.
+        will_wait: bool,
+        /// Every plan this clock was asked about, in the order it was asked.
+        plans: RefCell<Vec<WaitPlan>>,
+    }
+
+    impl Counted {
+        /// A clock that reads `instant` forever and never sleeps.
+        fn new(instant: OffsetDateTime) -> Self {
+            Self {
+                instant,
+                will_wait: false,
+                plans: RefCell::default(),
+            }
+        }
+
+        /// As [`Counted::new`], for a run that does sit its waits out.
+        fn waiting(instant: OffsetDateTime) -> Self {
+            Self {
+                will_wait: true,
+                ..Self::new(instant)
+            }
+        }
+
+        /// The plans this clock was asked to sit out, in order.
+        fn plans(&self) -> Vec<WaitPlan> {
+            self.plans.borrow().clone()
+        }
+    }
+
+    impl Clock for Counted {
+        fn now(&self) -> OffsetDateTime {
+            self.instant
+        }
+
+        fn sit_out(&self, plan: WaitPlan) -> bool {
+            self.plans.borrow_mut().push(plan);
+            self.will_wait
+        }
+    }
+
+    /// The task's own rows, oldest first, read on a second connection because that is
+    /// who asks this question in real life.
+    fn rows(project: &Project) -> Vec<Event> {
+        Journal::open_for(project)
+            .expect("a registered project's journal is openable")
+            .events_for(TaskId::new(TASK))
+            .expect("the rows this run wrote are readable")
+    }
+
+    /// The kinds the journal holds for the task, oldest first.
+    fn kinds(project: &Project) -> Vec<&'static str> {
+        rows(project)
+            .iter()
+            .map(|row| row.kind.discriminant())
+            .collect()
+    }
+
+    /// Whether the journal holds a row of this kind for the task.
+    fn holds(project: &Project, kind: &str) -> bool {
+        kinds(project).contains(&kind)
+    }
+
+    /// The state the journal replays to, with an illegal row reported as the failure it
+    /// is rather than as a state that was never reached.
+    fn replayed(project: &Project) -> Option<TaskState> {
+        let mut journal =
+            Journal::open_for(project).expect("a registered project's journal is openable");
+        journal
+            .rebuild_state()
+            .expect("every row this run wrote is one the state machine accepts");
+        journal
+            .get_state(TaskId::new(TASK))
+            .expect("the projection is readable")
+    }
+
+    /// The attempt records the evidence directory holds, which is the mechanical answer
+    /// to "how many attempts did this task actually have".
+    fn attempts(project: &Project) -> Vec<AttemptId> {
+        read_evidence(project, TaskId::new(TASK))
+            .expect("an attempt's own record is readable from the moment it opened")
+            .into_iter()
+            .map(|record| record.id)
+            .collect()
+    }
+
+    /// The commit the `TaskDone` row closed the task on.
+    fn closed_on(project: &Project) -> String {
+        for row in rows(project) {
+            if let EventKind::TaskDone { commit } = row.kind {
+                return commit;
+            }
+        }
+        panic!("a finished task is closed on the commit it was published as");
+    }
+
+    /// Take the project's lock from a test, as an outsider would, and give it back.
+    fn lock_is_free(project: &Project) -> bool {
+        let Ok(held) = lock::acquire(&project.state_dir, Duration::ZERO) else {
+            return false;
+        };
+        held.release().expect("a lock this test took is given back");
+        true
+    }
+
+    /// Drive the queue's task against `clock` to a stop that is not a refusal, and hand
+    /// back the state its own journal says it stopped in.
+    fn parked(fixture: &Fixture, run: &mut Runner, work: &Task, clock: &dyn Clock) -> TaskState {
+        let state = run
+            .run_task_with(&fixture.env(), work, clock)
+            .expect("a limit, a gate and a question are pauses, and no pause is a refusal");
+        assert!(
+            state.is_paused(),
+            "§3's eighth invariant and CONTRACT.md §1 both make this a pause: {state:?}"
+        );
+        state
+    }
+
+    /// Drive the queue's task against `clock` to its end.
+    fn finished(fixture: &Fixture, run: &mut Runner, work: &Task, clock: &dyn Clock) -> TaskState {
+        run.run_task_with(&fixture.env(), work, clock)
+            .expect("nothing here gives a waited-out run a reason to refuse")
+    }
+
+    /// The state a paused task goes back to when it is resumed.
+    fn resumed(state: &TaskState) -> TaskState {
+        apply(state, &EventKind::Resumed).expect("a pause is somewhere a run comes back from")
+    }
+
+    #[test]
+    fn a_limit_that_named_its_reset_parks_with_that_deadline() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[Script::limit(NAMED)]));
+        let mut run = fixture.run();
+        let before = fixture.origin_tip();
+        let clock = Counted::new(now());
+
+        let state = parked(&fixture, &mut run, &task(), &clock);
+
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::Limit {
+                    until: Some(wake())
+                },
+                resume_to: Box::new(TaskState::Running {
+                    attempt: AttemptId::new(FIRST),
+                    phase: Phase::Implement,
+                }),
+            },
+            "§7 waits a known reset out to the exact instant plus the margin, and the row \
+             is written before anybody sleeps: {state:?}"
+        );
+        assert_eq!(
+            clock.plans(),
+            vec![WaitPlan::Deadline { at: wake() }],
+            "the plan the provider's own words support is a deadline, not a backoff"
+        );
+        let mut wanted = PREFLIGHT.to_vec();
+        wanted.extend(a_session_that_printed(NAMED));
+        wanted.push("Paused");
+        assert_eq!(
+            kinds(&fixture.project),
+            wanted,
+            "the pause is the last row, and nothing after it was started"
+        );
+        assert!(
+            !holds(&fixture.project, "TaskFailed"),
+            "a limit is exit 3, not exit 1"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(state.clone()),
+            "the journal replays to the pause the run returned"
+        );
+        assert_eq!(
+            resumed(&state),
+            TaskState::Running {
+                attempt: AttemptId::new(FIRST),
+                phase: Phase::Implement,
+            },
+            "and a resume goes back to the attempt that met the limit"
+        );
+        assert_eq!(
+            fixture.origin_tip(),
+            before,
+            "nothing a paused attempt was doing was published"
+        );
+        assert!(
+            lock_is_free(&fixture.project),
+            "a pause gives the machine back"
+        );
+        assert_eq!(
+            fixture.checkouts().len(),
+            1,
+            "a clean checkout is not kept, and the user's own is the one left: {:?}",
+            fixture.checkouts()
+        );
+    }
+
+    #[test]
+    fn a_limit_that_named_no_reset_parks_with_a_bounded_backoff() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[Script::limit(UNNAMED)]));
+        let mut run = fixture.run();
+        let clock = Counted::new(now());
+
+        let state = parked(&fixture, &mut run, &task(), &clock);
+
+        let TaskState::Paused {
+            reason: PauseReason::Limit { until },
+            ..
+        } = &state
+        else {
+            panic!("a usage limit is the pause §7 names, and this run reached {state:?}");
+        };
+        assert_eq!(
+            until, &None,
+            "nothing here invents an instant the provider did not name"
+        );
+        assert_eq!(
+            clock.plans(),
+            vec![WaitPlan::Backoff {
+                wait: time::Duration::seconds(i64::try_from(MARGIN_SECS).expect("a margin fits"))
+            }],
+            "an unknown reset is a bounded backoff of the configured pause"
+        );
+        assert!(
+            !holds(&fixture.project, "TaskFailed"),
+            "and it is still not a failure"
+        );
+    }
+
+    #[test]
+    fn a_limit_the_run_waited_out_costs_no_attempt_and_the_task_finishes() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[
+            Script::limit(UNNAMED),
+            Script::done(&[(SEED_FILE, "fixed")]),
+        ]));
+        fixture.report(SECOND, DONE);
+        let mut run = fixture.run();
+        let clock = Counted::waiting(now());
+
+        let state = finished(&fixture, &mut run, &task(), &clock);
+
+        assert_eq!(
+            state,
+            TaskState::Done,
+            "a waited-out limit leaves the task where any other attempt would have"
+        );
+        assert_eq!(
+            clock.plans().len(),
+            1,
+            "one wait was planned, and the run went on after it"
+        );
+        let journalled = kinds(&fixture.project);
+        let slept = journalled
+            .iter()
+            .position(|kind| *kind == "Paused")
+            .expect("a wait is journalled as a pause before anybody sleeps");
+        let woke = journalled
+            .iter()
+            .position(|kind| *kind == "Resumed")
+            .expect("and the wait is closed by a resume, which is what a restart reads");
+        assert!(
+            slept < woke && journalled.iter().filter(|kind| **kind == "Paused").count() == 1,
+            "one pause, then one resume, then the work went on: {journalled:?}"
+        );
+        assert_eq!(
+            fixture.asked().len(),
+            2,
+            "the wait bought one fresh session and no more"
+        );
+        assert!(
+            fixture.asked()[1].contains("class: ProviderLimit"),
+            "and that session was told what the last one was refused for"
+        );
+        assert_eq!(
+            attempts(&fixture.project),
+            [AttemptId::new(FIRST), AttemptId::new(SECOND)],
+            "the wait itself is not an attempt: two, not three"
+        );
+        assert!(
+            fixture.account(SECOND).is_file(),
+            "the session after the wait is a repair, and accounts for itself"
+        );
+        assert_eq!(
+            fixture.ran(),
+            ["targeted", "verify"],
+            "the resumed attempt was gated like any other"
+        );
+        assert_eq!(
+            closed_on(&fixture.project),
+            fixture.origin_tip(),
+            "and finished work was published, pause and all"
+        );
+        assert!(lock_is_free(&fixture.project), "and the lock comes back");
+    }
+
+    #[test]
+    fn a_second_limit_in_one_run_parks_rather_than_waits_again() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[Script::limit(UNNAMED), Script::limit(UNNAMED)]));
+        let mut run = fixture.run();
+        let clock = Counted::waiting(now());
+
+        let state = parked(&fixture, &mut run, &task(), &clock);
+
+        assert_eq!(
+            clock.plans().len(),
+            1,
+            "the second limit is the provider contradicting the first wait, and a waiting \
+             supervisor cannot settle that"
+        );
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::Limit { until: None },
+                resume_to: Box::new(TaskState::Remediating {
+                    attempt: AttemptId::new(SECOND),
+                    phase: Phase::Implement,
+                }),
+            },
+            "it parks at the attempt that met it: {state:?}"
+        );
+        let mut wanted = PREFLIGHT.to_vec();
+        wanted.extend(a_session_that_printed(UNNAMED));
+        wanted.extend(["Paused", "Resumed"]);
+        wanted.extend(a_session_that_printed(UNNAMED));
+        wanted.extend(["SelfHealingReport", "Paused"]);
+        assert_eq!(
+            kinds(&fixture.project),
+            wanted,
+            "one wait, one more attempt, and the account of it before the pause"
+        );
+        assert_eq!(
+            attempts(&fixture.project),
+            [AttemptId::new(FIRST), AttemptId::new(SECOND)],
+            "both attempts are recorded"
+        );
+        assert!(fixture.account(SECOND).is_file());
+        assert!(
+            !holds(&fixture.project, "TaskFailed"),
+            "and neither limit failed the task"
+        );
+        assert!(lock_is_free(&fixture.project));
+    }
+
+    #[test]
+    fn a_limit_met_where_the_bounds_are_spent_parks_without_sleeping() {
+        let fixture = Fixture::spent();
+        fixture.script(&scenario(&[Script::limit(NAMED).taking(1500)]));
+        let mut run = fixture.run();
+        let clock = Counted::waiting(now());
+
+        let state = parked(&fixture, &mut run, &task(), &clock);
+
+        assert!(
+            clock.plans().is_empty(),
+            "a run out of its elapsed bound does not begin to sit a wait out: {:?}",
+            clock.plans()
+        );
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::Limit {
+                    until: Some(wake())
+                },
+                resume_to: Box::new(TaskState::Running {
+                    attempt: AttemptId::new(FIRST),
+                    phase: Phase::Implement,
+                }),
+            },
+            "and it is parked with the same deadline a run that could wait would have \
+             written, because a spent budget is not a different limit: {state:?}"
+        );
+        assert_eq!(
+            fixture.asked().len(),
+            1,
+            "no session was launched past the bound that stopped this run"
+        );
+        assert!(
+            !holds(&fixture.project, "TaskFailed"),
+            "a bound spent on a limit is still exit 3"
+        );
+    }
+
+    #[test]
+    fn a_report_that_asked_a_question_parks_the_attempt_that_wrote_it() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[Script::done(&[])]));
+        fixture.report(FIRST, FULL_ASK);
+        let mut run = fixture.run();
+        let clock = Counted::new(now());
+
+        let state = parked(&fixture, &mut run, &task(), &clock);
+
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::Input,
+                resume_to: Box::new(TaskState::Running {
+                    attempt: AttemptId::new(FIRST),
+                    phase: Phase::Implement,
+                }),
+            },
+            "§6's waiting_input is the state behind the eighth invariant: {state:?}"
+        );
+        let ask = rows(&fixture.project)
+            .into_iter()
+            .find_map(|row| match row.kind {
+                EventKind::DecisionRaised { request } => Some(request),
+                _ => None,
+            });
+        let ask = ask.expect("a complete ask is journalled as the decision it asks for");
+        assert_eq!(
+            ask.question, "keep the pause's reason as text or as a table?",
+            "in the agent's own words"
+        );
+        assert_eq!(ask.options, ["text", "table"], "every choice it saw");
+        assert!(!ask.tradeoffs.is_empty() && !ask.impact.is_empty());
+        assert_eq!(
+            kinds(&fixture.project).last(),
+            Some(&"DecisionRaised"),
+            "the ask is the row that parks it, and no second pause row is nested under it"
+        );
+        assert!(
+            fixture.report_of(FIRST).is_file(),
+            "the report itself stays filed as evidence"
+        );
+        assert_eq!(
+            resumed(&state),
+            TaskState::Running {
+                attempt: AttemptId::new(FIRST),
+                phase: Phase::Implement,
+            }
+        );
+        assert!(lock_is_free(&fixture.project));
+    }
+
+    #[test]
+    fn a_session_that_asked_in_its_output_alone_parks_without_an_ask() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[Script::spoken(SHORT_ASK)]));
+        let mut run = fixture.run();
+        let clock = Counted::new(now());
+
+        let state = parked(&fixture, &mut run, &task(), &clock);
+
+        assert!(
+            matches!(
+                state,
+                TaskState::Paused {
+                    reason: PauseReason::Input,
+                    ..
+                }
+            ),
+            "a session that stopped at a decision has stopped at a decision, report or no \
+             report: {state:?}"
+        );
+        assert!(
+            !holds(&fixture.project, "DecisionRaised"),
+            "nothing that could be read as a decision request was written, so none is \
+             invented: {:?}",
+            kinds(&fixture.project)
+        );
+        assert!(
+            !fixture.report_of(FIRST).exists(),
+            "and a pause does not file the report its session never wrote"
+        );
+        assert!(!holds(&fixture.project, "TaskFailed"));
+        assert_eq!(fixture.ran(), Vec::<String>::new(), "nothing was gated");
+    }
+
+    #[test]
+    fn an_ask_short_of_a_section_costs_the_ask_and_not_the_pause() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[Script::done(&[])]));
+        fixture.report(FIRST, SHORT_ASK);
+        let mut run = fixture.run();
+        let clock = Counted::new(now());
+
+        let state = parked(&fixture, &mut run, &task(), &clock);
+
+        assert!(
+            matches!(
+                state,
+                TaskState::Paused {
+                    reason: PauseReason::Input,
+                    ..
+                }
+            ),
+            "a report that claims NEEDS_INPUT stops the run whatever shape its body is in: \
+             {state:?}"
+        );
+        assert!(
+            !holds(&fixture.project, "DecisionRaised"),
+            "and the shortage costs the structured ask, not the pause: {:?}",
+            kinds(&fixture.project)
+        );
+        assert!(
+            fixture.report_of(FIRST).is_file(),
+            "the words it did write are kept where the prompt said to keep them"
+        );
+        assert!(
+            !fixture.account(FIRST).is_file(),
+            "a first attempt owes no §7 account, paused or otherwise"
+        );
+        assert!(!holds(&fixture.project, "TaskFailed"));
+    }
+
+    #[test]
+    fn a_gate_task_parks_before_anything_is_started() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[Script::done(&[])]));
+        let mut run = fixture.run();
+        let before = fixture.origin_tip();
+        let clock = Counted::new(now());
+
+        let state = parked(&fixture, &mut run, &gate_task(), &clock);
+
+        assert_eq!(
+            state,
+            TaskState::Paused {
+                reason: PauseReason::HumanGate,
+                resume_to: Box::new(TaskState::Queued),
+            },
+            "§6 gives a gate to a person, so the task never left the queue: {state:?}"
+        );
+        assert_eq!(
+            kinds(&fixture.project),
+            ["Paused"],
+            "one row, and no preflight, lock, checkout or session behind it"
+        );
+        assert_eq!(fixture.ran(), Vec::<String>::new(), "no gate command ran");
+        assert!(fixture.asked().is_empty(), "no session was ever started");
+        assert!(
+            clock.plans().is_empty(),
+            "a gate waits on a person, not on a clock"
+        );
+        assert_eq!(fixture.checkouts().len(), 1, "no checkout was cut for it");
+        assert_eq!(fixture.origin_tip(), before, "and it produces no commit");
+        assert!(
+            lock_is_free(&fixture.project),
+            "and it holds no lock while it waits"
+        );
+        assert_eq!(
+            replayed(&fixture.project),
+            Some(state.clone()),
+            "the journal replays to the gate"
+        );
+        assert_eq!(
+            apply(
+                &state,
+                &EventKind::GateAcknowledged {
+                    by: "operator".to_owned(),
+                    at: now(),
+                }
+            )
+            .expect("a gate is acknowledged by a person"),
+            TaskState::Acknowledged {
+                by: "operator".to_owned(),
+                at: now(),
+            },
+            "and `ack` is the only way out of it"
+        );
+    }
+
+    #[test]
+    fn a_gate_parked_twice_is_parked_once() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[Script::done(&[])]));
+        let mut run = fixture.run();
+        let clock = Counted::new(now());
+
+        let first = parked(&fixture, &mut run, &gate_task(), &clock);
+        let again = parked(&fixture, &mut run, &gate_task(), &clock);
+
+        assert_eq!(first, again, "an operator pressing run twice sees one gate");
+        assert_eq!(
+            kinds(&fixture.project),
+            ["Paused"],
+            "and the journal holds one row, not a nested pause ADR-0026 would refuse"
+        );
+    }
+
+    #[test]
+    fn the_machines_clock_reads_the_instant_it_is_asked_at() {
+        let before = OffsetDateTime::now_utc();
+        let read = Machine.now();
+        let after = OffsetDateTime::now_utc();
+
+        assert!(
+            read >= before && read <= after,
+            "the production clock answers the instant it is asked at, which is the instant \
+             a reset is measured against: {read:?} between {before:?} and {after:?}"
+        );
+    }
+
+    #[test]
+    fn the_machines_clock_sits_out_a_wait_that_has_not_passed() {
+        let one_second = time::Duration::seconds(1);
+
+        let started = Instant::now();
+        assert!(
+            Machine.sit_out(WaitPlan::Backoff { wait: one_second }),
+            "a wait it is asked to sit out is a wait it reports having sat out"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(900),
+            "and it really slept: {:?}",
+            started.elapsed()
+        );
+
+        let already = OffsetDateTime::now_utc().saturating_sub(one_second * 60);
+        let passed = Instant::now();
+        assert!(
+            Machine.sit_out(WaitPlan::Deadline { at: already }),
+            "a deadline already gone is still a wait that ended"
+        );
+        assert!(
+            passed.elapsed() < Duration::from_millis(500),
+            "without sleeping through anything that had already happened: {:?}",
+            passed.elapsed()
+        );
     }
 }
