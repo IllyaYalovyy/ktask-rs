@@ -168,7 +168,8 @@ fn event_loop(
 /// Whether `key` ends the session: Ctrl-C always, and `q` unless an overlay is
 /// open, where it closes the overlay instead, or a search or an answer is
 /// being typed, where it is a letter of the text.
-fn quits(app: &App, key: &KeyEvent) -> bool {
+#[must_use]
+pub fn quits(app: &App, key: &KeyEvent) -> bool {
     match key.code {
         KeyCode::Char('c') => key.modifiers.contains(KeyModifiers::CONTROL),
         KeyCode::Char('q') => {
