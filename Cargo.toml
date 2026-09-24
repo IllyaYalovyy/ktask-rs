@@ -48,6 +48,14 @@ dbg_macro = "warn"
 print_stdout = "warn"
 print_stderr = "warn"
 
+# The shipped binary: one self-contained file (SQLite is bundled) that runs on
+# a machine with no Rust toolchain. Thin LTO trims it without the link time of
+# full LTO; stripping drops symbols and debug info that only a debugger reads.
+# crates/ktask-cli/tests/release.rs asserts both and runs the result.
+[profile.release]
+lto = "thin"
+strip = true
+
 # Fixed set, resolved and checked against deny.toml. See docs/DESIGN.md
 # Dependencies: do not add, remove or substitute a crate without an ADR.
 [workspace.dependencies]

@@ -12,16 +12,34 @@ This guide is the walk-through.
 
 ## 1. Install
 
-You need `git` and a Rust toolchain of version 1.97 or newer. From a checkout
-of this repository:
+`ktask-rs` is one binary. Building it needs `git` and a Rust toolchain of
+version 1.97 or newer; running it needs only `git`, because SQLite is
+compiled into the binary and nothing else is loaded at run time. From a
+checkout of this repository:
 
 ```sh
 cargo install --path crates/ktask-cli --locked
 ```
 
-That builds and installs one binary, `ktask-rs`, into `~/.cargo/bin`. Check
-that it is on your `PATH` with `ktask-rs --version`; `ktask-rs --help` lists
-every command.
+That builds the release profile and installs `ktask-rs` into `~/.cargo/bin`.
+The profile (the `[profile.release]` table in `Cargo.toml`) turns on thin
+link-time optimisation and strips symbols, so the result is one small,
+self-contained file. Check that it is on your `PATH` with
+`ktask-rs --version`; `ktask-rs --help` lists every command.
+
+To put the binary on a machine that has no Rust toolchain, build it once and
+copy the file. The target machine needs the same operating system and
+processor architecture as the one you built on, and `git`:
+
+```sh
+cargo build --release --locked
+install -m 755 target/release/ktask-rs ~/.local/bin/
+```
+
+The test suite builds the release profile and runs `target/release/ktask-rs`
+through a complete queue with the `dummy` provider
+(`cargo nextest run -p ktask-cli -E 'test(/release::/)'`), so the binary you
+copy is the one that has been proven.
 
 ## 2. A project to work on
 
