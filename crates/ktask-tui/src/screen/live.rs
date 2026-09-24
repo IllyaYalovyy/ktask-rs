@@ -108,7 +108,7 @@ pub struct GateLine {
 }
 
 impl GateLine {
-    fn new(result: &GateResult) -> Self {
+    pub(crate) fn new(result: &GateResult) -> Self {
         Self {
             kind: result.kind,
             passed: result.passed,
@@ -147,7 +147,7 @@ impl GateLine {
 }
 
 /// The name a gate goes by in the interface.
-fn gate_name(kind: GateKind) -> String {
+pub(crate) fn gate_name(kind: GateKind) -> String {
     format!("{kind:?}").to_lowercase()
 }
 

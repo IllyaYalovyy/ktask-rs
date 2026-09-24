@@ -54,6 +54,10 @@ pub enum KeyAction {
     NextError,
     /// Go to the previous error in the logs.
     PrevError,
+    /// Show the previous attempt in the task inspector.
+    PrevAttempt,
+    /// Show the next attempt in the task inspector.
+    NextAttempt,
     /// Quit; never kills a running task.
     Quit,
     /// Close the overlay if one is open, otherwise quit.
@@ -79,6 +83,7 @@ pub struct Binding {
 const ALL: &[Screen] = &Screen::ALL;
 const LIVE_RUN: &[Screen] = &[Screen::LiveRun];
 const LOGS: &[Screen] = &[Screen::Logs];
+const INSPECTOR: &[Screen] = &[Screen::Inspector];
 
 const fn bind(
     key: KeyCode,
@@ -106,7 +111,7 @@ const fn plain(
 }
 
 /// Every key binding, in the order the key map lists them.
-pub static BINDINGS: [Binding; 31] = [
+pub static BINDINGS: [Binding; 33] = [
     plain(
         KeyCode::Char('1'),
         KeyAction::Jump(Screen::Queue),
@@ -240,6 +245,18 @@ pub static BINDINGS: [Binding; 31] = [
         KeyAction::PrevError,
         LOGS,
         "Previous error",
+    ),
+    plain(
+        KeyCode::Char('['),
+        KeyAction::PrevAttempt,
+        INSPECTOR,
+        "Previous attempt",
+    ),
+    plain(
+        KeyCode::Char(']'),
+        KeyAction::NextAttempt,
+        INSPECTOR,
+        "Next attempt",
     ),
     bind(
         KeyCode::Char('c'),
@@ -375,7 +392,7 @@ mod tests {
             .filter(|binding| binding.screens.len() != Screen::ALL.len())
             .map(|binding| binding.action)
             .collect();
-        assert_eq!(screen_keys.len(), 8);
+        assert_eq!(screen_keys.len(), 10);
     }
 
     /// The keys of the logs screen, written out independently of the table.
@@ -413,6 +430,20 @@ mod tests {
             .collect();
         assert_eq!(helps.len(), 7);
         assert!(helps.iter().all(|help| !help.trim().is_empty()));
+    }
+
+    #[test]
+    fn the_attempt_keys_are_bound_on_the_inspector_screen_alone() {
+        for screen in Screen::ALL {
+            for (c, action) in [('[', KeyAction::PrevAttempt), (']', KeyAction::NextAttempt)] {
+                let expected = (screen == Screen::Inspector).then_some(action);
+                assert_eq!(
+                    action_on(screen, &char_key(c)),
+                    expected,
+                    "{c} on {screen:?}"
+                );
+            }
+        }
     }
 
     #[test]

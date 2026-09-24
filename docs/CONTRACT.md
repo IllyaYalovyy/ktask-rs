@@ -226,6 +226,27 @@ Bindings are consistent across screens: a key never means two different things.
 5. **Task inspector** — objective, acceptance criteria, dependencies,
    completion gates, work protocol with current phase highlighted, per-attempt
    evidence.
+
+   ```
+   [ / ]       show the previous / the next attempt
+   j / k       inspect the next / the previous task
+   g / G       inspect the first / the last task
+   ```
+
+   It shows the task selected in the queue (`Enter` opens it here). The
+   definition comes first: outcome, done-when, verify and refs. Below it the
+   work protocol is a row of phases, each marked done (`✓`), current (`▶`,
+   drawn reversed), stopped (`✗`), skipped by a declared TDD exception (`↷`) or
+   pending (`·`), followed by what the current phase may write and which gate
+   it runs, and the completion gates marked the same way. The phase marks come
+   from the journal alone: the current phase is the last one the shown attempt
+   entered, and a phase the protocol does not list is still shown. The rest is
+   the evidence of one attempt: verdict, each gate's result (with the last line
+   a failed gate wrote), timing, exit, model, commits and usage. The newest
+   attempt is shown, and followed as new ones start, until `[` steps back;
+   `]` back to the newest follows it again. A terminal too short for all of it
+   gives each part of the definition and the evidence a line before any gets
+   a second.
 6. **Input inbox** — pending questions with context, impact and recommended
    response; resolving here writes the same ADR as `resolve`.
 7. **History** — event timeline across every attempt and remediation.

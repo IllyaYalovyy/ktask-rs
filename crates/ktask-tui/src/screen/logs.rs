@@ -463,7 +463,7 @@ fn level_style(level: Level) -> Style {
 }
 
 /// The name of a phase in the interface.
-fn phase_name(phase: Phase) -> &'static str {
+pub(crate) fn phase_name(phase: Phase) -> &'static str {
     match phase {
         Phase::Goal => "Goal",
         Phase::Scope => "Scope",
