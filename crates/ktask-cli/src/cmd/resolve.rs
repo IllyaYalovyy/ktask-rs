@@ -16,30 +16,18 @@
 //! Nothing here commits the ADR; see `docs/adr/0009-*.md`.
 
 use ktask_core::{
-    Config, DecisionRequest, EventKind, Journal, PauseReason, Project, RunOutcome, TaskId,
-    TaskState, apply, redact,
+    Config, DecisionRequest, PauseReason, Project, ResolveError, RunOutcome, TaskId, TaskState,
+    bullets, raised_request, resolve_decision,
 };
 use std::env::{self, VarError};
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::{Path, PathBuf};
 use time::{Date, OffsetDateTime};
 
 use super::editor;
 use crate::cmd::run::read_queue;
 use crate::render;
 
-/// The ADR directory, relative to the repository root.
-const ADR_DIR: &str = "docs/adr";
-
 /// The scratch file `$EDITOR` opens, within the project's state directory.
 const SCRATCH_FILE_NAME: &str = "resolve-answer.md";
-
-/// The longest slug in an ADR's filename, in characters.
-const SLUG_LIMIT: usize = 50;
-
-/// The longest title in an ADR's heading, in characters, before it is cut.
-const TITLE_LIMIT: usize = 72;
 
 /// Answers the question `task` is waiting on with `note`, or with what
 /// `$EDITOR` leaves behind when `note` is omitted. Exits 0 once the answer is
@@ -116,47 +104,15 @@ fn resolve(
         Err(detail) => return RunOutcome::Usage { detail },
     };
 
-    let adr_dir = project.root.join(ADR_DIR);
-    let number = match next_adr_number(&adr_dir) {
-        Ok(number) => number,
-        Err(err) => {
-            return check_failed(format!(
-                "resolve: could not read {}: {err}",
-                adr_dir.display()
-            ));
+    let relative = match resolve_decision(project, task, &request, &answer, today) {
+        Ok(relative) => relative,
+        Err(err @ ResolveError::Rejected { .. }) => {
+            return RunOutcome::Usage {
+                detail: format!("resolve: {err}"),
+            };
         }
+        Err(err) => return check_failed(format!("resolve: {err}")),
     };
-    let title = title(&request.question);
-    let relative = PathBuf::from(ADR_DIR).join(format!("{number:04}-{}.md", slug(&title)));
-
-    let event = EventKind::DecisionResolved {
-        adr_path: relative.clone(),
-        answer: answer.clone(),
-    };
-    // `read_queue` only lets an input pause get this far, the one state that
-    // accepts this event; checking anyway keeps that a fact `apply` states
-    // rather than one this function assumes.
-    if let Err(err) = apply(state, &event) {
-        return RunOutcome::Usage {
-            detail: format!("resolve: task {task} cannot be resolved: {err}"),
-        };
-    }
-    let appended =
-        Journal::open_for(project).and_then(|mut journal| journal.append(Some(task), &event));
-    if let Err(err) = appended {
-        return check_failed(format!(
-            "resolve: could not record the resolution of task {task}: {err}"
-        ));
-    }
-
-    let adr = render_adr(number, &title, today, task, &request, &answer);
-    if let Err(err) = write_adr(&project.root.join(&relative), &adr) {
-        return check_failed(format!(
-            "resolve: the answer to task {task} is journaled, but its ADR {} could not be \
-             written: {err}; the answer was: {answer}",
-            relative.display()
-        ));
-    }
 
     render::out(format_args!("task {task} resolved: {}", relative.display()));
     render::progress(format_args!(
@@ -164,16 +120,6 @@ fn resolve(
          refuses a working tree with uncommitted files"
     ));
     RunOutcome::Drained
-}
-
-/// The question `task` most recently raised: the last `DecisionRaised` in
-/// its journaled history.
-fn raised_request(project: &Project, task: TaskId) -> ktask_core::Result<Option<DecisionRequest>> {
-    let events = Journal::open_for(project)?.events_for(task)?;
-    Ok(events.into_iter().rev().find_map(|event| match event.kind {
-        EventKind::DecisionRaised { request } => Some(request),
-        _ => None,
-    }))
 }
 
 /// The answer to `request`: `note` if given, else what `$EDITOR` leaves
@@ -237,132 +183,6 @@ fn strip_comment(text: &str) -> &str {
         .map_or(text, |(_, after)| after.trim())
 }
 
-/// The number the next ADR takes: one more than the highest `NNNN-*.md`
-/// under `dir`, or 1 when there is none (0000 is the template). Files that
-/// do not open with four digits and a hyphen are not ADRs and are ignored.
-fn next_adr_number(dir: &Path) -> std::io::Result<u32> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(1),
-        Err(err) => return Err(err),
-    };
-    let mut highest = 0;
-    for entry in entries {
-        let name = entry?.file_name().to_string_lossy().into_owned();
-        let number = name
-            .split_once('-')
-            .filter(|(digits, _)| digits.len() == 4)
-            .and_then(|(digits, _)| digits.parse::<u32>().ok());
-        highest = highest.max(number.unwrap_or(0));
-    }
-    Ok(highest + 1)
-}
-
-/// The ADR heading for `question`: its first non-empty line without closing
-/// punctuation, cut to [`TITLE_LIMIT`] characters with an ellipsis.
-fn title(question: &str) -> String {
-    let line = question
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("")
-        .trim_end_matches(['?', '.', '!', ':'])
-        .trim_end();
-    if line.is_empty() {
-        return "Decision".to_string();
-    }
-    if line.chars().count() <= TITLE_LIMIT {
-        return line.to_string();
-    }
-    let cut: String = line.chars().take(TITLE_LIMIT).collect();
-    format!("{}…", cut.trim_end())
-}
-
-/// A filename-safe rendering of `text`: lowercase ASCII letters and digits
-/// in words joined by single hyphens, at most [`SLUG_LIMIT`] characters, or
-/// `decision` when nothing is left.
-fn slug(text: &str) -> String {
-    let mut out = String::new();
-    for c in text.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-        } else if !out.ends_with('-') {
-            out.push('-');
-        }
-    }
-    let cut: String = out.trim_matches('-').chars().take(SLUG_LIMIT).collect();
-    let cut = cut.trim_end_matches('-');
-    if cut.is_empty() {
-        "decision".to_string()
-    } else {
-        cut.to_string()
-    }
-}
-
-/// `items` as a Markdown bullet list, one per line.
-fn bullets(items: &[String]) -> String {
-    items
-        .iter()
-        .map(|item| format!("- {item}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// The ADR for a resolved decision, in the shape of
-/// `docs/adr/0000-template.md`. Redacted as a whole: unlike the journal and
-/// the state directory, this file goes into the repository.
-fn render_adr(
-    number: u32,
-    title: &str,
-    date: Date,
-    task: TaskId,
-    request: &DecisionRequest,
-    answer: &str,
-) -> String {
-    let recommended = request
-        .recommended
-        .as_ref()
-        .map_or_else(String::new, |recommended| {
-            format!("\n\nRecommended by the agent: {recommended}")
-        });
-    let context = format!(
-        "Task {task} paused for a decision (`waiting_input`):\n\n{}\n\nTrade-offs: {}{recommended}",
-        request.question, request.tradeoffs
-    );
-    let alternatives = bullets(&request.options);
-
-    let adr = format!(
-        "# {number:04}. {title}\n\n\
-         - **Status:** accepted\n\
-         - **Date:** {:04}-{:02}-{:02}\n\n\
-         ## Context\n\n{context}\n\n\
-         ## Decision\n\n{answer}\n\n\
-         ## Alternatives considered\n\nThe options the agent put forward:\n\n{alternatives}\n\n\
-         ## Consequences\n\n{}\n\n\
-         Recorded by `ktask-rs resolve`; task {task} runs again with this decision in its \
-         context.\n",
-        date.year(),
-        u8::from(date.month()),
-        date.day(),
-        request.impact,
-    );
-    redact(&adr, &[])
-}
-
-/// Writes `adr` to `path`, creating `docs/adr` if it is not there yet.
-/// Refuses to overwrite: an ADR is a record, and a number already taken is
-/// somebody else's.
-fn write_adr(path: &Path, adr: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?
-        .write_all(adr.as_bytes())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,7 +191,7 @@ mod tests {
         AttemptId, DecisionRequest, EventKind, Journal, PauseReason, Task, TaskState, TaskStatus,
     };
     use std::env::VarError;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use time::{Date, Month};
 
     fn today() -> Date {
@@ -645,35 +465,6 @@ mod tests {
     }
 
     #[test]
-    fn the_next_adr_number_follows_the_highest_one_present_and_ignores_other_files() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let adrs = dir.path().join("adr");
-        std::fs::create_dir_all(&adrs).expect("mkdir");
-        for name in [
-            "0000-template.md",
-            "0008-retry.md",
-            "0012-something.md",
-            "README.md",
-            "notes.txt",
-            "12-short.md",
-        ] {
-            std::fs::write(adrs.join(name), "").expect("write");
-        }
-
-        assert_eq!(next_adr_number(&adrs).expect("scan"), 13);
-    }
-
-    #[test]
-    fn the_first_adr_of_a_repository_with_no_adr_directory_is_number_one() {
-        let dir = tempfile::tempdir().expect("tempdir");
-
-        assert_eq!(
-            next_adr_number(&dir.path().join("missing")).expect("scan"),
-            1
-        );
-    }
-
-    #[test]
     fn a_second_resolution_takes_the_next_number() {
         let dir = tempfile::tempdir().expect("tempdir");
         let project = waiting_project(&dir, request());
@@ -717,43 +508,6 @@ mod tests {
                 "0002-which-port.md".to_string(),
             ]
         );
-    }
-
-    #[test]
-    fn slugs_are_lowercase_ascii_words_joined_by_single_hyphens() {
-        assert_eq!(slug("Postgres or SQLite?"), "postgres-or-sqlite");
-        assert_eq!(
-            slug("  --Use  `tokio`, not async-std!! "),
-            "use-tokio-not-async-std"
-        );
-        assert_eq!(slug("Übergröße"), "bergr-e");
-        assert_eq!(slug("???"), "decision");
-        assert_eq!(slug(""), "decision");
-    }
-
-    #[test]
-    fn a_long_slug_is_cut_without_leaving_a_trailing_hyphen() {
-        let long = format!("{} {}", "a".repeat(49), "b".repeat(30));
-
-        let cut = slug(&long);
-
-        assert_eq!(cut, "a".repeat(49));
-        assert!(cut.len() <= SLUG_LIMIT);
-    }
-
-    #[test]
-    fn a_title_is_the_first_line_of_the_question_without_its_closing_punctuation() {
-        assert_eq!(title("Which database?\nMore detail."), "Which database");
-        assert_eq!(title("\n  Which database?  "), "Which database");
-        assert_eq!(title(""), "Decision");
-    }
-
-    #[test]
-    fn a_long_title_is_shortened_with_an_ellipsis() {
-        let shown = title(&"word ".repeat(40));
-
-        assert_eq!(shown.chars().count(), TITLE_LIMIT + 1);
-        assert!(shown.ends_with('…'), "{shown}");
     }
 
     // -- refusals ----------------------------------------------------------------
