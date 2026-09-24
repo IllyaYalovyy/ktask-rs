@@ -7,6 +7,13 @@ Other tools automate agents. ktask guarantees that ordered work was actually
 verified, published, and recoverable — without leaking its operational context
 into the repository. See [VISION.md](VISION.md) for the full design.
 
+## Getting started
+
+[docs/GUIDE.md](docs/GUIDE.md) takes you from install to a drained queue with
+the built-in `dummy` provider: `init`, `add`, `plan lint`, `run` and `status`,
+each with its real output. The guide is run by the test suite, so what it
+shows is what the commands print.
+
 ## This branch
 
 `template` is the **seed** every implementation run starts from. It is
@@ -35,6 +42,7 @@ markers that the first tasks replace.
 | `docs/adr/` | architecture decision records — the only operational docs kept in-repo |
 | `scripts/check-prereqs.sh` | reports what must be installed before any task can run |
 | `scripts/quality.sh` | the single entry point for every mechanical gate |
+| `docs/GUIDE.md` | getting started: install, init, add, plan lint, run, status |
 | `docs/CONTRACT.md` | the CLI and TUI surface: commands, exit codes, screens, keys |
 | `docs/QUALITY.md` | what each gate enforces, and why |
 | `rustfmt.toml`, `clippy.toml`, `_typos.toml` | static analysis configuration |
