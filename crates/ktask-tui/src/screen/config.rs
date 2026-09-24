@@ -1231,4 +1231,120 @@ mod tests {
             }
         }
     }
+
+    // ---- styles and boundaries ----
+
+    /// The foreground and modifiers of the first cell of the row of `app` that
+    /// starts with `prefix`, and of the cell `column` columns along it.
+    fn style_at(app: &App, prefix: &str, column: u16) -> Style {
+        let harness = Harness::from_app(app.clone());
+        let text = harness.text();
+        let row = text
+            .split('\n')
+            .position(|row| row.starts_with(prefix))
+            .unwrap_or_else(|| panic!("no row starting {prefix:?}"));
+        let cell = &harness.buffer()[(column, u16::try_from(row).expect("row"))];
+        cell.style()
+    }
+
+    #[test]
+    fn config_headings_are_bold_and_a_source_that_is_not_the_default_stands_out() {
+        let app = loaded(
+            (80, 24),
+            snap(
+                vec![
+                    setting("provider", Some("\"claude\""), Source::ProjectFile),
+                    setting("max_attempts", Some("2"), Source::Default),
+                ],
+                vec![passing("git")],
+            ),
+        );
+        let bold = |style: Style| style.add_modifier.contains(Modifier::BOLD);
+        assert!(bold(style_at(&app, "Doctor", 0)));
+        assert!(bold(style_at(&app, "Configuration", 0)));
+        // The source column starts after the key column and its gap.
+        let source = u16::try_from("max_attempts".len() + 1).expect("column");
+        assert_eq!(style_at(&app, "provider", source).fg, Some(Color::Cyan));
+        assert!(
+            style_at(&app, "max_attempts", source)
+                .add_modifier
+                .contains(Modifier::DIM)
+        );
+        assert_eq!(
+            style_at(&app, "max_attempts", source).fg,
+            Some(Color::Reset)
+        );
+        // The key and the value are not styled like the source.
+        assert_eq!(style_at(&app, "provider", 0).fg, Some(Color::Reset));
+    }
+
+    #[test]
+    fn config_an_unset_value_is_dim_and_a_set_one_is_not() {
+        let app = loaded(
+            (80, 24),
+            snap(
+                vec![
+                    setting("model", None, Source::Default),
+                    setting("provider", Some("\"x\""), Source::Default),
+                ],
+                Vec::new(),
+            ),
+        );
+        let value = u16::try_from("provider".len() + 1 + SOURCE_WIDTH + 1).expect("column");
+        assert!(
+            style_at(&app, "model", value)
+                .add_modifier
+                .contains(Modifier::DIM)
+        );
+        assert!(
+            !style_at(&app, "provider", value)
+                .add_modifier
+                .contains(Modifier::DIM)
+        );
+    }
+
+    #[test]
+    fn config_the_reason_a_configuration_could_not_load_is_red() {
+        let mut app = app_at((80, 24));
+        assert!(backfill(&mut app, &|| Err("bad key".to_owned())));
+        assert_eq!(
+            style_at(&app, "The configuration could not", 0).fg,
+            Some(Color::Red)
+        );
+        assert_eq!(style_at(&app, "bad key", 0).fg, Some(Color::Red));
+        assert_eq!(style_at(&app, "Fix the file", 0).fg, Some(Color::Reset));
+    }
+
+    #[test]
+    fn config_the_value_column_needs_its_minimum_room_or_the_value_moves_under_the_key() {
+        let settings = vec![setting("mainline_branch", Some("\"main\""), Source::Env)];
+        let value_column = "mainline_branch".len() + GAP.len() + SOURCE_WIDTH + GAP.len();
+        let enough = u16::try_from(value_column + MIN_VALUE_WIDTH).expect("width");
+        let inline = loaded((enough, 30), snap(settings.clone(), Vec::new()));
+        assert!(
+            shown(&inline)
+                .iter()
+                .any(|line| line.starts_with("mainline_branch environment  \"main\""))
+        );
+        let short = loaded((enough - 1, 30), snap(settings, Vec::new()));
+        assert!(shown(&short).iter().any(|line| line == "  \"main\""));
+    }
+
+    #[test]
+    fn config_a_body_of_one_row_shows_a_line_of_the_document_and_no_key_bar() {
+        let app = loaded((80, 2), many(3));
+        assert_eq!(
+            shown(&app),
+            ["9 Configuration and doctor", "Doctor · all 1 checks pass"]
+        );
+        let scrolled = key(app, 'j');
+        assert_eq!(shown(&scrolled)[1], "PASS git: fine");
+    }
+
+    #[test]
+    fn config_a_body_of_no_rows_draws_nothing_and_scrolls_nowhere() {
+        let app = loaded((80, 1), many(40));
+        assert_eq!(shown(&app), ["9 Configuration and doctor"]);
+        assert_eq!(key(app, 'G').config.top, 40 + 4);
+    }
 }
