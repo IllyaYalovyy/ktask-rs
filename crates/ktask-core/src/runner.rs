@@ -11022,6 +11022,9 @@ mod pause {
     /// The same refusal with no instant in it, which is the other half of §7's table.
     const UNNAMED: &str = "ERROR: usage limit reached; try again later";
 
+    /// A provider fault a fresh session can fix, which is the class a wait is not for.
+    const DROPPED: &str = "ERROR: connection reset by peer while streaming";
+
     /// The gate report the scripted gate prints once the fix is in the tree.
     const GREEN: &str = "running 1 tests\ntest the_fix ... ok\n\ntest result: ok. 1 passed; 0 \
                         failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n";
@@ -11327,6 +11330,21 @@ mod pause {
                 outcome: "needs_input",
                 printed: words,
                 exit_code: None,
+                delay_ms: None,
+                files: &[],
+            }
+        }
+
+        /// A session the provider dropped mid-work, printing `words`.
+        ///
+        /// The status is declared for the reason [`Script::limit`] gives: the fault is
+        /// read out of what the session printed, and [`crate::classify`] only believes
+        /// a session's prose when the session did not also claim it finished.
+        fn dropped(words: &'static str) -> Self {
+            Self {
+                outcome: "failure",
+                printed: words,
+                exit_code: Some(1),
                 delay_ms: None,
                 files: &[],
             }
@@ -11762,6 +11780,58 @@ mod pause {
             "and finished work was published, pause and all"
         );
         assert!(lock_is_free(&fixture.project), "and the lock comes back");
+    }
+
+    /// §7 waits a limit out and asks everything else again, and the two answers are not
+    /// interchangeable.
+    ///
+    /// The assertion is that the clock was handed *nothing*: a fault with no reset to
+    /// wait for that is routed through the wait path still ends the task in the state an
+    /// ordinary repair reaches, so only the wait it took, the rows it wrote and the class
+    /// the next session was told give this one away. The clock is one that would have
+    /// slept, so the emptiness is the run's refusal to ask rather than a clock that
+    /// answered no.
+    #[test]
+    fn a_fault_that_is_not_a_limit_is_asked_again_without_a_wait() {
+        let fixture = Fixture::new();
+        fixture.script(&scenario(&[
+            Script::dropped(DROPPED),
+            Script::done(&[(SEED_FILE, "fixed")]),
+        ]));
+        fixture.report(SECOND, DONE);
+        let mut run = fixture.run();
+        let clock = Counted::waiting(now());
+
+        let state = finished(&fixture, &mut run, &task(), &clock);
+
+        assert_eq!(
+            state,
+            TaskState::Done,
+            "a dropped session is repaired into a finished task like any other refusal: \
+             {state:?}"
+        );
+        assert!(
+            clock.plans().is_empty(),
+            "a limit is the one refusal a run sleeps for, and a fault with no reset to wait \
+             for was handed the clock as one: {:?}",
+            clock.plans()
+        );
+        for kind in ["Paused", "Resumed"] {
+            assert!(
+                !holds(&fixture.project, kind),
+                "nothing here paused, so the journal owes no {kind} row: {:?}",
+                kinds(&fixture.project)
+            );
+        }
+        assert_eq!(
+            fixture.asked().len(),
+            2,
+            "asking again is one fresh session, with no wait in front of it"
+        );
+        assert!(
+            fixture.asked()[1].contains("class: ProviderTransient"),
+            "and the session after the fault was told what the last one was refused for"
+        );
     }
 
     #[test]
