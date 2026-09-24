@@ -116,6 +116,19 @@ pub enum Source {
     Flag,
 }
 
+/// One effective configuration value with the layer that resolved it: a row
+/// of what `ktask-rs` is actually running with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Setting {
+    /// The key, as written in a config file.
+    pub key: String,
+    /// The effective value as TOML would write it (strings quoted, lists in
+    /// brackets), or `None` for an optional key nothing has set.
+    pub value: Option<String>,
+    /// The layer that provided it.
+    pub source: Source,
+}
+
 /// A value paired with the layer that resolved it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved<T> {
@@ -229,6 +242,26 @@ impl Config {
                     .copied()
                     .unwrap_or(Source::Default);
                 (key, source)
+            })
+            .collect()
+    }
+}
+
+impl Config {
+    /// Every configurable key with its effective value and the layer that
+    /// resolved it, in the order [`Config::provenance`] lists them.
+    #[must_use]
+    pub fn settings(&self) -> Vec<Setting> {
+        let values = match toml::Value::try_from(self) {
+            Ok(toml::Value::Table(table)) => table,
+            _ => toml::Table::new(),
+        };
+        self.provenance()
+            .into_iter()
+            .map(|(key, source)| Setting {
+                value: values.get(&key).map(toml::Value::to_string),
+                key,
+                source,
             })
             .collect()
     }
@@ -388,6 +421,82 @@ fn parse_env_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn setting<'a>(settings: &'a [Setting], key: &str) -> &'a Setting {
+        settings
+            .iter()
+            .find(|setting| setting.key == key)
+            .unwrap_or_else(|| panic!("no setting for {key}"))
+    }
+
+    #[test]
+    fn settings_lists_every_key_that_provenance_lists_in_the_same_order() {
+        let config = Config::default();
+        let keys: Vec<String> = config.settings().into_iter().map(|s| s.key).collect();
+        let provenance: Vec<String> = config.provenance().into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, provenance);
+    }
+
+    #[test]
+    fn settings_show_each_value_as_toml_writes_it() {
+        let config = Config::default();
+        let settings = config.settings();
+        assert_eq!(
+            setting(&settings, "provider").value.as_deref(),
+            Some("\"dummy\"")
+        );
+        assert_eq!(
+            setting(&settings, "max_attempts").value.as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            setting(&settings, "test_globs").value.as_deref(),
+            Some(r#"["**/tests/**", "**/*_test.rs", "src/**/tests.rs"]"#)
+        );
+        assert_eq!(
+            setting(&settings, "secret_patterns").value.as_deref(),
+            Some("[]")
+        );
+    }
+
+    #[test]
+    fn settings_leave_an_optional_key_nothing_set_without_a_value() {
+        let settings = Config::default().settings();
+        for key in [
+            "model",
+            "dummy_scenario_path",
+            "verify_command",
+            "flake_command",
+        ] {
+            assert_eq!(setting(&settings, key).value, None, "{key}");
+        }
+    }
+
+    #[test]
+    fn settings_carry_the_value_and_the_source_of_the_layer_that_won() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let project = dir.path().join("project.toml");
+        std::fs::write(
+            &project,
+            "max_attempts = 7\nverify_command = [\"make\", \"test\"]\n",
+        )
+        .expect("write");
+        let config = Config::load(None, Some(&project), &|key| {
+            (key == "KTASK_MODEL").then(|| "opus".to_string())
+        })
+        .expect("load");
+        let settings = config.settings();
+        let attempts = setting(&settings, "max_attempts");
+        assert_eq!(attempts.value.as_deref(), Some("7"));
+        assert_eq!(attempts.source, Source::ProjectFile);
+        let verify = setting(&settings, "verify_command");
+        assert_eq!(verify.value.as_deref(), Some(r#"["make", "test"]"#));
+        assert_eq!(verify.source, Source::ProjectFile);
+        let model = setting(&settings, "model");
+        assert_eq!(model.value.as_deref(), Some("\"opus\""));
+        assert_eq!(model.source, Source::Env);
+        assert_eq!(setting(&settings, "provider").source, Source::Default);
+    }
 
     #[test]
     fn empty_toml_document_deserializes_to_defaults() {

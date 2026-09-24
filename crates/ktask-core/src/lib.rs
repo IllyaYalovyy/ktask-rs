@@ -41,7 +41,7 @@ pub use classify::{
     FailureClass, Recovery, Stream, TddException, WaitPlan, classify, limit_message, parse_reset,
     wait_plan,
 };
-pub use config::{Config, Resolved, Source, load_for};
+pub use config::{Config, Resolved, Setting, Source, load_for};
 pub use context::{assemble, collect_adrs, ensure_defaults, load_context_doc, load_template};
 pub use control::{Request, pending, send, supervisor_alive};
 pub use decision::{DecisionRequest, parse_decision_request};
