@@ -65,7 +65,8 @@ pub use remediate::{
 };
 pub use report::{ReportClaim, ReportResult, parse_report, read_report, report_path};
 pub use runner::{
-    CheckOutcome, PhaseOutcome, PreflightCheck, PreflightReport, Prepared, Runner, preflight,
+    CheckOutcome, PhaseOutcome, PreflightCheck, PreflightReport, Prepared, RunOutcome, Runner,
+    preflight,
 };
 pub use state::{
     PauseReason, Phase, Recovery, Stream, TaskState, apply, check_one_active, check_predecessor,

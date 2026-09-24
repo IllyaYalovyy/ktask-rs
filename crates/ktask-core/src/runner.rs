@@ -159,6 +159,11 @@
 //!   checkout standing behind `origin` is ordinary, and the work is based on the
 //!   fetched tip rather than on `HEAD`, so drift is settled by publication
 //!   (ADR-0046) instead of being refused here.
+//!
+//! [`RunOutcome`] is the module's one answer type rather than one of its jobs:
+//! a queue-draining command hands it back, and it says what happened in the words
+//! `docs/CONTRACT.md` §1 documents — with no number in it, because the number a
+//! process leaves behind belongs to the CLI that runs one (T105 maps them).
 
 use std::fmt;
 use std::fs::{self, OpenOptions, Permissions};
@@ -2704,6 +2709,66 @@ pub enum PhaseOutcome {
         /// The one-line account of the refusal, naming `path`.
         detail: String,
     },
+}
+
+/// What a command decided, named rather than numbered.
+///
+/// `docs/DESIGN.md` *Other fixed types* fixes these variants and
+/// `docs/CONTRACT.md` §1 fixes what each of them means. The numbers §1's table
+/// pairs them with are deliberately not part of this type, and no function in
+/// this crate produces one: `run`, `retry` and the rest say *what happened*, and
+/// the process boundary that turns that into a status is the CLI alone. A core
+/// that returned `3` had already chosen which interface it was answering, and the
+/// TUI — the primary interface — has no exit code to show a paused queue with.
+///
+/// The division that carries the weight is §1's own: [`RunOutcome::Drained`] is
+/// the only answer that says the work finished, [`RunOutcome::TaskFailed`] the
+/// only one that says a task failed, and the three between them are pauses. A
+/// provider limit, a human gate and a question a person owes stop the queue
+/// without refusing anything (VISION.md §6), and none of them may mark its task
+/// `failed` — which is why they are three variants and never a
+/// [`TaskState::Failed`] wearing a different coat.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunOutcome {
+    /// Every task the run was asked to work reached a terminal success state, in
+    /// order, with its predecessor's completion proved before it started.
+    Drained,
+    /// A task failed with its remediation budget spent, which stops everything
+    /// behind it: a successor cannot start until its predecessor is complete.
+    TaskFailed {
+        /// The task that failed, which is the one `retry --task` is aimed at.
+        task: TaskId,
+    },
+    /// The command itself was used wrongly — bad arguments, a malformed task, no
+    /// registered project. Nothing ran, so nothing failed and nothing is paused.
+    Usage {
+        /// What was wrong, in the words the operator acts on: the argument, the
+        /// missing section, or the `ktask-rs init` that would have made one.
+        detail: String,
+    },
+    /// A provider's plan limit stopped the run. The world said pause: the work is
+    /// neither done nor wrong, and the same attempt resumes when the ceiling lifts.
+    ProviderLimit {
+        /// When the ceiling lifts, as the provider named it. `None` when it named
+        /// no time and the run's own back-off chose the wait — an invented instant
+        /// would be a deadline a resumed run slept to for no reason.
+        until: Option<OffsetDateTime>,
+    },
+    /// The run reached a task that is itself a human gate. Only a person moves it,
+    /// and the queue behind it waits (VISION.md §3's invariant 7).
+    HumanGate {
+        /// The gate task that stopped the queue, which `ack` is aimed at.
+        task: TaskId,
+    },
+    /// A task put a decision to a person and the run refused to spend a guess on
+    /// the answer (VISION.md §3's invariant 8).
+    NeedsInput {
+        /// The task whose question is owed an answer, which `resolve` is aimed at.
+        task: TaskId,
+    },
+    /// Something stopped the run from outside it. What it had already journaled is
+    /// durable, so this answer means *resume*, not *start over*.
+    Interrupted,
 }
 
 /// The name the repository registers `task`'s checkout under.
@@ -12160,5 +12225,222 @@ mod pause {
             "without sleeping through anything that had already happened: {:?}",
             passed.elapsed()
         );
+    }
+}
+
+#[cfg(test)]
+mod outcome {
+    //! What a command answers with, and the seven answers it may choose.
+    //!
+    //! `docs/DESIGN.md` *Other fixed types* fixes the variants and
+    //! `docs/CONTRACT.md` §1 fixes what each of them *means*, including the rule
+    //! this type exists for: three of the seven are pauses and "must never mark a
+    //! task `failed`". Both properties belong to the type, so both are pinned
+    //! here — which answers exist, what each carries, and that whoever reads this
+    //! crate cannot mistake a pause for a run that failed.
+    //!
+    //! What is deliberately not asserted here is the number an answer turns into.
+    //! §1's table belongs to the CLI that maps it, and a test in this crate that
+    //! named 3 or 130 would put the numbers back into the layer whose whole point
+    //! is that none are in it.
+
+    use super::RunOutcome;
+    use crate::TaskId;
+    use std::collections::BTreeSet;
+    use time::OffsetDateTime;
+    use time::macros::datetime;
+
+    /// What a wrong invocation is answered with: the argument the operator has to
+    /// fix, so the refusal is actionable rather than merely negative.
+    const USAGE: &str = "`--task` wants a number";
+
+    /// The task a stopping answer names. Seven rather than one, so an answer that
+    /// loses the id, or supplies somebody else's, cannot pass by coincidence.
+    fn task() -> TaskId {
+        TaskId::new(7)
+    }
+
+    /// The instant a provider said its ceiling lifts at, to the second.
+    fn reset() -> OffsetDateTime {
+        datetime!(2026-09-23 12:20:00 UTC)
+    }
+
+    /// Every outcome §1 documents, in the order its table lists them.
+    fn documented() -> Vec<RunOutcome> {
+        vec![
+            RunOutcome::Drained,
+            RunOutcome::TaskFailed { task: task() },
+            RunOutcome::Usage {
+                detail: USAGE.to_owned(),
+            },
+            RunOutcome::ProviderLimit {
+                until: Some(reset()),
+            },
+            RunOutcome::HumanGate { task: task() },
+            RunOutcome::NeedsInput { task: task() },
+            RunOutcome::Interrupted,
+        ]
+    }
+
+    /// What an answer means, in §1's words and with no number in sight.
+    ///
+    /// The match is total over the enum on purpose: an eighth variant arrives
+    /// without its documented meaning only by this function being extended to say
+    /// what it means, and two documented outcomes collapsed into one variant
+    /// collapse two rows of the list into one word, which the first test refuses.
+    fn meaning(answer: &RunOutcome) -> &'static str {
+        match answer {
+            RunOutcome::Drained => "the queue drained",
+            RunOutcome::TaskFailed { .. } => "a task failed after its remediation budget",
+            RunOutcome::Usage { .. } => "the command was used wrongly",
+            RunOutcome::ProviderLimit { .. } => "the provider's ceiling paused the run",
+            RunOutcome::HumanGate { .. } => "the run stopped at a human gate",
+            RunOutcome::NeedsInput { .. } => "the run stopped on a question a person owes",
+            RunOutcome::Interrupted => "the run was interrupted with its state durable",
+        }
+    }
+
+    #[test]
+    fn every_documented_outcome_is_its_own_answer() {
+        let meanings: Vec<&str> = documented().iter().map(meaning).collect();
+        let distinct: BTreeSet<&str> = meanings.iter().copied().collect();
+
+        assert_eq!(
+            meanings.len(),
+            7,
+            "§1 documents seven outcomes: {meanings:?}"
+        );
+        assert_eq!(
+            distinct.len(),
+            meanings.len(),
+            "two documented outcomes share one variant, so one of them cannot be \
+             answered: {meanings:?}"
+        );
+    }
+
+    #[test]
+    fn a_failure_names_the_task_a_retry_is_aimed_at() {
+        let answer = RunOutcome::TaskFailed { task: task() };
+        let RunOutcome::TaskFailed { task } = &answer else {
+            panic!("the answer that stops a queue is the failed task: {answer:?}");
+        };
+
+        assert_eq!(
+            *task,
+            TaskId::new(7),
+            "the id `retry --task` has to be given"
+        );
+        assert_ne!(
+            answer,
+            RunOutcome::TaskFailed {
+                task: TaskId::new(8)
+            },
+            "the failure names the task that failed, not whichever one the run reached \
+             last: {answer:?}"
+        );
+    }
+
+    #[test]
+    fn a_limit_carries_the_instant_the_provider_named() {
+        let answer = RunOutcome::ProviderLimit {
+            until: Some(reset()),
+        };
+        let RunOutcome::ProviderLimit { until } = &answer else {
+            panic!("a ceiling is a pause, and a pause is an answer: {answer:?}");
+        };
+
+        assert_eq!(
+            *until,
+            Some(reset()),
+            "the instant a resumed run wakes at is the one the provider gave, not one \
+             re-derived after the wait"
+        );
+        assert_ne!(
+            answer,
+            RunOutcome::ProviderLimit { until: None },
+            "a ceiling that named no reset is a different answer, because the wait was \
+             the run's own back-off: {answer:?}"
+        );
+    }
+
+    #[test]
+    fn a_gate_and_a_question_each_name_the_task_they_stopped_at() {
+        let gate = RunOutcome::HumanGate { task: task() };
+        let question = RunOutcome::NeedsInput { task: task() };
+
+        assert_eq!(
+            gate,
+            RunOutcome::HumanGate {
+                task: TaskId::new(7)
+            }
+        );
+        assert_eq!(
+            question,
+            RunOutcome::NeedsInput {
+                task: TaskId::new(7)
+            }
+        );
+        assert_ne!(
+            gate, question,
+            "a gate an `ack` passes is not a question a `resolve` answers: {gate:?} is \
+             not {question:?}"
+        );
+    }
+
+    #[test]
+    fn a_usage_error_carries_the_thing_the_operator_has_to_fix() {
+        let answer = RunOutcome::Usage {
+            detail: USAGE.to_owned(),
+        };
+        let RunOutcome::Usage { detail } = &answer else {
+            panic!("a wrong invocation is answered, not run: {answer:?}");
+        };
+
+        assert_eq!(
+            *detail, USAGE,
+            "the answer has to name the argument, section or missing project"
+        );
+        assert_ne!(
+            answer,
+            RunOutcome::Usage {
+                detail: String::new()
+            },
+            "an empty detail is a refusal nobody can act on: {answer:?}"
+        );
+    }
+
+    #[test]
+    fn a_pause_is_never_the_answer_that_says_a_task_failed() {
+        let pauses = [
+            RunOutcome::ProviderLimit {
+                until: Some(reset()),
+            },
+            RunOutcome::HumanGate { task: task() },
+            RunOutcome::NeedsInput { task: task() },
+        ];
+
+        for pause in &pauses {
+            assert!(
+                !matches!(pause, RunOutcome::TaskFailed { .. }),
+                "{} is a pause, and §1 says a pause must never mark a task failed: \
+                 {pause:?}",
+                meaning(pause)
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_drained_queue_is_the_answer_that_says_the_work_finished() {
+        let stops: Vec<RunOutcome> = documented().into_iter().skip(1).collect();
+
+        for stop in &stops {
+            assert_ne!(
+                stop,
+                &RunOutcome::Drained,
+                "{} stopped short of the end of the queue, so it cannot be the answer \
+                 that says the queue drained: {stop:?}",
+                meaning(stop)
+            );
+        }
     }
 }
