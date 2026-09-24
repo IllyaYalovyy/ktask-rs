@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+4 Failures
+ circuit breaker: closed · most repeated 1× (trips at 3)
+  TASK ATT CLASS                  SIG      REPEATS      STATE       DETAIL
+> 2    -   environment_failure    c5e030a7 ×1/3         failed      git is not i
+  1    1   verification_failure   13e11cad ×1/3         failed      the verify g
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+environment_failure — a missing SDK, dependency or host capability
+task 2 · attempt - · recorded by preflight · failed
+signature c5e030a7b3bd62f0 · seen 1× of 3 · breaker closed
+detail: git is not installed
+policy: bounded by attempts, time and tokens; repeats trip the breaker
+actions: retry (r) · cancel (c) · rerun-gate (x)
+
+r retry  c cancel  x rerun-gate
+Press ? for the key map

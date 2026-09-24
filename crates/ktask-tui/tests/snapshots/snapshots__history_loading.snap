@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+7 History
+History · whole queue
+Reading the journal…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+j/k scroll  PgUp/PgDn page  g/G first/last  t task timeline
+Press ? for the key map

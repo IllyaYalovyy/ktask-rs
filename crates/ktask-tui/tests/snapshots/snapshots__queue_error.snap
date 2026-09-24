@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+1 Queue
+  ID   STATE             PROTOCOL   PHASE           ATTEMPTS
+  1    Done              tdd        -               1
+> 2    Failed            tdd        Green           3
+  3    Queued                       -               0
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+pause: no task is running; there is nothing to pause
+Press ? for the key map

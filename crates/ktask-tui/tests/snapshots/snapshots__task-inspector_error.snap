@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+5 Task inspector
+ Task 1 · Add the parser
+ Failed · tdd · 1 attempt
+Outcome    Plan files parse into tasks.
+Done-when  The parser round-trips every example plan.
+Verify     cargo nextest run -p ktask-core
+Refs       docs/CONTRACT.md section 2
+Protocol   · red ✗ green · refactor · verify · publish
+           in green · may write any path · gate targeted · records evidence
+Gates      · format · lint · build ✗ verify · privacy
+Attempts   1 of 1 · attempt 1 · newest
+           verdict: failed · verification_failure: the verify gate failed with e
+           gate verify failed (exit 1) 2.4s
+             └ error[E0308]: mismatched types
+           started 2026-09-23 10:30:40
+           exit: provider exit 1
+           commits: 01234567 → no candidate
+
+
+
+
+
+[ / ] attempt  j / k task  g / G first / last
+Press ? for the key map

@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+9 Configuration and doctor
+The configuration could not be loaded
+cannot read .ktask/config.toml: unknown key `retention`
+
+Fix the file it names, then press r to read it again.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+r refresh  j/k scroll  g/G top/bottom  PgUp/PgDn page
+Press ? for the key map

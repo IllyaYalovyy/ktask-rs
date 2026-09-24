@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+2 Live run · following
+task 1 · attempt 1 · phase Green · elapsed 0:00:50
+command: -
+gates: targeted passed 2.4s
+== task 1, attempt 1 (tdd) ==
+reading src/parser.rs
+adding the Block type
+running the targeted tests
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Press ? for the key map

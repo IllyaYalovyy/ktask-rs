@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+2 Live run · detached (f to follow)
+task 1 · attempt 1 · phase Green · elapsed 0:01:50
+command: agent pid 4242
+gates: -
+… older output, not loaded
+… older output, not loaded
+… older output, not loaded
+… older output, not loaded
+… older output, not loaded
+… older output, not loaded
+… older output, not loaded
+line 7
+line 8
+line 9
+line 10
+
+
+
+
+
+
+
+
+Press ? for the key map

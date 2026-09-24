@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+9 Configuration and doctor
+Doctor · all 2 checks pass
+PASS git: git 2.51.0
+PASS provider: claude found on PATH
+
+Configuration · 6 settings · 4 not from the defaults
+provider          global file  "claude"
+model             environment  "opus"
+retention_days    project file 45
+verify_command    project file ["make", "test"]
+output_ring_lines default      4096
+push_remote       default      (unset)
+
+
+
+
+
+
+
+
+
+
+r refresh  j/k scroll  g/G top/bottom  PgUp/PgDn page
+Press ? for the key map

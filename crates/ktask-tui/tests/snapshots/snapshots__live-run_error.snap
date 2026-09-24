@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+2 Live run · following
+task 1 · attempt 1 · phase Green · elapsed 0:01:10 · ended
+command: -
+gates: verify failed (exit 1) 2.4s
+== task 1, attempt 1 (tdd) ==
+running the tests
+error[E0308]: mismatched types
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Press ? for the key map

@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+8 Git
+Git · task 1
+Publication: not published
+The task's worktree is gone, so its changes cannot be shown
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Press ? for the key map

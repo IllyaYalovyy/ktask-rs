@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+3 Logs
+structured · level ≥ debug · phase - · search - · 0/0 following
+No log entries
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Press ? for the key map

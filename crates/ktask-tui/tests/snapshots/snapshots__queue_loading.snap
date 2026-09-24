@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+1 Queue
+  ID   STATE             PROTOCOL   PHASE           ATTEMPTS
+> 1    Queued                       -               0
+  2    Queued                       -               0
+  3    Queued                       -               0
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+p pause  i interrupt  r retry  c cancel  Enter inspect  R resume  A ack  x rerun
+a attach  d diff
+Press ? for the key map

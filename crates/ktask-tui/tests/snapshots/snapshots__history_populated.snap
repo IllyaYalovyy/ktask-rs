@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+7 History
+History · whole queue · line 8 of 8 · following
+  ── task 1 · before any attempt
+  ---------- --:--:-- T1    TaskQueued        task queued: Add the parser
+  ---------- --:--:-- T1    PreflightStarted  preflight started
+  ---------- --:--:-- T1    PreflightPassed   preflight passed at 0123456789abcd
+  ── task 1 · attempt 1
+  ---------- --:--:-- T1    AttemptStarted    attempt started: protocol=tdd pid=
+  ---------- --:--:-- T1    PhaseEntered      phase entered: Green
+> ---------- --:--:-- T1    GateFinished      gate finished: Targeted passed (ex
+
+
+
+
+
+
+
+
+
+
+
+
+j/k scroll  PgUp/PgDn page  g/G first/last  t task timeline
+Press ? for the key map

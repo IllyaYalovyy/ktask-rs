@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+3 Logs
+structured · level ≥ debug · phase - · search - · 7/7 following
+  10:30:10 INF   t1   - -     task queued: Add the parser
+  10:30:20 INF   t1   - -     preflight started
+  10:30:30 INF   t1   - -     preflight passed at 0123456789abcdef0123456789abcd
+  10:30:40 INF   t1  a1 -     attempt started: protocol=tdd pid=4242 base_sha=01
+  10:30:50 INF   t1  a1 Green phase entered: Green
+  10:31:00 DBG   t1  a1 Green [Stdout] reading src/parser.rs
+> 10:31:10 INF   t1   - Green gate finished: Targeted passed (exit_code=Some(0))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Press ? for the key map

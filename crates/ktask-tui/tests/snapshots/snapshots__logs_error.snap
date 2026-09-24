@@ -1,0 +1,28 @@
+---
+source: crates/ktask-tui/tests/snapshots.rs
+expression: drawn
+---
+3 Logs
+structured · level ≥ debug · phase - · search - · 11/11 following
+  10:30:10 INF   t1   - -     task queued: Add the parser
+  10:30:20 INF   t1   - -     preflight started
+  10:30:30 INF   t1   - -     preflight passed at 0123456789abcdef0123456789abcd
+  10:30:40 INF   t1  a1 -     attempt started: protocol=tdd pid=4242 base_sha=01
+  10:30:50 INF   t1  a1 Green phase entered: Green
+  10:31:00 DBG   t1  a1 Green [Stdout] running the tests
+  10:31:10 DBG   t1  a1 Green [Stderr] error[E0308]: mismatched types
+  10:31:20 INF   t1  a1 Green attempt finished: exit_code=1 model_reported=unkno
+  10:31:30 ERR   t1   - Green gate finished: Verify failed (exit_code=Some(1))
+  10:31:40 ERR   t1  a1 Green verify failed (VerificationFailure): the verify ga
+> 10:31:50 ERR   t1   - Green task failed (VerificationFailure): the verify gate
+
+
+
+
+
+
+
+
+
+
+Press ? for the key map
