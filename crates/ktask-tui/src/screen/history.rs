@@ -1340,7 +1340,15 @@ mod tests {
         let mut app = loaded((80, 24), &journal.journal, 0);
         app.history.cursor = Some(10 * PAGE_ROWS);
         assert_eq!(wanted(&app), None);
-        let last = format!("task queued: {}", 3 * PAGE_ROWS - 1);
+        let total = 3 * PAGE_ROWS;
+        assert!(
+            lines_of(&app)
+                .iter()
+                .any(|l| l.contains(&format!("line {total} of {total}"))),
+            "{:#?}",
+            lines_of(&app)
+        );
+        let last = format!("task queued: {}", total - 1);
         assert!(
             lines_of(&app)
                 .iter()
@@ -1357,6 +1365,16 @@ mod tests {
         numbered(&mut journal, rows);
         let app = loaded(size, &journal.journal, 0);
         (journal, app)
+    }
+
+    #[test]
+    fn history_len_and_is_empty_say_how_many_rows_the_timeline_has() {
+        let fresh = app_on_history((80, 24));
+        assert_eq!(fresh.history.len(), 0);
+        assert!(fresh.history.is_empty());
+        let (_journal, app) = timeline_app(5, (80, 24));
+        assert_eq!(app.history.len(), 5);
+        assert!(!app.history.is_empty());
     }
 
     #[test]
