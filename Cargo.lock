@@ -772,6 +772,7 @@ dependencies = [
  "crossterm",
  "insta",
  "ktask-core",
+ "proptest",
  "ratatui",
  "tempfile",
  "time",
