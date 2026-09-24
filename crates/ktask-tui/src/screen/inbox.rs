@@ -211,14 +211,10 @@ pub fn fold(app: &mut App, event: &Event) {
             ..
         }
     );
-    match &event.kind {
-        EventKind::DecisionRaised { request } if waiting => {
-            inbox.pending.insert(task, tidy_request(request));
-        }
-        _ if !waiting => {
-            inbox.pending.remove(&task);
-        }
-        _ => {}
+    if !waiting {
+        inbox.pending.remove(&task);
+    } else if let EventKind::DecisionRaised { request } = &event.kind {
+        inbox.pending.insert(task, tidy_request(request));
     }
     let orphaned = inbox
         .draft
