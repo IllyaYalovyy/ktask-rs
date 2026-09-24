@@ -9,6 +9,7 @@ use crate::event::AppEvent;
 use crate::keys::{KeyAction, lookup};
 use crate::layout::layout_for;
 use crate::screen::failures::FailureBoard;
+use crate::screen::history::History;
 use crate::screen::inbox::Inbox;
 use crate::screen::inspector::Inspector;
 use crate::screen::live::LiveRun;
@@ -62,6 +63,9 @@ pub struct App {
     pub inspector: Inspector,
     /// The input inbox's pending questions and the answer being typed.
     pub inbox: Inbox,
+    /// The history screen's view of the journal's timeline: the page read from
+    /// it and where the view is in it.
+    pub history: History,
     /// The terminal's size as columns and rows.
     pub size: (u16, u16),
     /// The actions the operator has asked for, oldest first, that the shell
@@ -93,6 +97,7 @@ impl App {
             failures: FailureBoard::default(),
             inspector: Inspector::default(),
             inbox: Inbox::default(),
+            history: History::default(),
             size,
             outbox: Vec::new(),
             notice: None,
@@ -138,6 +143,7 @@ pub fn update(mut app: App, ev: AppEvent) -> App {
             crate::screen::failures::handle_key(&mut app, &key);
             crate::screen::inspector::handle_key(&mut app, &key);
             crate::screen::inbox::handle_key(&mut app, &key);
+            crate::screen::history::handle_key(&mut app, &key);
             navigate(&mut app, &key);
         }
         AppEvent::Tick => {}
@@ -178,6 +184,7 @@ fn apply_core(app: &mut App, event: Event) {
     crate::screen::failures::fold(app, &event);
     crate::screen::inspector::fold(app, &event);
     crate::screen::inbox::fold(app, &event);
+    crate::screen::history::fold(app, &event);
     if let (Some(id), EventKind::TaskQueued { title }) = (event.task_id, event.kind)
         && app.tasks.iter().all(|task| task.id != id)
     {
@@ -220,6 +227,7 @@ pub fn render(app: &App, frame: &mut Frame<'_>) {
         Screen::Failures => crate::screen::failures::render(app, &plan, frame),
         Screen::Inspector => crate::screen::inspector::render(app, &plan, frame),
         Screen::InputInbox => crate::screen::inbox::render(app, &plan, frame),
+        Screen::History => crate::screen::history::render(app, &plan, frame),
         _ => {}
     }
     match &app.overlay {
@@ -613,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn app_core_events_only_the_logs_show_change_nothing_but_the_logs() {
+    fn app_core_events_only_the_logs_and_the_histories_stale_mark_change() {
         let before = update(App::new((80, 24)), queued(1, "First"));
         let after = update(before.clone(), core(Some(1), EventKind::Resumed));
         assert_eq!(after.logs.len(), before.logs.len() + 1);
@@ -621,9 +629,13 @@ mod tests {
             after.logs.selected().map(|entry| entry.text().to_owned()),
             Some("resumed".to_owned())
         );
+        // The history keeps no event, only a note that its page is stale.
+        assert_ne!(after.history, before.history);
+        assert_eq!(after.history.held(), 0);
         assert_eq!(
             App {
                 logs: before.logs.clone(),
+                history: before.history.clone(),
                 ..after
             },
             before

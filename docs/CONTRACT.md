@@ -265,6 +265,20 @@ Bindings are consistent across screens: a key never means two different things.
    answer is recorded by the same code as `resolve --note`, so the ADR is
    byte-identical to the command's. A blank answer is refused and stays open.
 7. **History** — event timeline across every attempt and remediation.
+
+   ```
+   j / k       scroll down / up a row
+   g / G       the first row / the newest row, following it
+   PgUp / PgDn scroll a screenful
+   t           switch between the whole queue's timeline and the selected task's
+   ```
+
+   Each row is an event with its UTC timestamp, task, kind and description;
+   a heading opens each attempt and marks a remediation. The agent's output is
+   the logs' business and is not listed. The timeline is read from the journal
+   as it is scrolled, never kept whole by the interface, so a long history
+   costs a bounded page of memory. The view follows the newest row until it is
+   scrolled up.
 8. **Git** — changed files, diff, commits, publication state, comparison with
    remote mainline.
 9. **Configuration and doctor** — effective configuration with the source of
