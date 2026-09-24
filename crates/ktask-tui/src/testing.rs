@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn testing_key_reaches_update_as_a_plain_key_event_and_the_screen_is_redrawn() {
         let mut harness = Harness::new(20, 3);
-        harness.key('x');
+        harness.key('z');
         // Key bindings are not wired yet, so the key changes nothing visible;
         // the frame is still the queue's.
         assert!(harness.text().starts_with("1 Queue"));

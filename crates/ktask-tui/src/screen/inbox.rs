@@ -108,6 +108,13 @@ pub struct Inbox {
 }
 
 impl Inbox {
+    /// Where the journal has put `task`, by the core's transition table, or
+    /// `None` for a task no event has named.
+    #[must_use]
+    pub fn state(&self, task: TaskId) -> Option<&TaskState> {
+        self.states.get(&task)
+    }
+
     /// How many questions are waiting.
     #[must_use]
     pub fn len(&self) -> usize {

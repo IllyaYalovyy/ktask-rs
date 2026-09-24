@@ -6,6 +6,7 @@
 //! tests that do nothing unless that marker is set.
 
 use ktask_tui::App;
+use ktask_tui::actions::{Command as Launcher, Dispatcher};
 use ktask_tui::terminal::{install_panic_hook, is_not_a_terminal, run};
 use std::fs::File;
 use std::io::Write;
@@ -73,7 +74,11 @@ fn terminal_child_runs_with_a_piped_stdout() {
         return;
     }
     let (_tx, rx) = mpsc::channel();
-    let outcome = run(App::new((80, 24)), rx);
+    let outcome = run(
+        App::new((80, 24)),
+        rx,
+        Dispatcher::new(Launcher::new("ktask-rs"), "/"),
+    );
     let mut err = std::io::stderr();
     match outcome {
         Err(e) if is_not_a_terminal(&e) => {

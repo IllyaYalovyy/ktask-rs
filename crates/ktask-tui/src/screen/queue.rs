@@ -11,24 +11,30 @@
 //! grows; if the queue is ever shorter than the index, the last row is shown
 //! as selected instead.
 //!
-//! Five keys act on the queue: `p` pause, `i` interrupt, `r` retry the
-//! selected task, `c` cancel it and `Enter` open it in the inspector. The
-//! first four are [`Action`]s, the operations that have a CLI command of the
-//! same name; [`update`](crate::update) does no I/O, so a key that asks for
-//! one appends it to [`App::outbox`] and the shell carries it out through the
-//! core operation behind that command. `Enter` only changes the view. Each is
-//! offered under the rule its CLI command applies (`pause` and `interrupt`
-//! need a task in flight, `retry` a failed one, `cancel` any but a finished
-//! or publishing one); an action the selected state does not allow is drawn
-//! dimmed in the action bar, does nothing when pressed, and says why in
-//! [`App::notice`].
+//! Ten keys act on the queue: `p` pause, `i` interrupt, `R` resume the queue,
+//! `r` retry the selected task, `c` cancel it, `A` acknowledge its human gate
+//! and `x` re-run its gates are [`Action`]s, the operations that have a CLI
+//! command of the same name; [`update`](crate::update) does no I/O, so a key
+//! that asks for one appends it to [`App::outbox`] and the shell carries it
+//! out (see [`actions`](crate::actions)). `Enter` opens the selected task in
+//! the inspector, `a` attaches to the run in progress and `d` opens the
+//! selected task's diff; those three are [`ViewOp`]s or plain navigation and
+//! change only what is shown. Each is offered under the rule its CLI command
+//! applies (`pause` and `interrupt` need a task in flight, `resume` a queue
+//! with something left to do and nothing running, `retry` a failed task,
+//! `cancel` any but a finished or publishing one, `A` a task at a human gate,
+//! `x` any but a finished task nothing is working); an operation the selected
+//! state does not allow is drawn dimmed in the action bar, does nothing when
+//! pressed, and says why in [`App::notice`].
 
+use crate::actions::{apply_view, check_view};
 use crate::app::App;
 use crate::keys::{KeyAction, lookup};
 use crate::layout::LayoutPlan;
 use crate::text::{display_width, truncate_to_width};
-use crate::types::{Action, Screen, TaskView};
+use crate::types::{Action, Screen, TaskView, ViewOp};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ktask_core::{PauseReason, TaskState};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -43,7 +49,8 @@ const HEADINGS: [&str; 5] = ["ID", "STATE", "PROTOCOL", "PHASE", "ATTEMPTS"];
 const WANTED: [usize; 5] = [4, 17, 10, 15, 8];
 
 /// The fewest body rows that leave room for the action bar: the heading, three
-/// tasks and the bar. A shorter body gives every row to the tasks.
+/// tasks and the bar's first row. A shorter body gives every row to the tasks;
+/// a taller one lets the bar take a second row.
 const BAR_MIN_HEIGHT: u16 = 5;
 
 /// What separates two entries of the action bar.
@@ -59,7 +66,7 @@ const NO_PHASE: &str = "-";
 const EMPTY: &str = "No tasks queued.";
 
 /// The style of a state's name, distinct for each state of
-/// [`TaskState`](ktask_core::TaskState). A state this screen does not know is
+/// [`TaskState`]. A state this screen does not know is
 /// drawn plainly, so a state added to the core is still shown.
 #[must_use]
 pub fn state_style(state: &str) -> Style {
@@ -103,22 +110,37 @@ enum Operation {
     Retry,
     Cancel,
     Inspect,
+    Resume,
+    Acknowledge,
+    RerunGate,
+    Attach,
+    OpenDiff,
 }
 
 impl Operation {
     /// Every operation, in the order the action bar lists them.
-    const ALL: [Operation; 5] = [
+    const ALL: [Operation; 10] = [
         Operation::Pause,
         Operation::Interrupt,
         Operation::Retry,
         Operation::Cancel,
         Operation::Inspect,
+        Operation::Resume,
+        Operation::Acknowledge,
+        Operation::RerunGate,
+        Operation::Attach,
+        Operation::OpenDiff,
     ];
 
     /// The operation `key` asks for. Modifiers unbind the key, so `Ctrl-C`
-    /// stays quit and never cancels.
+    /// stays quit and never cancels; Shift is the exception, since it is
+    /// how a capital letter is typed.
     fn from_key(key: &KeyEvent) -> Option<Self> {
-        if key.modifiers != KeyModifiers::NONE {
+        let modifiers = match key.code {
+            KeyCode::Char(_) => key.modifiers - KeyModifiers::SHIFT,
+            _ => key.modifiers,
+        };
+        if modifiers != KeyModifiers::NONE {
             return None;
         }
         match key.code {
@@ -127,6 +149,11 @@ impl Operation {
             KeyCode::Char('r') => Some(Operation::Retry),
             KeyCode::Char('c') => Some(Operation::Cancel),
             KeyCode::Enter => Some(Operation::Inspect),
+            KeyCode::Char('R') => Some(Operation::Resume),
+            KeyCode::Char('A') => Some(Operation::Acknowledge),
+            KeyCode::Char('x') => Some(Operation::RerunGate),
+            KeyCode::Char('a') => Some(Operation::Attach),
+            KeyCode::Char('d') => Some(Operation::OpenDiff),
             _ => None,
         }
     }
@@ -139,6 +166,11 @@ impl Operation {
             Operation::Retry => "r",
             Operation::Cancel => "c",
             Operation::Inspect => "Enter",
+            Operation::Resume => "R",
+            Operation::Acknowledge => "A",
+            Operation::RerunGate => "x",
+            Operation::Attach => "a",
+            Operation::OpenDiff => "d",
         }
     }
 
@@ -151,6 +183,21 @@ impl Operation {
             Operation::Retry => "retry",
             Operation::Cancel => "cancel",
             Operation::Inspect => "inspect",
+            Operation::Resume => "resume",
+            Operation::Acknowledge => "ack",
+            Operation::RerunGate => "rerun-gate",
+            Operation::Attach => "attach",
+            Operation::OpenDiff => "open-diff",
+        }
+    }
+
+    /// The word the action bar uses, where it is short of room for the
+    /// label: the same as the label except for the two longest.
+    fn bar_label(self) -> &'static str {
+        match self {
+            Operation::RerunGate => "rerun",
+            Operation::OpenDiff => "diff",
+            other => other.label(),
         }
     }
 }
@@ -162,12 +209,14 @@ enum Outcome {
     Dispatch(Action),
     /// Show the task on this row in the inspector.
     Inspect(usize),
+    /// Change what is shown.
+    View(ViewOp),
 }
 
 /// Whether a supervisor is in the middle of a task in `state`: an attempt is
 /// in flight, and `pause` and `interrupt` have something to act on. The
 /// states are named as [`TaskView::state`] names them.
-fn in_flight(state: &str) -> bool {
+pub(crate) fn in_flight(state: &str) -> bool {
     matches!(
         state,
         "Preflight" | "Running" | "Remediating" | "Verifying" | "Publishing"
@@ -197,6 +246,50 @@ fn cancel_refusal(state: &str) -> Option<String> {
     }
 }
 
+/// The name of the state `task` is in. The journal is asked first, through
+/// the inbox, which follows every task's state by the core's transition
+/// table; the row's own state is what is left for a task no event has named.
+fn state_of(app: &App, task: &TaskView) -> String {
+    app.inbox
+        .state(task.id)
+        .map_or_else(|| task.state.clone(), |state| state.name().to_owned())
+}
+
+/// The first task, in queue order, that a supervisor is in the middle of.
+pub(crate) fn running(app: &App) -> Option<&TaskView> {
+    app.tasks
+        .iter()
+        .find(|task| in_flight(&state_of(app, task)))
+}
+
+/// Whether the journal put `task` at a human gate: paused, waiting for
+/// `ack`.
+fn at_gate(app: &App, task: &TaskView) -> bool {
+    matches!(
+        app.inbox.state(task.id),
+        Some(TaskState::Paused {
+            reason: PauseReason::HumanGate,
+            ..
+        })
+    )
+}
+
+/// Whether `state` is one `rerun-gate` finds nothing to verify in: done,
+/// acknowledged or cancelled. A task published and verified may still have its
+/// worktree, so it is not among them.
+fn nothing_to_verify(state: &str) -> bool {
+    matches!(state, "Done" | "Acknowledged" | "Cancelled")
+}
+
+/// Whether the queue has moved past a task in `state`: the states `resume`
+/// does not stop at.
+fn complete(state: &str) -> bool {
+    matches!(
+        state,
+        "PublishedVerified" | "Done" | "Acknowledged" | "Cancelled"
+    )
+}
+
 /// What `operation` does now, or the reason it is not available: what the
 /// operator is told when they press its key anyway.
 fn plan(app: &App, operation: Operation) -> Result<Outcome, String> {
@@ -204,7 +297,7 @@ fn plan(app: &App, operation: Operation) -> Result<Outcome, String> {
     let selected = selected_row(app).and_then(|row| app.tasks.get(row).map(|task| (row, task)));
     match (operation, selected) {
         (Operation::Pause | Operation::Interrupt, _) => {
-            if app.tasks.iter().any(|task| in_flight(&task.state)) {
+            if running(app).is_some() {
                 Ok(Outcome::Dispatch(if operation == Operation::Pause {
                     Action::Pause
                 } else {
@@ -216,20 +309,79 @@ fn plan(app: &App, operation: Operation) -> Result<Outcome, String> {
                 ))
             }
         }
+        (Operation::Resume, _) => {
+            if let Some(task) = running(app) {
+                Err(format!(
+                    "resume: task {} is {}; a run is already in progress",
+                    task.id,
+                    state_of(app, task).to_lowercase()
+                ))
+            } else if app.tasks.iter().all(|task| complete(&state_of(app, task))) {
+                Err("resume: the queue is drained; there is nothing to resume".to_owned())
+            } else {
+                Ok(Outcome::Dispatch(Action::Resume))
+            }
+        }
+        (Operation::Attach, _) => {
+            let op = ViewOp::Attach;
+            check_view(app, &op).map(|()| Outcome::View(op))
+        }
         (_, None) => Err(format!("{label}: no task is selected")),
         (Operation::Inspect, Some((row, _))) => Ok(Outcome::Inspect(row)),
-        (Operation::Retry, Some((_, task))) if task.state == "Failed" => {
-            Ok(Outcome::Dispatch(Action::Retry { task: task.id }))
+        (Operation::OpenDiff, Some((_, task))) => {
+            let op = ViewOp::OpenDiff { task: task.id };
+            check_view(app, &op).map(|()| Outcome::View(op))
         }
-        (Operation::Retry, Some((_, task))) => Err(format!(
-            "retry: task {} is {}; only a failed task can be retried",
-            task.id,
-            task.state.to_lowercase()
-        )),
-        (Operation::Cancel, Some((_, task))) => match cancel_refusal(&task.state) {
+        (Operation::Retry, Some((_, task))) => {
+            let state = state_of(app, task);
+            if state == "Failed" {
+                Ok(Outcome::Dispatch(Action::Retry { task: task.id }))
+            } else {
+                Err(format!(
+                    "retry: task {} is {}; only a failed task can be retried",
+                    task.id,
+                    state.to_lowercase()
+                ))
+            }
+        }
+        (Operation::Cancel, Some((_, task))) => match cancel_refusal(&state_of(app, task)) {
             None => Ok(Outcome::Dispatch(Action::Cancel { task: task.id })),
             Some(why) => Err(format!("cancel: task {} {why}", task.id)),
         },
+        (Operation::Acknowledge, Some((_, task))) => {
+            if at_gate(app, task) {
+                Ok(Outcome::Dispatch(Action::Acknowledge {
+                    task: Some(task.id),
+                }))
+            } else if app.tasks.iter().any(|other| at_gate(app, other)) {
+                Err(format!(
+                    "ack: task {} is {}, not at a human gate",
+                    task.id,
+                    state_of(app, task).to_lowercase()
+                ))
+            } else {
+                Err("ack: no human gate is pending".to_owned())
+            }
+        }
+        (Operation::RerunGate, Some((_, task))) => {
+            let state = state_of(app, task);
+            let (id, name) = (task.id, state.to_lowercase());
+            if nothing_to_verify(&state) {
+                Err(format!(
+                    "rerun-gate: task {id} is {name}; a finished task has nothing left to verify"
+                ))
+            } else if in_flight(&state) {
+                Err(format!(
+                    "rerun-gate: task {id} is {name} and a supervisor is still working it; \
+                     interrupt it first"
+                ))
+            } else {
+                Ok(Outcome::Dispatch(Action::RerunGate {
+                    task: id,
+                    gate: None,
+                }))
+            }
+        }
     }
 }
 
@@ -241,6 +393,11 @@ fn perform(app: &mut App, operation: Operation) {
         Ok(Outcome::Inspect(row)) => {
             app.selected.insert(Screen::Inspector, row);
             app.screen = Screen::Inspector;
+        }
+        Ok(Outcome::View(op)) => {
+            if let Err(why) = apply_view(app, &op) {
+                app.notice = Some(why);
+            }
         }
         Err(why) => app.notice = Some(why),
     }
@@ -335,39 +492,68 @@ fn task_line(task: &TaskView, selected: bool, widths: [usize; 5]) -> Line<'stati
 }
 
 /// The action bar: each operation's key and name, dimmed when it is not
-/// available for the selected task, cut to `width` columns.
-fn action_bar(app: &App, width: usize) -> Line<'static> {
-    let mut spans = Vec::new();
-    let mut left = width;
-    for (at, operation) in Operation::ALL.into_iter().enumerate() {
+/// available for the selected task, in at most `max_rows` rows of `width`
+/// columns. An entry goes on the row it fits on, or else starts the next
+/// row; when there is no next row, the entry is cut at the edge.
+fn action_bar(app: &App, width: usize, max_rows: usize) -> Vec<Line<'static>> {
+    let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut left = 0;
+    for operation in Operation::ALL {
         let style = if plan(app, operation).is_ok() {
             Style::new()
         } else {
             Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM)
         };
-        let gap = if at == 0 { "" } else { BAR_GAP };
-        let text = truncate_to_width(
-            &format!("{gap}{} {}", operation.key(), operation.label()),
-            left,
-        );
-        left -= display_width(&text);
-        // The gap is not part of the entry, so it does not take its style.
-        match text.strip_prefix(gap) {
-            Some(entry) if !gap.is_empty() => {
-                spans.push(Span::raw(gap));
-                spans.push(Span::styled(entry.to_owned(), style));
+        let entry = format!("{} {}", operation.key(), operation.bar_label());
+        let fits = left >= BAR_GAP.len() + display_width(&entry);
+        let full = rows.len() >= max_rows;
+        match rows.last_mut() {
+            Some(row) if fits => {
+                row.push(Span::raw(BAR_GAP));
+                row.push(Span::styled(entry.clone(), style));
+                left -= BAR_GAP.len() + display_width(&entry);
             }
-            _ => spans.push(Span::styled(text, style)),
+            Some(row) if full => {
+                // The gap is not part of the entry, so it does not take its style.
+                let text = truncate_to_width(&format!("{BAR_GAP}{entry}"), left);
+                left -= display_width(&text);
+                match text.strip_prefix(BAR_GAP) {
+                    Some(cut) => {
+                        row.push(Span::raw(BAR_GAP));
+                        row.push(Span::styled(cut.to_owned(), style));
+                    }
+                    None => row.push(Span::styled(text, style)),
+                }
+            }
+            _ if max_rows > 0 => {
+                let text = truncate_to_width(&entry, width);
+                left = width - display_width(&text);
+                rows.push(vec![Span::styled(text, style)]);
+            }
+            _ => {}
         }
     }
-    Line::from(spans)
+    rows.into_iter().map(Line::from).collect()
 }
 
-/// The last row of `body`, where the action bar and the notice go.
-fn last_row(body: Rect) -> Rect {
+/// How many rows the action bar may take in a body `height` rows tall: none
+/// when there is no room for it and a few tasks, one when there is, two when
+/// there is room for one more.
+fn bar_rows(height: u16) -> usize {
+    match height {
+        0..BAR_MIN_HEIGHT => 0,
+        BAR_MIN_HEIGHT => 1,
+        _ => 2,
+    }
+}
+
+/// The last `rows` rows of `body`, where the action bar goes, and where the
+/// notice goes in its place.
+fn last_rows(body: Rect, rows: usize) -> Rect {
+    let rows = u16::try_from(rows).unwrap_or(u16::MAX).min(body.height);
     Rect {
-        y: body.bottom() - 1,
-        height: 1,
+        y: body.bottom() - rows,
+        height: rows,
         ..body
     }
 }
@@ -381,13 +567,14 @@ pub fn render(app: &App, plan: &LayoutPlan, frame: &mut Frame<'_>) {
         return;
     }
     let width = usize::from(body.width);
+    let mut actions = Vec::new();
     if let Some(selected) = selected_row(app) {
         let widths = column_widths(width);
         let headings = HEADINGS.map(|heading| (heading.to_owned(), Style::new()));
         let mut lines =
             vec![row_line("  ", headings, widths).style(Style::new().add_modifier(Modifier::BOLD))];
-        let has_actions_row = body.height >= BAR_MIN_HEIGHT;
-        let rows = usize::from(body.height) - 1 - usize::from(has_actions_row);
+        actions = action_bar(app, width, bar_rows(body.height));
+        let rows = usize::from(body.height) - 1 - actions.len();
         let offset = (selected + 1).saturating_sub(rows);
         lines.extend(
             app.tasks
@@ -398,8 +585,9 @@ pub fn render(app: &App, plan: &LayoutPlan, frame: &mut Frame<'_>) {
                 .map(|(at, task)| task_line(task, at == selected, widths)),
         );
         frame.render_widget(Paragraph::new(lines), body);
-        if has_actions_row {
-            frame.render_widget(Paragraph::new(action_bar(app, width)), last_row(body));
+        if !actions.is_empty() {
+            let area = last_rows(body, actions.len());
+            frame.render_widget(Paragraph::new(actions.clone()), area);
         }
     } else {
         frame.render_widget(Paragraph::new(truncate_to_width(EMPTY, width)), body);
@@ -409,9 +597,9 @@ pub fn render(app: &App, plan: &LayoutPlan, frame: &mut Frame<'_>) {
             truncate_to_width(notice, width),
             Style::new().fg(Color::Yellow),
         );
-        let row = last_row(body);
-        frame.render_widget(Clear, row);
-        frame.render_widget(Paragraph::new(line), row);
+        // The notice takes the place of the whole bar, not of its last row.
+        frame.render_widget(Clear, last_rows(body, actions.len().max(1)));
+        frame.render_widget(Paragraph::new(line), last_rows(body, 1));
     }
 }
 
@@ -786,15 +974,16 @@ mod tests {
         assert_eq!(rows[0], "1 Queue");
         assert!(rows[1].contains("STATE"));
         assert!(rows[2].starts_with("> 1 "));
-        // The body's last row is the action bar, so one fewer task shows.
+        // The body's last two rows are the action bar, so two fewer tasks show.
+        assert_eq!(
+            rows[20],
+            "  19   Queued            tdd        -               0"
+        );
         assert_eq!(
             rows[21],
-            "  20   Queued            tdd        -               0"
+            "p pause  i interrupt  r retry  c cancel  Enter inspect  R resume  A ack  x rerun"
         );
-        assert_eq!(
-            rows[22],
-            "p pause  i interrupt  r retry  c cancel  Enter inspect"
-        );
+        assert_eq!(rows[22], "a attach  d diff");
         assert_eq!(rows[23], "Press ? for the key map");
     }
     // --- actions -----------------------------------------------------------
@@ -958,22 +1147,33 @@ mod tests {
 
     #[test]
     fn queue_bar_shows_an_unavailable_action_dimmed_and_an_available_one_plain() {
-        let bar = "p pause  i interrupt  r retry  c cancel  Enter inspect";
-        for (state, retry_available) in [("Failed", true), ("Running", false)] {
+        let bars = [
+            "p pause  i interrupt  r retry  c cancel  Enter inspect  R resume  A ack  x rerun",
+            "a attach  d diff",
+        ];
+        for (state, running) in [("Failed", false), ("Running", true)] {
             let harness = harness_with(vec![view(1, state, None, 1)]);
             let text = harness.text();
-            let row = text.lines().nth(22).expect("bar row").trim_end();
-            assert_eq!(row, bar, "{state}");
+            for (row, bar) in [21, 22].into_iter().zip(bars) {
+                let shown = text.lines().nth(row).expect("bar row").trim_end();
+                assert_eq!(shown, bar, "{state}");
+            }
             let buffer = harness.buffer();
-            // Columns of the first letter of each action's key.
-            for (name, column, available) in [
-                ("pause", 0, state == "Running"),
-                ("interrupt", 9, state == "Running"),
-                ("retry", 22, retry_available),
-                ("cancel", 31, true),
-                ("inspect", 41, true),
+            // Where each action's key is: its row, its column and whether the
+            // selected task lets it be used.
+            for (name, row, column, available) in [
+                ("pause", 21, 0, running),
+                ("interrupt", 21, 9, running),
+                ("retry", 21, 22, !running),
+                ("cancel", 21, 31, true),
+                ("inspect", 21, 41, true),
+                ("resume", 21, 56, !running),
+                ("ack", 21, 66, false),
+                ("rerun", 21, 73, !running),
+                ("attach", 22, 0, running),
+                ("diff", 22, 10, true),
             ] {
-                let cell = &buffer[(column, 22)];
+                let cell = &buffer[(column, row)];
                 let dimmed = cell.modifier.contains(Modifier::DIM);
                 assert_eq!(dimmed, !available, "{name} with the task {state}");
                 assert_eq!(cell.fg == Color::DarkGray, !available, "{name} {state}");
@@ -993,8 +1193,13 @@ mod tests {
     fn queue_bar_is_cut_to_the_width_and_never_overflows() {
         let app = app_with(vec![view(1, "Failed", None, 1)], (20, 8));
         let text = snapshot(&app);
-        let row = text.lines().nth(7).expect("bar row");
-        assert_eq!(row, "p pause  i interrupt");
+        let rows: Vec<&str> = text.lines().collect();
+        assert_eq!(rows[6], "p pause  i interrupt");
+        assert_eq!(rows[7], "r retry  c cancel  E");
+        // With room for one row only, the rest of the bar is cut, not moved.
+        let app = app_with(vec![view(1, "Failed", None, 1)], (20, 6));
+        let text = snapshot(&app);
+        assert_eq!(text.lines().nth(5), Some("p pause  i interrupt"));
         for size in [(1, 8), (3, 8), (10, 8), (0, 8)] {
             let _ = snapshot(&app_with(vec![view(1, "Failed", None, 1)], size));
         }
@@ -1157,5 +1362,365 @@ mod tests {
         app = press(app, KeyCode::Char('c'));
         assert_eq!(app.outbox, []);
         assert!(app.notice.is_some_and(|n| n.contains("task 4")));
+    }
+
+    // --- the remaining actions ---------------------------------------------
+
+    /// A journal event about `task`, as it would arrive from the bus.
+    fn journal(task: u32, kind: EventKind) -> AppEvent {
+        AppEvent::Core(Event {
+            seq: EventSeq::new(1),
+            ts: OffsetDateTime::UNIX_EPOCH,
+            task_id: Some(TaskId::new(task)),
+            kind,
+        })
+    }
+
+    /// An interface over `count` queued tasks whose state the journal has
+    /// moved on: each `(task, event)` is folded in.
+    fn journaled(count: u32, events: Vec<(u32, EventKind)>) -> Harness {
+        let mut harness = Harness::new(80, 24);
+        for id in 1..=count {
+            harness.send(queued_event(id));
+        }
+        for (task, kind) in events {
+            harness.send(journal(task, kind));
+        }
+        harness
+    }
+
+    fn shifted(harness: &mut Harness, c: char) {
+        harness.send(AppEvent::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::SHIFT,
+        )));
+    }
+
+    fn told(harness: &Harness) -> Option<&str> {
+        harness.app().notice.as_deref()
+    }
+
+    #[test]
+    fn queue_actions_resume_is_asked_for_while_work_is_left_and_nothing_runs() {
+        for states in [
+            vec!["Queued"],
+            vec!["Done", "Failed"],
+            vec!["Cancelled", "Paused", "Done"],
+            vec!["PublishedVerified", "Queued"],
+        ] {
+            let tasks = states
+                .iter()
+                .zip(1..)
+                .map(|(state, id)| view(id, state, None, 0))
+                .collect();
+            let mut harness = harness_with(tasks);
+            shifted(&mut harness, 'R');
+            assert_eq!(harness.app().outbox, [Action::Resume], "{states:?}");
+            assert_eq!(told(&harness), None);
+        }
+    }
+
+    #[test]
+    fn queue_actions_resume_is_capital_r_and_lower_case_r_is_still_retry() {
+        let mut harness = harness_with(vec![view(1, "Queued", None, 0)]);
+        harness.key('R');
+        assert_eq!(harness.app().outbox, [Action::Resume]);
+        // Lower case is retry, and refused for a task that has not failed.
+        harness.key('r');
+        assert_eq!(harness.app().outbox, [Action::Resume]);
+        assert!(told(&harness).is_some_and(|n| n.starts_with("retry: task 1 is queued")));
+    }
+
+    #[test]
+    fn queue_actions_resume_of_a_drained_queue_says_there_is_nothing_to_resume() {
+        let want = "resume: the queue is drained; there is nothing to resume";
+        let drained = vec![
+            view(1, "Done", None, 1),
+            view(2, "Acknowledged", None, 1),
+            view(3, "Cancelled", None, 0),
+            view(4, "PublishedVerified", None, 1),
+        ];
+        for tasks in [drained, Vec::new()] {
+            let mut harness = harness_with(tasks);
+            harness.key('R');
+            assert!(harness.app().outbox.is_empty());
+            assert_eq!(told(&harness), Some(want));
+        }
+    }
+
+    #[test]
+    fn queue_actions_resume_is_refused_while_a_task_is_running() {
+        for state in [
+            "Preflight",
+            "Running",
+            "Remediating",
+            "Verifying",
+            "Publishing",
+        ] {
+            let mut harness = harness_with(vec![view(1, "Done", None, 1), view(2, state, None, 1)]);
+            harness.key('R');
+            assert!(harness.app().outbox.is_empty(), "{state}");
+            let want = format!(
+                "resume: task 2 is {}; a run is already in progress",
+                state.to_lowercase()
+            );
+            assert_eq!(told(&harness), Some(want.as_str()));
+        }
+    }
+
+    #[test]
+    fn queue_actions_acknowledge_names_the_selected_task_at_a_human_gate() {
+        let mut harness = journaled(
+            3,
+            vec![(
+                2,
+                EventKind::Paused {
+                    reason: PauseReason::HumanGate,
+                },
+            )],
+        );
+        harness.key('j');
+        shifted(&mut harness, 'A');
+        assert_eq!(
+            harness.app().outbox,
+            [Action::Acknowledge {
+                task: Some(TaskId::new(2))
+            }]
+        );
+        assert_eq!(told(&harness), None);
+    }
+
+    #[test]
+    fn queue_actions_acknowledge_of_a_task_not_at_the_gate_names_the_state_it_is_in() {
+        let mut harness = journaled(
+            2,
+            vec![(
+                2,
+                EventKind::Paused {
+                    reason: PauseReason::HumanGate,
+                },
+            )],
+        );
+        shifted(&mut harness, 'A');
+        assert!(harness.app().outbox.is_empty());
+        assert_eq!(
+            told(&harness),
+            Some("ack: task 1 is queued, not at a human gate")
+        );
+    }
+
+    #[test]
+    fn queue_actions_acknowledge_says_when_no_gate_is_pending_at_all() {
+        for events in [
+            Vec::new(),
+            vec![(
+                1,
+                EventKind::Paused {
+                    reason: PauseReason::Input,
+                },
+            )],
+        ] {
+            let mut harness = journaled(1, events);
+            shifted(&mut harness, 'A');
+            assert!(harness.app().outbox.is_empty());
+            assert_eq!(told(&harness), Some("ack: no human gate is pending"));
+        }
+        let mut harness = Harness::new(80, 24);
+        harness.key('A');
+        assert_eq!(told(&harness), Some("ack: no task is selected"));
+    }
+
+    #[test]
+    fn queue_actions_read_a_tasks_state_from_the_journal_before_the_row() {
+        // The row still says it was queued; the journal has moved it on.
+        let mut harness = journaled(1, vec![(1, EventKind::PreflightStarted)]);
+        assert_eq!(harness.app().tasks[0].state, "Queued");
+        harness.key('p');
+        harness.key('i');
+        assert_eq!(harness.app().outbox, [Action::Pause, Action::Interrupt]);
+        harness.key('R');
+        assert_eq!(
+            told(&harness),
+            Some("resume: task 1 is preflight; a run is already in progress")
+        );
+        harness.key('a');
+        assert_eq!(harness.app().screen, Screen::LiveRun);
+    }
+
+    #[test]
+    fn queue_actions_rerun_gate_is_asked_for_a_task_nothing_is_working() {
+        for state in ["Queued", "Paused", "Failed", "PublishedVerified"] {
+            let mut harness = harness_with(vec![view(1, state, None, 1)]);
+            harness.key('x');
+            assert_eq!(
+                harness.app().outbox,
+                [Action::RerunGate {
+                    task: TaskId::new(1),
+                    gate: None
+                }],
+                "{state}"
+            );
+            assert_eq!(told(&harness), None, "{state}");
+        }
+    }
+
+    #[test]
+    fn queue_actions_rerun_gate_refuses_a_finished_task_and_one_being_worked() {
+        for state in ["Done", "Acknowledged", "Cancelled"] {
+            let mut harness = harness_with(vec![view(1, state, None, 1)]);
+            harness.key('x');
+            assert!(harness.app().outbox.is_empty(), "{state}");
+            let want = format!(
+                "rerun-gate: task 1 is {}; a finished task has nothing left to verify",
+                state.to_lowercase()
+            );
+            assert_eq!(told(&harness), Some(want.as_str()));
+        }
+        for state in [
+            "Preflight",
+            "Running",
+            "Remediating",
+            "Verifying",
+            "Publishing",
+        ] {
+            let mut harness = harness_with(vec![view(1, state, None, 1)]);
+            harness.key('x');
+            assert!(harness.app().outbox.is_empty(), "{state}");
+            let want = format!(
+                "rerun-gate: task 1 is {} and a supervisor is still working it; interrupt it first",
+                state.to_lowercase()
+            );
+            assert_eq!(told(&harness), Some(want.as_str()));
+        }
+    }
+
+    #[test]
+    fn queue_actions_rerun_gate_acts_on_the_selected_task() {
+        let mut harness = harness_with(mixed_queue());
+        harness.key('j');
+        harness.key('x');
+        assert_eq!(
+            harness.app().outbox,
+            [Action::RerunGate {
+                task: TaskId::new(2),
+                gate: None
+            }]
+        );
+        harness.key('j');
+        harness.key('j');
+        harness.key('x');
+        assert_eq!(harness.app().outbox.len(), 1);
+        assert!(told(&harness).is_some_and(|n| n.starts_with("rerun-gate: task 4 is done")));
+    }
+
+    #[test]
+    fn queue_actions_attach_shows_the_live_run_following_and_asks_for_nothing() {
+        let mut app = app_with(mixed_queue(), (80, 24));
+        app.follow = false;
+        let mut harness = Harness::from_app(app);
+        harness.key('a');
+        assert_eq!(harness.app().screen, Screen::LiveRun);
+        assert!(harness.app().follow);
+        assert!(harness.app().outbox.is_empty());
+        assert!(harness.text().starts_with("2 Live run"));
+    }
+
+    #[test]
+    fn queue_actions_attach_with_nothing_running_says_so_and_stays() {
+        let mut harness =
+            harness_with(vec![view(1, "Failed", None, 1), view(2, "Queued", None, 0)]);
+        harness.key('a');
+        assert_eq!(harness.app().screen, Screen::Queue);
+        assert_eq!(
+            told(&harness),
+            Some("attach: no task is running; there is nothing to attach to")
+        );
+    }
+
+    #[test]
+    fn queue_actions_open_diff_shows_the_git_screen_for_the_selected_task() {
+        let mut harness = harness_with(mixed_queue());
+        harness.key('j');
+        harness.key('j');
+        harness.key('d');
+        assert_eq!(harness.app().screen, Screen::Git);
+        assert_eq!(harness.app().selected.get(&Screen::Queue), Some(&2));
+        assert!(harness.app().outbox.is_empty());
+        assert!(harness.text().starts_with("8 Git"));
+    }
+
+    #[test]
+    fn queue_actions_open_diff_needs_a_selected_task() {
+        let mut harness = Harness::new(80, 24);
+        harness.key('d');
+        assert_eq!(harness.app().screen, Screen::Queue);
+        assert_eq!(told(&harness), Some("open-diff: no task is selected"));
+    }
+
+    #[test]
+    fn queue_actions_new_keys_are_ignored_off_the_queue_screen_and_under_an_overlay() {
+        for key in ['R', 'A', 'x', 'a', 'd'] {
+            let before = App {
+                screen: Screen::Logs,
+                ..app_with(mixed_queue(), (80, 24))
+            };
+            let after = press(before.clone(), KeyCode::Char(key));
+            assert_eq!(after.screen, Screen::Logs, "{key}");
+            assert!(after.outbox.is_empty(), "{key}");
+            let before = App {
+                overlay: Some(Overlay::KeyMap),
+                ..app_with(mixed_queue(), (80, 24))
+            };
+            assert_eq!(press(before.clone(), KeyCode::Char(key)), before, "{key}");
+        }
+    }
+
+    #[test]
+    fn queue_actions_new_keys_need_no_modifier_but_shift() {
+        let before = app_with(mixed_queue(), (80, 24));
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+            for key in ['R', 'A', 'x', 'a', 'd'] {
+                let event = AppEvent::Key(KeyEvent::new(KeyCode::Char(key), modifiers));
+                assert_eq!(update(before.clone(), event), before, "{key} {modifiers:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn queue_actions_bar_lists_every_operation_with_its_key_on_a_terminal_of_80_columns() {
+        let harness = harness_with(vec![view(1, "Failed", None, 1)]);
+        let text = harness.text();
+        let bar: Vec<&str> = text.lines().skip(21).take(2).collect();
+        for entry in [
+            "p pause",
+            "i interrupt",
+            "r retry",
+            "c cancel",
+            "Enter inspect",
+            "R resume",
+            "A ack",
+            "x rerun",
+            "a attach",
+            "d diff",
+        ] {
+            assert!(
+                bar.iter().any(|row| row.contains(entry)),
+                "{entry}: {bar:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn queue_actions_notice_takes_the_place_of_both_bar_rows() {
+        let mut harness = harness_with(vec![view(1, "Done", None, 1)]);
+        harness.key('x');
+        let text = harness.text();
+        let rows: Vec<&str> = text.lines().collect();
+        assert!(
+            rows[22].starts_with("rerun-gate: task 1 is done"),
+            "{rows:?}"
+        );
+        assert!(!rows[21].contains("p pause"), "{rows:?}");
+        assert!(!text.contains("a attach"));
     }
 }

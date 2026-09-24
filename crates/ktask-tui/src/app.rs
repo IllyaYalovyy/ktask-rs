@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn app_key_press_without_a_binding_leaves_the_state_unchanged() {
         let before = App::new((80, 24));
-        let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        let key = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE);
         assert_eq!(update(before.clone(), AppEvent::Key(key)), before);
     }
 

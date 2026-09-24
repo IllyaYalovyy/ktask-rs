@@ -10,10 +10,14 @@
 //! [`ktask_tui::terminal::run`] drains.
 //!
 //! Nothing here writes to the journal: closing the interface never disturbs
-//! a run.
+//! a run. The actions the operator asks for in the interface are carried out
+//! by running this same binary's command of the same name
+//! ([`ktask_tui::actions`]), against this project, so they are the CLI's own
+//! operations and go on when the interface is closed.
 
 use ktask_core::{Config, Event, Project, Result, RunOutcome, journal_path};
-use ktask_tui::terminal::is_not_a_terminal;
+use ktask_tui::actions::{Command, Dispatcher};
+use ktask_tui::terminal::{self, is_not_a_terminal};
 use ktask_tui::{App, AppEvent, JournalTail};
 use std::io::{self, IsTerminal};
 use std::sync::Arc;
@@ -34,11 +38,10 @@ const FOLLOW_INTERVAL: Duration = Duration::from_millis(100);
 /// Exits 2 (a usage error) when stdout is not a terminal, before the journal
 /// is touched; 1 when the journal cannot be read or the terminal fails.
 pub(crate) fn run(project: &Project, _config: &Config) -> RunOutcome {
-    run_with(
-        project,
-        io::stdout().is_terminal(),
-        ktask_tui::terminal::run,
-    )
+    run_with(project, io::stdout().is_terminal(), |app, rx| {
+        let actions = Dispatcher::new(Command::current()?, &project.root);
+        terminal::run(app, rx, actions)
+    })
 }
 
 /// [`run`] with the terminal check and the interface itself passed in, so a

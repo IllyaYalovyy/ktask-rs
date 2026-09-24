@@ -8,10 +8,14 @@
 //! operator's own screen rather than being swallowed by the alternate one, and
 //! the shell is left with echo and line editing back.
 //!
+//! The actions the operator asks for are carried out here too, once a turn,
+//! by the [`Dispatcher`] the caller hands in ([`crate::actions`]).
+//!
 //! Everything that decides what happens lives in [`crate::app`]; the loop here
 //! is generic over how it draws and where its input comes from, so it runs
 //! unchanged under a test backend with scripted input.
 
+use crate::actions::{Dispatcher, Launch};
 use crate::app::{App, render, update};
 use crate::event::AppEvent;
 use crossterm::cursor::Show;
@@ -36,7 +40,9 @@ const TICK: Duration = Duration::from_millis(100);
 ///
 /// Returns once the terminal has been restored. `rx` carries journal events
 /// from an in-process run; the loop drains it on every turn and never treats
-/// a disconnected sender as the end of the session.
+/// a disconnected sender as the end of the session. Once a turn, `actions`
+/// starts whatever the operator asked for and reports what has finished; what
+/// it started goes on if the interface is closed.
 ///
 /// # Errors
 ///
@@ -44,7 +50,7 @@ const TICK: Duration = Duration::from_millis(100);
 /// [`is_not_a_terminal`]). Otherwise fails on a terminal I/O error; the
 /// terminal is restored first, and a restore failure is reported only when
 /// nothing else went wrong.
-pub fn run(app: App, rx: Receiver<Event>) -> Result<()> {
+pub fn run<L: Launch>(app: App, rx: Receiver<Event>, mut actions: Dispatcher<L>) -> Result<()> {
     require_terminal(io::stdout().is_terminal())?;
     install_panic_hook();
     let mut out = io::stdout();
@@ -61,6 +67,10 @@ pub fn run(app: App, rx: Receiver<Event>) -> Result<()> {
                     } else {
                         Ok(None)
                     }
+                },
+                |app| {
+                    actions.dispatch(app);
+                    actions.poll(app);
                 },
             )
         })
@@ -124,12 +134,14 @@ pub fn install_panic_hook() {
 }
 
 /// Draws, waits for one input, folds it and whatever the journal produced into
-/// the state, and repeats until the operator quits. Returns the final state.
+/// the state, lets `act` carry out what the state now asks for, and repeats
+/// until the operator quits. Returns the final state.
 fn event_loop(
     mut app: App,
     mut journal: impl FnMut() -> Option<Event>,
     mut draw: impl FnMut(&App) -> io::Result<()>,
     mut poll: impl FnMut(Duration) -> io::Result<Option<TermEvent>>,
+    mut act: impl FnMut(&mut App),
 ) -> io::Result<App> {
     loop {
         draw(&app)?;
@@ -148,6 +160,7 @@ fn event_loop(
         while let Some(event) = journal() {
             app = update(app, AppEvent::Core(event));
         }
+        act(&mut app);
         app = update(app, AppEvent::Tick);
     }
 }
@@ -207,6 +220,7 @@ mod tests {
                     .map_err(|never| match never {})
             },
             |_| Ok(script.pop_front()),
+            |_| {},
         );
         (outcome, sizes)
     }
@@ -400,6 +414,7 @@ mod tests {
             || None,
             |_| Ok(()),
             |_| Err(io::Error::other("input broke")),
+            |_| {},
         )
         .expect_err("input error propagates");
         assert_eq!(err.to_string(), "input broke");
@@ -416,6 +431,7 @@ mod tests {
                 polled = true;
                 Ok(None)
             },
+            |_| {},
         )
         .expect_err("draw error propagates");
         assert_eq!(err.to_string(), "draw broke");
@@ -433,9 +449,78 @@ mod tests {
                 waited = Some(timeout);
                 Ok(Some(press('q')))
             },
+            |_| {},
         );
         assert!(outcome.is_ok());
         assert_eq!(waited, Some(TICK));
+    }
+
+    #[test]
+    fn actions_are_carried_out_once_a_turn_after_the_turn_has_been_folded() {
+        // `p` on a queue with a running task asks to pause; the same turn's
+        // action step sees it, and the outbox is empty after it took it.
+        let mut app = App::new((20, 5));
+        app.tasks.push(crate::types::TaskView {
+            id: TaskId::new(1),
+            title: "t".into(),
+            state: "Running".into(),
+            protocol: String::new(),
+            phase: None,
+            attempts: 1,
+            elapsed: None,
+        });
+        let mut script: VecDeque<TermEvent> = VecDeque::from([press('p'), press('q')]);
+        let mut seen = Vec::new();
+        let outcome = event_loop(
+            app,
+            || None,
+            |_| Ok(()),
+            |_| Ok(script.pop_front()),
+            |app| seen.push(app.take_outbox()),
+        );
+        assert!(outcome.expect("loop").outbox.is_empty());
+        assert_eq!(seen, [vec![crate::types::Action::Pause]]);
+    }
+
+    #[test]
+    fn actions_step_can_tell_the_operator_something_and_the_next_frame_shows_it() {
+        let mut app = App::new((40, 5));
+        app.tasks.push(crate::types::TaskView {
+            id: TaskId::new(1),
+            title: "t".into(),
+            state: "Failed".into(),
+            protocol: String::new(),
+            phase: None,
+            attempts: 1,
+            elapsed: None,
+        });
+        let mut terminal = Terminal::new(TestBackend::new(40, 5)).expect("test backend");
+        let mut script = VecDeque::from([TermEvent::FocusGained, press('q')]);
+        let mut frames = Vec::new();
+        let outcome = event_loop(
+            app,
+            || None,
+            |app| {
+                let _ = terminal.draw(|frame| render(app, frame));
+                let buffer = terminal.backend().buffer().clone();
+                frames.push(
+                    (0..5)
+                        .map(|y| {
+                            (0..40)
+                                .map(|x| buffer[(x, y)].symbol().to_owned())
+                                .collect()
+                        })
+                        .collect::<Vec<String>>()
+                        .join("\n"),
+                );
+                Ok(())
+            },
+            |_| Ok(script.pop_front()),
+            |app| app.notice = Some("retry task 1: started".into()),
+        );
+        assert!(outcome.is_ok());
+        assert!(!frames[0].contains("retry task 1: started"));
+        assert!(frames[1].contains("retry task 1: started"), "{}", frames[1]);
     }
 
     #[test]

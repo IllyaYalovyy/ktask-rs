@@ -3,6 +3,7 @@
 //! Must stay headlessly testable: keep decision logic pure and confine
 //! terminal I/O to a thin shell. See docs/TESTING.md.
 
+pub mod actions;
 pub mod app;
 pub mod event;
 pub mod keys;

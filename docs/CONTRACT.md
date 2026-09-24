@@ -175,7 +175,29 @@ Bindings are consistent across screens: a key never means two different things.
 ### Screens
 
 1. **Queue** — ordered tasks with state, protocol, current phase, attempts.
-   Actions: select, pause, interrupt, retry, cancel, jump to inspector.
+   Actions: select, pause, interrupt, resume, retry, cancel, acknowledge, rerun
+   gate, attach, open diff, jump to inspector.
+
+   ```
+   p / i       pause / interrupt the run
+   R           resume the queue from the first task that is not done
+   r / c       retry / cancel the selected task
+   A           acknowledge the selected task's human gate
+   x           re-run the selected task's gates
+   a           attach: show the live run in progress, following it
+   d           open the selected task's diff on the git screen
+   Enter       open the selected task in the inspector
+   ```
+
+   Each key is offered under the rule its command applies, from the state the
+   journal has put the task in: `pause` and `interrupt` need a task in flight,
+   `resume` a queue with something left to do and nothing running, `retry` a
+   failed task, `cancel` any but a finished or publishing one, `A` a task at a
+   human gate, `x` any but a finished task no supervisor is working. The
+   action bar draws an operation that is not offered dimmed, and pressing its
+   key does nothing and says why. An action runs the command of the same name
+   (`ktask-rs retry --task 3`), started by the interface and outliving it, and
+   its result is shown when it finishes.
 2. **Live run** — streaming agent output, the command being executed, gate
    results as they land, elapsed time. Follow mode on by default; any scroll
    detaches follow, `f` re-attaches.
