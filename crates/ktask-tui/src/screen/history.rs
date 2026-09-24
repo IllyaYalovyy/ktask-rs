@@ -380,7 +380,7 @@ fn rows_height(app: &App) -> usize {
 
 /// The row numbers the view shows: the newest `height` rows when following,
 /// otherwise the ones around `cursor`, never past the ends.
-fn viewport(cursor: Option<usize>, total: usize, height: usize) -> Range<usize> {
+pub(crate) fn viewport(cursor: Option<usize>, total: usize, height: usize) -> Range<usize> {
     let last_top = total.saturating_sub(height);
     let top = match cursor {
         None => last_top,

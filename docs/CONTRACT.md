@@ -281,6 +281,24 @@ Bindings are consistent across screens: a key never means two different things.
    scrolled up.
 8. **Git** — changed files, diff, commits, publication state, comparison with
    remote mainline.
+
+   ```
+   j / k       select the next / the previous changed file
+   g / G       select the first / the last changed file
+   PgUp / PgDn scroll the selected file's diff a screenful
+   ```
+
+   It shows the task selected on the queue screen: its changed files against
+   the commit its attempt began from (added, modified, deleted, renamed, and
+   binary marked as such), the diff of the selected file, the commits the task
+   made, whether it is published (from the journal, so it is shown after the
+   worktree is gone), and how its `HEAD` compares with the remote mainline —
+   commits ahead and behind, as of the last fetch; viewing never fetches. The
+   files and commits listed are capped and the heading says when they were
+   cut. A diff is never held whole: a bounded window of it is read around the
+   view and re-read as it scrolls. Only committed work is shown. A task whose
+   worktree is gone shows why instead of its changes. A terminal too short for
+   every part shows the status lines and the file list.
 9. **Configuration and doctor** — effective configuration with the source of
    each value, and doctor results.
 
