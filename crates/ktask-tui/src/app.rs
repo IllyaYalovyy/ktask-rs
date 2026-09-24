@@ -8,6 +8,7 @@
 use crate::event::AppEvent;
 use crate::keys::{KeyAction, lookup};
 use crate::layout::layout_for;
+use crate::screen::config::ConfigView;
 use crate::screen::failures::FailureBoard;
 use crate::screen::git::GitView;
 use crate::screen::history::History;
@@ -70,6 +71,9 @@ pub struct App {
     /// The git screen's view of the selected task's repository: what the
     /// journal says about its base and publication, and what git said.
     pub git: GitView,
+    /// The configuration screen's last read of the effective configuration
+    /// and the doctor's checks.
+    pub config: ConfigView,
     /// The terminal's size as columns and rows.
     pub size: (u16, u16),
     /// The actions the operator has asked for, oldest first, that the shell
@@ -103,6 +107,7 @@ impl App {
             inbox: Inbox::default(),
             history: History::default(),
             git: GitView::default(),
+            config: ConfigView::default(),
             size,
             outbox: Vec::new(),
             notice: None,
@@ -150,6 +155,7 @@ pub fn update(mut app: App, ev: AppEvent) -> App {
             crate::screen::inbox::handle_key(&mut app, &key);
             crate::screen::history::handle_key(&mut app, &key);
             crate::screen::git::handle_key(&mut app, &key);
+            crate::screen::config::handle_key(&mut app, &key);
             navigate(&mut app, &key);
         }
         AppEvent::Tick => {}
@@ -236,7 +242,7 @@ pub fn render(app: &App, frame: &mut Frame<'_>) {
         Screen::InputInbox => crate::screen::inbox::render(app, &plan, frame),
         Screen::History => crate::screen::history::render(app, &plan, frame),
         Screen::Git => crate::screen::git::render(app, &plan, frame),
-        Screen::Config => {}
+        Screen::Config => crate::screen::config::render(app, &plan, frame),
     }
     match &app.overlay {
         Some(Overlay::KeyMap) => crate::screen::help::render(app.screen, area, frame),

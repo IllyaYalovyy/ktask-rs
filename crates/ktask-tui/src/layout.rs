@@ -235,9 +235,8 @@ mod tests {
     const HINT: &str = "Press ? for the key map";
 
     /// What the queue, the live run, the logs, the failures, the inspector, the
-    /// input inbox, the history and the git screen draw in their bodies before
-    /// anything has happened; the configuration screen leaves its body blank
-    /// until its own task fills it in. The live run has its command and
+    /// input inbox, the history, the git screen and the configuration screen draw
+    /// in their bodies before anything has happened. The live run has its command and
     /// gate rows only where the body is tall enough (see `screen::live`).
     fn body_text(screen: Screen, size: (u16, u16)) -> Vec<(u16, &'static str)> {
         match screen {
@@ -278,7 +277,7 @@ mod tests {
                 ]
             }
             Screen::Git => vec![(1, "Git"), (2, "No task is selected")],
-            Screen::Config => Vec::new(),
+            Screen::Config => vec![(1, "Reading the configuration and running the checks…")],
         }
     }
 

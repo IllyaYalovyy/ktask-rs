@@ -302,6 +302,22 @@ Bindings are consistent across screens: a key never means two different things.
 9. **Configuration and doctor** — effective configuration with the source of
    each value, and doctor results.
 
+   ```
+   r           read the configuration and run the checks again
+   j / k       scroll down / up a line
+   g / G       the top / the bottom
+   PgUp / PgDn scroll a screenful
+   ```
+
+   The doctor comes first: each check is the line `ktask-rs doctor` prints,
+   remedy included, wrapped rather than cut, and a failing one is red. Below
+   it is every configuration key with the layer that resolved it (default,
+   global file, project file, environment or flag) and its effective value; a
+   key nothing has set says `(unset)`. Both are read when the screen is first
+   shown and again on `r`, never on their own, so viewing runs no check twice.
+   A configuration that cannot be loaded is shown with the reason and the way
+   to read it again instead.
+
 ### Actions
 
 Every action is also a CLI command: pause, interrupt, resume, retry, resolve,
