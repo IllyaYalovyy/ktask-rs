@@ -249,6 +249,21 @@ Bindings are consistent across screens: a key never means two different things.
    a second.
 6. **Input inbox** — pending questions with context, impact and recommended
    response; resolving here writes the same ADR as `resolve`.
+
+   ```
+   j / k       select the next / the previous question
+   g / G       select the first / the last question
+   a / Enter   answer the selected question
+   r           answer it, starting from the recommended response
+   ```
+
+   A question is listed while its task is paused for input, and leaves the
+   list when the journal says it is answered or cancelled. While an answer is
+   typed every key is a letter of it, so `q` and the digits do not quit or
+   change screen: `Enter` sends it, `Esc` abandons it, `Backspace` removes a
+   letter, and `Ctrl-C` still quits. Sending is the `resolve` action; the
+   answer is recorded by the same code as `resolve --note`, so the ADR is
+   byte-identical to the command's. A blank answer is refused and stays open.
 7. **History** — event timeline across every attempt and remediation.
 8. **Git** — changed files, diff, commits, publication state, comparison with
    remote mainline.

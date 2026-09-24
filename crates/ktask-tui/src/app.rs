@@ -9,6 +9,7 @@ use crate::event::AppEvent;
 use crate::keys::{KeyAction, lookup};
 use crate::layout::layout_for;
 use crate::screen::failures::FailureBoard;
+use crate::screen::inbox::Inbox;
 use crate::screen::inspector::Inspector;
 use crate::screen::live::LiveRun;
 use crate::screen::logs::LogView;
@@ -59,6 +60,8 @@ pub struct App {
     /// The task inspector's task definitions and per-attempt evidence. The task
     /// it shows is the selected row of [`App::selected`] for the inspector.
     pub inspector: Inspector,
+    /// The input inbox's pending questions and the answer being typed.
+    pub inbox: Inbox,
     /// The terminal's size as columns and rows.
     pub size: (u16, u16),
     /// The actions the operator has asked for, oldest first, that the shell
@@ -89,6 +92,7 @@ impl App {
             logs: LogView::default(),
             failures: FailureBoard::default(),
             inspector: Inspector::default(),
+            inbox: Inbox::default(),
             size,
             outbox: Vec::new(),
             notice: None,
@@ -122,7 +126,9 @@ pub fn update(mut app: App, ev: AppEvent) -> App {
         AppEvent::Core(event) => apply_core(&mut app, event),
         AppEvent::Key(key) => {
             // A search being typed takes the key as text, before any binding.
-            if crate::screen::logs::capture(&mut app, &key) {
+            if crate::screen::logs::capture(&mut app, &key)
+                || crate::screen::inbox::capture(&mut app, &key)
+            {
                 return app;
             }
             crate::screen::help::handle_key(&mut app, &key);
@@ -131,6 +137,7 @@ pub fn update(mut app: App, ev: AppEvent) -> App {
             crate::screen::logs::handle_key(&mut app, &key);
             crate::screen::failures::handle_key(&mut app, &key);
             crate::screen::inspector::handle_key(&mut app, &key);
+            crate::screen::inbox::handle_key(&mut app, &key);
             navigate(&mut app, &key);
         }
         AppEvent::Tick => {}
@@ -170,6 +177,7 @@ fn apply_core(app: &mut App, event: Event) {
     crate::screen::logs::fold(app, &event);
     crate::screen::failures::fold(app, &event);
     crate::screen::inspector::fold(app, &event);
+    crate::screen::inbox::fold(app, &event);
     if let (Some(id), EventKind::TaskQueued { title }) = (event.task_id, event.kind)
         && app.tasks.iter().all(|task| task.id != id)
     {
@@ -211,6 +219,7 @@ pub fn render(app: &App, frame: &mut Frame<'_>) {
         Screen::Logs => crate::screen::logs::render(app, &plan, frame),
         Screen::Failures => crate::screen::failures::render(app, &plan, frame),
         Screen::Inspector => crate::screen::inspector::render(app, &plan, frame),
+        Screen::InputInbox => crate::screen::inbox::render(app, &plan, frame),
         _ => {}
     }
     match &app.overlay {

@@ -743,6 +743,7 @@ dependencies = [
  "crossterm",
  "ktask-core",
  "ratatui",
+ "tempfile",
  "time",
  "unicode-segmentation",
  "unicode-width",

@@ -40,7 +40,7 @@ use time::OffsetDateTime;
 /// `max_remediation_attempts`). `Paused` suspends any of those pipeline
 /// states and remembers exactly where to resume. `Done`, `Acknowledged`,
 /// `Failed` and `Cancelled` are terminal, per `VISION.md` §6.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TaskState {
     /// Waiting for its turn; no attempt has started.
     Queued,

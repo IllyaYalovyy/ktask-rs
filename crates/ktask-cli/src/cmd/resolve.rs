@@ -436,6 +436,31 @@ mod tests {
         assert!(adr.contains("[redacted]"), "{adr}");
     }
 
+    #[test]
+    fn the_adr_the_interface_writes_for_the_same_answer_is_byte_identical() {
+        let from_command = tempfile::tempdir().expect("tempdir");
+        let from_interface = tempfile::tempdir().expect("tempdir");
+        let command = waiting_project(&from_command, request());
+        let interface = waiting_project(&from_interface, request());
+
+        let outcome = resolve(
+            &command,
+            TaskId::new(1),
+            Some("Use SQLite."),
+            &no_env,
+            today(),
+        );
+        let path =
+            ktask_tui::screen::inbox::resolve(&interface, TaskId::new(1), "Use SQLite.", today())
+                .expect("the interface resolves");
+
+        assert_eq!(outcome, RunOutcome::Drained);
+        assert_eq!(adr_names(&command), adr_names(&interface));
+        let written = std::fs::read(command.root.join(&path)).expect("the command's ADR");
+        let from_tui = std::fs::read(interface.root.join(&path)).expect("the interface's ADR");
+        assert_eq!(written, from_tui);
+    }
+
     // -- the ADR's shape -------------------------------------------------------
 
     #[test]

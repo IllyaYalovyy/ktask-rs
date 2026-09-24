@@ -153,13 +153,16 @@ fn event_loop(
 }
 
 /// Whether `key` ends the session: Ctrl-C always, and `q` unless an overlay is
-/// open, where it closes the overlay instead, or a search is being typed,
-/// where it is a letter of the search.
+/// open, where it closes the overlay instead, or a search or an answer is
+/// being typed, where it is a letter of the text.
 fn quits(app: &App, key: &KeyEvent) -> bool {
     match key.code {
         KeyCode::Char('c') => key.modifiers.contains(KeyModifiers::CONTROL),
         KeyCode::Char('q') => {
-            key.modifiers.is_empty() && app.overlay.is_none() && !app.logs.is_typing()
+            key.modifiers.is_empty()
+                && app.overlay.is_none()
+                && !app.logs.is_typing()
+                && !app.inbox.is_typing()
         }
         _ => false,
     }
@@ -275,6 +278,54 @@ mod tests {
             AppEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)),
         );
         assert!(app.logs.is_typing());
+        assert!(!quits(&app, &q));
+        assert!(quits(&app, &ctrl_c));
+        app = update(
+            app,
+            AppEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        );
+        assert!(quits(&app, &q));
+    }
+
+    #[test]
+    fn q_is_a_letter_of_the_answer_while_one_is_typed_but_ctrl_c_still_quits() {
+        let request = ktask_core::DecisionRequest {
+            question: "Which?".into(),
+            options: vec!["a".into()],
+            tradeoffs: "none".into(),
+            impact: "none".into(),
+            recommended: None,
+        };
+        let mut app = App::new((20, 5));
+        app.screen = crate::types::Screen::InputInbox;
+        for (seq, kind) in [
+            EventKind::PreflightStarted,
+            EventKind::PreflightPassed {
+                base_sha: "abc".into(),
+            },
+            EventKind::AttemptStarted {
+                attempt: ktask_core::AttemptId::new(1),
+                protocol: "direct".into(),
+                pid: 1,
+                base_sha: "abc".into(),
+            },
+            EventKind::DecisionRaised { request },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut event = queued(seq as u64 + 1, 1, "t");
+            event.kind = kind;
+            app = update(app, AppEvent::Core(event));
+        }
+        let q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(quits(&app, &q), "nothing is being typed yet");
+        app = update(
+            app,
+            AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+        );
+        assert!(app.inbox.is_typing());
         assert!(!quits(&app, &q));
         assert!(quits(&app, &ctrl_c));
         app = update(
