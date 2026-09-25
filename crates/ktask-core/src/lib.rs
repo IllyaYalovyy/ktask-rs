@@ -22,6 +22,7 @@ mod project;
 pub mod protocol;
 pub mod provider;
 mod queue;
+mod recovery;
 pub mod redact;
 mod remediate;
 mod report;
@@ -59,6 +60,7 @@ pub use protocol::{
 };
 pub use provider::{Capabilities, Invocation, Outcome, Provider, Usage, UsageSource};
 pub use queue::{load, next_runnable};
+pub use recovery::{RecoveryDecision, reconcile};
 pub use remediate::{
     Bound, Bounds, Breaker, BreakerState, RecoveryReport, bundle, check_no_policy_edit,
     file_report, policy_edit_event, should_continue, signature, trip_event,
