@@ -499,7 +499,7 @@ fn lot_of(record: &Record) -> Lot {
 }
 
 /// What the machine says about a pid right now.
-enum Life {
+pub(crate) enum Life {
     /// The process runs, and when it began wherever the machine can say.
     Running {
         /// The tick count at which it began.
@@ -521,7 +521,7 @@ enum Life {
 /// could be signalled without asking anything of the process. `EPERM` is
 /// therefore an answer of "yes, and it is not yours", not an answer of "no",
 /// and it is treated as one.
-fn life_of(pid: u32) -> Life {
+pub(crate) fn life_of(pid: u32) -> Life {
     let stat = proc_stat(pid);
     let Ok(as_pid) = i32::try_from(pid) else {
         return Life::OutOfReach {

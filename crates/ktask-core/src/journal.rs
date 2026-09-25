@@ -1992,7 +1992,7 @@ mod projection {
         /// run that quietly stopped, a lie about a task instead of an error about a
         /// file. The sequence is carried because "which record" is the question an
         /// operator can act on.
-        fn replayed_states(&self) -> Result<BTreeMap<TaskId, TaskState>> {
+        pub(crate) fn replayed_states(&self) -> Result<BTreeMap<TaskId, TaskState>> {
             let mut folded: BTreeMap<TaskId, TaskState> = BTreeMap::new();
             self.for_each_event(EventSeq::new(0), &mut |event| {
                 let Some(task) = event.task_id else {

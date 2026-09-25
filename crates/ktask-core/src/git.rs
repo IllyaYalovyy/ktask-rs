@@ -1011,6 +1011,22 @@ fn unmerged_paths(worktree: &Path) -> Result<Vec<PathBuf>> {
 /// share a directory, and never in the tree [`is_clean`] reads (ADR-0043).
 const MANAGED_SUFFIX: &str = ".ktask-worktrees";
 
+/// The directory one repository's task worktrees live in.
+///
+/// [`create_worktree`] derives every task checkout from it, and [`crate::recovery`]
+/// reads that same directory out of [`list_worktrees`] to tell a task's own checkout
+/// from the main checkout and from anything a person put beside the repository. Both
+/// come through here, because the place task checkouts live is one fact and a second
+/// spelling of it is a rule that could drift from the one that decides.
+///
+/// # Errors
+///
+/// [`Error::Git`] when `root` holds no repository, as every query in this module does.
+pub(crate) fn managed_dir(root: &Path) -> Result<PathBuf> {
+    let toplevel = git(root, &["rev-parse", "--show-toplevel"])?;
+    Ok(PathBuf::from(format!("{toplevel}{MANAGED_SUFFIX}")))
+}
+
 /// One checkout git has registered, as `git worktree list --porcelain` printed
 /// it — the main checkout and every task worktree alike.
 ///
@@ -1172,12 +1188,14 @@ pub fn remove_worktree(root: &Path, worktree: &Path) -> Result<()> {
 /// The directory the worktree named `name` belongs in, and the refusal of a
 /// name that would put it somewhere else.
 fn worktree_path(root: &Path, name: &str) -> Result<PathBuf> {
-    let toplevel = git(root, &["rev-parse", "--show-toplevel"])?;
-    let managed = format!("{toplevel}{MANAGED_SUFFIX}");
-    let at = Path::new(&managed).join(name);
+    let managed = managed_dir(root)?;
+    let at = managed.join(name);
     if !one_component(name) {
         return Err(Error::Policy {
-            detail: format!("`{name}` is not one directory name inside `{managed}`"),
+            detail: format!(
+                "`{name}` is not one directory name inside `{}`",
+                managed.display()
+            ),
             paths: vec![at],
         });
     }

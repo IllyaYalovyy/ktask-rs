@@ -3107,7 +3107,7 @@ pub enum RunOutcome {
 /// checkout whose evidence the next attempt is told to read. `task-7` is the shape
 /// ADR-0043 anticipates, and it is one path component, which is all
 /// [`crate::git::create_worktree`] accepts.
-fn worktree_name(task: TaskId) -> String {
+pub(crate) fn worktree_name(task: TaskId) -> String {
     format!("task-{task}")
 }
 
