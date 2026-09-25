@@ -8,23 +8,31 @@
 //! [`crate::RecoveryDecision`] is what it leaves behind: one journaled row per
 //! conclusion, with the evidence beside it.
 //!
-//! Three inputs are read, in that order, and nothing else is. The events are folded
-//! into the state each task is in — not read out of `task_state`, which ADR-0023 made
-//! disposable precisely so a crash could be answered from the events. The kernel is
-//! asked about the `pid` the journal recorded, with [`crate::lock`]'s one
-//! implementation of that question. And git is asked which checkouts the repository
-//! registers, because the commit a publication was making either exists or does not.
+//! Four inputs are read, in that order. The events are folded into the state each task
+//! is in — not read out of `task_state`, which ADR-0023 made disposable precisely so a
+//! crash could be answered from the events. The kernel is asked about the `pid` the
+//! journal recorded, with [`crate::lock`]'s one implementation of that question. Git is
+//! asked which checkouts the repository registers, because the commit a publication was
+//! making either exists or does not. And where the phase being decided is a
+//! publication, the remote mainline is fetched and its tip compared with the candidate
+//! the journal offered, because a checkout cannot tell a landed push from one that died
+//! halfway: that is ADR-0097's fourth input, added to ADR-0096's three. No other phase
+//! reaches it, so no other phase is asked about it — preflight, the gates and an agent's
+//! session are all local work.
 //!
-//! What recovery never does is change the world: it fetches nothing, commits nothing,
-//! pushes nothing, creates and removes no worktree, and never takes the repository
-//! lock. Every one of those side effects belongs to a command an operator started.
-//! The whole of ADR-0096 is the rule that turns these three answers into one of
-//! §6's three verdicts, and the combinations it refuses rather than guesses about.
+//! What recovery never does is change the world: it commits nothing, pushes nothing,
+//! creates and removes no worktree, and never takes the repository lock. Every one of
+//! those side effects belongs to a command an operator started. The fetch above is the
+//! one question asked beyond this machine, and it is asked to prove a publication
+//! rather than to make one: it moves no ref anywhere. The whole of ADR-0096 is the rule
+//! that turns these answers into one of §6's three verdicts, and the combinations it
+//! refuses rather than guesses about.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+use crate::config;
 use crate::error::{Error, Result};
 use crate::event::EventKind;
 use crate::git;
@@ -62,6 +70,12 @@ pub struct RecoveryDecision {
 /// after this returns is therefore reading the states these decisions move, never the
 /// ones a crashed run left behind.
 ///
+/// One verdict journals a second row. A publication the remote was read back holding
+/// also gets the [`EventKind::PublishVerified`] row that reading is the proof of,
+/// appended immediately before its decision row: the proof belongs to the journal, not
+/// to the memory of the pass that read it, so the next restart reaches
+/// [`TaskState::PublishedVerified`] from the events without asking the remote again.
+///
 /// Deciding is idempotent. A second pass over a task the first pass parked finds
 /// [`TaskState::Paused`] and answers [`Recovery::AlreadyApplied`] without moving it, so
 /// the projection never oscillates however often a run reconciles itself at start-up.
@@ -77,8 +91,13 @@ pub struct RecoveryDecision {
 /// journaled for, or a commit in a publication's checkout that nothing offered — and
 /// when the verdicts would leave more than one task active, which is
 /// [`crate::check_one_active`]'s invariant 1. [`Error::Git`] when `project`'s root
-/// holds no repository, because the checkout is one of the three inputs and guessing
-/// about the other two is not recovery.
+/// holds no repository, because the checkout is one of the inputs and guessing about
+/// the others is not recovery; and when a publication's candidate has to be compared
+/// with the remote mainline and the remote will not answer, because a push that cannot
+/// be read back is a push whose fate only the remote knows. [`Error::Config`], with
+/// [`Error::Io`] behind it, when the settings that name that remote and branch cannot
+/// be read. Both questions are asked only of a pass that holds a publication: one that
+/// stopped short of a published commit is decided without either.
 ///
 /// A refusal writes nothing at all: every verdict and every resulting state is
 /// computed before the first row is appended.
@@ -101,12 +120,18 @@ pub struct RecoveryDecision {
 /// # }
 /// ```
 pub fn reconcile(journal: &mut Journal, project: &Project) -> Result<Vec<RecoveryDecision>> {
-    reconcile_with(journal, project, &life_of)
+    reconcile_with(journal, project, &life_of, &Mainline::for_project)
 }
 
 /// The clause every verdict carries when no attempt's process was asked about,
 /// because the state the task is in names no attempt in flight.
 const NO_PROCESS: &str = "no process was asked about, because no attempt of this task is in flight";
+
+/// The clause every verdict carries when the remote mainline was not asked about,
+/// because the phase being decided reaches no remote: preflight, the gates and an
+/// agent's session are all local work, and only a publication's side effect is
+/// visible anywhere but on this machine.
+const NO_REMOTE: &str = "the remote was not asked, because nothing this phase does reaches it";
 
 /// [`reconcile`], with the process table handed in.
 ///
@@ -119,6 +144,7 @@ fn reconcile_with(
     journal: &mut Journal,
     project: &Project,
     process: &dyn Fn(u32) -> Life,
+    mainline: &dyn Fn(&Project) -> Result<Mainline>,
 ) -> Result<Vec<RecoveryDecision>> {
     let folded = journal.replayed_states()?;
     let projected = journal.all_states()?;
@@ -126,7 +152,16 @@ fn reconcile_with(
     let mut facts = read_facts(journal)?;
     let checkouts = read_checkouts(&project.root)?;
     let mut states = folded.clone();
-    let mut decided: Vec<RecoveryDecision> = Vec::new();
+    let mut decided: Vec<(RecoveryDecision, Option<EventKind>)> = Vec::new();
+    let ask_mainline = || {
+        let names = mainline(project)?;
+        let tip = names.fetched_tip(&project.root)?;
+        Ok(Answered {
+            remote: names.remote,
+            branch: names.branch,
+            tip,
+        })
+    };
     for task in known_tasks(journal, &folded)? {
         let checkout = checkouts
             .get(&worktree_name(task))
@@ -137,29 +172,44 @@ fn reconcile_with(
         if state.is_terminal() || (record.last.is_none() && matches!(checkout, Checkout::Absent)) {
             continue;
         }
-        let (decision, detail) = decide(task, &state, &record, &checkout, process)?;
-        let moved = apply(
-            &state,
+        let verdict = decide(task, &state, &record, &checkout, process, &ask_mainline)?;
+        let mut moved = state.clone();
+        if let Some(proved) = &verdict.proved {
+            moved = apply(&moved, proved)?;
+        }
+        moved = apply(
+            &moved,
             &EventKind::RecoveryDecision {
-                decision,
-                detail: detail.clone(),
+                decision: verdict.decision,
+                detail: verdict.detail.clone(),
             },
         )?;
         states.insert(task, moved);
-        decided.push(RecoveryDecision {
-            task: Some(task),
-            decision,
-            detail,
-        });
+        decided.push((
+            RecoveryDecision {
+                task: Some(task),
+                decision: verdict.decision,
+                detail: verdict.detail,
+            },
+            verdict.proved,
+        ));
     }
     check_one_active(&states)?;
-    let repaired = drift.into_iter().map(|detail| RecoveryDecision {
-        task: None,
-        decision: Recovery::AlreadyApplied,
-        detail,
+    let repaired = drift.into_iter().map(|detail| {
+        (
+            RecoveryDecision {
+                task: None,
+                decision: Recovery::AlreadyApplied,
+                detail,
+            },
+            None,
+        )
     });
     let verdicts = repaired.chain(decided).collect::<Vec<_>>();
-    for verdict in &verdicts {
+    for (verdict, proved) in &verdicts {
+        if let Some(row) = proved {
+            journal.append(verdict.task, row)?;
+        }
         journal.append(
             verdict.task,
             &EventKind::RecoveryDecision {
@@ -171,7 +221,127 @@ fn reconcile_with(
     if states != projected {
         journal.rebuild_state()?;
     }
-    Ok(verdicts)
+    Ok(verdicts.into_iter().map(|(verdict, _)| verdict).collect())
+}
+
+/// Which branch of which remote a publication had to move.
+///
+/// The two names come from the project's own settings rather than from a guess,
+/// because §10's comparison is against *the* mainline: grading a candidate against
+/// a branch nothing ever published to would read a publication as unmade and offer
+/// the remote a second one.
+#[derive(Debug)]
+struct Mainline {
+    /// The remote a publication pushes to and recovery fetches.
+    remote: String,
+    /// The branch a publication had to move.
+    branch: String,
+}
+
+impl Mainline {
+    /// The mainline the project's resolved settings name.
+    ///
+    /// This is asked only of a pass that holds a publication, because a run that
+    /// stopped short of one is decided from the journal, the process table and the
+    /// checkout: reading settings a verdict never uses would give a broken settings
+    /// document a say about a recovery that has nothing to ask the remote.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] and [`Error::Io`] exactly as [`crate::config::load_for`]
+    /// makes them, passed through unchanged. Settings that cannot be read are not a
+    /// mainline to guess at.
+    fn for_project(project: &Project) -> Result<Self> {
+        let config = config::load_for(project)?;
+        Ok(Self {
+            remote: config.mainline_remote,
+            branch: config.mainline_branch,
+        })
+    }
+
+    /// The fully-qualified remote-tracking ref the fetched tip is read from.
+    ///
+    /// Qualified because `rev-parse main` answers about the *local* branch, which
+    /// here is the commit the attempt started from rather than the one it was trying
+    /// to publish. It always begins `refs/remotes/`, so neither name can reach git
+    /// wearing an option's clothes.
+    fn tracked_ref(&self) -> String {
+        format!("refs/remotes/{}/{}", self.remote, self.branch)
+    }
+
+    /// Fetch the remote, and read back the tip it holds for this branch.
+    ///
+    /// The fetch is not decoration. `refs/remotes/<remote>/<branch>` is a cache of
+    /// the last conversation with the remote, and [`crate::git::publish`] names it
+    /// as the thing a fetch has to move before it can be believed — which is what
+    /// makes a recovery that skips the fetch able to read a stale ref as a landed
+    /// push, and a lie as one.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Git`] when the remote will not answer, or holds no such branch.
+    /// Recovery refuses rather than guessing what a publication it cannot see the
+    /// end of did.
+    fn fetched_tip(&self, root: &Path) -> Result<String> {
+        git::fetch(root, &self.remote)?;
+        git::git(root, &["rev-parse", "--verify", &self.tracked_ref()])
+    }
+}
+
+/// What the remote mainline answered when recovery asked it.
+#[derive(Debug)]
+struct Answered {
+    /// The remote that was fetched.
+    remote: String,
+    /// The branch whose tip was read.
+    branch: String,
+    /// The tip that fetch brought back.
+    tip: String,
+}
+
+impl Answered {
+    /// The clause a verdict carries about what the remote said.
+    fn clause(&self) -> String {
+        format!(
+            "`{}` was fetched and `{}` holds {}",
+            self.remote, self.branch, self.tip
+        )
+    }
+}
+
+/// What recovery decided about one task, before any of it is journalled.
+#[derive(Debug)]
+struct Verdict {
+    /// Which of §6's three answers this is.
+    decision: Recovery,
+    /// The evidence, in the order recovery read it.
+    detail: String,
+    /// A row the verdict read off the world that the machine needs before the task
+    /// can stand where the verdict puts it. Only a publication whose push the remote
+    /// was read back holding has one: [`EventKind::PublishVerified`] is the row §10's
+    /// seventh step makes the whole difference between `Publishing` and
+    /// [`TaskState::PublishedVerified`], and recovery has read that proof itself.
+    /// Every other verdict's record is its decision row alone.
+    proved: Option<EventKind>,
+}
+
+impl Verdict {
+    /// A verdict whose decision row is the whole of its record.
+    fn decided(decision: Recovery, detail: String) -> Self {
+        Self {
+            decision,
+            detail,
+            proved: None,
+        }
+    }
+}
+
+/// The verdict a phase answered with, when reading the world proved nothing the
+/// machine does not already hold.
+impl From<(Recovery, String)> for Verdict {
+    fn from(answer: (Recovery, String)) -> Self {
+        Self::decided(answer.0, answer.1)
+    }
 }
 
 /// Where a task's checkout was found to be.
@@ -360,43 +530,49 @@ fn decide(
     facts: &Facts,
     checkout: &Checkout,
     process: &dyn Fn(u32) -> Life,
-) -> Result<(Recovery, String)> {
+    mainline: &dyn Fn() -> Result<Answered>,
+) -> Result<Verdict> {
     match state {
         TaskState::Queued => from_queue(task, state, facts, checkout),
-        TaskState::Preflight => Ok((
+        TaskState::Preflight => Ok(Verdict::decided(
             Recovery::Resume,
             evidence(
                 state,
                 facts,
                 checkout,
                 NO_PROCESS,
+                NO_REMOTE,
                 "preflight is the supervisor's own checks and nothing an agent can corrupt, so they are simply run again",
             ),
         )),
         TaskState::Running { attempt, .. } | TaskState::Remediating { attempt, .. } => {
-            agents(task, *attempt, state, facts, checkout, process)
+            Ok(agents(task, *attempt, state, facts, checkout, process)?.into())
         }
-        TaskState::Verifying { attempt } => gates(task, *attempt, state, facts, checkout, process),
+        TaskState::Verifying { attempt } => {
+            Ok(gates(task, *attempt, state, facts, checkout, process)?.into())
+        }
         TaskState::Publishing { attempt } => {
-            publication(task, *attempt, state, facts, checkout, process)
+            publication(task, *attempt, state, facts, checkout, process, mainline)
         }
-        TaskState::PublishedVerified { .. } => Ok((
+        TaskState::PublishedVerified { .. } => Ok(Verdict::decided(
             Recovery::AlreadyApplied,
             evidence(
                 state,
                 facts,
                 checkout,
                 NO_PROCESS,
+                NO_REMOTE,
                 "the remote was read back holding the commit, which no restart can unprove, so the publication is not made a second time",
             ),
         )),
-        TaskState::Paused { .. } => Ok((
+        TaskState::Paused { .. } => Ok(Verdict::decided(
             Recovery::AlreadyApplied,
             evidence(
                 state,
                 facts,
                 checkout,
                 NO_PROCESS,
+                NO_REMOTE,
                 "the pause is durable and holds the state to return to; a restart lifts no gate and resumes no wait, so the task stays parked exactly where it was",
             ),
         )),
@@ -421,15 +597,16 @@ fn from_queue(
     state: &TaskState,
     facts: &Facts,
     checkout: &Checkout,
-) -> Result<(Recovery, String)> {
+) -> Result<Verdict> {
     match checkout {
-        Checkout::Absent => Ok((
+        Checkout::Absent => Ok(Verdict::decided(
             Recovery::AlreadyApplied,
             evidence(
                 state,
                 facts,
                 checkout,
                 NO_PROCESS,
+                NO_REMOTE,
                 "nothing this task began is anywhere to be found, so there is no phase to resume \
                  and nothing that may already have taken effect",
             ),
@@ -477,7 +654,10 @@ fn agents(
              continued nor undone by guesswork",
         )
     };
-    Ok((decision, evidence(state, facts, checkout, &asked, because)))
+    Ok((
+        decision,
+        evidence(state, facts, checkout, &asked, NO_REMOTE, because),
+    ))
 }
 
 /// The gates phase: the supervisor's own commands, spent on one attempt's output.
@@ -513,16 +693,33 @@ fn gates(
              longer exists",
         )
     };
-    Ok((decision, evidence(state, facts, checkout, &asked, because)))
+    Ok((
+        decision,
+        evidence(state, facts, checkout, &asked, NO_REMOTE, because),
+    ))
 }
 
 /// The publication: the one phase whose side effect outlives the process.
 ///
-/// A commit is either there or it is not, and the checkout says which. The commit
-/// the journal offered sitting in `HEAD` means the publication happened and must
-/// not happen again; the attempt's own base commit still in `HEAD` means it did
-/// not happen and may be run again. Anything else is a commit no row ever offered,
-/// which is not a verdict to choose but a repository to be asked about.
+/// A commit is either there or it is not, and the checkout says which. The push is a
+/// different question, and the checkout cannot answer it: a candidate sitting in
+/// `HEAD` looks the same whether the push landed or died halfway. So VISION.md §10's
+/// comparison is made against the only witness to a landed push — the remote is
+/// fetched, and the tip that fetch brings back is compared with the candidate the
+/// journal offered (ADR-0097).
+///
+/// Equal means the push landed: the task is moved to [`TaskState::PublishedVerified`]
+/// by journalling the [`EventKind::PublishVerified`] row that reading is the proof of,
+/// because that row is the whole of what separates the two states. Unequal means it
+/// did not land, and the publication is retried — with the commit, if the checkout
+/// already holds it, left alone rather than made a second time.
+///
+/// Recovery itself pushes nothing. What it reads is a `fetch` and a `rev-parse`, and
+/// the decision to put a candidate in front of the remote again belongs to the
+/// publication that gets restarted. A phase that offered no commit yet leaves nothing
+/// to compare, so the remote is not asked about it at all: that verdict comes from the
+/// checkout, and neither a settings document nor an unreachable remote gets a say over
+/// work that never reached either.
 fn publication(
     task: TaskId,
     attempt: AttemptId,
@@ -530,56 +727,88 @@ fn publication(
     facts: &Facts,
     checkout: &Checkout,
     process: &dyn Fn(u32) -> Life,
-) -> Result<(Recovery, String)> {
+    mainline: &dyn Fn() -> Result<Answered>,
+) -> Result<Verdict> {
     let started = claim(facts, task, attempt, state)?;
     let (runs, asked) = liveness(started.pid, process);
     if runs {
-        return Ok((
+        return Ok(Verdict::decided(
             Recovery::Resume,
             evidence(
                 state,
                 facts,
                 checkout,
                 &asked,
+                NO_REMOTE,
                 "the push is still in the air, so it is waited for rather than started again",
             ),
         ));
     }
+    let offered = facts.offered.get(&attempt);
+    let answered = match offered {
+        Some(_) => Some(mainline()?),
+        None => None,
+    };
+    let remote = answered
+        .as_ref()
+        .map_or_else(|| NO_REMOTE.to_owned(), Answered::clause);
+    if let (Some(candidate), Some(answered)) = (offered, answered.as_ref())
+        && answered.tip == *candidate
+    {
+        return Ok(Verdict {
+            decision: Recovery::AlreadyApplied,
+            detail: evidence(
+                state,
+                facts,
+                checkout,
+                &asked,
+                &remote,
+                "the remote holds the very commit the journal offered, so the push landed \
+                 and offering it once more would publish the same work twice",
+            ),
+            proved: Some(EventKind::PublishVerified {
+                commit: candidate.clone(),
+                remote_sha: answered.tip.clone(),
+            }),
+        });
+    }
     let Checkout::At { path, head } = checkout else {
-        return Ok((
+        return Ok(Verdict::decided(
             Recovery::MarkInterrupted,
             evidence(
                 state,
                 facts,
                 checkout,
                 &asked,
-                "the checkout the commit was to be made in is gone, so nothing was committed and \
-                 nothing was pushed",
+                &remote,
+                "the checkout the commit was to be made in is gone, so there is nothing left \
+                 for the publication to be made from",
             ),
         ));
     };
-    let offered = facts.offered.get(&attempt);
     if offered == Some(head) {
-        return Ok((
-            Recovery::AlreadyApplied,
-            evidence(
-                state,
-                facts,
-                checkout,
-                &asked,
-                "the checkout already holds the very commit the journal offered, so the commit \
-                 exists and making it again would be a second one",
-            ),
-        ));
-    }
-    if head == &started.base_sha {
-        return Ok((
+        return Ok(Verdict::decided(
             Recovery::Resume,
             evidence(
                 state,
                 facts,
                 checkout,
                 &asked,
+                &remote,
+                "the checkout already holds the commit the journal offered and the remote does \
+                 not, so that commit is not made a second time and only the push is retried",
+            ),
+        ));
+    }
+    if head == &started.base_sha {
+        return Ok(Verdict::decided(
+            Recovery::Resume,
+            evidence(
+                state,
+                facts,
+                checkout,
+                &asked,
+                &remote,
                 "the checkout still stands at the commit the attempt began from, so no commit was \
                  made and the publication can be run again",
             ),
@@ -668,13 +897,15 @@ fn evidence(
     facts: &Facts,
     checkout: &Checkout,
     asked: &str,
+    remote: &str,
     because: &str,
 ) -> String {
     format!(
-        "state {}{}; {}; {}; the journal's last row is {}; {}",
+        "state {}{}; {}; {}; {}; the journal's last row is {}; {}",
         state.name(),
         whereof(state),
         asked,
+        remote,
         describe(checkout),
         facts.last.as_deref().unwrap_or("no row at all"),
         because,
@@ -720,7 +951,11 @@ mod tests {
     use crate::journal::Journal;
     use crate::lock::Life;
     use crate::project::Project;
-    use crate::recovery::{Checkout, Facts, RecoveryDecision, decide, reconcile, reconcile_with};
+    use crate::project::project_config_path;
+    use crate::recovery::{
+        Answered, Checkout, Facts, Mainline, NO_REMOTE, RecoveryDecision, decide, reconcile,
+        reconcile_with,
+    };
     use crate::runner::worktree_name;
     use crate::state::{PauseReason, Phase, Recovery, TaskState};
     use crate::task::{Task, parse_plan};
@@ -919,6 +1154,22 @@ mod tests {
         );
     }
 
+    /// The rows that put `task` into `Publishing` with nothing offered yet.
+    ///
+    /// [`EventKind::VerifyPassed`] is what opens a publication, and the commit is
+    /// offered after it, so a run that died between the two is in the phase with no
+    /// candidate to compare a remote tip against.
+    fn publication_opens(journal: &mut Journal, task: TaskId, pid: u32, base: &str) {
+        gates_begin(journal, task, 1, pid, base);
+        row(
+            journal,
+            task,
+            &EventKind::VerifyPassed {
+                attempt: AttemptId::new(1),
+            },
+        );
+    }
+
     /// Decide with a process table that answers `answer` for every pid it is asked
     /// about, counting the times it was asked at all.
     ///
@@ -932,9 +1183,41 @@ mod tests {
         answer: fn(u32) -> Life,
         probes: &Cell<usize>,
     ) -> Result<Vec<RecoveryDecision>, Error> {
-        reconcile_with(journal, &fixture.project, &|pid| {
-            probes.set(probes.get() + 1);
-            answer(pid)
+        reconcile_with(
+            journal,
+            &fixture.project,
+            &|pid| {
+                probes.set(probes.get() + 1);
+                answer(pid)
+            },
+            &mainline(),
+        )
+    }
+
+    /// The mainline a fixture's scratch repository publishes to, named rather than
+    /// read out of the machine's settings: the fixture's remote is `origin` and its
+    /// branch is `main`, and a test that resolved those names from the environment
+    /// it happened to run in would be testing whoever set the environment.
+    ///
+    /// It is handed over as a resolver rather than as a [`Mainline`] because the
+    /// question recovery asks is the one [`Mainline::for_project`] answers, and that
+    /// question can fail: a stand-in for a fallible question is built in the shape of
+    /// the question, so only the answer is pinned here.
+    fn mainline() -> impl Fn(&Project) -> Result<Mainline, Error> {
+        |_| {
+            Ok(Mainline {
+                remote: "origin".to_owned(),
+                branch: "main".to_owned(),
+            })
+        }
+    }
+
+    /// A remote question a test never expects to be asked, because the phase it is
+    /// deciding reaches no remote at all.
+    fn never_asked() -> Result<Answered, Error> {
+        Err(Error::Corrupt {
+            detail: "recovery asked the remote about a phase that reaches no remote".to_owned(),
+            seq: None,
         })
     }
 
@@ -990,6 +1273,80 @@ mod tests {
         journal.get_state(task).expect("the projection is readable")
     }
 
+    /// How many rows called `kind` the journal holds for `task`.
+    ///
+    /// The count of [`EventKind::PublishVerified`] is what tells a proved
+    /// publication from one that merely was not pushed again, and the count of
+    /// [`EventKind::PublishStarted`] is what tells a retried publication from a
+    /// duplicated one. A verdict on its own cannot tell those apart.
+    fn rows(journal: &Journal, task: TaskId, kind: &str) -> usize {
+        journal
+            .events()
+            .expect("the journal is readable")
+            .into_iter()
+            .filter(|event| event.task_id == Some(task) && event.kind.discriminant() == kind)
+            .count()
+    }
+
+    /// The commit the bare origin itself holds on `main`, read from the origin.
+    ///
+    /// Read off the remote rather than out of any remote-tracking ref, because the
+    /// question under test is what the remote holds — and the ref in the fetching
+    /// repository is one of the things being tested.
+    fn remote_main(fixture: &Fixture) -> String {
+        git::git(fixture.repo.origin(), &["rev-parse", "main"])
+            .expect("the scratch origin was seeded with a main")
+    }
+
+    /// Write the cached remote-tracking ref by hand, without asking the remote.
+    ///
+    /// This is what a machine that has not spoken to `origin` since some earlier
+    /// instant looks like: the cache is behind the truth, or — once a commit no push
+    /// ever carried is written into it — ahead of it.
+    fn remember_tip(fixture: &Fixture, sha: &str) {
+        git::git(
+            &fixture.project.root,
+            &["update-ref", "refs/remotes/origin/main", sha],
+        )
+        .expect("a remote-tracking ref is writable");
+    }
+
+    /// Write the project's own settings document, naming the mainline it publishes
+    /// to.
+    ///
+    /// The project's document outranks the machine's, which is what lets a test hold
+    /// the two names recovery resolves without reading the environment the suite
+    /// happens to run in.
+    fn name_mainline(fixture: &Fixture, remote: &str, branch: &str) {
+        fs::write(
+            project_config_path(&fixture.project),
+            format!("mainline_remote = \"{remote}\"\nmainline_branch = \"{branch}\"\n"),
+        )
+        .expect("a project's settings document is writable");
+    }
+
+    /// Point `origin` at a directory that is not there, so every question asked of
+    /// the remote fails. A test that still gets an answer never asked for one.
+    fn orphan_the_remote(fixture: &Fixture) {
+        let gone = fixture.repo.path().join("gone.git");
+        git::git(
+            &fixture.project.root,
+            &["remote", "set-url", "origin", &gone.display().to_string()],
+        )
+        .expect("a remote's url is rewritable");
+    }
+
+    /// Register a second remote called `name` at `url`, which is how a project comes
+    /// to publish to a remote the settings name rather than the one `git clone` would
+    /// have called `origin`.
+    fn add_remote(fixture: &Fixture, name: &str, url: &Path) {
+        git::git(
+            &fixture.project.root,
+            &["remote", "add", name, &url.display().to_string()],
+        )
+        .expect("a second remote is registerable");
+    }
+
     #[test]
     fn a_projection_that_disagrees_with_the_journal_is_repaired_and_that_is_recorded() {
         let fixture = Fixture::new();
@@ -1000,7 +1357,7 @@ mod tests {
             .put_state(task, &TaskState::Done)
             .expect("a projection row is writable");
 
-        let decisions = reconcile_with(&mut journal, &fixture.project, &dead)
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
             .expect("a drifted projection is repaired rather than argued about");
 
         assert_eq!(decisions.first().map(|found| found.task), Some(None));
@@ -1027,8 +1384,8 @@ mod tests {
             .put_state(task, &TaskState::Preflight)
             .expect("a projection row is writable");
 
-        let decisions =
-            reconcile_with(&mut journal, &fixture.project, &dead).expect("a matching pass runs");
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a matching pass runs");
 
         assert_eq!(
             decisions.iter().filter(|one| one.task.is_none()).count(),
@@ -1050,8 +1407,8 @@ mod tests {
             },
         );
 
-        let decisions =
-            reconcile_with(&mut journal, &fixture.project, &dead).expect("a queued pass runs");
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a queued pass runs");
 
         assert_eq!(decisions.len(), 1, "{decisions:?}");
         assert_eq!(decisions[0].task, Some(task));
@@ -1069,8 +1426,8 @@ mod tests {
         let mut journal = fixture.journal();
         journal.put_tasks(&queue(1)).expect("a queue is importable");
 
-        let decisions =
-            reconcile_with(&mut journal, &fixture.project, &dead).expect("an untouched pass runs");
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("an untouched pass runs");
 
         assert!(decisions.is_empty(), "{decisions:?}");
         assert_eq!(decided(&journal), Vec::new(), "nothing was decided");
@@ -1084,7 +1441,7 @@ mod tests {
         journal.put_tasks(&queue(1)).expect("a queue is importable");
         let at = fixture.checkout_of(task);
 
-        let error = reconcile_with(&mut journal, &fixture.project, &dead)
+        let error = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
             .expect_err("a checkout with no journal behind it is not a phase to resume");
 
         assert!(matches!(error, Error::Policy { .. }), "{error}");
@@ -1102,8 +1459,8 @@ mod tests {
         let task = TaskId::new(1);
         preflight_begins(&mut journal, task);
 
-        let decisions =
-            reconcile_with(&mut journal, &fixture.project, &dead).expect("a preflight pass runs");
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a preflight pass runs");
 
         assert_eq!(decisions[0].decision, Recovery::Resume, "{decisions:?}");
         assert_eq!(projected(&journal, task), Some(TaskState::Preflight));
@@ -1136,8 +1493,8 @@ mod tests {
         let task = TaskId::new(1);
         attempt_begins(&mut journal, task, 1, 4_000_000, &fixture.base());
 
-        let decisions =
-            reconcile_with(&mut journal, &fixture.project, &dead).expect("a crashed pass runs");
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a crashed pass runs");
 
         assert_eq!(
             decisions[0].decision,
@@ -1206,8 +1563,8 @@ mod tests {
         attempt_begins(&mut journal, task, 1, 4_000_002, &fixture.base());
         attempt_continues(&mut journal, task, 2, 4_000_002, &fixture.base());
 
-        let decisions =
-            reconcile_with(&mut journal, &fixture.project, &dead).expect("a remediation pass runs");
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a remediation pass runs");
 
         assert_eq!(
             decisions[0].decision,
@@ -1229,7 +1586,7 @@ mod tests {
         gates_begin(&mut journal, task, 1, 4_000_003, &fixture.base());
         fixture.checkout_of(task);
 
-        let decisions = reconcile_with(&mut journal, &fixture.project, &dead)
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
             .expect("a verification pass runs");
 
         assert_eq!(decisions[0].decision, Recovery::Resume, "{decisions:?}");
@@ -1249,7 +1606,7 @@ mod tests {
         let task = TaskId::new(1);
         gates_begin(&mut journal, task, 1, 4_000_004, &fixture.base());
 
-        let decisions = reconcile_with(&mut journal, &fixture.project, &dead)
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
             .expect("a bare verification pass runs");
 
         assert_eq!(
@@ -1267,18 +1624,295 @@ mod tests {
         let at = fixture.checkout_of(task);
         let candidate = Fixture::commit_in(&at, "the candidate");
         publication_begins(&mut journal, task, 4_000_005, &fixture.base(), &candidate);
+        let held = remote_main(&fixture);
 
-        let decisions =
-            reconcile_with(&mut journal, &fixture.project, &dead).expect("a mid-push pass runs");
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a mid-push pass runs");
+
+        assert_eq!(decisions[0].decision, Recovery::Resume, "{decisions:?}");
+        assert!(
+            decisions[0].detail.contains(&candidate),
+            "the verdict names the commit it refused to make again: {}",
+            decisions[0].detail
+        );
+        assert!(
+            decisions[0].detail.contains("not made a second time")
+                && decisions[0].detail.contains("push is retried"),
+            "the verdict says which half of the publication is repeated: {}",
+            decisions[0].detail
+        );
+        assert_eq!(
+            rows(&journal, task, "PublishVerified"),
+            0,
+            "a push the remote does not hold is not journalled as one that landed"
+        );
+        assert_eq!(
+            projected(&journal, task),
+            Some(TaskState::Publishing {
+                attempt: AttemptId::new(1)
+            }),
+            "the task stays in the phase that has to finish"
+        );
+        assert_eq!(
+            remote_main(&fixture),
+            held,
+            "recovery itself pushed nothing"
+        );
+    }
+
+    #[test]
+    fn a_publication_the_remote_was_read_back_holding_is_not_pushed_again() {
+        let fixture = Fixture::new();
+        let mut journal = fixture.journal();
+        let task = TaskId::new(1);
+        let at = fixture.checkout_of(task);
+        let candidate = Fixture::commit_in(&at, "the candidate");
+        publication_begins(&mut journal, task, 4_000_020, &fixture.base(), &candidate);
+        git::publish(&at, "origin", "main", &candidate).expect("a candidate is pushable");
+
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a pass over a publication that landed runs");
 
         assert_eq!(
             decisions[0].decision,
             Recovery::AlreadyApplied,
             "{decisions:?}"
         );
+        assert_eq!(
+            projected(&journal, task),
+            Some(TaskState::PublishedVerified {
+                commit: candidate.clone()
+            }),
+            "the remote holding the candidate is the one fact Publishing waits for, so the task \
+             stands where the push left it"
+        );
+        assert_eq!(
+            rows(&journal, task, "PublishVerified"),
+            1,
+            "the proof recovery read off the remote is journalled, because a next restart has to \
+             reach the same state without asking the remote again"
+        );
+        assert_eq!(
+            rows(&journal, task, "PublishStarted"),
+            1,
+            "a publication the remote confirms is never started a second time"
+        );
+        assert_eq!(
+            remote_main(&fixture),
+            candidate,
+            "the origin holds exactly the commit the journal offered"
+        );
         assert!(
             decisions[0].detail.contains(&candidate),
-            "the verdict names the commit it refused to make again: {}",
+            "the verdict names the commit the remote was found holding: {}",
+            decisions[0].detail
+        );
+    }
+
+    #[test]
+    fn published_work_is_not_parked_even_after_its_checkout_is_removed() {
+        let fixture = Fixture::new();
+        let mut journal = fixture.journal();
+        let task = TaskId::new(1);
+        let at = fixture.checkout_of(task);
+        let candidate = Fixture::commit_in(&at, "the candidate");
+        publication_begins(&mut journal, task, 4_000_021, &fixture.base(), &candidate);
+        git::publish(&at, "origin", "main", &candidate).expect("a candidate is pushable");
+        fs::remove_dir_all(&at).expect("a checkout is removable by a test");
+
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a pass over published work with no checkout runs");
+
+        assert_eq!(
+            decisions[0].decision,
+            Recovery::AlreadyApplied,
+            "{decisions:?}"
+        );
+        assert_eq!(
+            projected(&journal, task),
+            Some(TaskState::PublishedVerified { commit: candidate }),
+            "a vanished checkout cannot un-publish a commit the remote holds: the work is out, \
+             and parking it would invite a second publication of it"
+        );
+    }
+
+    #[test]
+    fn a_publication_is_compared_with_the_mainline_the_projects_own_settings_name() {
+        let fixture = Fixture::new();
+        let mut journal = fixture.journal();
+        let task = TaskId::new(1);
+        let at = fixture.checkout_of(task);
+        let candidate = Fixture::commit_in(&at, "the candidate");
+        publication_begins(&mut journal, task, 4_000_026, &fixture.base(), &candidate);
+        git::publish(&at, "origin", "trunk", &candidate)
+            .expect("a candidate is pushable to a branch");
+        add_remote(&fixture, "upstream", fixture.repo.origin());
+        orphan_the_remote(&fixture);
+        name_mainline(&fixture, "upstream", "trunk");
+
+        let decisions = reconcile(&mut journal, &fixture.project)
+            .expect("a pass that resolves the project's own names runs");
+
+        assert_eq!(
+            decisions[0].decision,
+            Recovery::AlreadyApplied,
+            "{decisions:?}"
+        );
+        assert_eq!(
+            projected(&journal, task),
+            Some(TaskState::PublishedVerified { commit: candidate }),
+            "`upstream/trunk` is the mainline this project publishes to, and `origin` is a \
+             remote that cannot answer: a pass that guessed the defaults instead of reading the \
+             settings would fail on one name and retry a landed push on the other"
+        );
+    }
+
+    #[test]
+    fn a_landed_push_is_read_from_the_remote_and_not_from_the_cached_ref() {
+        let fixture = Fixture::new();
+        let mut journal = fixture.journal();
+        let task = TaskId::new(1);
+        let at = fixture.checkout_of(task);
+        let candidate = Fixture::commit_in(&at, "the candidate");
+        publication_begins(&mut journal, task, 4_000_022, &fixture.base(), &candidate);
+        git::publish(&at, "origin", "main", &candidate).expect("a candidate is pushable");
+        remember_tip(&fixture, &fixture.base());
+
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a pass over a publication with a stale ref runs");
+
+        assert_eq!(
+            decisions[0].decision,
+            Recovery::AlreadyApplied,
+            "{decisions:?}"
+        );
+        assert_eq!(
+            projected(&journal, task),
+            Some(TaskState::PublishedVerified { commit: candidate }),
+            "the cached ref says the push never landed, and only the fetch knows it did"
+        );
+    }
+
+    #[test]
+    fn a_cached_ref_holding_what_the_remote_never_took_is_not_a_landed_push() {
+        let fixture = Fixture::new();
+        let mut journal = fixture.journal();
+        let task = TaskId::new(1);
+        let at = fixture.checkout_of(task);
+        let candidate = Fixture::commit_in(&at, "the candidate");
+        publication_begins(&mut journal, task, 4_000_023, &fixture.base(), &candidate);
+        remember_tip(&fixture, &candidate);
+        let held = remote_main(&fixture);
+
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a pass over a publication with a lying ref runs");
+
+        assert_eq!(decisions[0].decision, Recovery::Resume, "{decisions:?}");
+        assert_eq!(
+            rows(&journal, task, "PublishVerified"),
+            0,
+            "a ref that already holds the candidate proves nothing: the fetch is the witness"
+        );
+        assert_eq!(
+            remote_main(&fixture),
+            held,
+            "recovery pushed nothing, and believing the ref is what would have let it"
+        );
+    }
+
+    #[test]
+    fn a_publication_the_remote_cannot_be_asked_about_refuses_to_decide() {
+        let fixture = Fixture::new();
+        let mut journal = fixture.journal();
+        let task = TaskId::new(1);
+        let at = fixture.checkout_of(task);
+        let candidate = Fixture::commit_in(&at, "the candidate");
+        publication_begins(&mut journal, task, 4_000_024, &fixture.base(), &candidate);
+        orphan_the_remote(&fixture);
+        journal
+            .put_state(
+                task,
+                &TaskState::Publishing {
+                    attempt: AttemptId::new(1),
+                },
+            )
+            .expect("a projection row is writable");
+
+        let error = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect_err("a publication whose remote will not answer cannot be resolved");
+
+        assert!(matches!(error, Error::Git { .. }), "{error}");
+        assert_eq!(decided(&journal), Vec::new(), "a refusal decides nothing");
+        assert_eq!(
+            projected(&journal, task),
+            Some(TaskState::Publishing {
+                attempt: AttemptId::new(1)
+            }),
+            "a refusal writes nothing, so the task stays in the dangerous phase rather than \
+             being moved by a guess"
+        );
+    }
+
+    /// A push whose process is still alive is a fate still being made, not one to
+    /// read back, so liveness is answered before the remote is — and the fixture's
+    /// remote is left pointing at nothing to prove the pass really did not reach it.
+    #[test]
+    fn a_push_still_in_the_air_is_waited_for_without_asking_the_remote() {
+        let fixture = Fixture::new();
+        let mut journal = fixture.journal();
+        let task = TaskId::new(1);
+        let at = fixture.checkout_of(task);
+        let candidate = Fixture::commit_in(&at, "the candidate");
+        publication_begins(
+            &mut journal,
+            task,
+            std::process::id(),
+            &fixture.base(),
+            &candidate,
+        );
+        orphan_the_remote(&fixture);
+
+        let decisions =
+            reconcile(&mut journal, &fixture.project).expect("a live push is waited for");
+
+        assert_eq!(decisions[0].decision, Recovery::Resume, "{decisions:?}");
+        assert!(
+            decisions[0].detail.contains(NO_REMOTE),
+            "the verdict says the remote was not asked, and the unreachable remote the fixture \
+             left behind is what proves that saying is true: {}",
+            decisions[0].detail
+        );
+        assert_eq!(
+            rows(&journal, task, "PublishVerified"),
+            0,
+            "a push still in progress is not journalled as one that landed"
+        );
+        assert_eq!(
+            projected(&journal, task),
+            Some(TaskState::Publishing {
+                attempt: AttemptId::new(1)
+            }),
+            "the task is left in the phase its live push is still working through"
+        );
+    }
+
+    #[test]
+    fn a_publication_with_nothing_offered_yet_never_asks_the_remote() {
+        let fixture = Fixture::new();
+        let mut journal = fixture.journal();
+        let task = TaskId::new(1);
+        fixture.checkout_of(task);
+        publication_opens(&mut journal, task, 4_000_025, &fixture.base());
+        orphan_the_remote(&fixture);
+
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a publication that offered no commit needs no answer from the remote");
+
+        assert_eq!(decisions[0].decision, Recovery::Resume, "{decisions:?}");
+        assert!(
+            decisions[0].detail.contains(NO_REMOTE),
+            "the verdict says the remote was not asked, and the unreachable remote in the \
+             fixture is what proves it said true: {}",
             decisions[0].detail
         );
     }
@@ -1292,8 +1926,8 @@ mod tests {
         fixture.checkout_of(task);
         publication_begins(&mut journal, task, 4_000_006, &fixture.base(), &candidate);
 
-        let decisions =
-            reconcile_with(&mut journal, &fixture.project, &dead).expect("a pre-commit pass runs");
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a pre-commit pass runs");
 
         assert_eq!(decisions[0].decision, Recovery::Resume, "{decisions:?}");
     }
@@ -1308,7 +1942,7 @@ mod tests {
         let found = Fixture::commit_in(&at, "a commit nobody offered");
         publication_begins(&mut journal, task, 4_000_007, &fixture.base(), &candidate);
 
-        let error = reconcile_with(&mut journal, &fixture.project, &dead)
+        let error = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
             .expect_err("a commit no row offered is not work to adopt");
 
         assert!(matches!(error, Error::Policy { .. }), "{error}");
@@ -1329,8 +1963,8 @@ mod tests {
         fs::remove_dir_all(&at).expect("a checkout is removable by a test");
         publication_begins(&mut journal, task, 4_000_008, &fixture.base(), &candidate);
 
-        let decisions =
-            reconcile_with(&mut journal, &fixture.project, &dead).expect("a vanished pass runs");
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a vanished pass runs");
 
         assert_eq!(
             decisions[0].decision,
@@ -1360,8 +1994,8 @@ mod tests {
             },
         );
 
-        let decisions =
-            reconcile_with(&mut journal, &fixture.project, &dead).expect("a published pass runs");
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a published pass runs");
 
         assert_eq!(
             decisions[0].decision,
@@ -1389,8 +2023,8 @@ mod tests {
             },
         );
 
-        let decisions =
-            reconcile_with(&mut journal, &fixture.project, &dead).expect("a parked pass runs");
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a parked pass runs");
 
         assert_eq!(
             decisions[0].decision,
@@ -1413,11 +2047,12 @@ mod tests {
         let mut journal = fixture.journal();
         let task = TaskId::new(1);
         attempt_begins(&mut journal, task, 1, 4_000_010, &fixture.base());
-        reconcile_with(&mut journal, &fixture.project, &dead).expect("the first pass runs");
+        reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("the first pass runs");
         let parked = projected(&journal, task);
 
-        let second =
-            reconcile_with(&mut journal, &fixture.project, &dead).expect("the second pass runs");
+        let second = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("the second pass runs");
 
         assert_eq!(second[0].decision, Recovery::AlreadyApplied, "{second:?}");
         assert_eq!(
@@ -1442,7 +2077,7 @@ mod tests {
             },
         );
 
-        let error = reconcile_with(&mut journal, &fixture.project, &dead)
+        let error = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
             .expect_err("a state naming an attempt no row began is damage");
 
         assert!(matches!(error, Error::Corrupt { .. }), "{error}");
@@ -1493,7 +2128,7 @@ mod tests {
             },
         );
 
-        let error = reconcile_with(&mut journal, &fixture.project, &dead)
+        let error = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
             .expect_err("a refused row is damage");
 
         match error {
@@ -1517,7 +2152,7 @@ mod tests {
             state_dir: fixture.project.state_dir.clone(),
         };
 
-        let error = reconcile_with(&mut journal, &project, &dead)
+        let error = reconcile_with(&mut journal, &project, &dead, &mainline())
             .expect_err("a checkout that cannot be read is not a question to skip");
 
         assert!(matches!(error, Error::Git { .. }), "{error}");
@@ -1547,8 +2182,8 @@ mod tests {
             },
         );
 
-        let decisions =
-            reconcile_with(&mut journal, &fixture.project, &dead).expect("a finished pass runs");
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a finished pass runs");
 
         assert!(decisions.is_empty(), "{decisions:?}");
         assert_eq!(
@@ -1566,6 +2201,7 @@ mod tests {
             &Facts::default(),
             &Checkout::Absent,
             &dead,
+            &never_asked,
         )
         .expect_err("a terminal task is not a phase to resolve");
 
@@ -1582,8 +2218,8 @@ mod tests {
         preflight_begins(&mut journal, checks);
         attempt_begins(&mut journal, crashed, 1, 4_000_014, &fixture.base());
 
-        let decisions =
-            reconcile_with(&mut journal, &fixture.project, &dead).expect("a mixed pass runs");
+        let decisions = reconcile_with(&mut journal, &fixture.project, &dead, &mainline())
+            .expect("a mixed pass runs");
 
         let rows = decided(&journal);
         let expected: Vec<(Option<TaskId>, Recovery, String)> = decisions
