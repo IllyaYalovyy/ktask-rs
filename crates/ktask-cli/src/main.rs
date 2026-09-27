@@ -10,10 +10,11 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use ktask_adapters::{
-    GitCli, SqliteJournal, SqliteRegistry, SystemClock, journal_path, registry_path,
+    CommandEditor, GitCli, SqliteJournal, SqliteRegistry, SystemClock, journal_path, registry_path,
 };
 use ktask_core::{
-    AddError, Placement, Project, RegisterError, ResolveError, TaskDraft, TaskId, TaskKind,
+    AddError, EditAddError, Edited, Placement, Project, RegisterError, ResolveError, TaskDraft,
+    TaskId, TaskKind,
 };
 
 /// Runs an ordered queue of software tasks through AI coding agents.
@@ -32,22 +33,24 @@ enum Command {
         command: ProjectCommand,
     },
     /// Add a task, at the end of the queue unless told where, and print its ID
+    ///
+    /// Without --title and --criterion the task is written in $EDITOR.
     Add {
         /// One line saying what the task is
-        #[arg(long)]
-        title: String,
+        #[arg(long, requires = "criterion")]
+        title: Option<String>,
         /// What must be true for the task to be done; repeat for each criterion
-        #[arg(long, value_name = "CRITERION", required = true)]
+        #[arg(long, value_name = "CRITERION", requires = "title")]
         criterion: Vec<String>,
         /// The longer description of the task
-        #[arg(long, default_value = "")]
-        body: String,
-        /// Who does the task: agent or human
-        #[arg(long, value_parser = str::parse::<TaskKind>, default_value_t)]
-        kind: TaskKind,
+        #[arg(long, requires = "title")]
+        body: Option<String>,
+        /// Who does the task: agent or human [default: agent]
+        #[arg(long, value_parser = str::parse::<TaskKind>, requires = "title")]
+        kind: Option<TaskKind>,
         /// A related task or page: github:owner/repo#NUMBER or an http(s) URL; repeat for
         /// each link
-        #[arg(long, value_name = "REF")]
+        #[arg(long, value_name = "REF", requires = "title")]
         link: Vec<String>,
         /// Put the task immediately before the task with this ID
         #[arg(long, value_name = "ID", conflicts_with = "after")]
@@ -167,6 +170,18 @@ impl From<AddError> for Failure {
     }
 }
 
+impl From<EditAddError> for Failure {
+    fn from(error: EditAddError) -> Self {
+        match error {
+            EditAddError::Add(error) => Self::from(error),
+            EditAddError::Editor(_) | EditAddError::Invalid(_) => Self {
+                message: error.to_string(),
+                code: 2,
+            },
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let mut stdout = io::stdout().lock();
@@ -222,22 +237,47 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             after,
             project,
         } => {
+            // Checked before anything is registered or opened, so that a missing editor
+            // changes nothing.
+            let content = match title {
+                Some(title) => Content::Written(TaskDraft {
+                    title: title.clone(),
+                    body: body.clone().unwrap_or_default(),
+                    criteria: criterion.clone(),
+                    kind: kind.unwrap_or_default(),
+                    links: link.clone(),
+                }),
+                None => Content::Editor(editor_from_environment()?),
+            };
             let registry = open_registry()?;
             let project = resolve(&registry, project.as_deref())?;
             let journal = open_journal(&project)?;
-            let draft = TaskDraft {
-                title: title.clone(),
-                body: body.clone(),
-                criteria: criterion.clone(),
-                kind: *kind,
-                links: link.clone(),
-            };
             let placement = match (before, after) {
                 (Some(id), _) => Placement::Before(TaskId(*id)),
                 (None, Some(id)) => Placement::After(TaskId(*id)),
                 (None, None) => Placement::End,
             };
-            let task = ktask_core::add_task(&journal, &SystemClock, &draft, placement)?;
+            let task = match content {
+                Content::Written(draft) => {
+                    ktask_core::add_task(&journal, &SystemClock, &draft, placement)?
+                }
+                Content::Editor(editor) => {
+                    match ktask_core::add_task_in_editor(
+                        &journal,
+                        &SystemClock,
+                        &editor,
+                        placement,
+                    )? {
+                        Edited::Added(task) => task,
+                        Edited::Unchanged => {
+                            return Ok(render::nothing_added("left unchanged", &mut io::stderr())?);
+                        }
+                        Edited::Emptied => {
+                            return Ok(render::nothing_added("emptied", &mut io::stderr())?);
+                        }
+                    }
+                }
+            };
             Ok(render::added(&task, stdout)?)
         }
         Command::List { project, json } => {
@@ -267,6 +307,27 @@ fn resolve(registry: &SqliteRegistry, selected: Option<&str>) -> Result<Project,
         render::registered(&resolution.project, &mut io::stderr())?;
     }
     Ok(resolution.project)
+}
+
+/// Where a new task's content comes from.
+enum Content {
+    /// The command line gave it.
+    Written(TaskDraft),
+    /// The person writes it in this editor.
+    Editor(CommandEditor),
+}
+
+/// The editor `$EDITOR` names.
+fn editor_from_environment() -> Result<CommandEditor, Failure> {
+    match std::env::var("EDITOR") {
+        Ok(command) if !command.trim().is_empty() => Ok(CommandEditor::new(command)),
+        _ => Err(Failure {
+            message: "$EDITOR is not set, so there is nothing to write the task in; set it \
+                      (for example EDITOR=vi) or give the task with --title and --criterion"
+                .to_owned(),
+            code: 2,
+        }),
+    }
 }
 
 fn open_registry() -> Result<SqliteRegistry, String> {
