@@ -5,6 +5,7 @@
 //! never changes its environment or working directory: everything is set on the child.
 
 use std::error::Error;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -59,20 +60,28 @@ impl Sandbox {
         self.root.path().join("tmp")
     }
 
+    /// The environment a child of this sandbox gets and nothing else: the sandbox's own
+    /// directories, and `PATH` from the test process.
+    pub(crate) fn environment(&self) -> Vec<(&'static str, OsString)> {
+        let mut variables = vec![
+            ("HOME", self.home().into_os_string()),
+            ("XDG_CONFIG_HOME", self.config_home().into_os_string()),
+            ("XDG_STATE_HOME", self.state_home().into_os_string()),
+            ("TMPDIR", self.tmpdir().into_os_string()),
+        ];
+        if let Some(path) = std::env::var_os("PATH") {
+            variables.push(("PATH", path));
+        }
+        variables
+    }
+
     /// Gives `command` this sandbox's environment and `cwd` as its working directory,
-    /// dropping everything else it would inherit except `PATH`.
+    /// dropping everything else it would inherit.
     pub(crate) fn isolate<'a>(&self, command: &'a mut Command, cwd: &Path) -> &'a mut Command {
         command
             .env_clear()
-            .env("HOME", self.home())
-            .env("XDG_CONFIG_HOME", self.config_home())
-            .env("XDG_STATE_HOME", self.state_home())
-            .env("TMPDIR", self.tmpdir())
-            .current_dir(cwd);
-        if let Some(path) = std::env::var_os("PATH") {
-            command.env("PATH", path);
-        }
-        command
+            .envs(self.environment())
+            .current_dir(cwd)
     }
 
     /// Runs `ktask-rs` with `args` in `cwd` and waits for it to exit.
