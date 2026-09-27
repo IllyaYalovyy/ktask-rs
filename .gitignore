@@ -20,14 +20,9 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# ktask operational state. The configuration files in .ktask/ are versioned;
-# the queue and logs are per-run state and must never be committed.
-.ktask/queue/
-.ktask/logs/
-# The queue is rewritten in place as tasks complete ([DONE]/[FAIL] markers).
-# Tracking it would dirty the tree after every task, sweep progress markers
-# into the agent's own commits, and let an agent edit its own task list.
-.ktask/tasks.md
+# ktask's per-project state and configuration. Nothing under it is ever
+# committed: not the queue, not the logs, not the config.
+.ktask/
 
 # insta writes these when a snapshot test fails; they must never be committed
 # and must never dirty the tree between tasks.

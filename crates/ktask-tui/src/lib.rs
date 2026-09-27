@@ -1,7 +1,7 @@
 //! Terminal user interface.
 //!
 //! Must stay headlessly testable: keep decision logic pure and confine
-//! terminal I/O to a thin shell. See docs/TESTING.md.
+//! terminal I/O to a thin shell. See docs/ARCHITECTURE.md.
 
 /// Placeholder proving the workspace builds and tests at the seed commit,
 /// and that the interface is wired to the core it renders.
