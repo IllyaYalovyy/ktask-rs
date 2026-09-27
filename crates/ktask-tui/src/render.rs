@@ -19,7 +19,7 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
         None => vec![Line::from("Loading the queue…")],
         Some(queue) => {
             let summary = queue.summary;
-            vec![
+            let mut lines = vec![
                 Line::styled(
                     queue.project.name.clone(),
                     Style::new().add_modifier(Modifier::BOLD),
@@ -33,8 +33,17 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
                     summary.cancelled
                 )),
                 Line::default(),
-                Line::from("The queue is empty."),
-            ]
+            ];
+            if queue.tasks.is_empty() {
+                lines.push(Line::from("The queue is empty."));
+            }
+            lines.extend(queue.tasks.iter().map(|task| {
+                Line::from(format!(
+                    "{:>3}  #{}  {}  {}  {}",
+                    task.position, task.id, task.status, task.kind, task.title
+                ))
+            }));
+            lines
         }
     };
     Paragraph::new(lines)
@@ -47,7 +56,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::SystemTime;
 
-    use ktask_core::{Project, queue_view};
+    use ktask_core::{Project, QueueView, StatusSummary, Task, TaskId, TaskKind, TaskStatus};
 
     use crate::{Event, update};
 
@@ -68,18 +77,43 @@ mod tests {
         row.trim_start_matches('│').trim_end_matches('│').trim_end()
     }
 
-    fn loaded() -> App {
+    fn task(position: usize, title: &str, kind: TaskKind) -> Task {
+        Task {
+            id: TaskId(position as u64 * 10),
+            position,
+            title: title.to_owned(),
+            body: String::new(),
+            criteria: vec!["it works".to_owned()],
+            kind,
+            links: vec![],
+            status: TaskStatus::Pending,
+            created_at: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    fn loaded(tasks: Vec<Task>) -> App {
+        let summary = StatusSummary {
+            pending: tasks.len(),
+            ..StatusSummary::default()
+        };
         let project = Project {
             name: "app".to_owned(),
             path: PathBuf::from("/work/app"),
             registered_at: SystemTime::UNIX_EPOCH,
         };
-        update(App::default(), Event::Loaded(queue_view(project)))
+        update(
+            App::default(),
+            Event::Loaded(QueueView {
+                project,
+                summary,
+                tasks,
+            }),
+        )
     }
 
     #[test]
     fn an_empty_queue_shows_the_project_the_counts_and_a_message() {
-        let rows = drawn(&loaded(), 60, 8);
+        let rows = drawn(&loaded(vec![]), 60, 8);
         assert_eq!(inside(&rows[1]), "app");
         assert_eq!(
             inside(&rows[2]),
@@ -89,8 +123,24 @@ mod tests {
     }
 
     #[test]
+    fn tasks_are_listed_in_order_with_position_id_status_kind_and_title() {
+        let app = loaded(vec![
+            task(1, "first", TaskKind::Agent),
+            task(2, "second", TaskKind::Human),
+        ]);
+        let rows = drawn(&app, 60, 8);
+        assert_eq!(
+            inside(&rows[2]),
+            "pending 2 · running 0 · done 0 · failed 0 · cancelled 0"
+        );
+        assert_eq!(inside(&rows[4]), "  1  #10  pending  agent  first");
+        assert_eq!(inside(&rows[5]), "  2  #20  pending  human  second");
+        assert!(!rows.iter().any(|row| row.contains("The queue is empty.")));
+    }
+
+    #[test]
     fn the_frame_fills_the_area_and_shows_the_key_to_quit() {
-        let rows = drawn(&loaded(), 60, 8);
+        let rows = drawn(&loaded(vec![]), 60, 8);
         assert!(rows[0].starts_with("┌ ktask-rs ─"));
         assert!(rows[0].ends_with('┐'));
         assert!(rows[7].starts_with("└ q quit ─"));

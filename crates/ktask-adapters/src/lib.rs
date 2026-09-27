@@ -6,10 +6,12 @@
 
 mod clock;
 mod git;
+mod journal;
 mod registry;
 mod state;
 
 pub use clock::SystemClock;
 pub use git::GitCli;
+pub use journal::SqliteJournal;
 pub use registry::SqliteRegistry;
-pub use state::registry_path;
+pub use state::{journal_path, registry_path};

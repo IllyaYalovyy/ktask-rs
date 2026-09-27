@@ -9,8 +9,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use ktask_adapters::{GitCli, SqliteRegistry, SystemClock, registry_path};
-use ktask_core::{Project, RegisterError, ResolveError};
+use ktask_adapters::{
+    GitCli, SqliteJournal, SqliteRegistry, SystemClock, journal_path, registry_path,
+};
+use ktask_core::{AddError, Project, RegisterError, ResolveError, TaskDraft, TaskKind};
 
 /// Runs an ordered queue of software tasks through AI coding agents.
 #[derive(Debug, Parser)]
@@ -26,6 +28,34 @@ enum Command {
     Project {
         #[command(subcommand)]
         command: ProjectCommand,
+    },
+    /// Add a task at the end of the queue and print its ID
+    Add {
+        /// One line saying what the task is
+        #[arg(long)]
+        title: String,
+        /// What must be true for the task to be done; repeat for each criterion
+        #[arg(long, value_name = "CRITERION", required = true)]
+        criterion: Vec<String>,
+        /// The longer description of the task
+        #[arg(long, default_value = "")]
+        body: String,
+        /// Who does the task: agent or human
+        #[arg(long, value_parser = str::parse::<TaskKind>, default_value_t)]
+        kind: TaskKind,
+        /// A related task or page: github:owner/repo#NUMBER or an http(s) URL; repeat for
+        /// each link
+        #[arg(long, value_name = "REF")]
+        link: Vec<String>,
+        /// Work on this registered project instead of the one the current directory is in
+        #[arg(long, value_name = "NAME")]
+        project: Option<String>,
+    },
+    /// List the queue in order
+    List {
+        /// Work on this registered project instead of the one the current directory is in
+        #[arg(long, value_name = "NAME")]
+        project: Option<String>,
     },
     /// Open the terminal interface on the project's queue
     Tui {
@@ -108,6 +138,18 @@ impl From<RegisterError> for Failure {
     }
 }
 
+impl From<AddError> for Failure {
+    fn from(error: AddError) -> Self {
+        match error {
+            AddError::Journal(_) => Self::from(error.to_string()),
+            _ => Self {
+                message: error.to_string(),
+                code: 2,
+            },
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let mut stdout = io::stdout().lock();
@@ -148,7 +190,38 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             }
             let registry = open_registry()?;
             let project = resolve(&registry, project.as_deref())?;
-            Ok(ktask_tui::run(|| Ok(ktask_core::queue_view(project)))?)
+            let journal = open_journal(&project)?;
+            Ok(ktask_tui::run(|| {
+                ktask_core::queue_view(project, &journal).map_err(|e| e.to_string())
+            })?)
+        }
+        Command::Add {
+            title,
+            criterion,
+            body,
+            kind,
+            link,
+            project,
+        } => {
+            let registry = open_registry()?;
+            let project = resolve(&registry, project.as_deref())?;
+            let journal = open_journal(&project)?;
+            let draft = TaskDraft {
+                title: title.clone(),
+                body: body.clone(),
+                criteria: criterion.clone(),
+                kind: *kind,
+                links: link.clone(),
+            };
+            let task = ktask_core::add_task(&journal, &SystemClock, &draft)?;
+            Ok(render::added(&task, stdout)?)
+        }
+        Command::List { project } => {
+            let registry = open_registry()?;
+            let project = resolve(&registry, project.as_deref())?;
+            let journal = open_journal(&project)?;
+            let tasks = ktask_core::list_tasks(&journal).map_err(|e| e.to_string())?;
+            Ok(render::tasks(&tasks, stdout)?)
         }
         Command::Project {
             command: ProjectCommand::Register { name, json },
@@ -177,6 +250,16 @@ fn open_registry() -> Result<SqliteRegistry, String> {
         "cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path",
     )?;
     SqliteRegistry::open(&path).map_err(|e| e.to_string())
+}
+
+fn open_journal(project: &Project) -> Result<SqliteJournal, String> {
+    let path = journal_path(
+        std::env::var_os("XDG_STATE_HOME"),
+        std::env::var_os("HOME"),
+        &project.name,
+    )
+    .ok_or("cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path")?;
+    SqliteJournal::open(&path).map_err(|e| e.to_string())
 }
 
 fn current_dir() -> Result<PathBuf, String> {

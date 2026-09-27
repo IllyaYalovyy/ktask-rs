@@ -4,7 +4,10 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use crate::{Clock, Git, GitError, Project, ProjectRegistry, RegistryError};
+use crate::{
+    Clock, Git, GitError, Journal, JournalError, Project, ProjectRegistry, RegistryError, Task,
+    TaskDraft, TaskId, TaskKind, TaskStatus,
+};
 
 /// An in-memory registry that can be told to fail.
 #[derive(Debug, Default)]
@@ -88,5 +91,61 @@ pub(crate) fn project(name: &str, seconds: u64) -> Project {
         name: name.to_owned(),
         path: PathBuf::from(format!("/work/{name}")),
         registered_at: at(seconds),
+    }
+}
+
+/// An in-memory journal that can be told to fail.
+#[derive(Debug, Default)]
+pub(crate) struct FakeJournal {
+    pub(crate) tasks: RefCell<Vec<Task>>,
+    pub(crate) failure: Option<JournalError>,
+}
+
+impl FakeJournal {
+    pub(crate) fn failing(failure: JournalError) -> Self {
+        Self {
+            tasks: RefCell::default(),
+            failure: Some(failure),
+        }
+    }
+}
+
+impl Journal for FakeJournal {
+    fn append_task(&self, draft: &TaskDraft, at: SystemTime) -> Result<Task, JournalError> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone());
+        }
+        let mut tasks = self.tasks.borrow_mut();
+        let task = Task {
+            id: TaskId(tasks.len() as u64 + 1),
+            position: tasks.len() + 1,
+            title: draft.title.clone(),
+            body: draft.body.clone(),
+            criteria: draft.criteria.clone(),
+            kind: draft.kind,
+            links: draft.links.clone(),
+            status: TaskStatus::Pending,
+            created_at: at,
+        };
+        tasks.push(task.clone());
+        Ok(task)
+    }
+
+    fn tasks(&self) -> Result<Vec<Task>, JournalError> {
+        match &self.failure {
+            Some(failure) => Err(failure.clone()),
+            None => Ok(self.tasks.borrow().clone()),
+        }
+    }
+}
+
+/// A valid draft titled `title`, with one criterion and nothing else.
+pub(crate) fn draft(title: &str) -> TaskDraft {
+    TaskDraft {
+        title: title.to_owned(),
+        body: String::new(),
+        criteria: vec!["it works".to_owned()],
+        kind: TaskKind::Agent,
+        links: vec![],
     }
 }

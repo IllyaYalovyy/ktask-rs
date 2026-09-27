@@ -3,36 +3,19 @@
 
 #[path = "support/pty.rs"]
 mod pty;
+#[path = "support/repo.rs"]
+mod repo;
 mod support;
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
-use pty::Terminal;
+use pty::{Terminal, lines_inside_frame};
+use repo::{git_repository, scratch};
 use support::{Result, Sandbox};
-use tempfile::TempDir;
 
 const ROWS: u16 = 24;
 const COLS: u16 = 80;
 const SUMMARY: &str = "pending 0 · running 0 · done 0 · failed 0 · cancelled 0";
-
-/// A scratch directory, canonical so that it can be compared with what the binary prints.
-fn scratch() -> Result<(TempDir, PathBuf)> {
-    let dir = TempDir::new()?;
-    let path = std::fs::canonicalize(dir.path())?;
-    Ok((dir, path))
-}
-
-/// A new git repository called `name` inside `parent`.
-fn git_repository(sandbox: &Sandbox, parent: &Path, name: &str) -> Result<PathBuf> {
-    let dir = parent.join(name);
-    std::fs::create_dir_all(&dir)?;
-    let mut command = Command::new("git");
-    command.args(["init", "--quiet"]);
-    let status = sandbox.isolate(&mut command, &dir).status()?;
-    assert!(status.success());
-    Ok(dir)
-}
 
 /// Opens the terminal interface in `cwd` and waits until the queue screen is drawn whole:
 /// the frame is drawn top to bottom, so it is complete once its last corner is there.
@@ -43,19 +26,6 @@ fn open(sandbox: &Sandbox, cwd: &Path, rows: u16, cols: u16) -> Result<Terminal>
         contents.contains("The queue is empty.") && contents.ends_with('┘')
     })?;
     Ok(terminal)
-}
-
-/// The lines of `screen` with whatever the frame draws on either side stripped.
-fn lines_inside_frame(screen: &str) -> Vec<String> {
-    screen
-        .lines()
-        .map(|line| {
-            line.trim_start_matches('│')
-                .trim_end_matches('│')
-                .trim_end()
-                .to_owned()
-        })
-        .collect()
 }
 
 #[test]
@@ -248,5 +218,81 @@ fn an_unknown_project_exits_two_pointing_at_project_list() -> Result<()> {
     assert!(screen.contains("unknown project \"ghost\""), "{screen}");
     assert!(screen.contains("ktask-rs project list"), "{screen}");
     assert!(!terminal.screen().contains("The queue is empty."));
+    Ok(())
+}
+
+/// Adds a task of `kind` titled `title` from the command line.
+fn add_task(sandbox: &Sandbox, repository: &Path, title: &str, kind: &str) -> Result<()> {
+    let outcome = sandbox.run(
+        repository,
+        &[
+            "add",
+            "--title",
+            title,
+            "--criterion",
+            "it works",
+            "--kind",
+            kind,
+        ],
+    )?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    Ok(())
+}
+
+/// Opens the queue screen and waits until it shows a task, drawn whole.
+fn open_with_tasks(sandbox: &Sandbox, cwd: &Path) -> Result<Terminal> {
+    let terminal = Terminal::launch(sandbox, cwd, &["tui"], ROWS, COLS)?;
+    terminal.wait_for("the queue with its tasks", |screen| {
+        let contents = screen.contents();
+        contents.contains("  1  #1  ") && contents.ends_with('┘')
+    })?;
+    Ok(terminal)
+}
+
+#[test]
+fn tasks_added_from_the_cli_appear_with_the_summary_updated() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, work) = scratch()?;
+    let repository = git_repository(&sandbox, &work, "my-app")?;
+    add_task(&sandbox, &repository, "Write the parser", "agent")?;
+    add_task(&sandbox, &repository, "Approve the design", "human")?;
+
+    let mut terminal = open_with_tasks(&sandbox, &repository)?;
+
+    let screen = terminal.screen();
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[1], "my-app");
+    assert_eq!(
+        lines[2],
+        "pending 2 · running 0 · done 0 · failed 0 · cancelled 0"
+    );
+    assert_eq!(lines[4], "  1  #1  pending  agent  Write the parser");
+    assert_eq!(lines[5], "  2  #2  pending  human  Approve the design");
+    assert!(!screen.contains("The queue is empty."), "{screen}");
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
+fn a_task_added_after_the_screen_was_closed_shows_the_next_time_it_opens() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, work) = scratch()?;
+    let repository = git_repository(&sandbox, &work, "my-app")?;
+    let mut terminal = open(&sandbox, &repository, ROWS, COLS)?;
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+
+    add_task(&sandbox, &repository, "Late arrival", "agent")?;
+
+    let mut terminal = open_with_tasks(&sandbox, &repository)?;
+    let lines = lines_inside_frame(&terminal.screen());
+    assert_eq!(
+        lines[2],
+        "pending 1 · running 0 · done 0 · failed 0 · cancelled 0"
+    );
+    assert_eq!(lines[4], "  1  #1  pending  agent  Late arrival");
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())
 }

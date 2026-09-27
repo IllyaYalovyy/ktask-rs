@@ -786,6 +786,7 @@ version = "0.1.0"
 dependencies = [
  "ktask-core",
  "rusqlite",
+ "serde_json",
  "tempfile",
 ]
 

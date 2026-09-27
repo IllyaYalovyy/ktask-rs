@@ -4,17 +4,37 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-/// The registry database, `<state home>/ktask-rs/registry.db`.
+/// The directory all of the tool's state lives under, `<state home>/ktask-rs`.
 ///
 /// The state home is `xdg_state_home`, or `$HOME/.local/state` when that is unset, empty or
 /// relative (the XDG Base Directory rule). `None` when neither gives an absolute path.
-#[must_use]
-pub fn registry_path(xdg_state_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+fn state_directory(xdg_state_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
     let absolute =
         |value: Option<OsString>| value.map(PathBuf::from).filter(|path| path.is_absolute());
     let state_home = absolute(xdg_state_home)
         .or_else(|| absolute(home).map(|home| home.join(".local").join("state")))?;
-    Some(state_home.join("ktask-rs").join("registry.db"))
+    Some(state_home.join("ktask-rs"))
+}
+
+/// The registry database, `<state home>/ktask-rs/registry.db`; see [`state_directory`] for
+/// how the state home is found.
+#[must_use]
+pub fn registry_path(xdg_state_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    Some(state_directory(xdg_state_home, home)?.join("registry.db"))
+}
+
+/// The journal of the project called `project`, `<state home>/ktask-rs/<project>/journal.db`.
+#[must_use]
+pub fn journal_path(
+    xdg_state_home: Option<OsString>,
+    home: Option<OsString>,
+    project: &str,
+) -> Option<PathBuf> {
+    Some(
+        state_directory(xdg_state_home, home)?
+            .join(project)
+            .join("journal.db"),
+    )
 }
 
 #[cfg(test)]
@@ -43,6 +63,19 @@ mod tests {
                 Some(Path::new("/home/me/.local/state/ktask-rs/registry.db").to_owned())
             );
         }
+    }
+
+    #[test]
+    fn a_journal_lives_in_a_directory_named_for_its_project() {
+        assert_eq!(
+            journal_path(Some(set("/state")), None, "my-app"),
+            Some(Path::new("/state/ktask-rs/my-app/journal.db").to_owned())
+        );
+        assert_eq!(
+            journal_path(None, Some(set("/home/me")), "my-app"),
+            Some(Path::new("/home/me/.local/state/ktask-rs/my-app/journal.db").to_owned())
+        );
+        assert_eq!(journal_path(None, None, "my-app"), None);
     }
 
     #[test]

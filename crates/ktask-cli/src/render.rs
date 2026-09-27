@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::Path;
 
 use jiff::Timestamp;
-use ktask_core::Project;
+use ktask_core::{Project, Task};
 use serde::Serialize;
 
 /// One project as `project list --json` shows it.
@@ -73,4 +73,21 @@ pub(crate) fn projects(
             writeln!(out, "{}\t{}", project.name, project.path.display()).map_err(|e| e.to_string())
         })
     }
+}
+
+/// Writes the ID of the task that has just been added.
+pub(crate) fn added(task: &Task, out: &mut impl Write) -> Result<(), String> {
+    writeln!(out, "{}", task.id).map_err(|e| e.to_string())
+}
+
+/// Writes `tasks`, one `position<TAB>#ID<TAB>status<TAB>kind<TAB>title` line each.
+pub(crate) fn tasks(tasks: &[Task], out: &mut impl Write) -> Result<(), String> {
+    tasks.iter().try_for_each(|task| {
+        writeln!(
+            out,
+            "{}\t#{}\t{}\t{}\t{}",
+            task.position, task.id, task.status, task.kind, task.title
+        )
+        .map_err(|e| e.to_string())
+    })
 }

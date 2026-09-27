@@ -41,16 +41,20 @@ mod tests {
     use std::path::PathBuf;
     use std::time::SystemTime;
 
-    use ktask_core::{Project, queue_view};
+    use ktask_core::{Project, StatusSummary};
 
     use super::*;
 
     fn queue() -> QueueView {
-        queue_view(Project {
-            name: "app".to_owned(),
-            path: PathBuf::from("/work/app"),
-            registered_at: SystemTime::UNIX_EPOCH,
-        })
+        QueueView {
+            project: Project {
+                name: "app".to_owned(),
+                path: PathBuf::from("/work/app"),
+                registered_at: SystemTime::UNIX_EPOCH,
+            },
+            summary: StatusSummary::default(),
+            tasks: vec![],
+        }
     }
 
     #[test]

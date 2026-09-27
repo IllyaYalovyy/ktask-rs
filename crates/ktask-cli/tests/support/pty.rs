@@ -204,3 +204,16 @@ fn size(rows: u16, cols: u16) -> PtySize {
         pixel_height: 0,
     }
 }
+
+/// The lines of `screen` with whatever the frame draws on either side stripped.
+pub(crate) fn lines_inside_frame(screen: &str) -> Vec<String> {
+    screen
+        .lines()
+        .map(|line| {
+            line.trim_start_matches('│')
+                .trim_end_matches('│')
+                .trim_end()
+                .to_owned()
+        })
+        .collect()
+}
