@@ -35,6 +35,9 @@ contradicts them, stop and report the contradiction.
   with a timeout.
 - Never make a check pass by weakening it: no `#[ignore]`, no `#[allow]` on the offending
   line, no deleted or loosened assertion, no narrowing a test until it passes.
+- **No code without a current use.** Nothing speculative, nothing "for later", no
+  compatibility shims, no unused options or parameters. The future gets its code when it
+  arrives.
 - Do what the task asks. Report adjacent problems instead of fixing them.
 - A product decision the documents do not answer is not yours to make — stop and ask.
 

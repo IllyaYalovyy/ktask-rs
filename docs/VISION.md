@@ -112,4 +112,5 @@ has clicked through, in and out, with keystrokes, is not done.
 ## Not
 
 A hosted service, a CI system, a multi-agent platform, or a workflow programming language.
-No parallel task execution.
+No parallel task execution. No compatibility of any kind with the Python `ktask`: no
+import, no shared formats, no shared commands — two independent tools.
