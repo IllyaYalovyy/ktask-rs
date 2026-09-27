@@ -58,6 +58,13 @@ implemented twice.
 - **CLI**: parse arguments, wire adapters, call the use case, render its result (text or
   `--json`), map its outcome to an exit code.
 
+## Platform
+
+Linux is the only supported platform; macOS may follow. Everything platform-specific —
+process groups and signals, pseudo-terminals, paths and directory conventions, file
+locking — lives behind a port or in one adapter module, never in `core` or the frontends.
+No decision may make a second platform harder to add.
+
 ## State and isolation
 
 Per-project state lives under `$XDG_STATE_HOME/ktask-rs/<project>/`, configuration under
