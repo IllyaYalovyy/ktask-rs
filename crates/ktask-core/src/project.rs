@@ -47,6 +47,13 @@ pub trait ProjectRegistry {
     ///
     /// Fails when the registry cannot be read.
     fn list(&self) -> Result<Vec<Project>, RegistryError>;
+
+    /// Registers `project`. The caller has checked that its name and path are free.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the registry cannot be written.
+    fn add(&self, project: &Project) -> Result<(), RegistryError>;
 }
 
 /// Use case: the registered projects, oldest registration first, ties broken by name.
@@ -66,36 +73,19 @@ pub fn list_projects(registry: &impl ProjectRegistry) -> Result<Vec<Project>, Re
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use crate::fakes::{FakeRegistry, project};
 
     use super::*;
 
-    /// An in-memory registry.
-    struct FakeRegistry(Result<Vec<Project>, RegistryError>);
-
-    impl ProjectRegistry for FakeRegistry {
-        fn list(&self) -> Result<Vec<Project>, RegistryError> {
-            self.0.clone()
-        }
-    }
-
-    fn project(name: &str, seconds: u64) -> Project {
-        Project {
-            name: name.to_owned(),
-            path: PathBuf::from(format!("/work/{name}")),
-            registered_at: SystemTime::UNIX_EPOCH + Duration::from_secs(seconds),
-        }
-    }
-
     #[test]
     fn an_empty_registry_lists_nothing() {
-        let registry = FakeRegistry(Ok(vec![]));
+        let registry = FakeRegistry::default();
         assert_eq!(list_projects(&registry), Ok(vec![]));
     }
 
     #[test]
     fn projects_come_back_oldest_registration_first() {
-        let registry = FakeRegistry(Ok(vec![project("late", 30), project("early", 10)]));
+        let registry = FakeRegistry::with(vec![project("late", 30), project("early", 10)]);
         assert_eq!(
             list_projects(&registry),
             Ok(vec![project("early", 10), project("late", 30)])
@@ -104,7 +94,7 @@ mod tests {
 
     #[test]
     fn projects_registered_at_the_same_time_are_ordered_by_name() {
-        let registry = FakeRegistry(Ok(vec![project("beta", 10), project("alpha", 10)]));
+        let registry = FakeRegistry::with(vec![project("beta", 10), project("alpha", 10)]);
         assert_eq!(
             list_projects(&registry),
             Ok(vec![project("alpha", 10), project("beta", 10)])
@@ -114,7 +104,7 @@ mod tests {
     #[test]
     fn a_registry_failure_is_passed_on() {
         let failure = RegistryError::new("disk on fire");
-        let registry = FakeRegistry(Err(failure.clone()));
+        let registry = FakeRegistry::failing(failure.clone());
         assert_eq!(list_projects(&registry), Err(failure));
     }
 }
