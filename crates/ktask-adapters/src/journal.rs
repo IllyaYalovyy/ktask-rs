@@ -4,7 +4,8 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use ktask_core::{
-    AppendError, Journal, JournalError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus,
+    AppendError, CancelError, Journal, JournalError, Placement, Task, TaskDraft, TaskId, TaskKind,
+    TaskStatus,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 
@@ -231,6 +232,42 @@ impl Journal for SqliteJournal {
         }
         transaction.commit().map_err(|e| failed(doing, e))?;
         Ok(added)
+    }
+
+    fn cancel_task(&self, id: TaskId, at: SystemTime) -> Result<(), CancelError> {
+        let doing = "cannot remove the task from the journal";
+        let number = i64::try_from(id.0).unwrap_or(i64::MAX);
+        let transaction =
+            Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)
+                .map_err(|e| failed(doing, e))?;
+        let status = transaction
+            .query_row("SELECT status FROM tasks WHERE id = ?1", [number], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()
+            .map_err(|e| failed(doing, e))?;
+        match status {
+            None => return Err(CancelError::UnknownTask(id)),
+            Some(status) if status == TaskStatus::Cancelled.as_str() => {
+                return Err(CancelError::AlreadyCancelled(id));
+            }
+            Some(_) => {}
+        }
+        transaction
+            .execute(
+                "UPDATE tasks SET status = ?2 WHERE id = ?1",
+                (number, TaskStatus::Cancelled.as_str()),
+            )
+            .map_err(|e| failed(doing, e))?;
+        transaction
+            .execute(
+                "INSERT INTO events (at, kind, task_id, payload)
+                 VALUES (?1, 'task_cancelled', ?2, '{}')",
+                (to_seconds(at), number),
+            )
+            .map_err(|e| failed(doing, e))?;
+        transaction.commit().map_err(|e| failed(doing, e))?;
+        Ok(())
     }
 
     fn tasks(&self) -> Result<Vec<Task>, JournalError> {
@@ -646,6 +683,90 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
             .unwrap();
         assert_eq!(events, 0);
+    }
+
+    fn added_abc(journal: &SqliteJournal) {
+        for title in ["a", "b", "c"] {
+            journal
+                .append_task(&draft(title), Placement::End, at(1))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn a_cancelled_task_stays_in_its_place_with_its_number_and_records_one_event() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        added_abc(&journal);
+
+        journal.cancel_task(TaskId(2), at(900)).unwrap();
+
+        let shown: Vec<_> = open(&dir)
+            .tasks()
+            .unwrap()
+            .iter()
+            .map(|t| (t.position, t.id, t.status))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (1, TaskId(1), TaskStatus::Pending),
+                (2, TaskId(2), TaskStatus::Cancelled),
+                (3, TaskId(3), TaskStatus::Pending)
+            ]
+        );
+        let (events, kind, task_id, when): (i64, String, i64, i64) = journal
+            .connection
+            .query_row(
+                "SELECT COUNT(*), kind, task_id, at FROM events WHERE seq > 3",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (events, kind.as_str(), task_id, when),
+            (1, "task_cancelled", 2, 900)
+        );
+    }
+
+    #[test]
+    fn a_cancelled_tasks_number_is_never_reused_even_at_the_end() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        added_abc(&journal);
+        journal.cancel_task(TaskId(3), at(2)).unwrap();
+        let next = journal
+            .append_task(&draft("d"), Placement::End, at(3))
+            .unwrap();
+        assert_eq!(next.id, TaskId(4));
+    }
+
+    #[test]
+    fn cancelling_an_unknown_or_a_cancelled_task_changes_nothing() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        added_abc(&journal);
+        journal.cancel_task(TaskId(2), at(2)).unwrap();
+        let tasks = journal.tasks().unwrap();
+        let events = || -> i64 {
+            journal
+                .connection
+                .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+                .unwrap()
+        };
+        let recorded = events();
+
+        assert_eq!(
+            journal.cancel_task(TaskId(9), at(3)),
+            Err(CancelError::UnknownTask(TaskId(9)))
+        );
+        assert_eq!(
+            journal.cancel_task(TaskId(2), at(3)),
+            Err(CancelError::AlreadyCancelled(TaskId(2)))
+        );
+
+        assert_eq!(journal.tasks().unwrap(), tasks);
+        assert_eq!(events(), recorded);
     }
 
     #[test]

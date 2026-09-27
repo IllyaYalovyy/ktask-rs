@@ -783,8 +783,8 @@ fn an_id_in_an_empty_queue_is_unknown() -> Result<()> {
 #[test]
 fn a_cancelled_id_exits_two_naming_it_and_adds_nothing() -> Result<()> {
     let fixture = abc()?;
-    let database = rusqlite::Connection::open(fixture.journal("my-app"))?;
-    database.execute("UPDATE tasks SET status = 'cancelled' WHERE id = 2", [])?;
+    let removed = fixture.run(&["remove", "2"])?;
+    assert_eq!(removed.code, Some(0), "{}", removed.stderr);
     let events = fixture.rows("events")?.len();
 
     for flag in ["--before", "--after"] {
@@ -792,11 +792,11 @@ fn a_cancelled_id_exits_two_naming_it_and_adds_nothing() -> Result<()> {
         assert_usage_error(&outcome, &["task 2 is cancelled"]);
     }
 
-    assert_eq!(queue(&fixture)?, ["1:a", "2:b", "3:c"]);
+    assert_eq!(queue(&fixture)?, ["1:a", "3:c"]);
     assert_eq!(fixture.rows("events")?.len(), events);
     // Its neighbours are still fine to place next to.
     add_placed(&fixture, "new", "--after", "1")?;
-    assert_eq!(queue(&fixture)?, ["1:a", "4:new", "2:b", "3:c"]);
+    assert_eq!(queue(&fixture)?, ["1:a", "4:new", "3:c"]);
     Ok(())
 }
 

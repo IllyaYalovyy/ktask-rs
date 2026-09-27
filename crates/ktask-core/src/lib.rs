@@ -17,13 +17,14 @@ pub use clock::Clock;
 pub use edit::{EditAddError, Edited, Editor, EditorError, TemplateProblem, add_task_in_editor};
 pub use git::{Git, GitError};
 pub use import::{ImportError, InvalidTask, import_tasks};
-pub use journal::{AppendError, Journal, JournalError};
+pub use journal::{AppendError, CancelError, Journal, JournalError};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
 pub use queue::{QueueView, StatusSummary, queue_view};
 pub use register::{RegisterError, register_project};
 pub use resolve::{Resolution, ResolveError, resolve_project};
 pub use task::{
-    AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, add_task, list_tasks,
+    AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, add_task, list_all_tasks,
+    list_tasks, remove_task,
 };
 
 #[cfg(test)]

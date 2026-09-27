@@ -14,8 +14,8 @@ use ktask_adapters::{
     registry_path,
 };
 use ktask_core::{
-    AddError, EditAddError, Edited, ImportError, Placement, Project, RegisterError, ResolveError,
-    TaskDraft, TaskId, TaskKind,
+    AddError, CancelError, EditAddError, Edited, ImportError, Placement, Project, RegisterError,
+    ResolveError, TaskDraft, TaskId, TaskKind,
 };
 
 /// Runs an ordered queue of software tasks through AI coding agents.
@@ -81,11 +81,23 @@ enum Command {
         #[arg(long, value_name = "NAME")]
         project: Option<String>,
     },
-    /// List the queue in order
+    /// Remove a task from the queue: it is cancelled, and stays in the journal
+    Remove {
+        /// The ID of the task to remove
+        #[arg(value_name = "ID")]
+        id: u64,
+        /// Work on this registered project instead of the one the current directory is in
+        #[arg(long, value_name = "NAME")]
+        project: Option<String>,
+    },
+    /// List the queue in order, without the tasks that were removed
     List {
         /// Work on this registered project instead of the one the current directory is in
         #[arg(long, value_name = "NAME")]
         project: Option<String>,
+        /// Show the tasks that were removed too, with status cancelled
+        #[arg(long)]
+        all: bool,
         /// Print a JSON array with every field of every task instead of one line per task
         #[arg(long)]
         json: bool,
@@ -189,6 +201,18 @@ impl From<AddError> for Failure {
     }
 }
 
+impl From<CancelError> for Failure {
+    fn from(error: CancelError) -> Self {
+        match error {
+            CancelError::Journal(_) => Self::from(error.to_string()),
+            CancelError::UnknownTask(_) | CancelError::AlreadyCancelled(_) => Self {
+                message: format!("{error}; `ktask-rs list --all` shows every task"),
+                code: 2,
+            },
+        }
+    }
+}
+
 impl From<EditAddError> for Failure {
     fn from(error: EditAddError) -> Self {
         match error {
@@ -280,9 +304,7 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
                 }),
                 None => Content::Editor(editor_from_environment()?),
             };
-            let registry = open_registry()?;
-            let project = resolve(&registry, project.as_deref())?;
-            let journal = open_journal(&project)?;
+            let journal = open_queue(project.as_deref())?;
             let placement = placement(*before, *after);
             let task = match content {
                 Content::Written(draft) => {
@@ -316,9 +338,7 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             // Read before anything is registered or opened, so that a missing file changes
             // nothing.
             let json = read_text(file).map_err(|message| Failure { message, code: 2 })?;
-            let registry = open_registry()?;
-            let project = resolve(&registry, project.as_deref())?;
-            let journal = open_journal(&project)?;
+            let journal = open_queue(project.as_deref())?;
             let tasks = ktask_core::import_tasks(
                 &journal,
                 &SystemClock,
@@ -330,11 +350,19 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
                 .try_for_each(|task| render::added(task, stdout))
                 .map_err(Failure::from)
         }
-        Command::List { project, json } => {
-            let registry = open_registry()?;
-            let project = resolve(&registry, project.as_deref())?;
-            let journal = open_journal(&project)?;
-            let tasks = ktask_core::list_tasks(&journal).map_err(|e| e.to_string())?;
+        Command::Remove { id, project } => {
+            let journal = open_queue(project.as_deref())?;
+            ktask_core::remove_task(&journal, &SystemClock, TaskId(*id))?;
+            Ok(render::removed(TaskId(*id), stdout)?)
+        }
+        Command::List { project, all, json } => {
+            let journal = open_queue(project.as_deref())?;
+            let tasks = if *all {
+                ktask_core::list_all_tasks(&journal)
+            } else {
+                ktask_core::list_tasks(&journal)
+            }
+            .map_err(|e| e.to_string())?;
             Ok(render::tasks(&tasks, *json, stdout)?)
         }
         Command::Project {
@@ -356,6 +384,13 @@ fn placement(before: Option<u64>, after: Option<u64>) -> Placement {
         (None, Some(id)) => Placement::After(TaskId(id)),
         (None, None) => Placement::End,
     }
+}
+
+/// The journal of the project a command works on.
+fn open_queue(selected: Option<&str>) -> Result<SqliteJournal, Failure> {
+    let registry = open_registry()?;
+    let project = resolve(&registry, selected)?;
+    Ok(open_journal(&project)?)
 }
 
 /// The project a command works on, telling on standard error when that registered it.

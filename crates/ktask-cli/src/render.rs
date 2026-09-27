@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::Path;
 
 use jiff::Timestamp;
-use ktask_core::{Project, Task};
+use ktask_core::{Project, Task, TaskId};
 use serde::Serialize;
 
 /// One project as `project list --json` shows it.
@@ -83,6 +83,11 @@ pub(crate) fn projects(
 /// Writes the ID of the task that has just been added.
 pub(crate) fn added(task: &Task, out: &mut impl Write) -> Result<(), String> {
     writeln!(out, "{}", task.id).map_err(|e| e.to_string())
+}
+
+/// Writes the line telling that the task numbered `id` has just been removed.
+pub(crate) fn removed(id: TaskId, out: &mut impl Write) -> Result<(), String> {
+    writeln!(out, "removed task {id}").map_err(|e| e.to_string())
 }
 
 /// One task as `list --json` shows it.

@@ -329,7 +329,7 @@ pub fn add_task_in_editor(
 #[cfg(test)]
 mod tests {
     use crate::fakes::{FakeClock, FakeEditor, FakeJournal, at, draft};
-    use crate::{JournalError, TaskId, list_tasks};
+    use crate::{JournalError, TaskId, list_all_tasks, list_tasks};
 
     use super::*;
 
@@ -533,7 +533,7 @@ Criteria:
             assert_eq!(result, Err(EditAddError::Add(error)));
             assert_eq!(*editor.opened_on.borrow(), None);
         }
-        assert_eq!(list_tasks(&journal).unwrap().len(), 2);
+        assert_eq!(list_all_tasks(&journal).unwrap().len(), 2);
     }
 
     #[test]

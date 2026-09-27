@@ -5,7 +5,7 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::SystemTime;
 
-use crate::{AppendError, Clock, Journal, JournalError};
+use crate::{AppendError, CancelError, Clock, Journal, JournalError};
 
 /// The number a task is known by: assigned once, in order, never reused, never changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -289,13 +289,53 @@ pub fn add_task(
     Ok(journal.append_task(draft, placement, clock.now())?)
 }
 
-/// Use case: every task in the queue, in order.
+/// Use case: removes the task numbered `id` from the queue.
+///
+/// The task is cancelled, not deleted: it stays in the journal, keeps its number, and is
+/// shown only when cancelled tasks are asked for.
+///
+/// # Errors
+///
+/// Fails, changing nothing, when there is no such task, when it is cancelled already, or
+/// when the journal cannot be written.
+pub fn remove_task(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    id: TaskId,
+) -> Result<(), CancelError> {
+    journal.cancel_task(id, clock.now())
+}
+
+/// Use case: every task in the queue, in order, without the cancelled ones. Positions count
+/// the tasks shown.
 ///
 /// # Errors
 ///
 /// Fails when the journal cannot be read.
 pub fn list_tasks(journal: &impl Journal) -> Result<Vec<Task>, JournalError> {
+    Ok(without_cancelled(journal.tasks()?))
+}
+
+/// Use case: every task, cancelled ones included, in queue order. Positions count them all.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub fn list_all_tasks(journal: &impl Journal) -> Result<Vec<Task>, JournalError> {
     journal.tasks()
+}
+
+/// `tasks` without the cancelled ones, positions counting from 1 again.
+pub(crate) fn without_cancelled(tasks: Vec<Task>) -> Vec<Task> {
+    tasks
+        .into_iter()
+        .filter(|task| task.status != TaskStatus::Cancelled)
+        .enumerate()
+        .map(|(index, task)| Task {
+            position: index + 1,
+            ..task
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -440,6 +480,82 @@ mod tests {
             );
             assert_eq!(list_tasks(&journal).unwrap(), before);
         }
+    }
+
+    fn queue_of_abc_with_b_removed() -> FakeJournal {
+        let journal = FakeJournal::default();
+        for title in ["a", "b", "c"] {
+            add_task(&journal, &clock(), &draft(title), Placement::End).unwrap();
+        }
+        remove_task(&journal, &clock(), TaskId(2)).unwrap();
+        journal
+    }
+
+    #[test]
+    fn a_removed_task_is_left_out_of_the_list_and_the_others_are_renumbered_by_position() {
+        let journal = queue_of_abc_with_b_removed();
+        let shown: Vec<_> = list_tasks(&journal)
+            .unwrap()
+            .iter()
+            .map(|t| (t.position, t.id, t.status))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (1, TaskId(1), TaskStatus::Pending),
+                (2, TaskId(3), TaskStatus::Pending)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_removed_task_stays_in_the_full_list_cancelled_and_in_its_place() {
+        let journal = queue_of_abc_with_b_removed();
+        let shown: Vec<_> = list_all_tasks(&journal)
+            .unwrap()
+            .iter()
+            .map(|t| (t.position, t.id, t.status))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (1, TaskId(1), TaskStatus::Pending),
+                (2, TaskId(2), TaskStatus::Cancelled),
+                (3, TaskId(3), TaskStatus::Pending)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_removed_tasks_number_is_not_reused() {
+        let journal = queue_of_abc_with_b_removed();
+        let added = add_task(&journal, &clock(), &draft("d"), Placement::End).unwrap();
+        assert_eq!(added.id, TaskId(4));
+    }
+
+    #[test]
+    fn removing_an_unknown_or_a_cancelled_task_is_refused_and_changes_nothing() {
+        let journal = queue_of_abc_with_b_removed();
+        let before = list_all_tasks(&journal).unwrap();
+        assert_eq!(
+            remove_task(&journal, &clock(), TaskId(9)),
+            Err(CancelError::UnknownTask(TaskId(9)))
+        );
+        assert_eq!(
+            remove_task(&journal, &clock(), TaskId(2)),
+            Err(CancelError::AlreadyCancelled(TaskId(2)))
+        );
+        assert_eq!(list_all_tasks(&journal).unwrap(), before);
+    }
+
+    #[test]
+    fn a_journal_failure_is_passed_on_when_removing() {
+        let failure = JournalError::new("disk on fire");
+        let journal = FakeJournal::failing(failure.clone());
+        assert_eq!(
+            remove_task(&journal, &clock(), TaskId(1)),
+            Err(CancelError::Journal(failure))
+        );
     }
 
     #[test]

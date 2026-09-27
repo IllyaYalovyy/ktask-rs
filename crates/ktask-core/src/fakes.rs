@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::{
-    AppendError, Clock, Editor, EditorError, Git, GitError, Journal, JournalError, Placement,
-    Project, ProjectRegistry, RegistryError, Task, TaskDraft, TaskId, TaskKind, TaskStatus,
+    AppendError, CancelError, Clock, Editor, EditorError, Git, GitError, Journal, JournalError,
+    Placement, Project, ProjectRegistry, RegistryError, Task, TaskDraft, TaskId, TaskKind,
+    TaskStatus,
 };
 
 /// An in-memory registry that can be told to fail.
@@ -160,6 +161,22 @@ impl Journal for FakeJournal {
         }
         *self.tasks.borrow_mut() = tasks;
         Ok(added)
+    }
+
+    fn cancel_task(&self, id: TaskId, _at: SystemTime) -> Result<(), CancelError> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone().into());
+        }
+        let mut tasks = self.tasks.borrow_mut();
+        let task = tasks
+            .iter_mut()
+            .find(|task| task.id == id)
+            .ok_or(CancelError::UnknownTask(id))?;
+        if task.status == TaskStatus::Cancelled {
+            return Err(CancelError::AlreadyCancelled(id));
+        }
+        task.status = TaskStatus::Cancelled;
+        Ok(())
     }
 
     fn tasks(&self) -> Result<Vec<Task>, JournalError> {

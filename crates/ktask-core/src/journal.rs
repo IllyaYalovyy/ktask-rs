@@ -58,6 +58,35 @@ impl From<JournalError> for AppendError {
     }
 }
 
+/// Why a task was not cancelled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CancelError {
+    /// There is no such task.
+    UnknownTask(TaskId),
+    /// The task was cancelled already.
+    AlreadyCancelled(TaskId),
+    /// The journal could not be used.
+    Journal(JournalError),
+}
+
+impl fmt::Display for CancelError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownTask(id) => write!(f, "there is no task {id}"),
+            Self::AlreadyCancelled(id) => write!(f, "task {id} is already cancelled"),
+            Self::Journal(error) => error.fmt(f),
+        }
+    }
+}
+
+impl Error for CancelError {}
+
+impl From<JournalError> for CancelError {
+    fn from(error: JournalError) -> Self {
+        Self::Journal(error)
+    }
+}
+
 /// Port: one project's journal. Every change is an event appended to it, and the tasks are
 /// updated from that event in the same transaction.
 pub trait Journal {
@@ -97,7 +126,16 @@ pub trait Journal {
             .ok_or_else(|| JournalError::new("the journal stored no task").into())
     }
 
-    /// Every task, in queue order, with positions counting from 1.
+    /// Appends a task-cancelled event for the task numbered `id` and marks the task cancelled,
+    /// in one transaction. The task stays in the journal and keeps its number.
+    ///
+    /// # Errors
+    ///
+    /// Fails, recording nothing, when there is no such task, when it is cancelled already, or
+    /// when the journal cannot be written.
+    fn cancel_task(&self, id: TaskId, at: SystemTime) -> Result<(), CancelError>;
+
+    /// Every task, cancelled ones included, in queue order, with positions counting from 1.
     ///
     /// # Errors
     ///

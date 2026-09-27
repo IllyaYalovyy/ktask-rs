@@ -1,6 +1,7 @@
 //! What the queue screen shows.
 
-use crate::{Journal, JournalError, Project, Task, TaskStatus, list_tasks};
+use crate::task::without_cancelled;
+use crate::{Journal, JournalError, Project, Task, TaskStatus, list_all_tasks};
 
 /// How many tasks are in each status.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -43,7 +44,8 @@ pub struct QueueView {
     pub project: Project,
     /// How many tasks are in each status.
     pub summary: StatusSummary,
-    /// The tasks, in queue order.
+    /// The tasks still in the queue, in queue order; cancelled ones are counted in the summary
+    /// and not shown.
     pub tasks: Vec<Task>,
 }
 
@@ -53,11 +55,11 @@ pub struct QueueView {
 ///
 /// Fails when the journal cannot be read.
 pub fn queue_view(project: Project, journal: &impl Journal) -> Result<QueueView, JournalError> {
-    let tasks = list_tasks(journal)?;
+    let tasks = list_all_tasks(journal)?;
     Ok(QueueView {
         project,
         summary: StatusSummary::of(&tasks),
-        tasks,
+        tasks: without_cancelled(tasks),
     })
 }
 
@@ -103,6 +105,27 @@ mod tests {
                 done: 1,
                 failed: 1,
                 cancelled: 0
+            }
+        );
+    }
+
+    #[test]
+    fn removed_tasks_are_counted_as_cancelled_and_not_shown() {
+        let journal = FakeJournal::default();
+        let clock = FakeClock(at(1));
+        for title in ["a", "b", "c"] {
+            add_task(&journal, &clock, &draft(title), Placement::End).unwrap();
+        }
+        crate::remove_task(&journal, &clock, crate::TaskId(2)).unwrap();
+        let view = queue_view(project("app", 10), &journal).unwrap();
+        let shown: Vec<_> = view.tasks.iter().map(|t| (t.position, &*t.title)).collect();
+        assert_eq!(shown, [(1, "a"), (2, "c")]);
+        assert_eq!(
+            view.summary,
+            StatusSummary {
+                pending: 2,
+                cancelled: 1,
+                ..StatusSummary::default()
             }
         );
     }
