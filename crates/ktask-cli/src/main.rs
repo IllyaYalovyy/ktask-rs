@@ -392,9 +392,13 @@ fn tui(selected: Option<&str>) -> Result<(), Failure> {
     let registry = open_registry()?;
     let project = resolve(&registry, selected)?;
     let journal = open_journal(&project)?;
-    Ok(ktask_tui::run(|show_cancelled| {
-        ktask_core::queue_view(project.clone(), &journal, show_cancelled).map_err(|e| e.to_string())
-    })?)
+    Ok(ktask_tui::run(
+        |show_cancelled| {
+            ktask_core::queue_view(project.clone(), &journal, show_cancelled)
+                .map_err(|e| e.to_string())
+        },
+        |id| ktask_core::remove_task(&journal, &SystemClock, id).map_err(|e| e.to_string()),
+    )?)
 }
 
 fn resolve(registry: &SqliteRegistry, selected: Option<&str>) -> Result<Project, Failure> {

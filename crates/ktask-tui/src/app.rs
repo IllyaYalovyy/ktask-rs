@@ -1,6 +1,6 @@
 //! The state of the terminal interface and how events change it.
 
-use ktask_core::{QueueView, TaskId};
+use ktask_core::{QueueView, TaskId, TaskStatus};
 use ratatui::crossterm::event::KeyCode;
 
 /// Everything the screen shows and remembers.
@@ -14,6 +14,10 @@ pub struct App {
     pub show_cancelled: bool,
     /// Whether the key map covers the queue.
     pub help: bool,
+    /// The task the operator is being asked to confirm removing; the answer is the next key.
+    pub confirming: Option<TaskId>,
+    /// The task whose removal was confirmed: the loop carries it out and clears this.
+    pub removal: Option<TaskId>,
     /// Set when the operator asked to leave.
     pub quit: bool,
 }
@@ -35,13 +39,23 @@ pub fn update(app: App, event: Event) -> App {
     match event {
         Event::Loaded(queue) => {
             let selected = reselect(&app, &queue);
+            let confirming = app.confirming.filter(|id| removable(&queue, *id));
             App {
                 queue: Some(queue),
                 selected,
+                confirming,
                 ..app
             }
         }
         Event::Key(KeyCode::Char('q')) => App { quit: true, ..app },
+        Event::Key(key) if app.confirming.is_some() => match key {
+            KeyCode::Char('y') => confirm_removal(app),
+            KeyCode::Char('n') | KeyCode::Esc => App {
+                confirming: None,
+                ..app
+            },
+            _ => app,
+        },
         Event::Key(key) if app.help => match key {
             KeyCode::Esc | KeyCode::Char('?') => App { help: false, ..app },
             _ => app,
@@ -54,11 +68,52 @@ pub fn update(app: App, event: Event) -> App {
             },
             KeyCode::Char('j') | KeyCode::Down => select(app, |index, _| index.saturating_add(1)),
             KeyCode::Char('k') | KeyCode::Up => select(app, |index, _| index.saturating_sub(1)),
+            KeyCode::Char('d') => App {
+                confirming: app.selected.filter(|id| {
+                    app.queue
+                        .as_ref()
+                        .is_some_and(|queue| removable(queue, *id))
+                }),
+                ..app
+            },
             KeyCode::Char('g') => select(app, |_, _| 0),
             KeyCode::Char('G') => select(app, |_, len| len.saturating_sub(1)),
             _ => app,
         },
         Event::Resize => app,
+    }
+}
+
+/// Whether `queue` shows the task `id` and it can still be removed: a cancelled one cannot.
+fn removable(queue: &QueueView, id: TaskId) -> bool {
+    queue
+        .tasks
+        .iter()
+        .any(|task| task.id == id && task.status != TaskStatus::Cancelled)
+}
+
+/// The app once the removal it asks about is confirmed: the removal is left for the loop to
+/// carry out, and the selection moves to the task after the one removed, or the one before
+/// it when it was the last, so that it is already there when the queue is loaded again.
+fn confirm_removal(app: App) -> App {
+    let Some(id) = app.confirming else {
+        return app;
+    };
+    let neighbour = app.queue.as_ref().and_then(|queue| {
+        let index = queue.tasks.iter().position(|task| task.id == id)?;
+        let next = queue.tasks.get(index + 1);
+        next.or_else(|| {
+            index
+                .checked_sub(1)
+                .and_then(|before| queue.tasks.get(before))
+        })
+        .map(|task| task.id)
+    });
+    App {
+        confirming: None,
+        removal: Some(id),
+        selected: neighbour.or(app.selected),
+        ..app
     }
 }
 
@@ -251,6 +306,86 @@ mod tests {
             assert_eq!(press(open.clone(), &[key]), open);
         }
         assert!(press(open, &[KeyCode::Char('q')]).quit);
+    }
+
+    #[test]
+    fn d_asks_about_removing_the_selected_task_and_changes_nothing_else() {
+        let app = press(
+            loaded(&[1, 2, 3]),
+            &[KeyCode::Char('j'), KeyCode::Char('d')],
+        );
+        assert_eq!(app.confirming, Some(TaskId(2)));
+        assert_eq!(app.removal, None);
+        assert_eq!(on(&app), Some(2));
+        assert_eq!(app.queue, Some(queue_of(&[1, 2, 3])));
+    }
+
+    #[test]
+    fn d_with_nothing_selected_or_a_cancelled_task_selected_asks_nothing() {
+        assert_eq!(press(loaded(&[]), &[KeyCode::Char('d')]).confirming, None);
+        let mut queue = queue_of(&[1, 2]);
+        queue.tasks[0].status = TaskStatus::Cancelled;
+        let app = update(App::default(), Event::Loaded(queue));
+        assert_eq!(press(app, &[KeyCode::Char('d')]).confirming, None);
+    }
+
+    #[test]
+    fn y_confirms_the_removal_and_moves_the_selection_to_the_next_task() {
+        let app = press(
+            loaded(&[1, 2, 3]),
+            &[KeyCode::Char('j'), KeyCode::Char('d'), KeyCode::Char('y')],
+        );
+        assert_eq!(app.confirming, None);
+        assert_eq!(app.removal, Some(TaskId(2)));
+        assert_eq!(on(&app), Some(3));
+    }
+
+    #[test]
+    fn confirming_the_removal_of_the_last_task_moves_the_selection_to_the_one_before() {
+        let app = press(
+            loaded(&[1, 2, 3]),
+            &[KeyCode::Char('G'), KeyCode::Char('d'), KeyCode::Char('y')],
+        );
+        assert_eq!(app.removal, Some(TaskId(3)));
+        assert_eq!(on(&app), Some(2));
+    }
+
+    #[test]
+    fn n_and_esc_drop_the_question_and_change_nothing_else() {
+        let before = loaded(&[1, 2]);
+        for answer in [KeyCode::Char('n'), KeyCode::Esc] {
+            let app = press(before.clone(), &[KeyCode::Char('d'), answer]);
+            assert_eq!(app, before);
+        }
+    }
+
+    #[test]
+    fn while_a_removal_is_asked_about_only_its_answers_and_quit_are_heard() {
+        let asked = press(loaded(&[1, 2]), &[KeyCode::Char('d')]);
+        for key in [
+            KeyCode::Char('j'),
+            KeyCode::Char('G'),
+            KeyCode::Char('a'),
+            KeyCode::Char('?'),
+            KeyCode::Char('d'),
+            KeyCode::Char('x'),
+        ] {
+            assert_eq!(press(asked.clone(), &[key]), asked);
+        }
+        assert!(press(asked, &[KeyCode::Char('q')]).quit);
+    }
+
+    #[test]
+    fn the_question_goes_when_its_task_is_gone_or_cancelled_from_elsewhere() {
+        let asked = press(loaded(&[1, 2]), &[KeyCode::Char('d')]);
+        let gone = update(asked.clone(), Event::Loaded(queue_of(&[2])));
+        assert_eq!(gone.confirming, None);
+        let mut queue = queue_of(&[1, 2]);
+        queue.tasks[0].status = TaskStatus::Cancelled;
+        let cancelled = update(asked.clone(), Event::Loaded(queue));
+        assert_eq!(cancelled.confirming, None);
+        let same = update(asked, Event::Loaded(queue_of(&[1, 2, 3])));
+        assert_eq!(same.confirming, Some(TaskId(1)));
     }
 
     #[test]

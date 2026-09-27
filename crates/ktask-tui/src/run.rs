@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use ktask_core::QueueView;
+use ktask_core::{QueueView, TaskId};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event as Input, KeyEventKind};
 
@@ -16,14 +16,19 @@ const REFRESH: Duration = Duration::from_millis(200);
 ///
 /// `load` fetches the queue to show, with the cancelled tasks when it is told to. It is called
 /// at the start, again and again while the interface waits, and when the operator asks for
-/// cancelled tasks or stops asking. The terminal is put back as it was on every way out.
+/// cancelled tasks or stops asking. `remove` removes a task the operator confirmed removing,
+/// after which the queue is loaded again. The terminal is put back as it was on every way out.
 ///
 /// # Errors
 ///
-/// Fails when the queue cannot be loaded or the terminal cannot be used.
-pub fn run(load: impl FnMut(bool) -> Result<QueueView, String>) -> Result<(), String> {
+/// Fails when the queue cannot be loaded, a task cannot be removed or the terminal cannot be
+/// used.
+pub fn run(
+    load: impl FnMut(bool) -> Result<QueueView, String>,
+    remove: impl FnMut(TaskId) -> Result<(), String>,
+) -> Result<(), String> {
     let mut terminal = ratatui::try_init().map_err(|e| format!("cannot use the terminal: {e}"))?;
-    let result = drive(&mut terminal, load);
+    let result = drive(&mut terminal, load, remove);
     ratatui::restore();
     result
 }
@@ -31,6 +36,7 @@ pub fn run(load: impl FnMut(bool) -> Result<QueueView, String>) -> Result<(), St
 fn drive(
     terminal: &mut DefaultTerminal,
     mut load: impl FnMut(bool) -> Result<QueueView, String>,
+    mut remove: impl FnMut(TaskId) -> Result<(), String>,
 ) -> Result<(), String> {
     let mut app = update(App::default(), Event::Loaded(load(false)?));
     loop {
@@ -46,7 +52,9 @@ fn drive(
             if let Some(event) = translate(&input) {
                 app = update(app, event);
             }
-            if app.show_cancelled == asked {
+            if let Some(id) = app.removal.take() {
+                remove(id)?;
+            } else if app.show_cancelled == asked {
                 continue;
             }
         }

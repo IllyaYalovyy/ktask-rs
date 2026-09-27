@@ -10,14 +10,17 @@ use ratatui::widgets::{Block, Paragraph, Widget};
 use crate::App;
 
 /// Every key the queue screen answers, and what it does.
-const KEYS: [(&str, &str); 8] = [
+const KEYS: [(&str, &str); 11] = [
     ("j, Down", "select the next task"),
     ("k, Up", "select the previous task"),
     ("g", "select the first task"),
     ("G", "select the last task"),
     ("a", "show or hide cancelled tasks"),
+    ("d", "remove the selected task, after asking"),
+    ("y", "answer yes when asked to remove a task"),
+    ("n", "answer no when asked to remove a task"),
     ("?", "show or hide this key map"),
-    ("Esc", "close this key map"),
+    ("Esc", "close this key map, or answer no"),
     ("q", "quit"),
 ];
 
@@ -34,7 +37,7 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
         Some(queue) => {
             let [header, list] =
                 Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(inner);
-            Paragraph::new(header_lines(queue)).render(header, buf);
+            Paragraph::new(header_lines(app, queue)).render(header, buf);
             Paragraph::new(task_lines(app, queue, usize::from(list.height))).render(list, buf);
         }
     }
@@ -57,8 +60,21 @@ fn key_map(area: Rect, buf: &mut Buffer) {
     Paragraph::new(lines).render(area, buf);
 }
 
-fn header_lines(queue: &QueueView) -> Vec<Line<'static>> {
+/// The header: the project, the counts, and the question of a removal while there is one.
+fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
     let summary = queue.summary;
+    let question = app
+        .confirming
+        .and_then(|id| queue.tasks.iter().find(|task| task.id == id))
+        .map_or_else(Line::default, |task| {
+            Line::styled(
+                format!(
+                    "Remove #{} {}? y to remove · n or Esc to keep",
+                    task.id, task.title
+                ),
+                Style::new().add_modifier(Modifier::BOLD),
+            )
+        });
     vec![
         Line::styled(
             queue.project.name.clone(),
@@ -68,7 +84,7 @@ fn header_lines(queue: &QueueView) -> Vec<Line<'static>> {
             "pending {} · running {} · done {} · failed {} · cancelled {}",
             summary.pending, summary.running, summary.done, summary.failed, summary.cancelled
         )),
-        Line::default(),
+        question,
     ]
 }
 
@@ -262,12 +278,34 @@ mod tests {
             loaded(vec![task(1, "Write parser", TaskKind::Agent)]),
             &[Char('?')],
         );
-        let rows = drawn(&app, 60, 14);
+        let rows = drawn(&app, 60, 17);
         let screen = rows.join("\n");
-        for key in ["j, Down", "k, Up", "g ", "G ", "a ", "? ", "Esc", "q "] {
+        for key in [
+            "j, Down", "k, Up", "g ", "G ", "a ", "d ", "y ", "n ", "? ", "Esc", "q ",
+        ] {
             assert!(screen.contains(key), "{key:?} in\n{screen}");
         }
         assert!(!screen.contains("Write parser"), "{screen}");
+    }
+
+    #[test]
+    fn asking_to_remove_a_task_names_it_and_the_keys_that_answer() {
+        use ratatui::crossterm::event::KeyCode::Char;
+        let app = keys(
+            loaded(vec![
+                task(1, "first", TaskKind::Agent),
+                task(2, "second", TaskKind::Agent),
+            ]),
+            &[Char('j'), Char('d')],
+        );
+        let rows = drawn(&app, 60, 8);
+        assert_eq!(
+            inside(&rows[3]),
+            "Remove #20 second? y to remove · n or Esc to keep"
+        );
+        assert_eq!(inside(&rows[5]), ">  2  #20  pending  agent  second");
+        let rows = drawn(&keys(app, &[Char('n')]), 60, 8);
+        assert_eq!(inside(&rows[3]), "");
     }
 
     #[test]
