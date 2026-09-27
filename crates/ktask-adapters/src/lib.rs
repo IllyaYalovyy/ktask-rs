@@ -3,3 +3,9 @@
 //!
 //! Everything that touches the outside world lives here, and platform-specific
 //! code stays inside one module of this crate. See docs/ARCHITECTURE.md.
+
+mod registry;
+mod state;
+
+pub use registry::SqliteRegistry;
+pub use state::registry_path;
