@@ -7,22 +7,22 @@ use super::pty::{Terminal, lines_inside_frame};
 use super::repo::{git_repository, scratch};
 use super::support::{Result, Sandbox};
 
-const ROWS: u16 = 24;
-const COLS: u16 = 80;
+pub(crate) const ROWS: u16 = 24;
+pub(crate) const COLS: u16 = 80;
 const DOWN: &str = "\x1b[B";
 const UP: &str = "\x1b[A";
-const ESC: &str = "\x1b";
+pub(crate) const ESC: &str = "\x1b";
 
 /// A sandbox with a git repository called `my-app` whose queue holds `alpha`, `bravo`,
 /// `charlie`, `delta` and `echo`, numbered 1 to 5.
-struct Fixture {
-    sandbox: Sandbox,
-    repository: PathBuf,
+pub(crate) struct Fixture {
+    pub(crate) sandbox: Sandbox,
+    pub(crate) repository: PathBuf,
     _keep: tempfile::TempDir,
 }
 
 impl Fixture {
-    fn new() -> Result<Self> {
+    pub(crate) fn new() -> Result<Self> {
         let fixture = Self::empty()?;
         for title in ["alpha", "bravo", "charlie", "delta", "echo"] {
             fixture.add(title)?;
@@ -30,7 +30,7 @@ impl Fixture {
         Ok(fixture)
     }
 
-    fn empty() -> Result<Self> {
+    pub(crate) fn empty() -> Result<Self> {
         let sandbox = Sandbox::new()?;
         let (keep, work) = scratch()?;
         let repository = git_repository(&sandbox, &work, "my-app")?;
@@ -42,20 +42,20 @@ impl Fixture {
     }
 
     /// Runs `ktask-rs` with `args` inside the repository and expects it to succeed.
-    fn cli(&self, args: &[&str]) -> Result<()> {
+    pub(crate) fn cli(&self, args: &[&str]) -> Result<()> {
         let outcome = self.sandbox.run(&self.repository, args)?;
         assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
         Ok(())
     }
 
-    fn add(&self, title: &str) -> Result<()> {
+    pub(crate) fn add(&self, title: &str) -> Result<()> {
         self.cli(&["add", "--title", title, "--criterion", "it works"])
     }
 
     /// Opens the queue screen on a terminal of `rows` lines and waits until it is drawn whole,
     /// with the first task marked: the frame is drawn top to bottom, so it is complete once
     /// its last corner is there.
-    fn open(&self, rows: u16) -> Result<Terminal> {
+    pub(crate) fn open(&self, rows: u16) -> Result<Terminal> {
         let terminal = Terminal::launch(&self.sandbox, &self.repository, &["tui"], rows, COLS)?;
         terminal.wait_for("the queue with the first task selected", |screen| {
             let contents = screen.contents();
@@ -67,7 +67,7 @@ impl Fixture {
 }
 
 /// The rows of `screen` that carry the selection mark, without the frame.
-fn marked(screen: &str) -> Vec<String> {
+pub(crate) fn marked(screen: &str) -> Vec<String> {
     lines_inside_frame(screen)
         .into_iter()
         .filter(|line| line.starts_with('>'))
@@ -75,7 +75,7 @@ fn marked(screen: &str) -> Vec<String> {
 }
 
 /// Waits until the selection is on `title` and nowhere else, and returns the row it is on.
-fn wait_selected(terminal: &Terminal, title: &str) -> Result<String> {
+pub(crate) fn wait_selected(terminal: &Terminal, title: &str) -> Result<String> {
     let screen = terminal.wait_for(
         &format!("the selection on {title}"),
         |screen| matches!(marked(&screen.contents()).as_slice(), [row] if row.ends_with(title)),
@@ -93,7 +93,7 @@ fn walk(terminal: &mut Terminal, steps: &[(&str, &str)]) -> Result<()> {
     Ok(())
 }
 
-fn quit(mut terminal: Terminal) -> Result<()> {
+pub(crate) fn quit(mut terminal: Terminal) -> Result<()> {
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())
@@ -291,8 +291,11 @@ fn question_mark_shows_the_key_map_and_esc_closes_it_back_to_the_queue() -> Resu
         "g        select the first task",
         "G        select the last task",
         "a        show or hide cancelled tasks",
+        "d        remove the selected task, after asking",
+        "y        answer yes when asked to remove a task",
+        "n        answer no when asked to remove a task",
         "?        show or hide this key map",
-        "Esc      close this key map",
+        "Esc      close this key map, or answer no",
         "q        quit",
     ] {
         assert!(lines.contains(&key.to_owned()), "{key:?} in\n{screen}");
