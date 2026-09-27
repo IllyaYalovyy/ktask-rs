@@ -344,3 +344,43 @@ fn tasks_inserted_from_the_cli_show_in_their_place_with_their_own_ids() -> Resul
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())
 }
+
+#[test]
+fn tasks_imported_from_the_cli_show_in_their_place_with_their_own_ids() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, work) = scratch()?;
+    let repository = git_repository(&sandbox, &work, "my-app")?;
+    add_task(&sandbox, &repository, "a", "agent")?;
+    add_task(&sandbox, &repository, "b", "agent")?;
+    let file = work.join("tasks.json");
+    std::fs::write(
+        &file,
+        r#"[{"title": "x", "criteria": ["c"]},
+            {"title": "y", "criteria": ["c"], "kind": "human"}]"#,
+    )?;
+    let imported = sandbox.run(
+        &repository,
+        &["import", &file.to_string_lossy(), "--before", "2"],
+    )?;
+    assert_eq!(imported.stdout, "3\n4\n");
+    assert_eq!(imported.code, Some(0), "{}", imported.stderr);
+
+    let mut terminal = Terminal::launch(&sandbox, &repository, &["tui"], ROWS, COLS)?;
+    terminal.wait_for("the queue with four tasks", |screen| {
+        let contents = screen.contents();
+        contents.contains("  4  #2  pending  agent  b") && contents.ends_with('┘')
+    })?;
+
+    let lines = lines_inside_frame(&terminal.screen());
+    assert_eq!(
+        lines[2],
+        "pending 4 · running 0 · done 0 · failed 0 · cancelled 0"
+    );
+    assert_eq!(lines[4], "  1  #1  pending  agent  a");
+    assert_eq!(lines[5], "  2  #3  pending  agent  x");
+    assert_eq!(lines[6], "  3  #4  pending  human  y");
+    assert_eq!(lines[7], "  4  #2  pending  agent  b");
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}

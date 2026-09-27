@@ -10,11 +10,12 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use ktask_adapters::{
-    CommandEditor, GitCli, SqliteJournal, SqliteRegistry, SystemClock, journal_path, registry_path,
+    CommandEditor, GitCli, SqliteJournal, SqliteRegistry, SystemClock, journal_path, read_text,
+    registry_path,
 };
 use ktask_core::{
-    AddError, EditAddError, Edited, Placement, Project, RegisterError, ResolveError, TaskDraft,
-    TaskId, TaskKind,
+    AddError, EditAddError, Edited, ImportError, Placement, Project, RegisterError, ResolveError,
+    TaskDraft, TaskId, TaskKind,
 };
 
 /// Runs an ordered queue of software tasks through AI coding agents.
@@ -56,6 +57,24 @@ enum Command {
         #[arg(long, value_name = "ID", conflicts_with = "after")]
         before: Option<u64>,
         /// Put the task immediately after the task with this ID
+        #[arg(long, value_name = "ID")]
+        after: Option<u64>,
+        /// Work on this registered project instead of the one the current directory is in
+        #[arg(long, value_name = "NAME")]
+        project: Option<String>,
+    },
+    /// Add the tasks of a JSON array, in order and all or none, and print their IDs
+    ///
+    /// Each task has the authored fields `list --json` prints: title, body, criteria, kind
+    /// and links. Only title and criteria are required.
+    Import {
+        /// The JSON file to read, or - for standard input
+        #[arg(value_name = "FILE")]
+        file: String,
+        /// Put the tasks immediately before the task with this ID
+        #[arg(long, value_name = "ID", conflicts_with = "after")]
+        before: Option<u64>,
+        /// Put the tasks immediately after the task with this ID
         #[arg(long, value_name = "ID")]
         after: Option<u64>,
         /// Work on this registered project instead of the one the current directory is in
@@ -182,6 +201,18 @@ impl From<EditAddError> for Failure {
     }
 }
 
+impl From<ImportError> for Failure {
+    fn from(error: ImportError) -> Self {
+        match error {
+            ImportError::Add(error) => Self::from(error),
+            ImportError::Malformed(_) | ImportError::NotAnArray | ImportError::Invalid(_) => Self {
+                message: error.to_string(),
+                code: 2,
+            },
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let mut stdout = io::stdout().lock();
@@ -252,11 +283,7 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             let registry = open_registry()?;
             let project = resolve(&registry, project.as_deref())?;
             let journal = open_journal(&project)?;
-            let placement = match (before, after) {
-                (Some(id), _) => Placement::Before(TaskId(*id)),
-                (None, Some(id)) => Placement::After(TaskId(*id)),
-                (None, None) => Placement::End,
-            };
+            let placement = placement(*before, *after);
             let task = match content {
                 Content::Written(draft) => {
                     ktask_core::add_task(&journal, &SystemClock, &draft, placement)?
@@ -280,6 +307,29 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             };
             Ok(render::added(&task, stdout)?)
         }
+        Command::Import {
+            file,
+            before,
+            after,
+            project,
+        } => {
+            // Read before anything is registered or opened, so that a missing file changes
+            // nothing.
+            let json = read_text(file).map_err(|message| Failure { message, code: 2 })?;
+            let registry = open_registry()?;
+            let project = resolve(&registry, project.as_deref())?;
+            let journal = open_journal(&project)?;
+            let tasks = ktask_core::import_tasks(
+                &journal,
+                &SystemClock,
+                &json,
+                placement(*before, *after),
+            )?;
+            tasks
+                .iter()
+                .try_for_each(|task| render::added(task, stdout))
+                .map_err(Failure::from)
+        }
         Command::List { project, json } => {
             let registry = open_registry()?;
             let project = resolve(&registry, project.as_deref())?;
@@ -296,6 +346,15 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
                 ktask_core::register_project(&registry, &GitCli, &SystemClock, &cwd, name)?;
             Ok(render::project(&project, *json, stdout)?)
         }
+    }
+}
+
+/// Where `--before` and `--after` put new tasks.
+fn placement(before: Option<u64>, after: Option<u64>) -> Placement {
+    match (before, after) {
+        (Some(id), _) => Placement::Before(TaskId(id)),
+        (None, Some(id)) => Placement::After(TaskId(id)),
+        (None, None) => Placement::End,
     }
 }
 

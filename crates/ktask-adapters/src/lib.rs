@@ -7,6 +7,7 @@
 mod clock;
 mod editor;
 mod git;
+mod input;
 mod journal;
 mod registry;
 mod state;
@@ -14,6 +15,7 @@ mod state;
 pub use clock::SystemClock;
 pub use editor::CommandEditor;
 pub use git::GitCli;
+pub use input::read_text;
 pub use journal::SqliteJournal;
 pub use registry::SqliteRegistry;
 pub use state::{journal_path, registry_path};
