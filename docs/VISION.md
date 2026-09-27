@@ -56,7 +56,8 @@ steps. Each mechanism can be turned off per project.
 A provider is an agent CLI described by configuration: the command and arguments, how the
 prompt and model are passed, how output is streamed and parsed, and which messages mean a
 limit, an error or a question. **Adding a new CLI is a configuration change, not a code
-change.**
+change.** Provider configurations can be defined globally and overridden or added per
+project.
 
 Claude Code and Codex ship configured at launch, plus a scripted `dummy` for tests.
 Integration with them is deep and tested: streamed output, session and usage data, limits,
@@ -83,6 +84,12 @@ A stop tells the operator, on one screen: **what** happened (which step, which c
 which error), **why** (cause, and whose it is — this task, an earlier one, or the
 environment), **when**, and **exactly what is expected** — one decision with options and a
 recommendation, or one command. Never a symptom like "report not found".
+
+## Configuration
+
+Everything configurable is layered: built-in defaults, then global, then per project, then
+per task — providers, models and fallbacks, pipelines, loops and cut-offs, hooks, limits.
+Each project can shape its own process without affecting any other.
 
 ## Outside the repository
 
