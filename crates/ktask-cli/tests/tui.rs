@@ -384,3 +384,55 @@ fn tasks_imported_from_the_cli_show_in_their_place_with_their_own_ids() -> Resul
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())
 }
+
+#[test]
+fn a_task_removed_from_the_cli_is_hidden_and_counted_as_cancelled() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, work) = scratch()?;
+    let repository = git_repository(&sandbox, &work, "my-app")?;
+    add_task(&sandbox, &repository, "First", "agent")?;
+    add_task(&sandbox, &repository, "Second", "human")?;
+    add_task(&sandbox, &repository, "Third", "agent")?;
+    let removed = sandbox.run(&repository, &["remove", "2"])?;
+    assert_eq!(removed.code, Some(0), "{}", removed.stderr);
+
+    let mut terminal = open_with_tasks(&sandbox, &repository)?;
+
+    let screen = terminal.screen();
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(
+        lines[2],
+        "pending 2 · running 0 · done 0 · failed 0 · cancelled 1"
+    );
+    assert_eq!(lines[4], "  1  #1  pending  agent  First");
+    assert_eq!(lines[5], "  2  #3  pending  agent  Third");
+    assert_eq!(lines[6], "");
+    assert!(!screen.contains("Second"), "{screen}");
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
+fn a_queue_with_every_task_removed_shows_as_empty_with_them_counted_as_cancelled() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, work) = scratch()?;
+    let repository = git_repository(&sandbox, &work, "my-app")?;
+    add_task(&sandbox, &repository, "Only", "agent")?;
+    let removed = sandbox.run(&repository, &["remove", "1"])?;
+    assert_eq!(removed.code, Some(0), "{}", removed.stderr);
+
+    let mut terminal = open(&sandbox, &repository, ROWS, COLS)?;
+
+    let screen = terminal.screen();
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(
+        lines[2],
+        "pending 0 · running 0 · done 0 · failed 0 · cancelled 1"
+    );
+    assert_eq!(lines[4], "The queue is empty.");
+    assert!(!screen.contains("Only"), "{screen}");
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
