@@ -5,11 +5,12 @@
 mod render;
 
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use ktask_adapters::{GitCli, SqliteRegistry, SystemClock, registry_path};
-use ktask_core::ResolveError;
+use ktask_core::{RegisterError, ResolveError};
 
 /// Runs an ordered queue of software tasks through AI coding agents.
 #[derive(Debug, Parser)]
@@ -45,6 +46,15 @@ enum ProjectCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Register the current directory under a name of your choosing
+    Register {
+        /// The name to register the project under
+        #[arg(long, value_name = "NAME")]
+        name: String,
+        /// Print a JSON object instead of one line
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Why a command failed, and the exit code to report it with.
@@ -67,7 +77,27 @@ impl From<ResolveError> for Failure {
                 message: format!("{error}; `ktask-rs project list` shows the registered projects"),
                 code: 2,
             },
+            ResolveError::NameTaken { ref path, .. } => Self {
+                message: format!(
+                    "{error}; to register {} under a different name, run in that directory: \
+                     ktask-rs project register --name <NAME>",
+                    path.display()
+                ),
+                code: 2,
+            },
             _ => Self::from(error.to_string()),
+        }
+    }
+}
+
+impl From<RegisterError> for Failure {
+    fn from(error: RegisterError) -> Self {
+        match error {
+            RegisterError::Registry(_) | RegisterError::Git(_) => Self::from(error.to_string()),
+            _ => Self {
+                message: error.to_string(),
+                code: 2,
+            },
         }
     }
 }
@@ -98,8 +128,7 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             command: ProjectCommand::Show { project, json },
         } => {
             let registry = open_registry()?;
-            let cwd = std::env::current_dir()
-                .map_err(|e| format!("cannot find the current directory: {e}"))?;
+            let cwd = current_dir()?;
             let resolution = ktask_core::resolve_project(
                 &registry,
                 &GitCli,
@@ -112,6 +141,15 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             }
             Ok(render::project(&resolution.project, *json, stdout)?)
         }
+        Command::Project {
+            command: ProjectCommand::Register { name, json },
+        } => {
+            let registry = open_registry()?;
+            let cwd = current_dir()?;
+            let project =
+                ktask_core::register_project(&registry, &GitCli, &SystemClock, &cwd, name)?;
+            Ok(render::project(&project, *json, stdout)?)
+        }
     }
 }
 
@@ -120,4 +158,8 @@ fn open_registry() -> Result<SqliteRegistry, String> {
         "cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path",
     )?;
     SqliteRegistry::open(&path).map_err(|e| e.to_string())
+}
+
+fn current_dir() -> Result<PathBuf, String> {
+    std::env::current_dir().map_err(|e| format!("cannot find the current directory: {e}"))
 }

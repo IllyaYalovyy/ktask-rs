@@ -263,7 +263,14 @@ fn a_folder_name_already_registered_for_another_directory_is_an_error() -> Resul
         "{}",
         outcome.stderr
     );
-    assert_eq!(outcome.code, Some(1));
+    assert!(
+        outcome
+            .stderr
+            .contains("ktask-rs project register --name <NAME>"),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(outcome.code, Some(2));
     assert_eq!(listed(&sandbox)?, shown("app", &one));
     Ok(())
 }
