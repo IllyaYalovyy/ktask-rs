@@ -77,9 +77,21 @@ impl Sandbox {
 
     /// Runs `ktask-rs` with `args` in `cwd` and waits for it to exit.
     pub(crate) fn run(&self, cwd: &Path, args: &[&str]) -> Result<Outcome> {
+        self.run_with(cwd, args, |_| {})
+    }
+
+    /// Like [`Sandbox::run`], after `adjust` has changed the child's environment.
+    pub(crate) fn run_with(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        adjust: impl FnOnce(&mut Command),
+    ) -> Result<Outcome> {
         let mut command = Command::new(env!("CARGO_BIN_EXE_ktask-rs"));
         command.args(args);
-        let output = self.isolate(&mut command, cwd).output()?;
+        self.isolate(&mut command, cwd);
+        adjust(&mut command);
+        let output = command.output()?;
         Ok(Outcome {
             stdout: String::from_utf8(output.stdout)?,
             stderr: String::from_utf8(output.stderr)?,
