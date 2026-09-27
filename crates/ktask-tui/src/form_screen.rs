@@ -45,6 +45,40 @@ impl Sheet {
     }
 }
 
+/// `text` broken into rows of at most `width` characters, at spaces where it can be.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rows = vec![String::new()];
+    for word in text.split(' ') {
+        let mut word: Vec<char> = word.chars().collect();
+        loop {
+            let row = rows.last_mut().map_or(0, |row| row.chars().count());
+            let separator = usize::from(row > 0);
+            if row + separator + word.len() <= width {
+                break;
+            }
+            if row > 0 {
+                rows.push(String::new());
+            } else {
+                // A word longer than a row is cut.
+                let rest = word.split_off(width.min(word.len()));
+                if let Some(last) = rows.last_mut() {
+                    last.extend(word);
+                }
+                rows.push(String::new());
+                word = rest;
+            }
+        }
+        if let Some(row) = rows.last_mut() {
+            if !row.is_empty() {
+                row.push(' ');
+            }
+            row.extend(word);
+        }
+    }
+    rows
+}
+
 /// The marker in front of the field the focus is on.
 fn marker(form: &Form, field: Focus) -> char {
     if form.focus == field { '>' } else { ' ' }
@@ -59,11 +93,15 @@ pub(crate) fn draw(form: &Form, area: Rect, buf: &mut Buffer) -> Option<Position
         focus_row: 0,
         cursor_x: None,
     };
-    sheet.rows.extend(
-        form.problems
-            .iter()
-            .map(|problem| Line::styled(format!("! {problem}"), bold)),
-    );
+    for problem in &form.problems {
+        for (index, row) in wrap(problem, sheet.width.saturating_sub(2))
+            .into_iter()
+            .enumerate()
+        {
+            let lead = if index == 0 { "! " } else { "  " };
+            sheet.rows.push(Line::styled(format!("{lead}{row}"), bold));
+        }
+    }
     sheet.push(String::new());
 
     let mark = |field| marker(form, field);
@@ -117,4 +155,30 @@ pub(crate) fn draw(form: &Form, area: Rect, buf: &mut Buffer) -> Option<Position
         .min(area.width.saturating_sub(1));
     let y = u16::try_from(sheet.focus_row - first).unwrap_or(u16::MAX);
     Some(Position::new(area.x + x, area.y + y))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap;
+
+    #[test]
+    fn text_that_fits_stays_on_one_row() {
+        assert_eq!(wrap("a short one", 11), ["a short one"]);
+    }
+
+    #[test]
+    fn text_breaks_at_spaces_and_no_row_is_longer_than_the_width() {
+        assert_eq!(wrap("aaa bbb ccc dd", 7), ["aaa bbb", "ccc dd"]);
+        assert_eq!(wrap("aaa bbb", 3), ["aaa", "bbb"]);
+    }
+
+    #[test]
+    fn a_word_longer_than_a_row_is_cut_into_rows() {
+        assert_eq!(wrap("abcdefgh x", 3), ["abc", "def", "gh", "x"]);
+    }
+
+    #[test]
+    fn nothing_is_nothing_to_show_but_still_one_row() {
+        assert_eq!(wrap("", 5), [""]);
+    }
 }
