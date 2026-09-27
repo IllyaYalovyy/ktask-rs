@@ -4,8 +4,12 @@
 //! Everything that touches the outside world lives here, and platform-specific
 //! code stays inside one module of this crate. See docs/ARCHITECTURE.md.
 
+mod clock;
+mod git;
 mod registry;
 mod state;
 
+pub use clock::SystemClock;
+pub use git::GitCli;
 pub use registry::SqliteRegistry;
 pub use state::registry_path;

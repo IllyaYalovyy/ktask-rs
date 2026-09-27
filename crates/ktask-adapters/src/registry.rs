@@ -67,6 +67,26 @@ impl ProjectRegistry for SqliteRegistry {
             .map_err(fail)?;
         rows.collect::<Result<_, _>>().map_err(fail)
     }
+
+    fn add(&self, project: &Project) -> Result<(), RegistryError> {
+        let registered_at = project
+            .registered_at
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or_else(|before| -to_seconds(before.duration()), to_seconds);
+        self.connection
+            .execute(
+                "INSERT INTO projects (name, path, registered_at) VALUES (?1, ?2, ?3)",
+                (&project.name, project.path.to_string_lossy(), registered_at),
+            )
+            .map(drop)
+            .map_err(|cause| {
+                RegistryError::new(format!("cannot register project {}: {cause}", project.name))
+            })
+    }
+}
+
+fn to_seconds(duration: Duration) -> i64 {
+    i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
 }
 
 fn from_unix_seconds(seconds: i64) -> SystemTime {
@@ -90,6 +110,36 @@ mod tests {
                 (name, path, seconds),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn an_added_project_is_listed_and_survives_reopening() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("registry.db");
+        let added = Project {
+            name: "alpha".to_owned(),
+            path: PathBuf::from("/work/alpha"),
+            registered_at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_000),
+        };
+        SqliteRegistry::open(&path).unwrap().add(&added).unwrap();
+        assert_eq!(SqliteRegistry::open(&path).unwrap().list(), Ok(vec![added]));
+    }
+
+    #[test]
+    fn a_name_or_path_that_is_taken_cannot_be_added_again() {
+        let dir = TempDir::new().unwrap();
+        let registry = SqliteRegistry::open(&dir.path().join("registry.db")).unwrap();
+        let project = |name: &str, path: &str| Project {
+            name: name.to_owned(),
+            path: PathBuf::from(path),
+            registered_at: SystemTime::UNIX_EPOCH,
+        };
+        registry.add(&project("alpha", "/work/alpha")).unwrap();
+        for clash in [project("alpha", "/other"), project("beta", "/work/alpha")] {
+            let error = registry.add(&clash).unwrap_err().to_string();
+            assert!(error.contains("cannot register project"), "{error}");
+        }
+        assert_eq!(registry.list().unwrap().len(), 1);
     }
 
     #[test]
