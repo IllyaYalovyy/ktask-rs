@@ -15,6 +15,38 @@ struct ProjectJson<'a> {
     registered_at: String,
 }
 
+/// One project as `project show --json` shows it.
+#[derive(Debug, Serialize)]
+struct ShownJson<'a> {
+    name: &'a str,
+    path: &'a Path,
+}
+
+/// Writes the line telling that `project` has just been registered.
+pub(crate) fn registered(project: &Project, out: &mut impl Write) -> Result<(), String> {
+    writeln!(
+        out,
+        "registered project {} → {}",
+        project.name,
+        project.path.display()
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Writes `project`: a `name<TAB>path` line, or a JSON object with `json`.
+pub(crate) fn project(project: &Project, json: bool, out: &mut impl Write) -> Result<(), String> {
+    if json {
+        let shown = ShownJson {
+            name: &project.name,
+            path: &project.path,
+        };
+        serde_json::to_writer(&mut *out, &shown).map_err(|e| e.to_string())?;
+        writeln!(out).map_err(|e| e.to_string())
+    } else {
+        writeln!(out, "{}\t{}", project.name, project.path.display()).map_err(|e| e.to_string())
+    }
+}
+
 /// Writes `projects`: one `name<TAB>path` line each, or a JSON array with `json`.
 pub(crate) fn projects(
     projects: &[Project],
