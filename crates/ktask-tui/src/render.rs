@@ -1,54 +1,115 @@
 //! Draws an [`App`] into a buffer.
 
+use ktask_core::{QueueView, Task, TaskStatus};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, Paragraph, Widget};
 
 use crate::App;
+
+/// Every key the queue screen answers, and what it does.
+const KEYS: [(&str, &str); 8] = [
+    ("j, Down", "select the next task"),
+    ("k, Up", "select the previous task"),
+    ("g", "select the first task"),
+    ("G", "select the last task"),
+    ("a", "show or hide cancelled tasks"),
+    ("?", "show or hide this key map"),
+    ("Esc", "close this key map"),
+    ("q", "quit"),
+];
 
 /// Draws `app` over the whole of `area`.
 pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
     let block = Block::bordered()
         .title(" ktask-rs ")
-        .title_bottom(" q quit ");
+        .title_bottom(" q quit · ? keys ");
     let inner = block.inner(area);
     block.render(area, buf);
-    let lines = match &app.queue {
-        None => vec![Line::from("Loading the queue…")],
+    match &app.queue {
+        None => Paragraph::new("Loading the queue…").render(inner, buf),
+        Some(_) if app.help => key_map(inner, buf),
         Some(queue) => {
-            let summary = queue.summary;
-            let mut lines = vec![
-                Line::styled(
-                    queue.project.name.clone(),
-                    Style::new().add_modifier(Modifier::BOLD),
-                ),
-                Line::from(format!(
-                    "pending {} · running {} · done {} · failed {} · cancelled {}",
-                    summary.pending,
-                    summary.running,
-                    summary.done,
-                    summary.failed,
-                    summary.cancelled
-                )),
-                Line::default(),
-            ];
-            if queue.tasks.is_empty() {
-                lines.push(Line::from("The queue is empty."));
-            }
-            lines.extend(queue.tasks.iter().map(|task| {
-                Line::from(format!(
-                    "{:>3}  #{}  {}  {}  {}",
-                    task.position, task.id, task.status, task.kind, task.title
-                ))
-            }));
-            lines
+            let [header, list] =
+                Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(inner);
+            Paragraph::new(header_lines(queue)).render(header, buf);
+            Paragraph::new(task_lines(app, queue, usize::from(list.height))).render(list, buf);
         }
-    };
-    Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .render(inner, buf);
+    }
+}
+
+fn key_map(area: Rect, buf: &mut Buffer) {
+    let width = KEYS
+        .iter()
+        .map(|(key, _)| key.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut lines = vec![
+        Line::styled("Keys", Style::new().add_modifier(Modifier::BOLD)),
+        Line::default(),
+    ];
+    lines.extend(
+        KEYS.iter()
+            .map(|(key, does)| Line::from(format!("{key:<width$}  {does}"))),
+    );
+    Paragraph::new(lines).render(area, buf);
+}
+
+fn header_lines(queue: &QueueView) -> Vec<Line<'static>> {
+    let summary = queue.summary;
+    vec![
+        Line::styled(
+            queue.project.name.clone(),
+            Style::new().add_modifier(Modifier::BOLD),
+        ),
+        Line::from(format!(
+            "pending {} · running {} · done {} · failed {} · cancelled {}",
+            summary.pending, summary.running, summary.done, summary.failed, summary.cancelled
+        )),
+        Line::default(),
+    ]
+}
+
+/// The rows of the task list that fit in `height` lines, scrolled so that the selected task
+/// is the last one in view when it would not be otherwise. The selected task is marked with
+/// `>` and shown reversed; a cancelled one is dimmed and says so in its status.
+fn task_lines(app: &App, queue: &QueueView, height: usize) -> Vec<Line<'static>> {
+    if queue.tasks.is_empty() {
+        return vec![Line::from("The queue is empty.")];
+    }
+    let selected = queue
+        .tasks
+        .iter()
+        .position(|task| Some(task.id) == app.selected);
+    let first = selected.map_or(0, |index| (index + 1).saturating_sub(height));
+    queue
+        .tasks
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(height)
+        .map(|(index, task)| task_line(task, Some(index) == selected))
+        .collect()
+}
+
+fn task_line(task: &Task, selected: bool) -> Line<'static> {
+    let marker = if selected { '>' } else { ' ' };
+    let mut style = Style::new();
+    if task.status == TaskStatus::Cancelled {
+        style = style.add_modifier(Modifier::DIM);
+    }
+    if selected {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    Line::styled(
+        format!(
+            "{marker}{:>3}  #{}  {}  {}  {}",
+            task.position, task.id, task.status, task.kind, task.title
+        ),
+        style,
+    )
 }
 
 #[cfg(test)]
@@ -133,8 +194,8 @@ mod tests {
             inside(&rows[2]),
             "pending 2 · running 0 · done 0 · failed 0 · cancelled 0"
         );
-        assert_eq!(inside(&rows[4]), "  1  #10  pending  agent  first");
-        assert_eq!(inside(&rows[5]), "  2  #20  pending  human  second");
+        assert_eq!(inside(&rows[4]), ">  1  #10  pending  agent  first");
+        assert_eq!(inside(&rows[5]), "   2  #20  pending  human  second");
         assert!(!rows.iter().any(|row| row.contains("The queue is empty.")));
     }
 
@@ -143,8 +204,70 @@ mod tests {
         let rows = drawn(&loaded(vec![]), 60, 8);
         assert!(rows[0].starts_with("┌ ktask-rs ─"));
         assert!(rows[0].ends_with('┐'));
-        assert!(rows[7].starts_with("└ q quit ─"));
+        assert!(rows[7].starts_with("└ q quit · ? keys ─"));
         assert!(rows[7].ends_with('┘'));
+    }
+
+    fn keys(app: App, keys: &[ratatui::crossterm::event::KeyCode]) -> App {
+        keys.iter()
+            .fold(app, |app, key| update(app, Event::Key(*key)))
+    }
+
+    #[test]
+    fn the_selected_task_is_marked_and_the_mark_follows_the_selection() {
+        use ratatui::crossterm::event::KeyCode::Char;
+        let app = loaded(vec![
+            task(1, "first", TaskKind::Agent),
+            task(2, "second", TaskKind::Agent),
+        ]);
+        let rows = drawn(&keys(app.clone(), &[Char('j')]), 60, 8);
+        assert_eq!(inside(&rows[4]), "   1  #10  pending  agent  first");
+        assert_eq!(inside(&rows[5]), ">  2  #20  pending  agent  second");
+    }
+
+    #[test]
+    fn a_cancelled_task_says_so_in_its_status() {
+        let mut gone = task(2, "gone", TaskKind::Agent);
+        gone.status = TaskStatus::Cancelled;
+        let rows = drawn(&loaded(vec![gone]), 60, 8);
+        assert_eq!(inside(&rows[4]), ">  2  #20  cancelled  agent  gone");
+    }
+
+    #[test]
+    fn a_long_list_scrolls_to_keep_the_selection_in_view() {
+        use ratatui::crossterm::event::KeyCode::Char;
+        let tasks = (1..=10)
+            .map(|n| task(n, &format!("t{n}"), TaskKind::Agent))
+            .collect();
+        // Five lines are left for the list under the frame and the header.
+        let rows = drawn(&keys(loaded(tasks), &[Char('G')]), 60, 10);
+        assert_eq!(inside(&rows[4]), "   6  #60  pending  agent  t6");
+        assert_eq!(inside(&rows[8]), "> 10  #100  pending  agent  t10");
+        let rows = drawn(&keys(loaded_ten(), &[Char('G'), Char('g')]), 60, 10);
+        assert_eq!(inside(&rows[4]), ">  1  #10  pending  agent  t1");
+    }
+
+    fn loaded_ten() -> App {
+        loaded(
+            (1..=10)
+                .map(|n| task(n, &format!("t{n}"), TaskKind::Agent))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn the_key_map_lists_every_key_of_the_screen_instead_of_the_queue() {
+        use ratatui::crossterm::event::KeyCode::Char;
+        let app = keys(
+            loaded(vec![task(1, "Write parser", TaskKind::Agent)]),
+            &[Char('?')],
+        );
+        let rows = drawn(&app, 60, 14);
+        let screen = rows.join("\n");
+        for key in ["j, Down", "k, Up", "g ", "G ", "a ", "? ", "Esc", "q "] {
+            assert!(screen.contains(key), "{key:?} in\n{screen}");
+        }
+        assert!(!screen.contains("Write parser"), "{screen}");
     }
 
     #[test]

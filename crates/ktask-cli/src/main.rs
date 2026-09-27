@@ -266,22 +266,7 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             let project = resolve(&registry, project.as_deref())?;
             Ok(render::project(&project, *json, stdout)?)
         }
-        Command::Tui { project } => {
-            if !io::stdout().is_terminal() {
-                return Err(Failure {
-                    message: "the terminal interface needs a terminal; \
-                              `ktask-rs list` shows the queue without one"
-                        .to_owned(),
-                    code: 2,
-                });
-            }
-            let registry = open_registry()?;
-            let project = resolve(&registry, project.as_deref())?;
-            let journal = open_journal(&project)?;
-            Ok(ktask_tui::run(|| {
-                ktask_core::queue_view(project, &journal).map_err(|e| e.to_string())
-            })?)
-        }
+        Command::Tui { project } => tui(project.as_deref()),
         Command::Add {
             title,
             criterion,
@@ -394,6 +379,24 @@ fn open_queue(selected: Option<&str>) -> Result<SqliteJournal, Failure> {
 }
 
 /// The project a command works on, telling on standard error when that registered it.
+/// Opens the terminal interface on the queue of the project selected, or the current one.
+fn tui(selected: Option<&str>) -> Result<(), Failure> {
+    if !io::stdout().is_terminal() {
+        return Err(Failure {
+            message: "the terminal interface needs a terminal; \
+                      `ktask-rs list` shows the queue without one"
+                .to_owned(),
+            code: 2,
+        });
+    }
+    let registry = open_registry()?;
+    let project = resolve(&registry, selected)?;
+    let journal = open_journal(&project)?;
+    Ok(ktask_tui::run(|show_cancelled| {
+        ktask_core::queue_view(project.clone(), &journal, show_cancelled).map_err(|e| e.to_string())
+    })?)
+}
+
 fn resolve(registry: &SqliteRegistry, selected: Option<&str>) -> Result<Project, Failure> {
     let cwd = current_dir()?;
     let resolution = ktask_core::resolve_project(registry, &GitCli, &SystemClock, &cwd, selected)?;
