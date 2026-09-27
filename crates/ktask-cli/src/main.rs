@@ -4,13 +4,13 @@
 
 mod render;
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use ktask_adapters::{GitCli, SqliteRegistry, SystemClock, registry_path};
-use ktask_core::{RegisterError, ResolveError};
+use ktask_core::{Project, RegisterError, ResolveError};
 
 /// Runs an ordered queue of software tasks through AI coding agents.
 #[derive(Debug, Parser)]
@@ -26,6 +26,12 @@ enum Command {
     Project {
         #[command(subcommand)]
         command: ProjectCommand,
+    },
+    /// Open the terminal interface on the project's queue
+    Tui {
+        /// Work on this registered project instead of the one the current directory is in
+        #[arg(long, value_name = "NAME")]
+        project: Option<String>,
     },
 }
 
@@ -128,18 +134,21 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             command: ProjectCommand::Show { project, json },
         } => {
             let registry = open_registry()?;
-            let cwd = current_dir()?;
-            let resolution = ktask_core::resolve_project(
-                &registry,
-                &GitCli,
-                &SystemClock,
-                &cwd,
-                project.as_deref(),
-            )?;
-            if resolution.registered {
-                render::registered(&resolution.project, &mut io::stderr())?;
+            let project = resolve(&registry, project.as_deref())?;
+            Ok(render::project(&project, *json, stdout)?)
+        }
+        Command::Tui { project } => {
+            if !io::stdout().is_terminal() {
+                return Err(Failure {
+                    message: "the terminal interface needs a terminal; \
+                              `ktask-rs list` shows the queue without one"
+                        .to_owned(),
+                    code: 2,
+                });
             }
-            Ok(render::project(&resolution.project, *json, stdout)?)
+            let registry = open_registry()?;
+            let project = resolve(&registry, project.as_deref())?;
+            Ok(ktask_tui::run(|| Ok(ktask_core::queue_view(project)))?)
         }
         Command::Project {
             command: ProjectCommand::Register { name, json },
@@ -151,6 +160,16 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             Ok(render::project(&project, *json, stdout)?)
         }
     }
+}
+
+/// The project a command works on, telling on standard error when that registered it.
+fn resolve(registry: &SqliteRegistry, selected: Option<&str>) -> Result<Project, Failure> {
+    let cwd = current_dir()?;
+    let resolution = ktask_core::resolve_project(registry, &GitCli, &SystemClock, &cwd, selected)?;
+    if resolution.registered {
+        render::registered(&resolution.project, &mut io::stderr())?;
+    }
+    Ok(resolution.project)
 }
 
 fn open_registry() -> Result<SqliteRegistry, String> {
