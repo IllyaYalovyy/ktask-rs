@@ -8,10 +8,17 @@ contradicts them, stop and report the contradiction.
 - **Wired.** The change is reachable from the real binary. Code that only tests call is
   not done. If a task builds a piece whose wiring belongs to a later task, say so in the
   report — do not call it done.
-- **Tested end to end.** Logic gets unit tests against the port fakes. Anything a user can
-  see or do gets a test through the end-to-end harness (real binary, pseudo-terminal).
+- **Tested end to end.** Logic gets unit tests against the port fakes. On top of that,
+  through the real binary:
+  - **CLI**: every command and every option, in and out — valid input, invalid input,
+    text and `--json` output, exit codes, and the resulting state.
+  - **TUI**: every screen, key by key, in and out — every way in, every action, every way
+    back — asserting what the screen shows after each step.
+  - **Both ways round**: what one frontend does, the other shows.
   Tests do not have to be written first. They do have to exist, and each must fail if the
   behaviour it names breaks.
+- **No duplication between frontends.** A CLI command and its TUI action call the same
+  use-case function. Logic in a frontend is a defect.
 - **Green.** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`, run in the foreground, all passing.
 

@@ -45,11 +45,18 @@ types.
 
 ## Interfaces
 
+**One application layer, two frontends.** Every action and every view — add, list, remove,
+run, status, everything — is a single use-case function in `core`. The CLI command and the
+TUI key that do the same thing call the same function with the same arguments. Frontends
+parse input and render output; they contain no logic of their own, and nothing is
+implemented twice.
+
 - **TUI**: `update(App, Event) -> App` and `render(&App)` are pure. One thin loop owns the
   terminal and feeds events (keys, resize, journal events, loaded data) into `update`.
   Every screen gets its data through that loop — a screen whose data is loaded only in
   tests does not exist.
-- **CLI**: parse, wire adapters, call a core use case, map its outcome to an exit code.
+- **CLI**: parse arguments, wire adapters, call the use case, render its result (text or
+  `--json`), map its outcome to an exit code.
 
 ## State and isolation
 
