@@ -16,7 +16,7 @@ depends on none of them. `cli` is the only place where adapters are chosen and w
 
 Everything `core` needs from the outside world is a trait defined in `core`:
 `Journal`, `Git`, `Commands` (run a process with timeout and streaming output), `Provider`,
-`Clock`. Each has a real adapter in `ktask-adapters` and an in-memory fake used by `core`'s
+`Clock`, `ProjectRegistry` (the projects the tool knows, in `$XDG_STATE_HOME/ktask-rs/registry.db`). Each has a real adapter in `ktask-adapters` and an in-memory fake used by `core`'s
 tests. Nothing in `core` spawns a process, opens a file or reads the environment.
 
 The `Provider` adapter is one generic implementation driven by provider configuration
