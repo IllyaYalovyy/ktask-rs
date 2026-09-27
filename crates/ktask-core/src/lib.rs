@@ -5,6 +5,7 @@
 mod clock;
 mod edit;
 mod git;
+mod import;
 mod journal;
 mod project;
 mod queue;
@@ -15,6 +16,7 @@ mod task;
 pub use clock::Clock;
 pub use edit::{EditAddError, Edited, Editor, EditorError, TemplateProblem, add_task_in_editor};
 pub use git::{Git, GitError};
+pub use import::{ImportError, InvalidTask, import_tasks};
 pub use journal::{AppendError, Journal, JournalError};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
 pub use queue::{QueueView, StatusSummary, queue_view};
