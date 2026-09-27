@@ -5,12 +5,14 @@
 mod clock;
 mod git;
 mod project;
+mod queue;
 mod register;
 mod resolve;
 
 pub use clock::Clock;
 pub use git::{Git, GitError};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
+pub use queue::{QueueView, StatusSummary, queue_view};
 pub use register::{RegisterError, register_project};
 pub use resolve::{Resolution, ResolveError, resolve_project};
 
