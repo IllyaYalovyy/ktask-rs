@@ -44,22 +44,31 @@ pub struct QueueView {
     pub project: Project,
     /// How many tasks are in each status.
     pub summary: StatusSummary,
-    /// The tasks still in the queue, in queue order; cancelled ones are counted in the summary
-    /// and not shown.
+    /// The tasks to show, in queue order: without the cancelled ones, which the summary
+    /// counts anyway, unless they were asked for. Positions count what is shown.
     pub tasks: Vec<Task>,
 }
 
-/// Use case: the queue of `project`, whose journal is `journal`.
+/// Use case: the queue of `project`, whose journal is `journal`; with the cancelled tasks in
+/// their places when `show_cancelled`.
 ///
 /// # Errors
 ///
 /// Fails when the journal cannot be read.
-pub fn queue_view(project: Project, journal: &impl Journal) -> Result<QueueView, JournalError> {
+pub fn queue_view(
+    project: Project,
+    journal: &impl Journal,
+    show_cancelled: bool,
+) -> Result<QueueView, JournalError> {
     let tasks = list_all_tasks(journal)?;
     Ok(QueueView {
         project,
         summary: StatusSummary::of(&tasks),
-        tasks: without_cancelled(tasks),
+        tasks: if show_cancelled {
+            tasks
+        } else {
+            without_cancelled(tasks)
+        },
     })
 }
 
@@ -72,7 +81,7 @@ mod tests {
 
     #[test]
     fn a_new_queue_has_every_count_at_zero_and_no_tasks() {
-        let view = queue_view(project("app", 10), &FakeJournal::default()).unwrap();
+        let view = queue_view(project("app", 10), &FakeJournal::default(), false).unwrap();
         assert_eq!(view.project, project("app", 10));
         assert_eq!(view.summary, StatusSummary::default());
         assert_eq!(view.tasks, vec![]);
@@ -94,7 +103,7 @@ mod tests {
         for (task, status) in journal.tasks.borrow_mut().iter_mut().zip(statuses) {
             task.status = status;
         }
-        let view = queue_view(project("app", 10), &journal).unwrap();
+        let view = queue_view(project("app", 10), &journal, false).unwrap();
         let titles: Vec<_> = view.tasks.iter().map(|t| t.title.as_str()).collect();
         assert_eq!(titles, ["a", "b", "c", "d"]);
         assert_eq!(
@@ -117,7 +126,7 @@ mod tests {
             add_task(&journal, &clock, &draft(title), Placement::End).unwrap();
         }
         crate::remove_task(&journal, &clock, crate::TaskId(2)).unwrap();
-        let view = queue_view(project("app", 10), &journal).unwrap();
+        let view = queue_view(project("app", 10), &journal, false).unwrap();
         let shown: Vec<_> = view.tasks.iter().map(|t| (t.position, &*t.title)).collect();
         assert_eq!(shown, [(1, "a"), (2, "c")]);
         assert_eq!(
@@ -131,9 +140,37 @@ mod tests {
     }
 
     #[test]
+    fn asked_for_the_cancelled_tasks_are_shown_in_their_places_and_counted_in_the_positions() {
+        let journal = FakeJournal::default();
+        let clock = FakeClock(at(1));
+        for title in ["a", "b", "c"] {
+            add_task(&journal, &clock, &draft(title), Placement::End).unwrap();
+        }
+        crate::remove_task(&journal, &clock, crate::TaskId(2)).unwrap();
+        let view = queue_view(project("app", 10), &journal, true).unwrap();
+        let shown: Vec<_> = view
+            .tasks
+            .iter()
+            .map(|t| (t.position, &*t.title, t.status))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (1, "a", TaskStatus::Pending),
+                (2, "b", TaskStatus::Cancelled),
+                (3, "c", TaskStatus::Pending)
+            ]
+        );
+        assert_eq!(view.summary.cancelled, 1);
+    }
+
+    #[test]
     fn a_journal_failure_is_passed_on() {
         let failure = JournalError::new("disk on fire");
         let journal = FakeJournal::failing(failure.clone());
-        assert_eq!(queue_view(project("app", 10), &journal), Err(failure));
+        assert_eq!(
+            queue_view(project("app", 10), &journal, false),
+            Err(failure)
+        );
     }
 }
