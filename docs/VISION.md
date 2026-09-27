@@ -43,6 +43,14 @@ resolve), a command step, a human approval step.
 - **Verification by the tool.** Whatever checks a project configures, the tool runs them.
   An agent's claim of success is never evidence.
 
+## Git
+
+The tool does the git work that needs no judgement, so no tokens are spent on it: before a
+task starts it makes sure the work begins from an up-to-date code base; it gives the agent
+an isolated working copy; it records what changed, for status, diffs and audit. It does not
+decide what gets committed, pushed or proposed — commits, pushes and PRs are configured
+steps. Each mechanism can be turned off per project.
+
 ## Providers
 
 Claude Code and Codex at launch, plus a scripted `dummy` for tests. Integration with each
