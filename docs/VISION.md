@@ -53,9 +53,16 @@ steps. Each mechanism can be turned off per project.
 
 ## Providers
 
-Claude Code and Codex at launch, plus a scripted `dummy` for tests. Integration with each
-agent CLI is deep and tested: streamed output, session and usage data, limits, errors,
-model reported vs requested. Adding a provider touches nothing else.
+A provider is an agent CLI described by configuration: the command and arguments, how the
+prompt and model are passed, how output is streamed and parsed, and which messages mean a
+limit, an error or a question. **Adding a new CLI is a configuration change, not a code
+change.**
+
+Claude Code and Codex ship configured at launch, plus a scripted `dummy` for tests.
+Integration with them is deep and tested: streamed output, session and usage data, limits,
+errors, model reported vs requested. Where a CLI offers structured output, a provider
+configuration can use a built-in parser for it; the parsers are few and generic, not one
+per CLI.
 
 ## Status and audit
 

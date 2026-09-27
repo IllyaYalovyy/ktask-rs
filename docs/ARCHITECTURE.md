@@ -19,6 +19,11 @@ Everything `core` needs from the outside world is a trait defined in `core`:
 `Clock`. Each has a real adapter in `ktask-adapters` and an in-memory fake used by `core`'s
 tests. Nothing in `core` spawns a process, opens a file or reads the environment.
 
+The `Provider` adapter is one generic implementation driven by provider configuration
+(command, argument templates, output format, classification patterns), plus a small set of
+output parsers (plain text, JSON lines, …). Claude Code and Codex are configurations, not
+types.
+
 ## Core
 
 - **Journal first.** Every state change is an event appended to the journal before its
