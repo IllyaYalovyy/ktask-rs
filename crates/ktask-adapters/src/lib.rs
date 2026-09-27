@@ -1,0 +1,5 @@
+//! Real implementations of the ports `ktask-core` defines: journal, git,
+//! subprocess runner, providers, clock, filesystem.
+//!
+//! Everything that touches the outside world lives here, and platform-specific
+//! code stays inside one module of this crate. See docs/ARCHITECTURE.md.

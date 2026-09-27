@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/ktask-core", "crates/ktask-cli", "crates/ktask-tui"]
+members = [
+    "crates/ktask-core",
+    "crates/ktask-adapters",
+    "crates/ktask-cli",
+    "crates/ktask-tui",
+]
 
 [workspace.package]
 version = "0.1.0"
