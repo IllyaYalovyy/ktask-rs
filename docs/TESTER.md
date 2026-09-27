@@ -25,7 +25,8 @@ Test every flow the change touches, end to end, in both interfaces:
   limit, a hang, a question that needs a human. Each must end in a state the tool explains.
 
 Every flow you test by hand must also exist as an automated test through the real binary.
-Write the missing ones.
+Write the missing ones. **A TUI screen or action that no test clicks through, in and out,
+with keystrokes to the real binary, is a FAIL** — whatever else is tested.
 
 ## Output
 

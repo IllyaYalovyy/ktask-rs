@@ -11,8 +11,11 @@ Check, in this order:
 2. **Tests would catch a regression.** For each behaviour the task names, find the test
    that fails if it breaks. Imagine the obvious wrong implementation — would a test notice?
    A behaviour without such a test is a finding.
-3. **End-to-end tests exist.** Every user-visible change has an automated test through the
-   real binary. Snapshot tests of a render function do not count on their own.
+3. **End-to-end tests exist.** Every CLI command and option is exercised through the real
+   binary. Every TUI screen and action the change touches is clicked through, in and out,
+   by keystrokes to the real binary in a pseudo-terminal. Unit tests of `update`, snapshots
+   of `render` and harnesses that bypass the binary do not count. A missing one is an
+   automatic rejection.
 4. **Architecture.** No I/O in `core`; dependencies point inward; new outside-world needs
    go through a port with a fake.
 5. **Hermetic tests.** No real home directory, no `set_current_dir`, no process

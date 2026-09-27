@@ -17,6 +17,10 @@ contradicts them, stop and report the contradiction.
   - **Both ways round**: what one frontend does, the other shows.
   Tests do not have to be written first. They do have to exist, and each must fail if the
   behaviour it names breaks.
+- **A TUI screen or action that has not been clicked through, in and out, by a test
+  driving the real binary with keystrokes in a pseudo-terminal, is not tested and not
+  done.** Unit tests of `update`, snapshots of `render` and harnesses that bypass the real
+  binary are useful and do not count. No exceptions.
 - **No duplication between frontends.** A CLI command and its TUI action call the same
   use-case function. Logic in a frontend is a defect.
 - **Green.** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,

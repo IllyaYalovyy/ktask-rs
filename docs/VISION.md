@@ -106,7 +106,8 @@ The tool never creates files in the working tree. The repository only receives t
 
 The TUI exists because a terminal application can be driven and read by tests with no
 human looking at it. **Every screen and every flow is exercised end to end, by tests,
-against the real binary.** That is why the product is a TUI.
+against the real binary.** That is why the product is a TUI. A screen or action that no test
+has clicked through, in and out, with keystrokes, is not done.
 
 ## Not
 
