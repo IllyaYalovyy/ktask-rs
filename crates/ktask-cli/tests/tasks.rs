@@ -559,3 +559,307 @@ fn list_json_is_in_the_help() -> Result<()> {
     assert_eq!(help.code, Some(0));
     Ok(())
 }
+
+/// Adds `title` with `--before`/`--after` given as `flag`, and returns what was printed.
+fn add_placed(fixture: &Fixture, title: &str, flag: &str, id: &str) -> Result<Outcome> {
+    fixture.run(&["add", "--title", title, "--criterion", "it works", flag, id])
+}
+
+/// The queue as `id:title` pairs in order, from `list`, checked against `list --json`.
+fn queue(fixture: &Fixture) -> Result<Vec<String>> {
+    let listed = fixture.run(&["list"])?;
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    let text: Vec<String> = listed
+        .stdout
+        .lines()
+        .map(|line| {
+            let mut fields = line.split('\t').skip(1);
+            let id = fields.next().unwrap_or_default().trim_start_matches('#');
+            let title = fields.nth(2).unwrap_or_default();
+            format!("{id}:{title}")
+        })
+        .collect();
+    let json = fixture.run(&["list", "--json"])?;
+    let tasks: Value = serde_json::from_str(&json.stdout)?;
+    let from_json: Vec<String> = tasks
+        .as_array()
+        .ok_or("list --json is not an array")?
+        .iter()
+        .enumerate()
+        .map(|(index, task)| {
+            assert_eq!(task["position"], index + 1);
+            format!("{}:{}", task["id"], task["title"].as_str().unwrap_or(""))
+        })
+        .collect();
+    assert_eq!(text, from_json);
+    Ok(text)
+}
+
+/// A fixture whose queue is `a`, `b`, `c`, numbered 1, 2, 3.
+fn abc() -> Result<Fixture> {
+    let fixture = Fixture::new()?;
+    for title in ["a", "b", "c"] {
+        fixture.add(title)?;
+    }
+    Ok(fixture)
+}
+
+#[test]
+fn before_puts_the_task_immediately_before_the_one_named_and_no_id_changes() -> Result<()> {
+    let fixture = abc()?;
+
+    let added = add_placed(&fixture, "new", "--before", "2")?;
+
+    assert_eq!(added.stdout, "4\n");
+    assert_eq!(added.code, Some(0), "{}", added.stderr);
+    assert_eq!(queue(&fixture)?, ["1:a", "4:new", "2:b", "3:c"]);
+    Ok(())
+}
+
+#[test]
+fn after_puts_the_task_immediately_after_the_one_named_and_no_id_changes() -> Result<()> {
+    let fixture = abc()?;
+
+    let added = add_placed(&fixture, "new", "--after", "2")?;
+
+    assert_eq!(added.stdout, "4\n");
+    assert_eq!(added.code, Some(0), "{}", added.stderr);
+    assert_eq!(queue(&fixture)?, ["1:a", "2:b", "4:new", "3:c"]);
+    Ok(())
+}
+
+#[test]
+fn a_task_can_go_before_the_first_and_after_the_last() -> Result<()> {
+    let fixture = abc()?;
+
+    assert_eq!(
+        add_placed(&fixture, "first", "--before", "1")?.stdout,
+        "4\n"
+    );
+    assert_eq!(add_placed(&fixture, "last", "--after", "3")?.stdout, "5\n");
+
+    assert_eq!(queue(&fixture)?, ["4:first", "1:a", "2:b", "3:c", "5:last"]);
+    Ok(())
+}
+
+#[test]
+fn a_task_can_go_before_the_first_and_after_the_last_in_a_queue_of_one() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add("only")?;
+    add_placed(&fixture, "before", "--before", "1")?;
+    add_placed(&fixture, "after", "--after", "1")?;
+    assert_eq!(queue(&fixture)?, ["2:before", "1:only", "3:after"]);
+    Ok(())
+}
+
+#[test]
+fn placing_repeatedly_keeps_every_task_where_it_was_put() -> Result<()> {
+    let fixture = abc()?;
+    add_placed(&fixture, "d", "--before", "3")?;
+    add_placed(&fixture, "e", "--after", "4")?;
+    add_placed(&fixture, "f", "--before", "1")?;
+    fixture.add("g")?;
+    add_placed(&fixture, "h", "--after", "7")?;
+
+    assert_eq!(
+        queue(&fixture)?,
+        ["6:f", "1:a", "2:b", "4:d", "5:e", "3:c", "7:g", "8:h"]
+    );
+    Ok(())
+}
+
+#[test]
+fn a_placed_task_keeps_the_ids_in_the_journal_and_records_where_it_went() -> Result<()> {
+    let fixture = abc()?;
+    add_placed(&fixture, "new", "--before", "2")?;
+    add_placed(&fixture, "newer", "--after", "3")?;
+
+    let ids: Vec<_> = fixture
+        .rows("tasks")?
+        .iter()
+        .map(|task| {
+            (
+                task["id"].as_i64(),
+                task["title"].as_str().map(str::to_owned),
+            )
+        })
+        .collect();
+    let expected: Vec<_> = [(1, "a"), (2, "b"), (3, "c"), (4, "new"), (5, "newer")]
+        .into_iter()
+        .map(|(id, title)| (Some(id), Some(title.to_owned())))
+        .collect();
+    assert_eq!(ids, expected);
+    let events = fixture.rows("events")?;
+    assert_eq!(events.len(), 5, "adding a task is one event, placed or not");
+    let payload = |index: usize| -> Result<Value> {
+        Ok(serde_json::from_str(
+            events[index]["payload"].as_str().unwrap_or_default(),
+        )?)
+    };
+    assert_eq!(payload(0)?.get("before"), None);
+    assert_eq!(payload(0)?.get("after"), None);
+    assert_eq!(payload(3)?["before"], 2);
+    assert_eq!(payload(4)?["after"], 3);
+    Ok(())
+}
+
+#[test]
+fn a_placed_task_keeps_every_option_it_was_given() -> Result<()> {
+    let fixture = abc()?;
+    let added = fixture.run(&[
+        "add",
+        "--title",
+        "Full",
+        "--criterion",
+        "one",
+        "--body",
+        "text",
+        "--kind",
+        "human",
+        "--link",
+        "https://example.com",
+        "--after",
+        "1",
+    ])?;
+    assert_eq!(added.code, Some(0), "{}", added.stderr);
+
+    let listed = fixture.run(&["list", "--json"])?;
+    let tasks: Value = serde_json::from_str(&listed.stdout)?;
+    assert_eq!(tasks[1]["id"], 4);
+    assert_eq!(tasks[1]["title"], "Full");
+    assert_eq!(tasks[1]["body"], "text");
+    assert_eq!(tasks[1]["kind"], "human");
+    assert_eq!(tasks[1]["links"], json!(["https://example.com"]));
+    assert_eq!(tasks[1]["criteria"], json!(["one"]));
+    Ok(())
+}
+
+#[test]
+fn before_and_after_together_exit_two_naming_both_and_add_nothing() -> Result<()> {
+    let fixture = abc()?;
+    let events = fixture.rows("events")?.len();
+
+    let outcome = fixture.run(&[
+        "add",
+        "--title",
+        "t",
+        "--criterion",
+        "c",
+        "--before",
+        "1",
+        "--after",
+        "2",
+    ])?;
+
+    assert_usage_error(&outcome, &["--before", "--after"]);
+    assert_eq!(queue(&fixture)?, ["1:a", "2:b", "3:c"]);
+    assert_eq!(fixture.rows("events")?.len(), events);
+    Ok(())
+}
+
+#[test]
+fn an_unknown_id_exits_two_naming_it_and_adds_nothing() -> Result<()> {
+    let fixture = abc()?;
+    let events = fixture.rows("events")?.len();
+
+    for (flag, id) in [("--before", "9"), ("--after", "9"), ("--before", "0")] {
+        let outcome = add_placed(&fixture, "t", flag, id)?;
+        assert_usage_error(&outcome, &[&format!("no task {id}"), "ktask-rs list"]);
+    }
+
+    assert_eq!(queue(&fixture)?, ["1:a", "2:b", "3:c"]);
+    assert_eq!(fixture.rows("events")?.len(), events);
+    Ok(())
+}
+
+#[test]
+fn an_id_in_an_empty_queue_is_unknown() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let outcome = add_placed(&fixture, "t", "--after", "1")?;
+    assert_usage_error(&outcome, &["no task 1"]);
+    fixture.assert_nothing_added()
+}
+
+#[test]
+fn a_cancelled_id_exits_two_naming_it_and_adds_nothing() -> Result<()> {
+    let fixture = abc()?;
+    let database = rusqlite::Connection::open(fixture.journal("my-app"))?;
+    database.execute("UPDATE tasks SET status = 'cancelled' WHERE id = 2", [])?;
+    let events = fixture.rows("events")?.len();
+
+    for flag in ["--before", "--after"] {
+        let outcome = add_placed(&fixture, "t", flag, "2")?;
+        assert_usage_error(&outcome, &["task 2 is cancelled"]);
+    }
+
+    assert_eq!(queue(&fixture)?, ["1:a", "2:b", "3:c"]);
+    assert_eq!(fixture.rows("events")?.len(), events);
+    // Its neighbours are still fine to place next to.
+    add_placed(&fixture, "new", "--after", "1")?;
+    assert_eq!(queue(&fixture)?, ["1:a", "4:new", "2:b", "3:c"]);
+    Ok(())
+}
+
+#[test]
+fn an_id_that_is_not_a_number_exits_two_naming_the_option_and_adds_nothing() -> Result<()> {
+    let fixture = abc()?;
+    for (flag, id) in [("--before", "second"), ("--after", "1.5"), ("--after", "")] {
+        let outcome = add_placed(&fixture, "t", flag, id)?;
+        assert_usage_error(&outcome, &[flag]);
+    }
+    assert_eq!(queue(&fixture)?, ["1:a", "2:b", "3:c"]);
+    Ok(())
+}
+
+#[test]
+fn a_task_that_breaks_a_rule_is_refused_before_its_place_is_looked_up() -> Result<()> {
+    let fixture = abc()?;
+    let outcome = fixture.run(&["add", "--title", "", "--criterion", "c", "--before", "9"])?;
+    assert_usage_error(&outcome, &["title is empty"]);
+    assert_eq!(queue(&fixture)?, ["1:a", "2:b", "3:c"]);
+    Ok(())
+}
+
+#[test]
+fn before_and_after_work_with_project_from_any_directory() -> Result<()> {
+    let fixture = abc()?;
+    let other = git_repository(&fixture.sandbox, &fixture.work, "other-app")?;
+    let shown = fixture.sandbox.run(&other, &["project", "show"])?;
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+
+    let added = fixture.sandbox.run(
+        &other,
+        &[
+            "add",
+            "--project",
+            "my-app",
+            "--title",
+            "remote",
+            "--criterion",
+            "c",
+            "--before",
+            "1",
+        ],
+    )?;
+
+    assert_eq!(added.stdout, "4\n", "{}", added.stderr);
+    assert_eq!(queue(&fixture)?, ["4:remote", "1:a", "2:b", "3:c"]);
+    // The other project has no task 1 to place next to.
+    let unknown = fixture.sandbox.run(
+        &other,
+        &["add", "--title", "t", "--criterion", "c", "--before", "1"],
+    )?;
+    assert_usage_error(&unknown, &["no task 1"]);
+    Ok(())
+}
+
+#[test]
+fn before_and_after_are_in_the_add_help() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let add = fixture.run(&["add", "--help"])?;
+    assert_eq!(add.code, Some(0));
+    for option in ["--before <ID>", "--after <ID>"] {
+        assert!(add.stdout.contains(option), "{option}: {}", add.stdout);
+    }
+    Ok(())
+}

@@ -296,3 +296,51 @@ fn a_task_added_after_the_screen_was_closed_shows_the_next_time_it_opens() -> Re
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())
 }
+
+/// Adds a task titled `title` with `--before` or `--after` (`flag`) the task numbered `id`.
+fn add_placed_task(
+    sandbox: &Sandbox,
+    repository: &Path,
+    title: &str,
+    flag: &str,
+    id: &str,
+) -> Result<()> {
+    let outcome = sandbox.run(
+        repository,
+        &["add", "--title", title, "--criterion", "it works", flag, id],
+    )?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    Ok(())
+}
+
+#[test]
+fn tasks_inserted_from_the_cli_show_in_their_place_with_their_own_ids() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, work) = scratch()?;
+    let repository = git_repository(&sandbox, &work, "my-app")?;
+    add_task(&sandbox, &repository, "Second", "agent")?;
+    add_task(&sandbox, &repository, "Fourth", "agent")?;
+    add_placed_task(&sandbox, &repository, "Third", "--before", "2")?;
+    add_placed_task(&sandbox, &repository, "First", "--before", "1")?;
+    add_placed_task(&sandbox, &repository, "Fifth", "--after", "2")?;
+
+    let mut terminal = Terminal::launch(&sandbox, &repository, &["tui"], ROWS, COLS)?;
+    terminal.wait_for("the queue with five tasks", |screen| {
+        let contents = screen.contents();
+        contents.contains("Fifth") && contents.ends_with('┘')
+    })?;
+
+    let lines = lines_inside_frame(&terminal.screen());
+    assert_eq!(
+        lines[2],
+        "pending 5 · running 0 · done 0 · failed 0 · cancelled 0"
+    );
+    assert_eq!(lines[4], "  1  #4  pending  agent  First");
+    assert_eq!(lines[5], "  2  #1  pending  agent  Second");
+    assert_eq!(lines[6], "  3  #3  pending  agent  Third");
+    assert_eq!(lines[7], "  4  #2  pending  agent  Fourth");
+    assert_eq!(lines[8], "  5  #5  pending  agent  Fifth");
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
