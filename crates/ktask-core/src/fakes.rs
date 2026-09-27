@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::{
-    AppendError, Clock, Git, GitError, Journal, JournalError, Placement, Project, ProjectRegistry,
-    RegistryError, Task, TaskDraft, TaskId, TaskKind, TaskStatus,
+    AppendError, Clock, Editor, EditorError, Git, GitError, Journal, JournalError, Placement,
+    Project, ProjectRegistry, RegistryError, Task, TaskDraft, TaskId, TaskKind, TaskStatus,
 };
 
 /// An in-memory registry that can be told to fail.
@@ -170,5 +170,32 @@ pub(crate) fn draft(title: &str) -> TaskDraft {
         criteria: vec!["it works".to_owned()],
         kind: TaskKind::Agent,
         links: vec![],
+    }
+}
+
+/// An editor that returns what it was told to, and remembers what it was opened on.
+#[derive(Debug)]
+pub(crate) struct FakeEditor {
+    pub(crate) result: Result<String, EditorError>,
+    pub(crate) opened_on: RefCell<Option<String>>,
+}
+
+impl FakeEditor {
+    pub(crate) fn returning(result: Result<String, EditorError>) -> Self {
+        Self {
+            result,
+            opened_on: RefCell::default(),
+        }
+    }
+
+    pub(crate) fn writing(text: &str) -> Self {
+        Self::returning(Ok(text.to_owned()))
+    }
+}
+
+impl Editor for FakeEditor {
+    fn edit(&self, text: &str) -> Result<String, EditorError> {
+        *self.opened_on.borrow_mut() = Some(text.to_owned());
+        self.result.clone()
     }
 }

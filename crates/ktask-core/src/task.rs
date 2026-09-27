@@ -233,6 +233,28 @@ fn is_link(link: &str) -> bool {
     })
 }
 
+/// Every rule `draft` breaks, in the order of its fields; empty when it may be added.
+pub(crate) fn draft_problems(draft: &TaskDraft) -> Vec<AddError> {
+    let mut problems = Vec::new();
+    if draft.title.trim().is_empty() {
+        problems.push(AddError::EmptyTitle);
+    }
+    if draft.criteria.is_empty() {
+        problems.push(AddError::NoCriteria);
+    }
+    if draft.criteria.iter().any(|c| c.trim().is_empty()) {
+        problems.push(AddError::EmptyCriterion);
+    }
+    problems.extend(
+        draft
+            .links
+            .iter()
+            .filter(|link| !is_link(link))
+            .map(|link| AddError::MalformedLink(link.clone())),
+    );
+    problems
+}
+
 /// Use case: adds the task `draft` to the queue at `placement`.
 ///
 /// The journal records one event and numbers and places the task in the same transaction.
@@ -249,17 +271,8 @@ pub fn add_task(
     draft: &TaskDraft,
     placement: Placement,
 ) -> Result<Task, AddError> {
-    if draft.title.trim().is_empty() {
-        return Err(AddError::EmptyTitle);
-    }
-    if draft.criteria.is_empty() {
-        return Err(AddError::NoCriteria);
-    }
-    if draft.criteria.iter().any(|c| c.trim().is_empty()) {
-        return Err(AddError::EmptyCriterion);
-    }
-    if let Some(link) = draft.links.iter().find(|link| !is_link(link)) {
-        return Err(AddError::MalformedLink(link.clone()));
+    if let Some(problem) = draft_problems(draft).into_iter().next() {
+        return Err(problem);
     }
     Ok(journal.append_task(draft, placement, clock.now())?)
 }

@@ -3,6 +3,7 @@
 //! outside world only through ports it defines itself. See docs/ARCHITECTURE.md.
 
 mod clock;
+mod edit;
 mod git;
 mod journal;
 mod project;
@@ -12,6 +13,7 @@ mod resolve;
 mod task;
 
 pub use clock::Clock;
+pub use edit::{EditAddError, Edited, Editor, EditorError, TemplateProblem, add_task_in_editor};
 pub use git::{Git, GitError};
 pub use journal::{AppendError, Journal, JournalError};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
