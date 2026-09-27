@@ -2,6 +2,8 @@
 //! resizing, and what happens when there is no terminal. Moving around the queue is in
 //! `tui/navigate.rs`; removing a task is in `tui/remove.rs`.
 
+#[path = "tui/add.rs"]
+mod add;
 #[path = "tui/navigate.rs"]
 mod navigate;
 #[path = "support/pty.rs"]
