@@ -5,7 +5,7 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::SystemTime;
 
-use crate::{Clock, Journal, JournalError};
+use crate::{AppendError, Clock, Journal, JournalError};
 
 /// The number a task is known by: assigned once, in order, never reused, never changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -146,6 +146,17 @@ pub struct TaskDraft {
     pub links: Vec<String>,
 }
 
+/// Where a new task goes in the queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// After every other task.
+    End,
+    /// Immediately before this task.
+    Before(TaskId),
+    /// Immediately after this task.
+    After(TaskId),
+}
+
 /// Why a task was not added.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddError {
@@ -157,6 +168,10 @@ pub enum AddError {
     EmptyCriterion,
     /// A link is neither a `github:owner/repo#NUMBER` reference nor an `http(s)` URL.
     MalformedLink(String),
+    /// The task the new one was to be placed next to does not exist.
+    UnknownTask(TaskId),
+    /// The task the new one was to be placed next to was cancelled.
+    CancelledTask(TaskId),
     /// The journal could not be used.
     Journal(JournalError),
 }
@@ -171,6 +186,8 @@ impl fmt::Display for AddError {
                 f,
                 "malformed link {link:?}: expected github:owner/repo#NUMBER or an http(s) URL"
             ),
+            Self::UnknownTask(id) => write!(f, "there is no task {id}"),
+            Self::CancelledTask(id) => write!(f, "task {id} is cancelled"),
             Self::Journal(error) => error.fmt(f),
         }
     }
@@ -178,9 +195,13 @@ impl fmt::Display for AddError {
 
 impl Error for AddError {}
 
-impl From<JournalError> for AddError {
-    fn from(error: JournalError) -> Self {
-        Self::Journal(error)
+impl From<AppendError> for AddError {
+    fn from(error: AppendError) -> Self {
+        match error {
+            AppendError::UnknownTask(id) => Self::UnknownTask(id),
+            AppendError::CancelledTask(id) => Self::CancelledTask(id),
+            AppendError::Journal(error) => Self::Journal(error),
+        }
     }
 }
 
@@ -212,18 +233,21 @@ fn is_link(link: &str) -> bool {
     })
 }
 
-/// Use case: adds the task `draft` at the end of the queue.
+/// Use case: adds the task `draft` to the queue at `placement`.
 ///
-/// The journal records one event and numbers the task in the same transaction.
+/// The journal records one event and numbers and places the task in the same transaction.
+/// No other task's number changes.
 ///
 /// # Errors
 ///
 /// Fails, adding nothing, when the title is blank, there is no criterion or one is blank, a
-/// link is malformed, or the journal cannot be written.
+/// link is malformed, `placement` names a task that does not exist or was cancelled, or the
+/// journal cannot be written.
 pub fn add_task(
     journal: &impl Journal,
     clock: &impl Clock,
     draft: &TaskDraft,
+    placement: Placement,
 ) -> Result<Task, AddError> {
     if draft.title.trim().is_empty() {
         return Err(AddError::EmptyTitle);
@@ -237,7 +261,7 @@ pub fn add_task(
     if let Some(link) = draft.links.iter().find(|link| !is_link(link)) {
         return Err(AddError::MalformedLink(link.clone()));
     }
-    Ok(journal.append_task(draft, clock.now())?)
+    Ok(journal.append_task(draft, placement, clock.now())?)
 }
 
 /// Use case: every task in the queue, in order.
@@ -272,7 +296,7 @@ mod tests {
                 "https://example.com/x".to_owned(),
             ],
         };
-        let task = add_task(&journal, &clock(), &written).unwrap();
+        let task = add_task(&journal, &clock(), &written, Placement::End).unwrap();
         assert_eq!(
             task,
             Task {
@@ -294,7 +318,7 @@ mod tests {
     fn tasks_are_appended_at_the_end_with_the_next_number() {
         let journal = FakeJournal::default();
         for title in ["a", "b", "c"] {
-            add_task(&journal, &clock(), &draft(title)).unwrap();
+            add_task(&journal, &clock(), &draft(title), Placement::End).unwrap();
         }
         let listed = list_tasks(&journal).unwrap();
         let shown: Vec<_> = listed
@@ -309,6 +333,88 @@ mod tests {
                 (3, TaskId(3), "c")
             ]
         );
+    }
+
+    /// The titles of the queue, in order, after adding `a`, `b` and `c` and then `new` at
+    /// `placement`.
+    fn titles_after_inserting(placement: Placement) -> Vec<String> {
+        let journal = FakeJournal::default();
+        for title in ["a", "b", "c"] {
+            add_task(&journal, &clock(), &draft(title), Placement::End).unwrap();
+        }
+        add_task(&journal, &clock(), &draft("new"), placement).unwrap();
+        list_tasks(&journal)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.title)
+            .collect()
+    }
+
+    #[test]
+    fn a_task_goes_immediately_before_or_after_the_one_named() {
+        let before = |id| titles_after_inserting(Placement::Before(TaskId(id)));
+        let after = |id| titles_after_inserting(Placement::After(TaskId(id)));
+        assert_eq!(before(1), ["new", "a", "b", "c"]);
+        assert_eq!(before(2), ["a", "new", "b", "c"]);
+        assert_eq!(before(3), ["a", "b", "new", "c"]);
+        assert_eq!(after(1), ["a", "new", "b", "c"]);
+        assert_eq!(after(2), ["a", "b", "new", "c"]);
+        assert_eq!(after(3), ["a", "b", "c", "new"]);
+    }
+
+    #[test]
+    fn an_inserted_task_gets_the_next_number_and_no_other_number_changes() {
+        let journal = FakeJournal::default();
+        for title in ["a", "b"] {
+            add_task(&journal, &clock(), &draft(title), Placement::End).unwrap();
+        }
+        let inserted = add_task(
+            &journal,
+            &clock(),
+            &draft("new"),
+            Placement::Before(TaskId(1)),
+        )
+        .unwrap();
+        assert_eq!((inserted.id, inserted.position), (TaskId(3), 1));
+        let shown: Vec<_> = list_tasks(&journal)
+            .unwrap()
+            .iter()
+            .map(|t| (t.position, t.id))
+            .collect();
+        assert_eq!(shown, [(1, TaskId(3)), (2, TaskId(1)), (3, TaskId(2))]);
+    }
+
+    #[test]
+    fn placing_a_task_next_to_one_that_is_missing_or_cancelled_adds_nothing() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        journal.tasks.borrow_mut()[0].status = TaskStatus::Cancelled;
+        add_task(&journal, &clock(), &draft("b"), Placement::End).unwrap();
+        let before = list_tasks(&journal).unwrap();
+        for (placement, expected) in [
+            (
+                Placement::Before(TaskId(9)),
+                AddError::UnknownTask(TaskId(9)),
+            ),
+            (
+                Placement::After(TaskId(9)),
+                AddError::UnknownTask(TaskId(9)),
+            ),
+            (
+                Placement::Before(TaskId(1)),
+                AddError::CancelledTask(TaskId(1)),
+            ),
+            (
+                Placement::After(TaskId(1)),
+                AddError::CancelledTask(TaskId(1)),
+            ),
+        ] {
+            assert_eq!(
+                add_task(&journal, &clock(), &draft("x"), placement),
+                Err(expected)
+            );
+            assert_eq!(list_tasks(&journal).unwrap(), before);
+        }
     }
 
     #[test]
@@ -357,7 +463,10 @@ mod tests {
         ];
         for (bad, expected) in cases {
             let journal = FakeJournal::default();
-            assert_eq!(add_task(&journal, &clock(), &bad), Err(expected));
+            assert_eq!(
+                add_task(&journal, &clock(), &bad, Placement::End),
+                Err(expected)
+            );
             assert_eq!(list_tasks(&journal), Ok(vec![]));
         }
     }
@@ -402,7 +511,7 @@ mod tests {
         let failure = JournalError::new("disk on fire");
         let journal = FakeJournal::failing(failure.clone());
         assert_eq!(
-            add_task(&journal, &clock(), &draft("x")),
+            add_task(&journal, &clock(), &draft("x"), Placement::End),
             Err(AddError::Journal(failure.clone()))
         );
         assert_eq!(list_tasks(&journal), Err(failure));

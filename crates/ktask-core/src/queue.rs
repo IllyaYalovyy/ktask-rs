@@ -64,7 +64,7 @@ pub fn queue_view(project: Project, journal: &impl Journal) -> Result<QueueView,
 #[cfg(test)]
 mod tests {
     use crate::fakes::{FakeClock, FakeJournal, at, draft, project};
-    use crate::{TaskStatus, add_task};
+    use crate::{Placement, TaskStatus, add_task};
 
     use super::*;
 
@@ -81,7 +81,7 @@ mod tests {
         let journal = FakeJournal::default();
         let clock = FakeClock(at(1));
         for title in ["a", "b", "c", "d"] {
-            add_task(&journal, &clock, &draft(title)).unwrap();
+            add_task(&journal, &clock, &draft(title), Placement::End).unwrap();
         }
         let statuses = [
             TaskStatus::Done,

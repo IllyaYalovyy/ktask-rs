@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fmt;
 use std::time::SystemTime;
 
-use crate::{Task, TaskDraft};
+use crate::{Placement, Task, TaskDraft, TaskId};
 
 /// Why the journal could not be read or written.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,17 +29,53 @@ impl fmt::Display for JournalError {
 
 impl Error for JournalError {}
 
+/// Why a task was not appended to the journal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppendError {
+    /// The task the new one was to be placed next to does not exist.
+    UnknownTask(TaskId),
+    /// The task the new one was to be placed next to was cancelled.
+    CancelledTask(TaskId),
+    /// The journal could not be used.
+    Journal(JournalError),
+}
+
+impl fmt::Display for AppendError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownTask(id) => write!(f, "there is no task {id}"),
+            Self::CancelledTask(id) => write!(f, "task {id} is cancelled"),
+            Self::Journal(error) => error.fmt(f),
+        }
+    }
+}
+
+impl Error for AppendError {}
+
+impl From<JournalError> for AppendError {
+    fn from(error: JournalError) -> Self {
+        Self::Journal(error)
+    }
+}
+
 /// Port: one project's journal. Every change is an event appended to it, and the tasks are
 /// updated from that event in the same transaction.
 pub trait Journal {
     /// Appends a task-added event for `draft`, which the caller has validated, and puts the
-    /// task at the end of the queue with the next number, in one transaction. Numbers start
-    /// at 1 and are never reused. Returns the task as stored.
+    /// task at `placement` in the queue with the next number, in one transaction. Numbers
+    /// start at 1 and are never reused, and no other task's number changes. Returns the task
+    /// as stored.
     ///
     /// # Errors
     ///
-    /// Fails, recording nothing, when the journal cannot be written.
-    fn append_task(&self, draft: &TaskDraft, at: SystemTime) -> Result<Task, JournalError>;
+    /// Fails, recording nothing, when `placement` names a task that does not exist or was
+    /// cancelled, or when the journal cannot be written.
+    fn append_task(
+        &self,
+        draft: &TaskDraft,
+        placement: Placement,
+        at: SystemTime,
+    ) -> Result<Task, AppendError>;
 
     /// Every task, in queue order, with positions counting from 1.
     ///

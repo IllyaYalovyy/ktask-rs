@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::{
-    Clock, Git, GitError, Journal, JournalError, Project, ProjectRegistry, RegistryError, Task,
-    TaskDraft, TaskId, TaskKind, TaskStatus,
+    AppendError, Clock, Git, GitError, Journal, JournalError, Placement, Project, ProjectRegistry,
+    RegistryError, Task, TaskDraft, TaskId, TaskKind, TaskStatus,
 };
 
 /// An in-memory registry that can be told to fail.
@@ -111,14 +111,34 @@ impl FakeJournal {
 }
 
 impl Journal for FakeJournal {
-    fn append_task(&self, draft: &TaskDraft, at: SystemTime) -> Result<Task, JournalError> {
+    fn append_task(
+        &self,
+        draft: &TaskDraft,
+        placement: Placement,
+        at: SystemTime,
+    ) -> Result<Task, AppendError> {
         if let Some(failure) = &self.failure {
-            return Err(failure.clone());
+            return Err(failure.clone().into());
         }
         let mut tasks = self.tasks.borrow_mut();
+        let next = |anchor: TaskId| {
+            let index = tasks
+                .iter()
+                .position(|task| task.id == anchor)
+                .ok_or(AppendError::UnknownTask(anchor))?;
+            if tasks[index].status == TaskStatus::Cancelled {
+                return Err(AppendError::CancelledTask(anchor));
+            }
+            Ok(index)
+        };
+        let index = match placement {
+            Placement::End => tasks.len(),
+            Placement::Before(anchor) => next(anchor)?,
+            Placement::After(anchor) => next(anchor)? + 1,
+        };
         let task = Task {
             id: TaskId(tasks.len() as u64 + 1),
-            position: tasks.len() + 1,
+            position: index + 1,
             title: draft.title.clone(),
             body: draft.body.clone(),
             criteria: draft.criteria.clone(),
@@ -127,7 +147,10 @@ impl Journal for FakeJournal {
             status: TaskStatus::Pending,
             created_at: at,
         };
-        tasks.push(task.clone());
+        tasks.insert(index, task.clone());
+        for (index, task) in tasks.iter_mut().enumerate() {
+            task.position = index + 1;
+        }
         Ok(task)
     }
 

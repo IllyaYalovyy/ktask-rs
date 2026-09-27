@@ -12,7 +12,9 @@ use clap::{Parser, Subcommand};
 use ktask_adapters::{
     GitCli, SqliteJournal, SqliteRegistry, SystemClock, journal_path, registry_path,
 };
-use ktask_core::{AddError, Project, RegisterError, ResolveError, TaskDraft, TaskKind};
+use ktask_core::{
+    AddError, Placement, Project, RegisterError, ResolveError, TaskDraft, TaskId, TaskKind,
+};
 
 /// Runs an ordered queue of software tasks through AI coding agents.
 #[derive(Debug, Parser)]
@@ -29,7 +31,7 @@ enum Command {
         #[command(subcommand)]
         command: ProjectCommand,
     },
-    /// Add a task at the end of the queue and print its ID
+    /// Add a task, at the end of the queue unless told where, and print its ID
     Add {
         /// One line saying what the task is
         #[arg(long)]
@@ -47,6 +49,12 @@ enum Command {
         /// each link
         #[arg(long, value_name = "REF")]
         link: Vec<String>,
+        /// Put the task immediately before the task with this ID
+        #[arg(long, value_name = "ID", conflicts_with = "after")]
+        before: Option<u64>,
+        /// Put the task immediately after the task with this ID
+        #[arg(long, value_name = "ID")]
+        after: Option<u64>,
         /// Work on this registered project instead of the one the current directory is in
         #[arg(long, value_name = "NAME")]
         project: Option<String>,
@@ -145,6 +153,12 @@ impl From<AddError> for Failure {
     fn from(error: AddError) -> Self {
         match error {
             AddError::Journal(_) => Self::from(error.to_string()),
+            AddError::UnknownTask(_) | AddError::CancelledTask(_) => Self {
+                message: format!(
+                    "{error}; `ktask-rs list` shows the tasks a new one can be placed next to"
+                ),
+                code: 2,
+            },
             _ => Self {
                 message: error.to_string(),
                 code: 2,
@@ -204,6 +218,8 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             body,
             kind,
             link,
+            before,
+            after,
             project,
         } => {
             let registry = open_registry()?;
@@ -216,7 +232,12 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
                 kind: *kind,
                 links: link.clone(),
             };
-            let task = ktask_core::add_task(&journal, &SystemClock, &draft)?;
+            let placement = match (before, after) {
+                (Some(id), _) => Placement::Before(TaskId(*id)),
+                (None, Some(id)) => Placement::After(TaskId(*id)),
+                (None, None) => Placement::End,
+            };
+            let task = ktask_core::add_task(&journal, &SystemClock, &draft, placement)?;
             Ok(render::added(&task, stdout)?)
         }
         Command::List { project, json } => {
