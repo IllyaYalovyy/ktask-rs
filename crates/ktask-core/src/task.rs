@@ -289,6 +289,26 @@ pub fn add_task(
     Ok(journal.append_task(draft, placement, clock.now())?)
 }
 
+/// Use case: [`add_task`], for a person filling in a form: when the task is not added, every
+/// reason is given, not only the first, so that all of them can be put right at once.
+///
+/// # Errors
+///
+/// Fails, adding nothing, with every rule `draft` breaks in the order of its fields, or with
+/// the one reason `placement` or the journal gives.
+pub fn add_task_listing_problems(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    draft: &TaskDraft,
+    placement: Placement,
+) -> Result<Task, Vec<AddError>> {
+    let problems = draft_problems(draft);
+    if !problems.is_empty() {
+        return Err(problems);
+    }
+    add_task(journal, clock, draft, placement).map_err(|error| vec![error])
+}
+
 /// Use case: removes the task numbered `id` from the queue.
 ///
 /// The task is cancelled, not deleted: it stays in the journal, keeps its number, and is
@@ -377,6 +397,55 @@ mod tests {
             }
         );
         assert_eq!(list_tasks(&journal), Ok(vec![task]));
+    }
+
+    #[test]
+    fn listing_problems_gives_every_rule_the_draft_breaks_and_adds_nothing() {
+        let journal = FakeJournal::default();
+        let broken = TaskDraft {
+            title: "  ".to_owned(),
+            criteria: vec![String::new()],
+            links: vec!["nope".to_owned()],
+            ..draft("x")
+        };
+        assert_eq!(
+            add_task_listing_problems(&journal, &clock(), &broken, Placement::End),
+            Err(vec![
+                AddError::EmptyTitle,
+                AddError::EmptyCriterion,
+                AddError::MalformedLink("nope".to_owned()),
+            ])
+        );
+        let none = TaskDraft {
+            criteria: vec![],
+            ..draft("")
+        };
+        assert_eq!(
+            add_task_listing_problems(&journal, &clock(), &none, Placement::End),
+            Err(vec![AddError::EmptyTitle, AddError::NoCriteria])
+        );
+        assert_eq!(list_tasks(&journal), Ok(vec![]));
+    }
+
+    #[test]
+    fn listing_problems_adds_a_valid_draft_like_add_task_and_reports_a_bad_placement() {
+        let journal = FakeJournal::default();
+        let added =
+            add_task_listing_problems(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        assert_eq!(
+            (added.id, added.position, added.title.as_str()),
+            (TaskId(1), 1, "a")
+        );
+        assert_eq!(
+            add_task_listing_problems(
+                &journal,
+                &clock(),
+                &draft("b"),
+                Placement::Before(TaskId(9))
+            ),
+            Err(vec![AddError::UnknownTask(TaskId(9))])
+        );
+        assert_eq!(list_tasks(&journal), Ok(vec![added]));
     }
 
     #[test]

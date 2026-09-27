@@ -23,8 +23,8 @@ pub use queue::{QueueView, StatusSummary, queue_view};
 pub use register::{RegisterError, register_project};
 pub use resolve::{Resolution, ResolveError, resolve_project};
 pub use task::{
-    AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, add_task, list_all_tasks,
-    list_tasks, remove_task,
+    AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, add_task,
+    add_task_listing_problems, list_all_tasks, list_tasks, remove_task,
 };
 
 #[cfg(test)]
