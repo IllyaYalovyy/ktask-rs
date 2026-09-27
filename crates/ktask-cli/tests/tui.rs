@@ -1,6 +1,9 @@
 //! `ktask-rs tui` on the real binary, in a pseudo-terminal: the queue screen, quitting,
-//! resizing, and what happens when there is no terminal.
+//! resizing, and what happens when there is no terminal. Moving around the queue is in
+//! `tui/navigate.rs`.
 
+#[path = "tui/navigate.rs"]
+mod navigate;
 #[path = "support/pty.rs"]
 mod pty;
 #[path = "support/repo.rs"]
@@ -61,7 +64,10 @@ fn the_screen_is_a_frame_around_the_whole_terminal_with_the_key_to_quit() -> Res
     assert_eq!(rows.len(), usize::from(ROWS));
     assert!(rows[0].starts_with("┌ ktask-rs ─"), "{screen}");
     assert!(rows[0].ends_with('┐'), "{screen}");
-    assert!(rows[rows.len() - 1].starts_with("└ q quit ─"), "{screen}");
+    assert!(
+        rows[rows.len() - 1].starts_with("└ q quit · ? keys ─"),
+        "{screen}"
+    );
     assert!(rows[rows.len() - 1].ends_with('┘'), "{screen}");
     Ok(())
 }
@@ -266,8 +272,8 @@ fn tasks_added_from_the_cli_appear_with_the_summary_updated() -> Result<()> {
         lines[2],
         "pending 2 · running 0 · done 0 · failed 0 · cancelled 0"
     );
-    assert_eq!(lines[4], "  1  #1  pending  agent  Write the parser");
-    assert_eq!(lines[5], "  2  #2  pending  human  Approve the design");
+    assert_eq!(lines[4], ">  1  #1  pending  agent  Write the parser");
+    assert_eq!(lines[5], "   2  #2  pending  human  Approve the design");
     assert!(!screen.contains("The queue is empty."), "{screen}");
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
@@ -291,7 +297,7 @@ fn a_task_added_after_the_screen_was_closed_shows_the_next_time_it_opens() -> Re
         lines[2],
         "pending 1 · running 0 · done 0 · failed 0 · cancelled 0"
     );
-    assert_eq!(lines[4], "  1  #1  pending  agent  Late arrival");
+    assert_eq!(lines[4], ">  1  #1  pending  agent  Late arrival");
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())
@@ -335,11 +341,11 @@ fn tasks_inserted_from_the_cli_show_in_their_place_with_their_own_ids() -> Resul
         lines[2],
         "pending 5 · running 0 · done 0 · failed 0 · cancelled 0"
     );
-    assert_eq!(lines[4], "  1  #4  pending  agent  First");
-    assert_eq!(lines[5], "  2  #1  pending  agent  Second");
-    assert_eq!(lines[6], "  3  #3  pending  agent  Third");
-    assert_eq!(lines[7], "  4  #2  pending  agent  Fourth");
-    assert_eq!(lines[8], "  5  #5  pending  agent  Fifth");
+    assert_eq!(lines[4], ">  1  #4  pending  agent  First");
+    assert_eq!(lines[5], "   2  #1  pending  agent  Second");
+    assert_eq!(lines[6], "   3  #3  pending  agent  Third");
+    assert_eq!(lines[7], "   4  #2  pending  agent  Fourth");
+    assert_eq!(lines[8], "   5  #5  pending  agent  Fifth");
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())
@@ -376,10 +382,10 @@ fn tasks_imported_from_the_cli_show_in_their_place_with_their_own_ids() -> Resul
         lines[2],
         "pending 4 · running 0 · done 0 · failed 0 · cancelled 0"
     );
-    assert_eq!(lines[4], "  1  #1  pending  agent  a");
-    assert_eq!(lines[5], "  2  #3  pending  agent  x");
-    assert_eq!(lines[6], "  3  #4  pending  human  y");
-    assert_eq!(lines[7], "  4  #2  pending  agent  b");
+    assert_eq!(lines[4], ">  1  #1  pending  agent  a");
+    assert_eq!(lines[5], "   2  #3  pending  agent  x");
+    assert_eq!(lines[6], "   3  #4  pending  human  y");
+    assert_eq!(lines[7], "   4  #2  pending  agent  b");
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())
@@ -404,8 +410,8 @@ fn a_task_removed_from_the_cli_is_hidden_and_counted_as_cancelled() -> Result<()
         lines[2],
         "pending 2 · running 0 · done 0 · failed 0 · cancelled 1"
     );
-    assert_eq!(lines[4], "  1  #1  pending  agent  First");
-    assert_eq!(lines[5], "  2  #3  pending  agent  Third");
+    assert_eq!(lines[4], ">  1  #1  pending  agent  First");
+    assert_eq!(lines[5], "   2  #3  pending  agent  Third");
     assert_eq!(lines[6], "");
     assert!(!screen.contains("Second"), "{screen}");
     terminal.send("q")?;
