@@ -11,13 +11,15 @@ use crate::App;
 use crate::form_screen;
 
 /// Every key the queue screen answers, and what it does.
-const KEYS: [(&str, &str); 12] = [
+const KEYS: [(&str, &str); 14] = [
     ("j, Down", "select the next task"),
     ("k, Up", "select the previous task"),
     ("g", "select the first task"),
     ("G", "select the last task"),
     ("a", "show or hide cancelled tasks"),
     ("n", "add a task at the end, written in a form"),
+    ("o", "add a task below the selected one, written in a form"),
+    ("O", "add a task above the selected one, written in a form"),
     ("d", "remove the selected task, after asking"),
     ("y", "answer yes when asked to remove a task"),
     ("n", "answer no when asked to remove a task"),

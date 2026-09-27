@@ -1,6 +1,6 @@
 //! The form a new task is written in: its fields, where the focus is, and what it holds.
 
-use ktask_core::{TaskDraft, TaskKind};
+use ktask_core::{Placement, TaskDraft, TaskKind};
 use ratatui::crossterm::event::KeyCode;
 
 use crate::text::TextArea;
@@ -26,13 +26,16 @@ pub(crate) struct Form {
     pub(crate) body: TextArea,
     pub(crate) criteria: Vec<TextArea>,
     pub(crate) focus: Focus,
+    /// Where the task goes in the queue.
+    pub(crate) placement: Placement,
     /// Why the last submission added nothing.
     pub(crate) problems: Vec<String>,
 }
 
 impl Form {
-    /// An empty form with one empty criterion, on its title.
-    pub(crate) fn new() -> Self {
+    /// An empty form with one empty criterion, on its title, for a task that goes at
+    /// `placement`.
+    pub(crate) fn new(placement: Placement) -> Self {
         Self {
             title: TextArea::new(false),
             kind: TaskKind::default(),
@@ -40,6 +43,7 @@ impl Form {
             body: TextArea::new(true),
             criteria: vec![TextArea::new(true)],
             focus: Focus::Title,
+            placement,
             problems: Vec::new(),
         }
     }
@@ -142,7 +146,7 @@ mod tests {
 
     #[test]
     fn a_new_form_is_empty_with_one_criterion_and_the_focus_on_the_title() {
-        let form = Form::new();
+        let form = Form::new(Placement::End);
         assert_eq!(form.focus, Focus::Title);
         assert_eq!(
             form.draft(),
@@ -158,7 +162,7 @@ mod tests {
 
     #[test]
     fn the_draft_is_what_was_typed_with_links_split_on_spaces() {
-        let form = type_in(Form::new(), "Title");
+        let form = type_in(Form::new(Placement::End), "Title");
         let form = type_in(form.moved(true).moved(true), "github:a/b#1  https://x.io ");
         let form = type_in(form.moved(true), "one\ntwo");
         let form = type_in(form.moved(true), "first\nmore");
@@ -177,7 +181,7 @@ mod tests {
 
     #[test]
     fn the_focus_walks_the_fields_in_order_and_wraps_both_ways() {
-        let form = Form::new().with_criterion();
+        let form = Form::new(Placement::End).with_criterion();
         let mut seen = vec![Focus::Criterion(1)];
         let mut walking = form.clone().moved(true);
         while walking.focus != Focus::Criterion(1) {
@@ -195,14 +199,14 @@ mod tests {
                 Focus::Criterion(0)
             ]
         );
-        let back = Form::new().moved(false);
+        let back = Form::new(Placement::End).moved(false);
         assert_eq!(back.focus, Focus::Criterion(0));
         assert_eq!(back.moved(false).focus, Focus::Body);
     }
 
     #[test]
     fn left_right_and_space_toggle_the_kind_and_other_keys_do_not() {
-        let form = Form::new().moved(true);
+        let form = Form::new(Placement::End).moved(true);
         assert_eq!(form.focus, Focus::Kind);
         for key in [KeyCode::Left, KeyCode::Right, KeyCode::Char(' ')] {
             let human = form.clone().press(key);
@@ -216,14 +220,14 @@ mod tests {
 
     #[test]
     fn a_criterion_is_added_after_the_last_with_the_focus_on_it() {
-        let form = Form::new().with_criterion().with_criterion();
+        let form = Form::new(Placement::End).with_criterion().with_criterion();
         assert_eq!(form.criteria.len(), 3);
         assert_eq!(form.focus, Focus::Criterion(2));
     }
 
     #[test]
     fn removing_a_criterion_moves_the_focus_to_its_neighbour_then_to_the_body() {
-        let form = type_in(Form::new().moved(false), "a");
+        let form = type_in(Form::new(Placement::End).moved(false), "a");
         let form = type_in(form.with_criterion(), "b");
         let form = type_in(form.with_criterion(), "c");
         let form = form.moved(false).without_criterion();
@@ -240,10 +244,10 @@ mod tests {
 
     #[test]
     fn with_no_criterion_left_the_focus_still_walks_and_one_can_be_added() {
-        let form = Form::new().moved(false).without_criterion();
+        let form = Form::new(Placement::End).moved(false).without_criterion();
         assert_eq!(form.clone().moved(true).focus, Focus::Title);
         assert_eq!(form.moved(false).focus, Focus::Links);
-        let form = Form::new()
+        let form = Form::new(Placement::End)
             .moved(false)
             .without_criterion()
             .with_criterion();

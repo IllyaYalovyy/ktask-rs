@@ -9,7 +9,7 @@ use super::navigate::{COLS, ESC, Fixture, ROWS, marked, quit};
 use super::pty::{Terminal, lines_inside_frame};
 use super::support::Result;
 
-const TAB: &str = "\t";
+pub(crate) const TAB: &str = "\t";
 const SHIFT_TAB: &str = "\x1b[Z";
 const ENTER: &str = "\r";
 const BACKSPACE: &str = "\x7f";
@@ -20,7 +20,7 @@ const UP: &str = "\x1b[A";
 const DOWN: &str = "\x1b[B";
 const HOME: &str = "\x1b[H";
 const END: &str = "\x1b[F";
-const SUBMIT: &str = "\x13";
+pub(crate) const SUBMIT: &str = "\x13";
 const ADD_CRITERION: &str = "\x0e";
 const REMOVE_CRITERION: &str = "\x04";
 
@@ -31,7 +31,7 @@ const TEXT: u16 = 14;
 const TITLE: usize = 3;
 
 /// Opens the queue screen and the form over it.
-fn open_form(fixture: &Fixture) -> Result<Terminal> {
+pub(crate) fn open_form(fixture: &Fixture) -> Result<Terminal> {
     let mut terminal =
         Terminal::launch(&fixture.sandbox, &fixture.repository, &["tui"], ROWS, COLS)?;
     terminal.wait_for("the queue screen", |screen| {
@@ -75,7 +75,7 @@ fn expect_rows(terminal: &Terminal, rows: &[(usize, &str)]) -> Result<Vec<String
 }
 
 /// Every task `list --json` shows, without the creation time.
-fn listed(fixture: &Fixture) -> Result<Vec<Value>> {
+pub(crate) fn listed(fixture: &Fixture) -> Result<Vec<Value>> {
     let outcome = fixture
         .sandbox
         .run(&fixture.repository, &["list", "--all", "--json"])?;
@@ -92,7 +92,7 @@ fn listed(fixture: &Fixture) -> Result<Vec<Value>> {
 }
 
 /// Waits until the form is gone and the queue shows `text`.
-fn wait_queue_with(terminal: &Terminal, text: &str) -> Result<String> {
+pub(crate) fn wait_queue_with(terminal: &Terminal, text: &str) -> Result<String> {
     terminal.wait_for(&format!("the queue showing {text:?}"), |screen| {
         let contents = screen.contents();
         !contents.contains("New task") && contents.contains(text) && contents.ends_with('┘')

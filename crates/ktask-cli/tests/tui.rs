@@ -4,6 +4,8 @@
 
 #[path = "tui/add.rs"]
 mod add;
+#[path = "tui/insert.rs"]
+mod insert;
 #[path = "tui/navigate.rs"]
 mod navigate;
 #[path = "support/pty.rs"]

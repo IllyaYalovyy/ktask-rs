@@ -1,5 +1,6 @@
 //! Draws the form a new task is written in.
 
+use ktask_core::Placement;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -84,12 +85,21 @@ fn marker(form: &Form, field: Focus) -> char {
     if form.focus == field { '>' } else { ' ' }
 }
 
+/// What the form is for, and where the task goes when it is not at the end.
+fn heading(placement: Placement) -> String {
+    match placement {
+        Placement::End => "New task".to_owned(),
+        Placement::Before(id) => format!("New task above #{id}"),
+        Placement::After(id) => format!("New task below #{id}"),
+    }
+}
+
 /// Draws `form` over the whole of `area`, and returns where the cursor goes.
 pub(crate) fn draw(form: &Form, area: Rect, buf: &mut Buffer) -> Option<Position> {
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let mut sheet = Sheet {
         width: usize::from(area.width),
-        rows: vec![Line::styled("New task", bold)],
+        rows: vec![Line::styled(heading(form.placement), bold)],
         focus_row: 0,
         cursor_x: None,
     };

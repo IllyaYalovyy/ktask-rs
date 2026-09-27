@@ -1,6 +1,6 @@
 //! The state of the terminal interface and how events change it.
 
-use ktask_core::{QueueView, TaskDraft, TaskId, TaskStatus};
+use ktask_core::{Placement, QueueView, TaskDraft, TaskId, TaskStatus};
 use ratatui::crossterm::event::KeyCode;
 
 use crate::form::Form;
@@ -22,9 +22,9 @@ pub struct App {
     pub removal: Option<TaskId>,
     /// The form a new task is written in, while it is open; it covers the queue.
     pub(crate) form: Option<Form>,
-    /// The task the form was submitted with: the loop adds it and answers with
-    /// [`Event::Added`] or [`Event::Rejected`], and clears this.
-    pub submission: Option<TaskDraft>,
+    /// The task the form was submitted with and where it goes: the loop adds it and answers
+    /// with [`Event::Added`] or [`Event::Rejected`], and clears this.
+    pub submission: Option<(TaskDraft, Placement)>,
     /// Set when the operator asked to leave.
     pub quit: bool,
 }
@@ -38,8 +38,8 @@ pub enum Event {
     Key(KeyCode),
     /// A letter was pressed with Ctrl held.
     Ctrl(char),
-    /// The task the form was submitted with was added: the form closes.
-    Added,
+    /// The task the form was submitted with was added, and has this number: the form closes.
+    Added(TaskId),
     /// The task the form was submitted with was not added, for these reasons: the form stays
     /// open and shows them.
     Rejected(Vec<String>),
@@ -73,7 +73,7 @@ pub fn update(app: App, event: Event) -> App {
             'd' => in_form(app, Form::without_criterion),
             _ => app,
         },
-        Event::Added => App { form: None, ..app },
+        Event::Added(id) => added(app, id),
         Event::Rejected(problems) => in_form(app, |form| Form { problems, ..form }),
         Event::Key(KeyCode::Char('q')) => App { quit: true, ..app },
         Event::Key(key) if app.confirming.is_some() => match key {
@@ -96,10 +96,9 @@ pub fn update(app: App, event: Event) -> App {
             },
             KeyCode::Char('j') | KeyCode::Down => select(app, |index, _| index.saturating_add(1)),
             KeyCode::Char('k') | KeyCode::Up => select(app, |index, _| index.saturating_sub(1)),
-            KeyCode::Char('n') => App {
-                form: Some(Form::new()),
-                ..app
-            },
+            KeyCode::Char('n') => open_form(app, Placement::End),
+            KeyCode::Char('o') => open_form_next_to(app, Placement::After),
+            KeyCode::Char('O') => open_form_next_to(app, Placement::Before),
             KeyCode::Char('d') => App {
                 confirming: app.selected.filter(|id| {
                     app.queue
@@ -127,7 +126,41 @@ fn in_form(app: App, change: impl FnOnce(Form) -> Form) -> App {
 /// The app with the form's task left for the loop to add, if a form is open.
 fn submit(app: App) -> App {
     App {
-        submission: app.form.as_ref().map(Form::draft),
+        submission: app.form.as_ref().map(|form| (form.draft(), form.placement)),
+        ..app
+    }
+}
+
+/// The app with an empty form open, for a task that goes at `placement`.
+fn open_form(app: App, placement: Placement) -> App {
+    App {
+        form: Some(Form::new(placement)),
+        ..app
+    }
+}
+
+/// The app with an empty form open, for a task that goes next to the selected one the way
+/// `beside` says; at the end when nothing is selected.
+fn open_form_next_to(app: App, beside: fn(TaskId) -> Placement) -> App {
+    let placement = app.selected.map_or(Placement::End, beside);
+    open_form(app, placement)
+}
+
+/// The app once the task the form holds is added as `id`: the form closes, and a task put
+/// next to the selected one is selected, so that it is already there when the queue is
+/// loaded again.
+fn added(app: App, id: TaskId) -> App {
+    let placed_next_to_one = app
+        .form
+        .as_ref()
+        .is_some_and(|form| form.placement != Placement::End);
+    App {
+        form: None,
+        selected: if placed_next_to_one {
+            Some(id)
+        } else {
+            app.selected
+        },
         ..app
     }
 }
@@ -457,7 +490,7 @@ mod tests {
     fn n_opens_an_empty_form_and_esc_closes_it_changing_nothing_else() {
         let before = loaded(&[1, 2]);
         let open = press(before.clone(), &[KeyCode::Char('n')]);
-        assert_eq!(form_of(&open), &Form::new());
+        assert_eq!(form_of(&open), &Form::new(Placement::End));
         assert_eq!(open.queue, before.queue);
         assert_eq!(press(open, &[KeyCode::Esc]), before);
     }
@@ -502,8 +535,10 @@ mod tests {
         let app = typed(app, "Title");
         let app = update(app, Event::Ctrl('s'));
         assert_eq!(
-            app.submission.as_ref().map(|draft| draft.title.as_str()),
-            Some("Title")
+            app.submission
+                .as_ref()
+                .map(|(draft, placement)| (draft.title.as_str(), *placement)),
+            Some(("Title", Placement::End))
         );
         assert!(app.form.is_some());
     }
@@ -514,7 +549,48 @@ mod tests {
         let rejected = update(app.clone(), Event::Rejected(vec!["a problem".to_owned()]));
         assert_eq!(form_of(&rejected).problems, ["a problem"]);
         assert_eq!(form_of(&rejected).draft().title, "Title");
-        assert_eq!(update(app, Event::Added).form, None);
+        assert_eq!(update(app, Event::Added(TaskId(2))).form, None);
+    }
+
+    #[test]
+    fn o_and_capital_o_open_a_form_for_a_task_below_or_above_the_selected_one() {
+        let app = press(loaded(&[1, 2, 3]), &[KeyCode::Char('j')]);
+        let below = press(app.clone(), &[KeyCode::Char('o')]);
+        assert_eq!(form_of(&below).placement, Placement::After(TaskId(2)));
+        let above = press(app, &[KeyCode::Char('O')]);
+        assert_eq!(form_of(&above).placement, Placement::Before(TaskId(2)));
+        assert_eq!(on(&above), Some(2));
+    }
+
+    #[test]
+    fn o_and_capital_o_on_an_empty_queue_open_a_form_for_a_task_at_the_end() {
+        for key in [KeyCode::Char('o'), KeyCode::Char('O')] {
+            let app = press(loaded(&[]), &[key]);
+            assert_eq!(form_of(&app).placement, Placement::End);
+        }
+    }
+
+    #[test]
+    fn a_submitted_form_carries_where_its_task_goes() {
+        let app = press(loaded(&[1, 2]), &[KeyCode::Char('O')]);
+        let app = update(typed(app, "T"), Event::Ctrl('s'));
+        assert_eq!(
+            app.submission.map(|(_, placement)| placement),
+            Some(Placement::Before(TaskId(1)))
+        );
+    }
+
+    #[test]
+    fn a_task_added_next_to_the_selected_one_is_selected_and_one_added_at_the_end_is_not() {
+        for key in [KeyCode::Char('o'), KeyCode::Char('O')] {
+            let app = press(loaded(&[1, 2]), &[key]);
+            let app = update(app, Event::Added(TaskId(3)));
+            assert_eq!((on(&app), app.form.is_none()), (Some(3), true));
+            let reloaded = update(app, Event::Loaded(queue_of(&[1, 3, 2])));
+            assert_eq!(on(&reloaded), Some(3));
+        }
+        let app = press(loaded(&[1, 2]), &[KeyCode::Char('n')]);
+        assert_eq!(on(&update(app, Event::Added(TaskId(3)))), Some(1));
     }
 
     #[test]

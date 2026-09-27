@@ -398,9 +398,9 @@ fn tui(selected: Option<&str>) -> Result<(), Failure> {
                 .map_err(|e| e.to_string())
         },
         |id| ktask_core::remove_task(&journal, &SystemClock, id).map_err(|e| e.to_string()),
-        |draft| {
-            ktask_core::add_task_listing_problems(&journal, &SystemClock, draft, Placement::End)
-                .map(drop)
+        |draft, placement| {
+            ktask_core::add_task_listing_problems(&journal, &SystemClock, draft, placement)
+                .map(|task| task.id)
                 .map_err(|problems| problems.iter().map(ToString::to_string).collect())
         },
     )?)

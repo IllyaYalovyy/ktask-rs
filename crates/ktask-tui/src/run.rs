@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use ktask_core::{QueueView, TaskDraft, TaskId};
+use ktask_core::{Placement, QueueView, TaskDraft, TaskId};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, KeyModifiers};
 
@@ -18,7 +18,8 @@ const REFRESH: Duration = Duration::from_millis(200);
 /// at the start, again and again while the interface waits, and when the operator asks for
 /// cancelled tasks or stops asking. `remove` removes a task the operator confirmed removing,
 /// after which the queue is loaded again. `add` adds the task the operator wrote in the form
-/// at the end of the queue, and gives the reasons it was not added when it was not. The terminal is put back as it was on every way out.
+/// where the form says, and gives its number, or the reasons it was not added when it was
+/// not. The terminal is put back as it was on every way out.
 ///
 /// # Errors
 ///
@@ -27,7 +28,7 @@ const REFRESH: Duration = Duration::from_millis(200);
 pub fn run(
     load: impl FnMut(bool) -> Result<QueueView, String>,
     remove: impl FnMut(TaskId) -> Result<(), String>,
-    add: impl FnMut(&TaskDraft) -> Result<(), Vec<String>>,
+    add: impl FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
 ) -> Result<(), String> {
     let mut terminal = ratatui::try_init().map_err(|e| format!("cannot use the terminal: {e}"))?;
     let result = drive(&mut terminal, load, remove, add);
@@ -39,7 +40,7 @@ fn drive(
     terminal: &mut DefaultTerminal,
     mut load: impl FnMut(bool) -> Result<QueueView, String>,
     mut remove: impl FnMut(TaskId) -> Result<(), String>,
-    mut add: impl FnMut(&TaskDraft) -> Result<(), Vec<String>>,
+    mut add: impl FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
 ) -> Result<(), String> {
     let mut app = update(App::default(), Event::Loaded(load(false)?));
     loop {
@@ -61,9 +62,9 @@ fn drive(
             }
             if let Some(id) = app.removal.take() {
                 remove(id)?;
-            } else if let Some(draft) = app.submission.take() {
-                let added = match add(&draft) {
-                    Ok(()) => Event::Added,
+            } else if let Some((draft, placement)) = app.submission.take() {
+                let added = match add(&draft, placement) {
+                    Ok(id) => Event::Added(id),
                     Err(problems) => Event::Rejected(problems),
                 };
                 app = update(app, added);
