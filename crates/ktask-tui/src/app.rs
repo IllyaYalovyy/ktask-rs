@@ -1,7 +1,9 @@
 //! The state of the terminal interface and how events change it.
 
-use ktask_core::{QueueView, TaskId, TaskStatus};
+use ktask_core::{QueueView, TaskDraft, TaskId, TaskStatus};
 use ratatui::crossterm::event::KeyCode;
+
+use crate::form::Form;
 
 /// Everything the screen shows and remembers.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -18,6 +20,11 @@ pub struct App {
     pub confirming: Option<TaskId>,
     /// The task whose removal was confirmed: the loop carries it out and clears this.
     pub removal: Option<TaskId>,
+    /// The form a new task is written in, while it is open; it covers the queue.
+    pub(crate) form: Option<Form>,
+    /// The task the form was submitted with: the loop adds it and answers with
+    /// [`Event::Added`] or [`Event::Rejected`], and clears this.
+    pub submission: Option<TaskDraft>,
     /// Set when the operator asked to leave.
     pub quit: bool,
 }
@@ -29,6 +36,13 @@ pub enum Event {
     Loaded(QueueView),
     /// A key was pressed.
     Key(KeyCode),
+    /// A letter was pressed with Ctrl held.
+    Ctrl(char),
+    /// The task the form was submitted with was added: the form closes.
+    Added,
+    /// The task the form was submitted with was not added, for these reasons: the form stays
+    /// open and shows them.
+    Rejected(Vec<String>),
     /// The terminal changed size; the screen is drawn again at the new size.
     Resize,
 }
@@ -47,6 +61,20 @@ pub fn update(app: App, event: Event) -> App {
                 ..app
             }
         }
+        Event::Key(key) if app.form.is_some() => match key {
+            KeyCode::Esc => App { form: None, ..app },
+            KeyCode::Tab => in_form(app, |form| form.moved(true)),
+            KeyCode::BackTab => in_form(app, |form| form.moved(false)),
+            _ => in_form(app, |form| form.press(key)),
+        },
+        Event::Ctrl(letter) if app.form.is_some() => match letter {
+            's' => submit(app),
+            'n' => in_form(app, Form::with_criterion),
+            'd' => in_form(app, Form::without_criterion),
+            _ => app,
+        },
+        Event::Added => App { form: None, ..app },
+        Event::Rejected(problems) => in_form(app, |form| Form { problems, ..form }),
         Event::Key(KeyCode::Char('q')) => App { quit: true, ..app },
         Event::Key(key) if app.confirming.is_some() => match key {
             KeyCode::Char('y') => confirm_removal(app),
@@ -68,6 +96,10 @@ pub fn update(app: App, event: Event) -> App {
             },
             KeyCode::Char('j') | KeyCode::Down => select(app, |index, _| index.saturating_add(1)),
             KeyCode::Char('k') | KeyCode::Up => select(app, |index, _| index.saturating_sub(1)),
+            KeyCode::Char('n') => App {
+                form: Some(Form::new()),
+                ..app
+            },
             KeyCode::Char('d') => App {
                 confirming: app.selected.filter(|id| {
                     app.queue
@@ -80,7 +112,23 @@ pub fn update(app: App, event: Event) -> App {
             KeyCode::Char('G') => select(app, |_, len| len.saturating_sub(1)),
             _ => app,
         },
-        Event::Resize => app,
+        Event::Ctrl(_) | Event::Resize => app,
+    }
+}
+
+/// The app with `change` made to the form, if one is open.
+fn in_form(app: App, change: impl FnOnce(Form) -> Form) -> App {
+    App {
+        form: app.form.map(change),
+        ..app
+    }
+}
+
+/// The app with the form's task left for the loop to add, if a form is open.
+fn submit(app: App) -> App {
+    App {
+        submission: app.form.as_ref().map(Form::draft),
+        ..app
     }
 }
 
@@ -386,6 +434,102 @@ mod tests {
         assert_eq!(cancelled.confirming, None);
         let same = update(asked, Event::Loaded(queue_of(&[1, 2, 3])));
         assert_eq!(same.confirming, Some(TaskId(1)));
+    }
+
+    fn form_of(app: &App) -> &Form {
+        app.form.as_ref().expect("the form is open")
+    }
+
+    fn typed(app: App, text: &str) -> App {
+        text.chars().fold(app, |app, c| {
+            update(
+                app,
+                Event::Key(if c == '\n' {
+                    KeyCode::Enter
+                } else {
+                    KeyCode::Char(c)
+                }),
+            )
+        })
+    }
+
+    #[test]
+    fn n_opens_an_empty_form_and_esc_closes_it_changing_nothing_else() {
+        let before = loaded(&[1, 2]);
+        let open = press(before.clone(), &[KeyCode::Char('n')]);
+        assert_eq!(form_of(&open), &Form::new());
+        assert_eq!(open.queue, before.queue);
+        assert_eq!(press(open, &[KeyCode::Esc]), before);
+    }
+
+    #[test]
+    fn while_the_form_is_open_letters_are_typed_and_no_queue_key_acts() {
+        let open = press(loaded(&[1, 2]), &[KeyCode::Char('n')]);
+        let app = typed(open, "qjdna?");
+        assert!(!app.quit && !app.help && app.confirming.is_none() && app.form.is_some());
+        assert_eq!(form_of(&app).draft().title, "qjdna?");
+        assert_eq!(on(&app), Some(1));
+        let app = press(app, &[KeyCode::Down, KeyCode::Char('G')]);
+        assert_eq!(on(&app), Some(1));
+        assert!(!press(app, &[KeyCode::Char('q')]).quit);
+    }
+
+    #[test]
+    fn tab_and_shift_tab_move_the_focus_and_esc_leaves_no_trace_of_the_form() {
+        let app = press(loaded(&[1]), &[KeyCode::Char('n'), KeyCode::Tab]);
+        assert_eq!(form_of(&app).focus, crate::form::Focus::Kind);
+        let app = press(app, &[KeyCode::BackTab, KeyCode::BackTab]);
+        assert_eq!(form_of(&app).focus, crate::form::Focus::Criterion(0));
+        let closed = press(app, &[KeyCode::Esc]);
+        assert_eq!(closed.form, None);
+        assert_eq!(closed.submission, None);
+    }
+
+    #[test]
+    fn ctrl_n_and_ctrl_d_add_and_remove_criteria() {
+        let app = press(loaded(&[1]), &[KeyCode::Char('n')]);
+        let app = update(app, Event::Ctrl('n'));
+        assert_eq!(form_of(&app).criteria.len(), 2);
+        let app = update(update(app, Event::Ctrl('d')), Event::Ctrl('d'));
+        assert!(form_of(&app).criteria.is_empty());
+        let app = update(app, Event::Ctrl('x'));
+        assert!(form_of(&app).criteria.is_empty());
+    }
+
+    #[test]
+    fn ctrl_s_leaves_the_form_open_and_its_task_for_the_loop() {
+        let app = press(loaded(&[1]), &[KeyCode::Char('n')]);
+        let app = typed(app, "Title");
+        let app = update(app, Event::Ctrl('s'));
+        assert_eq!(
+            app.submission.as_ref().map(|draft| draft.title.as_str()),
+            Some("Title")
+        );
+        assert!(app.form.is_some());
+    }
+
+    #[test]
+    fn added_closes_the_form_and_rejected_shows_why_and_keeps_what_was_typed() {
+        let app = typed(press(loaded(&[1]), &[KeyCode::Char('n')]), "Title");
+        let rejected = update(app.clone(), Event::Rejected(vec!["a problem".to_owned()]));
+        assert_eq!(form_of(&rejected).problems, ["a problem"]);
+        assert_eq!(form_of(&rejected).draft().title, "Title");
+        assert_eq!(update(app, Event::Added).form, None);
+    }
+
+    #[test]
+    fn ctrl_keys_do_nothing_on_the_queue() {
+        let app = loaded(&[1, 2]);
+        for letter in ['s', 'n', 'd', 'q'] {
+            assert_eq!(update(app.clone(), Event::Ctrl(letter)), app);
+        }
+    }
+
+    #[test]
+    fn a_reload_keeps_the_form_open() {
+        let app = typed(press(loaded(&[1]), &[KeyCode::Char('n')]), "Ti");
+        let app = update(app, Event::Loaded(queue_of(&[1, 2])));
+        assert_eq!(form_of(&app).draft().title, "Ti");
     }
 
     #[test]

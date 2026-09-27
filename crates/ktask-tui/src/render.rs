@@ -2,20 +2,22 @@
 
 use ktask_core::{QueueView, Task, TaskStatus};
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph, Widget};
 
 use crate::App;
+use crate::form_screen;
 
 /// Every key the queue screen answers, and what it does.
-const KEYS: [(&str, &str); 11] = [
+const KEYS: [(&str, &str); 12] = [
     ("j, Down", "select the next task"),
     ("k, Up", "select the previous task"),
     ("g", "select the first task"),
     ("G", "select the last task"),
     ("a", "show or hide cancelled tasks"),
+    ("n", "add a task at the end, written in a form"),
     ("d", "remove the selected task, after asking"),
     ("y", "answer yes when asked to remove a task"),
     ("n", "answer no when asked to remove a task"),
@@ -24,13 +26,24 @@ const KEYS: [(&str, &str); 11] = [
     ("q", "quit"),
 ];
 
-/// Draws `app` over the whole of `area`.
-pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
+/// What the form's frame says at the bottom: the keys that are not typing.
+const FORM_KEYS: &str =
+    " Ctrl-S add · Esc cancel · Tab, Shift-Tab field · Ctrl-N, Ctrl-D criterion ";
+
+/// Draws `app` over the whole of `area`, and returns where the cursor goes when it is shown.
+pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     let block = Block::bordered()
         .title(" ktask-rs ")
-        .title_bottom(" q quit · ? keys ");
+        .title_bottom(if app.form.is_some() {
+            FORM_KEYS
+        } else {
+            " q quit · ? keys "
+        });
     let inner = block.inner(area);
     block.render(area, buf);
+    if let Some(form) = &app.form {
+        return form_screen::draw(form, inner, buf);
+    }
     match &app.queue {
         None => Paragraph::new("Loading the queue…").render(inner, buf),
         Some(_) if app.help => key_map(inner, buf),
@@ -41,6 +54,7 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
             Paragraph::new(task_lines(app, queue, usize::from(list.height))).render(list, buf);
         }
     }
+    None
 }
 
 fn key_map(area: Rect, buf: &mut Buffer) {
@@ -306,6 +320,47 @@ mod tests {
         assert_eq!(inside(&rows[5]), ">  2  #20  pending  agent  second");
         let rows = drawn(&keys(app, &[Char('n')]), 60, 8);
         assert_eq!(inside(&rows[3]), "");
+    }
+
+    fn draw_form(app: &App, height: u16) -> (Vec<String>, Option<Position>) {
+        let area = Rect::new(0, 0, 60, height);
+        let mut buf = Buffer::empty(area);
+        let cursor = render(app, area, &mut buf);
+        (drawn(app, 60, height), cursor)
+    }
+
+    #[test]
+    fn the_form_covers_the_queue_with_its_fields_and_puts_the_cursor_in_the_title() {
+        use ratatui::crossterm::event::KeyCode::Char;
+        let app = keys(
+            loaded(vec![task(1, "first", TaskKind::Agent)]),
+            &[Char('n')],
+        );
+        let (rows, cursor) = draw_form(&app, 14);
+        assert_eq!(inside(&rows[1]), "New task");
+        assert_eq!(inside(&rows[3]), "> Title:");
+        assert_eq!(inside(&rows[4]), "  Kind:      < agent >");
+        assert_eq!(inside(&rows[5]), "  Links:");
+        assert_eq!(inside(&rows[6]), "  Body:");
+        assert_eq!(inside(&rows[8]), "  Criteria:");
+        assert_eq!(inside(&rows[9]), "   1.");
+        assert!(
+            rows[13].starts_with("└ Ctrl-S add · Esc cancel"),
+            "{rows:?}"
+        );
+        assert!(!rows.join("\n").contains("first"));
+        assert_eq!(cursor, Some(Position::new(14, 3)));
+    }
+
+    #[test]
+    fn a_long_title_scrolls_sideways_so_that_the_cursor_stays_on_the_screen() {
+        use ratatui::crossterm::event::KeyCode::Char;
+        let mut app = keys(loaded(vec![]), &[Char('n')]);
+        app = keys(app, &"x".repeat(70).chars().map(Char).collect::<Vec<_>>());
+        let (rows, cursor) = draw_form(&app, 12);
+        let cursor = cursor.expect("the cursor is shown");
+        assert!(cursor.x < 59, "{cursor:?}");
+        assert!(inside(&rows[3]).ends_with('x'), "{rows:?}");
     }
 
     #[test]

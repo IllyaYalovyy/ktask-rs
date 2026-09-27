@@ -4,8 +4,11 @@
 //! thin loop ([`run`]). See docs/ARCHITECTURE.md.
 
 mod app;
+mod form;
+mod form_screen;
 mod render;
 mod run;
+mod text;
 
 pub use app::{App, Event, update};
 pub use render::render;

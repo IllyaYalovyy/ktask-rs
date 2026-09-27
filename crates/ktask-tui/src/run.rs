@@ -2,9 +2,9 @@
 
 use std::time::Duration;
 
-use ktask_core::{QueueView, TaskId};
+use ktask_core::{QueueView, TaskDraft, TaskId};
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, Event as Input, KeyEventKind};
+use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, KeyModifiers};
 
 use crate::{App, Event, render, update};
 
@@ -17,7 +17,8 @@ const REFRESH: Duration = Duration::from_millis(200);
 /// `load` fetches the queue to show, with the cancelled tasks when it is told to. It is called
 /// at the start, again and again while the interface waits, and when the operator asks for
 /// cancelled tasks or stops asking. `remove` removes a task the operator confirmed removing,
-/// after which the queue is loaded again. The terminal is put back as it was on every way out.
+/// after which the queue is loaded again. `add` adds the task the operator wrote in the form
+/// at the end of the queue, and gives the reasons it was not added when it was not. The terminal is put back as it was on every way out.
 ///
 /// # Errors
 ///
@@ -26,9 +27,10 @@ const REFRESH: Duration = Duration::from_millis(200);
 pub fn run(
     load: impl FnMut(bool) -> Result<QueueView, String>,
     remove: impl FnMut(TaskId) -> Result<(), String>,
+    add: impl FnMut(&TaskDraft) -> Result<(), Vec<String>>,
 ) -> Result<(), String> {
     let mut terminal = ratatui::try_init().map_err(|e| format!("cannot use the terminal: {e}"))?;
-    let result = drive(&mut terminal, load, remove);
+    let result = drive(&mut terminal, load, remove, add);
     ratatui::restore();
     result
 }
@@ -37,11 +39,16 @@ fn drive(
     terminal: &mut DefaultTerminal,
     mut load: impl FnMut(bool) -> Result<QueueView, String>,
     mut remove: impl FnMut(TaskId) -> Result<(), String>,
+    mut add: impl FnMut(&TaskDraft) -> Result<(), Vec<String>>,
 ) -> Result<(), String> {
     let mut app = update(App::default(), Event::Loaded(load(false)?));
     loop {
         terminal
-            .draw(|frame| render(&app, frame.area(), frame.buffer_mut()))
+            .draw(|frame| {
+                if let Some(cursor) = render(&app, frame.area(), frame.buffer_mut()) {
+                    frame.set_cursor_position(cursor);
+                }
+            })
             .map_err(|e| format!("cannot draw the screen: {e}"))?;
         if app.quit {
             return Ok(());
@@ -54,6 +61,12 @@ fn drive(
             }
             if let Some(id) = app.removal.take() {
                 remove(id)?;
+            } else if let Some(draft) = app.submission.take() {
+                let added = match add(&draft) {
+                    Ok(()) => Event::Added,
+                    Err(problems) => Event::Rejected(problems),
+                };
+                app = update(app, added);
             } else if app.show_cancelled == asked {
                 continue;
             }
@@ -66,7 +79,12 @@ fn drive(
 /// The event an input from the terminal means, if it means any.
 fn translate(input: &Input) -> Option<Event> {
     match input {
-        Input::Key(key) if key.kind == KeyEventKind::Press => Some(Event::Key(key.code)),
+        Input::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+            KeyCode::Char(letter) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Event::Ctrl(letter))
+            }
+            code => Some(Event::Key(code)),
+        },
         Input::Resize(..) => Some(Event::Resize),
         _ => None,
     }
