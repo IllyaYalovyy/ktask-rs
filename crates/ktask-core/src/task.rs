@@ -157,6 +157,18 @@ pub enum Placement {
     After(TaskId),
 }
 
+impl Placement {
+    /// Where the task that follows one just placed goes, when a batch is placed here: after
+    /// `previous`, so the batch keeps its order — or still at the end.
+    #[must_use]
+    pub fn then_after(self, previous: TaskId) -> Self {
+        match self {
+            Self::End => Self::End,
+            Self::Before(_) | Self::After(_) => Self::After(previous),
+        }
+    }
+}
+
 /// Why a task was not added.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddError {

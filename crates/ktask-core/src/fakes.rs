@@ -111,47 +111,55 @@ impl FakeJournal {
 }
 
 impl Journal for FakeJournal {
-    fn append_task(
+    fn append_tasks(
         &self,
-        draft: &TaskDraft,
+        drafts: &[TaskDraft],
         placement: Placement,
         at: SystemTime,
-    ) -> Result<Task, AppendError> {
+    ) -> Result<Vec<Task>, AppendError> {
         if let Some(failure) = &self.failure {
             return Err(failure.clone().into());
         }
-        let mut tasks = self.tasks.borrow_mut();
-        let next = |anchor: TaskId| {
-            let index = tasks
-                .iter()
-                .position(|task| task.id == anchor)
-                .ok_or(AppendError::UnknownTask(anchor))?;
-            if tasks[index].status == TaskStatus::Cancelled {
-                return Err(AppendError::CancelledTask(anchor));
+        // Worked out on a copy, so that a failure part-way leaves the queue as it was.
+        let mut tasks = self.tasks.borrow().clone();
+        let mut added = Vec::new();
+        let mut placement = placement;
+        for draft in drafts {
+            let next = |anchor: TaskId| {
+                let index = tasks
+                    .iter()
+                    .position(|task| task.id == anchor)
+                    .ok_or(AppendError::UnknownTask(anchor))?;
+                if tasks[index].status == TaskStatus::Cancelled {
+                    return Err(AppendError::CancelledTask(anchor));
+                }
+                Ok(index)
+            };
+            let index = match placement {
+                Placement::End => tasks.len(),
+                Placement::Before(anchor) => next(anchor)?,
+                Placement::After(anchor) => next(anchor)? + 1,
+            };
+            let task = Task {
+                id: TaskId(tasks.len() as u64 + 1),
+                position: index + 1,
+                title: draft.title.clone(),
+                body: draft.body.clone(),
+                criteria: draft.criteria.clone(),
+                kind: draft.kind,
+                links: draft.links.clone(),
+                status: TaskStatus::Pending,
+                created_at: at,
+            };
+            tasks.insert(index, task.clone());
+            for (index, task) in tasks.iter_mut().enumerate() {
+                task.position = index + 1;
             }
-            Ok(index)
-        };
-        let index = match placement {
-            Placement::End => tasks.len(),
-            Placement::Before(anchor) => next(anchor)?,
-            Placement::After(anchor) => next(anchor)? + 1,
-        };
-        let task = Task {
-            id: TaskId(tasks.len() as u64 + 1),
-            position: index + 1,
-            title: draft.title.clone(),
-            body: draft.body.clone(),
-            criteria: draft.criteria.clone(),
-            kind: draft.kind,
-            links: draft.links.clone(),
-            status: TaskStatus::Pending,
-            created_at: at,
-        };
-        tasks.insert(index, task.clone());
-        for (index, task) in tasks.iter_mut().enumerate() {
-            task.position = index + 1;
+            placement = placement.then_after(task.id);
+            added.push(task);
         }
-        Ok(task)
+        *self.tasks.borrow_mut() = tasks;
+        Ok(added)
     }
 
     fn tasks(&self) -> Result<Vec<Task>, JournalError> {

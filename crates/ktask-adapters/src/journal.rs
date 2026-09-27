@@ -190,40 +190,47 @@ fn from_seconds(seconds: i64) -> SystemTime {
 }
 
 impl Journal for SqliteJournal {
-    fn append_task(
+    fn append_tasks(
         &self,
-        draft: &TaskDraft,
+        drafts: &[TaskDraft],
         placement: Placement,
         at: SystemTime,
-    ) -> Result<Task, AppendError> {
+    ) -> Result<Vec<Task>, AppendError> {
         let doing = "cannot add the task to the journal";
         // Immediate: take the write lock first, so that reading the order keys and
         // inserting among them cannot interleave with another process adding a task.
         let transaction =
             Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)
                 .map_err(|e| failed(doing, e))?;
-        let order_key = make_room(&transaction, placement)?;
-        let id = insert(&transaction, draft, placement, order_key, to_seconds(at))
-            .map_err(|e| failed(doing, e))?;
-        let position: i64 = transaction
-            .query_row(
-                "SELECT COUNT(*) FROM tasks WHERE order_key <= ?1",
-                [order_key],
-                |row| row.get(0),
-            )
-            .map_err(|e| failed(doing, e))?;
+        let mut added = Vec::new();
+        let mut placement = placement;
+        for draft in drafts {
+            let order_key = make_room(&transaction, placement)?;
+            let id = insert(&transaction, draft, placement, order_key, to_seconds(at))
+                .map_err(|e| failed(doing, e))?;
+            let position: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM tasks WHERE order_key <= ?1",
+                    [order_key],
+                    |row| row.get(0),
+                )
+                .map_err(|e| failed(doing, e))?;
+            let id = TaskId(u64::try_from(id).map_err(|e| failed(doing, e))?);
+            added.push(Task {
+                id,
+                position: usize::try_from(position).map_err(|e| failed(doing, e))?,
+                title: draft.title.clone(),
+                body: draft.body.clone(),
+                criteria: draft.criteria.clone(),
+                kind: draft.kind,
+                links: draft.links.clone(),
+                status: TaskStatus::Pending,
+                created_at: from_seconds(to_seconds(at)),
+            });
+            placement = placement.then_after(id);
+        }
         transaction.commit().map_err(|e| failed(doing, e))?;
-        Ok(Task {
-            id: TaskId(u64::try_from(id).map_err(|e| failed(doing, e))?),
-            position: usize::try_from(position).map_err(|e| failed(doing, e))?,
-            title: draft.title.clone(),
-            body: draft.body.clone(),
-            criteria: draft.criteria.clone(),
-            kind: draft.kind,
-            links: draft.links.clone(),
-            status: TaskStatus::Pending,
-            created_at: from_seconds(to_seconds(at)),
-        })
+        Ok(added)
     }
 
     fn tasks(&self) -> Result<Vec<Task>, JournalError> {
@@ -568,6 +575,77 @@ mod tests {
         let error = journal.tasks().unwrap_err().to_string();
         assert!(error.contains("task 1"), "{error}");
         assert!(error.contains("status"), "{error}");
+    }
+
+    #[test]
+    fn a_batch_is_placed_together_in_order_with_one_event_per_task() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        for title in ["a", "b"] {
+            journal
+                .append_task(&draft(title), Placement::End, at(1))
+                .unwrap();
+        }
+        let batch = [draft("x"), draft("y"), draft("z")];
+        let added = journal
+            .append_tasks(&batch, Placement::Before(TaskId(2)), at(2))
+            .unwrap();
+        let placed: Vec<_> = added.iter().map(|t| (t.id.0, t.position)).collect();
+        assert_eq!(placed, [(3, 2), (4, 3), (5, 4)]);
+        let shown: Vec<_> = journal
+            .tasks()
+            .unwrap()
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
+        assert_eq!(shown, ["a", "x", "y", "z", "b"]);
+        let events: i64 = journal
+            .connection
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(events, 5);
+    }
+
+    #[test]
+    fn a_batch_placed_next_to_a_missing_task_records_nothing() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        journal
+            .append_task(&draft("a"), Placement::End, at(1))
+            .unwrap();
+        let error = journal
+            .append_tasks(
+                &[draft("x"), draft("y")],
+                Placement::After(TaskId(9)),
+                at(2),
+            )
+            .unwrap_err();
+        assert_eq!(error, AppendError::UnknownTask(TaskId(9)));
+        assert_eq!(journal.tasks().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_batch_that_fails_part_way_is_rolled_back() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        journal
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER refuse BEFORE INSERT ON events
+                 WHEN (SELECT COUNT(*) FROM events) >= 2
+                 BEGIN SELECT RAISE(ABORT, 'refused'); END",
+            )
+            .unwrap();
+        let error = journal
+            .append_tasks(&[draft("x"), draft("y"), draft("z")], Placement::End, at(2))
+            .unwrap_err();
+        assert!(error.to_string().contains("refused"), "{error}");
+        assert_eq!(journal.tasks().unwrap(), vec![]);
+        let events: i64 = journal
+            .connection
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(events, 0);
     }
 
     #[test]

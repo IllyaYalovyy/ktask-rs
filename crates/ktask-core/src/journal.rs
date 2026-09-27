@@ -61,21 +61,41 @@ impl From<JournalError> for AppendError {
 /// Port: one project's journal. Every change is an event appended to it, and the tasks are
 /// updated from that event in the same transaction.
 pub trait Journal {
-    /// Appends a task-added event for `draft`, which the caller has validated, and puts the
-    /// task at `placement` in the queue with the next number, in one transaction. Numbers
-    /// start at 1 and are never reused, and no other task's number changes. Returns the task
-    /// as stored.
+    /// Appends a task-added event for each of `drafts`, which the caller has validated, and
+    /// puts the tasks in the queue in that order, together, at `placement` — before or after
+    /// the task it names, or at the end — with the next numbers, all in one transaction.
+    /// Numbers start at 1 and are never reused, and no other task's number changes. Returns
+    /// the tasks as stored.
     ///
     /// # Errors
     ///
     /// Fails, recording nothing, when `placement` names a task that does not exist or was
     /// cancelled, or when the journal cannot be written.
+    fn append_tasks(
+        &self,
+        drafts: &[TaskDraft],
+        placement: Placement,
+        at: SystemTime,
+    ) -> Result<Vec<Task>, AppendError>;
+
+    /// Appends a task-added event for `draft`, which the caller has validated, and puts the
+    /// task at `placement` in the queue with the next number, in one transaction. Returns the
+    /// task as stored.
+    ///
+    /// # Errors
+    ///
+    /// As [`Journal::append_tasks`].
     fn append_task(
         &self,
         draft: &TaskDraft,
         placement: Placement,
         at: SystemTime,
-    ) -> Result<Task, AppendError>;
+    ) -> Result<Task, AppendError> {
+        let mut tasks = self.append_tasks(std::slice::from_ref(draft), placement, at)?;
+        tasks
+            .pop()
+            .ok_or_else(|| JournalError::new("the journal stored no task").into())
+    }
 
     /// Every task, in queue order, with positions counting from 1.
     ///
