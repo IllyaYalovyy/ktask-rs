@@ -56,6 +56,9 @@ enum Command {
         /// Work on this registered project instead of the one the current directory is in
         #[arg(long, value_name = "NAME")]
         project: Option<String>,
+        /// Print a JSON array with every field of every task instead of one line per task
+        #[arg(long)]
+        json: bool,
     },
     /// Open the terminal interface on the project's queue
     Tui {
@@ -216,12 +219,12 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             let task = ktask_core::add_task(&journal, &SystemClock, &draft)?;
             Ok(render::added(&task, stdout)?)
         }
-        Command::List { project } => {
+        Command::List { project, json } => {
             let registry = open_registry()?;
             let project = resolve(&registry, project.as_deref())?;
             let journal = open_journal(&project)?;
             let tasks = ktask_core::list_tasks(&journal).map_err(|e| e.to_string())?;
-            Ok(render::tasks(&tasks, stdout)?)
+            Ok(render::tasks(&tasks, *json, stdout)?)
         }
         Command::Project {
             command: ProjectCommand::Register { name, json },

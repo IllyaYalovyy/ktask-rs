@@ -416,3 +416,146 @@ fn add_and_list_are_in_the_help_with_their_options() -> Result<()> {
     assert_eq!(add.code, Some(0));
     Ok(())
 }
+
+/// The creation time the journal holds for the task numbered `id`, as `list --json` writes it.
+fn stored_creation_time(fixture: &Fixture, id: i64) -> Result<String> {
+    let rows = fixture.rows("tasks")?;
+    let seconds = rows
+        .iter()
+        .find(|task| task["id"] == id)
+        .and_then(|task| task["created_at"].as_i64())
+        .ok_or("no such task in the journal")?;
+    Ok(jiff::Timestamp::from_second(seconds)?.to_string())
+}
+
+#[test]
+fn list_json_prints_every_field_of_every_task_in_queue_order() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let full = fixture.run(&[
+        "add",
+        "--title",
+        "Full task",
+        "--criterion",
+        "first criterion",
+        "--criterion",
+        "second \"quoted\" criterion",
+        "--body",
+        "Some body\nover two lines — with ünïcode",
+        "--kind",
+        "human",
+        "--link",
+        "github:owner/repo#123",
+        "--link",
+        "https://example.com/a",
+    ])?;
+    assert_eq!(full.code, Some(0), "{}", full.stderr);
+    fixture.add("Plain task")?;
+
+    let listed = fixture.run(&["list", "--json"])?;
+
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    assert_eq!(listed.stderr, "");
+    assert!(listed.stdout.ends_with('\n'), "{}", listed.stdout);
+    let parsed: Value = serde_json::from_str(&listed.stdout)?;
+    assert_eq!(
+        parsed,
+        json!([
+            {
+                "id": 1,
+                "position": 1,
+                "title": "Full task",
+                "body": "Some body\nover two lines — with ünïcode",
+                "criteria": ["first criterion", "second \"quoted\" criterion"],
+                "kind": "human",
+                "links": ["github:owner/repo#123", "https://example.com/a"],
+                "status": "pending",
+                "created_at": stored_creation_time(&fixture, 1)?,
+            },
+            {
+                "id": 2,
+                "position": 2,
+                "title": "Plain task",
+                "body": "",
+                "criteria": ["it works"],
+                "kind": "agent",
+                "links": [],
+                "status": "pending",
+                "created_at": stored_creation_time(&fixture, 2)?,
+            },
+        ])
+    );
+    Ok(())
+}
+
+#[test]
+fn list_json_of_an_empty_queue_is_an_empty_array() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let listed = fixture.run(&["list", "--json"])?;
+    assert_eq!(listed.stdout, "[]\n");
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    Ok(())
+}
+
+#[test]
+fn list_json_is_the_same_bytes_every_time_for_the_same_state() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add("one")?;
+    fixture.add("two")?;
+    let first = fixture.run(&["list", "--json"])?;
+    let second = fixture.run(&["list", "--json"])?;
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    assert!(!first.stdout.is_empty());
+    assert_eq!(first.stdout, second.stdout);
+    // Fields are written in a fixed order, not sorted or shuffled.
+    assert!(
+        first.stdout.starts_with(
+            "[{\"id\":1,\"position\":1,\"title\":\"one\",\"body\":\"\",\"criteria\":[\"it works\"],\
+             \"kind\":\"agent\",\"links\":[],\"status\":\"pending\",\"created_at\":\""
+        ),
+        "{}",
+        first.stdout
+    );
+    Ok(())
+}
+
+#[test]
+fn list_json_works_with_project_and_reports_a_broken_journal() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let other = git_repository(&fixture.sandbox, &fixture.work, "other-app")?;
+    fixture.add("mine")?;
+    let shown = fixture.sandbox.run(&other, &["project", "show"])?;
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+
+    let remote = fixture
+        .sandbox
+        .run(&other, &["list", "--json", "--project", "my-app"])?;
+    let tasks: Value = serde_json::from_str(&remote.stdout)?;
+    assert_eq!(tasks.as_array().map(Vec::len), Some(1), "{}", remote.stdout);
+    assert_eq!(tasks[0]["title"], "mine");
+    assert_eq!(
+        fixture.sandbox.run(&other, &["list", "--json"])?.stdout,
+        "[]\n"
+    );
+
+    let unknown = fixture.run(&["list", "--json", "--project", "ghost"])?;
+    assert_usage_error(&unknown, &["ghost"]);
+
+    let path = fixture.journal("my-app");
+    std::fs::write(
+        &path,
+        "this is not sqlite, and it is long enough to be checked",
+    )?;
+    let broken = fixture.run(&["list", "--json"])?;
+    assert_eq!(broken.code, Some(1), "{}", broken.stderr);
+    assert_eq!(broken.stdout, "");
+    Ok(())
+}
+
+#[test]
+fn list_json_is_in_the_help() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let help = fixture.run(&["list", "--help"])?;
+    assert!(help.stdout.contains("--json"), "{}", help.stdout);
+    assert_eq!(help.code, Some(0));
+    Ok(())
+}

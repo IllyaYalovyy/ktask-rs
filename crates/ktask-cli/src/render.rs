@@ -80,14 +80,52 @@ pub(crate) fn added(task: &Task, out: &mut impl Write) -> Result<(), String> {
     writeln!(out, "{}", task.id).map_err(|e| e.to_string())
 }
 
-/// Writes `tasks`, one `position<TAB>#ID<TAB>status<TAB>kind<TAB>title` line each.
-pub(crate) fn tasks(tasks: &[Task], out: &mut impl Write) -> Result<(), String> {
-    tasks.iter().try_for_each(|task| {
-        writeln!(
-            out,
-            "{}\t#{}\t{}\t{}\t{}",
-            task.position, task.id, task.status, task.kind, task.title
-        )
-        .map_err(|e| e.to_string())
-    })
+/// One task as `list --json` shows it.
+#[derive(Debug, Serialize)]
+struct TaskJson<'a> {
+    id: u64,
+    position: usize,
+    title: &'a str,
+    body: &'a str,
+    criteria: &'a [String],
+    kind: &'static str,
+    links: &'a [String],
+    status: &'static str,
+    created_at: String,
+}
+
+/// Writes `tasks`: one `position<TAB>#ID<TAB>status<TAB>kind<TAB>title` line each, or a JSON
+/// array with `json`.
+pub(crate) fn tasks(tasks: &[Task], json: bool, out: &mut impl Write) -> Result<(), String> {
+    if json {
+        let shown = tasks
+            .iter()
+            .map(|task| {
+                let created_at = Timestamp::try_from(task.created_at)
+                    .map_err(|e| format!("task {}: bad creation time: {e}", task.id))?;
+                Ok(TaskJson {
+                    id: task.id.0,
+                    position: task.position,
+                    title: &task.title,
+                    body: &task.body,
+                    criteria: &task.criteria,
+                    kind: task.kind.as_str(),
+                    links: &task.links,
+                    status: task.status.as_str(),
+                    created_at: created_at.to_string(),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        serde_json::to_writer(&mut *out, &shown).map_err(|e| e.to_string())?;
+        writeln!(out).map_err(|e| e.to_string())
+    } else {
+        tasks.iter().try_for_each(|task| {
+            writeln!(
+                out,
+                "{}\t#{}\t{}\t{}\t{}",
+                task.position, task.id, task.status, task.kind, task.title
+            )
+            .map_err(|e| e.to_string())
+        })
+    }
 }
