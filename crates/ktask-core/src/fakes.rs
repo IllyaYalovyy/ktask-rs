@@ -1,13 +1,14 @@
 //! In-memory implementations of the ports, for the tests of this crate.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::{
-    AppendError, CancelError, Clock, CommandSpec, Commands, CommandsError, Git, GitError, Journal,
-    JournalError, Output, Placement, Project, ProjectRegistry, RegistryError, Task, TaskDraft,
-    TaskId, TaskKind, TaskStatus,
+    AppendError, BeginAttemptError, CancelError, Clock, CommandSpec, Commands, CommandsError, Git,
+    GitError, Journal, JournalError, Outcome, Output, Placement, Project, ProjectRegistry,
+    RecordReportError, RegistryError, Task, TaskDraft, TaskId, TaskKind, TaskStatus,
 };
 
 /// An in-memory registry that can be told to fail.
@@ -99,6 +100,7 @@ pub(crate) fn project(name: &str, seconds: u64) -> Project {
 #[derive(Debug, Default)]
 pub(crate) struct FakeJournal {
     pub(crate) tasks: RefCell<Vec<Task>>,
+    pub(crate) attempts: RefCell<HashMap<TaskId, u32>>,
     pub(crate) failure: Option<JournalError>,
 }
 
@@ -106,6 +108,7 @@ impl FakeJournal {
     pub(crate) fn failing(failure: JournalError) -> Self {
         Self {
             tasks: RefCell::default(),
+            attempts: RefCell::default(),
             failure: Some(failure),
         }
     }
@@ -184,6 +187,50 @@ impl Journal for FakeJournal {
             Some(failure) => Err(failure.clone()),
             None => Ok(self.tasks.borrow().clone()),
         }
+    }
+
+    fn begin_attempt(&self, id: TaskId, _at: SystemTime) -> Result<u32, BeginAttemptError> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone().into());
+        }
+        let mut tasks = self.tasks.borrow_mut();
+        let task = tasks
+            .iter_mut()
+            .find(|task| task.id == id)
+            .ok_or(BeginAttemptError::UnknownTask(id))?;
+        if task.status != TaskStatus::Pending {
+            return Err(BeginAttemptError::NotPending(id));
+        }
+        task.status = TaskStatus::Running;
+        let mut attempts = self.attempts.borrow_mut();
+        let number = attempts.entry(id).or_insert(0);
+        *number += 1;
+        Ok(*number)
+    }
+
+    fn record_report(
+        &self,
+        id: TaskId,
+        number: u32,
+        _outcome: Outcome,
+        _reason: Option<&str>,
+        _at: SystemTime,
+    ) -> Result<(), RecordReportError> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone().into());
+        }
+        let tasks = self.tasks.borrow();
+        let Some(task) = tasks.iter().find(|task| task.id == id) else {
+            return Err(RecordReportError::UnknownAttempt { task: id, number });
+        };
+        let current = self.attempts.borrow().get(&id).copied().unwrap_or(0);
+        if current != number {
+            return Err(RecordReportError::UnknownAttempt { task: id, number });
+        }
+        if task.status != TaskStatus::Running {
+            return Err(RecordReportError::AttemptEnded { task: id, number });
+        }
+        Ok(())
     }
 }
 

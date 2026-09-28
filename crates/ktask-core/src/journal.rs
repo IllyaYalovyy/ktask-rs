@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fmt;
 use std::time::SystemTime;
 
-use crate::{Placement, Task, TaskDraft, TaskId};
+use crate::{Outcome, Placement, Task, TaskDraft, TaskId};
 
 /// Why the journal could not be read or written.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +87,79 @@ impl From<JournalError> for CancelError {
     }
 }
 
+/// Why an attempt could not be started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BeginAttemptError {
+    /// There is no such task.
+    UnknownTask(TaskId),
+    /// The task is not pending, so it cannot be started: it is already running, or it is
+    /// done, failed or cancelled.
+    NotPending(TaskId),
+    /// The journal could not be used.
+    Journal(JournalError),
+}
+
+impl fmt::Display for BeginAttemptError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownTask(id) => write!(f, "there is no task {id}"),
+            Self::NotPending(id) => write!(f, "task {id} is not pending"),
+            Self::Journal(error) => error.fmt(f),
+        }
+    }
+}
+
+impl Error for BeginAttemptError {}
+
+impl From<JournalError> for BeginAttemptError {
+    fn from(error: JournalError) -> Self {
+        Self::Journal(error)
+    }
+}
+
+/// Why a report could not be recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordReportError {
+    /// No attempt numbered like this was ever started for this task.
+    UnknownAttempt {
+        /// The task the report named.
+        task: TaskId,
+        /// The attempt number the report named.
+        number: u32,
+    },
+    /// This attempt was started, but is no longer running.
+    AttemptEnded {
+        /// The task the report named.
+        task: TaskId,
+        /// The attempt number the report named.
+        number: u32,
+    },
+    /// The journal could not be used.
+    Journal(JournalError),
+}
+
+impl fmt::Display for RecordReportError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownAttempt { task, number } => {
+                write!(f, "there is no attempt {number} of task {task}")
+            }
+            Self::AttemptEnded { task, number } => {
+                write!(f, "attempt {number} of task {task} has ended")
+            }
+            Self::Journal(error) => error.fmt(f),
+        }
+    }
+}
+
+impl Error for RecordReportError {}
+
+impl From<JournalError> for RecordReportError {
+    fn from(error: JournalError) -> Self {
+        Self::Journal(error)
+    }
+}
+
 /// Port: one project's journal. Every change is an event appended to it, and the tasks are
 /// updated from that event in the same transaction.
 pub trait Journal {
@@ -141,6 +214,33 @@ pub trait Journal {
     ///
     /// Fails when the journal cannot be read.
     fn tasks(&self) -> Result<Vec<Task>, JournalError>;
+
+    /// Starts the next attempt at the pending task numbered `id`: records an attempt-started
+    /// event and marks the task running, in one transaction. Returns the attempt's number,
+    /// starting at 1 and never reused for this task.
+    ///
+    /// # Errors
+    ///
+    /// Fails, recording nothing, when there is no such task, when it is not pending, or when
+    /// the journal cannot be written.
+    fn begin_attempt(&self, id: TaskId, at: SystemTime) -> Result<u32, BeginAttemptError>;
+
+    /// Records a report for attempt `number` of the task numbered `id`: one event carrying
+    /// `outcome` and `reason`. A later report for the same running attempt is recorded the
+    /// same way and stands as the current one; both stay in the journal.
+    ///
+    /// # Errors
+    ///
+    /// Fails, recording nothing, when no attempt numbered `number` was started for this task,
+    /// when it was but has since ended, or when the journal cannot be written.
+    fn record_report(
+        &self,
+        id: TaskId,
+        number: u32,
+        outcome: Outcome,
+        reason: Option<&str>,
+        at: SystemTime,
+    ) -> Result<(), RecordReportError>;
 }
 
 /// Port: notices when a project's journal changes, so a frontend can show what another
