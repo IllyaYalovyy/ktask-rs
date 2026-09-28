@@ -15,8 +15,8 @@ use ktask_adapters::{
     journal_path, read_text, registry_path,
 };
 use ktask_core::{
-    AddError, CancelError, EchoError, ImportError, Placement, Project, RegisterError, ResolveError,
-    TaskDraft, TaskId, TaskKind,
+    AddError, AttemptToken, CancelError, EchoError, ImportError, Outcome, Placement, Project,
+    RegisterError, ReportError, ResolveError, TaskDraft, TaskId, TaskKind,
 };
 
 /// Runs an ordered queue of software tasks through AI coding agents.
@@ -111,6 +111,19 @@ enum Command {
     Provider {
         #[command(subcommand)]
         command: ProviderCommand,
+    },
+    /// State the outcome of an attempt; the token names its project, task and attempt, so
+    /// this works from any directory
+    Report {
+        /// The attempt's token
+        #[arg(long)]
+        token: String,
+        /// What the attempt ended with: done, failed, needs-input or too-large
+        #[arg(value_name = "OUTCOME")]
+        outcome: String,
+        /// Why it ended that way; required unless the outcome is done
+        #[arg(long)]
+        reason: Option<String>,
     },
 }
 
@@ -257,6 +270,20 @@ impl From<CancelError> for Failure {
     }
 }
 
+impl From<ReportError> for Failure {
+    fn from(error: ReportError) -> Self {
+        match error {
+            ReportError::Record(ktask_core::RecordReportError::Journal(_)) => {
+                Self::from(error.to_string())
+            }
+            _ => Self {
+                message: error.to_string(),
+                code: 2,
+            },
+        }
+    }
+}
+
 impl From<ImportError> for Failure {
     fn from(error: ImportError) -> Self {
         match error {
@@ -387,7 +414,35 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<ExitCode, Failure> 
                     timeout_ms,
                 },
         } => provider_run(provider, token, *attempt, *timeout_ms, stdout),
+        Command::Report {
+            token,
+            outcome,
+            reason,
+        } => report(token, outcome, reason.as_deref(), stdout),
     }
+}
+
+/// Records `outcome` (and `reason`) for the attempt `token` names, in the journal of the
+/// project it names — resolved from the token alone, so this needs no `--project` and works
+/// from any directory.
+fn report(
+    token: &str,
+    outcome: &str,
+    reason: Option<&str>,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
+    let outcome: Outcome = outcome
+        .parse()
+        .map_err(|message| Failure { message, code: 2 })?;
+    let token: AttemptToken = token
+        .parse()
+        .map_err(|message| Failure { message, code: 2 })?;
+    let registry = open_registry()?;
+    let project = resolve(&registry, Some(&token.project))?;
+    let journal = open_journal(&project)?;
+    ktask_core::report(&journal, &SystemClock, &token, outcome, reason)?;
+    render::reported(&token, outcome, stdout)?;
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Runs `provider` on the prompt read from standard input, writing what it produced to

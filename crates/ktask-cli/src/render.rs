@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::Path;
 
 use jiff::Timestamp;
-use ktask_core::{Output, Project, Task, TaskId};
+use ktask_core::{AttemptToken, Outcome, Output, Project, Task, TaskId};
 use serde::Serialize;
 
 /// One project as `project list --json` shows it.
@@ -96,6 +96,21 @@ pub(crate) fn added(task: &Task, out: &mut impl Write) -> Result<(), String> {
 /// Writes the line telling that the task numbered `id` has just been removed.
 pub(crate) fn removed(id: TaskId, out: &mut impl Write) -> Result<(), String> {
     writeln!(out, "removed task {id}").map_err(|e| e.to_string())
+}
+
+/// Writes the line telling that `outcome` has just been recorded for the attempt `token`
+/// names.
+pub(crate) fn reported(
+    token: &AttemptToken,
+    outcome: Outcome,
+    out: &mut impl Write,
+) -> Result<(), String> {
+    writeln!(
+        out,
+        "recorded {outcome} for task {} attempt {}",
+        token.task, token.number
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// One task as `list --json` shows it.
