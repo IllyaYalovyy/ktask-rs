@@ -67,6 +67,11 @@ pub enum TaskStatus {
     Done,
     /// Ended in failure.
     Failed,
+    /// The agent needs a decision from the operator before the task can continue.
+    Blocked,
+    /// The attempt ended with no report from the agent: a crash, or killed at its time
+    /// limit.
+    FailedUnknown,
     /// Removed from the queue.
     Cancelled,
 }
@@ -80,6 +85,8 @@ impl TaskStatus {
             Self::Running => "running",
             Self::Done => "done",
             Self::Failed => "failed",
+            Self::Blocked => "blocked",
+            Self::FailedUnknown => "failed-unknown",
             Self::Cancelled => "cancelled",
         }
     }
@@ -100,6 +107,8 @@ impl FromStr for TaskStatus {
             Self::Running,
             Self::Done,
             Self::Failed,
+            Self::Blocked,
+            Self::FailedUnknown,
             Self::Cancelled,
         ]
         .into_iter()
@@ -934,6 +943,8 @@ mod tests {
             TaskStatus::Running,
             TaskStatus::Done,
             TaskStatus::Failed,
+            TaskStatus::Blocked,
+            TaskStatus::FailedUnknown,
             TaskStatus::Cancelled,
         ] {
             assert_eq!(status.as_str().parse(), Ok(status));

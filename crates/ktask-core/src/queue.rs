@@ -14,6 +14,10 @@ pub struct StatusSummary {
     pub done: usize,
     /// Tasks that ended in failure.
     pub failed: usize,
+    /// Tasks blocked on a decision from the operator.
+    pub blocked: usize,
+    /// Tasks whose attempt ended with no report from the agent.
+    pub failed_unknown: usize,
     /// Tasks that were removed from the queue.
     pub cancelled: usize,
 }
@@ -29,6 +33,8 @@ impl StatusSummary {
                 TaskStatus::Running => &mut summary.running,
                 TaskStatus::Done => &mut summary.done,
                 TaskStatus::Failed => &mut summary.failed,
+                TaskStatus::Blocked => &mut summary.blocked,
+                TaskStatus::FailedUnknown => &mut summary.failed_unknown,
                 TaskStatus::Cancelled => &mut summary.cancelled,
             };
             *count += 1;
@@ -110,10 +116,9 @@ mod tests {
             view.summary,
             StatusSummary {
                 pending: 2,
-                running: 0,
                 done: 1,
                 failed: 1,
-                cancelled: 0
+                ..StatusSummary::default()
             }
         );
     }

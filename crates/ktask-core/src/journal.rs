@@ -2,9 +2,9 @@
 
 use std::error::Error;
 use std::fmt;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
-use crate::{Outcome, Placement, Task, TaskDraft, TaskId};
+use crate::{Outcome, Placement, Task, TaskDraft, TaskId, TaskStatus};
 
 /// Why the journal could not be read or written.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,6 +160,19 @@ impl From<JournalError> for RecordReportError {
     }
 }
 
+/// What running an attempt produced, given to [`Journal::end_attempt`].
+#[derive(Debug, Clone, Copy)]
+pub struct AttemptRun<'a> {
+    /// How long the provider ran.
+    pub duration: Duration,
+    /// The provider's exit code, or `None` when it was killed past its time limit.
+    pub exit_code: Option<i32>,
+    /// What the attempt, and so the task, ends at.
+    pub status: TaskStatus,
+    /// Why, when `status` is not `done`.
+    pub reason: Option<&'a str>,
+}
+
 /// Port: one project's journal. Every change is an event appended to it, and the tasks are
 /// updated from that event in the same transaction.
 pub trait Journal {
@@ -239,6 +252,50 @@ pub trait Journal {
         number: u32,
         outcome: Outcome,
         reason: Option<&str>,
+        at: SystemTime,
+    ) -> Result<(), RecordReportError>;
+
+    /// Records that attempt `number` of task `id` is starting to run with `provider`, right
+    /// before the provider is started: one event, carrying no status change of its own — the
+    /// task is already running, from [`Journal::begin_attempt`].
+    ///
+    /// # Errors
+    ///
+    /// Fails when the journal cannot be written.
+    fn attempt_running(
+        &self,
+        id: TaskId,
+        number: u32,
+        provider: &str,
+        at: SystemTime,
+    ) -> Result<(), JournalError>;
+
+    /// The most recent outcome and reason the agent itself reported for attempt `number` of
+    /// task `id`, with [`crate::report`] — `None` when it reported nothing.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the journal cannot be read.
+    fn last_report(
+        &self,
+        id: TaskId,
+        number: u32,
+    ) -> Result<Option<(Outcome, Option<String>)>, JournalError>;
+
+    /// Ends attempt `number` of task `id`: records how long the provider ran, its exit code
+    /// (`None` when it was killed past its time limit), and the resulting `status` and
+    /// `reason`, and sets the task to `status` — one event, in the same transaction as the
+    /// status change.
+    ///
+    /// # Errors
+    ///
+    /// Fails, changing nothing, when no attempt numbered `number` is running for this task,
+    /// or when the journal cannot be written.
+    fn end_attempt(
+        &self,
+        id: TaskId,
+        number: u32,
+        run: AttemptRun<'_>,
         at: SystemTime,
     ) -> Result<(), RecordReportError>;
 }

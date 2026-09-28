@@ -8,6 +8,9 @@ use std::time::Duration;
 
 use crate::{CommandSpec, Commands, CommandsError, Output};
 
+/// The name the `echo` provider is known by.
+pub const NAME: &str = "echo";
+
 /// Why the `echo` provider could not run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EchoError {
