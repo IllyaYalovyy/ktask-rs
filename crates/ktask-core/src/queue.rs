@@ -2,9 +2,11 @@
 
 use std::collections::HashMap;
 
-use crate::status::{AttemptLine, status};
+use crate::status::{AttemptLine, AttemptOutcome, status};
 use crate::task::without_cancelled;
-use crate::{Clock, Journal, JournalError, Project, Task, TaskId, TaskStatus, list_all_tasks};
+use crate::{
+    Clock, Journal, JournalError, Project, RunLock, Task, TaskId, TaskStatus, list_all_tasks,
+};
 
 /// How many tasks are in each status.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -19,26 +21,38 @@ pub struct StatusSummary {
     pub failed: usize,
     /// Tasks blocked on a decision from the operator.
     pub blocked: usize,
-    /// Tasks whose attempt ended with no report from the agent.
+    /// Tasks whose attempt ended with no report from the agent, and tasks the journal still
+    /// calls running whose run is not alive to finish them — shown `interrupted` in their own
+    /// row, but counted here with the other attempts the tool itself had to call, not the
+    /// agent.
     pub failed_unknown: usize,
     /// Tasks that were removed from the queue.
     pub cancelled: usize,
 }
 
 impl StatusSummary {
-    /// The counts for `tasks`.
+    /// The counts for `tasks`, `attempts` giving each one that was attempted its shown
+    /// outcome — a task shown [`AttemptOutcome::Interrupted`] is never counted `running`; it
+    /// joins `failed_unknown`, the count of the other attempts the tool called on its own.
     #[must_use]
-    pub fn of(tasks: &[Task]) -> Self {
+    pub fn of(tasks: &[Task], attempts: &HashMap<TaskId, AttemptLine>) -> Self {
         let mut summary = Self::default();
         for task in tasks {
-            let count = match task.status {
-                TaskStatus::Pending => &mut summary.pending,
-                TaskStatus::Running => &mut summary.running,
-                TaskStatus::Done => &mut summary.done,
-                TaskStatus::Failed => &mut summary.failed,
-                TaskStatus::Blocked => &mut summary.blocked,
-                TaskStatus::FailedUnknown => &mut summary.failed_unknown,
-                TaskStatus::Cancelled => &mut summary.cancelled,
+            let interrupted = attempts
+                .get(&task.id)
+                .is_some_and(|attempt| attempt.outcome == AttemptOutcome::Interrupted);
+            let count = if interrupted {
+                &mut summary.failed_unknown
+            } else {
+                match task.status {
+                    TaskStatus::Pending => &mut summary.pending,
+                    TaskStatus::Running => &mut summary.running,
+                    TaskStatus::Done => &mut summary.done,
+                    TaskStatus::Failed => &mut summary.failed,
+                    TaskStatus::Blocked => &mut summary.blocked,
+                    TaskStatus::FailedUnknown => &mut summary.failed_unknown,
+                    TaskStatus::Cancelled => &mut summary.cancelled,
+                }
             };
             *count += 1;
         }
@@ -64,23 +78,28 @@ pub struct QueueView {
 /// Use case: the queue of `project`, whose journal is `journal`; with the cancelled tasks in
 /// their places when `show_cancelled`.
 ///
+/// A task the journal still calls `running` is shown `running` only while `lock` says a run is
+/// actually alive; otherwise it is shown `interrupted` at once, with no need to wait for the
+/// next `run` to reconcile it — the same rule `status` follows, from the same use case.
+///
 /// # Errors
 ///
-/// Fails when the journal cannot be read.
+/// Fails when the journal cannot be read, or when `lock` cannot be used.
 pub fn queue_view(
     project: Project,
     journal: &impl Journal,
     clock: &impl Clock,
+    lock: &impl RunLock,
     show_cancelled: bool,
 ) -> Result<QueueView, JournalError> {
     let tasks = list_all_tasks(journal)?;
-    let attempts = status(journal, clock)?
+    let attempts: HashMap<TaskId, AttemptLine> = status(journal, clock, lock)?
         .into_iter()
         .map(|entry| (entry.task, entry.attempt))
         .collect();
     Ok(QueueView {
         project,
-        summary: StatusSummary::of(&tasks),
+        summary: StatusSummary::of(&tasks, &attempts),
         tasks: if show_cancelled {
             tasks
         } else {
@@ -94,10 +113,15 @@ pub fn queue_view(
 mod tests {
     use std::time::Duration;
 
-    use crate::fakes::{FakeClock, FakeJournal, at, draft, project};
+    use crate::fakes::{FakeClock, FakeJournal, FakeRunLock, at, draft, project};
     use crate::{AttemptRun, Placement, TaskId, TaskStatus, add_task};
 
     use super::*;
+
+    /// A lock no run holds — irrelevant whenever nothing is running.
+    fn no_run() -> FakeRunLock {
+        FakeRunLock::free()
+    }
 
     #[test]
     fn a_new_queue_has_every_count_at_zero_and_no_tasks() {
@@ -105,6 +129,7 @@ mod tests {
             project("app", 10),
             &FakeJournal::default(),
             &FakeClock(at(0)),
+            &no_run(),
             false,
         )
         .unwrap();
@@ -141,7 +166,7 @@ mod tests {
             )
             .unwrap();
         }
-        let view = queue_view(project("app", 10), &journal, &clock, false).unwrap();
+        let view = queue_view(project("app", 10), &journal, &clock, &no_run(), false).unwrap();
         let titles: Vec<_> = view.tasks.iter().map(|t| t.title.as_str()).collect();
         assert_eq!(titles, ["a", "b", "c", "d"]);
         assert_eq!(
@@ -163,7 +188,7 @@ mod tests {
             add_task(&journal, &clock, &draft(title), Placement::End).unwrap();
         }
         crate::remove_task(&journal, &clock, TaskId(2)).unwrap();
-        let view = queue_view(project("app", 10), &journal, &clock, false).unwrap();
+        let view = queue_view(project("app", 10), &journal, &clock, &no_run(), false).unwrap();
         let shown: Vec<_> = view.tasks.iter().map(|t| (t.position, &*t.title)).collect();
         assert_eq!(shown, [(1, "a"), (2, "c")]);
         assert_eq!(
@@ -184,7 +209,7 @@ mod tests {
             add_task(&journal, &clock, &draft(title), Placement::End).unwrap();
         }
         crate::remove_task(&journal, &clock, TaskId(2)).unwrap();
-        let view = queue_view(project("app", 10), &journal, &clock, true).unwrap();
+        let view = queue_view(project("app", 10), &journal, &clock, &no_run(), true).unwrap();
         let shown: Vec<_> = view
             .tasks
             .iter()
@@ -206,7 +231,13 @@ mod tests {
         let failure = JournalError::new("disk on fire");
         let journal = FakeJournal::failing(failure.clone());
         assert_eq!(
-            queue_view(project("app", 10), &journal, &FakeClock(at(0)), false),
+            queue_view(
+                project("app", 10),
+                &journal,
+                &FakeClock(at(0)),
+                &no_run(),
+                false
+            ),
             Err(failure)
         );
     }
@@ -218,11 +249,45 @@ mod tests {
         add_task(&journal, &clock, &draft("a"), Placement::End).unwrap();
         crate::attempt::begin_attempt_running(&journal, &clock, TaskId(1), "echo").unwrap();
 
-        let view = queue_view(project("app", 10), &journal, &FakeClock(at(30)), false).unwrap();
+        let view = queue_view(
+            project("app", 10),
+            &journal,
+            &FakeClock(at(30)),
+            &no_run(),
+            false,
+        )
+        .unwrap();
 
-        let expected = status(&journal, &FakeClock(at(30))).unwrap()[0]
+        let expected = status(&journal, &FakeClock(at(30)), &no_run()).unwrap()[0]
             .attempt
             .clone();
         assert_eq!(view.attempts.get(&TaskId(1)), Some(&expected));
+    }
+
+    #[test]
+    fn a_task_left_running_with_no_run_alive_is_shown_interrupted_and_counted_with_failed_unknown()
+    {
+        let journal = FakeJournal::default();
+        let clock = FakeClock(at(0));
+        add_task(&journal, &clock, &draft("a"), Placement::End).unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock, TaskId(1), "echo").unwrap();
+
+        let view = queue_view(project("app", 10), &journal, &clock, &no_run(), false).unwrap();
+
+        // The task's own persisted status is untouched, but it is shown `interrupted`, not
+        // `running`, and counted with the other attempts the tool itself had to end, not the
+        // agent.
+        assert_eq!(view.tasks[0].status, TaskStatus::Running);
+        assert_eq!(
+            view.attempts.get(&TaskId(1)).unwrap().outcome,
+            AttemptOutcome::Interrupted
+        );
+        assert_eq!(
+            view.summary,
+            StatusSummary {
+                failed_unknown: 1,
+                ..StatusSummary::default()
+            }
+        );
     }
 }

@@ -36,7 +36,9 @@ pub use register::{RegisterError, register_project};
 pub use report::{AttemptToken, Outcome, ReportError, report, start_attempt};
 pub use resolve::{Resolution, ResolveError, resolve_project};
 pub use run::{Attempted, RunContext, RunEnd, RunError, RunReport, build_prompt, run_queue};
-pub use status::{AttemptLine, AttemptOutcome, IMPLEMENTATION, StatusEntry, status};
+pub use status::{
+    AttemptLine, AttemptOutcome, IMPLEMENTATION, StatusEntry, displayed_status, status,
+};
 pub use task::{
     AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, add_task,
     add_task_listing_problems, list_all_tasks, list_tasks, remove_task,

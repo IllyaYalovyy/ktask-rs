@@ -3,7 +3,9 @@
 use std::fmt;
 use std::time::Duration;
 
-use crate::{Clock, Journal, JournalError, Outcome, Task, TaskId, TaskStatus, list_all_tasks};
+use crate::{
+    Clock, Journal, JournalError, Outcome, RunLock, Task, TaskId, TaskStatus, list_all_tasks,
+};
 
 /// The one step kind that exists so far: an agent implementing the task.
 pub const IMPLEMENTATION: &str = "implementation";
@@ -19,6 +21,9 @@ pub enum AttemptOutcome {
     Reported(Outcome),
     /// The tool observed the attempt end with no report from the agent.
     Unreported,
+    /// The journal still calls the attempt running, but no run is alive to finish it: a run
+    /// that was killed outright left it behind, and nothing has reconciled it yet.
+    Interrupted,
 }
 
 impl AttemptOutcome {
@@ -29,6 +34,7 @@ impl AttemptOutcome {
             Self::Running => "running",
             Self::Reported(outcome) => outcome.as_str(),
             Self::Unreported => TaskStatus::FailedUnknown.as_str(),
+            Self::Interrupted => "interrupted",
         }
     }
 }
@@ -70,27 +76,47 @@ pub struct StatusEntry {
     pub attempt: AttemptLine,
 }
 
+/// The status word to show for a task: `status.as_str()`, except `"interrupted"` when its
+/// most recent attempt's outcome is [`AttemptOutcome::Interrupted`] — a task the journal still
+/// calls `running`, but whose run is not alive to finish it. `status` and the queue screen
+/// both show this word in place of the task's own status, from this one place, so neither
+/// decides it on its own.
+#[must_use]
+pub fn displayed_status(status: TaskStatus, outcome: Option<AttemptOutcome>) -> &'static str {
+    if outcome == Some(AttemptOutcome::Interrupted) {
+        "interrupted"
+    } else {
+        status.as_str()
+    }
+}
+
 /// The [`StatusEntry`] for `task`, given its most recent attempt and the agent's own report of
-/// it, when there was one.
+/// it, when there was one; `run_alive` says whether a live run currently holds the project's
+/// run lock, which only matters when the attempt has not ended.
 fn entry_for(
     task: Task,
     attempt: crate::Attempt,
     reported: Option<(Outcome, Option<String>)>,
     clock: &impl Clock,
+    run_alive: bool,
 ) -> StatusEntry {
     let (outcome, reason, time_spent) = match (&attempt.ended, reported) {
         (Some(end), Some((outcome, reason))) => {
             (AttemptOutcome::Reported(outcome), reason, end.duration)
         }
         (Some(end), None) => (AttemptOutcome::Unreported, end.reason.clone(), end.duration),
-        (None, _) => (
-            AttemptOutcome::Running,
-            None,
-            clock
+        (None, _) => {
+            let elapsed = clock
                 .now()
                 .duration_since(attempt.started_at)
-                .unwrap_or_default(),
-        ),
+                .unwrap_or_default();
+            let outcome = if run_alive {
+                AttemptOutcome::Running
+            } else {
+                AttemptOutcome::Interrupted
+            };
+            (outcome, None, elapsed)
+        }
     };
     StatusEntry {
         task: task.id,
@@ -111,20 +137,31 @@ fn entry_for(
 /// that was attempted at least once, cancelled tasks included when they were. A task never
 /// attempted, pending or cancelled before it ever ran, is left out.
 ///
+/// A task the journal still calls `running` is shown `running` only while `lock` says a run is
+/// actually alive; otherwise — a run that was killed outright left it behind — it is shown
+/// `interrupted` at once, with no need to wait for the next `run` to reconcile it.
+///
 /// # Errors
 ///
-/// Fails when the journal cannot be read.
+/// Fails when the journal cannot be read, or when `lock` cannot be used.
 pub fn status(
     journal: &impl Journal,
     clock: &impl Clock,
+    lock: &impl RunLock,
 ) -> Result<Vec<StatusEntry>, JournalError> {
+    let run_alive = match crate::attempt::running(journal)? {
+        Some(_) => lock
+            .in_progress()
+            .map_err(|error| JournalError::new(error.to_string()))?,
+        None => false,
+    };
     let mut entries = Vec::new();
     for task in list_all_tasks(journal)? {
         let Some(attempt) = crate::attempt::last_attempt(journal, task.id)? else {
             continue;
         };
         let reported = crate::attempt::last_report(journal, task.id, attempt.number)?;
-        entries.push(entry_for(task, attempt, reported, clock));
+        entries.push(entry_for(task, attempt, reported, clock, run_alive));
     }
     Ok(entries)
 }
@@ -133,7 +170,7 @@ pub fn status(
 mod tests {
     use std::time::Duration;
 
-    use crate::fakes::{FakeClock, FakeJournal, at, draft};
+    use crate::fakes::{FakeClock, FakeJournal, FakeRunLock, at, draft};
     use crate::{AttemptRun, Outcome, Placement, TaskId, TaskStatus, add_task, report};
 
     use super::*;
@@ -142,11 +179,21 @@ mod tests {
         FakeClock(at(seconds))
     }
 
+    /// A lock no run holds.
+    fn no_run() -> FakeRunLock {
+        FakeRunLock::free()
+    }
+
+    /// A lock a live run holds.
+    fn a_live_run() -> FakeRunLock {
+        FakeRunLock::held_by(Some(4_321))
+    }
+
     #[test]
     fn a_pending_task_is_left_out() {
         let journal = FakeJournal::default();
         add_task(&journal, &clock(0), &draft("a"), Placement::End).unwrap();
-        assert_eq!(status(&journal, &clock(0)).unwrap(), vec![]);
+        assert_eq!(status(&journal, &clock(0), &no_run()).unwrap(), vec![]);
     }
 
     #[test]
@@ -154,12 +201,15 @@ mod tests {
         let journal = FakeJournal::default();
         add_task(&journal, &clock(0), &draft("a"), Placement::End).unwrap();
         crate::remove_task(&journal, &clock(0), TaskId(1)).unwrap();
-        assert_eq!(status(&journal, &clock(0)).unwrap(), vec![]);
+        assert_eq!(status(&journal, &clock(0), &no_run()).unwrap(), vec![]);
     }
 
     #[test]
     fn an_empty_queue_has_no_status_and_a_project_with_no_attempts_reports_nothing() {
-        assert_eq!(status(&FakeJournal::default(), &clock(0)).unwrap(), vec![]);
+        assert_eq!(
+            status(&FakeJournal::default(), &clock(0), &no_run()).unwrap(),
+            vec![]
+        );
     }
 
     /// A journal with one task titled `a`, whose one attempt was started at second 100 and ran
@@ -172,9 +222,9 @@ mod tests {
     }
 
     #[test]
-    fn a_running_attempt_shows_no_outcome_and_its_elapsed_time_so_far() {
+    fn a_running_attempt_with_its_run_alive_shows_no_outcome_and_its_elapsed_time_so_far() {
         let journal = journal_with_a_started_attempt();
-        let entries = status(&journal, &clock(130)).unwrap();
+        let entries = status(&journal, &clock(130), &a_live_run()).unwrap();
         assert_eq!(
             entries,
             vec![StatusEntry {
@@ -190,6 +240,35 @@ mod tests {
                     reason: None,
                 },
             }]
+        );
+    }
+
+    #[test]
+    fn a_running_attempt_with_no_run_alive_shows_interrupted_at_once() {
+        let journal = journal_with_a_started_attempt();
+        let entries = status(&journal, &clock(130), &no_run()).unwrap();
+        assert_eq!(
+            entries,
+            vec![StatusEntry {
+                task: TaskId(1),
+                title: "a".to_owned(),
+                // The task's own persisted status is unaffected: the journal still calls it
+                // running, since nothing reconciled it. Only the attempt's shown outcome, and
+                // `displayed_status`, say otherwise.
+                status: TaskStatus::Running,
+                attempt: AttemptLine {
+                    number: 1,
+                    step: IMPLEMENTATION,
+                    provider: Some("echo".to_owned()),
+                    time_spent: Duration::from_secs(30),
+                    outcome: AttemptOutcome::Interrupted,
+                    reason: None,
+                },
+            }]
+        );
+        assert_eq!(
+            displayed_status(entries[0].status, Some(entries[0].attempt.outcome)),
+            "interrupted"
         );
     }
 
@@ -222,7 +301,10 @@ mod tests {
             clock(112).0,
         )
         .unwrap();
-        status(&journal, &clock(200)).unwrap().remove(0).attempt
+        status(&journal, &clock(200), &no_run())
+            .unwrap()
+            .remove(0)
+            .attempt
     }
 
     #[test]
@@ -272,7 +354,7 @@ mod tests {
             clock(115).0,
         )
         .unwrap();
-        let entries = status(&journal, &clock(200)).unwrap();
+        let entries = status(&journal, &clock(200), &no_run()).unwrap();
         assert_eq!(entries[0].status, TaskStatus::Blocked);
         assert_eq!(
             entries[0].attempt.outcome,
@@ -298,7 +380,7 @@ mod tests {
             clock(107).0,
         )
         .unwrap();
-        let entries = status(&journal, &clock(200)).unwrap();
+        let entries = status(&journal, &clock(200), &no_run()).unwrap();
         assert_eq!(entries[0].status, TaskStatus::FailedUnknown);
         assert_eq!(entries[0].attempt.outcome, AttemptOutcome::Unreported);
         assert_eq!(entries[0].attempt.outcome.as_str(), "failed-unknown");
@@ -361,7 +443,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = status(&journal, &clock(2)).unwrap();
+        let entries = status(&journal, &clock(2), &no_run()).unwrap();
         let ids: Vec<_> = entries.iter().map(|entry| entry.task).collect();
         assert_eq!(ids, [TaskId(1), TaskId(3)]);
         assert_eq!(entries[0].status, TaskStatus::Done);
@@ -372,7 +454,7 @@ mod tests {
     fn a_journal_failure_is_passed_on() {
         let failure = JournalError::new("disk on fire");
         let journal = FakeJournal::failing(failure.clone());
-        assert_eq!(status(&journal, &clock(0)), Err(failure));
+        assert_eq!(status(&journal, &clock(0), &no_run()), Err(failure));
     }
 
     #[test]
@@ -380,6 +462,27 @@ mod tests {
         assert_eq!(AttemptOutcome::Running.as_str(), "running");
         assert_eq!(AttemptOutcome::Reported(Outcome::Done).as_str(), "done");
         assert_eq!(AttemptOutcome::Unreported.as_str(), "failed-unknown");
+        assert_eq!(AttemptOutcome::Interrupted.as_str(), "interrupted");
         assert_eq!(AttemptOutcome::Running.to_string(), "running");
+    }
+
+    #[test]
+    fn displayed_status_only_overrides_a_task_shown_interrupted() {
+        assert_eq!(
+            displayed_status(TaskStatus::Running, Some(AttemptOutcome::Interrupted)),
+            "interrupted"
+        );
+        assert_eq!(
+            displayed_status(TaskStatus::Running, Some(AttemptOutcome::Running)),
+            "running"
+        );
+        assert_eq!(displayed_status(TaskStatus::Running, None), "running");
+        assert_eq!(
+            displayed_status(
+                TaskStatus::Failed,
+                Some(AttemptOutcome::Reported(Outcome::TooLarge))
+            ),
+            "failed"
+        );
     }
 }

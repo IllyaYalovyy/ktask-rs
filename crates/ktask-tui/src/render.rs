@@ -1,6 +1,6 @@
 //! Draws an [`App`] into a buffer.
 
-use ktask_core::{AttemptLine, CancelError, QueueView, Task, TaskStatus};
+use ktask_core::{AttemptLine, CancelError, QueueView, Task, TaskStatus, displayed_status};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -156,8 +156,9 @@ fn task_lines(app: &App, queue: &QueueView, height: usize) -> Vec<Line<'static>>
         if lines.len() >= height {
             break;
         }
-        lines.push(task_line(task, Some(index) == selected));
-        if let Some(attempt) = queue.attempts.get(&task.id) {
+        let attempt = queue.attempts.get(&task.id);
+        lines.push(task_line(task, attempt, Some(index) == selected));
+        if let Some(attempt) = attempt {
             if lines.len() >= height {
                 break;
             }
@@ -207,7 +208,10 @@ fn attempt_line(attempt: &AttemptLine) -> Line<'static> {
     Line::styled(text, Style::new().add_modifier(Modifier::DIM))
 }
 
-fn task_line(task: &Task, selected: bool) -> Line<'static> {
+/// `task`'s row: its position, ID, status, kind and title. `attempt` — the same line
+/// `status` shows for it, from the same use case — decides the status word when it says the
+/// task is shown `interrupted` rather than `task.status`'s own `running`.
+fn task_line(task: &Task, attempt: Option<&AttemptLine>, selected: bool) -> Line<'static> {
     let marker = if selected { '>' } else { ' ' };
     let mut style = Style::new();
     if task.status == TaskStatus::Cancelled {
@@ -216,10 +220,11 @@ fn task_line(task: &Task, selected: bool) -> Line<'static> {
     if selected {
         style = style.add_modifier(Modifier::REVERSED);
     }
+    let status = displayed_status(task.status, attempt.map(|attempt| attempt.outcome));
     Line::styled(
         format!(
             "{marker}{:>3}  #{}  {}  {}  {}",
-            task.position, task.id, task.status, task.kind, task.title
+            task.position, task.id, status, task.kind, task.title
         ),
         style,
     )

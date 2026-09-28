@@ -3,9 +3,9 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use ktask_adapters::SystemClock;
+use ktask_adapters::{FileRunLock, SystemClock};
 
-use crate::context::open_queue;
+use crate::context::{open_journal, open_registry, resolve, run_lock_file};
 use crate::error::Failure;
 use crate::render;
 
@@ -20,10 +20,15 @@ pub(crate) struct Args {
     json: bool,
 }
 
-/// Prints every task that was attempted, with its most recent attempt.
+/// Prints every task that was attempted, with its most recent attempt. A task the journal
+/// still calls `running` is shown `interrupted` at once when no run is alive to finish it,
+/// rather than waiting for the next `run` to reconcile it.
 pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
-    let journal = open_queue(args.project.as_deref())?;
-    let entries = ktask_core::status(&journal, &SystemClock).map_err(|e| e.to_string())?;
+    let registry = open_registry()?;
+    let project = resolve(&registry, args.project.as_deref())?;
+    let journal = open_journal(&project)?;
+    let lock = FileRunLock::new(run_lock_file(&project)?);
+    let entries = ktask_core::status(&journal, &SystemClock, &lock).map_err(|e| e.to_string())?;
     render::status(&entries, args.json, stdout)?;
     Ok(ExitCode::SUCCESS)
 }

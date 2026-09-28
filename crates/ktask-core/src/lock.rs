@@ -40,4 +40,13 @@ pub trait RunLock {
     /// Fails when another run already holds the lock, naming its process when known, or when
     /// the lock cannot be used at all.
     fn acquire(&self) -> Result<(), RunLockError>;
+
+    /// Whether a run currently holds the lock — without taking it, and without disturbing
+    /// whoever holds it. Used to tell a task the journal still calls `running` apart: still
+    /// truly running, or left behind by a run that is no longer alive.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the lock cannot be used at all.
+    fn in_progress(&self) -> Result<bool, RunLockError>;
 }

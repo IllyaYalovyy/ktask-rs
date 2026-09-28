@@ -233,7 +233,7 @@ fn status_json(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
         .map(|entry| StatusJson {
             id: entry.task.0,
             title: &entry.title,
-            status: entry.status.as_str(),
+            status: ktask_core::displayed_status(entry.status, Some(entry.attempt.outcome)),
             attempt: AttemptJson {
                 number: entry.attempt.number,
                 step: entry.attempt.step,
@@ -255,7 +255,8 @@ fn status_text(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
     entries
         .iter()
         .try_for_each(|entry| {
-            writeln!(out, "#{}\t{}\t{}", entry.task, entry.status, entry.title)?;
+            let status = ktask_core::displayed_status(entry.status, Some(entry.attempt.outcome));
+            writeln!(out, "#{}\t{}\t{}", entry.task, status, entry.title)?;
             let provider = entry.attempt.provider.as_deref().unwrap_or("-");
             match &entry.attempt.reason {
                 Some(reason) => writeln!(

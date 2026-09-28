@@ -72,6 +72,27 @@ impl RunLock for FileRunLock {
         *self.held.borrow_mut() = Some(locked);
         Ok(())
     }
+
+    fn in_progress(&self) -> Result<bool, RunLockError> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| unusable("cannot create the directory for the run lock", parent, e))?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&self.path)
+            .map_err(|e| unusable("cannot open the run lock", &self.path, e))?;
+        match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+            // Nobody held it: the trylock above just took it, and it is released again the
+            // moment `locked` is dropped here.
+            Ok(_locked) => Ok(false),
+            Err((_, Errno::EAGAIN)) => Ok(true),
+            Err((_, errno)) => Err(unusable("cannot lock", &self.path, errno)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -114,5 +135,48 @@ mod tests {
 
         let second = FileRunLock::new(path);
         second.acquire().unwrap();
+    }
+
+    #[test]
+    fn in_progress_is_false_on_a_lock_nobody_has_ever_taken() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("nested").join("run.lock");
+        let lock = FileRunLock::new(path);
+        assert_eq!(lock.in_progress(), Ok(false));
+    }
+
+    #[test]
+    fn in_progress_is_true_while_another_holder_has_the_lock() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("run.lock");
+        let holder = FileRunLock::new(path.clone());
+        holder.acquire().unwrap();
+
+        let peeker = FileRunLock::new(path);
+        assert_eq!(peeker.in_progress(), Ok(true));
+    }
+
+    #[test]
+    fn in_progress_is_false_again_once_the_holder_is_dropped() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("run.lock");
+        let holder = FileRunLock::new(path.clone());
+        holder.acquire().unwrap();
+        drop(holder);
+
+        let peeker = FileRunLock::new(path);
+        assert_eq!(peeker.in_progress(), Ok(false));
+    }
+
+    #[test]
+    fn in_progress_does_not_itself_take_the_lock() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("run.lock");
+        let peeker = FileRunLock::new(path.clone());
+        assert_eq!(peeker.in_progress(), Ok(false));
+
+        // Peeking left the lock free: a real acquire still succeeds afterwards.
+        let acquirer = FileRunLock::new(path);
+        acquirer.acquire().unwrap();
     }
 }

@@ -2,9 +2,9 @@
 
 use std::io::{self, IsTerminal};
 
-use ktask_adapters::{FileJournalWatch, SqliteJournal, SystemClock};
+use ktask_adapters::{FileJournalWatch, FileRunLock, SqliteJournal, SystemClock};
 
-use crate::context::{journal_file, open_registry, resolve};
+use crate::context::{journal_file, open_registry, resolve, run_lock_file};
 use crate::error::Failure;
 
 /// `ktask-rs tui`'s arguments.
@@ -30,10 +30,17 @@ pub(crate) fn run(args: &Args) -> Result<(), Failure> {
     let path = journal_file(&project)?;
     let journal = SqliteJournal::open(&path).map_err(|e| e.to_string())?;
     let watch = FileJournalWatch::open(&path).map_err(|e| e.to_string())?;
+    let lock = FileRunLock::new(run_lock_file(&project)?);
     Ok(ktask_tui::run(
         |show_cancelled| {
-            ktask_core::queue_view(project.clone(), &journal, &SystemClock, show_cancelled)
-                .map_err(|e| e.to_string())
+            ktask_core::queue_view(
+                project.clone(),
+                &journal,
+                &SystemClock,
+                &lock,
+                show_cancelled,
+            )
+            .map_err(|e| e.to_string())
         },
         |id| ktask_core::remove_task(&journal, &SystemClock, id).map_err(|e| e.to_string()),
         |draft, placement| {

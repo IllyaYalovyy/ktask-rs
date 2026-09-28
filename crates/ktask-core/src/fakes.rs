@@ -183,6 +183,10 @@ impl RunLock for FakeRunLock {
             None => Ok(()),
         }
     }
+
+    fn in_progress(&self) -> Result<bool, RunLockError> {
+        Ok(self.failure.is_some())
+    }
 }
 
 /// A valid draft titled `title`, with one criterion and nothing else.
