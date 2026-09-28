@@ -44,7 +44,7 @@ fn with_nested_ktask_rs_on_path(command: &mut std::process::Command) {
     }
 }
 
-/// Waits, for up to a few seconds, until `condition` holds, polling every 20ms; fails naming
+/// Waits, for up to a few seconds, until `condition` holds, checking every 20ms; fails naming
 /// `what` when it never does.
 fn wait_until(what: &str, mut condition: impl FnMut() -> bool) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -52,7 +52,7 @@ fn wait_until(what: &str, mut condition: impl FnMut() -> bool) -> Result<()> {
         if Instant::now() >= deadline {
             return Err(format!("timed out waiting for {what}").into());
         }
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::park_timeout(Duration::from_millis(20));
     }
     Ok(())
 }
@@ -426,7 +426,14 @@ fn while_a_run_is_in_progress_the_running_task_shows_its_elapsed_time_so_far() -
     wait_until("the attempt to start running", || {
         fixture.attempt_running_provider(1).is_ok()
     })?;
-    std::thread::sleep(Duration::from_millis(1_200));
+    wait_until("the attempt to have run for at least a second", || {
+        fixture
+            .run(&["status", "--json"])
+            .ok()
+            .and_then(|outcome| serde_json::from_str::<serde_json::Value>(&outcome.stdout).ok())
+            .and_then(|entries| entries[0]["attempt"]["time_spent_seconds"].as_u64())
+            .is_some_and(|seconds| seconds >= 1)
+    })?;
 
     let outcome = fixture.run(&["status"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);

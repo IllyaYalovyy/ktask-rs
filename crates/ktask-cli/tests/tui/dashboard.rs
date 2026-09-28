@@ -183,9 +183,12 @@ fn a_run_started_elsewhere_shows_pending_then_running_with_elapsed_time_increasi
 
     // Nothing else touches the journal while the attempt is still gated on `go`: any further
     // frame, and any increase in the elapsed time shown, comes from the loop's own tick.
-    std::thread::sleep(Duration::from_millis(2_500));
-
-    let screen = terminal.screen();
+    let screen = terminal.wait_for("the elapsed time to move on its own", |screen| {
+        lines_inside_frame(&screen.contents())
+            .get(5)
+            .and_then(|line| attempt_seconds(line).ok())
+            .is_some_and(|seconds| seconds > first_elapsed)
+    })?;
     let lines = lines_inside_frame(&screen);
     let second_elapsed = attempt_seconds(&lines[5])?;
     assert!(
@@ -238,7 +241,7 @@ fn is_running(pid: u32) -> bool {
     state != Some("Z")
 }
 
-/// Waits, for up to a few seconds, until `condition` holds, polling every 20ms; fails naming
+/// Waits, for up to a few seconds, until `condition` holds, checking every 20ms; fails naming
 /// `what` when it never does.
 fn wait_until(what: &str, mut condition: impl FnMut() -> bool) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -246,7 +249,7 @@ fn wait_until(what: &str, mut condition: impl FnMut() -> bool) -> Result<()> {
         if Instant::now() >= deadline {
             return Err(format!("timed out waiting for {what}").into());
         }
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::park_timeout(Duration::from_millis(20));
     }
     Ok(())
 }
