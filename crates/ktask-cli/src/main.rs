@@ -12,11 +12,12 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use ktask_adapters::{
     FileJournalWatch, FileRunLock, GitCli, ProcessCommands, SqliteJournal, SqliteRegistry,
-    SystemClock, journal_path, read_text, registry_path, run_lock_path,
+    SystemClock, echo, journal_path, read_text, registry_path, run_lock_path,
 };
 use ktask_core::{
-    AddError, AttemptToken, CancelError, EchoError, ImportError, Outcome, Placement, Project,
-    RegisterError, ReportError, ResolveError, RunError, TaskDraft, TaskId, TaskKind,
+    AddError, AttemptToken, CancelError, ImportError, Outcome, Placement, Project,
+    ProviderRunError, RegisterError, ReportError, ResolveError, RunContext, RunError, TaskDraft,
+    TaskId, TaskKind,
 };
 
 /// Runs an ordered queue of software tasks through AI coding agents.
@@ -503,10 +504,13 @@ fn run_command(
         &journal,
         &SystemClock,
         &ProcessCommands,
+        &echo::PROVIDER,
         &lock,
-        &project.name,
-        &project.path,
-        Duration::from_secs(attempt_timeout),
+        RunContext {
+            project_name: &project.name,
+            project_dir: &project.path,
+            attempt_timeout: Duration::from_secs(attempt_timeout),
+        },
     )?;
     let stopped = render::run(&report, stdout)?;
     Ok(if stopped {
@@ -525,11 +529,11 @@ fn provider_run(
     timeout_ms: u64,
     stdout: &mut impl Write,
 ) -> Result<ExitCode, Failure> {
-    if provider != ktask_core::echo::NAME {
+    if provider != echo::NAME {
         return Err(Failure {
             message: format!(
                 "unknown provider {provider:?}; known providers: {}",
-                ktask_core::echo::NAME
+                echo::NAME
             ),
             code: 2,
         });
@@ -541,14 +545,19 @@ fn provider_run(
         .map_err(|e| format!("cannot read the prompt: {e}"))?;
     let dir = current_dir()?;
     let timeout = Duration::from_millis(timeout_ms);
-    let output = ktask_core::run_echo(&ProcessCommands, &prompt, token, attempt, &dir, timeout)
-        .map_err(|error| match error {
-            EchoError::NoBashBlock => Failure {
-                message: error.to_string(),
-                code: 2,
-            },
-            EchoError::Commands(_) => Failure::from(error.to_string()),
-        })?;
+    let output = ktask_core::run_provider(
+        &ProcessCommands,
+        &echo::PROVIDER,
+        &prompt,
+        token,
+        attempt,
+        &dir,
+        timeout,
+    )
+    .map_err(|error| match error {
+        ProviderRunError::Build(message) => Failure { message, code: 2 },
+        ProviderRunError::Commands(_) => Failure::from(error.to_string()),
+    })?;
     render::provider_output(&output, stdout, &mut io::stderr())?;
     match output.exit {
         ktask_core::Exit::Code(code) => Ok(ExitCode::from(u8::try_from(code).unwrap_or(u8::MAX))),
