@@ -24,6 +24,10 @@ struct State {
     parser: vt100::Parser,
     /// The child's exit code; `None` while it runs. A signal that ended it reads as a failure.
     exit: Option<u32>,
+    /// Whether the reader has drained the terminal to its end. The child's exit and the last
+    /// of its output arrive on separate threads; a screen read straight after the exit is seen
+    /// can otherwise miss output that was still on its way.
+    eof: bool,
 }
 
 /// The state and the signal that it changed.
@@ -75,6 +79,7 @@ impl Terminal {
             state: Mutex::new(State {
                 parser: vt100::Parser::new(rows, cols, 0),
                 exit: None,
+                eof: false,
             }),
             changed: Condvar::new(),
         });
@@ -89,6 +94,8 @@ impl Terminal {
                     .process(chunk.get(..count).unwrap_or_default());
                 output.changed.notify_all();
             }
+            output.lock().eof = true;
+            output.changed.notify_all();
         });
         let exits = Arc::clone(&shared);
         thread::spawn(move || {
@@ -154,7 +161,8 @@ impl Terminal {
         })
     }
 
-    /// Waits until the child has exited, and returns its exit code.
+    /// Waits until the child has exited and its last output has been read, and returns its
+    /// exit code.
     ///
     /// # Errors
     ///
@@ -163,7 +171,9 @@ impl Terminal {
         let (state, _) = self
             .shared
             .changed
-            .wait_timeout_while(self.shared.lock(), TIMEOUT, |state| state.exit.is_none())
+            .wait_timeout_while(self.shared.lock(), TIMEOUT, |state| {
+                state.exit.is_none() || !state.eof
+            })
             .unwrap_or_else(PoisonError::into_inner);
         state.exit.ok_or_else(|| {
             let screen = state.parser.screen().contents();

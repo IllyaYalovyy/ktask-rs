@@ -282,7 +282,11 @@ fn question_mark_shows_the_key_map_and_esc_closes_it_back_to_the_queue() -> Resu
     walk(&mut terminal, &[("j", "bravo")])?;
 
     terminal.send("?")?;
-    let screen = terminal.wait_for("the key map", |screen| screen.contents().contains("Keys"))?;
+    // Waits for the last line of the key map, not just its title, so the frame is whole
+    // before its lines are checked one by one.
+    let screen = terminal.wait_for("the key map", |screen| {
+        screen.contents().contains("q        quit")
+    })?;
 
     let lines = lines_inside_frame(&screen);
     for key in [
