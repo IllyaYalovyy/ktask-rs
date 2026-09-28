@@ -5,6 +5,8 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::SystemTime;
 
+use crate::journal::{AppendConflict, Event};
+use crate::queue_state::QueueState;
 use crate::{AppendError, CancelError, Clock, Journal, JournalError};
 
 /// The number a task is known by: assigned once, in order, never reused, never changed.
@@ -262,8 +264,13 @@ impl From<AppendError> for AddError {
         match error {
             AppendError::UnknownTask(id) => Self::UnknownTask(id),
             AppendError::CancelledTask(id) => Self::CancelledTask(id),
-            AppendError::Journal(error) => Self::Journal(error),
         }
+    }
+}
+
+impl From<JournalError> for AddError {
+    fn from(error: JournalError) -> Self {
+        Self::Journal(error)
     }
 }
 
@@ -332,6 +339,58 @@ pub(crate) fn draft_problems(draft: &TaskDraft) -> Vec<AddError> {
     problems
 }
 
+/// Reads the queue's events, decides `build`'s events against the state they fold to, and
+/// appends them — retrying, from a fresh read, for as long as [`Journal::append_events`]
+/// reports that the journal moved on since. `build` does not check its own rules (title,
+/// criteria, links, and so on): the caller has done that before looping.
+///
+/// # Errors
+///
+/// Fails, appending nothing, with whatever `build` itself refuses with, or when the journal
+/// cannot be read or written.
+fn decide_and_append<T, E>(
+    journal: &impl Journal,
+    build: impl Fn(&QueueState) -> Result<(Vec<Event>, T), E>,
+) -> Result<T, E>
+where
+    E: From<JournalError>,
+{
+    loop {
+        let events = journal.events().map_err(E::from)?;
+        let state = QueueState::fold(&events);
+        let (new_events, result) = build(&state)?;
+        match journal.append_events(&new_events, events.len()) {
+            Ok(()) => return Ok(result),
+            Err(AppendConflict::Conflict) => {}
+            Err(AppendConflict::Journal(error)) => return Err(E::from(error)),
+        }
+    }
+}
+
+/// Use case: adds every task of `drafts`, together, to the queue at `placement`, in order.
+///
+/// The journal records one event per task and places them together, with the next numbers.
+/// No other task's number changes.
+///
+/// # Errors
+///
+/// Fails, adding nothing, when `placement` names a task that does not exist or was
+/// cancelled, or when the journal cannot be read or written. Does not check `drafts`
+/// themselves: the caller has done that.
+pub(crate) fn add_tasks(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    drafts: &[TaskDraft],
+    placement: Placement,
+) -> Result<Vec<Task>, AddError> {
+    let at = clock.now();
+    decide_and_append(journal, |state| {
+        state
+            .decide_add(drafts, placement, at)
+            .map_err(AddError::from)
+    })
+}
+
 /// Use case: adds the task `draft` to the queue at `placement`.
 ///
 /// The journal records one event and numbers and places the task in the same transaction.
@@ -351,7 +410,11 @@ pub fn add_task(
     if let Some(problem) = draft_problems(draft).into_iter().next() {
         return Err(problem);
     }
-    Ok(journal.append_task(draft, placement, clock.now())?)
+    let added = add_tasks(journal, clock, std::slice::from_ref(draft), placement)?;
+    added
+        .into_iter()
+        .next()
+        .ok_or_else(|| AddError::Journal(JournalError::new("the journal stored no task")))
 }
 
 /// Use case: [`add_task`], for a person filling in a form: when the task is not added, every
@@ -388,7 +451,32 @@ pub fn remove_task(
     clock: &impl Clock,
     id: TaskId,
 ) -> Result<(), CancelError> {
-    journal.cancel_task(id, clock.now())
+    let at = clock.now();
+    decide_and_append(journal, |state| {
+        state.decide_cancel(id, at).map(|event| (vec![event], ()))
+    })
+}
+
+/// Every task, cancelled ones included, in queue order, with its full status: the queue's
+/// own state (pending or cancelled), overlaid with what its most recent attempt, if it has
+/// one, ended at — or `running`, while it has none yet.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub fn list_all_tasks(journal: &impl Journal) -> Result<Vec<Task>, JournalError> {
+    let events = journal.events()?;
+    let mut tasks = QueueState::fold(&events).into_tasks();
+    for task in &mut tasks {
+        if task.status == TaskStatus::Cancelled {
+            continue;
+        }
+        task.status = match journal.last_attempt(task.id)? {
+            None => TaskStatus::Pending,
+            Some(attempt) => attempt.ended.map_or(TaskStatus::Running, |end| end.status),
+        };
+    }
+    Ok(tasks)
 }
 
 /// Use case: every task in the queue, in order, without the cancelled ones. Positions count
@@ -398,16 +486,7 @@ pub fn remove_task(
 ///
 /// Fails when the journal cannot be read.
 pub fn list_tasks(journal: &impl Journal) -> Result<Vec<Task>, JournalError> {
-    Ok(without_cancelled(journal.tasks()?))
-}
-
-/// Use case: every task, cancelled ones included, in queue order. Positions count them all.
-///
-/// # Errors
-///
-/// Fails when the journal cannot be read.
-pub fn list_all_tasks(journal: &impl Journal) -> Result<Vec<Task>, JournalError> {
-    journal.tasks()
+    Ok(without_cancelled(list_all_tasks(journal)?))
 }
 
 /// `tasks` without the cancelled ones, positions counting from 1 again.
@@ -587,7 +666,7 @@ mod tests {
     fn placing_a_task_next_to_one_that_is_missing_or_cancelled_adds_nothing() {
         let journal = FakeJournal::default();
         add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
-        journal.tasks.borrow_mut()[0].status = TaskStatus::Cancelled;
+        remove_task(&journal, &clock(), TaskId(1)).unwrap();
         add_task(&journal, &clock(), &draft("b"), Placement::End).unwrap();
         let before = list_tasks(&journal).unwrap();
         for (placement, expected) in [

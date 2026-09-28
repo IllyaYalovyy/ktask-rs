@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::{
-    AppendError, Attempt, AttemptEnd, AttemptRun, BeginAttemptError, CancelError, Clock,
-    CommandSpec, Commands, CommandsError, Git, GitError, Journal, JournalError, Outcome, Output,
-    Placement, Project, ProjectRegistry, RecordReportError, RegistryError, RunLock, RunLockError,
-    Task, TaskDraft, TaskId, TaskKind, TaskStatus,
+    AppendConflict, Attempt, AttemptEnd, AttemptRun, BeginAttemptError, Clock, CommandSpec,
+    Commands, CommandsError, Event, Git, GitError, Journal, JournalError, Outcome, Output, Project,
+    ProjectRegistry, RecordReportError, RegistryError, RunLock, RunLockError, Task, TaskDraft,
+    TaskId, TaskKind, TaskStatus,
 };
 
 /// An in-memory registry that can be told to fail.
@@ -98,8 +98,19 @@ pub(crate) fn project(name: &str, seconds: u64) -> Project {
 }
 
 /// An in-memory journal that can be told to fail.
+///
+/// `events` is the journal proper, backing [`Journal::events`] and [`Journal::append_events`]:
+/// the one source of truth for the queue's own state (which tasks exist, in what order, and
+/// which are cancelled), exactly as [`crate::queue_state`] folds it.
+///
+/// `tasks` is a mechanical mirror of `events`, kept only so that the attempt-tracking methods
+/// below — unrelated to the queue's own rules, and out of this task's scope — have an
+/// id-keyed row to read and write, the same way the SQLite adapter keeps one. Nothing here
+/// decides where a task goes or whether it may be added: that is `events`' and
+/// [`crate::queue_state::QueueState`]'s job alone.
 #[derive(Debug, Default)]
 pub(crate) struct FakeJournal {
+    pub(crate) events: RefCell<Vec<Event>>,
     pub(crate) tasks: RefCell<Vec<Task>>,
     pub(crate) attempts: RefCell<HashMap<TaskId, u32>>,
     pub(crate) reports: RefCell<HashMap<(TaskId, u32), Report>>,
@@ -115,6 +126,7 @@ type Report = (Outcome, Option<String>);
 impl FakeJournal {
     pub(crate) fn failing(failure: JournalError) -> Self {
         Self {
+            events: RefCell::default(),
             tasks: RefCell::default(),
             attempts: RefCell::default(),
             reports: RefCell::default(),
@@ -124,81 +136,58 @@ impl FakeJournal {
             failure: Some(failure),
         }
     }
+
+    /// Mirrors `event` into `self.tasks`, mechanically: no rule about the queue is decided
+    /// here, only bookkeeping for the attempt-tracking methods that still key off it.
+    fn mirror(&self, event: &Event) {
+        match event {
+            Event::TaskAdded { id, draft, at, .. } => {
+                self.tasks.borrow_mut().push(Task {
+                    id: *id,
+                    position: 0,
+                    title: draft.title.clone(),
+                    body: draft.body.clone(),
+                    criteria: draft.criteria.clone(),
+                    kind: draft.kind,
+                    links: draft.links.clone(),
+                    status: TaskStatus::Pending,
+                    created_at: *at,
+                });
+            }
+            Event::TaskCancelled { id, .. } => {
+                if let Some(task) = self
+                    .tasks
+                    .borrow_mut()
+                    .iter_mut()
+                    .find(|task| task.id == *id)
+                {
+                    task.status = TaskStatus::Cancelled;
+                }
+            }
+        }
+    }
 }
 
 impl Journal for FakeJournal {
-    fn append_tasks(
-        &self,
-        drafts: &[TaskDraft],
-        placement: Placement,
-        at: SystemTime,
-    ) -> Result<Vec<Task>, AppendError> {
-        if let Some(failure) = &self.failure {
-            return Err(failure.clone().into());
-        }
-        // Worked out on a copy, so that a failure part-way leaves the queue as it was.
-        let mut tasks = self.tasks.borrow().clone();
-        let mut added = Vec::new();
-        let mut placement = placement;
-        for draft in drafts {
-            let next = |anchor: TaskId| {
-                let index = tasks
-                    .iter()
-                    .position(|task| task.id == anchor)
-                    .ok_or(AppendError::UnknownTask(anchor))?;
-                if tasks[index].status == TaskStatus::Cancelled {
-                    return Err(AppendError::CancelledTask(anchor));
-                }
-                Ok(index)
-            };
-            let index = match placement {
-                Placement::End => tasks.len(),
-                Placement::Before(anchor) => next(anchor)?,
-                Placement::After(anchor) => next(anchor)? + 1,
-            };
-            let task = Task {
-                id: TaskId(tasks.len() as u64 + 1),
-                position: index + 1,
-                title: draft.title.clone(),
-                body: draft.body.clone(),
-                criteria: draft.criteria.clone(),
-                kind: draft.kind,
-                links: draft.links.clone(),
-                status: TaskStatus::Pending,
-                created_at: at,
-            };
-            tasks.insert(index, task.clone());
-            for (index, task) in tasks.iter_mut().enumerate() {
-                task.position = index + 1;
-            }
-            placement = placement.then_after(task.id);
-            added.push(task);
-        }
-        *self.tasks.borrow_mut() = tasks;
-        Ok(added)
-    }
-
-    fn cancel_task(&self, id: TaskId, _at: SystemTime) -> Result<(), CancelError> {
-        if let Some(failure) = &self.failure {
-            return Err(failure.clone().into());
-        }
-        let mut tasks = self.tasks.borrow_mut();
-        let task = tasks
-            .iter_mut()
-            .find(|task| task.id == id)
-            .ok_or(CancelError::UnknownTask(id))?;
-        if task.status == TaskStatus::Cancelled {
-            return Err(CancelError::AlreadyCancelled(id));
-        }
-        task.status = TaskStatus::Cancelled;
-        Ok(())
-    }
-
-    fn tasks(&self) -> Result<Vec<Task>, JournalError> {
+    fn events(&self) -> Result<Vec<Event>, JournalError> {
         match &self.failure {
             Some(failure) => Err(failure.clone()),
-            None => Ok(self.tasks.borrow().clone()),
+            None => Ok(self.events.borrow().clone()),
         }
+    }
+
+    fn append_events(&self, events: &[Event], read: usize) -> Result<(), AppendConflict> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone().into());
+        }
+        if self.events.borrow().len() != read {
+            return Err(AppendConflict::Conflict);
+        }
+        for event in events {
+            self.mirror(event);
+            self.events.borrow_mut().push(event.clone());
+        }
+        Ok(())
     }
 
     fn begin_attempt(&self, id: TaskId, at: SystemTime) -> Result<u32, BeginAttemptError> {

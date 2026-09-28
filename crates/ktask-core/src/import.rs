@@ -5,7 +5,7 @@ use std::fmt;
 
 use serde::Deserialize;
 
-use crate::task::draft_problems;
+use crate::task::{add_tasks, draft_problems};
 use crate::{AddError, Clock, Journal, Placement, Task, TaskDraft, TaskKind};
 
 /// A task as the JSON array writes it: the authored fields of `list --json`. Every field may
@@ -132,9 +132,7 @@ pub fn import_tasks(
     if !invalid.is_empty() {
         return Err(ImportError::Invalid(invalid));
     }
-    journal
-        .append_tasks(&drafts, placement, clock.now())
-        .map_err(|e| ImportError::Add(e.into()))
+    add_tasks(journal, clock, &drafts, placement).map_err(ImportError::Add)
 }
 
 #[cfg(test)]

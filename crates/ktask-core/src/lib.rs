@@ -11,6 +11,7 @@ mod journal;
 mod lock;
 mod project;
 mod queue;
+mod queue_state;
 mod register;
 mod report;
 mod resolve;
@@ -24,8 +25,8 @@ pub use echo::{EchoError, run_echo};
 pub use git::{Git, GitError};
 pub use import::{ImportError, InvalidTask, import_tasks};
 pub use journal::{
-    AppendError, Attempt, AttemptEnd, AttemptRun, BeginAttemptError, CancelError, Journal,
-    JournalError, JournalWatch, RecordReportError,
+    AppendConflict, AppendError, Attempt, AttemptEnd, AttemptRun, BeginAttemptError, CancelError,
+    Event, Journal, JournalError, JournalWatch, RecordReportError,
 };
 pub use lock::{RunLock, RunLockError};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};

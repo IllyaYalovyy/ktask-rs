@@ -4,7 +4,32 @@ use std::error::Error;
 use std::fmt;
 use std::time::{Duration, SystemTime};
 
-use crate::{Outcome, Placement, Task, TaskDraft, TaskId, TaskStatus};
+use crate::{Outcome, Placement, TaskDraft, TaskId, TaskStatus};
+
+/// One thing that happened to the queue: what [`Journal::events`] reads and
+/// [`Journal::append_events`] writes. [`crate::queue_state`] is the one place that decides
+/// what these mean.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Event {
+    /// A task was added.
+    TaskAdded {
+        /// The number it was given.
+        id: TaskId,
+        /// What it was written with.
+        draft: TaskDraft,
+        /// Where it was placed.
+        placement: Placement,
+        /// When.
+        at: SystemTime,
+    },
+    /// A task was cancelled.
+    TaskCancelled {
+        /// The task's number.
+        id: TaskId,
+        /// When.
+        at: SystemTime,
+    },
+}
 
 /// Why the journal could not be read or written.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,15 +54,13 @@ impl fmt::Display for JournalError {
 
 impl Error for JournalError {}
 
-/// Why a task was not appended to the journal.
+/// Why a task was not added at the place it was asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppendError {
     /// The task the new one was to be placed next to does not exist.
     UnknownTask(TaskId),
     /// The task the new one was to be placed next to was cancelled.
     CancelledTask(TaskId),
-    /// The journal could not be used.
-    Journal(JournalError),
 }
 
 impl fmt::Display for AppendError {
@@ -45,14 +68,34 @@ impl fmt::Display for AppendError {
         match self {
             Self::UnknownTask(id) => write!(f, "there is no task {id}"),
             Self::CancelledTask(id) => write!(f, "task {id} is cancelled"),
-            Self::Journal(error) => error.fmt(f),
         }
     }
 }
 
 impl Error for AppendError {}
 
-impl From<JournalError> for AppendError {
+/// Why [`Journal::append_events`] refused to append.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppendConflict {
+    /// The journal already held more events than were read to decide the ones given: read
+    /// it again, decide again, and retry.
+    Conflict,
+    /// The journal could not be written.
+    Journal(JournalError),
+}
+
+impl fmt::Display for AppendConflict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Conflict => f.write_str("the journal has moved on since it was read"),
+            Self::Journal(error) => error.fmt(f),
+        }
+    }
+}
+
+impl Error for AppendConflict {}
+
+impl From<JournalError> for AppendConflict {
     fn from(error: JournalError) -> Self {
         Self::Journal(error)
     }
@@ -200,57 +243,23 @@ pub struct Attempt {
 /// Port: one project's journal. Every change is an event appended to it, and the tasks are
 /// updated from that event in the same transaction.
 pub trait Journal {
-    /// Appends a task-added event for each of `drafts`, which the caller has validated, and
-    /// puts the tasks in the queue in that order, together, at `placement` — before or after
-    /// the task it names, or at the end — with the next numbers, all in one transaction.
-    /// Numbers start at 1 and are never reused, and no other task's number changes. Returns
-    /// the tasks as stored.
-    ///
-    /// # Errors
-    ///
-    /// Fails, recording nothing, when `placement` names a task that does not exist or was
-    /// cancelled, or when the journal cannot be written.
-    fn append_tasks(
-        &self,
-        drafts: &[TaskDraft],
-        placement: Placement,
-        at: SystemTime,
-    ) -> Result<Vec<Task>, AppendError>;
-
-    /// Appends a task-added event for `draft`, which the caller has validated, and puts the
-    /// task at `placement` in the queue with the next number, in one transaction. Returns the
-    /// task as stored.
-    ///
-    /// # Errors
-    ///
-    /// As [`Journal::append_tasks`].
-    fn append_task(
-        &self,
-        draft: &TaskDraft,
-        placement: Placement,
-        at: SystemTime,
-    ) -> Result<Task, AppendError> {
-        let mut tasks = self.append_tasks(std::slice::from_ref(draft), placement, at)?;
-        tasks
-            .pop()
-            .ok_or_else(|| JournalError::new("the journal stored no task").into())
-    }
-
-    /// Appends a task-cancelled event for the task numbered `id` and marks the task cancelled,
-    /// in one transaction. The task stays in the journal and keeps its number.
-    ///
-    /// # Errors
-    ///
-    /// Fails, recording nothing, when there is no such task, when it is cancelled already, or
-    /// when the journal cannot be written.
-    fn cancel_task(&self, id: TaskId, at: SystemTime) -> Result<(), CancelError>;
-
-    /// Every task, cancelled ones included, in queue order, with positions counting from 1.
+    /// Every event recorded for the queue, in the order they were appended.
     ///
     /// # Errors
     ///
     /// Fails when the journal cannot be read.
-    fn tasks(&self) -> Result<Vec<Task>, JournalError>;
+    fn events(&self) -> Result<Vec<Event>, JournalError>;
+
+    /// Appends `events`, together, atomically, provided the journal still holds exactly
+    /// `read` events — as many as [`Journal::events`] returned when they were decided.
+    ///
+    /// # Errors
+    ///
+    /// Refuses with [`AppendConflict::Conflict`], recording nothing, when the journal holds
+    /// more than `read` events already: something else appended first, so the events given
+    /// were decided against a queue that has since moved on — read it again, decide again,
+    /// and retry. Fails with [`AppendConflict::Journal`] when the journal cannot be written.
+    fn append_events(&self, events: &[Event], read: usize) -> Result<(), AppendConflict>;
 
     /// Starts the next attempt at the pending task numbered `id`: records an attempt-started
     /// event and marks the task running, in one transaction. Returns the attempt's number,

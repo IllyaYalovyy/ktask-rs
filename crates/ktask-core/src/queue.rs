@@ -92,8 +92,10 @@ pub fn queue_view(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::fakes::{FakeClock, FakeJournal, at, draft, project};
-    use crate::{Placement, TaskStatus, add_task};
+    use crate::{AttemptRun, Placement, TaskId, TaskStatus, add_task};
 
     use super::*;
 
@@ -119,14 +121,25 @@ mod tests {
         for title in ["a", "b", "c", "d"] {
             add_task(&journal, &clock, &draft(title), Placement::End).unwrap();
         }
-        let statuses = [
-            TaskStatus::Done,
-            TaskStatus::Pending,
-            TaskStatus::Failed,
-            TaskStatus::Pending,
-        ];
-        for (task, status) in journal.tasks.borrow_mut().iter_mut().zip(statuses) {
-            task.status = status;
+        // `a` and `c` run an attempt that ends at the status wanted; `b` and `d` stay pending.
+        for (id, status) in [
+            (TaskId(1), TaskStatus::Done),
+            (TaskId(3), TaskStatus::Failed),
+        ] {
+            let number = journal.begin_attempt(id, clock.0).unwrap();
+            journal
+                .end_attempt(
+                    id,
+                    number,
+                    AttemptRun {
+                        duration: Duration::ZERO,
+                        exit_code: Some(0),
+                        status,
+                        reason: None,
+                    },
+                    clock.0,
+                )
+                .unwrap();
         }
         let view = queue_view(project("app", 10), &journal, &clock, false).unwrap();
         let titles: Vec<_> = view.tasks.iter().map(|t| t.title.as_str()).collect();

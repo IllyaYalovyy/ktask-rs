@@ -396,7 +396,20 @@ mod tests {
     fn a_queue_with_nothing_pending_ends_the_run_without_attempting_anything() {
         let journal = FakeJournal::default();
         add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
-        journal.tasks.borrow_mut()[0].status = TaskStatus::Done;
+        let number = journal.begin_attempt(TaskId(1), clock().0).unwrap();
+        journal
+            .end_attempt(
+                TaskId(1),
+                number,
+                AttemptRun {
+                    duration: Duration::ZERO,
+                    exit_code: Some(0),
+                    status: TaskStatus::Done,
+                    reason: None,
+                },
+                clock().0,
+            )
+            .unwrap();
         let commands = commands_ok(Exit::Code(0));
         let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
         assert_eq!(
