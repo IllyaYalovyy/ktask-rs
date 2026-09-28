@@ -1,7 +1,10 @@
 //! What the queue screen shows.
 
+use std::collections::HashMap;
+
+use crate::status::{AttemptLine, status};
 use crate::task::without_cancelled;
-use crate::{Journal, JournalError, Project, Task, TaskStatus, list_all_tasks};
+use crate::{Clock, Journal, JournalError, Project, Task, TaskId, TaskStatus, list_all_tasks};
 
 /// How many tasks are in each status.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -53,6 +56,9 @@ pub struct QueueView {
     /// The tasks to show, in queue order: without the cancelled ones, which the summary
     /// counts anyway, unless they were asked for. Positions count what is shown.
     pub tasks: Vec<Task>,
+    /// The most recent attempt of every task that has one — the same line `status` shows,
+    /// from the same use case. A task with no entry here was never attempted.
+    pub attempts: HashMap<TaskId, AttemptLine>,
 }
 
 /// Use case: the queue of `project`, whose journal is `journal`; with the cancelled tasks in
@@ -64,9 +70,14 @@ pub struct QueueView {
 pub fn queue_view(
     project: Project,
     journal: &impl Journal,
+    clock: &impl Clock,
     show_cancelled: bool,
 ) -> Result<QueueView, JournalError> {
     let tasks = list_all_tasks(journal)?;
+    let attempts = status(journal, clock)?
+        .into_iter()
+        .map(|entry| (entry.task, entry.attempt))
+        .collect();
     Ok(QueueView {
         project,
         summary: StatusSummary::of(&tasks),
@@ -75,6 +86,7 @@ pub fn queue_view(
         } else {
             without_cancelled(tasks)
         },
+        attempts,
     })
 }
 
@@ -87,10 +99,17 @@ mod tests {
 
     #[test]
     fn a_new_queue_has_every_count_at_zero_and_no_tasks() {
-        let view = queue_view(project("app", 10), &FakeJournal::default(), false).unwrap();
+        let view = queue_view(
+            project("app", 10),
+            &FakeJournal::default(),
+            &FakeClock(at(0)),
+            false,
+        )
+        .unwrap();
         assert_eq!(view.project, project("app", 10));
         assert_eq!(view.summary, StatusSummary::default());
         assert_eq!(view.tasks, vec![]);
+        assert!(view.attempts.is_empty());
     }
 
     #[test]
@@ -109,7 +128,7 @@ mod tests {
         for (task, status) in journal.tasks.borrow_mut().iter_mut().zip(statuses) {
             task.status = status;
         }
-        let view = queue_view(project("app", 10), &journal, false).unwrap();
+        let view = queue_view(project("app", 10), &journal, &clock, false).unwrap();
         let titles: Vec<_> = view.tasks.iter().map(|t| t.title.as_str()).collect();
         assert_eq!(titles, ["a", "b", "c", "d"]);
         assert_eq!(
@@ -130,8 +149,8 @@ mod tests {
         for title in ["a", "b", "c"] {
             add_task(&journal, &clock, &draft(title), Placement::End).unwrap();
         }
-        crate::remove_task(&journal, &clock, crate::TaskId(2)).unwrap();
-        let view = queue_view(project("app", 10), &journal, false).unwrap();
+        crate::remove_task(&journal, &clock, TaskId(2)).unwrap();
+        let view = queue_view(project("app", 10), &journal, &clock, false).unwrap();
         let shown: Vec<_> = view.tasks.iter().map(|t| (t.position, &*t.title)).collect();
         assert_eq!(shown, [(1, "a"), (2, "c")]);
         assert_eq!(
@@ -151,8 +170,8 @@ mod tests {
         for title in ["a", "b", "c"] {
             add_task(&journal, &clock, &draft(title), Placement::End).unwrap();
         }
-        crate::remove_task(&journal, &clock, crate::TaskId(2)).unwrap();
-        let view = queue_view(project("app", 10), &journal, true).unwrap();
+        crate::remove_task(&journal, &clock, TaskId(2)).unwrap();
+        let view = queue_view(project("app", 10), &journal, &clock, true).unwrap();
         let shown: Vec<_> = view
             .tasks
             .iter()
@@ -174,8 +193,26 @@ mod tests {
         let failure = JournalError::new("disk on fire");
         let journal = FakeJournal::failing(failure.clone());
         assert_eq!(
-            queue_view(project("app", 10), &journal, false),
+            queue_view(project("app", 10), &journal, &FakeClock(at(0)), false),
             Err(failure)
         );
+    }
+
+    #[test]
+    fn a_task_with_an_attempt_carries_the_same_attempt_line_status_would_show() {
+        let journal = FakeJournal::default();
+        let clock = FakeClock(at(0));
+        add_task(&journal, &clock, &draft("a"), Placement::End).unwrap();
+        crate::start_attempt(&journal, &clock, "proj", TaskId(1)).unwrap();
+        journal
+            .attempt_running(TaskId(1), 1, "echo", at(0))
+            .unwrap();
+
+        let view = queue_view(project("app", 10), &journal, &FakeClock(at(30)), false).unwrap();
+
+        let expected = status(&journal, &FakeClock(at(30))).unwrap()[0]
+            .attempt
+            .clone();
+        assert_eq!(view.attempts.get(&TaskId(1)), Some(&expected));
     }
 }
