@@ -1,5 +1,6 @@
 //! Starts real subprocesses: feeds stdin, captures stdout and stderr, and kills a command and
-//! every process it started when it runs past its time limit.
+//! every process it started when it runs past its time limit — or when this process is asked
+//! to stop while one is running.
 
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt as _;
@@ -10,11 +11,22 @@ use std::thread;
 use ktask_core::{CommandSpec, Commands, CommandsError, Exit, Output};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
+use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+use signal_hook::iterator::Signals;
 
 /// Commands, by starting real subprocesses, each in its own process group so that the whole
 /// group can be killed at once.
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessCommands;
+
+/// What ended the wait for the child: it exited on its own, or this process was asked to
+/// stop while it was still running.
+enum Awaited {
+    /// The child exited; this is [`std::process::Child::wait`]'s own result.
+    Exited(std::io::Result<ExitStatus>),
+    /// SIGTERM, SIGINT or SIGHUP arrived at this process.
+    AskedToStop,
+}
 
 impl Commands for ProcessCommands {
     fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
@@ -62,26 +74,54 @@ impl Commands for ProcessCommands {
             buf
         });
 
+        let mut signals = Signals::new([SIGTERM, SIGINT, SIGHUP])
+            .map_err(|e| fail(format!("cannot watch for a termination signal: {e}")))?;
+        let handle = signals.handle();
+
         let (sender, receiver) = mpsc::channel();
+        let waiter_sender = sender.clone();
         let waiter = thread::spawn(move || {
             let status = child.wait();
-            let _ = sender.send(status);
+            let _ = waiter_sender.send(Awaited::Exited(status));
+        });
+        let signal_watcher = thread::spawn(move || {
+            if signals.forever().next().is_some() {
+                let _ = sender.send(Awaited::AskedToStop);
+            }
         });
 
         let status = match receiver.recv_timeout(spec.timeout) {
-            Ok(status) => status,
+            Ok(Awaited::Exited(status)) => status,
+            Ok(Awaited::AskedToStop) => {
+                // The whole group, not just the child itself, so nothing it started is left
+                // behind. A failure here means it is already gone.
+                let _ = kill(Pid::from_raw(-pgid), Signal::SIGKILL);
+                // Waited for, so it is reaped rather than left a zombie, but otherwise
+                // ignored: nothing about this attempt is recorded. The next run finds its
+                // task still `running` and accounts for the interruption. There is
+                // deliberately no further cleanup past this point — the process is ending
+                // regardless of what called it.
+                let _ = receiver.recv();
+                std::process::exit(1);
+            }
             Err(RecvTimeoutError::Timeout) => {
                 // The whole group, not just the child itself, so nothing it started is left
                 // behind. A failure here means it is already gone.
                 let _ = kill(Pid::from_raw(-pgid), Signal::SIGKILL);
-                receiver
-                    .recv()
-                    .map_err(|_| fail("the wait thread stopped without a result".to_owned()))?
+                match receiver.recv() {
+                    Ok(Awaited::Exited(status)) => status,
+                    Ok(Awaited::AskedToStop) => std::process::exit(1),
+                    Err(_) => {
+                        return Err(fail("the wait thread stopped without a result".to_owned()));
+                    }
+                }
             }
             Err(RecvTimeoutError::Disconnected) => {
                 return Err(fail("the wait thread stopped without a result".to_owned()));
             }
         };
+        handle.close();
+        let _ = signal_watcher.join();
         let _ = waiter.join();
 
         let stdout = stdout_reader

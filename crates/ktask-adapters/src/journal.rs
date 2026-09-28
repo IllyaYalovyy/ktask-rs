@@ -529,6 +529,25 @@ impl Journal for SqliteJournal {
         transaction.commit().map_err(|e| failed(doing, e))?;
         Ok(())
     }
+
+    fn running(&self) -> Result<Option<(TaskId, u32)>, JournalError> {
+        let doing = "cannot read the running task";
+        self.connection
+            .query_row(
+                "SELECT id, attempt_number FROM tasks WHERE status = ?1 LIMIT 1",
+                [TaskStatus::Running.as_str()],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()
+            .map_err(|e| failed(doing, e))?
+            .map(|(id, number)| {
+                Ok((
+                    TaskId(u64::try_from(id).map_err(|e| failed(doing, e))?),
+                    u32::try_from(number).map_err(|e| failed(doing, e))?,
+                ))
+            })
+            .transpose()
+    }
 }
 
 #[cfg(test)]
@@ -1327,5 +1346,42 @@ mod tests {
             })
         );
         assert_eq!(journal.tasks().unwrap()[0].status, TaskStatus::Cancelled);
+    }
+
+    #[test]
+    fn running_is_none_until_an_attempt_starts_and_names_its_task_and_attempt_number() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        journal
+            .append_task(&draft("a"), Placement::End, at(1))
+            .unwrap();
+        assert_eq!(journal.running().unwrap(), None);
+
+        journal.begin_attempt(TaskId(1), at(1)).unwrap();
+        assert_eq!(journal.running().unwrap(), Some((TaskId(1), 1)));
+    }
+
+    #[test]
+    fn running_is_none_again_once_the_attempt_ends() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        journal
+            .append_task(&draft("a"), Placement::End, at(1))
+            .unwrap();
+        journal.begin_attempt(TaskId(1), at(1)).unwrap();
+        journal
+            .end_attempt(
+                TaskId(1),
+                1,
+                AttemptRun {
+                    duration: Duration::from_secs(1),
+                    exit_code: Some(0),
+                    status: TaskStatus::Done,
+                    reason: None,
+                },
+                at(2),
+            )
+            .unwrap();
+        assert_eq!(journal.running().unwrap(), None);
     }
 }
