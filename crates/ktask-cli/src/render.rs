@@ -33,11 +33,6 @@ pub(crate) fn registered(project: &Project, out: &mut impl Write) -> Result<(), 
     .map_err(|e| e.to_string())
 }
 
-/// Writes the line telling that the editor added no task because the template was `how`.
-pub(crate) fn nothing_added(how: &str, out: &mut impl Write) -> Result<(), String> {
-    writeln!(out, "nothing added: the template was {how}").map_err(|e| e.to_string())
-}
-
 /// Writes `project`: a `name<TAB>path` line, or a JSON object with `json`.
 pub(crate) fn project(project: &Project, json: bool, out: &mut impl Write) -> Result<(), String> {
     if json {

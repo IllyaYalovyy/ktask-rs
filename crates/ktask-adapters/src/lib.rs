@@ -5,7 +5,6 @@
 //! code stays inside one module of this crate. See docs/ARCHITECTURE.md.
 
 mod clock;
-mod editor;
 mod git;
 mod input;
 mod journal;
@@ -13,7 +12,6 @@ mod registry;
 mod state;
 
 pub use clock::SystemClock;
-pub use editor::CommandEditor;
 pub use git::GitCli;
 pub use input::read_text;
 pub use journal::SqliteJournal;

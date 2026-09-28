@@ -4,6 +4,7 @@
 mod repo;
 mod support;
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use repo::{git_repository, scratch};
@@ -402,6 +403,11 @@ fn add_and_list_are_in_the_help_with_their_options() -> Result<()> {
     let help = fixture.run(&["--help"])?;
     assert!(help.stdout.contains("add"), "{}", help.stdout);
     assert!(help.stdout.contains("list"), "{}", help.stdout);
+    assert!(
+        !help.stdout.to_lowercase().contains("editor"),
+        "{}",
+        help.stdout
+    );
     let add = fixture.run(&["add", "--help"])?;
     for option in [
         "--title",
@@ -414,7 +420,48 @@ fn add_and_list_are_in_the_help_with_their_options() -> Result<()> {
         assert!(add.stdout.contains(option), "{option}: {}", add.stdout);
     }
     assert_eq!(add.code, Some(0));
+    assert!(
+        !add.stdout.to_lowercase().contains("editor"),
+        "{}",
+        add.stdout
+    );
     Ok(())
+}
+
+#[test]
+fn a_missing_title_exits_two_and_starts_no_program_whatever_editor_is_set_to() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let marker = fixture.work.join("editor-ran");
+    let script = fixture.work.join("marking-editor");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\ntouch {}\nexit 0\n", marker.display()),
+    )?;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
+
+    for editor in [
+        None,
+        Some(String::new()),
+        Some(script.display().to_string()),
+    ] {
+        let outcome = fixture.sandbox.run_with(
+            &fixture.repository,
+            &["add", "--criterion", "c"],
+            |command| {
+                if let Some(editor) = &editor {
+                    command.env("EDITOR", editor);
+                }
+            },
+        )?;
+        assert_eq!(outcome.code, Some(2), "{editor:?}: {}", outcome.stderr);
+        assert!(
+            outcome.stderr.contains("--title"),
+            "{editor:?}: {}",
+            outcome.stderr
+        );
+        assert!(!marker.exists(), "{editor:?}: the editor was started");
+    }
+    fixture.assert_nothing_added()
 }
 
 /// The creation time the journal holds for the task numbered `id`, as `list --json` writes it.

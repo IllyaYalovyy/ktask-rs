@@ -10,12 +10,11 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use ktask_adapters::{
-    CommandEditor, GitCli, SqliteJournal, SqliteRegistry, SystemClock, journal_path, read_text,
-    registry_path,
+    GitCli, SqliteJournal, SqliteRegistry, SystemClock, journal_path, read_text, registry_path,
 };
 use ktask_core::{
-    AddError, CancelError, EditAddError, Edited, ImportError, Placement, Project, RegisterError,
-    ResolveError, TaskDraft, TaskId, TaskKind,
+    AddError, CancelError, ImportError, Placement, Project, RegisterError, ResolveError, TaskDraft,
+    TaskId, TaskKind,
 };
 
 /// Runs an ordered queue of software tasks through AI coding agents.
@@ -34,24 +33,22 @@ enum Command {
         command: ProjectCommand,
     },
     /// Add a task, at the end of the queue unless told where, and print its ID
-    ///
-    /// Without --title and --criterion the task is written in $EDITOR.
     Add {
         /// One line saying what the task is
         #[arg(long, requires = "criterion")]
-        title: Option<String>,
+        title: String,
         /// What must be true for the task to be done; repeat for each criterion
-        #[arg(long, value_name = "CRITERION", requires = "title")]
+        #[arg(long, value_name = "CRITERION")]
         criterion: Vec<String>,
         /// The longer description of the task
-        #[arg(long, requires = "title")]
+        #[arg(long)]
         body: Option<String>,
         /// Who does the task: agent or human [default: agent]
-        #[arg(long, value_parser = str::parse::<TaskKind>, requires = "title")]
+        #[arg(long, value_parser = str::parse::<TaskKind>)]
         kind: Option<TaskKind>,
         /// A related task or page: github:owner/repo#NUMBER or an http(s) URL; repeat for
         /// each link
-        #[arg(long, value_name = "REF", requires = "title")]
+        #[arg(long, value_name = "REF")]
         link: Vec<String>,
         /// Put the task immediately before the task with this ID
         #[arg(long, value_name = "ID", conflicts_with = "after")]
@@ -213,18 +210,6 @@ impl From<CancelError> for Failure {
     }
 }
 
-impl From<EditAddError> for Failure {
-    fn from(error: EditAddError) -> Self {
-        match error {
-            EditAddError::Add(error) => Self::from(error),
-            EditAddError::Editor(_) | EditAddError::Invalid(_) => Self {
-                message: error.to_string(),
-                code: 2,
-            },
-        }
-    }
-}
-
 impl From<ImportError> for Failure {
     fn from(error: ImportError) -> Self {
         match error {
@@ -277,41 +262,16 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             after,
             project,
         } => {
-            // Checked before anything is registered or opened, so that a missing editor
-            // changes nothing.
-            let content = match title {
-                Some(title) => Content::Written(TaskDraft {
-                    title: title.clone(),
-                    body: body.clone().unwrap_or_default(),
-                    criteria: criterion.clone(),
-                    kind: kind.unwrap_or_default(),
-                    links: link.clone(),
-                }),
-                None => Content::Editor(editor_from_environment()?),
+            let draft = TaskDraft {
+                title: title.clone(),
+                body: body.clone().unwrap_or_default(),
+                criteria: criterion.clone(),
+                kind: kind.unwrap_or_default(),
+                links: link.clone(),
             };
             let journal = open_queue(project.as_deref())?;
             let placement = placement(*before, *after);
-            let task = match content {
-                Content::Written(draft) => {
-                    ktask_core::add_task(&journal, &SystemClock, &draft, placement)?
-                }
-                Content::Editor(editor) => {
-                    match ktask_core::add_task_in_editor(
-                        &journal,
-                        &SystemClock,
-                        &editor,
-                        placement,
-                    )? {
-                        Edited::Added(task) => task,
-                        Edited::Unchanged => {
-                            return Ok(render::nothing_added("left unchanged", &mut io::stderr())?);
-                        }
-                        Edited::Emptied => {
-                            return Ok(render::nothing_added("emptied", &mut io::stderr())?);
-                        }
-                    }
-                }
-            };
+            let task = ktask_core::add_task(&journal, &SystemClock, &draft, placement)?;
             Ok(render::added(&task, stdout)?)
         }
         Command::Import {
@@ -413,27 +373,6 @@ fn resolve(registry: &SqliteRegistry, selected: Option<&str>) -> Result<Project,
         render::registered(&resolution.project, &mut io::stderr())?;
     }
     Ok(resolution.project)
-}
-
-/// Where a new task's content comes from.
-enum Content {
-    /// The command line gave it.
-    Written(TaskDraft),
-    /// The person writes it in this editor.
-    Editor(CommandEditor),
-}
-
-/// The editor `$EDITOR` names.
-fn editor_from_environment() -> Result<CommandEditor, Failure> {
-    match std::env::var("EDITOR") {
-        Ok(command) if !command.trim().is_empty() => Ok(CommandEditor::new(command)),
-        _ => Err(Failure {
-            message: "$EDITOR is not set, so there is nothing to write the task in; set it \
-                      (for example EDITOR=vi) or give the task with --title and --criterion"
-                .to_owned(),
-            code: 2,
-        }),
-    }
 }
 
 fn open_registry() -> Result<SqliteRegistry, String> {
