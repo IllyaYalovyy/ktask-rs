@@ -7,16 +7,22 @@ use std::thread;
 use ktask_core::{JournalWatch, Placement, QueueView, TaskDraft, TaskId};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, KeyModifiers};
+use signal_hook::consts::{SIGHUP, SIGTERM};
+use signal_hook::iterator::Signals;
 
 use crate::{App, Event, render, update};
 
-/// Something the loop is woken by: a key (or resize) at the terminal, or the journal having
-/// changed under it.
+/// Something the loop is woken by: a key (or resize) at the terminal, the journal having
+/// changed under it, or the process being told to stop.
 enum Wake {
     /// An input arrived at the terminal.
     Input(Input),
     /// The journal changed; the queue is stale and worth loading again.
     Changed,
+    /// SIGTERM or SIGHUP arrived — the terminal went away, or the operator or the system
+    /// asked the process to stop. There is nothing to weigh against a form's content here:
+    /// the terminal is leaving regardless, so the loop ends at once.
+    Stop,
 }
 
 /// Starts a terminal synchronized update: a reader that stops at the matching end marker never
@@ -50,7 +56,8 @@ fn draw(terminal: &mut DefaultTerminal, app: &App) -> Result<(), String> {
 /// where the form says, and gives its number, or the reasons it was not added when it was not.
 /// `watch` blocks until the journal changes; it is polled from a dedicated thread, so a task
 /// added, inserted or removed by another process shows in the next frame without the loop
-/// itself ever waking on a timer. The terminal is put back as it was on every way out.
+/// itself ever waking on a timer. The terminal is put back as it was on every way out: the
+/// operator quitting, SIGTERM or SIGHUP (its terminal going away sends this), or an error.
 ///
 /// # Errors
 ///
@@ -63,15 +70,19 @@ pub fn run(
     watch: impl JournalWatch + Send + 'static,
 ) -> Result<(), String> {
     let mut terminal = ratatui::try_init().map_err(|e| format!("cannot use the terminal: {e}"))?;
-    let wakes = spawn_wakes(watch);
-    let result = drive(&mut terminal, load, remove, add, &wakes);
+    let result =
+        spawn_wakes(watch).and_then(|wakes| drive(&mut terminal, load, remove, add, &wakes));
     ratatui::restore();
     result
 }
 
-/// Starts the threads that turn keyboard input and journal changes into a single stream the
-/// loop can block on, with no timer of its own.
-fn spawn_wakes(watch: impl JournalWatch + Send + 'static) -> Receiver<Wake> {
+/// Starts the threads that turn keyboard input, journal changes and a termination signal into
+/// a single stream the loop can block on, with no timer of its own.
+///
+/// # Errors
+///
+/// Fails when SIGTERM and SIGHUP cannot be watched for.
+fn spawn_wakes(watch: impl JournalWatch + Send + 'static) -> Result<Receiver<Wake>, String> {
     let (sender, receiver) = mpsc::channel();
     let keys = sender.clone();
     thread::spawn(move || {
@@ -81,14 +92,22 @@ fn spawn_wakes(watch: impl JournalWatch + Send + 'static) -> Receiver<Wake> {
             }
         }
     });
+    let changed = sender.clone();
     thread::spawn(move || {
         while watch.wait().is_ok() {
-            if sender.send(Wake::Changed).is_err() {
+            if changed.send(Wake::Changed).is_err() {
                 return;
             }
         }
     });
-    receiver
+    let mut signals = Signals::new([SIGTERM, SIGHUP])
+        .map_err(|e| format!("cannot watch for a termination signal: {e}"))?;
+    thread::spawn(move || {
+        if signals.forever().next().is_some() {
+            let _ = sender.send(Wake::Stop);
+        }
+    });
+    Ok(receiver)
 }
 
 fn drive(
@@ -108,6 +127,7 @@ fn drive(
             .recv()
             .map_err(|_| "the keyboard and journal-watch threads both stopped".to_owned())?
         {
+            Wake::Stop => return Ok(()),
             Wake::Changed => {}
             Wake::Input(input) => {
                 let asked = app.show_cancelled;
