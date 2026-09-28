@@ -315,57 +315,104 @@ fn a_run_killed_outright_shows_the_task_interrupted_at_once_with_no_next_run() -
     Ok(())
 }
 
-#[test]
-fn each_ending_and_done_show_their_own_outcome_and_reason_and_the_summary_counts_them() -> Result<()>
-{
-    let fixture = Fixture::new()?;
-    fixture.add_agent_task("a", &reporting_body("done"))?;
-    fixture.add_agent_task("b", &reporting_body_with_reason("failed", "it broke"))?;
-    fixture.add_agent_task("c", &reporting_body_with_reason("too-large", "split me"))?;
-    fixture.add_agent_task(
-        "d",
-        &reporting_body_with_reason("needs-input", "which path?"),
-    )?;
-    fixture.add_agent_task("e", "```bash\necho did nothing\n```\n")?;
-    fixture.run_the_queue_to_completion()?;
+/// A summary line with `done`, `failed`, `blocked` and `unknown` filled in, the rest at their
+/// baseline for a queue of one or two tasks, none cancelled.
+fn summary(done: u32, failed: u32, blocked: u32, unknown: u32) -> String {
+    format!(
+        "pending 0  running 0  done {done}  failed {failed}  blocked {blocked}  unknown {unknown}  cancelled 0"
+    )
+}
 
-    let terminal = fixture.open()?;
-    let screen = terminal.wait_for("every task with its attempt line", |screen| {
-        let contents = screen.contents();
-        contents.contains("failed-unknown") && contents.ends_with('┘')
+#[test]
+fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> Result<()> {
+    // `run` refuses to attempt a task once an earlier one is left `failed`, `blocked` or
+    // `failed-unknown`, so a queue that exercises every ending needs one project per ending:
+    // a `done` filler task, then the task whose ending is under test.
+    let done = Fixture::new()?;
+    done.add_agent_task("a", &reporting_body("done"))?;
+    done.run_the_queue_to_completion()?;
+    let terminal = done.open()?;
+    let screen = terminal.wait_for("a's attempt line", |screen| {
+        screen.contents().contains("implementation") && screen.contents().ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
-
     assert_eq!(lines[4], ">  1  #1  done  agent  a");
     assert!(
         lines[5].contains("implementation · echo") && lines[5].ends_with("done"),
         "{}",
         lines[5]
     );
+    assert_eq!(lines[2], summary(1, 0, 0, 0));
+    drop(terminal);
 
+    let failed = Fixture::new()?;
+    failed.add_agent_task("x", &reporting_body("done"))?;
+    failed.add_agent_task("b", &reporting_body_with_reason("failed", "it broke"))?;
+    failed.run_the_queue()?;
+    let terminal = failed.open()?;
+    let screen = terminal.wait_for("b's attempt line", |screen| {
+        screen.contents().contains("failed: it broke") && screen.contents().ends_with('┘')
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[4], ">  1  #1  done  agent  x");
     assert_eq!(lines[6], "   2  #2  failed  agent  b");
     assert!(lines[7].ends_with("failed: it broke"), "{}", lines[7]);
-
-    assert_eq!(lines[8], "   3  #3  failed  agent  c");
-    assert!(lines[9].ends_with("too-large: split me"), "{}", lines[9]);
-
-    assert_eq!(lines[10], "   4  #4  blocked  agent  d");
-    assert!(
-        lines[11].ends_with("needs-input: which path?"),
-        "{}",
-        lines[11]
-    );
-
-    assert_eq!(lines[12], "   5  #5  failed-unknown  agent  e");
-    assert!(lines[13].contains("failed-unknown:"), "{}", lines[13]);
-    assert!(lines[13].contains("reported nothing"), "{}", lines[13]);
-
-    assert_eq!(
-        lines[2],
-        "pending 0  running 0  done 1  failed 2  blocked 1  unknown 1  cancelled 0"
-    );
-
+    assert_eq!(lines[2], summary(1, 1, 0, 0));
     drop(terminal);
+
+    let too_large = Fixture::new()?;
+    too_large.add_agent_task("x", &reporting_body("done"))?;
+    too_large.add_agent_task("c", &reporting_body_with_reason("too-large", "split me"))?;
+    too_large.run_the_queue()?;
+    let terminal = too_large.open()?;
+    let screen = terminal.wait_for("c's attempt line", |screen| {
+        screen.contents().contains("too-large: split me") && screen.contents().ends_with('┘')
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[4], ">  1  #1  done  agent  x");
+    assert_eq!(lines[6], "   2  #2  failed  agent  c");
+    assert!(lines[7].ends_with("too-large: split me"), "{}", lines[7]);
+    assert_eq!(lines[2], summary(1, 1, 0, 0));
+    drop(terminal);
+
+    let needs_input = Fixture::new()?;
+    needs_input.add_agent_task("x", &reporting_body("done"))?;
+    needs_input.add_agent_task(
+        "d",
+        &reporting_body_with_reason("needs-input", "which path?"),
+    )?;
+    needs_input.run_the_queue()?;
+    let terminal = needs_input.open()?;
+    let screen = terminal.wait_for("d's attempt line", |screen| {
+        screen.contents().contains("needs-input: which path?") && screen.contents().ends_with('┘')
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[4], ">  1  #1  done  agent  x");
+    assert_eq!(lines[6], "   2  #2  blocked  agent  d");
+    assert!(
+        lines[7].ends_with("needs-input: which path?"),
+        "{}",
+        lines[7]
+    );
+    assert_eq!(lines[2], summary(1, 0, 1, 0));
+    drop(terminal);
+
+    let unknown = Fixture::new()?;
+    unknown.add_agent_task("x", &reporting_body("done"))?;
+    unknown.add_agent_task("e", "```bash\necho did nothing\n```\n")?;
+    unknown.run_the_queue()?;
+    let terminal = unknown.open()?;
+    let screen = terminal.wait_for("e's attempt line", |screen| {
+        screen.contents().contains("failed-unknown:") && screen.contents().ends_with('┘')
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[4], ">  1  #1  done  agent  x");
+    assert_eq!(lines[6], "   2  #2  failed-unknown  agent  e");
+    assert!(lines[7].contains("failed-unknown:"), "{}", lines[7]);
+    assert!(lines[7].contains("reported nothing"), "{}", lines[7]);
+    assert_eq!(lines[2], summary(1, 0, 0, 1));
+    drop(terminal);
+
     Ok(())
 }
 

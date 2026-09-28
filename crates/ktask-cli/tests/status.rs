@@ -1,8 +1,9 @@
 //! `ktask-rs status` on the real binary: what ran and how it ended.
 //!
-//! `run` stops at the first task whose attempt does not report `done`, so a queue that
-//! exercises every ending needs one `run` call per stop; each call picks up at the next
-//! pending task, in queue order, exactly where the previous one left off.
+//! `run` refuses to attempt anything once an earlier task is left `failed`, `blocked` or
+//! `failed-unknown`, so a queue that exercises every ending `status` distinguishes needs one
+//! project per ending, each run once: a `done` filler task, then the task whose ending is
+//! under test.
 
 #[path = "support/repo.rs"]
 mod repo;
@@ -140,18 +141,6 @@ impl Fixture {
             .unwrap_or_default()
             .to_owned())
     }
-
-    /// Runs `ktask-rs run` again and again, until the queue has nothing left pending or is
-    /// empty, so that every task that stops one run is given its attempt.
-    fn run_the_queue_to_completion(&self) -> Result<()> {
-        for _ in 0..10 {
-            let outcome = self.run_the_queue(&["run"])?;
-            if outcome.stdout.contains("nothing is pending") || outcome.stdout.contains("empty") {
-                return Ok(());
-            }
-        }
-        Err("the queue never finished".into())
-    }
 }
 
 #[test]
@@ -180,125 +169,227 @@ fn an_empty_queue_also_prints_nothing_and_exits_zero() -> Result<()> {
     Ok(())
 }
 
-/// A queue whose five tasks, once run to completion, end at every one of `status`'s outcome
-/// labels: `done`, `failed`, `too-large`, `needs-input` and the tool's own `failed-unknown`.
-fn queue_with_every_outcome(fixture: &Fixture) -> Result<()> {
+/// A fresh project with just a `done` task, run to completion.
+fn done_fixture() -> Result<Fixture> {
+    let fixture = Fixture::new()?;
     fixture.add_agent_task("a", &reporting_body("done"))?;
-    fixture.add_agent_task("b", &reporting_body_with_reason("failed", "it broke"))?;
-    fixture.add_agent_task("c", &reporting_body_with_reason("too-large", "split me"))?;
-    fixture.add_agent_task(
+    let run = fixture.run_the_queue(&["run"])?;
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    Ok(fixture)
+}
+
+/// A fresh project with a `done` filler task `x`, then a task named `title` whose body is
+/// `body`, run until the second task stops it — so `status` has both, in queue order.
+fn fixture_stopped_by(title: &str, body: &str) -> Result<Fixture> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("x", &reporting_body("done"))?;
+    fixture.add_agent_task(title, body)?;
+    let run = fixture.run_the_queue(&["run"])?;
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    Ok(fixture)
+}
+
+fn failed_fixture() -> Result<Fixture> {
+    fixture_stopped_by("b", &reporting_body_with_reason("failed", "it broke"))
+}
+
+fn too_large_fixture() -> Result<Fixture> {
+    fixture_stopped_by("c", &reporting_body_with_reason("too-large", "split me"))
+}
+
+fn needs_input_fixture() -> Result<Fixture> {
+    fixture_stopped_by(
         "d",
         &reporting_body_with_reason("needs-input", "which path?"),
-    )?;
-    fixture.add_agent_task("e", "```bash\necho did nothing\n```\n")?;
-    fixture.run_the_queue_to_completion()?;
-    Ok(())
+    )
+}
+
+fn failed_unknown_fixture() -> Result<Fixture> {
+    fixture_stopped_by("e", "```bash\necho did nothing\n```\n")
 }
 
 #[test]
-fn status_shows_every_task_in_queue_order_with_its_title_status_and_attempt_line() -> Result<()> {
-    let fixture = Fixture::new()?;
-    queue_with_every_outcome(&fixture)?;
+fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_line() -> Result<()> {
+    let fixture = done_fixture()?;
+    let outcome = fixture.run(&["status"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout.lines().collect::<Vec<_>>(),
+        ["#1\tdone\ta", "\timplementation\techo\t0s\tdone"]
+    );
 
+    let fixture = failed_fixture()?;
+    let outcome = fixture.run(&["status"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout.lines().collect::<Vec<_>>(),
+        [
+            "#1\tdone\tx",
+            "\timplementation\techo\t0s\tdone",
+            "#2\tfailed\tb",
+            "\timplementation\techo\t0s\tfailed\tit broke",
+        ]
+    );
+
+    let fixture = too_large_fixture()?;
+    let outcome = fixture.run(&["status"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout.lines().collect::<Vec<_>>(),
+        [
+            "#1\tdone\tx",
+            "\timplementation\techo\t0s\tdone",
+            "#2\tfailed\tc",
+            "\timplementation\techo\t0s\ttoo-large\tsplit me",
+        ]
+    );
+
+    let fixture = needs_input_fixture()?;
+    let outcome = fixture.run(&["status"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout.lines().collect::<Vec<_>>(),
+        [
+            "#1\tdone\tx",
+            "\timplementation\techo\t0s\tdone",
+            "#2\tblocked\td",
+            "\timplementation\techo\t0s\tneeds-input\twhich path?",
+        ]
+    );
+
+    let fixture = failed_unknown_fixture()?;
     let outcome = fixture.run(&["status"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     let lines: Vec<&str> = outcome.stdout.lines().collect();
-    assert_eq!(lines.len(), 10, "{lines:#?}");
-
-    assert_eq!(lines[0], "#1\tdone\ta");
+    assert_eq!(lines.len(), 4, "{lines:#?}");
+    assert_eq!(lines[0], "#1\tdone\tx");
     assert_eq!(lines[1], "\timplementation\techo\t0s\tdone");
-
-    assert_eq!(lines[2], "#2\tfailed\tb");
-    assert_eq!(lines[3], "\timplementation\techo\t0s\tfailed\tit broke");
-
-    assert_eq!(lines[4], "#3\tfailed\tc");
-    assert_eq!(lines[5], "\timplementation\techo\t0s\ttoo-large\tsplit me");
-
-    assert_eq!(lines[6], "#4\tblocked\td");
-    assert_eq!(
-        lines[7],
-        "\timplementation\techo\t0s\tneeds-input\twhich path?"
-    );
-
-    assert_eq!(lines[8], "#5\tfailed-unknown\te");
+    assert_eq!(lines[2], "#2\tfailed-unknown\te");
     assert!(
-        lines[9].starts_with("\timplementation\techo\t0s\tfailed-unknown\t"),
+        lines[3].starts_with("\timplementation\techo\t0s\tfailed-unknown\t"),
         "{}",
-        lines[9]
+        lines[3]
     );
-    assert!(lines[9].contains("reported nothing"), "{}", lines[9]);
+    assert!(lines[3].contains("reported nothing"), "{}", lines[3]);
     Ok(())
 }
 
+/// `(id, status, title, attempt.outcome, attempt.reason)` for one entry of a `status --json`
+/// array.
+type ShownEntry = (u64, String, String, String, Option<String>);
+
 #[test]
 fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
-    let fixture = Fixture::new()?;
-    queue_with_every_outcome(&fixture)?;
+    /// `entries["id"/"status"/"title"/"attempt"."outcome"/"attempt"."reason"]`, in order, for
+    /// every entry of a `status --json` array.
+    fn shown(stdout: &str) -> Result<Vec<ShownEntry>> {
+        let entries: serde_json::Value = serde_json::from_str(stdout)?;
+        Ok(entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                (
+                    entry["id"].as_u64().unwrap(),
+                    entry["status"].as_str().unwrap().to_owned(),
+                    entry["title"].as_str().unwrap().to_owned(),
+                    entry["attempt"]["outcome"].as_str().unwrap().to_owned(),
+                    entry["attempt"]["reason"].as_str().map(str::to_owned),
+                )
+            })
+            .collect())
+    }
 
+    let fixture = done_fixture()?;
     let outcome = fixture.run(&["status", "--json"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
-    let entries: serde_json::Value = serde_json::from_str(&outcome.stdout)?;
-    let entries = entries.as_array().unwrap();
-    assert_eq!(entries.len(), 5);
+    assert_eq!(
+        shown(&outcome.stdout)?,
+        vec![(1, "done".into(), "a".into(), "done".into(), None)]
+    );
 
-    let shown: Vec<_> = entries
-        .iter()
-        .map(|entry| {
+    let fixture = failed_fixture()?;
+    let outcome = fixture.run(&["status", "--json"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(
+        shown(&outcome.stdout)?,
+        vec![
+            (1, "done".into(), "x".into(), "done".into(), None),
             (
-                entry["id"].as_u64().unwrap(),
-                entry["status"].as_str().unwrap().to_owned(),
-                entry["title"].as_str().unwrap().to_owned(),
-                entry["attempt"]["outcome"].as_str().unwrap().to_owned(),
-                entry["attempt"]["reason"].as_str().map(str::to_owned),
-            )
-        })
-        .collect();
-    let expected: Vec<(u64, String, String, String, Option<String>)> = vec![
-        (1, "done".into(), "a".into(), "done".into(), None),
-        (
-            2,
-            "failed".into(),
-            "b".into(),
-            "failed".into(),
-            Some("it broke".into()),
-        ),
-        (
-            3,
-            "failed".into(),
-            "c".into(),
-            "too-large".into(),
-            Some("split me".into()),
-        ),
-        (
-            4,
-            "blocked".into(),
-            "d".into(),
-            "needs-input".into(),
-            Some("which path?".into()),
-        ),
-        (
-            5,
-            "failed-unknown".into(),
-            "e".into(),
-            "failed-unknown".into(),
-            Some("the provider exited with code 0 and reported nothing".into()),
-        ),
-    ];
-    assert_eq!(shown, expected);
-    for entry in entries {
+                2,
+                "failed".into(),
+                "b".into(),
+                "failed".into(),
+                Some("it broke".into()),
+            ),
+        ]
+    );
+
+    let fixture = too_large_fixture()?;
+    let outcome = fixture.run(&["status", "--json"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(
+        shown(&outcome.stdout)?,
+        vec![
+            (1, "done".into(), "x".into(), "done".into(), None),
+            (
+                2,
+                "failed".into(),
+                "c".into(),
+                "too-large".into(),
+                Some("split me".into()),
+            ),
+        ]
+    );
+
+    let fixture = needs_input_fixture()?;
+    let outcome = fixture.run(&["status", "--json"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(
+        shown(&outcome.stdout)?,
+        vec![
+            (1, "done".into(), "x".into(), "done".into(), None),
+            (
+                2,
+                "blocked".into(),
+                "d".into(),
+                "needs-input".into(),
+                Some("which path?".into()),
+            ),
+        ]
+    );
+
+    let fixture = failed_unknown_fixture()?;
+    let outcome = fixture.run(&["status", "--json"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    let shown_entries = shown(&outcome.stdout)?;
+    assert_eq!(
+        shown_entries[0],
+        (1, "done".into(), "x".into(), "done".into(), None)
+    );
+    assert_eq!(shown_entries[1].0, 2);
+    assert_eq!(shown_entries[1].1, "failed-unknown");
+    assert_eq!(shown_entries[1].2, "e");
+    assert_eq!(shown_entries[1].3, "failed-unknown");
+    // The failed_unknown attempt still carries a reason of its own — the tool's, not the
+    // agent's, since the agent never reported one.
+    assert!(
+        shown_entries[1]
+            .4
+            .as_deref()
+            .unwrap()
+            .contains("reported nothing"),
+        "{:?}",
+        shown_entries[1].4
+    );
+
+    let entries: serde_json::Value = serde_json::from_str(&outcome.stdout)?;
+    for entry in entries.as_array().unwrap() {
         assert_eq!(entry["attempt"]["step"], "implementation");
         assert_eq!(entry["attempt"]["provider"], "echo");
         assert_eq!(entry["attempt"]["number"], 1);
         assert!(entry["attempt"]["time_spent_seconds"].as_u64().is_some());
     }
-    // The one failed_unknown attempt still carries a reason of its own — the tool's, not the
-    // agent's, since the agent never reported one.
-    assert!(
-        entries[4]["attempt"]["reason"]
-            .as_str()
-            .unwrap()
-            .contains("reported nothing")
-    );
     Ok(())
 }
 
