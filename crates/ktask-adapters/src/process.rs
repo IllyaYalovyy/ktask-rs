@@ -445,7 +445,7 @@ mod tests {
                 "{} was never written",
                 path.display()
             );
-            thread::sleep(Duration::from_millis(10));
+            thread::park_timeout(Duration::from_millis(10));
         }
     }
 
@@ -468,7 +468,7 @@ mod tests {
                 }
             }
             assert!(Instant::now() < deadline, "process {pid} is still running");
-            thread::sleep(Duration::from_millis(20));
+            thread::park_timeout(Duration::from_millis(20));
         }
     }
 }

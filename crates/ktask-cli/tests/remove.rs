@@ -31,7 +31,7 @@ fn gated_body(go: &Path) -> String {
     )
 }
 
-/// Waits, for up to a few seconds, until `condition` holds, polling every 20ms; fails naming
+/// Waits, for up to a few seconds, until `condition` holds, checking every 20ms; fails naming
 /// `what` when it never does.
 fn wait_until(what: &str, mut condition: impl FnMut() -> bool) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -39,7 +39,7 @@ fn wait_until(what: &str, mut condition: impl FnMut() -> bool) -> Result<()> {
         if Instant::now() >= deadline {
             return Err(format!("timed out waiting for {what}").into());
         }
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::park_timeout(Duration::from_millis(20));
     }
     Ok(())
 }

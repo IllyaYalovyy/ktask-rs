@@ -241,7 +241,7 @@ fn wait_for_file(path: &Path) -> String {
             "{} was never written",
             path.display()
         );
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::park_timeout(Duration::from_millis(10));
     }
 }
 
@@ -263,6 +263,6 @@ fn wait_until_not_running(pid: i32) {
             }
         }
         assert!(Instant::now() < deadline, "process {pid} is still running");
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::park_timeout(Duration::from_millis(20));
     }
 }

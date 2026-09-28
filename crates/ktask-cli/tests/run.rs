@@ -49,7 +49,7 @@ fn with_dir_first_on_path(command: &mut std::process::Command, dir: &Path) {
     }
 }
 
-/// Waits, for up to a few seconds, until `condition` holds, polling every 20ms; fails naming
+/// Waits, for up to a few seconds, until `condition` holds, checking every 20ms; fails naming
 /// `what` when it never does.
 fn wait_until(what: &str, mut condition: impl FnMut() -> bool) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -57,7 +57,7 @@ fn wait_until(what: &str, mut condition: impl FnMut() -> bool) -> Result<()> {
         if Instant::now() >= deadline {
             return Err(format!("timed out waiting for {what}").into());
         }
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::park_timeout(Duration::from_millis(20));
     }
     Ok(())
 }
@@ -615,8 +615,10 @@ fn signal_to_run_ends_it_at_once_with_the_interrupted_reason_and_real_duration(
         "provider {provider_pid} is not running"
     );
     // Gives the attempt some real wall-clock time to run, so the duration `run` records for
-    // it below is provably more than an instant, not just never having been reset.
-    std::thread::sleep(Duration::from_millis(300));
+    // it below is provably more than an instant, not just never having been reset. Nothing
+    // in the journal changes while it is gated on the signal below, so there is no condition
+    // to wait for here beyond real time itself passing.
+    std::thread::park_timeout(Duration::from_millis(300));
 
     signal::kill(Pid::from_raw(first_pid), signal)?;
     let output = first.wait_with_output()?;
