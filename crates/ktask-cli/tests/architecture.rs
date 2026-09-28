@@ -40,3 +40,29 @@ fn the_binary_crate_reaches_every_other_crate() -> std::io::Result<()> {
     );
     Ok(())
 }
+
+/// A provider is a value `run` is handed; `core` decides nothing about which providers exist,
+/// so its production code must not name or know `echo` — the one built-in provider, defined
+/// in `ktask-adapters`. Test code is exempt: it is free to use `"echo"` as an arbitrary
+/// sample provider name, same as any other string.
+#[test]
+fn core_does_not_name_or_know_the_echo_provider() -> std::io::Result<()> {
+    let source_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("ktask-core")
+        .join("src");
+    for entry in std::fs::read_dir(&source_dir)? {
+        let path = entry?.path();
+        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)?;
+        let production_code = text.split("#[cfg(test)]").next().unwrap_or(&text);
+        assert!(
+            !production_code.to_lowercase().contains("echo"),
+            "{} names or knows the echo provider outside its tests",
+            path.display()
+        );
+    }
+    Ok(())
+}
