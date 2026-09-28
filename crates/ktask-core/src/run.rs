@@ -91,6 +91,16 @@ pub enum RunEnd {
         /// What it ended at: `failed`, `blocked` or `failed-unknown`.
         status: TaskStatus,
     },
+    /// The next task in queue order already ended `failed`, `blocked` or `failed-unknown`,
+    /// from an earlier run: this run refuses to skip past it and starts nothing.
+    Blocked {
+        /// The task the run refuses to skip past.
+        id: TaskId,
+        /// What it ended at: `failed`, `blocked` or `failed-unknown`.
+        status: TaskStatus,
+        /// Why, from its last attempt.
+        reason: Option<String>,
+    },
 }
 
 /// What a run did.
@@ -199,28 +209,57 @@ enum Pick {
     Task(Task),
     /// Stop: the next pending task is kind `human`.
     Human(TaskId),
+    /// Stop: the first task in queue order that is not `done` already ended `failed`,
+    /// `blocked` or `failed-unknown` — the run refuses to skip past it.
+    Blocked {
+        /// The task the run refuses to skip past.
+        id: TaskId,
+        /// What it ended at.
+        status: TaskStatus,
+        /// Why, from its last attempt.
+        reason: Option<String>,
+    },
     /// Stop: nothing is pending — `queue_is_empty` says whether the queue holds no tasks at
     /// all, or holds tasks that are all already decided.
     NothingLeft { queue_is_empty: bool },
 }
 
-/// Looks at the queue in order and decides what the run does next.
+/// Looks at the queue in order and decides what the run does next: the first task not
+/// already `done`. A `pending` task is attempted (or stops the run, when it is kind
+/// `human`); a task that already ended `failed`, `blocked` or `failed-unknown` stops the run
+/// without attempting anything, since the queue runs in order and nothing after it may run
+/// ahead of it.
 ///
 /// # Errors
 ///
 /// Fails when the journal cannot be read.
 fn pick_next_task(journal: &impl Journal) -> Result<Pick, RunError> {
     let tasks = list_tasks(journal)?;
-    let Some(next) = tasks.iter().find(|task| task.status == TaskStatus::Pending) else {
+    let Some(next) = tasks.iter().find(|task| task.status != TaskStatus::Done) else {
         return Ok(Pick::NothingLeft {
             queue_is_empty: tasks.is_empty(),
         });
     };
-    Ok(if next.kind == TaskKind::Human {
-        Pick::Human(next.id)
-    } else {
-        Pick::Task(next.clone())
-    })
+    match next.status {
+        TaskStatus::Pending => Ok(if next.kind == TaskKind::Human {
+            Pick::Human(next.id)
+        } else {
+            Pick::Task(next.clone())
+        }),
+        TaskStatus::Failed | TaskStatus::Blocked | TaskStatus::FailedUnknown => {
+            let reason = crate::attempt::last_attempt(journal, next.id)?
+                .and_then(|attempt| attempt.ended)
+                .and_then(|ended| ended.reason);
+            Ok(Pick::Blocked {
+                id: next.id,
+                status: next.status,
+                reason,
+            })
+        }
+        TaskStatus::Running | TaskStatus::Cancelled | TaskStatus::Done => unreachable!(
+            "a task left running is resolved before this loop runs; cancelled and done are filtered out above"
+        ),
+    }
 }
 
 /// Why the run ends when nothing is left pending: `Completed` when this run attempted
@@ -302,7 +341,8 @@ fn run_one_attempt(
 }
 
 /// Picks and attempts pending tasks, one at a time, until the queue stops the run: a task of
-/// kind `human`, an attempt that does not report `done`, or nothing left pending.
+/// kind `human`, an attempt that does not report `done`, an earlier task already left
+/// `failed`, `blocked` or `failed-unknown`, or nothing left pending.
 ///
 /// # Errors
 ///
@@ -333,6 +373,10 @@ fn attempt_loop(
                 let end = RunEnd::HumanTask(id);
                 return Ok(RunReport { attempted, end });
             }
+            Pick::Blocked { id, status, reason } => {
+                let end = RunEnd::Blocked { id, status, reason };
+                return Ok(RunReport { attempted, end });
+            }
             Pick::NothingLeft { queue_is_empty } => {
                 let end = end_when_nothing_left(&attempted, queue_is_empty);
                 return Ok(RunReport { attempted, end });
@@ -343,7 +387,9 @@ fn attempt_loop(
 
 /// Use case: runs the pending tasks of `context.project_name`, in queue order, one attempt
 /// each, with `provider` — stopping at the first task of kind `human`, at the first attempt
-/// that does not report `done`, or when nothing is left pending.
+/// that does not report `done`, at the first task in queue order already left `failed`,
+/// `blocked` or `failed-unknown` (nothing is attempted in that case), or when nothing is
+/// left pending.
 ///
 /// Takes `lock` for the whole run, so that two runs of the same project never overlap. When
 /// the previous run was killed while an attempt was in progress, this run finds its task
@@ -1073,5 +1119,189 @@ mod tests {
         // The provider is never run for the interrupted task: it already ran, unsupervised,
         // in the run that was killed.
         assert!(commands.last.borrow().is_none());
+    }
+
+    /// Ends task `id`'s one attempt at `status` with `reason`, as a previous run would have
+    /// left it.
+    fn end_task_from_a_previous_run(
+        journal: &FakeJournal,
+        id: TaskId,
+        status: TaskStatus,
+        reason: &'static str,
+    ) {
+        let number = crate::attempt::begin_attempt(journal, &clock(), id).unwrap();
+        crate::attempt::end_attempt(
+            journal,
+            id,
+            number,
+            AttemptRun {
+                duration: Duration::ZERO,
+                exit_code: Some(1),
+                status,
+                reason: Some(reason),
+            },
+            clock().0,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_task_already_failed_stops_the_run_before_attempting_anything() {
+        let journal = journal_of_abc();
+        end_task_from_a_previous_run(&journal, TaskId(1), TaskStatus::Failed, "it broke");
+        let commands = commands_ok(Exit::Code(0));
+
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+
+        assert_eq!(
+            report,
+            RunReport {
+                attempted: vec![],
+                end: RunEnd::Blocked {
+                    id: TaskId(1),
+                    status: TaskStatus::Failed,
+                    reason: Some("it broke".to_owned()),
+                },
+            }
+        );
+        let tasks = crate::list_all_tasks(&journal).unwrap();
+        assert_eq!(tasks[0].status, TaskStatus::Failed);
+        assert_eq!(tasks[1].status, TaskStatus::Pending);
+        assert_eq!(tasks[2].status, TaskStatus::Pending);
+        assert!(commands.last.borrow().is_none());
+    }
+
+    #[test]
+    fn a_task_already_blocked_stops_the_run_before_attempting_anything() {
+        let journal = journal_of_abc();
+        end_task_from_a_previous_run(&journal, TaskId(1), TaskStatus::Blocked, "which path?");
+        let commands = commands_ok(Exit::Code(0));
+
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.end,
+            RunEnd::Blocked {
+                id: TaskId(1),
+                status: TaskStatus::Blocked,
+                reason: Some("which path?".to_owned()),
+            }
+        );
+        assert!(report.attempted.is_empty());
+        assert!(commands.last.borrow().is_none());
+    }
+
+    #[test]
+    fn a_task_already_failed_unknown_stops_the_run_before_attempting_anything() {
+        let journal = journal_of_abc();
+        end_task_from_a_previous_run(&journal, TaskId(1), TaskStatus::FailedUnknown, "crashed");
+        let commands = commands_ok(Exit::Code(0));
+
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.end,
+            RunEnd::Blocked {
+                id: TaskId(1),
+                status: TaskStatus::FailedUnknown,
+                reason: Some("crashed".to_owned()),
+            }
+        );
+        assert!(report.attempted.is_empty());
+        assert!(commands.last.borrow().is_none());
+    }
+
+    #[test]
+    fn a_failed_task_past_an_earlier_done_one_still_stops_the_run_before_attempting_anything() {
+        let journal = journal_of_abc();
+        let number = crate::attempt::begin_attempt(&journal, &clock(), TaskId(1)).unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(1),
+            number,
+            AttemptRun {
+                duration: Duration::ZERO,
+                exit_code: Some(0),
+                status: TaskStatus::Done,
+                reason: None,
+            },
+            clock().0,
+        )
+        .unwrap();
+        end_task_from_a_previous_run(&journal, TaskId(2), TaskStatus::Failed, "it broke");
+        let commands = commands_ok(Exit::Code(0));
+
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.end,
+            RunEnd::Blocked {
+                id: TaskId(2),
+                status: TaskStatus::Failed,
+                reason: Some("it broke".to_owned()),
+            }
+        );
+        assert!(commands.last.borrow().is_none());
+    }
+
+    #[test]
+    fn removing_the_blocking_task_lets_the_next_run_continue_with_the_task_after_it() {
+        let journal = journal_of_abc();
+        end_task_from_a_previous_run(&journal, TaskId(1), TaskStatus::Failed, "it broke");
+        crate::remove_task(&journal, &clock(), TaskId(1)).unwrap();
+
+        let commands = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.attempted,
+            vec![
+                Attempted {
+                    id: TaskId(2),
+                    status: TaskStatus::Done,
+                    reason: None,
+                },
+                Attempted {
+                    id: TaskId(3),
+                    status: TaskStatus::Done,
+                    reason: None,
+                },
+            ]
+        );
+        assert_eq!(report.end, RunEnd::Completed);
     }
 }

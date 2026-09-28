@@ -116,9 +116,11 @@ pub(crate) fn reported(
 }
 
 /// Writes what a run did: one line per task attempted, then a line saying why it ended when
-/// there was nothing left to attempt or a task of kind `human` stopped it. Returns whether
-/// the run stopped on a failing ending — `failed`, `blocked` or `failed-unknown` — which the
-/// caller reports with exit code 1.
+/// there was nothing left to attempt, a task of kind `human` stopped it, or an earlier task
+/// left `failed`, `blocked` or `failed-unknown` refused it. Returns whether the run stopped
+/// on a failing ending — `failed`, `blocked` or `failed-unknown`, whether from an attempt
+/// this run made or one an earlier run already left behind — which the caller reports with
+/// exit code 1.
 pub(crate) fn run(report: &RunReport, out: &mut impl Write) -> Result<bool, String> {
     for attempt in &report.attempted {
         match &attempt.reason {
@@ -135,9 +137,19 @@ pub(crate) fn run(report: &RunReport, out: &mut impl Write) -> Result<bool, Stri
         RunEnd::HumanTask(id) => {
             writeln!(out, "task {id} is a human task; run stopped").map_err(|e| e.to_string())?;
         }
+        RunEnd::Blocked { id, status, reason } => {
+            match reason {
+                Some(reason) => writeln!(out, "task {id}: {status}: {reason}; run did not start"),
+                None => writeln!(out, "task {id}: {status}; run did not start"),
+            }
+            .map_err(|e| e.to_string())?;
+        }
         RunEnd::Completed | RunEnd::Stopped { .. } => {}
     }
-    Ok(matches!(report.end, RunEnd::Stopped { .. }))
+    Ok(matches!(
+        report.end,
+        RunEnd::Stopped { .. } | RunEnd::Blocked { .. }
+    ))
 }
 
 /// One task as `list --json` shows it.

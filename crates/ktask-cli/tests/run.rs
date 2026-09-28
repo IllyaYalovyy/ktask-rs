@@ -410,6 +410,97 @@ fn a_queue_with_nothing_pending_exits_zero_saying_so() -> Result<()> {
 }
 
 #[test]
+fn run_refuses_to_skip_past_an_earlier_failed_task_naming_it_and_its_reason() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", &reporting_body_with_reason("failed", "it broke"))?;
+    fixture.add_agent_task("b", &reporting_body("done"))?;
+    let first = fixture.run_the_queue(&["run"])?;
+    assert_eq!(first.code, Some(1), "{}", first.stderr);
+    assert_eq!(fixture.task_status(1)?, "failed");
+    assert_eq!(fixture.task_status(2)?, "pending");
+
+    let second = fixture.run_the_queue(&["run"])?;
+
+    assert_eq!(second.code, Some(1), "{}", second.stderr);
+    assert!(
+        second.stdout.contains("task 1: failed: it broke"),
+        "{}",
+        second.stdout
+    );
+    // Nothing was started: task 2 is untouched, still with no attempt of its own, and task 1
+    // has no second attempt.
+    assert_eq!(fixture.task_status(1)?, "failed");
+    assert_eq!(fixture.task_status(2)?, "pending");
+    Ok(())
+}
+
+#[test]
+fn run_refuses_to_skip_past_an_earlier_blocked_task() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task(
+        "a",
+        &reporting_body_with_reason("needs-input", "which path?"),
+    )?;
+    fixture.add_agent_task("b", &reporting_body("done"))?;
+    let first = fixture.run_the_queue(&["run"])?;
+    assert_eq!(first.code, Some(1), "{}", first.stderr);
+    assert_eq!(fixture.task_status(1)?, "blocked");
+
+    let second = fixture.run_the_queue(&["run"])?;
+
+    assert_eq!(second.code, Some(1), "{}", second.stderr);
+    assert!(
+        second.stdout.contains("task 1: blocked: which path?"),
+        "{}",
+        second.stdout
+    );
+    assert_eq!(fixture.task_status(2)?, "pending");
+    Ok(())
+}
+
+#[test]
+fn run_refuses_to_skip_past_an_earlier_failed_unknown_task() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", "```bash\necho did nothing\n```\n")?;
+    fixture.add_agent_task("b", &reporting_body("done"))?;
+    let first = fixture.run_the_queue(&["run"])?;
+    assert_eq!(first.code, Some(1), "{}", first.stderr);
+    assert_eq!(fixture.task_status(1)?, "failed-unknown");
+
+    let second = fixture.run_the_queue(&["run"])?;
+
+    assert_eq!(second.code, Some(1), "{}", second.stderr);
+    assert!(
+        second.stdout.contains("task 1: failed-unknown:"),
+        "{}",
+        second.stdout
+    );
+    assert_eq!(fixture.task_status(2)?, "pending");
+    Ok(())
+}
+
+#[test]
+fn removing_the_failed_task_lets_the_next_run_continue_with_the_task_after_it() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", &reporting_body_with_reason("failed", "it broke"))?;
+    fixture.add_agent_task("b", &reporting_body("done"))?;
+    let first = fixture.run_the_queue(&["run"])?;
+    assert_eq!(first.code, Some(1), "{}", first.stderr);
+    let blocked = fixture.run_the_queue(&["run"])?;
+    assert_eq!(blocked.code, Some(1), "{}", blocked.stderr);
+    assert_eq!(fixture.task_status(2)?, "pending");
+
+    let removed = fixture.run(&["remove", "1"])?;
+    assert_eq!(removed.code, Some(0), "{}", removed.stderr);
+
+    let third = fixture.run_the_queue(&["run"])?;
+
+    assert_eq!(third.code, Some(0), "{}", third.stderr);
+    assert_eq!(fixture.task_status(2)?, "done");
+    Ok(())
+}
+
+#[test]
 fn list_and_list_json_show_the_new_statuses() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add_agent_task("a", &reporting_body("done"))?;
