@@ -10,9 +10,9 @@
 
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nix::sys::termios::LocalFlags;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -101,8 +101,28 @@ impl Terminal {
         rows: u16,
         cols: u16,
     ) -> Result<Self> {
+        Self::launch_binary(
+            env!("CARGO_BIN_EXE_ktask-rs"),
+            sandbox,
+            cwd,
+            args,
+            rows,
+            cols,
+        )
+    }
+
+    /// Starts `bin` — `ktask-rs` or a test-support binary built alongside it — with `args` in
+    /// `cwd`, on a terminal of `rows` × `cols`.
+    pub(crate) fn launch_binary(
+        bin: &str,
+        sandbox: &Sandbox,
+        cwd: &Path,
+        args: &[&str],
+        rows: u16,
+        cols: u16,
+    ) -> Result<Self> {
         let pair = native_pty_system().openpty(size(rows, cols))?;
-        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_ktask-rs"));
+        let mut command = CommandBuilder::new(bin);
         command.args(args);
         command.env_clear();
         for (name, value) in sandbox.environment() {
@@ -188,6 +208,18 @@ impl Terminal {
         Ok(self.master.resize(size(rows, cols))?)
     }
 
+    /// Sends `signal` to the child directly, as the operating system would on its own —
+    /// SIGHUP when its controlling terminal hangs up, SIGTERM when told to stop.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the platform gave out no process id, or the signal could not be sent.
+    pub(crate) fn send_signal(&self, signal: nix::sys::signal::Signal) -> Result<()> {
+        let pid = self.pid.ok_or("the child's process id is not known")?;
+        let pid = nix::unistd::Pid::from_raw(i32::try_from(pid)?);
+        Ok(nix::sys::signal::kill(pid, signal)?)
+    }
+
     /// The screen as it stood at the end of the last complete frame, one line per row, trailing
     /// blanks trimmed. Never a frame caught half drawn.
     pub(crate) fn screen(&self) -> String {
@@ -209,26 +241,7 @@ impl Terminal {
     /// Fails when the platform gave out no process id, or `/proc/<pid>/stat` cannot be read
     /// or does not have the shape it always has on Linux.
     pub(crate) fn cpu_ticks(&self) -> Result<u64> {
-        let pid = self.pid.ok_or("the child's process id is not known")?;
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
-        // `comm`, the second field, is written in parentheses and may itself contain spaces
-        // or parentheses, so the fields before and including it are skipped by looking for
-        // the last `)` rather than splitting on whitespace from the start.
-        let after_comm = stat
-            .rsplit_once(')')
-            .map(|(_, rest)| rest)
-            .ok_or("/proc/<pid>/stat has no comm field")?;
-        let fields: Vec<&str> = after_comm.split_whitespace().collect();
-        // Field 3 (state) is fields[0] here; utime is field 14 and stime is field 15.
-        let utime: u64 = fields
-            .get(11)
-            .ok_or("/proc/<pid>/stat has no utime field")?
-            .parse()?;
-        let stime: u64 = fields
-            .get(12)
-            .ok_or("/proc/<pid>/stat has no stime field")?
-            .parse()?;
-        Ok(utime + stime)
+        cpu_ticks_of(self.pid.ok_or("the child's process id is not known")?)
     }
 
     /// Waits until `condition` holds of a complete frame, and returns that frame's text.
@@ -317,6 +330,108 @@ fn size(rows: u16, cols: u16) -> PtySize {
         cols,
         pixel_width: 0,
         pixel_height: 0,
+    }
+}
+
+/// The user and system CPU time process `pid` has used so far, in clock ticks, read from
+/// `/proc`.
+///
+/// # Errors
+///
+/// Fails when `/proc/<pid>/stat` cannot be read or does not have the shape it always has on
+/// Linux.
+fn cpu_ticks_of(pid: u32) -> Result<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    // `comm`, the second field, is written in parentheses and may itself contain spaces or
+    // parentheses, so the fields before and including it are skipped by looking for the last
+    // `)` rather than splitting on whitespace from the start.
+    let after_comm = stat
+        .rsplit_once(')')
+        .map(|(_, rest)| rest)
+        .ok_or("/proc/<pid>/stat has no comm field")?;
+    let fields: Vec<&str> = after_comm.split_whitespace().collect();
+    // Field 3 (state) is fields[0] here; utime is field 14 and stime is field 15.
+    let utime: u64 = fields
+        .get(11)
+        .ok_or("/proc/<pid>/stat has no utime field")?
+        .parse()?;
+    let stime: u64 = fields
+        .get(12)
+        .ok_or("/proc/<pid>/stat has no stime field")?
+        .parse()?;
+    Ok(utime + stime)
+}
+
+/// A child attached to a pseudo-terminal that is then closed outright — as a window or an SSH
+/// session going away would close it — instead of being held open and read from for the whole
+/// run, so a test can prove the child leaves on its own instead of running on.
+pub(crate) struct HungUp {
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    pid: Option<u32>,
+}
+
+impl HungUp {
+    /// Starts `bin` with `args` in `cwd`, waits for its first byte of output — proof the
+    /// interface is up and its signal handling is in place — then closes every descriptor
+    /// this process holds on the terminal's controlling side, hanging it up as a real
+    /// terminal going away would.
+    pub(crate) fn launch(bin: &str, sandbox: &Sandbox, cwd: &Path, args: &[&str]) -> Result<Self> {
+        let pair = native_pty_system().openpty(size(24, 80))?;
+        let mut command = CommandBuilder::new(bin);
+        command.args(args);
+        command.env_clear();
+        for (name, value) in sandbox.environment() {
+            command.env(name, value);
+        }
+        command.env("TERM", "xterm-256color");
+        command.cwd(cwd);
+        let child = pair.slave.spawn_command(command)?;
+        drop(pair.slave);
+        let pid = child.process_id();
+
+        // Reads the first byte on a thread that ends — and so closes its own handle on the
+        // terminal — before this function returns: nothing is left open on its account once
+        // the handles below are dropped too.
+        let mut reader = pair.master.try_clone_reader()?;
+        let (sender, waited) = mpsc::channel();
+        let reading = thread::spawn(move || {
+            let mut byte = [0_u8; 1];
+            let _ = sender.send(reader.read(&mut byte));
+        });
+        waited
+            .recv_timeout(TIMEOUT)
+            .map_err(|_| "the child produced no output before the timeout")?
+            .map_err(|e| format!("reading the child's first output failed: {e}"))?;
+        reading.join().map_err(|_| "the reader thread panicked")?;
+
+        drop(pair.master);
+        Ok(Self { child, pid })
+    }
+
+    /// Waits until the child has exited, failing if it has not within the timeout — a child
+    /// left running once its terminal is gone would otherwise hang a test forever.
+    pub(crate) fn wait_for_exit(&mut self) -> Result<portable_pty::ExitStatus> {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            if let Some(status) = self.child.try_wait()? {
+                return Ok(status);
+            }
+            if Instant::now() >= deadline {
+                return Err(
+                    "timed out waiting for the child to exit once its terminal closed".into(),
+                );
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// The user and system CPU time the child has used so far, in clock ticks.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the platform gave out no process id, or `/proc/<pid>/stat` cannot be read.
+    pub(crate) fn cpu_ticks(&self) -> Result<u64> {
+        cpu_ticks_of(self.pid.ok_or("the child's process id is not known")?)
     }
 }
 

@@ -4,6 +4,8 @@
 
 #[path = "tui/add.rs"]
 mod add;
+#[path = "tui/exit.rs"]
+mod exit;
 #[path = "tui/idle.rs"]
 mod idle;
 #[path = "tui/insert.rs"]
