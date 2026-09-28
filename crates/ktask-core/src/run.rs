@@ -8,28 +8,26 @@ use std::time::Duration;
 
 use crate::{
     AttemptRun, AttemptToken, BeginAttemptError, Clock, Commands, EchoError, Journal, JournalError,
-    Outcome, RecordReportError, Task, TaskId, TaskKind, TaskStatus, echo, list_tasks, run_echo,
-    start_attempt,
+    Outcome, RecordReportError, RunLock, RunLockError, Task, TaskId, TaskKind, TaskStatus, echo,
+    list_tasks, run_echo, start_attempt,
 };
 
 /// Why a run could not proceed at all — never for how an attempt itself ended, which is a
 /// normal [`RunReport`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunError {
-    message: String,
-}
-
-impl RunError {
-    fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
+pub enum RunError {
+    /// Another run already holds the project's run lock.
+    Locked(RunLockError),
+    /// Some other failure — the journal could not be read or written.
+    Other(String),
 }
 
 impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
+        match self {
+            Self::Locked(error) => error.fmt(f),
+            Self::Other(message) => f.write_str(message),
+        }
     }
 }
 
@@ -37,21 +35,31 @@ impl Error for RunError {}
 
 impl From<JournalError> for RunError {
     fn from(error: JournalError) -> Self {
-        Self::new(error.to_string())
+        Self::Other(error.to_string())
     }
 }
 
 impl From<BeginAttemptError> for RunError {
     fn from(error: BeginAttemptError) -> Self {
-        Self::new(error.to_string())
+        Self::Other(error.to_string())
     }
 }
 
 impl From<RecordReportError> for RunError {
     fn from(error: RecordReportError) -> Self {
-        Self::new(error.to_string())
+        Self::Other(error.to_string())
     }
 }
+
+impl From<RunLockError> for RunError {
+    fn from(error: RunLockError) -> Self {
+        Self::Locked(error)
+    }
+}
+
+/// The reason recorded for the task a killed run left running, found still running when the
+/// next run starts.
+const INTERRUPTED: &str = "the run was interrupted";
 
 /// One task the run attempted, and how its one attempt ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,18 +134,52 @@ pub fn build_prompt(task: &Task, token: &AttemptToken) -> String {
 /// `echo` provider, in `project_dir` — stopping at the first task of kind `human`, at the
 /// first attempt that does not report `done`, or when nothing is left pending.
 ///
+/// Takes `lock` for the whole run, so that two runs of the same project never overlap. When
+/// the previous run was killed while an attempt was in progress, that attempt's task is left
+/// `running` in the journal with no attempt-ended event; this run finds it, ends it
+/// `failed-unknown` with the reason "the run was interrupted", and stops there without
+/// attempting anything else.
+///
 /// # Errors
 ///
-/// Fails when the journal cannot be read or written; an attempt's own failure is reported
-/// in the returned [`RunReport`], not here.
+/// Fails, attempting nothing, when another run already holds `lock`. Fails when the journal
+/// cannot be read or written; an attempt's own failure is reported in the returned
+/// [`RunReport`], not here.
 pub fn run_queue(
     journal: &impl Journal,
     clock: &impl Clock,
     commands: &impl Commands,
+    lock: &impl RunLock,
     project_name: &str,
     project_dir: &Path,
     attempt_timeout: Duration,
 ) -> Result<RunReport, RunError> {
+    lock.acquire()?;
+    if let Some((id, number)) = journal.running()? {
+        journal.end_attempt(
+            id,
+            number,
+            AttemptRun {
+                duration: Duration::ZERO,
+                exit_code: None,
+                status: TaskStatus::FailedUnknown,
+                reason: Some(INTERRUPTED),
+            },
+            clock.now(),
+        )?;
+        return Ok(RunReport {
+            attempted: vec![Attempted {
+                id,
+                status: TaskStatus::FailedUnknown,
+                reason: Some(INTERRUPTED.to_owned()),
+            }],
+            end: RunEnd::Stopped {
+                id,
+                status: TaskStatus::FailedUnknown,
+            },
+        });
+    }
+
     let mut attempted = Vec::new();
     loop {
         let tasks = list_tasks(journal)?;
@@ -256,7 +298,7 @@ mod tests {
     use std::path::Path;
     use std::time::SystemTime;
 
-    use crate::fakes::{FakeClock, FakeCommands, FakeJournal, at, draft};
+    use crate::fakes::{FakeClock, FakeCommands, FakeJournal, FakeRunLock, at, draft};
     use crate::{Exit, Outcome, Placement, TaskDraft, TaskKind, TaskStatus, add_task, report};
 
     use super::*;
@@ -291,6 +333,7 @@ mod tests {
             journal,
             &clock(),
             commands,
+            &FakeRunLock::free(),
             "proj",
             Path::new("/work/proj"),
             timeout,
@@ -616,6 +659,7 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &FakeRunLock::free(),
             "proj",
             Path::new("/work/proj"),
             Duration::from_secs(42),
@@ -634,5 +678,64 @@ mod tests {
         let commands = commands_ok(Exit::Code(0));
         let error = run(&journal, &commands, Duration::from_secs(60)).unwrap_err();
         assert_eq!(error.to_string(), failure.to_string());
+    }
+
+    #[test]
+    fn a_lock_already_held_stops_the_run_before_touching_the_journal_or_running_anything() {
+        let journal = journal_of_abc();
+        let commands = commands_ok(Exit::Code(0));
+        let lock = FakeRunLock::held_by(Some(4_321));
+        let error = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &lock,
+            "proj",
+            Path::new("/work/proj"),
+            Duration::from_secs(60),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            RunError::Locked(RunLockError::InProgress(Some(4_321)))
+        );
+        assert!(error.to_string().contains("4321"), "{error}");
+        assert!(commands.last.borrow().is_none());
+        for task in journal.tasks.borrow().iter() {
+            assert_eq!(task.status, TaskStatus::Pending, "{}", task.id);
+        }
+    }
+
+    #[test]
+    fn a_task_left_running_by_a_killed_run_is_marked_failed_unknown_and_stops_the_run() {
+        let journal = journal_of_abc();
+        // Stands in for a previous run: it started an attempt at task `a` and never ended it,
+        // as a kill mid-attempt would leave things.
+        journal.begin_attempt(TaskId(1), clock().0).unwrap();
+        let commands = commands_ok(Exit::Code(0));
+
+        let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
+
+        assert_eq!(
+            report,
+            RunReport {
+                attempted: vec![Attempted {
+                    id: TaskId(1),
+                    status: TaskStatus::FailedUnknown,
+                    reason: Some("the run was interrupted".to_owned()),
+                }],
+                end: RunEnd::Stopped {
+                    id: TaskId(1),
+                    status: TaskStatus::FailedUnknown,
+                },
+            }
+        );
+        let tasks = journal.tasks.borrow();
+        assert_eq!(tasks[0].status, TaskStatus::FailedUnknown);
+        assert_eq!(tasks[1].status, TaskStatus::Pending);
+        assert_eq!(tasks[2].status, TaskStatus::Pending);
+        // The provider is never run for the interrupted task: it already ran, unsupervised,
+        // in the run that was killed.
+        assert!(commands.last.borrow().is_none());
     }
 }

@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime};
 use crate::{
     AppendError, AttemptRun, BeginAttemptError, CancelError, Clock, CommandSpec, Commands,
     CommandsError, Git, GitError, Journal, JournalError, Outcome, Output, Placement, Project,
-    ProjectRegistry, RecordReportError, RegistryError, Task, TaskDraft, TaskId, TaskKind,
-    TaskStatus,
+    ProjectRegistry, RecordReportError, RegistryError, RunLock, RunLockError, Task, TaskDraft,
+    TaskId, TaskKind, TaskStatus,
 };
 
 /// An in-memory registry that can be told to fail.
@@ -290,6 +290,18 @@ impl Journal for FakeJournal {
         task.status = run.status;
         Ok(())
     }
+
+    fn running(&self) -> Result<Option<(TaskId, u32)>, JournalError> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone());
+        }
+        let tasks = self.tasks.borrow();
+        let Some(task) = tasks.iter().find(|task| task.status == TaskStatus::Running) else {
+            return Ok(None);
+        };
+        let number = self.attempts.borrow().get(&task.id).copied().unwrap_or(0);
+        Ok(Some((task.id, number)))
+    }
 }
 
 /// A commands port that records the last spec it was given and always returns the same
@@ -313,6 +325,33 @@ impl Commands for FakeCommands {
     fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
         *self.last.borrow_mut() = Some(spec.clone());
         self.result.clone()
+    }
+}
+
+/// A run lock that either always succeeds or always fails the same way.
+#[derive(Debug)]
+pub(crate) struct FakeRunLock {
+    failure: Option<RunLockError>,
+}
+
+impl FakeRunLock {
+    pub(crate) fn free() -> Self {
+        Self { failure: None }
+    }
+
+    pub(crate) fn held_by(pid: Option<u32>) -> Self {
+        Self {
+            failure: Some(RunLockError::InProgress(pid)),
+        }
+    }
+}
+
+impl RunLock for FakeRunLock {
+    fn acquire(&self) -> Result<(), RunLockError> {
+        match &self.failure {
+            Some(failure) => Err(failure.clone()),
+            None => Ok(()),
+        }
     }
 }
 

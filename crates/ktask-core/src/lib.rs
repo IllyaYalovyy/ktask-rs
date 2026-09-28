@@ -8,6 +8,7 @@ pub mod echo;
 mod git;
 mod import;
 mod journal;
+mod lock;
 mod project;
 mod queue;
 mod register;
@@ -25,6 +26,7 @@ pub use journal::{
     AppendError, AttemptRun, BeginAttemptError, CancelError, Journal, JournalError, JournalWatch,
     RecordReportError,
 };
+pub use lock::{RunLock, RunLockError};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
 pub use queue::{QueueView, StatusSummary, queue_view};
 pub use register::{RegisterError, register_project};

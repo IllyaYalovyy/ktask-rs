@@ -298,6 +298,14 @@ pub trait Journal {
         run: AttemptRun<'_>,
         at: SystemTime,
     ) -> Result<(), RecordReportError>;
+
+    /// The task currently `running`, and the number of its current attempt, when one is — a
+    /// project has at most one at a time. `None` when none is running.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the journal cannot be read.
+    fn running(&self) -> Result<Option<(TaskId, u32)>, JournalError>;
 }
 
 /// Port: notices when a project's journal changes, so a frontend can show what another
