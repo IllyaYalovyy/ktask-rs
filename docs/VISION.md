@@ -38,9 +38,15 @@ resolve), a command step, a human approval step.
   critically filtered — unrelated, unimportant and repeated ones are dropped — before a
   fixer sees them; the loop runs until clean or a cut-off, and each round must reduce what
   remains or the loop stops.
-- **Self-healing and escalation.** When a step fails, configurable hooks decide what
-  happens next: retry, give the same model a diagnosis from a more capable one, hand the
-  task to a more capable model, or stop for a human.
+- **Remediation protocol.** When a task ends unexpectedly the tool does not simply retry
+  or stop. In order:
+  1. **Rules first** — cheap, mechanical evaluation: out of token budget, provider limit,
+     timeout, exited without reporting, attempts exhausted. A rule that matches decides
+     the next move without spending tokens.
+  2. **A capable model investigates** — given the task, its logs, reports and diff, it
+     finds the cause.
+  3. **It acts** — one of: retry with its diagnosis, insert a remediation task, break the
+     task down and supersede it, or escalate to the operator with a what/why/ask.
 - **Verification by the tool.** Whatever checks a project configures, the tool runs them.
   An agent's claim of success is never evidence.
 
