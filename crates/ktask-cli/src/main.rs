@@ -16,7 +16,7 @@ use ktask_adapters::{
 };
 use ktask_core::{
     AddError, AttemptToken, CancelError, EchoError, ImportError, Outcome, Placement, Project,
-    RegisterError, ReportError, ResolveError, TaskDraft, TaskId, TaskKind,
+    RegisterError, ReportError, ResolveError, RunError, TaskDraft, TaskId, TaskKind,
 };
 
 /// Runs an ordered queue of software tasks through AI coding agents.
@@ -107,6 +107,15 @@ enum Command {
         #[arg(long, value_name = "NAME")]
         project: Option<String>,
     },
+    /// Run the pending tasks in queue order, one attempt each, until one stops it
+    Run {
+        /// How long an attempt may run before it is killed, in seconds
+        #[arg(long, value_name = "SECONDS", default_value_t = DEFAULT_ATTEMPT_TIMEOUT_SECS)]
+        attempt_timeout: u64,
+        /// Work on this registered project instead of the one the current directory is in
+        #[arg(long, value_name = "NAME")]
+        project: Option<String>,
+    },
     /// Providers: the agents a task can be handed to
     Provider {
         #[command(subcommand)]
@@ -149,6 +158,9 @@ enum ProviderCommand {
 /// The `echo` provider's default time limit: generous, since it runs whatever a task's prompt
 /// wrote, but not unbounded.
 const DEFAULT_ECHO_TIMEOUT_MS: u64 = 300_000;
+
+/// `run`'s default time limit for one attempt: four hours.
+const DEFAULT_ATTEMPT_TIMEOUT_SECS: u64 = 14_400;
 
 #[derive(Debug, Subcommand)]
 enum ProjectCommand {
@@ -284,6 +296,12 @@ impl From<ReportError> for Failure {
     }
 }
 
+impl From<RunError> for Failure {
+    fn from(error: RunError) -> Self {
+        Self::from(error.to_string())
+    }
+}
+
 impl From<ImportError> for Failure {
     fn from(error: ImportError) -> Self {
         match error {
@@ -331,6 +349,10 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<ExitCode, Failure> 
             tui(project.as_deref())?;
             Ok(ExitCode::SUCCESS)
         }
+        Command::Run {
+            attempt_timeout,
+            project,
+        } => run_command(*attempt_timeout, project.as_deref(), stdout),
         Command::Add {
             title,
             criterion,
@@ -445,6 +467,32 @@ fn report(
     Ok(ExitCode::SUCCESS)
 }
 
+/// Runs the pending tasks of the resolved project in queue order, one attempt each with the
+/// `echo` provider, until one stops it; renders what happened and maps it to an exit code.
+fn run_command(
+    attempt_timeout: u64,
+    project: Option<&str>,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
+    let registry = open_registry()?;
+    let project = resolve(&registry, project)?;
+    let journal = open_journal(&project)?;
+    let report = ktask_core::run_queue(
+        &journal,
+        &SystemClock,
+        &ProcessCommands,
+        &project.name,
+        &project.path,
+        Duration::from_secs(attempt_timeout),
+    )?;
+    let stopped = render::run(&report, stdout)?;
+    Ok(if stopped {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
 /// Runs `provider` on the prompt read from standard input, writing what it produced to
 /// `stdout` and to standard error, and reporting its exit code as ours.
 fn provider_run(
@@ -454,9 +502,12 @@ fn provider_run(
     timeout_ms: u64,
     stdout: &mut impl Write,
 ) -> Result<ExitCode, Failure> {
-    if provider != "echo" {
+    if provider != ktask_core::echo::NAME {
         return Err(Failure {
-            message: format!("unknown provider {provider:?}; known providers: echo"),
+            message: format!(
+                "unknown provider {provider:?}; known providers: {}",
+                ktask_core::echo::NAME
+            ),
             code: 2,
         });
     }

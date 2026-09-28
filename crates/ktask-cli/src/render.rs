@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::Path;
 
 use jiff::Timestamp;
-use ktask_core::{AttemptToken, Outcome, Output, Project, Task, TaskId};
+use ktask_core::{AttemptToken, Outcome, Output, Project, RunEnd, RunReport, Task, TaskId};
 use serde::Serialize;
 
 /// One project as `project list --json` shows it.
@@ -111,6 +111,31 @@ pub(crate) fn reported(
         token.task, token.number
     )
     .map_err(|e| e.to_string())
+}
+
+/// Writes what a run did: one line per task attempted, then a line saying why it ended when
+/// there was nothing left to attempt or a task of kind `human` stopped it. Returns whether
+/// the run stopped on a failing ending — `failed`, `blocked` or `failed-unknown` — which the
+/// caller reports with exit code 1.
+pub(crate) fn run(report: &RunReport, out: &mut impl Write) -> Result<bool, String> {
+    for attempt in &report.attempted {
+        match &attempt.reason {
+            Some(reason) => writeln!(out, "task {}: {}: {reason}", attempt.id, attempt.status),
+            None => writeln!(out, "task {}: {}", attempt.id, attempt.status),
+        }
+        .map_err(|e| e.to_string())?;
+    }
+    match &report.end {
+        RunEnd::EmptyQueue => writeln!(out, "the queue is empty").map_err(|e| e.to_string())?,
+        RunEnd::NothingPending => {
+            writeln!(out, "nothing is pending").map_err(|e| e.to_string())?;
+        }
+        RunEnd::HumanTask(id) => {
+            writeln!(out, "task {id} is a human task; run stopped").map_err(|e| e.to_string())?;
+        }
+        RunEnd::Completed | RunEnd::Stopped { .. } => {}
+    }
+    Ok(matches!(report.end, RunEnd::Stopped { .. }))
 }
 
 /// One task as `list --json` shows it.
