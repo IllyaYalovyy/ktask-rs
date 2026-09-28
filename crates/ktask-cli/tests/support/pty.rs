@@ -1,9 +1,12 @@
 //! Runs the real `ktask-rs` binary in a pseudo-terminal and reads its screen.
 //!
 //! The child gets the same sandbox as in the CLI harness. Its output is parsed by a terminal
-//! emulator, so what a test sees is what an operator would see. Waiting is always for a
-//! condition, with a timeout; nothing here sleeps for a fixed time. Everything that is
-//! specific to the platform's terminals stays in this file.
+//! emulator, so what a test sees is what an operator would see. Every frame the binary draws
+//! is bracketed by the terminal's synchronized-update markers (`ESC[?2026h` … `ESC[?2026l`);
+//! this harness watches for the end marker and only ever hands a test the screen as it stood
+//! at the end of a complete frame, never one caught mid-draw. Waiting is always for a
+//! condition, with a timeout that guards against a hung child, never a fixed sleep. Everything
+//! that is specific to the platform's terminals stays in this file.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -21,13 +24,45 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 
 /// What the reader and waiter threads learn about the child.
 struct State {
+    /// The live parser: it may hold a frame only partly drawn, so nothing outside this file
+    /// reads it directly.
     parser: vt100::Parser,
+    /// The screen as it stood at the end of the last complete frame. This, not the live
+    /// parser, is what a test ever sees.
+    frame: vt100::Screen,
     /// The child's exit code; `None` while it runs. A signal that ended it reads as a failure.
     exit: Option<u32>,
     /// Whether the reader has drained the terminal to its end. The child's exit and the last
     /// of its output arrive on separate threads; a screen read straight after the exit is seen
     /// can otherwise miss output that was still on its way.
     eof: bool,
+}
+
+/// Recognises the terminal's synchronized-update end marker (`ESC[?2026l`) in a byte stream,
+/// even when a read splits it across two chunks.
+#[derive(Default)]
+struct FrameScanner {
+    matched: usize,
+}
+
+/// The synchronized-update end marker: everything up to and including it belongs to a frame
+/// that is now whole.
+const FRAME_END: &[u8] = b"\x1b[?2026l";
+
+impl FrameScanner {
+    /// Feeds one more byte in. Returns whether it is the last byte of the end marker.
+    fn step(&mut self, byte: u8) -> bool {
+        if FRAME_END.get(self.matched) == Some(&byte) {
+            self.matched += 1;
+            if self.matched == FRAME_END.len() {
+                self.matched = 0;
+                return true;
+            }
+        } else {
+            self.matched = usize::from(FRAME_END.first() == Some(&byte));
+        }
+        false
+    }
 }
 
 /// The state and the signal that it changed.
@@ -75,9 +110,12 @@ impl Terminal {
         let mut reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
 
+        let parser = vt100::Parser::new(rows, cols, 0);
+        let frame = parser.screen().clone();
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
-                parser: vt100::Parser::new(rows, cols, 0),
+                parser,
+                frame,
                 exit: None,
                 eof: false,
             }),
@@ -86,15 +124,31 @@ impl Terminal {
         let output = Arc::clone(&shared);
         thread::spawn(move || {
             let mut chunk = [0_u8; 4096];
+            let mut scanner = FrameScanner::default();
             // A read error is how a closed terminal ends on Linux, like end of file.
             while let Ok(count @ 1..) = reader.read(&mut chunk) {
-                output
-                    .lock()
-                    .parser
-                    .process(chunk.get(..count).unwrap_or_default());
-                output.changed.notify_all();
+                let bytes = chunk.get(..count).unwrap_or_default();
+                let mut state = output.lock();
+                let mut start = 0;
+                for (index, &byte) in bytes.iter().enumerate() {
+                    if scanner.step(byte) {
+                        state
+                            .parser
+                            .process(bytes.get(start..=index).unwrap_or_default());
+                        start = index + 1;
+                        state.frame = state.parser.screen().clone();
+                        output.changed.notify_all();
+                    }
+                }
+                state.parser.process(bytes.get(start..).unwrap_or_default());
             }
-            output.lock().eof = true;
+            // What is left once the child is gone was never closed by a frame's end marker —
+            // most of it is the terminal being restored on the way out — but nothing further
+            // will ever draw over it, so it is as final and whole as a screen gets.
+            let mut state = output.lock();
+            state.frame = state.parser.screen().clone();
+            state.eof = true;
+            drop(state);
             output.changed.notify_all();
         });
         let exits = Arc::clone(&shared);
@@ -123,16 +177,19 @@ impl Terminal {
         Ok(self.master.resize(size(rows, cols))?)
     }
 
-    /// The text on the screen now, one line per row, trailing blanks trimmed.
+    /// The screen as it stood at the end of the last complete frame, one line per row, trailing
+    /// blanks trimmed. Never a frame caught half drawn.
     pub(crate) fn screen(&self) -> String {
-        self.shared.lock().parser.screen().contents()
+        self.shared.lock().frame.contents()
     }
 
-    /// Waits until `condition` holds of the screen, and returns the screen text then.
+    /// Waits until `condition` holds of a complete frame, and returns that frame's text.
+    /// `condition` never sees a frame that is only partly drawn.
     ///
     /// # Errors
     ///
-    /// Fails, showing the screen, when the condition still does not hold after the timeout.
+    /// Fails, showing the last complete frame, when the condition still does not hold after
+    /// the timeout; the timeout is a guard against a hung child, not a source of pass or fail.
     pub(crate) fn wait_for(
         &self,
         what: &str,
@@ -142,10 +199,10 @@ impl Terminal {
             .shared
             .changed
             .wait_timeout_while(self.shared.lock(), TIMEOUT, |state| {
-                !condition(state.parser.screen())
+                !condition(&state.frame)
             })
             .unwrap_or_else(PoisonError::into_inner);
-        let screen = state.parser.screen().contents();
+        let screen = state.frame.contents();
         if timeout.timed_out() {
             return Err(
                 format!("timed out waiting for {what}; the screen shows:\n{screen}").into(),
@@ -176,7 +233,7 @@ impl Terminal {
             })
             .unwrap_or_else(PoisonError::into_inner);
         state.exit.ok_or_else(|| {
-            let screen = state.parser.screen().contents();
+            let screen = state.frame.contents();
             format!("timed out waiting for the exit; the screen shows:\n{screen}").into()
         })
     }

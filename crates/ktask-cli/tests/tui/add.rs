@@ -43,13 +43,10 @@ pub(crate) fn open_form(fixture: &Fixture) -> Result<Terminal> {
 }
 
 /// Waits until the rows of the screen inside the frame hold `rows` at their indexes and the
-/// cursor is at (`row`, `col`) on the screen; returns the rows.
-fn expect(
-    terminal: &Terminal,
-    rows: &[(usize, &str)],
-    cursor: (usize, u16),
-) -> Result<Vec<String>> {
-    let screen = terminal.wait_for(
+/// cursor is at (`row`, `col`) on the screen; returns the whole matching screen, so a caller
+/// checking more of it does not have to read the screen a second time.
+fn expect(terminal: &Terminal, rows: &[(usize, &str)], cursor: (usize, u16)) -> Result<String> {
+    terminal.wait_for(
         &format!("{rows:?} with the cursor at {cursor:?}"),
         |screen| {
             let lines = lines_inside_frame(&screen.contents());
@@ -60,8 +57,7 @@ fn expect(
                     .iter()
                     .all(|(index, text)| lines.get(*index).is_some_and(|line| line == text))
         },
-    )?;
-    Ok(lines_inside_frame(&screen))
+    )
 }
 
 /// Waits until the rows hold `rows` at their indexes, wherever the cursor is.
@@ -104,7 +100,8 @@ fn n_opens_an_empty_form_over_the_queue_with_the_cursor_in_the_title() -> Result
     let fixture = Fixture::new()?;
     let terminal = open_form(&fixture)?;
 
-    let lines = expect(&terminal, &[(TITLE, "> Title:")], (TITLE, TEXT))?;
+    let screen = expect(&terminal, &[(TITLE, "> Title:")], (TITLE, TEXT))?;
+    let lines = lines_inside_frame(&screen);
 
     assert_eq!(lines[1], "New task");
     assert_eq!(lines[2], "");
@@ -115,7 +112,6 @@ fn n_opens_an_empty_form_over_the_queue_with_the_cursor_in_the_title() -> Result
     assert_eq!(lines[7], "");
     assert_eq!(lines[8], "  Criteria:");
     assert_eq!(lines[9], "   1.");
-    let screen = terminal.screen();
     assert!(!screen.contains("alpha"), "{screen}");
     let bottom = screen
         .lines()
@@ -161,7 +157,7 @@ fn filling_every_field_and_submitting_adds_the_task_at_the_end_as_typed() -> Res
     terminal.send("It adds and it lists")?;
     terminal.send(ADD_CRITERION)?;
     terminal.send("It says \"no\" to a blank title")?;
-    let lines = expect(
+    let lines = lines_inside_frame(&expect(
         &terminal,
         &[
             (11, "  Criteria:"),
@@ -169,7 +165,7 @@ fn filling_every_field_and_submitting_adds_the_task_at_the_end_as_typed() -> Res
             (13, ">  2. It says \"no\" to a blank title"),
         ],
         (13, 1 + 6 + 29),
-    )?;
+    )?);
     assert_eq!(lines[3], "  Title:     Ship the form");
     assert_eq!(lines[4], "  Kind:      < human >");
     assert_eq!(
@@ -616,27 +612,13 @@ fn criteria_are_added_after_the_last_and_removed_from_where_the_focus_is() -> Re
     Ok(())
 }
 
-/// The screen row of the focus marker, in a form of `criteria` criteria whose body is one line.
-fn focus_row(terminal: &Terminal) -> Result<usize> {
-    let screen = terminal.screen();
-    lines_inside_frame(&screen)
-        .iter()
-        .position(|line| line.starts_with('>'))
-        .ok_or_else(|| format!("no focus marker on\n{screen}").into())
-}
-
+/// Waits until the focus marker is on `row` and nowhere else.
 fn wait_focus(terminal: &Terminal, row: usize) -> Result<()> {
     terminal.wait_for(&format!("the focus on row {row}"), |screen| {
-        lines_inside_frame(&screen.contents())
-            .iter()
-            .filter(|line| line.starts_with('>'))
-            .count()
-            == 1
-            && lines_inside_frame(&screen.contents())
-                .get(row)
-                .is_some_and(|line| line.starts_with('>'))
+        let lines = lines_inside_frame(&screen.contents());
+        lines.iter().filter(|line| line.starts_with('>')).count() == 1
+            && lines.get(row).is_some_and(|line| line.starts_with('>'))
     })?;
-    assert_eq!(focus_row(terminal)?, row);
     Ok(())
 }
 
@@ -722,7 +704,7 @@ fn a_long_body_scrolls_to_keep_the_cursor_in_view_and_all_of_it_is_added() -> Re
     terminal.send(&body.join(ENTER))?;
 
     // The last line is at the bottom of the frame; the top of the form has scrolled away.
-    let lines = expect(&terminal, &[(22, "    line 30")], (22, 5 + 7))?;
+    let lines = lines_inside_frame(&expect(&terminal, &[(22, "    line 30")], (22, 5 + 7))?);
     assert!(
         !lines.iter().any(|line| line.contains("New task")),
         "{lines:?}"

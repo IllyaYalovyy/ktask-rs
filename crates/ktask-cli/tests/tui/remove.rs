@@ -2,7 +2,9 @@
 //! `ktask-rs remove` runs, `n` and Esc keep the task; what the screen shows after each, and
 //! what `ktask-rs list --all` shows of the journal.
 
-use super::navigate::{COLS, ESC, Fixture, ROWS, marked, quit, wait_selected};
+use super::navigate::{
+    COLS, ESC, Fixture, ROWS, marked, quit, wait_selected, wait_selected_screen,
+};
 use super::pty::{Terminal, lines_inside_frame};
 use super::support::Result;
 
@@ -153,10 +155,10 @@ fn d_then_n_changes_nothing() -> Result<()> {
 
     terminal.send("n")?;
 
-    terminal.wait_for("the question gone", |screen| {
+    let screen = terminal.wait_for("the question gone", |screen| {
         !screen.contents().contains("Remove #")
     })?;
-    assert_eq!(terminal.screen(), before);
+    assert_eq!(screen, before);
     // The task is still there to be removed or moved off: the next keys reach the queue.
     terminal.send("j")?;
     wait_selected(&terminal, "charlie")?;
@@ -176,10 +178,10 @@ fn d_then_esc_changes_nothing() -> Result<()> {
 
     terminal.send(ESC)?;
 
-    terminal.wait_for("the question gone", |screen| {
+    let screen = terminal.wait_for("the question gone", |screen| {
         !screen.contents().contains("Remove #")
     })?;
-    assert_eq!(terminal.screen(), before);
+    assert_eq!(screen, before);
     terminal.send("j")?;
     wait_selected(&terminal, "charlie")?;
     assert_eq!(journal(&fixture)?, journal_before);
@@ -216,12 +218,12 @@ fn while_the_question_is_open_only_y_n_esc_and_q_are_answered() -> Result<()> {
     }
     // Keys are handled in order: once n has been, the ones before it were too.
     terminal.send("n")?;
-    terminal.wait_for("the question gone", |screen| {
+    let screen = terminal.wait_for("the question gone", |screen| {
         !screen.contents().contains("Remove #")
     })?;
 
-    assert_eq!(terminal.screen(), before);
-    assert_ne!(terminal.screen(), asked);
+    assert_eq!(screen, before);
+    assert_ne!(screen, asked);
     assert!(
         journal(&fixture)?
             .iter()
@@ -345,12 +347,12 @@ fn d_on_a_cancelled_task_asks_nothing() -> Result<()> {
     terminal.send("d")?;
     // Keys are handled in order: this one is answered by the queue, not by a question.
     terminal.send("j")?;
-    wait_selected(&terminal, "bravo")?;
+    let screen = wait_selected_screen(&terminal, "bravo")?;
 
-    assert!(!terminal.screen().contains("Remove #"));
+    assert!(!screen.contains("Remove #"));
     terminal.send("k")?;
-    wait_selected(&terminal, "alpha")?;
-    assert_eq!(terminal.screen(), before);
+    let screen = wait_selected_screen(&terminal, "alpha")?;
+    assert_eq!(screen, before);
     quit(terminal)
 }
 

@@ -4,7 +4,7 @@
 //! `ktask-rs list --json` shows of the journal.
 
 use super::add::{SUBMIT, TAB, listed, wait_queue_with};
-use super::navigate::{ESC, Fixture, ROWS, marked, quit, wait_selected};
+use super::navigate::{ESC, Fixture, ROWS, marked, quit, wait_selected, wait_selected_screen};
 use super::pty::{Terminal, lines_inside_frame};
 use super::support::Result;
 
@@ -69,9 +69,12 @@ fn capital_o_then_submit_inserts_above_the_selected_task_with_the_ids_unchanged(
     write_and_submit(&mut terminal, "new")?;
 
     wait_queue_with(&terminal, "new")?;
-    let row = wait_selected(&terminal, "new")?;
-    assert_eq!(row, ">  2  #6  pending  agent  new");
-    let lines = lines_inside_frame(&terminal.screen());
+    let screen = wait_selected_screen(&terminal, "new")?;
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(
+        marked(&screen),
+        [">  2  #6  pending  agent  new".to_owned()]
+    );
     assert_eq!(lines[4], "   1  #1  pending  agent  alpha");
     assert_eq!(lines[6], "   3  #2  pending  agent  bravo");
     assert_eq!(lines[9], "   6  #5  pending  agent  echo");
@@ -94,9 +97,12 @@ fn o_then_submit_inserts_below_the_selected_task_with_the_ids_unchanged() -> Res
     write_and_submit(&mut terminal, "new")?;
 
     wait_queue_with(&terminal, "new")?;
-    let row = wait_selected(&terminal, "new")?;
-    assert_eq!(row, ">  3  #6  pending  agent  new");
-    let lines = lines_inside_frame(&terminal.screen());
+    let screen = wait_selected_screen(&terminal, "new")?;
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(
+        marked(&screen),
+        [">  3  #6  pending  agent  new".to_owned()]
+    );
     assert_eq!(lines[5], "   2  #2  pending  agent  bravo");
     assert_eq!(lines[7], "   4  #3  pending  agent  charlie");
     assert_eq!(
@@ -254,11 +260,11 @@ fn a_refused_task_stays_in_the_form_and_goes_where_the_key_said_once_it_is_accep
     terminal.send("O")?;
     wait_form(&terminal, "New task above #3")?;
     terminal.send(SUBMIT)?;
-    terminal.wait_for("the refusal", |screen| {
+    let screen = terminal.wait_for("the refusal", |screen| {
         screen.contents().contains("! the title is empty")
     })?;
     assert_eq!(order(&fixture)?.len(), 5);
-    let lines = lines_inside_frame(&terminal.screen());
+    let lines = lines_inside_frame(&screen);
     assert_eq!(lines[1], "New task above #3");
 
     terminal.send("late")?;

@@ -88,10 +88,9 @@ fn q_quits_with_exit_zero_and_puts_the_terminal_back() -> Result<()> {
     terminal.send("q")?;
 
     assert_eq!(terminal.wait_for_exit()?, 0);
-    terminal.wait_for("the normal screen back", |screen| {
+    let screen = terminal.wait_for("the normal screen back", |screen| {
         !screen.alternate_screen()
     })?;
-    let screen = terminal.screen();
     assert!(!screen.contains("The queue is empty."), "{screen}");
     terminal.wait_for("the cursor back", |screen| !screen.hide_cursor())?;
     assert!(terminal.is_cooked()?, "line editing and echo are back on");
@@ -202,9 +201,9 @@ fn project_selects_a_registered_project_from_any_directory() -> Result<()> {
         ROWS,
         COLS,
     )?;
-    terminal.wait_for_text("The queue is empty.")?;
+    let screen = terminal.wait_for_text("The queue is empty.")?;
 
-    let lines = lines_inside_frame(&terminal.screen());
+    let lines = lines_inside_frame(&screen);
     assert_eq!(lines[1], "first-app");
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
@@ -337,12 +336,12 @@ fn tasks_inserted_from_the_cli_show_in_their_place_with_their_own_ids() -> Resul
     add_placed_task(&sandbox, &repository, "Fifth", "--after", "2")?;
 
     let mut terminal = Terminal::launch(&sandbox, &repository, &["tui"], ROWS, COLS)?;
-    terminal.wait_for("the queue with five tasks", |screen| {
+    let screen = terminal.wait_for("the queue with five tasks", |screen| {
         let contents = screen.contents();
         contents.contains("Fifth") && contents.ends_with('┘')
     })?;
 
-    let lines = lines_inside_frame(&terminal.screen());
+    let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
         "pending 5 · running 0 · done 0 · failed 0 · cancelled 0"
@@ -378,12 +377,12 @@ fn tasks_imported_from_the_cli_show_in_their_place_with_their_own_ids() -> Resul
     assert_eq!(imported.code, Some(0), "{}", imported.stderr);
 
     let mut terminal = Terminal::launch(&sandbox, &repository, &["tui"], ROWS, COLS)?;
-    terminal.wait_for("the queue with four tasks", |screen| {
+    let screen = terminal.wait_for("the queue with four tasks", |screen| {
         let contents = screen.contents();
         contents.contains("  4  #2  pending  agent  b") && contents.ends_with('┘')
     })?;
 
-    let lines = lines_inside_frame(&terminal.screen());
+    let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
         "pending 4 · running 0 · done 0 · failed 0 · cancelled 0"

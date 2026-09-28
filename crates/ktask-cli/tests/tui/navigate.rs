@@ -74,12 +74,18 @@ pub(crate) fn marked(screen: &str) -> Vec<String> {
         .collect()
 }
 
-/// Waits until the selection is on `title` and nowhere else, and returns the row it is on.
-pub(crate) fn wait_selected(terminal: &Terminal, title: &str) -> Result<String> {
-    let screen = terminal.wait_for(
+/// Waits until the selection is on `title` and nowhere else, and returns the whole matching
+/// screen, so a caller checking more of it does not have to read the screen a second time.
+pub(crate) fn wait_selected_screen(terminal: &Terminal, title: &str) -> Result<String> {
+    terminal.wait_for(
         &format!("the selection on {title}"),
         |screen| matches!(marked(&screen.contents()).as_slice(), [row] if row.ends_with(title)),
-    )?;
+    )
+}
+
+/// Waits until the selection is on `title` and nowhere else, and returns the row it is on.
+pub(crate) fn wait_selected(terminal: &Terminal, title: &str) -> Result<String> {
+    let screen = wait_selected_screen(terminal, title)?;
     Ok(marked(&screen).remove(0))
 }
 
@@ -269,9 +275,10 @@ fn a_queue_with_nothing_cancelled_looks_the_same_with_a_pressed() -> Result<()> 
     // The next key has an effect that shows only if the toggle has been handled first.
     walk(&mut terminal, &[("j", "bravo")])?;
     terminal.send("a")?;
-    walk(&mut terminal, &[("k", "alpha")])?;
+    terminal.send("k")?;
+    let screen = wait_selected_screen(&terminal, "alpha")?;
 
-    assert_eq!(terminal.screen(), before);
+    assert_eq!(screen, before);
     quit(terminal)
 }
 
@@ -352,9 +359,9 @@ fn while_the_key_map_is_open_the_other_keys_do_nothing() -> Result<()> {
     })?;
 
     // Neither the selection nor the hidden task changed.
-    wait_selected(&terminal, "alpha")?;
-    assert!(!terminal.screen().contains("charlie"));
-    assert_ne!(terminal.screen(), map);
+    let screen = wait_selected_screen(&terminal, "alpha")?;
+    assert!(!screen.contains("charlie"));
+    assert_ne!(screen, map);
     quit(terminal)
 }
 

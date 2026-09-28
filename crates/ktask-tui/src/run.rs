@@ -1,5 +1,6 @@
 //! The loop that owns the terminal and feeds events into [`update`].
 
+use std::io::Write;
 use std::time::Duration;
 
 use ktask_core::{Placement, QueueView, TaskDraft, TaskId};
@@ -11,6 +12,28 @@ use crate::{App, Event, render, update};
 /// How long the loop waits for a key before it loads the queue again, so that a task added
 /// from elsewhere shows without a key being pressed.
 const REFRESH: Duration = Duration::from_millis(200);
+
+/// Starts a terminal synchronized update: a reader that stops at the matching end marker never
+/// sees a frame half drawn.
+const SYNC_START: &[u8] = b"\x1b[?2026h";
+/// Ends a terminal synchronized update.
+const SYNC_END: &[u8] = b"\x1b[?2026l";
+
+/// Draws one frame of `app`, wrapped in the terminal's synchronized-update markers.
+fn draw(terminal: &mut DefaultTerminal, app: &App) -> Result<(), String> {
+    let fail = |e: std::io::Error| format!("cannot draw the screen: {e}");
+    terminal.backend_mut().write_all(SYNC_START).map_err(fail)?;
+    terminal
+        .draw(|frame| {
+            if let Some(cursor) = render(app, frame.area(), frame.buffer_mut()) {
+                frame.set_cursor_position(cursor);
+            }
+        })
+        .map_err(fail)?;
+    let backend = terminal.backend_mut();
+    backend.write_all(SYNC_END).map_err(fail)?;
+    backend.flush().map_err(fail)
+}
 
 /// Runs the terminal interface until the operator quits.
 ///
@@ -44,13 +67,7 @@ fn drive(
 ) -> Result<(), String> {
     let mut app = update(App::default(), Event::Loaded(load(false)?));
     loop {
-        terminal
-            .draw(|frame| {
-                if let Some(cursor) = render(&app, frame.area(), frame.buffer_mut()) {
-                    frame.set_cursor_position(cursor);
-                }
-            })
-            .map_err(|e| format!("cannot draw the screen: {e}"))?;
+        draw(terminal, &app)?;
         if app.quit {
             return Ok(());
         }
