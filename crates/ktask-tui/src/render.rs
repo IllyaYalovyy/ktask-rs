@@ -1,6 +1,6 @@
 //! Draws an [`App`] into a buffer.
 
-use ktask_core::{AttemptLine, QueueView, Task, TaskStatus};
+use ktask_core::{AttemptLine, CancelError, QueueView, Task, TaskStatus};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -82,7 +82,8 @@ fn key_map(area: Rect, buf: &mut Buffer) {
     Paragraph::new(lines).render(area, buf);
 }
 
-/// The header: the project, the counts, and the question of a removal while there is one.
+/// The header: the project, the counts, and the question of a removal or the refusal of one,
+/// while there is either.
 fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
     let summary = queue.summary;
     let question = app
@@ -100,6 +101,12 @@ fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
                 Style::new().add_modifier(Modifier::BOLD),
             )
         });
+    let question = app.refused.map_or(question, |id| {
+        Line::styled(
+            CancelError::Running(id).to_string(),
+            Style::new().add_modifier(Modifier::BOLD),
+        )
+    });
     vec![
         Line::styled(
             queue.project.name.clone(),
@@ -512,6 +519,19 @@ mod tests {
         assert_eq!(inside(&rows[5]), ">  2  #20  pending  agent  second");
         let rows = drawn(&keys(app, &[Char('n')]), 60, 8);
         assert_eq!(inside(&rows[3]), "");
+    }
+
+    #[test]
+    fn d_on_a_running_task_shows_the_refusal_in_place_of_the_question() {
+        use ratatui::crossterm::event::KeyCode::Char;
+        let mut running = task(1, "first", TaskKind::Agent);
+        running.status = TaskStatus::Running;
+        let app = keys(loaded(vec![running]), &[Char('d')]);
+        let rows = drawn(&app, 60, 8);
+        assert_eq!(
+            inside(&rows[3]),
+            CancelError::Running(TaskId(10)).to_string()
+        );
     }
 
     fn draw_form(app: &App, height: u16) -> (Vec<String>, Option<Position>) {

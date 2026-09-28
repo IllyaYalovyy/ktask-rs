@@ -18,6 +18,9 @@ pub struct App {
     pub help: bool,
     /// What the operator is being asked to confirm, if anything; the answer is the next key.
     pub confirming: Option<Confirming>,
+    /// The task `d` just refused to remove because it is running: shown until the next key,
+    /// or until it is no longer running. No confirmation is asked for it.
+    pub refused: Option<TaskId>,
     /// The task whose removal was confirmed: the loop carries it out and clears this.
     pub removal: Option<TaskId>,
     /// The form a new task is written in, while it is open; it covers the queue.
@@ -66,10 +69,12 @@ pub fn update(app: App, event: Event) -> App {
                 Confirming::Removal(id) => removable(&queue, *id),
                 Confirming::Discard => true,
             });
+            let refused = app.refused.filter(|id| is_running(&queue, *id));
             App {
                 queue: Some(queue),
                 selected,
                 confirming,
+                refused,
                 ..app
             }
         }
@@ -110,32 +115,32 @@ pub fn update(app: App, event: Event) -> App {
             KeyCode::Esc | KeyCode::Char('?') => App { help: false, ..app },
             _ => app,
         },
-        Event::Key(key) => match key {
-            KeyCode::Char('?') => App { help: true, ..app },
-            KeyCode::Char('a') => App {
-                show_cancelled: !app.show_cancelled,
+        Event::Key(key) => {
+            // `refused` is a one-shot notice: any key past the one that raised it dismisses
+            // it, whether or not that key is `d` again.
+            let app = App {
+                refused: None,
                 ..app
-            },
-            KeyCode::Char('j') | KeyCode::Down => select(app, |index, _| index.saturating_add(1)),
-            KeyCode::Char('k') | KeyCode::Up => select(app, |index, _| index.saturating_sub(1)),
-            KeyCode::Char('n') => open_form(app, Placement::End),
-            KeyCode::Char('o') => open_form_next_to(app, Placement::After),
-            KeyCode::Char('O') => open_form_next_to(app, Placement::Before),
-            KeyCode::Char('d') => App {
-                confirming: app
-                    .selected
-                    .filter(|id| {
-                        app.queue
-                            .as_ref()
-                            .is_some_and(|queue| removable(queue, *id))
-                    })
-                    .map(Confirming::Removal),
-                ..app
-            },
-            KeyCode::Char('g') => select(app, |_, _| 0),
-            KeyCode::Char('G') => select(app, |_, len| len.saturating_sub(1)),
-            _ => app,
-        },
+            };
+            match key {
+                KeyCode::Char('?') => App { help: true, ..app },
+                KeyCode::Char('a') => App {
+                    show_cancelled: !app.show_cancelled,
+                    ..app
+                },
+                KeyCode::Char('j') | KeyCode::Down => {
+                    select(app, |index, _| index.saturating_add(1))
+                }
+                KeyCode::Char('k') | KeyCode::Up => select(app, |index, _| index.saturating_sub(1)),
+                KeyCode::Char('n') => open_form(app, Placement::End),
+                KeyCode::Char('o') => open_form_next_to(app, Placement::After),
+                KeyCode::Char('O') => open_form_next_to(app, Placement::Before),
+                KeyCode::Char('d') => press_d(app),
+                KeyCode::Char('g') => select(app, |_, _| 0),
+                KeyCode::Char('G') => select(app, |_, len| len.saturating_sub(1)),
+                _ => app,
+            }
+        }
         Event::Ctrl(_) | Event::Resize => app,
     }
 }
@@ -203,12 +208,45 @@ fn added(app: App, id: TaskId) -> App {
     }
 }
 
-/// Whether `queue` shows the task `id` and it can still be removed: a cancelled one cannot.
+/// Whether `queue` shows the task `id` and it can still be removed: a cancelled or a running
+/// one cannot.
 fn removable(queue: &QueueView, id: TaskId) -> bool {
+    queue.tasks.iter().any(|task| {
+        task.id == id && task.status != TaskStatus::Cancelled && task.status != TaskStatus::Running
+    })
+}
+
+/// Whether `queue` shows the task `id` as running.
+fn is_running(queue: &QueueView, id: TaskId) -> bool {
     queue
         .tasks
         .iter()
-        .any(|task| task.id == id && task.status != TaskStatus::Cancelled)
+        .any(|task| task.id == id && task.status == TaskStatus::Running)
+}
+
+/// The app after `d` on the selected task: it asks to confirm removing it when it can be
+/// removed, refuses without asking when it is running, and otherwise, with nothing selected
+/// or the selection cancelled already, changes nothing.
+fn press_d(app: App) -> App {
+    let Some(id) = app.selected else {
+        return app;
+    };
+    let Some(queue) = &app.queue else {
+        return app;
+    };
+    if removable(queue, id) {
+        App {
+            confirming: Some(Confirming::Removal(id)),
+            ..app
+        }
+    } else if is_running(queue, id) {
+        App {
+            refused: Some(id),
+            ..app
+        }
+    } else {
+        app
+    }
 }
 
 /// The app once the removal it asks about is confirmed: the removal is left for the loop to
@@ -447,6 +485,52 @@ mod tests {
         queue.tasks[0].status = TaskStatus::Cancelled;
         let app = update(App::default(), Event::Loaded(queue));
         assert_eq!(press(app, &[KeyCode::Char('d')]).confirming, None);
+    }
+
+    #[test]
+    fn d_on_a_running_task_refuses_without_asking_and_changes_nothing_else() {
+        let mut queue = queue_of(&[1, 2]);
+        queue.tasks[0].status = TaskStatus::Running;
+        let app = update(App::default(), Event::Loaded(queue.clone()));
+
+        let app = press(app, &[KeyCode::Char('d')]);
+
+        assert_eq!(app.confirming, None);
+        assert_eq!(app.removal, None);
+        assert_eq!(app.refused, Some(TaskId(1)));
+        assert_eq!(app.queue, Some(queue));
+    }
+
+    #[test]
+    fn the_refusal_is_dismissed_by_the_next_key_that_is_not_d_again() {
+        let mut queue = queue_of(&[1, 2]);
+        queue.tasks[0].status = TaskStatus::Running;
+        let app = update(App::default(), Event::Loaded(queue));
+        let refused = press(app, &[KeyCode::Char('d')]);
+        assert_eq!(refused.refused, Some(TaskId(1)));
+
+        for key in [KeyCode::Char('j'), KeyCode::Char('x')] {
+            assert_eq!(press(refused.clone(), &[key]).refused, None);
+        }
+        // The task is still running, so d again just shows the same refusal afresh.
+        assert_eq!(
+            press(refused, &[KeyCode::Char('d')]).refused,
+            Some(TaskId(1))
+        );
+    }
+
+    #[test]
+    fn the_refusal_goes_when_its_task_stops_running_from_elsewhere() {
+        let mut queue = queue_of(&[1, 2]);
+        queue.tasks[0].status = TaskStatus::Running;
+        let app = update(App::default(), Event::Loaded(queue));
+        let refused = press(app, &[KeyCode::Char('d')]);
+        assert_eq!(refused.refused, Some(TaskId(1)));
+
+        let mut queue = queue_of(&[1, 2]);
+        queue.tasks[0].status = TaskStatus::Done;
+        let reloaded = update(refused, Event::Loaded(queue));
+        assert_eq!(reloaded.refused, None);
     }
 
     #[test]

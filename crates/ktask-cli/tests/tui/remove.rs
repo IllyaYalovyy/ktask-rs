@@ -1,6 +1,10 @@
 //! Removing a task from the queue screen: `d` asks, `y` removes through the same use case
 //! `ktask-rs remove` runs, `n` and Esc keep the task; what the screen shows after each, and
-//! what `ktask-rs list --all` shows of the journal.
+//! what `ktask-rs list --all` shows of the journal. `d` on the running task is separate: it
+//! is refused, not asked about, exactly as `ktask-rs remove` refuses it.
+
+use std::path::Path;
+use std::process::{Command, Stdio};
 
 use super::navigate::{
     COLS, ESC, Fixture, ROWS, marked, quit, wait_selected, wait_selected_screen,
@@ -353,6 +357,78 @@ fn d_on_a_cancelled_task_asks_nothing() -> Result<()> {
     terminal.send("k")?;
     let screen = wait_selected_screen(&terminal, "alpha")?;
     assert_eq!(screen, before);
+    quit(terminal)
+}
+
+/// A bash block that waits for the file at `go` to exist, then reports `done`: an attempt
+/// that stays running until the test lets it finish.
+fn gated_body(go: &Path) -> String {
+    format!(
+        "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nktask-rs report --token \"$1\" done\n```\n",
+        go.display()
+    )
+}
+
+#[test]
+fn d_on_the_running_task_shows_the_same_refusal_and_asks_nothing() -> Result<()> {
+    let fixture = Fixture::empty()?;
+    let go = fixture.sandbox.tmpdir().join("go");
+    fixture.cli(&[
+        "add",
+        "--title",
+        "gated",
+        "--criterion",
+        "it works",
+        "--body",
+        &gated_body(&go),
+    ])?;
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ktask-rs"));
+    command.arg("run");
+    fixture.sandbox.isolate(&mut command, &fixture.repository);
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    let mut run = command.spawn()?;
+
+    let mut terminal = open_on(&fixture, "gated")?;
+    let screen = terminal.wait_for("the task running", |screen| {
+        lines_inside_frame(&screen.contents())
+            .get(4)
+            .is_some_and(|line| line.starts_with(">  1  #1  running"))
+    })?;
+    let running_row = lines_inside_frame(&screen)[4].clone();
+
+    terminal.send("d")?;
+    let screen = terminal.wait_for("the refusal", |screen| {
+        screen.contents().contains("task 1 is running")
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[3], "task 1 is running");
+    assert!(!screen.contains("y to remove"), "{screen}");
+    assert_eq!(lines[4], running_row, "the refusal asked nothing");
+
+    terminal.send("j")?;
+    let screen = terminal.wait_for("the refusal gone", |screen| {
+        !screen.contents().contains("task 1 is running")
+    })?;
+    assert!(!screen.contains("Remove #"), "{screen}");
+
+    std::fs::write(&go, "")?;
+    let status = run.wait()?;
+    assert!(status.success(), "{status:?}");
+    terminal.wait_for("the task done", |screen| {
+        lines_inside_frame(&screen.contents())
+            .get(4)
+            .is_some_and(|line| line.starts_with(">  1  #1  done"))
+    })?;
+
+    let listed = fixture
+        .sandbox
+        .run(&fixture.repository, &["list", "--all"])?;
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    assert!(!listed.stdout.contains("cancelled"), "{}", listed.stdout);
+    assert!(listed.stdout.contains("done"), "{}", listed.stdout);
+
     quit(terminal)
 }
 
