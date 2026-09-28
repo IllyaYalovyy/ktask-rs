@@ -4,8 +4,9 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use ktask_core::{
-    AppendError, AttemptRun, BeginAttemptError, CancelError, Journal, JournalError, Outcome,
-    Placement, RecordReportError, Task, TaskDraft, TaskId, TaskKind, TaskStatus,
+    AppendError, Attempt, AttemptEnd, AttemptRun, BeginAttemptError, CancelError, Journal,
+    JournalError, Outcome, Placement, RecordReportError, Task, TaskDraft, TaskId, TaskKind,
+    TaskStatus,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value;
@@ -185,6 +186,39 @@ fn from_seconds(seconds: i64) -> SystemTime {
     match u64::try_from(seconds) {
         Ok(after_epoch) => SystemTime::UNIX_EPOCH + Duration::from_secs(after_epoch),
         Err(_) => SystemTime::UNIX_EPOCH - Duration::from_secs(seconds.unsigned_abs()),
+    }
+}
+
+impl SqliteJournal {
+    /// The most recent event of `kind` for task `task_id`'s attempt `number`: its `at` and
+    /// payload, or `None` when there is no such event.
+    fn attempt_event(
+        &self,
+        task_id: i64,
+        number: u32,
+        kind: &str,
+    ) -> Result<Option<(i64, Value)>, JournalError> {
+        let doing = "cannot read the task's attempt";
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT at, payload FROM events
+                 WHERE kind = ?1 AND task_id = ?2 ORDER BY seq DESC",
+            )
+            .map_err(|e| failed(doing, e))?;
+        let rows = statement
+            .query_map((kind, task_id), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| failed(doing, e))?;
+        for row in rows {
+            let (at, payload) = row.map_err(|e| failed(doing, e))?;
+            let payload: Value = serde_json::from_str(&payload).map_err(|e| failed(doing, e))?;
+            if payload.get("number").and_then(Value::as_u64) == Some(u64::from(number)) {
+                return Ok(Some((at, payload)));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -547,6 +581,72 @@ impl Journal for SqliteJournal {
                 ))
             })
             .transpose()
+    }
+
+    fn last_attempt(&self, id: TaskId) -> Result<Option<Attempt>, JournalError> {
+        let doing = "cannot read the task's attempt";
+        let number_id = i64::try_from(id.0).unwrap_or(i64::MAX);
+        let attempt_number = self
+            .connection
+            .query_row(
+                "SELECT attempt_number FROM tasks WHERE id = ?1",
+                [number_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|e| failed(doing, e))?;
+        let Some(attempt_number) = attempt_number.filter(|number| *number > 0) else {
+            return Ok(None);
+        };
+        let number = u32::try_from(attempt_number).map_err(|e| failed(doing, e))?;
+
+        let Some((started, _)) = self.attempt_event(number_id, number, "attempt_started")? else {
+            return Err(failed(
+                doing,
+                format!("task {id} has attempt {number} but no attempt_started event"),
+            ));
+        };
+        let provider = self
+            .attempt_event(number_id, number, "attempt_running")?
+            .and_then(|(_, payload)| {
+                payload
+                    .get("provider")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            });
+        let ended = self
+            .attempt_event(number_id, number, "attempt_ended")?
+            .map(|(_, payload)| -> Result<AttemptEnd, JournalError> {
+                let duration_ms = payload
+                    .get("duration_ms")
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| failed(doing, "an attempt_ended event has no duration"))?;
+                let status = payload
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| failed(doing, "an attempt_ended event has no status"))?
+                    .parse::<TaskStatus>()
+                    .map_err(|e| failed(doing, e))?;
+                let reason = payload
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                Ok(AttemptEnd {
+                    duration: Duration::from_millis(
+                        u64::try_from(duration_ms).map_err(|e| failed(doing, e))?,
+                    ),
+                    status,
+                    reason,
+                })
+            })
+            .transpose()?;
+
+        Ok(Some(Attempt {
+            number,
+            started_at: from_seconds(started),
+            provider,
+            ended,
+        }))
     }
 }
 
@@ -1383,5 +1483,74 @@ mod tests {
             )
             .unwrap();
         assert_eq!(journal.running().unwrap(), None);
+    }
+
+    #[test]
+    fn last_attempt_is_none_for_a_task_never_attempted() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        journal
+            .append_task(&draft("a"), Placement::End, at(1))
+            .unwrap();
+        assert_eq!(journal.last_attempt(TaskId(1)).unwrap(), None);
+        assert_eq!(journal.last_attempt(TaskId(9)).unwrap(), None);
+    }
+
+    #[test]
+    fn last_attempt_while_running_carries_its_number_start_and_provider_but_no_ending() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        journal
+            .append_task(&draft("a"), Placement::End, at(1))
+            .unwrap();
+        journal.begin_attempt(TaskId(1), at(50)).unwrap();
+        journal
+            .attempt_running(TaskId(1), 1, "echo", at(55))
+            .unwrap();
+
+        let attempt = journal.last_attempt(TaskId(1)).unwrap().unwrap();
+        assert_eq!(attempt.number, 1);
+        assert_eq!(attempt.started_at, at(50));
+        assert_eq!(attempt.provider, Some("echo".to_owned()));
+        assert_eq!(attempt.ended, None);
+    }
+
+    #[test]
+    fn last_attempt_once_ended_carries_its_duration_status_and_reason() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        journal
+            .append_task(&draft("a"), Placement::End, at(1))
+            .unwrap();
+        journal.begin_attempt(TaskId(1), at(50)).unwrap();
+        journal
+            .attempt_running(TaskId(1), 1, "echo", at(55))
+            .unwrap();
+        journal
+            .end_attempt(
+                TaskId(1),
+                1,
+                AttemptRun {
+                    duration: Duration::from_millis(1_500),
+                    exit_code: Some(1),
+                    status: TaskStatus::Failed,
+                    reason: Some("it broke"),
+                },
+                at(70),
+            )
+            .unwrap();
+
+        let attempt = journal.last_attempt(TaskId(1)).unwrap().unwrap();
+        assert_eq!(attempt.number, 1);
+        assert_eq!(attempt.started_at, at(50));
+        assert_eq!(attempt.provider, Some("echo".to_owned()));
+        assert_eq!(
+            attempt.ended,
+            Some(AttemptEnd {
+                duration: Duration::from_millis(1_500),
+                status: TaskStatus::Failed,
+                reason: Some("it broke".to_owned()),
+            })
+        );
     }
 }
