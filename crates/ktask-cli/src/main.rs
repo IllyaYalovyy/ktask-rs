@@ -121,6 +121,15 @@ enum Command {
         #[command(subcommand)]
         command: ProviderCommand,
     },
+    /// What ran and how it ended: every task that was attempted, with its most recent attempt
+    Status {
+        /// Work on this registered project instead of the one the current directory is in
+        #[arg(long, value_name = "NAME")]
+        project: Option<String>,
+        /// Print a JSON array instead of one line per task
+        #[arg(long)]
+        json: bool,
+    },
     /// State the outcome of an attempt; the token names its project, task and attempt, so
     /// this works from any directory
     Report {
@@ -442,6 +451,12 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<ExitCode, Failure> 
                     timeout_ms,
                 },
         } => provider_run(provider, token, *attempt, *timeout_ms, stdout),
+        Command::Status { project, json } => {
+            let journal = open_queue(project.as_deref())?;
+            let entries = ktask_core::status(&journal, &SystemClock).map_err(|e| e.to_string())?;
+            render::status(&entries, *json, stdout)?;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Report {
             token,
             outcome,
