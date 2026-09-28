@@ -825,6 +825,7 @@ name = "ktask-adapters"
 version = "0.1.0"
 dependencies = [
  "ktask-core",
+ "nix 0.28.0",
  "notify",
  "rusqlite",
  "serde_json",
