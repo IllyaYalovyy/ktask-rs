@@ -1,8 +1,9 @@
 //! The loop that owns the terminal and feeds events into [`update`].
 
 use std::io::Write;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
+use std::time::Duration;
 
 use ktask_core::{JournalWatch, Placement, QueueView, TaskDraft, TaskId};
 use ratatui::DefaultTerminal;
@@ -13,7 +14,8 @@ use signal_hook::iterator::Signals;
 use crate::{App, Event, render, update};
 
 /// Something the loop is woken by: a key (or resize) at the terminal, the journal having
-/// changed under it, or the process being told to stop.
+/// changed under it, the process being told to stop, or — only while a task is running —
+/// the tick that keeps its elapsed time moving.
 enum Wake {
     /// An input arrived at the terminal.
     Input(Input),
@@ -23,7 +25,14 @@ enum Wake {
     /// asked the process to stop. There is nothing to weigh against a form's content here:
     /// the terminal is leaving regardless, so the loop ends at once.
     Stop,
+    /// No other wake arrived before [`TICK`] passed, while a task was running: the queue is
+    /// loaded again so the running task's elapsed time moves even though nothing else changed.
+    Tick,
 }
+
+/// How often the loop wakes on its own to refresh a running task's elapsed time, while one is
+/// running. Nothing wakes it on a timer otherwise.
+const TICK: Duration = Duration::from_secs(1);
 
 /// Starts a terminal synchronized update: a reader that stops at the matching end marker never
 /// sees a frame half drawn.
@@ -56,8 +65,11 @@ fn draw(terminal: &mut DefaultTerminal, app: &App) -> Result<(), String> {
 /// where the form says, and gives its number, or the reasons it was not added when it was not.
 /// `watch` blocks until the journal changes; it is polled from a dedicated thread, so a task
 /// added, inserted or removed by another process shows in the next frame without the loop
-/// itself ever waking on a timer. The terminal is put back as it was on every way out: the
-/// operator quitting, SIGTERM or SIGHUP (its terminal going away sends this), or an error.
+/// itself ever waking on a timer — except while a task is running, when the queue is loaded
+/// again on a short timer too, so the running task's elapsed time keeps moving even though
+/// nothing else changed; the loop goes back to waiting with no timer once nothing is running.
+/// The terminal is put back as it was on every way out: the operator quitting, SIGTERM or
+/// SIGHUP (its terminal going away sends this), or an error.
 ///
 /// # Errors
 ///
@@ -123,12 +135,26 @@ fn drive(
         if app.quit {
             return Ok(());
         }
-        match wakes
-            .recv()
-            .map_err(|_| "the keyboard and journal-watch threads both stopped".to_owned())?
-        {
+        let running = app
+            .queue
+            .as_ref()
+            .is_some_and(|queue| queue.summary.running > 0);
+        let wake = if running {
+            match wakes.recv_timeout(TICK) {
+                Ok(wake) => wake,
+                Err(RecvTimeoutError::Timeout) => Wake::Tick,
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err("the keyboard and journal-watch threads both stopped".to_owned());
+                }
+            }
+        } else {
+            wakes
+                .recv()
+                .map_err(|_| "the keyboard and journal-watch threads both stopped".to_owned())?
+        };
+        match wake {
             Wake::Stop => return Ok(()),
-            Wake::Changed => {}
+            Wake::Changed | Wake::Tick => {}
             Wake::Input(input) => {
                 let asked = app.show_cancelled;
                 if let Some(event) = translate(&input) {
