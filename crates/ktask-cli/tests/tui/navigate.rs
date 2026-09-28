@@ -215,7 +215,7 @@ fn a_toggles_cancelled_tasks_in_their_places_marked_as_cancelled_and_back() -> R
     let lines = lines_inside_frame(&terminal.screen());
     assert_eq!(
         lines[2],
-        "pending 4 · running 0 · done 0 · failed 0 · cancelled 1"
+        "pending 4  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 1"
     );
     assert_eq!(lines[5], "   2  #3  pending  agent  charlie");
     assert!(!terminal.screen().contains("bravo"));
@@ -227,7 +227,7 @@ fn a_toggles_cancelled_tasks_in_their_places_marked_as_cancelled_and_back() -> R
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 4 · running 0 · done 0 · failed 0 · cancelled 1"
+        "pending 4  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 1"
     );
     assert_eq!(lines[4], ">  1  #1  pending  agent  alpha");
     assert_eq!(lines[5], "   2  #2  cancelled  agent  bravo");
@@ -412,7 +412,7 @@ fn a_task_added_from_the_cli_appears_and_the_selection_stays_on_the_same_task() 
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 7 · running 0 · done 0 · failed 0 · cancelled 0"
+        "pending 7  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
     );
     assert_eq!(lines[4], "   1  #6  pending  agent  zulu");
     assert_eq!(lines[5], "   2  #1  pending  agent  alpha");

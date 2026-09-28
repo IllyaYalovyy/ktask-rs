@@ -65,7 +65,7 @@ fn d_asks_before_removing_and_names_the_selected_task_without_changing_anything(
     assert_eq!(lines[3], question(2, "bravo"));
     assert_eq!(
         lines[2],
-        "pending 5 · running 0 · done 0 · failed 0 · cancelled 0"
+        "pending 5  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
     );
     assert_eq!(marked(&screen), [">  2  #2  pending  agent  bravo"]);
     assert!(screen.contains("echo"), "{screen}");
@@ -88,7 +88,7 @@ fn d_then_y_removes_the_selected_task_and_the_selection_moves_to_the_one_after_i
     assert_eq!(lines[3], "");
     assert_eq!(
         lines[2],
-        "pending 4 · running 0 · done 0 · failed 0 · cancelled 1"
+        "pending 4  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 1"
     );
     assert_eq!(lines[4], "   1  #1  pending  agent  alpha");
     assert_eq!(lines[5], ">  2  #3  pending  agent  charlie");
@@ -268,7 +268,7 @@ fn removing_every_task_one_by_one_ends_on_the_empty_queue_message() -> Result<()
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 0 · running 0 · done 0 · failed 0 · cancelled 2"
+        "pending 0  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 2"
     );
     assert_eq!(lines[3], "");
     assert_eq!(lines[4], "The queue is empty.");
@@ -322,7 +322,7 @@ fn with_cancelled_tasks_shown_the_removed_task_stays_in_its_place_and_the_select
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 4 · running 0 · done 0 · failed 0 · cancelled 1"
+        "pending 4  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 1"
     );
     assert_eq!(lines[4], "   1  #1  pending  agent  alpha");
     assert_eq!(lines[5], "   2  #2  cancelled  agent  bravo");
