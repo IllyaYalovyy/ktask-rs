@@ -4,18 +4,19 @@
 
 mod render;
 
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use ktask_adapters::{
-    FileJournalWatch, GitCli, SqliteJournal, SqliteRegistry, SystemClock, journal_path, read_text,
-    registry_path,
+    FileJournalWatch, GitCli, ProcessCommands, SqliteJournal, SqliteRegistry, SystemClock,
+    journal_path, read_text, registry_path,
 };
 use ktask_core::{
-    AddError, CancelError, ImportError, Placement, Project, RegisterError, ResolveError, TaskDraft,
-    TaskId, TaskKind,
+    AddError, CancelError, EchoError, ImportError, Placement, Project, RegisterError, ResolveError,
+    TaskDraft, TaskId, TaskKind,
 };
 
 /// Runs an ordered queue of software tasks through AI coding agents.
@@ -106,7 +107,35 @@ enum Command {
         #[arg(long, value_name = "NAME")]
         project: Option<String>,
     },
+    /// Providers: the agents a task can be handed to
+    Provider {
+        #[command(subcommand)]
+        command: ProviderCommand,
+    },
 }
+
+#[derive(Debug, Subcommand)]
+enum ProviderCommand {
+    /// Run a provider on a prompt read from standard input, and print what it produced
+    Run {
+        /// The provider to run: currently only `echo`
+        #[arg(value_name = "PROVIDER")]
+        provider: String,
+        /// The attempt's token, passed to the provider as $1
+        #[arg(long)]
+        token: String,
+        /// The attempt number, passed to the provider as $2
+        #[arg(long)]
+        attempt: u32,
+        /// How long the provider may run before it is killed, in milliseconds
+        #[arg(long, value_name = "MS", default_value_t = DEFAULT_ECHO_TIMEOUT_MS)]
+        timeout_ms: u64,
+    },
+}
+
+/// The `echo` provider's default time limit: generous, since it runs whatever a task's prompt
+/// wrote, but not unbounded.
+const DEFAULT_ECHO_TIMEOUT_MS: u64 = 300_000;
 
 #[derive(Debug, Subcommand)]
 enum ProjectCommand {
@@ -244,7 +273,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let mut stdout = io::stdout().lock();
     match run(&cli.command, &mut stdout) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(failure) => {
             // Nowhere left to report a failure to write to standard error.
             let _ = writeln!(io::stderr(), "ktask-rs: {}", failure.message);
@@ -253,23 +282,28 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
+fn run(command: &Command, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
     match command {
         Command::Project {
             command: ProjectCommand::List { json },
         } => {
             let registry = open_registry()?;
             let projects = ktask_core::list_projects(&registry).map_err(|e| e.to_string())?;
-            Ok(render::projects(&projects, *json, stdout)?)
+            render::projects(&projects, *json, stdout)?;
+            Ok(ExitCode::SUCCESS)
         }
         Command::Project {
             command: ProjectCommand::Show { project, json },
         } => {
             let registry = open_registry()?;
             let project = resolve(&registry, project.as_deref())?;
-            Ok(render::project(&project, *json, stdout)?)
+            render::project(&project, *json, stdout)?;
+            Ok(ExitCode::SUCCESS)
         }
-        Command::Tui { project } => tui(project.as_deref()),
+        Command::Tui { project } => {
+            tui(project.as_deref())?;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Add {
             title,
             criterion,
@@ -292,7 +326,8 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             let task =
                 ktask_core::add_task_listing_problems(&journal, &SystemClock, &draft, placement)
                     .map_err(failure_from_add_problems)?;
-            Ok(render::added(&task, stdout)?)
+            render::added(&task, stdout)?;
+            Ok(ExitCode::SUCCESS)
         }
         Command::Import {
             file,
@@ -313,12 +348,14 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             tasks
                 .iter()
                 .try_for_each(|task| render::added(task, stdout))
-                .map_err(Failure::from)
+                .map_err(Failure::from)?;
+            Ok(ExitCode::SUCCESS)
         }
         Command::Remove { id, project } => {
             let journal = open_queue(project.as_deref())?;
             ktask_core::remove_task(&journal, &SystemClock, TaskId(*id))?;
-            Ok(render::removed(TaskId(*id), stdout)?)
+            render::removed(TaskId(*id), stdout)?;
+            Ok(ExitCode::SUCCESS)
         }
         Command::List { project, all, json } => {
             let journal = open_queue(project.as_deref())?;
@@ -328,7 +365,8 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
                 ktask_core::list_tasks(&journal)
             }
             .map_err(|e| e.to_string())?;
-            Ok(render::tasks(&tasks, *json, stdout)?)
+            render::tasks(&tasks, *json, stdout)?;
+            Ok(ExitCode::SUCCESS)
         }
         Command::Project {
             command: ProjectCommand::Register { name, json },
@@ -337,8 +375,60 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             let cwd = current_dir()?;
             let project =
                 ktask_core::register_project(&registry, &GitCli, &SystemClock, &cwd, name)?;
-            Ok(render::project(&project, *json, stdout)?)
+            render::project(&project, *json, stdout)?;
+            Ok(ExitCode::SUCCESS)
         }
+        Command::Provider {
+            command:
+                ProviderCommand::Run {
+                    provider,
+                    token,
+                    attempt,
+                    timeout_ms,
+                },
+        } => provider_run(provider, token, *attempt, *timeout_ms, stdout),
+    }
+}
+
+/// Runs `provider` on the prompt read from standard input, writing what it produced to
+/// `stdout` and to standard error, and reporting its exit code as ours.
+fn provider_run(
+    provider: &str,
+    token: &str,
+    attempt: u32,
+    timeout_ms: u64,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
+    if provider != "echo" {
+        return Err(Failure {
+            message: format!("unknown provider {provider:?}; known providers: echo"),
+            code: 2,
+        });
+    }
+    let mut prompt = String::new();
+    io::stdin()
+        .lock()
+        .read_to_string(&mut prompt)
+        .map_err(|e| format!("cannot read the prompt: {e}"))?;
+    let dir = current_dir()?;
+    let timeout = Duration::from_millis(timeout_ms);
+    let output = ktask_core::run_echo(&ProcessCommands, &prompt, token, attempt, &dir, timeout)
+        .map_err(|error| match error {
+            EchoError::NoBashBlock => Failure {
+                message: error.to_string(),
+                code: 2,
+            },
+            EchoError::Commands(_) => Failure::from(error.to_string()),
+        })?;
+    render::provider_output(&output, stdout, &mut io::stderr())?;
+    match output.exit {
+        ktask_core::Exit::Code(code) => Ok(ExitCode::from(u8::try_from(code).unwrap_or(u8::MAX))),
+        ktask_core::Exit::Killed => Err(Failure {
+            message: format!(
+                "provider {provider} ran past its time limit of {timeout_ms}ms and was killed, along with everything it started"
+            ),
+            code: 124,
+        }),
     }
 }
 

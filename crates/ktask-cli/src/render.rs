@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::Path;
 
 use jiff::Timestamp;
-use ktask_core::{Project, Task, TaskId};
+use ktask_core::{Output, Project, Task, TaskId};
 use serde::Serialize;
 
 /// One project as `project list --json` shows it.
@@ -73,6 +73,19 @@ pub(crate) fn projects(
             writeln!(out, "{}\t{}", project.name, project.path.display()).map_err(|e| e.to_string())
         })
     }
+}
+
+/// Writes what a provider produced: its standard output to `stdout`, its standard error to
+/// `stderr`.
+pub(crate) fn provider_output(
+    output: &Output,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> Result<(), String> {
+    stdout
+        .write_all(&output.stdout)
+        .map_err(|e| e.to_string())?;
+    stderr.write_all(&output.stderr).map_err(|e| e.to_string())
 }
 
 /// Writes the ID of the task that has just been added.
