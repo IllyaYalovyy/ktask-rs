@@ -405,6 +405,13 @@ fn attempt_outcome(
                 Some("the provider ran past its time limit and was killed".to_owned()),
             ));
         }
+        crate::Exit::Interrupted => {
+            return Ok((
+                None,
+                TaskStatus::FailedUnknown,
+                Some(INTERRUPTED.to_owned()),
+            ));
+        }
     };
     let report = crate::attempt::last_report(journal, task.id, token.number)?;
     let (status, reason) = match report {
@@ -889,6 +896,37 @@ mod tests {
             "{:?}",
             report.attempted[0].reason
         );
+    }
+
+    #[test]
+    fn an_interrupted_provider_ends_the_task_failed_unknown_with_the_interrupted_reason_and_exits_the_run()
+     {
+        let journal = journal_of_abc();
+        let commands = commands_ok(Exit::Interrupted);
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        assert_eq!(
+            report,
+            RunReport {
+                attempted: vec![Attempted {
+                    id: TaskId(1),
+                    status: TaskStatus::FailedUnknown,
+                    reason: Some("the run was interrupted".to_owned()),
+                }],
+                end: RunEnd::Stopped {
+                    id: TaskId(1),
+                    status: TaskStatus::FailedUnknown,
+                },
+            }
+        );
+        let tasks = crate::list_all_tasks(&journal).unwrap();
+        assert_eq!(tasks[0].status, TaskStatus::FailedUnknown);
+        assert_eq!(tasks[1].status, TaskStatus::Pending);
     }
 
     #[test]

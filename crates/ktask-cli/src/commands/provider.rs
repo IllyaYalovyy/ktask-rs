@@ -103,5 +103,11 @@ fn exit_code(
             ),
             code: 124,
         }),
+        ktask_core::Exit::Interrupted => Err(Failure {
+            message: format!(
+                "interrupted: provider {provider} was killed, along with everything it started"
+            ),
+            code: 130,
+        }),
     }
 }

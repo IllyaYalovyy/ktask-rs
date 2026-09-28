@@ -54,6 +54,9 @@ pub enum Exit {
     /// The command was still running once its time limit passed, and was killed along with
     /// every process it started.
     Killed,
+    /// This process was asked to stop (`SIGINT`, `SIGTERM` or `SIGHUP`) while the command was
+    /// still running; it, and every process it started, was killed along with it.
+    Interrupted,
 }
 
 /// What a command produced: its captured output and how it ended.
