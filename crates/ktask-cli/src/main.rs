@@ -10,7 +10,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use ktask_adapters::{
-    GitCli, SqliteJournal, SqliteRegistry, SystemClock, journal_path, read_text, registry_path,
+    FileJournalWatch, GitCli, SqliteJournal, SqliteRegistry, SystemClock, journal_path, read_text,
+    registry_path,
 };
 use ktask_core::{
     AddError, CancelError, ImportError, Placement, Project, RegisterError, ResolveError, TaskDraft,
@@ -370,7 +371,9 @@ fn tui(selected: Option<&str>) -> Result<(), Failure> {
     }
     let registry = open_registry()?;
     let project = resolve(&registry, selected)?;
-    let journal = open_journal(&project)?;
+    let path = journal_file(&project)?;
+    let journal = SqliteJournal::open(&path).map_err(|e| e.to_string())?;
+    let watch = FileJournalWatch::open(&path).map_err(|e| e.to_string())?;
     Ok(ktask_tui::run(
         |show_cancelled| {
             ktask_core::queue_view(project.clone(), &journal, show_cancelled)
@@ -382,6 +385,7 @@ fn tui(selected: Option<&str>) -> Result<(), Failure> {
                 .map(|task| task.id)
                 .map_err(|problems| problems.iter().map(ToString::to_string).collect())
         },
+        watch,
     )?)
 }
 
@@ -401,14 +405,21 @@ fn open_registry() -> Result<SqliteRegistry, String> {
     SqliteRegistry::open(&path).map_err(|e| e.to_string())
 }
 
-fn open_journal(project: &Project) -> Result<SqliteJournal, String> {
-    let path = journal_path(
+/// Where the journal of `project` lives.
+fn journal_file(project: &Project) -> Result<PathBuf, String> {
+    journal_path(
         std::env::var_os("XDG_STATE_HOME"),
         std::env::var_os("HOME"),
         &project.name,
     )
-    .ok_or("cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path")?;
-    SqliteJournal::open(&path).map_err(|e| e.to_string())
+    .ok_or_else(|| {
+        "cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path"
+            .to_owned()
+    })
+}
+
+fn open_journal(project: &Project) -> Result<SqliteJournal, String> {
+    SqliteJournal::open(&journal_file(project)?).map_err(|e| e.to_string())
 }
 
 fn current_dir() -> Result<PathBuf, String> {
