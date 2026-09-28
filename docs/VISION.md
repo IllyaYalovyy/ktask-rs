@@ -43,6 +43,30 @@ resolve), a command step, a human approval step.
 - **Verification by the tool.** Whatever checks a project configures, the tool runs them.
   An agent's claim of success is never evidence.
 
+## Beyond the single task
+
+Work is not one task looped to completion. A review can produce many follow-up tasks; a
+finding in one task can change another; a plan can turn out to be wrong.
+
+- **Automatic by default.** Everything that can be resolved without a human is resolved
+  without one: diagnosing a stop, retrying, escalating, turning findings into tasks. The
+  operator is asked only for decisions.
+- **Reviews over a range of work.** A review can cover one task, several, or a milestone.
+  Its findings are triaged — dropped, fixed now, or turned into new tasks placed in the
+  queue. The operator sees the triage and can change it.
+- **Tasks are reviewed too.** Before a task runs it can be checked: is it concrete, small
+  and testable, and is it still the right thing to do given what has been learned since it
+  was written?
+- **Direction checks.** The tool watches for signs that the work or the plan is wrong — a
+  task that has taken many iterations, the same failure repeating, reviews producing the
+  same findings, escalations rising — and then questions the assumption instead of trying
+  again: can this be done, is it the right thing, should it be split, replaced or dropped?
+  The answer comes to the operator as a what/why/ask.
+- **Process learning.** The tool accumulates learnings about the process itself, each with
+  its evidence, and proposes changes to the project's configuration — prompts, models,
+  pipeline, limits. Accepted changes are versioned, so their effect can be measured and a
+  change that did not help can be undone.
+
 ## Git
 
 The tool does the git work that needs no judgement, so no tokens are spent on it: before a
