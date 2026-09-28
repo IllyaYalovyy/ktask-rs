@@ -306,6 +306,7 @@ mod tests {
             },
             summary: StatusSummary::default(),
             tasks: ids.iter().map(|id| task(*id)).collect(),
+            attempts: std::collections::HashMap::new(),
         }
     }
 

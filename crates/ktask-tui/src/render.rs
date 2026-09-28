@@ -1,6 +1,6 @@
 //! Draws an [`App`] into a buffer.
 
-use ktask_core::{QueueView, Task, TaskStatus};
+use ktask_core::{AttemptLine, QueueView, Task, TaskStatus};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -106,16 +106,24 @@ fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
             Style::new().add_modifier(Modifier::BOLD),
         ),
         Line::from(format!(
-            "pending {} · running {} · done {} · failed {} · cancelled {}",
-            summary.pending, summary.running, summary.done, summary.failed, summary.cancelled
+            "pending {}  running {}  done {}  failed {}  blocked {}  unknown {}  cancelled {}",
+            summary.pending,
+            summary.running,
+            summary.done,
+            summary.failed,
+            summary.blocked,
+            summary.failed_unknown,
+            summary.cancelled
         )),
         question,
     ]
 }
 
-/// The rows of the task list that fit in `height` lines, scrolled so that the selected task
-/// is the last one in view when it would not be otherwise. The selected task is marked with
-/// `>` and shown reversed; a cancelled one is dimmed and says so in its status.
+/// The rows of the task list that fit in `height` lines, scrolled so that the selected task's
+/// block is the last one in view when it would not be otherwise. The selected task is marked
+/// with `>` and shown reversed; a cancelled one is dimmed and says so in its status. A task
+/// that has an attempt carries a second, dimmed line under it: the same line `status` shows
+/// for it, from the same use case.
 fn task_lines(app: &App, queue: &QueueView, height: usize) -> Vec<Line<'static>> {
     if queue.tasks.is_empty() {
         return vec![Line::from("The queue is empty.")];
@@ -124,15 +132,72 @@ fn task_lines(app: &App, queue: &QueueView, height: usize) -> Vec<Line<'static>>
         .tasks
         .iter()
         .position(|task| Some(task.id) == app.selected);
-    let first = selected.map_or(0, |index| (index + 1).saturating_sub(height));
-    queue
+    let block_heights: Vec<usize> = queue
         .tasks
         .iter()
-        .enumerate()
-        .skip(first)
-        .take(height)
-        .map(|(index, task)| task_line(task, Some(index) == selected))
-        .collect()
+        .map(|task| {
+            if queue.attempts.contains_key(&task.id) {
+                2
+            } else {
+                1
+            }
+        })
+        .collect();
+    let first = first_shown(&block_heights, selected, height);
+    let mut lines = Vec::new();
+    for (index, task) in queue.tasks.iter().enumerate().skip(first) {
+        if lines.len() >= height {
+            break;
+        }
+        lines.push(task_line(task, Some(index) == selected));
+        if let Some(attempt) = queue.attempts.get(&task.id) {
+            if lines.len() >= height {
+                break;
+            }
+            lines.push(attempt_line(attempt));
+        }
+    }
+    lines
+}
+
+/// The index of the first task shown: it walks back from the selected task, adding earlier
+/// tasks while the lines of everything from there to the selection still fit in `height`, so
+/// the selection's block ends up the last one in view exactly when it would not fit otherwise.
+fn first_shown(block_heights: &[usize], selected: Option<usize>, height: usize) -> usize {
+    let Some(selected) = selected else {
+        return 0;
+    };
+    let mut first = selected;
+    let mut shown = block_heights.get(selected).copied().unwrap_or(1);
+    while first > 0 {
+        let Some(&before) = block_heights.get(first - 1) else {
+            break;
+        };
+        if shown + before > height {
+            break;
+        }
+        first -= 1;
+        shown += before;
+    }
+    first
+}
+
+/// The attempt line under a task: the same line `status` shows for it, from the same use
+/// case — step, provider, time spent, outcome, and the reason when there is one.
+fn attempt_line(attempt: &AttemptLine) -> Line<'static> {
+    let provider = attempt.provider.as_deref().unwrap_or("-");
+    let mut text = format!(
+        "      {} · {} · {}s · {}",
+        attempt.step,
+        provider,
+        attempt.time_spent.as_secs(),
+        attempt.outcome
+    );
+    if let Some(reason) = &attempt.reason {
+        text.push_str(": ");
+        text.push_str(reason);
+    }
+    Line::styled(text, Style::new().add_modifier(Modifier::DIM))
 }
 
 fn task_line(task: &Task, selected: bool) -> Line<'static> {
@@ -155,10 +220,14 @@ fn task_line(task: &Task, selected: bool) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::path::PathBuf;
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
 
-    use ktask_core::{Project, QueueView, StatusSummary, Task, TaskId, TaskKind, TaskStatus};
+    use ktask_core::{
+        AttemptLine, AttemptOutcome, IMPLEMENTATION, Outcome, Project, QueueView, StatusSummary,
+        Task, TaskId, TaskKind, TaskStatus,
+    };
 
     use crate::{Event, update};
 
@@ -194,6 +263,10 @@ mod tests {
     }
 
     fn loaded(tasks: Vec<Task>) -> App {
+        loaded_with_attempts(tasks, HashMap::new())
+    }
+
+    fn loaded_with_attempts(tasks: Vec<Task>, attempts: HashMap<TaskId, AttemptLine>) -> App {
         let summary = StatusSummary {
             pending: tasks.len(),
             ..StatusSummary::default()
@@ -209,17 +282,36 @@ mod tests {
                 project,
                 summary,
                 tasks,
+                attempts,
             }),
         )
     }
 
+    /// An attempt line as `status` would build it: step [`IMPLEMENTATION`], `provider`, having
+    /// run for `time_spent_secs`, ending at `outcome` with `reason`.
+    fn attempt(
+        provider: &str,
+        time_spent_secs: u64,
+        outcome: AttemptOutcome,
+        reason: Option<&str>,
+    ) -> AttemptLine {
+        AttemptLine {
+            number: 1,
+            step: IMPLEMENTATION,
+            provider: Some(provider.to_owned()),
+            time_spent: Duration::from_secs(time_spent_secs),
+            outcome,
+            reason: reason.map(str::to_owned),
+        }
+    }
+
     #[test]
     fn an_empty_queue_shows_the_project_the_counts_and_a_message() {
-        let rows = drawn(&loaded(vec![]), 60, 8);
+        let rows = drawn(&loaded(vec![]), 90, 8);
         assert_eq!(inside(&rows[1]), "app");
         assert_eq!(
             inside(&rows[2]),
-            "pending 0 · running 0 · done 0 · failed 0 · cancelled 0"
+            "pending 0  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
         );
         assert_eq!(inside(&rows[4]), "The queue is empty.");
     }
@@ -230,10 +322,10 @@ mod tests {
             task(1, "first", TaskKind::Agent),
             task(2, "second", TaskKind::Human),
         ]);
-        let rows = drawn(&app, 60, 8);
+        let rows = drawn(&app, 90, 8);
         assert_eq!(
             inside(&rows[2]),
-            "pending 2 · running 0 · done 0 · failed 0 · cancelled 0"
+            "pending 2  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
         );
         assert_eq!(inside(&rows[4]), ">  1  #10  pending  agent  first");
         assert_eq!(inside(&rows[5]), "   2  #20  pending  human  second");
@@ -272,6 +364,95 @@ mod tests {
         gone.status = TaskStatus::Cancelled;
         let rows = drawn(&loaded(vec![gone]), 60, 8);
         assert_eq!(inside(&rows[4]), ">  2  #20  cancelled  agent  gone");
+    }
+
+    #[test]
+    fn a_task_with_an_attempt_shows_the_same_line_status_would_for_it() {
+        let mut attempts = HashMap::new();
+        attempts.insert(
+            TaskId(10),
+            attempt("echo", 12, AttemptOutcome::Running, None),
+        );
+        let app = loaded_with_attempts(vec![task(1, "first", TaskKind::Agent)], attempts);
+        let rows = drawn(&app, 60, 8);
+        assert_eq!(inside(&rows[4]), ">  1  #10  pending  agent  first");
+        assert_eq!(
+            inside(&rows[5]),
+            "      implementation · echo · 12s · running"
+        );
+    }
+
+    #[test]
+    fn a_done_attempt_carries_no_reason() {
+        let mut attempts = HashMap::new();
+        attempts.insert(
+            TaskId(10),
+            attempt("echo", 3, AttemptOutcome::Reported(Outcome::Done), None),
+        );
+        let mut task = task(1, "first", TaskKind::Agent);
+        task.status = TaskStatus::Done;
+        let app = loaded_with_attempts(vec![task], attempts);
+        let rows = drawn(&app, 60, 8);
+        assert_eq!(inside(&rows[4]), ">  1  #10  done  agent  first");
+        assert_eq!(inside(&rows[5]), "      implementation · echo · 3s · done");
+    }
+
+    #[test]
+    fn each_ending_shows_its_own_outcome_and_reason() {
+        let cases = [
+            (
+                TaskStatus::Failed,
+                AttemptOutcome::Reported(Outcome::Failed),
+                Some("it broke"),
+                "      implementation · echo · 1s · failed: it broke",
+            ),
+            (
+                TaskStatus::Blocked,
+                AttemptOutcome::Reported(Outcome::NeedsInput),
+                Some("which path?"),
+                "      implementation · echo · 1s · needs-input: which path?",
+            ),
+            (
+                TaskStatus::FailedUnknown,
+                AttemptOutcome::Unreported,
+                Some("reported nothing"),
+                "      implementation · echo · 1s · failed-unknown: reported nothing",
+            ),
+        ];
+        for (status, outcome, reason, expected) in cases {
+            let mut attempts = HashMap::new();
+            attempts.insert(TaskId(10), attempt("echo", 1, outcome, reason));
+            let mut task = task(1, "first", TaskKind::Agent);
+            task.status = status;
+            let app = loaded_with_attempts(vec![task], attempts);
+            let rows = drawn(&app, 80, 8);
+            assert_eq!(inside(&rows[5]), expected, "{status:?}");
+        }
+    }
+
+    #[test]
+    fn a_task_with_an_attempt_adds_a_second_line_to_the_scrolling_blocks() {
+        let mut attempts = HashMap::new();
+        attempts.insert(
+            TaskId(10),
+            attempt("echo", 1, AttemptOutcome::Running, None),
+        );
+        let tasks = vec![
+            task(1, "first", TaskKind::Agent),
+            task(2, "second", TaskKind::Agent),
+            task(3, "third", TaskKind::Agent),
+        ];
+        // Only five lines are left for the list; the first task's attempt line pushes the
+        // third task off the bottom.
+        let app = loaded_with_attempts(tasks, attempts);
+        let rows = drawn(&app, 60, 9);
+        assert_eq!(inside(&rows[4]), ">  1  #10  pending  agent  first");
+        assert_eq!(
+            inside(&rows[5]),
+            "      implementation · echo · 1s · running"
+        );
+        assert_eq!(inside(&rows[6]), "   2  #20  pending  agent  second");
+        assert_eq!(inside(&rows[7]), "   3  #30  pending  agent  third");
     }
 
     #[test]
