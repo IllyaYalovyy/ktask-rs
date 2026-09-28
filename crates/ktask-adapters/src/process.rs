@@ -2,6 +2,7 @@
 //! every process it started when it runs past its time limit — or when this process is asked
 //! to stop while one is running.
 
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, ExitStatus, Stdio};
@@ -15,9 +16,29 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
 /// Commands, by starting real subprocesses, each in its own process group so that the whole
-/// group can be killed at once.
+/// group can be killed at once. Every child's `PATH` gets the running `ktask-rs` binary's own
+/// directory prepended, ahead of whatever is already there, so a command that calls back into
+/// `ktask-rs` by name — a provider's script reporting an attempt's outcome, say — reaches the
+/// one that is running, not some other one found first on an inherited `PATH`.
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessCommands;
+
+/// The current process's `PATH`, with the directory of the running binary put first.
+fn path_with_own_binary_first() -> Result<OsString, CommandsError> {
+    let exe = std::env::current_exe()
+        .map_err(|e| CommandsError::new(format!("cannot find the running binary: {e}")))?;
+    let dir = exe.parent().ok_or_else(|| {
+        CommandsError::new(format!(
+            "the running binary {} has no parent directory",
+            exe.display()
+        ))
+    })?;
+    let mut dirs = vec![dir.to_path_buf()];
+    if let Some(existing) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&existing));
+    }
+    std::env::join_paths(dirs).map_err(|e| CommandsError::new(format!("cannot build PATH: {e}")))
+}
 
 /// What ended the wait for the child: it exited on its own, or this process was asked to
 /// stop while it was still running.
@@ -33,9 +54,11 @@ impl Commands for ProcessCommands {
         let fail =
             |cause: String| CommandsError::new(format!("cannot run {}: {cause}", spec.program));
 
+        let path = path_with_own_binary_first()?;
         let mut child = Command::new(&spec.program)
             .args(&spec.args)
             .current_dir(&spec.dir)
+            .env("PATH", path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -193,6 +216,53 @@ mod tests {
             .unwrap();
         assert_eq!(output.stdout, b"hello");
         assert_eq!(output.exit, Exit::Code(0));
+    }
+
+    #[test]
+    fn the_running_binarys_own_directory_is_put_first_on_the_childs_path() {
+        let dir = TempDir::new().unwrap();
+        let output = ProcessCommands
+            .run(&spec(
+                vec!["-c", "echo $PATH"],
+                dir.path(),
+                b"",
+                Duration::from_secs(5),
+            ))
+            .unwrap();
+        let path = String::from_utf8(output.stdout).unwrap();
+        let own_dir = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_owned();
+        let first = std::env::split_paths(path.trim_end()).next().unwrap();
+        assert_eq!(first, own_dir, "{path}");
+    }
+
+    #[test]
+    fn the_process_kept_its_own_path_after_the_running_binarys_directory() {
+        let dir = TempDir::new().unwrap();
+        let output = ProcessCommands
+            .run(&spec(
+                vec!["-c", "echo $PATH"],
+                dir.path(),
+                b"",
+                Duration::from_secs(5),
+            ))
+            .unwrap();
+        let path = String::from_utf8(output.stdout).unwrap();
+        let own_dir = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_owned();
+        let mut entries = std::env::split_paths(path.trim_end());
+        assert_eq!(entries.next().unwrap(), own_dir, "{path}");
+        let rest: Vec<_> = entries.collect();
+        let previous: Vec<_> = std::env::var_os("PATH")
+            .map(|path| std::env::split_paths(&path).collect())
+            .unwrap_or_default();
+        assert_eq!(rest, previous, "{path}");
     }
 
     #[test]
