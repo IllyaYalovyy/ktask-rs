@@ -5,6 +5,7 @@
 //! code stays inside one module of this crate. See docs/ARCHITECTURE.md.
 
 mod clock;
+pub mod echo;
 mod git;
 mod input;
 mod journal;
