@@ -1,17 +1,23 @@
 //! The loop that owns the terminal and feeds events into [`update`].
 
 use std::io::Write;
-use std::time::Duration;
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 
-use ktask_core::{Placement, QueueView, TaskDraft, TaskId};
+use ktask_core::{JournalWatch, Placement, QueueView, TaskDraft, TaskId};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, KeyModifiers};
 
 use crate::{App, Event, render, update};
 
-/// How long the loop waits for a key before it loads the queue again, so that a task added
-/// from elsewhere shows without a key being pressed.
-const REFRESH: Duration = Duration::from_millis(200);
+/// Something the loop is woken by: a key (or resize) at the terminal, or the journal having
+/// changed under it.
+enum Wake {
+    /// An input arrived at the terminal.
+    Input(Input),
+    /// The journal changed; the queue is stale and worth loading again.
+    Changed,
+}
 
 /// Starts a terminal synchronized update: a reader that stops at the matching end marker never
 /// sees a frame half drawn.
@@ -38,11 +44,13 @@ fn draw(terminal: &mut DefaultTerminal, app: &App) -> Result<(), String> {
 /// Runs the terminal interface until the operator quits.
 ///
 /// `load` fetches the queue to show, with the cancelled tasks when it is told to. It is called
-/// at the start, again and again while the interface waits, and when the operator asks for
-/// cancelled tasks or stops asking. `remove` removes a task the operator confirmed removing,
+/// at the start, again whenever `watch` reports the journal changed, and when the operator asks
+/// for cancelled tasks or stops asking. `remove` removes a task the operator confirmed removing,
 /// after which the queue is loaded again. `add` adds the task the operator wrote in the form
-/// where the form says, and gives its number, or the reasons it was not added when it was
-/// not. The terminal is put back as it was on every way out.
+/// where the form says, and gives its number, or the reasons it was not added when it was not.
+/// `watch` blocks until the journal changes; it is polled from a dedicated thread, so a task
+/// added, inserted or removed by another process shows in the next frame without the loop
+/// itself ever waking on a timer. The terminal is put back as it was on every way out.
 ///
 /// # Errors
 ///
@@ -52,11 +60,35 @@ pub fn run(
     load: impl FnMut(bool) -> Result<QueueView, String>,
     remove: impl FnMut(TaskId) -> Result<(), String>,
     add: impl FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
+    watch: impl JournalWatch + Send + 'static,
 ) -> Result<(), String> {
     let mut terminal = ratatui::try_init().map_err(|e| format!("cannot use the terminal: {e}"))?;
-    let result = drive(&mut terminal, load, remove, add);
+    let wakes = spawn_wakes(watch);
+    let result = drive(&mut terminal, load, remove, add, &wakes);
     ratatui::restore();
     result
+}
+
+/// Starts the threads that turn keyboard input and journal changes into a single stream the
+/// loop can block on, with no timer of its own.
+fn spawn_wakes(watch: impl JournalWatch + Send + 'static) -> Receiver<Wake> {
+    let (sender, receiver) = mpsc::channel();
+    let keys = sender.clone();
+    thread::spawn(move || {
+        while let Ok(input) = event::read() {
+            if keys.send(Wake::Input(input)).is_err() {
+                return;
+            }
+        }
+    });
+    thread::spawn(move || {
+        while watch.wait().is_ok() {
+            if sender.send(Wake::Changed).is_err() {
+                return;
+            }
+        }
+    });
+    receiver
 }
 
 fn drive(
@@ -64,6 +96,7 @@ fn drive(
     mut load: impl FnMut(bool) -> Result<QueueView, String>,
     mut remove: impl FnMut(TaskId) -> Result<(), String>,
     mut add: impl FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
+    wakes: &Receiver<Wake>,
 ) -> Result<(), String> {
     let mut app = update(App::default(), Event::Loaded(load(false)?));
     loop {
@@ -71,22 +104,27 @@ fn drive(
         if app.quit {
             return Ok(());
         }
-        let asked = app.show_cancelled;
-        if event::poll(REFRESH).map_err(|e| format!("cannot read the keyboard: {e}"))? {
-            let input = event::read().map_err(|e| format!("cannot read the keyboard: {e}"))?;
-            if let Some(event) = translate(&input) {
-                app = update(app, event);
-            }
-            if let Some(id) = app.removal.take() {
-                remove(id)?;
-            } else if let Some((draft, placement)) = app.submission.take() {
-                let added = match add(&draft, placement) {
-                    Ok(id) => Event::Added(id),
-                    Err(problems) => Event::Rejected(problems),
-                };
-                app = update(app, added);
-            } else if app.show_cancelled == asked {
-                continue;
+        match wakes
+            .recv()
+            .map_err(|_| "the keyboard and journal-watch threads both stopped".to_owned())?
+        {
+            Wake::Changed => {}
+            Wake::Input(input) => {
+                let asked = app.show_cancelled;
+                if let Some(event) = translate(&input) {
+                    app = update(app, event);
+                }
+                if let Some(id) = app.removal.take() {
+                    remove(id)?;
+                } else if let Some((draft, placement)) = app.submission.take() {
+                    let added = match add(&draft, placement) {
+                        Ok(id) => Event::Added(id),
+                        Err(problems) => Event::Rejected(problems),
+                    };
+                    app = update(app, added);
+                } else if app.show_cancelled == asked {
+                    continue;
+                }
             }
         }
         let queue = load(app.show_cancelled)?;
