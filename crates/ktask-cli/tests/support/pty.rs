@@ -232,6 +232,22 @@ impl Terminal {
         self.shared.lock().frames
     }
 
+    /// Blocks for up to `duration`, waking at once if a frame is drawn meanwhile. Returns
+    /// whether the whole span passed with no frame drawn — proof that a real span of idle
+    /// time passed with nothing happening, rather than a guess that `duration` was long
+    /// enough: an actual frame ends the wait on its own, it is never merely outlasted.
+    pub(crate) fn nothing_happens_for(&self, duration: Duration) -> bool {
+        let frames_before = self.frame_count();
+        let (state, _) = self
+            .shared
+            .changed
+            .wait_timeout_while(self.shared.lock(), duration, |state| {
+                state.frames == frames_before
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        state.frames == frames_before
+    }
+
     /// The user and system CPU time the child has used so far, in clock ticks, read from
     /// `/proc`. A caller compares this before and after a wait to show that the child did
     /// no work while it waited, rather than merely that it drew no frames.
@@ -421,7 +437,7 @@ impl HungUp {
                     "timed out waiting for the child to exit once its terminal closed".into(),
                 );
             }
-            thread::sleep(Duration::from_millis(20));
+            thread::park_timeout(Duration::from_millis(20));
         }
     }
 

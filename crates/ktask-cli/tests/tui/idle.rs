@@ -2,7 +2,6 @@
 //! screen is drawn once and the interface then sits still — no timer wakes it, and it burns
 //! no CPU while it waits.
 
-use std::thread;
 use std::time::Duration;
 
 use super::navigate::Fixture;
@@ -17,17 +16,15 @@ fn nothing_happening_draws_no_further_frames_and_uses_no_cpu() -> Result<()> {
     let fixture = Fixture::new()?;
     let mut terminal = fixture.open(24)?;
 
-    let frames_before = terminal.frame_count();
     let cpu_before = terminal.cpu_ticks()?;
-    thread::sleep(IDLE);
-    let frames_after = terminal.frame_count();
+    let quiet = terminal.nothing_happens_for(IDLE);
     let cpu_after = terminal.cpu_ticks()?;
 
-    assert_eq!(
-        frames_before, frames_after,
+    assert!(
+        quiet,
         "an idle screen with no key pressed and nothing changed drew a frame it had no reason to"
     );
-    // A generous allowance for scheduler noise around the sleep itself: a genuinely blocked
+    // A generous allowance for scheduler noise around the wait itself: a genuinely blocked
     // process uses no measurable CPU here, while a 200ms poll loop doing real work several
     // times over nearly a second would clear this easily.
     assert!(
