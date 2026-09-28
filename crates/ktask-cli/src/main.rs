@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use ktask_adapters::{
-    FileJournalWatch, GitCli, ProcessCommands, SqliteJournal, SqliteRegistry, SystemClock,
-    journal_path, read_text, registry_path,
+    FileJournalWatch, FileRunLock, GitCli, ProcessCommands, SqliteJournal, SqliteRegistry,
+    SystemClock, journal_path, read_text, registry_path, run_lock_path,
 };
 use ktask_core::{
     AddError, AttemptToken, CancelError, EchoError, ImportError, Outcome, Placement, Project,
@@ -298,7 +298,13 @@ impl From<ReportError> for Failure {
 
 impl From<RunError> for Failure {
     fn from(error: RunError) -> Self {
-        Self::from(error.to_string())
+        match error {
+            RunError::Locked(_) => Self {
+                message: error.to_string(),
+                code: 2,
+            },
+            RunError::Other(message) => Self::from(message),
+        }
     }
 }
 
@@ -477,10 +483,12 @@ fn run_command(
     let registry = open_registry()?;
     let project = resolve(&registry, project)?;
     let journal = open_journal(&project)?;
+    let lock = FileRunLock::new(run_lock_file(&project)?);
     let report = ktask_core::run_queue(
         &journal,
         &SystemClock,
         &ProcessCommands,
+        &lock,
         &project.name,
         &project.path,
         Duration::from_secs(attempt_timeout),
@@ -616,6 +624,19 @@ fn journal_file(project: &Project) -> Result<PathBuf, String> {
 
 fn open_journal(project: &Project) -> Result<SqliteJournal, String> {
     SqliteJournal::open(&journal_file(project)?).map_err(|e| e.to_string())
+}
+
+/// Where the run lock of `project` lives.
+fn run_lock_file(project: &Project) -> Result<PathBuf, String> {
+    run_lock_path(
+        std::env::var_os("XDG_STATE_HOME"),
+        std::env::var_os("HOME"),
+        &project.name,
+    )
+    .ok_or_else(|| {
+        "cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path"
+            .to_owned()
+    })
 }
 
 fn current_dir() -> Result<PathBuf, String> {
