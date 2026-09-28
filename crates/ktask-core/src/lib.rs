@@ -3,6 +3,8 @@
 //! outside world only through ports it defines itself. See docs/ARCHITECTURE.md.
 
 mod clock;
+mod commands;
+mod echo;
 mod git;
 mod import;
 mod journal;
@@ -13,6 +15,8 @@ mod resolve;
 mod task;
 
 pub use clock::Clock;
+pub use commands::{CommandSpec, Commands, CommandsError, Exit, Output};
+pub use echo::{EchoError, run_echo};
 pub use git::{Git, GitError};
 pub use import::{ImportError, InvalidTask, import_tasks};
 pub use journal::{AppendError, CancelError, Journal, JournalError, JournalWatch};

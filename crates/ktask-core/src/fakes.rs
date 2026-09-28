@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::{
-    AppendError, CancelError, Clock, Git, GitError, Journal, JournalError, Placement, Project,
-    ProjectRegistry, RegistryError, Task, TaskDraft, TaskId, TaskKind, TaskStatus,
+    AppendError, CancelError, Clock, CommandSpec, Commands, CommandsError, Git, GitError, Journal,
+    JournalError, Output, Placement, Project, ProjectRegistry, RegistryError, Task, TaskDraft,
+    TaskId, TaskKind, TaskStatus,
 };
 
 /// An in-memory registry that can be told to fail.
@@ -183,6 +184,30 @@ impl Journal for FakeJournal {
             Some(failure) => Err(failure.clone()),
             None => Ok(self.tasks.borrow().clone()),
         }
+    }
+}
+
+/// A commands port that records the last spec it was given and always returns the same
+/// canned result.
+#[derive(Debug)]
+pub(crate) struct FakeCommands {
+    pub(crate) last: RefCell<Option<CommandSpec>>,
+    result: Result<Output, CommandsError>,
+}
+
+impl FakeCommands {
+    pub(crate) fn returning(result: Result<Output, CommandsError>) -> Self {
+        Self {
+            last: RefCell::default(),
+            result,
+        }
+    }
+}
+
+impl Commands for FakeCommands {
+    fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+        *self.last.borrow_mut() = Some(spec.clone());
+        self.result.clone()
     }
 }
 
