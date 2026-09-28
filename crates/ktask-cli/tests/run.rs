@@ -12,11 +12,58 @@ mod repo;
 mod support;
 
 use std::path::{Path, PathBuf};
+use std::process::Child;
 use std::time::{Duration, Instant};
 
+use nix::sys::signal::{self, Signal};
+use nix::unistd::Pid;
 use repo::{git_repository, scratch};
 use rusqlite::OptionalExtension;
 use support::{Outcome, Result, Sandbox};
+
+/// Puts the directory of the `ktask-rs` under test on `command`'s `PATH`, ahead of whatever
+/// is already there, so a task's own bash block — standing in for what a real agent would
+/// run — can call back into `ktask-rs report` and find this same binary.
+fn with_nested_ktask_rs_on_path(command: &mut std::process::Command) {
+    let mut paths = Path::new(env!("CARGO_BIN_EXE_ktask-rs"))
+        .parent()
+        .map(Path::to_path_buf)
+        .into_iter()
+        .collect::<Vec<_>>();
+    if let Some(path) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&path));
+    }
+    if let Ok(joined) = std::env::join_paths(paths) {
+        command.env("PATH", joined);
+    }
+}
+
+/// Waits, for up to a few seconds, until `condition` holds, polling every 20ms; fails naming
+/// `what` when it never does.
+fn wait_until(what: &str, mut condition: impl FnMut() -> bool) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !condition() {
+        if Instant::now() >= deadline {
+            return Err(format!("timed out waiting for {what}").into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Ok(())
+}
+
+/// Whether process `pid` is still running. A killed process's entry under `/proc` can briefly
+/// outlive the signal that ended it, as a zombie waiting for its new parent to reap it once it
+/// is orphaned, so that alone does not count as still running.
+fn is_running(pid: u32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    let state = stat
+        .split(')')
+        .next_back()
+        .and_then(|rest| rest.split_whitespace().next());
+    state != Some("Z")
+}
 
 /// A sandbox with a git repository called `my-app`.
 struct Fixture {
@@ -63,19 +110,20 @@ impl Fixture {
 
     /// Like [`Fixture::run_the_queue`], in `dir` instead of the repository.
     fn run_the_queue_in(&self, dir: &Path, args: &[&str]) -> Result<Outcome> {
-        self.sandbox.run_with(dir, args, |command| {
-            let mut paths = Path::new(env!("CARGO_BIN_EXE_ktask-rs"))
-                .parent()
-                .map(Path::to_path_buf)
-                .into_iter()
-                .collect::<Vec<_>>();
-            if let Some(path) = std::env::var_os("PATH") {
-                paths.extend(std::env::split_paths(&path));
-            }
-            if let Ok(joined) = std::env::join_paths(paths) {
-                command.env("PATH", joined);
-            }
-        })
+        self.sandbox
+            .run_with(dir, args, with_nested_ktask_rs_on_path)
+    }
+
+    /// Like [`Fixture::run_the_queue`], without waiting for it: the caller drives or kills
+    /// the child itself.
+    fn spawn_the_queue(&self, args: &[&str]) -> Result<Child> {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_ktask-rs"));
+        command.args(args);
+        self.sandbox.isolate(&mut command, &self.repository);
+        with_nested_ktask_rs_on_path(&mut command);
+        command.stdout(std::process::Stdio::piped());
+        command.stderr(std::process::Stdio::piped());
+        Ok(command.spawn()?)
     }
 
     /// Adds a task with `title` and body `body`, one criterion, kind `agent`.
@@ -398,5 +446,92 @@ fn run_works_from_a_subdirectory_and_with_project_from_any_directory() -> Result
 
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     assert_eq!(fixture.task_status(1)?, "done");
+    Ok(())
+}
+
+#[test]
+fn a_second_run_while_one_is_in_progress_exits_two_naming_the_running_process() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let go = fixture.work.join("go");
+    fixture.add_agent_task(
+        "a",
+        &format!(
+            "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nktask-rs report --token \"$1\" done\n```\n",
+            go.display()
+        ),
+    )?;
+
+    let mut first = fixture.spawn_the_queue(&["run"])?;
+    let first_pid = first.id();
+    wait_until("the first run's attempt to start", || {
+        fixture.attempt_running_provider(1, 1).is_ok()
+    })?;
+
+    let second = fixture.run_the_queue(&["run"])?;
+    assert_eq!(second.code, Some(2), "{}", second.stderr);
+    assert!(
+        second.stderr.contains(&first_pid.to_string()),
+        "{}",
+        second.stderr
+    );
+    // The lock refusal changed nothing: the first run's attempt is still the only one.
+    assert_eq!(fixture.task_status(1)?, "running");
+
+    std::fs::write(&go, "")?;
+    let status = first.wait()?;
+    assert!(status.success(), "{status:?}");
+    assert_eq!(fixture.task_status(1)?, "done");
+    Ok(())
+}
+
+#[test]
+fn a_run_killed_mid_attempt_leaves_no_provider_process_and_the_next_run_marks_it_failed_unknown_and_exits_one()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    let pid_file = fixture.work.join("provider.pid");
+    fixture.add_agent_task(
+        "a",
+        &format!(
+            "```bash\necho $$ > \"{}\"\nsleep 30\n```\n",
+            pid_file.display()
+        ),
+    )?;
+    fixture.add_agent_task("b", &reporting_body("done"))?;
+
+    let mut first = fixture.spawn_the_queue(&["run"])?;
+    let first_pid = i32::try_from(first.id())?;
+
+    wait_until("the provider to record its process id", || {
+        pid_file.exists()
+    })?;
+    let provider_pid: u32 = std::fs::read_to_string(&pid_file)?.trim().parse()?;
+    assert!(
+        is_running(provider_pid),
+        "provider {provider_pid} is not running"
+    );
+
+    signal::kill(Pid::from_raw(first_pid), Signal::SIGTERM)?;
+    let status = first.wait()?;
+    assert!(!status.success(), "{status:?}");
+
+    wait_until(
+        "the provider to end once the run that started it is killed",
+        || !is_running(provider_pid),
+    )?;
+
+    let second = fixture.run_the_queue(&["run"])?;
+
+    assert_eq!(second.code, Some(1), "{}", second.stderr);
+    assert_eq!(fixture.task_status(1)?, "failed-unknown");
+    assert_eq!(fixture.task_status(2)?, "pending");
+    let (_, exit_code, status, reason) = fixture.attempt_ended(1)?;
+    assert_eq!(exit_code, None);
+    assert_eq!(status, "failed-unknown");
+    assert_eq!(reason.as_deref(), Some("the run was interrupted"));
+    assert!(
+        second.stdout.contains("the run was interrupted"),
+        "{}",
+        second.stdout
+    );
     Ok(())
 }
