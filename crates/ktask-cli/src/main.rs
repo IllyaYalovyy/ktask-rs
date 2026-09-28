@@ -595,7 +595,7 @@ fn tui(selected: Option<&str>) -> Result<(), Failure> {
     let watch = FileJournalWatch::open(&path).map_err(|e| e.to_string())?;
     Ok(ktask_tui::run(
         |show_cancelled| {
-            ktask_core::queue_view(project.clone(), &journal, show_cancelled)
+            ktask_core::queue_view(project.clone(), &journal, &SystemClock, show_cancelled)
                 .map_err(|e| e.to_string())
         },
         |id| ktask_core::remove_task(&journal, &SystemClock, id).map_err(|e| e.to_string()),

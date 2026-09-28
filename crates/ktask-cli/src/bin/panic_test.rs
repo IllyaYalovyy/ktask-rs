@@ -4,6 +4,7 @@
 //! printed — through the same code path the shipped binary runs, without adding a crash switch
 //! to it.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -31,6 +32,7 @@ fn empty_queue() -> QueueView {
         },
         summary: StatusSummary::default(),
         tasks: Vec::new(),
+        attempts: HashMap::new(),
     }
 }
 
