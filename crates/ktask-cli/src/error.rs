@@ -93,6 +93,10 @@ impl From<CancelError> for Failure {
                 message: format!("{error}; `ktask-rs list --all` shows every task"),
                 code: 2,
             },
+            CancelError::Running(_) => Self {
+                message: format!("{error}; wait for the run to finish, or stop it, then try again"),
+                code: 2,
+            },
         }
     }
 }

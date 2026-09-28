@@ -73,13 +73,6 @@ impl Fixture {
         Ok(token.to_string())
     }
 
-    /// Cancels task `task`, ending whatever attempt is running on it.
-    fn cancel(&self, task: u64) -> Result<()> {
-        let journal = SqliteJournal::open(&self.journal())?;
-        ktask_core::remove_task(&journal, &ktask_adapters::SystemClock, TaskId(task))?;
-        Ok(())
-    }
-
     /// The number of `attempt_reported` events, and the outcome and reason of the most recent
     /// one.
     fn last_report(&self) -> Result<(i64, Option<String>, Option<String>)> {
@@ -241,8 +234,11 @@ fn a_token_naming_an_unknown_task_or_the_wrong_attempt_exits_two_and_records_not
 fn a_token_whose_attempt_has_ended_exits_two_naming_it_and_records_nothing() -> Result<()> {
     let fixture = Fixture::new()?;
     let token = fixture.start_attempt(1)?;
-    fixture.cancel(1)?;
-    assert_eq!(fixture.task_status(1)?, "cancelled");
+    // `run`, finding the attempt already running from outside itself, treats it exactly as
+    // it would an attempt a crashed run left behind: it ends it `failed-unknown` and stops.
+    let interrupted = fixture.run(&["run"])?;
+    assert_eq!(interrupted.code, Some(1), "{}", interrupted.stderr);
+    assert_eq!(fixture.task_status(1)?, "failed-unknown");
 
     let outcome = fixture.run(&["report", "--token", &token, "done"])?;
 

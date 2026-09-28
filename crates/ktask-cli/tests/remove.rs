@@ -5,7 +5,9 @@
 mod repo;
 mod support;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Child;
+use std::time::{Duration, Instant};
 
 use repo::{git_repository, scratch};
 use serde_json::{Value, json};
@@ -20,21 +22,47 @@ struct Fixture {
     _keep: tempfile::TempDir,
 }
 
+/// A bash block that waits for the file at `go` to exist, then reports `done`: an attempt
+/// that stays running until the test lets it finish.
+fn gated_body(go: &Path) -> String {
+    format!(
+        "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nktask-rs report --token \"$1\" done\n```\n",
+        go.display()
+    )
+}
+
+/// Waits, for up to a few seconds, until `condition` holds, polling every 20ms; fails naming
+/// `what` when it never does.
+fn wait_until(what: &str, mut condition: impl FnMut() -> bool) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !condition() {
+        if Instant::now() >= deadline {
+            return Err(format!("timed out waiting for {what}").into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Ok(())
+}
+
 impl Fixture {
     fn new() -> Result<Self> {
-        let sandbox = Sandbox::new()?;
-        let (keep, work) = scratch()?;
-        let repository = git_repository(&sandbox, &work, "my-app")?;
-        let fixture = Self {
-            sandbox,
-            work,
-            repository,
-            _keep: keep,
-        };
+        let fixture = Self::empty()?;
         for title in ["a", "b", "c"] {
             fixture.add(title)?;
         }
         Ok(fixture)
+    }
+
+    fn empty() -> Result<Self> {
+        let sandbox = Sandbox::new()?;
+        let (keep, work) = scratch()?;
+        let repository = git_repository(&sandbox, &work, "my-app")?;
+        Ok(Self {
+            sandbox,
+            work,
+            repository,
+            _keep: keep,
+        })
     }
 
     /// Runs `ktask-rs` with `args` inside the repository.
@@ -46,6 +74,44 @@ impl Fixture {
         let outcome = self.run(&["add", "--title", title, "--criterion", "it works"])?;
         assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
         Ok(outcome)
+    }
+
+    /// Adds a task with `title` and body `body`, one criterion, kind `agent`.
+    fn add_agent_task(&self, title: &str, body: &str) -> Result<()> {
+        let outcome = self.run(&[
+            "add",
+            "--title",
+            title,
+            "--criterion",
+            "it works",
+            "--body",
+            body,
+        ])?;
+        assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+        Ok(())
+    }
+
+    /// Spawns `ktask-rs run` in the background and returns at once, so the caller can watch
+    /// or interrupt it. The binary under test puts its own directory on the child's `PATH`
+    /// itself, so a task's bash block calling back into `ktask-rs report` needs no help.
+    fn spawn_run(&self) -> Result<Child> {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_ktask-rs"));
+        command.arg("run");
+        self.sandbox.isolate(&mut command, &self.repository);
+        command.stdout(std::process::Stdio::piped());
+        command.stderr(std::process::Stdio::piped());
+        Ok(command.spawn()?)
+    }
+
+    /// The status column of task `task` in the journal, read directly so the test does not
+    /// have to wait on the CLI to observe it.
+    fn task_status(&self, task: u64) -> Result<String> {
+        let database = rusqlite::Connection::open(self.journal())?;
+        Ok(database.query_row(
+            "SELECT status FROM tasks WHERE id = ?1",
+            [i64::try_from(task)?],
+            |row| row.get(0),
+        )?)
     }
 
     fn journal(&self) -> PathBuf {
@@ -381,5 +447,26 @@ fn remove_and_all_are_in_the_help() -> Result<()> {
     for word in ["--all", "--json", "--project"] {
         assert!(list.stdout.contains(word), "{word}: {}", list.stdout);
     }
+    Ok(())
+}
+
+#[test]
+fn removing_the_running_task_exits_two_saying_so_and_the_run_finishes_as_if_nothing_was_asked()
+-> Result<()> {
+    let fixture = Fixture::empty()?;
+    let go = fixture.work.join("go");
+    fixture.add_agent_task("gated", &gated_body(&go))?;
+    let mut run = fixture.spawn_run()?;
+    wait_until("the task to start running", || {
+        fixture.task_status(1).ok().as_deref() == Some("running")
+    })?;
+
+    fixture.assert_refused("1", &["task 1 is running"])?;
+
+    assert_eq!(fixture.task_status(1)?, "running");
+    std::fs::write(&go, "")?;
+    let status = run.wait()?;
+    assert!(status.success(), "{status:?}");
+    assert_eq!(fixture.task_status(1)?, "done");
     Ok(())
 }
