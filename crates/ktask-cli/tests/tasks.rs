@@ -394,6 +394,104 @@ fn ids_are_sequential_and_survive_restarts() -> Result<()> {
 }
 
 #[test]
+fn two_processes_adding_at_the_same_moment_both_succeed_with_unique_ids_and_contiguous_positions()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    // Registers the project first, so the two concurrent processes below race only on the
+    // journal, not on first-time project registration (a different concern entirely).
+    fixture.add("seed")?;
+
+    // Two real `ktask-rs add` processes, started together against the same journal: one of
+    // them must find the journal has moved on since it read it, and retry.
+    let (first, second) = std::thread::scope(|scope| {
+        let a = scope.spawn(|| fixture.add("from a").map_err(|e| e.to_string()));
+        let b = scope.spawn(|| fixture.add("from b").map_err(|e| e.to_string()));
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    let first = first?;
+    let second = second?;
+
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    let first_id: u64 = first.stdout.trim().parse()?;
+    let second_id: u64 = second.stdout.trim().parse()?;
+    assert_ne!(first_id, second_id, "both processes were given the same id");
+    let mut ids = [first_id, second_id];
+    ids.sort_unstable();
+    assert_eq!(ids, [2, 3], "ids are not unique and contiguous");
+
+    let listed = queue(&fixture)?;
+    assert_eq!(listed.len(), 3);
+    let positions: Vec<_> = fixture
+        .rows("tasks")?
+        .iter()
+        .map(|task| task["id"].as_i64())
+        .collect();
+    assert_eq!(positions, [Some(1), Some(2), Some(3)]);
+    Ok(())
+}
+
+#[test]
+fn a_journal_written_by_a_previous_version_is_still_read_correctly_by_the_real_binary() -> Result<()>
+{
+    let fixture = Fixture::new()?;
+    let path = fixture.journal("my-app");
+    std::fs::create_dir_all(path.parent().ok_or("journal has no parent directory")?)?;
+    {
+        // The schema and rows exactly as a previous version — before events and appends
+        // moved into `ktask-rs::add_tasks` and `SqliteJournal::append_events` — wrote them,
+        // written here with nothing but `rusqlite`, not through this crate's own code.
+        let connection = rusqlite::Connection::open(&path)?;
+        connection.execute_batch(
+            "CREATE TABLE events (
+                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                 at INTEGER NOT NULL,
+                 kind TEXT NOT NULL,
+                 task_id INTEGER NOT NULL,
+                 payload TEXT NOT NULL
+             );
+             CREATE TABLE tasks (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 order_key INTEGER NOT NULL,
+                 title TEXT NOT NULL,
+                 body TEXT NOT NULL,
+                 criteria TEXT NOT NULL,
+                 kind TEXT NOT NULL,
+                 links TEXT NOT NULL,
+                 status TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 attempt_number INTEGER NOT NULL DEFAULT 0
+             )",
+        )?;
+        connection.execute(
+            "INSERT INTO tasks
+                 (id, order_key, title, body, criteria, kind, links, status, created_at)
+             VALUES (1, 1, 'old task', '', '[\"it works\"]', 'agent', '[]', 'cancelled', 500)",
+            [],
+        )?;
+        connection.execute(
+            "INSERT INTO events (at, kind, task_id, payload) VALUES (500, 'task_added', 1, ?1)",
+            [r#"{"title":"old task","body":"","criteria":["it works"],"kind":"agent","links":[]}"#],
+        )?;
+        connection.execute(
+            "INSERT INTO events (at, kind, task_id, payload) VALUES (600, 'task_cancelled', 1, '{}')",
+            [],
+        )?;
+    }
+
+    let listed = fixture.run(&["list", "--all"])?;
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    assert_eq!(listed.stdout, "1\t#1\tcancelled\tagent\told task\n");
+
+    // Adding through the real binary continues the ids on from what the old journal used.
+    let added = fixture.add("new")?;
+    assert_eq!(added.stdout, "2\n", "{}", added.stderr);
+    let listed = fixture.run(&["list"])?;
+    assert_eq!(listed.stdout, "1\t#2\tpending\tagent\tnew\n");
+    Ok(())
+}
+
+#[test]
 fn a_task_can_be_added_and_listed_from_a_subdirectory() -> Result<()> {
     let fixture = Fixture::new()?;
     let deep = fixture.repository.join("src").join("deep");
