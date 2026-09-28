@@ -158,6 +158,8 @@ pub enum CancelError {
     UnknownTask(TaskId),
     /// The task was cancelled already.
     AlreadyCancelled(TaskId),
+    /// The task is running: it must finish or be interrupted first.
+    Running(TaskId),
     /// The journal could not be used.
     Journal(JournalError),
 }
@@ -167,6 +169,7 @@ impl fmt::Display for CancelError {
         match self {
             Self::UnknownTask(id) => write!(f, "there is no task {id}"),
             Self::AlreadyCancelled(id) => write!(f, "task {id} is already cancelled"),
+            Self::Running(id) => write!(f, "task {id} is running"),
             Self::Journal(error) => error.fmt(f),
         }
     }

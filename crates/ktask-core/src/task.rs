@@ -415,8 +415,8 @@ pub fn add_task_listing_problems(
 ///
 /// # Errors
 ///
-/// Fails, changing nothing, when there is no such task, when it is cancelled already, or
-/// when the journal cannot be written.
+/// Fails, changing nothing, when there is no such task, when it is running, when it is
+/// cancelled already, or when the journal cannot be written.
 pub fn remove_task(
     journal: &impl Journal,
     clock: &impl Clock,
@@ -719,6 +719,21 @@ mod tests {
             remove_task(&journal, &clock(), TaskId(2)),
             Err(CancelError::AlreadyCancelled(TaskId(2)))
         );
+        assert_eq!(list_all_tasks(&journal).unwrap(), before);
+    }
+
+    #[test]
+    fn removing_a_running_task_is_refused_and_changes_nothing() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        crate::attempt::begin_attempt(&journal, &clock(), TaskId(1)).unwrap();
+        let before = list_all_tasks(&journal).unwrap();
+
+        assert_eq!(
+            remove_task(&journal, &clock(), TaskId(1)),
+            Err(CancelError::Running(TaskId(1)))
+        );
+
         assert_eq!(list_all_tasks(&journal).unwrap(), before);
     }
 

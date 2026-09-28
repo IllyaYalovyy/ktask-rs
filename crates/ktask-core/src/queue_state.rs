@@ -226,10 +226,12 @@ impl QueueState {
     ///
     /// # Errors
     ///
-    /// Fails, deciding nothing, when there is no such task or it is cancelled already.
+    /// Fails, deciding nothing, when there is no such task, it is running, or it is
+    /// cancelled already.
     pub(crate) fn decide_cancel(&self, id: TaskId, at: SystemTime) -> Result<Event, CancelError> {
         match self.tasks.iter().find(|task| task.id == id) {
             None => Err(CancelError::UnknownTask(id)),
+            Some(task) if task.status == TaskStatus::Running => Err(CancelError::Running(id)),
             Some(task) if task.status == TaskStatus::Cancelled => {
                 Err(CancelError::AlreadyCancelled(id))
             }
@@ -523,13 +525,19 @@ mod tests {
                 // One command in ten is a cancel.
                 0 => {
                     let id = existing[rng.below(existing.len())];
-                    let already = oracle.is_cancelled(id);
+                    let status = oracle.status_of(id);
                     let result = remove_task(journal, clock, id);
-                    if already {
-                        assert_eq!(result, Err(CancelError::AlreadyCancelled(id)));
-                    } else {
-                        assert_eq!(result, Ok(()));
-                        oracle.set_status(id, TaskStatus::Cancelled);
+                    match status {
+                        TaskStatus::Cancelled => {
+                            assert_eq!(result, Err(CancelError::AlreadyCancelled(id)));
+                        }
+                        TaskStatus::Running => {
+                            assert_eq!(result, Err(CancelError::Running(id)));
+                        }
+                        _ => {
+                            assert_eq!(result, Ok(()));
+                            oracle.set_status(id, TaskStatus::Cancelled);
+                        }
                     }
                     return;
                 }

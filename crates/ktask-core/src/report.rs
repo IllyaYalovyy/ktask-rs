@@ -331,7 +331,19 @@ mod tests {
     fn an_ended_attempt_is_refused_and_named() {
         let journal = journal_with_a_pending_task();
         let token = start_attempt(&journal, &clock(), "proj", TaskId(1)).unwrap();
-        crate::remove_task(&journal, &clock(), TaskId(1)).unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(1),
+            token.number,
+            crate::journal::AttemptRun {
+                duration: std::time::Duration::ZERO,
+                exit_code: Some(0),
+                status: TaskStatus::Done,
+                reason: None,
+            },
+            clock().now(),
+        )
+        .unwrap();
         let error = report(&journal, &clock(), &token, Outcome::Done, None).unwrap_err();
         assert_eq!(
             error,
