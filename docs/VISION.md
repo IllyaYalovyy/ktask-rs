@@ -22,7 +22,8 @@ visibility and less fragility.
 - Tasks can be added anywhere, inserted between two others, and reordered. IDs never
   change when the queue does.
 - **Breakdown.** If a task is too big, the working agent says so, and a more capable model
-  (configurable) splits it into smaller tasks inserted in its place.
+  (configurable) replaces it with smaller tasks, each placed in the queue where it
+  belongs. The queue is flat: tasks have no parents, children or hierarchy.
 - Tasks run one at a time, in order.
 
 ## Pipeline

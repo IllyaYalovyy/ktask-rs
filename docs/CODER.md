@@ -35,6 +35,9 @@ contradicts them, stop and report the contradiction.
   with a timeout.
 - Never make a check pass by weakening it: no `#[ignore]`, no `#[allow]` on the offending
   line, no deleted or loosened assertion, no narrowing a test until it passes.
+- **Nothing outside the task's scope is mocked, stubbed or sketched.** No placeholder
+  screens, lines, commands or options for features that do not exist yet. What is in scope
+  is complete, wired and tested end to end; what is not in scope is absent.
 - **No code without a current use.** Nothing speculative, nothing "for later", no
   compatibility shims, no unused options or parameters. The future gets its code when it
   arrives.
