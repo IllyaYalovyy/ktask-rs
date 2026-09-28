@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::{
-    AppendError, AttemptRun, BeginAttemptError, CancelError, Clock, CommandSpec, Commands,
-    CommandsError, Git, GitError, Journal, JournalError, Outcome, Output, Placement, Project,
-    ProjectRegistry, RecordReportError, RegistryError, RunLock, RunLockError, Task, TaskDraft,
-    TaskId, TaskKind, TaskStatus,
+    AppendError, Attempt, AttemptEnd, AttemptRun, BeginAttemptError, CancelError, Clock,
+    CommandSpec, Commands, CommandsError, Git, GitError, Journal, JournalError, Outcome, Output,
+    Placement, Project, ProjectRegistry, RecordReportError, RegistryError, RunLock, RunLockError,
+    Task, TaskDraft, TaskId, TaskKind, TaskStatus,
 };
 
 /// An in-memory registry that can be told to fail.
@@ -103,6 +103,9 @@ pub(crate) struct FakeJournal {
     pub(crate) tasks: RefCell<Vec<Task>>,
     pub(crate) attempts: RefCell<HashMap<TaskId, u32>>,
     pub(crate) reports: RefCell<HashMap<(TaskId, u32), Report>>,
+    pub(crate) started: RefCell<HashMap<(TaskId, u32), SystemTime>>,
+    pub(crate) providers: RefCell<HashMap<(TaskId, u32), String>>,
+    pub(crate) ended: RefCell<HashMap<(TaskId, u32), AttemptEnd>>,
     pub(crate) failure: Option<JournalError>,
 }
 
@@ -115,6 +118,9 @@ impl FakeJournal {
             tasks: RefCell::default(),
             attempts: RefCell::default(),
             reports: RefCell::default(),
+            started: RefCell::default(),
+            providers: RefCell::default(),
+            ended: RefCell::default(),
             failure: Some(failure),
         }
     }
@@ -195,7 +201,7 @@ impl Journal for FakeJournal {
         }
     }
 
-    fn begin_attempt(&self, id: TaskId, _at: SystemTime) -> Result<u32, BeginAttemptError> {
+    fn begin_attempt(&self, id: TaskId, at: SystemTime) -> Result<u32, BeginAttemptError> {
         if let Some(failure) = &self.failure {
             return Err(failure.clone().into());
         }
@@ -211,6 +217,7 @@ impl Journal for FakeJournal {
         let mut attempts = self.attempts.borrow_mut();
         let number = attempts.entry(id).or_insert(0);
         *number += 1;
+        self.started.borrow_mut().insert((id, *number), at);
         Ok(*number)
     }
 
@@ -244,15 +251,18 @@ impl Journal for FakeJournal {
 
     fn attempt_running(
         &self,
-        _id: TaskId,
-        _number: u32,
-        _provider: &str,
+        id: TaskId,
+        number: u32,
+        provider: &str,
         _at: SystemTime,
     ) -> Result<(), JournalError> {
-        match &self.failure {
-            Some(failure) => Err(failure.clone()),
-            None => Ok(()),
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone());
         }
+        self.providers
+            .borrow_mut()
+            .insert((id, number), provider.to_owned());
+        Ok(())
     }
 
     fn last_report(
@@ -288,6 +298,14 @@ impl Journal for FakeJournal {
             return Err(RecordReportError::AttemptEnded { task: id, number });
         }
         task.status = run.status;
+        self.ended.borrow_mut().insert(
+            (id, number),
+            AttemptEnd {
+                duration: run.duration,
+                status: run.status,
+                reason: run.reason.map(str::to_owned),
+            },
+        );
         Ok(())
     }
 
@@ -301,6 +319,26 @@ impl Journal for FakeJournal {
         };
         let number = self.attempts.borrow().get(&task.id).copied().unwrap_or(0);
         Ok(Some((task.id, number)))
+    }
+
+    fn last_attempt(&self, id: TaskId) -> Result<Option<Attempt>, JournalError> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone());
+        }
+        let Some(&number) = self.attempts.borrow().get(&id) else {
+            return Ok(None);
+        };
+        let Some(&started_at) = self.started.borrow().get(&(id, number)) else {
+            return Ok(None);
+        };
+        let provider = self.providers.borrow().get(&(id, number)).cloned();
+        let ended = self.ended.borrow().get(&(id, number)).cloned();
+        Ok(Some(Attempt {
+            number,
+            started_at,
+            provider,
+            ended,
+        }))
     }
 }
 

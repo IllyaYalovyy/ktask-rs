@@ -173,6 +173,30 @@ pub struct AttemptRun<'a> {
     pub reason: Option<&'a str>,
 }
 
+/// How an attempt ended, as [`Journal::last_attempt`] reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttemptEnd {
+    /// How long the provider ran.
+    pub duration: Duration,
+    /// What the attempt ended at.
+    pub status: TaskStatus,
+    /// Why, when `status` is not `done`.
+    pub reason: Option<String>,
+}
+
+/// A task's most recent attempt, as [`Journal::last_attempt`] returns it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attempt {
+    /// The attempt's number.
+    pub number: u32,
+    /// When it started.
+    pub started_at: SystemTime,
+    /// The provider it ran with, once [`Journal::attempt_running`] has recorded it.
+    pub provider: Option<String>,
+    /// How it ended, once [`Journal::end_attempt`] has recorded it; `None` while it runs.
+    pub ended: Option<AttemptEnd>,
+}
+
 /// Port: one project's journal. Every change is an event appended to it, and the tasks are
 /// updated from that event in the same transaction.
 pub trait Journal {
@@ -306,6 +330,15 @@ pub trait Journal {
     ///
     /// Fails when the journal cannot be read.
     fn running(&self) -> Result<Option<(TaskId, u32)>, JournalError>;
+
+    /// The most recent attempt at task `id`: its number, when it started, the provider it ran
+    /// with once that is known, and how it ended once that is known. `None` when the task was
+    /// never attempted.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the journal cannot be read.
+    fn last_attempt(&self, id: TaskId) -> Result<Option<Attempt>, JournalError>;
 }
 
 /// Port: notices when a project's journal changes, so a frontend can show what another
