@@ -494,8 +494,80 @@ fn a_second_run_while_one_is_in_progress_exits_two_naming_the_running_process() 
     Ok(())
 }
 
+/// `SIGTERM` and `SIGINT` to `run` end the provider (and everything it started), record the
+/// attempt `failed-unknown` with the reason "the run was interrupted" and its real duration,
+/// print that line, and exit `1` — all before `run` itself exits, with no need for a second
+/// `run` to notice anything.
+fn signal_to_run_ends_it_at_once_with_the_interrupted_reason_and_real_duration(
+    signal: Signal,
+) -> Result<()> {
+    let fixture = Fixture::new()?;
+    let pid_file = fixture.work.join("provider.pid");
+    fixture.add_agent_task(
+        "a",
+        &format!(
+            "```bash\necho $$ > \"{}\"\nsleep 30\n```\n",
+            pid_file.display()
+        ),
+    )?;
+    fixture.add_agent_task("b", &reporting_body("done"))?;
+
+    let first = fixture.spawn_the_queue(&["run"])?;
+    let first_pid = i32::try_from(first.id())?;
+
+    wait_until("the provider to record its process id", || {
+        pid_file.exists()
+    })?;
+    let provider_pid: u32 = std::fs::read_to_string(&pid_file)?.trim().parse()?;
+    assert!(
+        is_running(provider_pid),
+        "provider {provider_pid} is not running"
+    );
+    // Gives the attempt some real wall-clock time to run, so the duration `run` records for
+    // it below is provably more than an instant, not just never having been reset.
+    std::thread::sleep(Duration::from_millis(300));
+
+    signal::kill(Pid::from_raw(first_pid), signal)?;
+    let output = first.wait_with_output()?;
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(
+        stdout.contains("task 1: failed-unknown: the run was interrupted"),
+        "{stdout}"
+    );
+
+    // The provider — and the `sleep 30` inside the same bash block it ran — do not outlive
+    // the run that started them, even though nothing past this point runs another `run`.
+    wait_until(
+        "the provider to end once the run that started it ends",
+        || !is_running(provider_pid),
+    )?;
+
+    assert_eq!(fixture.task_status(1)?, "failed-unknown");
+    assert_eq!(fixture.task_status(2)?, "pending");
+    let (duration_ms, exit_code, status, reason) = fixture.attempt_ended(1)?;
+    assert_eq!(exit_code, None);
+    assert_eq!(status, "failed-unknown");
+    assert_eq!(reason.as_deref(), Some("the run was interrupted"));
+    // Well under the 300ms slept above would mean the duration was never really measured;
+    // a generous floor avoids the test being flaky under a loaded machine.
+    assert!(duration_ms >= 200, "{duration_ms}");
+    Ok(())
+}
+
 #[test]
-fn a_run_killed_mid_attempt_leaves_no_provider_process_and_the_next_run_marks_it_failed_unknown_and_exits_one()
+fn sigterm_to_run_ends_it_at_once_with_the_interrupted_reason_and_real_duration() -> Result<()> {
+    signal_to_run_ends_it_at_once_with_the_interrupted_reason_and_real_duration(Signal::SIGTERM)
+}
+
+#[test]
+fn sigint_to_run_ends_it_at_once_with_the_interrupted_reason_and_real_duration() -> Result<()> {
+    signal_to_run_ends_it_at_once_with_the_interrupted_reason_and_real_duration(Signal::SIGINT)
+}
+
+#[test]
+fn a_run_killed_outright_does_not_leave_its_provider_running_and_status_shows_it_interrupted_at_once()
 -> Result<()> {
     let fixture = Fixture::new()?;
     let pid_file = fixture.work.join("provider.pid");
@@ -520,17 +592,37 @@ fn a_run_killed_mid_attempt_leaves_no_provider_process_and_the_next_run_marks_it
         "provider {provider_pid} is not running"
     );
 
-    signal::kill(Pid::from_raw(first_pid), Signal::SIGTERM)?;
+    // `SIGKILL` cannot be caught: `run` gets no chance to run any code of its own — unlike
+    // `SIGTERM`/`SIGINT` — so the provider ending anyway proves the kernel-level tie
+    // (`PR_SET_PDEATHSIG`), not the ordinary signal handling those two get.
+    signal::kill(Pid::from_raw(first_pid), Signal::SIGKILL)?;
     let status = first.wait()?;
     assert!(!status.success(), "{status:?}");
 
     wait_until(
-        "the provider to end once the run that started it is killed",
+        "the provider to end once the run that started it is killed outright",
         || !is_running(provider_pid),
     )?;
 
-    let second = fixture.run_the_queue(&["run"])?;
+    // Nothing has reconciled the journal yet — the killed run had no chance to — but `status`
+    // must not show the task `running` regardless: no run is alive to finish it.
+    let status_output = fixture.run(&["status"])?;
+    assert_eq!(status_output.code, Some(0), "{}", status_output.stderr);
+    assert!(
+        status_output.stdout.contains("#1\tinterrupted\ta"),
+        "{}",
+        status_output.stdout
+    );
+    assert!(
+        !status_output.stdout.contains("\trunning\t") && !status_output.stdout.contains("running"),
+        "{}",
+        status_output.stdout
+    );
+    // The journal itself is untouched: nothing ran to reconcile it.
+    assert_eq!(fixture.task_status(1)?, "running");
 
+    // The next real `run` reconciles it exactly as it always has.
+    let second = fixture.run_the_queue(&["run"])?;
     assert_eq!(second.code, Some(1), "{}", second.stderr);
     assert_eq!(fixture.task_status(1)?, "failed-unknown");
     assert_eq!(fixture.task_status(2)?, "pending");
@@ -538,11 +630,6 @@ fn a_run_killed_mid_attempt_leaves_no_provider_process_and_the_next_run_marks_it
     assert_eq!(exit_code, None);
     assert_eq!(status, "failed-unknown");
     assert_eq!(reason.as_deref(), Some("the run was interrupted"));
-    assert!(
-        second.stdout.contains("the run was interrupted"),
-        "{}",
-        second.stdout
-    );
     Ok(())
 }
 

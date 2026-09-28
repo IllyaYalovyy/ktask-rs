@@ -4,7 +4,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use nix::sys::signal::{self, Signal};
+use nix::unistd::Pid;
 
 use super::pty::{Terminal, lines_inside_frame};
 use super::repo::{git_repository, scratch};
@@ -213,6 +216,97 @@ fn a_run_started_elsewhere_shows_pending_then_running_with_elapsed_time_increasi
     );
     assert!(
         screen.contains("pending 0") && screen.contains("running 0") && screen.contains("done 1"),
+        "{screen}"
+    );
+
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+/// Whether process `pid` is still running. A killed process's entry under `/proc` can briefly
+/// outlive the signal that ended it, as a zombie waiting for its new parent to reap it once it
+/// is orphaned, so that alone does not count as still running.
+fn is_running(pid: u32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    let state = stat
+        .split(')')
+        .next_back()
+        .and_then(|rest| rest.split_whitespace().next());
+    state != Some("Z")
+}
+
+/// Waits, for up to a few seconds, until `condition` holds, polling every 20ms; fails naming
+/// `what` when it never does.
+fn wait_until(what: &str, mut condition: impl FnMut() -> bool) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !condition() {
+        if Instant::now() >= deadline {
+            return Err(format!("timed out waiting for {what}").into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Ok(())
+}
+
+#[test]
+fn a_run_killed_outright_shows_the_task_interrupted_at_once_with_no_next_run() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let pid_file = fixture.work.join("provider.pid");
+    fixture.add_agent_task(
+        "a",
+        &format!(
+            "```bash\necho $$ > \"{}\"\nsleep 30\n```\n",
+            pid_file.display()
+        ),
+    )?;
+
+    let mut terminal = fixture.open()?;
+    let mut run = fixture.spawn_run()?;
+    let run_pid = run.id();
+
+    terminal.wait_for("the task running with its attempt line", |screen| {
+        let lines = lines_inside_frame(&screen.contents());
+        lines.get(4).is_some_and(|line| line.contains("running"))
+    })?;
+
+    wait_until("the provider to record its process id", || {
+        pid_file.exists()
+    })?;
+    let provider_pid: u32 = std::fs::read_to_string(&pid_file)?.trim().parse()?;
+    assert!(
+        is_running(provider_pid),
+        "provider {provider_pid} is not running"
+    );
+
+    // `SIGKILL` cannot be caught: the run gets no chance to record anything, unlike
+    // `SIGTERM`/`SIGINT`. The dashboard must still stop showing the task `running` once the
+    // run that was running it is gone, with no next `run` involved at all.
+    signal::kill(Pid::from_raw(i32::try_from(run_pid)?), Signal::SIGKILL)?;
+    let status = run.wait()?;
+    assert!(!status.success(), "{status:?}");
+    wait_until(
+        "the provider to end once the run that started it is killed outright",
+        || !is_running(provider_pid),
+    )?;
+
+    let screen = terminal.wait_for("the task shown interrupted", |screen| {
+        let lines = lines_inside_frame(&screen.contents());
+        lines
+            .get(4)
+            .is_some_and(|line| line.contains("interrupted"))
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[4], ">  1  #1  interrupted  agent  a");
+    assert!(
+        lines[5].contains("implementation · echo") && lines[5].ends_with("interrupted"),
+        "{}",
+        lines[5]
+    );
+    assert!(
+        screen.contains("running 0") && screen.contains("unknown 1"),
         "{screen}"
     );
 

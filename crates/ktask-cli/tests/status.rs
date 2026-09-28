@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant};
 
+use nix::sys::signal::{self, Signal};
+use nix::unistd::Pid;
 use repo::{git_repository, scratch};
 use support::{Outcome, Result, Sandbox};
 
@@ -359,6 +361,68 @@ fn while_a_run_is_in_progress_the_running_task_shows_its_elapsed_time_so_far() -
     std::fs::write(&go, "")?;
     let status = child.wait()?;
     assert!(status.success(), "{status:?}");
+    Ok(())
+}
+
+/// Whether process `pid` is still running. A killed process's entry under `/proc` can briefly
+/// outlive the signal that ended it, as a zombie waiting for its new parent to reap it once it
+/// is orphaned, so that alone does not count as still running.
+fn is_running(pid: u32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    let state = stat
+        .split(')')
+        .next_back()
+        .and_then(|rest| rest.split_whitespace().next());
+    state != Some("Z")
+}
+
+#[test]
+fn a_task_left_running_by_a_run_killed_outright_shows_interrupted_not_running() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let pid_file = fixture.work.join("provider.pid");
+    fixture.add_agent_task(
+        "a",
+        &format!(
+            "```bash\necho $$ > \"{}\"\nsleep 30\n```\n",
+            pid_file.display()
+        ),
+    )?;
+
+    let mut run = fixture.spawn_the_queue(&["run"])?;
+    let run_pid = run.id();
+    wait_until("the provider to record its process id", || {
+        pid_file.exists()
+    })?;
+    let provider_pid: u32 = std::fs::read_to_string(&pid_file)?.trim().parse()?;
+    assert!(
+        is_running(provider_pid),
+        "provider {provider_pid} is not running"
+    );
+
+    // `SIGKILL` cannot be caught: `run` gets no chance to record anything, unlike
+    // `SIGTERM`/`SIGINT`. `status` must not show `running` regardless, with no next `run`
+    // needed to notice.
+    signal::kill(Pid::from_raw(i32::try_from(run_pid)?), Signal::SIGKILL)?;
+    let status = run.wait()?;
+    assert!(!status.success(), "{status:?}");
+    wait_until(
+        "the provider to end once the run that started it is killed outright",
+        || !is_running(provider_pid),
+    )?;
+
+    let outcome = fixture.run(&["status"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(outcome.stdout.lines().next(), Some("#1\tinterrupted\ta"));
+    assert!(!outcome.stdout.contains("running"), "{}", outcome.stdout);
+
+    let json = fixture.run(&["status", "--json"])?;
+    assert_eq!(json.code, Some(0), "{}", json.stderr);
+    let entries: serde_json::Value = serde_json::from_str(&json.stdout)?;
+    assert_eq!(entries[0]["status"], "interrupted");
+    assert_eq!(entries[0]["attempt"]["outcome"], "interrupted");
+
     Ok(())
 }
 
