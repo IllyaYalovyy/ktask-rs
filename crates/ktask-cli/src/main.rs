@@ -5,6 +5,7 @@
 mod commands;
 mod context;
 mod error;
+mod exec_tied_to_parent;
 mod render;
 
 use std::io::{self, Write};
@@ -57,6 +58,10 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some(exec_tied_to_parent::MARKER) {
+        return exec_tied_to_parent::run(args.get(2..).unwrap_or_default());
+    }
     let cli = Cli::parse();
     let mut stdout = io::stdout().lock();
     match dispatch(&cli.command, &mut stdout) {

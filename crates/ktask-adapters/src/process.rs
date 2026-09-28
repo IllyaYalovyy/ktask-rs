@@ -1,17 +1,20 @@
 //! Starts real subprocesses: feeds stdin, captures stdout and stderr, and kills a command and
-//! every process it started when it runs past its time limit — or when this process is asked
-//! to stop while one is running.
+//! every process it started when it runs past its time limit, when this process is asked to
+//! stop (`SIGINT`, `SIGTERM`, `SIGHUP`) while one is running, or — even when this process is
+//! killed outright, with no chance to run any code of its own — the moment the kernel notices
+//! it is gone, through [`exec_tied_to_parent`].
 
 use std::ffi::OsString;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 
 use ktask_core::{CommandSpec, Commands, CommandsError, Exit, Output};
+use nix::sys::prctl;
 use nix::sys::signal::{Signal, kill};
-use nix::unistd::Pid;
+use nix::unistd::{Pid, getppid};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
@@ -22,6 +25,40 @@ use signal_hook::iterator::Signals;
 /// one that is running, not some other one found first on an inherited `PATH`.
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessCommands;
+
+/// The `argv[1]` that tells the `ktask-rs` binary to become [`exec_tied_to_parent`] instead
+/// of running its usual command line: `ktask-rs <MARKER> <parent-pid> <program> [args...]`.
+/// Every command [`ProcessCommands`] starts goes through this first, so the program it really
+/// wants never outlives this process even when it is killed outright. Never typed by a
+/// person — chosen so it collides with nothing a real command line would ever pass as its
+/// first argument — so `ktask-cli`'s `main` checks for it before its normal argument parsing
+/// even starts, and the rest of the CLI's grammar and `--help` never mention it.
+pub const EXEC_TIED_TO_PARENT_MARKER: &str = "__ktask-rs-exec-tied-to-parent__";
+
+/// Sets this process's parent-death signal to `SIGKILL`, tying its life to `parent_pid` at
+/// the kernel level, then execs `program` with `args`, replacing this process entirely — the
+/// far side of [`EXEC_TIED_TO_PARENT_MARKER`], run by `ktask-cli`'s `main`. Returns only when
+/// something failed — the death signal could not be set, `parent_pid` is no longer this
+/// process's parent (it already died in the narrow window before this ran, so nothing should
+/// run unsupervised on its behalf), or `program` could not be started — since a successful
+/// exec never returns.
+///
+/// Unlike [`std::os::unix::process::CommandExt::pre_exec`], this needs no `unsafe`: it runs
+/// ordinary, safe syscalls in a process of its own that has already fully exec'd into
+/// `ktask-rs`, rather than inside a fork of a process that might have more than one thread.
+#[must_use]
+pub fn exec_tied_to_parent(parent_pid: u32, program: &str, args: &[String]) -> io::Error {
+    let expected_parent = Pid::from_raw(i32::try_from(parent_pid).unwrap_or(i32::MAX));
+    if let Err(errno) = prctl::set_pdeathsig(Signal::SIGKILL) {
+        return io::Error::from(errno);
+    }
+    if getppid() != expected_parent {
+        return io::Error::other(
+            "the process that started this one is already gone; refusing to run unsupervised",
+        );
+    }
+    Command::new(program).args(args).exec()
+}
 
 /// The current process's `PATH`, with the directory of the running binary put first.
 fn path_with_own_binary_first() -> Result<OsString, CommandsError> {
@@ -44,9 +81,20 @@ fn path_with_own_binary_first() -> Result<OsString, CommandsError> {
 /// stop while it was still running.
 enum Awaited {
     /// The child exited; this is [`std::process::Child::wait`]'s own result.
-    Exited(std::io::Result<ExitStatus>),
+    Exited(io::Result<ExitStatus>),
     /// SIGTERM, SIGINT or SIGHUP arrived at this process.
     AskedToStop,
+}
+
+/// How the child's wait ended, before it is turned into an [`Exit`].
+enum Ended {
+    /// It exited on its own, or was reaped after the timeout killed it.
+    Exited(io::Result<ExitStatus>),
+    /// It ran past its time limit and was killed along with everything it started.
+    TimedOut,
+    /// This process was asked to stop while it was still running, and it was killed along
+    /// with everything it started.
+    Interrupted,
 }
 
 impl Commands for ProcessCommands {
@@ -55,7 +103,17 @@ impl Commands for ProcessCommands {
             |cause: String| CommandsError::new(format!("cannot run {}: {cause}", spec.program));
 
         let path = path_with_own_binary_first()?;
-        let mut child = Command::new(&spec.program)
+        let exe = std::env::current_exe()
+            .map_err(|e| fail(format!("cannot find the running binary: {e}")))?;
+        // The immediate child is `ktask-rs` itself, told to become `exec_tied_to_parent`: it
+        // ties itself to this process before exec'ing into `spec.program`, so that program
+        // never outlives this one, even when this one is killed outright. Since `exec`
+        // replaces the process image without forking again, this adds no real process to the
+        // tree: the pid spawned here is the pid `spec.program` itself ends up running as.
+        let child = Command::new(&exe)
+            .arg(EXEC_TIED_TO_PARENT_MARKER)
+            .arg(std::process::id().to_string())
+            .arg(&spec.program)
             .args(&spec.args)
             .current_dir(&spec.dir)
             .env("PATH", path)
@@ -67,105 +125,122 @@ impl Commands for ProcessCommands {
             .process_group(0)
             .spawn()
             .map_err(|e| fail(e.to_string()))?;
-        let pgid = i32::try_from(child.id()).unwrap_or(i32::MAX);
+        run_spawned(child, spec, fail)
+    }
+}
 
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| fail("the child has no standard input".to_owned()))?;
-        let mut stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| fail("the child has no standard output".to_owned()))?;
-        let mut stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| fail("the child has no standard error".to_owned()))?;
+/// Waits for `child` (already spawned as the leader of its own process group) to finish or
+/// run past `spec.timeout`, feeding `spec.stdin` and capturing its output; kills the whole
+/// process group on a timeout, or when this process is asked to stop while `child` is still
+/// running. Shared by [`ProcessCommands::run`] and this module's own tests, which spawn
+/// `child` directly against `bash` rather than through [`EXEC_TIED_TO_PARENT_MARKER`], since
+/// none of what this function does depends on how `child` came to exist.
+fn run_spawned(
+    mut child: std::process::Child,
+    spec: &CommandSpec,
+    fail: impl Fn(String) -> CommandsError,
+) -> Result<Output, CommandsError> {
+    let pgid = i32::try_from(child.id()).unwrap_or(i32::MAX);
 
-        let input = spec.stdin.clone();
-        let writer = thread::spawn(move || {
-            let _ = stdin.write_all(&input);
-        });
-        let stdout_reader = thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = stdout.read_to_end(&mut buf);
-            buf
-        });
-        let stderr_reader = thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = stderr.read_to_end(&mut buf);
-            buf
-        });
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| fail("the child has no standard input".to_owned()))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| fail("the child has no standard output".to_owned()))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| fail("the child has no standard error".to_owned()))?;
 
-        let mut signals = Signals::new([SIGTERM, SIGINT, SIGHUP])
-            .map_err(|e| fail(format!("cannot watch for a termination signal: {e}")))?;
-        let handle = signals.handle();
+    let input = spec.stdin.clone();
+    let writer = thread::spawn(move || {
+        let _ = stdin.write_all(&input);
+    });
+    let stdout_reader = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr.read_to_end(&mut buf);
+        buf
+    });
 
-        let (sender, receiver) = mpsc::channel();
-        let waiter_sender = sender.clone();
-        let waiter = thread::spawn(move || {
-            let status = child.wait();
-            let _ = waiter_sender.send(Awaited::Exited(status));
-        });
-        let signal_watcher = thread::spawn(move || {
-            if signals.forever().next().is_some() {
-                let _ = sender.send(Awaited::AskedToStop);
-            }
-        });
+    let mut signals = Signals::new([SIGTERM, SIGINT, SIGHUP])
+        .map_err(|e| fail(format!("cannot watch for a termination signal: {e}")))?;
+    let handle = signals.handle();
 
-        let status = match receiver.recv_timeout(spec.timeout) {
-            Ok(Awaited::Exited(status)) => status,
-            Ok(Awaited::AskedToStop) => {
-                // The whole group, not just the child itself, so nothing it started is left
-                // behind. A failure here means it is already gone.
-                let _ = kill(Pid::from_raw(-pgid), Signal::SIGKILL);
-                // Waited for, so it is reaped rather than left a zombie, but otherwise
-                // ignored: nothing about this attempt is recorded. The next run finds its
-                // task still `running` and accounts for the interruption. There is
-                // deliberately no further cleanup past this point — the process is ending
-                // regardless of what called it.
-                let _ = receiver.recv();
-                std::process::exit(1);
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                // The whole group, not just the child itself, so nothing it started is left
-                // behind. A failure here means it is already gone.
-                let _ = kill(Pid::from_raw(-pgid), Signal::SIGKILL);
-                match receiver.recv() {
-                    Ok(Awaited::Exited(status)) => status,
-                    Ok(Awaited::AskedToStop) => std::process::exit(1),
-                    Err(_) => {
-                        return Err(fail("the wait thread stopped without a result".to_owned()));
-                    }
+    let (sender, receiver) = mpsc::channel();
+    let waiter_sender = sender.clone();
+    let waiter = thread::spawn(move || {
+        let status = child.wait();
+        let _ = waiter_sender.send(Awaited::Exited(status));
+    });
+    let signal_watcher = thread::spawn(move || {
+        if signals.forever().next().is_some() {
+            let _ = sender.send(Awaited::AskedToStop);
+        }
+    });
+
+    let ended = match receiver.recv_timeout(spec.timeout) {
+        Ok(Awaited::Exited(status)) => Ended::Exited(status),
+        Ok(Awaited::AskedToStop) => {
+            // The whole group, not just the child itself, so nothing it started is left
+            // behind. A failure here means it is already gone.
+            let _ = kill(Pid::from_raw(-pgid), Signal::SIGKILL);
+            // Waited for, so it is reaped rather than left a zombie; the status itself is
+            // of no interest, since this attempt is ending `Interrupted` regardless of it.
+            let _ = receiver.recv();
+            Ended::Interrupted
+        }
+        Err(RecvTimeoutError::Timeout) => {
+            // The whole group, not just the child itself, so nothing it started is left
+            // behind. A failure here means it is already gone.
+            let _ = kill(Pid::from_raw(-pgid), Signal::SIGKILL);
+            match receiver.recv() {
+                Ok(Awaited::Exited(_) | Awaited::AskedToStop) => Ended::TimedOut,
+                Err(_) => {
+                    return Err(fail("the wait thread stopped without a result".to_owned()));
                 }
             }
-            Err(RecvTimeoutError::Disconnected) => {
-                return Err(fail("the wait thread stopped without a result".to_owned()));
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            return Err(fail("the wait thread stopped without a result".to_owned()));
+        }
+    };
+    handle.close();
+    let _ = signal_watcher.join();
+    let _ = waiter.join();
+
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| fail("the standard output reader panicked".to_owned()))?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| fail("the standard error reader panicked".to_owned()))?;
+    let _ = writer.join();
+
+    let exit = match ended {
+        Ended::Exited(status) => {
+            let status: ExitStatus =
+                status.map_err(|e| fail(format!("cannot wait for it: {e}")))?;
+            match status.code() {
+                Some(code) => Exit::Code(code),
+                None => Exit::Killed,
             }
-        };
-        handle.close();
-        let _ = signal_watcher.join();
-        let _ = waiter.join();
-
-        let stdout = stdout_reader
-            .join()
-            .map_err(|_| fail("the standard output reader panicked".to_owned()))?;
-        let stderr = stderr_reader
-            .join()
-            .map_err(|_| fail("the standard error reader panicked".to_owned()))?;
-        let _ = writer.join();
-
-        let status: ExitStatus = status.map_err(|e| fail(format!("cannot wait for it: {e}")))?;
-        let exit = match status.code() {
-            Some(code) => Exit::Code(code),
-            None => Exit::Killed,
-        };
-        Ok(Output {
-            stdout,
-            stderr,
-            exit,
-        })
-    }
+        }
+        Ended::TimedOut => Exit::Killed,
+        Ended::Interrupted => Exit::Interrupted,
+    };
+    Ok(Output {
+        stdout,
+        stderr,
+        exit,
+    })
 }
 
 #[cfg(test)]
@@ -187,17 +262,40 @@ mod tests {
         }
     }
 
+    /// Spawns `spec.program` directly, bypassing `EXEC_TIED_TO_PARENT_MARKER`: these tests
+    /// exercise the `PATH` handling, waiting, capturing, timeout and signal handling
+    /// `path_with_own_binary_first` and `run_spawned` share with [`ProcessCommands::run`]
+    /// against `bash` directly, since none of that depends on how the child came to exist —
+    /// only [`ProcessCommands::run`] itself needs the real `ktask-rs` binary the tie-through
+    /// relies on, and that is proven through the real binary instead, in `ktask-cli`'s own
+    /// end-to-end tests.
+    fn run_directly(spec: &CommandSpec) -> Result<Output, CommandsError> {
+        let fail =
+            |cause: String| CommandsError::new(format!("cannot run {}: {cause}", spec.program));
+        let path = path_with_own_binary_first()?;
+        let child = Command::new(&spec.program)
+            .args(&spec.args)
+            .current_dir(&spec.dir)
+            .env("PATH", path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .map_err(|e| fail(e.to_string()))?;
+        run_spawned(child, spec, fail)
+    }
+
     #[test]
     fn stdout_stderr_and_the_exit_code_are_captured() {
         let dir = TempDir::new().unwrap();
-        let output = ProcessCommands
-            .run(&spec(
-                vec!["-c", "echo out; echo err >&2; exit 7"],
-                dir.path(),
-                b"",
-                Duration::from_secs(5),
-            ))
-            .unwrap();
+        let output = run_directly(&spec(
+            vec!["-c", "echo out; echo err >&2; exit 7"],
+            dir.path(),
+            b"",
+            Duration::from_secs(5),
+        ))
+        .unwrap();
         assert_eq!(output.stdout, b"out\n");
         assert_eq!(output.stderr, b"err\n");
         assert_eq!(output.exit, Exit::Code(7));
@@ -206,14 +304,13 @@ mod tests {
     #[test]
     fn standard_input_is_fed_to_the_command_and_then_closed() {
         let dir = TempDir::new().unwrap();
-        let output = ProcessCommands
-            .run(&spec(
-                vec!["-c", "cat"],
-                dir.path(),
-                b"hello",
-                Duration::from_secs(5),
-            ))
-            .unwrap();
+        let output = run_directly(&spec(
+            vec!["-c", "cat"],
+            dir.path(),
+            b"hello",
+            Duration::from_secs(5),
+        ))
+        .unwrap();
         assert_eq!(output.stdout, b"hello");
         assert_eq!(output.exit, Exit::Code(0));
     }
@@ -221,14 +318,13 @@ mod tests {
     #[test]
     fn the_running_binarys_own_directory_is_put_first_on_the_childs_path() {
         let dir = TempDir::new().unwrap();
-        let output = ProcessCommands
-            .run(&spec(
-                vec!["-c", "echo $PATH"],
-                dir.path(),
-                b"",
-                Duration::from_secs(5),
-            ))
-            .unwrap();
+        let output = run_directly(&spec(
+            vec!["-c", "echo $PATH"],
+            dir.path(),
+            b"",
+            Duration::from_secs(5),
+        ))
+        .unwrap();
         let path = String::from_utf8(output.stdout).unwrap();
         let own_dir = std::env::current_exe()
             .unwrap()
@@ -242,14 +338,13 @@ mod tests {
     #[test]
     fn the_process_kept_its_own_path_after_the_running_binarys_directory() {
         let dir = TempDir::new().unwrap();
-        let output = ProcessCommands
-            .run(&spec(
-                vec!["-c", "echo $PATH"],
-                dir.path(),
-                b"",
-                Duration::from_secs(5),
-            ))
-            .unwrap();
+        let output = run_directly(&spec(
+            vec!["-c", "echo $PATH"],
+            dir.path(),
+            b"",
+            Duration::from_secs(5),
+        ))
+        .unwrap();
         let path = String::from_utf8(output.stdout).unwrap();
         let own_dir = std::env::current_exe()
             .unwrap()
@@ -269,14 +364,13 @@ mod tests {
     fn the_command_starts_in_the_given_directory() {
         let dir = TempDir::new().unwrap();
         let canonical = std::fs::canonicalize(dir.path()).unwrap();
-        let output = ProcessCommands
-            .run(&spec(
-                vec!["-c", "pwd"],
-                &canonical,
-                b"",
-                Duration::from_secs(5),
-            ))
-            .unwrap();
+        let output = run_directly(&spec(
+            vec!["-c", "pwd"],
+            &canonical,
+            b"",
+            Duration::from_secs(5),
+        ))
+        .unwrap();
         assert_eq!(
             String::from_utf8(output.stdout).unwrap().trim_end(),
             canonical.display().to_string()
@@ -286,16 +380,15 @@ mod tests {
     #[test]
     fn a_command_that_cannot_be_started_is_an_error_naming_it() {
         let dir = TempDir::new().unwrap();
-        let error = ProcessCommands
-            .run(&CommandSpec {
-                program: "there-is-no-such-program".to_owned(),
-                args: vec![],
-                dir: dir.path().to_owned(),
-                stdin: vec![],
-                timeout: Duration::from_secs(5),
-            })
-            .unwrap_err()
-            .to_string();
+        let error = run_directly(&CommandSpec {
+            program: "there-is-no-such-program".to_owned(),
+            args: vec![],
+            dir: dir.path().to_owned(),
+            stdin: vec![],
+            timeout: Duration::from_secs(5),
+        })
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("there-is-no-such-program"), "{error}");
     }
 
@@ -305,14 +398,13 @@ mod tests {
         let pid_file = dir.path().join("grandchild.pid");
         let script = format!("sleep 30 & echo $! > {}; sleep 30", pid_file.display());
         let started = Instant::now();
-        let output = ProcessCommands
-            .run(&spec(
-                vec!["-c", &script],
-                dir.path(),
-                b"",
-                Duration::from_millis(200),
-            ))
-            .unwrap();
+        let output = run_directly(&spec(
+            vec!["-c", &script],
+            dir.path(),
+            b"",
+            Duration::from_millis(200),
+        ))
+        .unwrap();
         assert_eq!(output.exit, Exit::Killed);
         // A generous ceiling: proves the wait ended with the kill, not with the full sleep.
         assert!(
@@ -328,14 +420,13 @@ mod tests {
     #[test]
     fn a_command_that_finishes_within_its_time_limit_is_not_killed() {
         let dir = TempDir::new().unwrap();
-        let output = ProcessCommands
-            .run(&spec(
-                vec!["-c", "echo quick"],
-                dir.path(),
-                b"",
-                Duration::from_secs(5),
-            ))
-            .unwrap();
+        let output = run_directly(&spec(
+            vec!["-c", "echo quick"],
+            dir.path(),
+            b"",
+            Duration::from_secs(5),
+        ))
+        .unwrap();
         assert_eq!(output.stdout, b"quick\n");
         assert_eq!(output.exit, Exit::Code(0));
     }
