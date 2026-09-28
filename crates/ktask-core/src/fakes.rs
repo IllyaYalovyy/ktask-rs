@@ -1,15 +1,13 @@
 //! In-memory implementations of the ports, for the tests of this crate.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::{
-    AppendConflict, Attempt, AttemptEnd, AttemptRun, BeginAttemptError, Clock, CommandSpec,
-    Commands, CommandsError, Event, Git, GitError, Journal, JournalError, Outcome, Output, Project,
-    ProjectRegistry, RecordReportError, RegistryError, RunLock, RunLockError, Task, TaskDraft,
-    TaskId, TaskKind, TaskStatus,
+    AppendConflict, Clock, CommandSpec, Commands, CommandsError, Event, Git, GitError, Journal,
+    JournalError, Output, Project, ProjectRegistry, RegistryError, RunLock, RunLockError,
+    TaskDraft, TaskKind,
 };
 
 /// An in-memory registry that can be told to fail.
@@ -97,73 +95,21 @@ pub(crate) fn project(name: &str, seconds: u64) -> Project {
     }
 }
 
-/// An in-memory journal that can be told to fail.
-///
-/// `events` is the journal proper, backing [`Journal::events`] and [`Journal::append_events`]:
-/// the one source of truth for the queue's own state (which tasks exist, in what order, and
-/// which are cancelled), exactly as [`crate::queue_state`] folds it.
-///
-/// `tasks` is a mechanical mirror of `events`, kept only so that the attempt-tracking methods
-/// below — unrelated to the queue's own rules, and out of this task's scope — have an
-/// id-keyed row to read and write, the same way the SQLite adapter keeps one. Nothing here
-/// decides where a task goes or whether it may be added: that is `events`' and
-/// [`crate::queue_state::QueueState`]'s job alone.
+/// An in-memory journal that can be told to fail: [`Journal::events`] and
+/// [`Journal::append_events`] are all there is to it — the one source of truth for the
+/// queue's state, tasks and attempts alike, is `events`, exactly as
+/// [`crate::queue_state::QueueState`] folds it.
 #[derive(Debug, Default)]
 pub(crate) struct FakeJournal {
     pub(crate) events: RefCell<Vec<Event>>,
-    pub(crate) tasks: RefCell<Vec<Task>>,
-    pub(crate) attempts: RefCell<HashMap<TaskId, u32>>,
-    pub(crate) reports: RefCell<HashMap<(TaskId, u32), Report>>,
-    pub(crate) started: RefCell<HashMap<(TaskId, u32), SystemTime>>,
-    pub(crate) providers: RefCell<HashMap<(TaskId, u32), String>>,
-    pub(crate) ended: RefCell<HashMap<(TaskId, u32), AttemptEnd>>,
     pub(crate) failure: Option<JournalError>,
 }
-
-/// What the agent reported for one attempt, as [`FakeJournal`] keeps it.
-type Report = (Outcome, Option<String>);
 
 impl FakeJournal {
     pub(crate) fn failing(failure: JournalError) -> Self {
         Self {
             events: RefCell::default(),
-            tasks: RefCell::default(),
-            attempts: RefCell::default(),
-            reports: RefCell::default(),
-            started: RefCell::default(),
-            providers: RefCell::default(),
-            ended: RefCell::default(),
             failure: Some(failure),
-        }
-    }
-
-    /// Mirrors `event` into `self.tasks`, mechanically: no rule about the queue is decided
-    /// here, only bookkeeping for the attempt-tracking methods that still key off it.
-    fn mirror(&self, event: &Event) {
-        match event {
-            Event::TaskAdded { id, draft, at, .. } => {
-                self.tasks.borrow_mut().push(Task {
-                    id: *id,
-                    position: 0,
-                    title: draft.title.clone(),
-                    body: draft.body.clone(),
-                    criteria: draft.criteria.clone(),
-                    kind: draft.kind,
-                    links: draft.links.clone(),
-                    status: TaskStatus::Pending,
-                    created_at: *at,
-                });
-            }
-            Event::TaskCancelled { id, .. } => {
-                if let Some(task) = self
-                    .tasks
-                    .borrow_mut()
-                    .iter_mut()
-                    .find(|task| task.id == *id)
-                {
-                    task.status = TaskStatus::Cancelled;
-                }
-            }
         }
     }
 }
@@ -183,151 +129,8 @@ impl Journal for FakeJournal {
         if self.events.borrow().len() != read {
             return Err(AppendConflict::Conflict);
         }
-        for event in events {
-            self.mirror(event);
-            self.events.borrow_mut().push(event.clone());
-        }
+        self.events.borrow_mut().extend_from_slice(events);
         Ok(())
-    }
-
-    fn begin_attempt(&self, id: TaskId, at: SystemTime) -> Result<u32, BeginAttemptError> {
-        if let Some(failure) = &self.failure {
-            return Err(failure.clone().into());
-        }
-        let mut tasks = self.tasks.borrow_mut();
-        let task = tasks
-            .iter_mut()
-            .find(|task| task.id == id)
-            .ok_or(BeginAttemptError::UnknownTask(id))?;
-        if task.status != TaskStatus::Pending {
-            return Err(BeginAttemptError::NotPending(id));
-        }
-        task.status = TaskStatus::Running;
-        let mut attempts = self.attempts.borrow_mut();
-        let number = attempts.entry(id).or_insert(0);
-        *number += 1;
-        self.started.borrow_mut().insert((id, *number), at);
-        Ok(*number)
-    }
-
-    fn record_report(
-        &self,
-        id: TaskId,
-        number: u32,
-        outcome: Outcome,
-        reason: Option<&str>,
-        _at: SystemTime,
-    ) -> Result<(), RecordReportError> {
-        if let Some(failure) = &self.failure {
-            return Err(failure.clone().into());
-        }
-        let tasks = self.tasks.borrow();
-        let Some(task) = tasks.iter().find(|task| task.id == id) else {
-            return Err(RecordReportError::UnknownAttempt { task: id, number });
-        };
-        let current = self.attempts.borrow().get(&id).copied().unwrap_or(0);
-        if current != number {
-            return Err(RecordReportError::UnknownAttempt { task: id, number });
-        }
-        if task.status != TaskStatus::Running {
-            return Err(RecordReportError::AttemptEnded { task: id, number });
-        }
-        self.reports
-            .borrow_mut()
-            .insert((id, number), (outcome, reason.map(str::to_owned)));
-        Ok(())
-    }
-
-    fn attempt_running(
-        &self,
-        id: TaskId,
-        number: u32,
-        provider: &str,
-        _at: SystemTime,
-    ) -> Result<(), JournalError> {
-        if let Some(failure) = &self.failure {
-            return Err(failure.clone());
-        }
-        self.providers
-            .borrow_mut()
-            .insert((id, number), provider.to_owned());
-        Ok(())
-    }
-
-    fn last_report(
-        &self,
-        id: TaskId,
-        number: u32,
-    ) -> Result<Option<(Outcome, Option<String>)>, JournalError> {
-        match &self.failure {
-            Some(failure) => Err(failure.clone()),
-            None => Ok(self.reports.borrow().get(&(id, number)).cloned()),
-        }
-    }
-
-    fn end_attempt(
-        &self,
-        id: TaskId,
-        number: u32,
-        run: AttemptRun<'_>,
-        _at: SystemTime,
-    ) -> Result<(), RecordReportError> {
-        if let Some(failure) = &self.failure {
-            return Err(failure.clone().into());
-        }
-        let mut tasks = self.tasks.borrow_mut();
-        let Some(task) = tasks.iter_mut().find(|task| task.id == id) else {
-            return Err(RecordReportError::UnknownAttempt { task: id, number });
-        };
-        let current = self.attempts.borrow().get(&id).copied().unwrap_or(0);
-        if current != number {
-            return Err(RecordReportError::UnknownAttempt { task: id, number });
-        }
-        if task.status != TaskStatus::Running {
-            return Err(RecordReportError::AttemptEnded { task: id, number });
-        }
-        task.status = run.status;
-        self.ended.borrow_mut().insert(
-            (id, number),
-            AttemptEnd {
-                duration: run.duration,
-                status: run.status,
-                reason: run.reason.map(str::to_owned),
-            },
-        );
-        Ok(())
-    }
-
-    fn running(&self) -> Result<Option<(TaskId, u32)>, JournalError> {
-        if let Some(failure) = &self.failure {
-            return Err(failure.clone());
-        }
-        let tasks = self.tasks.borrow();
-        let Some(task) = tasks.iter().find(|task| task.status == TaskStatus::Running) else {
-            return Ok(None);
-        };
-        let number = self.attempts.borrow().get(&task.id).copied().unwrap_or(0);
-        Ok(Some((task.id, number)))
-    }
-
-    fn last_attempt(&self, id: TaskId) -> Result<Option<Attempt>, JournalError> {
-        if let Some(failure) = &self.failure {
-            return Err(failure.clone());
-        }
-        let Some(&number) = self.attempts.borrow().get(&id) else {
-            return Ok(None);
-        };
-        let Some(&started_at) = self.started.borrow().get(&(id, number)) else {
-            return Ok(None);
-        };
-        let provider = self.providers.borrow().get(&(id, number)).cloned();
-        let ended = self.ended.borrow().get(&(id, number)).cloned();
-        Ok(Some(Attempt {
-            number,
-            started_at,
-            provider,
-            ended,
-        }))
     }
 }
 

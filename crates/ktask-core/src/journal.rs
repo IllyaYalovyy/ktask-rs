@@ -29,6 +29,56 @@ pub enum Event {
         /// When.
         at: SystemTime,
     },
+    /// An attempt at a task began.
+    AttemptStarted {
+        /// The task attempted.
+        id: TaskId,
+        /// The attempt's number.
+        number: u32,
+        /// When.
+        at: SystemTime,
+    },
+    /// An attempt started to run with a provider.
+    AttemptRunning {
+        /// The task attempted.
+        id: TaskId,
+        /// The attempt's number.
+        number: u32,
+        /// The provider it runs with.
+        provider: String,
+        /// When.
+        at: SystemTime,
+    },
+    /// The agent reported an attempt's outcome.
+    AttemptReported {
+        /// The task attempted.
+        id: TaskId,
+        /// The attempt's number.
+        number: u32,
+        /// What the agent reported.
+        outcome: Outcome,
+        /// Why, when the outcome needs a reason.
+        reason: Option<String>,
+        /// When.
+        at: SystemTime,
+    },
+    /// An attempt ended.
+    AttemptEnded {
+        /// The task attempted.
+        id: TaskId,
+        /// The attempt's number.
+        number: u32,
+        /// How long the provider ran.
+        duration: Duration,
+        /// The provider's exit code, or `None` when it was killed past its time limit.
+        exit_code: Option<i32>,
+        /// What the attempt, and so the task, ends at.
+        status: TaskStatus,
+        /// Why, when `status` is not `done`.
+        reason: Option<String>,
+        /// When.
+        at: SystemTime,
+    },
 }
 
 /// Why the journal could not be read or written.
@@ -203,7 +253,7 @@ impl From<JournalError> for RecordReportError {
     }
 }
 
-/// What running an attempt produced, given to [`Journal::end_attempt`].
+/// What running an attempt produced, given to [`crate::attempt::end_attempt`].
 #[derive(Debug, Clone, Copy)]
 pub struct AttemptRun<'a> {
     /// How long the provider ran.
@@ -216,7 +266,7 @@ pub struct AttemptRun<'a> {
     pub reason: Option<&'a str>,
 }
 
-/// How an attempt ended, as [`Journal::last_attempt`] reports it.
+/// How an attempt ended, as [`crate::attempt::last_attempt`] reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttemptEnd {
     /// How long the provider ran.
@@ -227,21 +277,24 @@ pub struct AttemptEnd {
     pub reason: Option<String>,
 }
 
-/// A task's most recent attempt, as [`Journal::last_attempt`] returns it.
+/// A task's most recent attempt, as [`crate::attempt::last_attempt`] returns it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attempt {
     /// The attempt's number.
     pub number: u32,
     /// When it started.
     pub started_at: SystemTime,
-    /// The provider it ran with, once [`Journal::attempt_running`] has recorded it.
+    /// The provider it ran with, once [`crate::attempt::begin_attempt_running`] has recorded
+    /// it.
     pub provider: Option<String>,
-    /// How it ended, once [`Journal::end_attempt`] has recorded it; `None` while it runs.
+    /// How it ended, once [`crate::attempt::end_attempt`] has recorded it; `None` while it
+    /// runs.
     pub ended: Option<AttemptEnd>,
 }
 
-/// Port: one project's journal. Every change is an event appended to it, and the tasks are
-/// updated from that event in the same transaction.
+/// Port: one project's journal. Every change is an event appended to it, and the queue's
+/// state — tasks and attempts alike — is a projection [`crate::queue_state::QueueState`]
+/// folds from those events; the journal itself decides nothing about what they mean.
 pub trait Journal {
     /// Every event recorded for the queue, in the order they were appended.
     ///
@@ -260,94 +313,6 @@ pub trait Journal {
     /// were decided against a queue that has since moved on — read it again, decide again,
     /// and retry. Fails with [`AppendConflict::Journal`] when the journal cannot be written.
     fn append_events(&self, events: &[Event], read: usize) -> Result<(), AppendConflict>;
-
-    /// Starts the next attempt at the pending task numbered `id`: records an attempt-started
-    /// event and marks the task running, in one transaction. Returns the attempt's number,
-    /// starting at 1 and never reused for this task.
-    ///
-    /// # Errors
-    ///
-    /// Fails, recording nothing, when there is no such task, when it is not pending, or when
-    /// the journal cannot be written.
-    fn begin_attempt(&self, id: TaskId, at: SystemTime) -> Result<u32, BeginAttemptError>;
-
-    /// Records a report for attempt `number` of the task numbered `id`: one event carrying
-    /// `outcome` and `reason`. A later report for the same running attempt is recorded the
-    /// same way and stands as the current one; both stay in the journal.
-    ///
-    /// # Errors
-    ///
-    /// Fails, recording nothing, when no attempt numbered `number` was started for this task,
-    /// when it was but has since ended, or when the journal cannot be written.
-    fn record_report(
-        &self,
-        id: TaskId,
-        number: u32,
-        outcome: Outcome,
-        reason: Option<&str>,
-        at: SystemTime,
-    ) -> Result<(), RecordReportError>;
-
-    /// Records that attempt `number` of task `id` is starting to run with `provider`, right
-    /// before the provider is started: one event, carrying no status change of its own — the
-    /// task is already running, from [`Journal::begin_attempt`].
-    ///
-    /// # Errors
-    ///
-    /// Fails when the journal cannot be written.
-    fn attempt_running(
-        &self,
-        id: TaskId,
-        number: u32,
-        provider: &str,
-        at: SystemTime,
-    ) -> Result<(), JournalError>;
-
-    /// The most recent outcome and reason the agent itself reported for attempt `number` of
-    /// task `id`, with [`crate::report`] — `None` when it reported nothing.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the journal cannot be read.
-    fn last_report(
-        &self,
-        id: TaskId,
-        number: u32,
-    ) -> Result<Option<(Outcome, Option<String>)>, JournalError>;
-
-    /// Ends attempt `number` of task `id`: records how long the provider ran, its exit code
-    /// (`None` when it was killed past its time limit), and the resulting `status` and
-    /// `reason`, and sets the task to `status` — one event, in the same transaction as the
-    /// status change.
-    ///
-    /// # Errors
-    ///
-    /// Fails, changing nothing, when no attempt numbered `number` is running for this task,
-    /// or when the journal cannot be written.
-    fn end_attempt(
-        &self,
-        id: TaskId,
-        number: u32,
-        run: AttemptRun<'_>,
-        at: SystemTime,
-    ) -> Result<(), RecordReportError>;
-
-    /// The task currently `running`, and the number of its current attempt, when one is — a
-    /// project has at most one at a time. `None` when none is running.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the journal cannot be read.
-    fn running(&self) -> Result<Option<(TaskId, u32)>, JournalError>;
-
-    /// The most recent attempt at task `id`: its number, when it started, the provider it ran
-    /// with once that is known, and how it ended once that is known. `None` when the task was
-    /// never attempted.
-    ///
-    /// # Errors
-    ///
-    /// Fails when the journal cannot be read.
-    fn last_attempt(&self, id: TaskId) -> Result<Option<Attempt>, JournalError>;
 }
 
 /// Port: notices when a project's journal changes, so a frontend can show what another

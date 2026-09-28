@@ -152,7 +152,7 @@ pub fn start_attempt(
     project: &str,
     id: TaskId,
 ) -> Result<AttemptToken, crate::BeginAttemptError> {
-    let number = journal.begin_attempt(id, clock.now())?;
+    let number = crate::attempt::begin_attempt(journal, clock, id)?;
     Ok(AttemptToken::new(project, id, number))
 }
 
@@ -174,7 +174,7 @@ pub fn report(
     if outcome.needs_reason() && blank {
         return Err(ReportError::ReasonRequired(outcome));
     }
-    journal.record_report(token.task, token.number, outcome, reason, clock.now())?;
+    crate::attempt::record_report(journal, clock, token.task, token.number, outcome, reason)?;
     Ok(())
 }
 
@@ -200,7 +200,10 @@ mod tests {
         let journal = journal_with_a_pending_task();
         let token = start_attempt(&journal, &clock(), "proj", TaskId(1)).unwrap();
         assert_eq!(token, AttemptToken::new("proj", TaskId(1), 1));
-        assert_eq!(journal.tasks.borrow()[0].status, TaskStatus::Running);
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Running
+        );
     }
 
     #[test]

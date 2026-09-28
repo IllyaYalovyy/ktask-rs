@@ -126,20 +126,20 @@ mod tests {
             (TaskId(1), TaskStatus::Done),
             (TaskId(3), TaskStatus::Failed),
         ] {
-            let number = journal.begin_attempt(id, clock.0).unwrap();
-            journal
-                .end_attempt(
-                    id,
-                    number,
-                    AttemptRun {
-                        duration: Duration::ZERO,
-                        exit_code: Some(0),
-                        status,
-                        reason: None,
-                    },
-                    clock.0,
-                )
-                .unwrap();
+            let number = crate::attempt::begin_attempt(&journal, &clock, id).unwrap();
+            crate::attempt::end_attempt(
+                &journal,
+                id,
+                number,
+                AttemptRun {
+                    duration: Duration::ZERO,
+                    exit_code: Some(0),
+                    status,
+                    reason: None,
+                },
+                clock.0,
+            )
+            .unwrap();
         }
         let view = queue_view(project("app", 10), &journal, &clock, false).unwrap();
         let titles: Vec<_> = view.tasks.iter().map(|t| t.title.as_str()).collect();
@@ -216,10 +216,7 @@ mod tests {
         let journal = FakeJournal::default();
         let clock = FakeClock(at(0));
         add_task(&journal, &clock, &draft("a"), Placement::End).unwrap();
-        crate::start_attempt(&journal, &clock, "proj", TaskId(1)).unwrap();
-        journal
-            .attempt_running(TaskId(1), 1, "echo", at(0))
-            .unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock, TaskId(1), "echo").unwrap();
 
         let view = queue_view(project("app", 10), &journal, &FakeClock(at(30)), false).unwrap();
 

@@ -120,10 +120,10 @@ pub fn status(
 ) -> Result<Vec<StatusEntry>, JournalError> {
     let mut entries = Vec::new();
     for task in list_all_tasks(journal)? {
-        let Some(attempt) = journal.last_attempt(task.id)? else {
+        let Some(attempt) = crate::attempt::last_attempt(journal, task.id)? else {
             continue;
         };
-        let reported = journal.last_report(task.id, attempt.number)?;
+        let reported = crate::attempt::last_report(journal, task.id, attempt.number)?;
         entries.push(entry_for(task, attempt, reported, clock));
     }
     Ok(entries)
@@ -134,9 +134,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::fakes::{FakeClock, FakeJournal, at, draft};
-    use crate::{
-        AttemptRun, Outcome, Placement, TaskId, TaskStatus, add_task, report, start_attempt,
-    };
+    use crate::{AttemptRun, Outcome, Placement, TaskId, TaskStatus, add_task, report};
 
     use super::*;
 
@@ -169,10 +167,7 @@ mod tests {
     fn journal_with_a_started_attempt() -> FakeJournal {
         let journal = FakeJournal::default();
         add_task(&journal, &clock(0), &draft("a"), Placement::End).unwrap();
-        start_attempt(&journal, &clock(100), "proj", TaskId(1)).unwrap();
-        journal
-            .attempt_running(TaskId(1), 1, "echo", clock(100).0)
-            .unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock(100), TaskId(1), "echo").unwrap();
         journal
     }
 
@@ -214,19 +209,19 @@ mod tests {
             reason,
         )
         .unwrap();
-        journal
-            .end_attempt(
-                TaskId(1),
-                1,
-                AttemptRun {
-                    duration: Duration::from_secs(12),
-                    exit_code: Some(0),
-                    status: status_at_end,
-                    reason,
-                },
-                clock(112).0,
-            )
-            .unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(1),
+            1,
+            AttemptRun {
+                duration: Duration::from_secs(12),
+                exit_code: Some(0),
+                status: status_at_end,
+                reason,
+            },
+            clock(112).0,
+        )
+        .unwrap();
         status(&journal, &clock(200)).unwrap().remove(0).attempt
     }
 
@@ -264,19 +259,19 @@ mod tests {
             Some("which path?"),
         )
         .unwrap();
-        journal
-            .end_attempt(
-                TaskId(1),
-                1,
-                AttemptRun {
-                    duration: Duration::from_secs(5),
-                    exit_code: Some(0),
-                    status: TaskStatus::Blocked,
-                    reason: Some("which path?"),
-                },
-                clock(115).0,
-            )
-            .unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(1),
+            1,
+            AttemptRun {
+                duration: Duration::from_secs(5),
+                exit_code: Some(0),
+                status: TaskStatus::Blocked,
+                reason: Some("which path?"),
+            },
+            clock(115).0,
+        )
+        .unwrap();
         let entries = status(&journal, &clock(200)).unwrap();
         assert_eq!(entries[0].status, TaskStatus::Blocked);
         assert_eq!(
@@ -290,19 +285,19 @@ mod tests {
     #[test]
     fn no_report_at_all_shows_the_tools_own_failed_unknown_outcome_and_reason() {
         let journal = journal_with_a_started_attempt();
-        journal
-            .end_attempt(
-                TaskId(1),
-                1,
-                AttemptRun {
-                    duration: Duration::from_secs(7),
-                    exit_code: Some(0),
-                    status: TaskStatus::FailedUnknown,
-                    reason: Some("the provider exited with code 0 and reported nothing"),
-                },
-                clock(107).0,
-            )
-            .unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(1),
+            1,
+            AttemptRun {
+                duration: Duration::from_secs(7),
+                exit_code: Some(0),
+                status: TaskStatus::FailedUnknown,
+                reason: Some("the provider exited with code 0 and reported nothing"),
+            },
+            clock(107).0,
+        )
+        .unwrap();
         let entries = status(&journal, &clock(200)).unwrap();
         assert_eq!(entries[0].status, TaskStatus::FailedUnknown);
         assert_eq!(entries[0].attempt.outcome, AttemptOutcome::Unreported);
@@ -320,10 +315,7 @@ mod tests {
         for title in ["a", "b", "c"] {
             add_task(&journal, &clock(0), &draft(title), Placement::End).unwrap();
         }
-        start_attempt(&journal, &clock(0), "proj", TaskId(1)).unwrap();
-        journal
-            .attempt_running(TaskId(1), 1, "echo", at(0))
-            .unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock(0), TaskId(1), "echo").unwrap();
         report(
             &journal,
             &clock(1),
@@ -332,24 +324,21 @@ mod tests {
             None,
         )
         .unwrap();
-        journal
-            .end_attempt(
-                TaskId(1),
-                1,
-                AttemptRun {
-                    duration: Duration::from_secs(1),
-                    exit_code: Some(0),
-                    status: TaskStatus::Done,
-                    reason: None,
-                },
-                at(1),
-            )
-            .unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(1),
+            1,
+            AttemptRun {
+                duration: Duration::from_secs(1),
+                exit_code: Some(0),
+                status: TaskStatus::Done,
+                reason: None,
+            },
+            at(1),
+        )
+        .unwrap();
         // task 2 stays pending.
-        start_attempt(&journal, &clock(0), "proj", TaskId(3)).unwrap();
-        journal
-            .attempt_running(TaskId(3), 1, "echo", at(0))
-            .unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock(0), TaskId(3), "echo").unwrap();
         report(
             &journal,
             &clock(1),
@@ -358,19 +347,19 @@ mod tests {
             Some("nope"),
         )
         .unwrap();
-        journal
-            .end_attempt(
-                TaskId(3),
-                1,
-                AttemptRun {
-                    duration: Duration::from_secs(1),
-                    exit_code: Some(0),
-                    status: TaskStatus::Failed,
-                    reason: Some("nope"),
-                },
-                at(1),
-            )
-            .unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(3),
+            1,
+            AttemptRun {
+                duration: Duration::from_secs(1),
+                exit_code: Some(0),
+                status: TaskStatus::Failed,
+                reason: Some("nope"),
+            },
+            at(1),
+        )
+        .unwrap();
 
         let entries = status(&journal, &clock(2)).unwrap();
         let ids: Vec<_> = entries.iter().map(|entry| entry.task).collect();

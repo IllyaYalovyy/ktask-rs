@@ -9,7 +9,7 @@ use std::time::Duration;
 use crate::{
     AttemptRun, AttemptToken, BeginAttemptError, Clock, Commands, EchoError, Journal, JournalError,
     Outcome, RecordReportError, RunLock, RunLockError, Task, TaskId, TaskKind, TaskStatus, echo,
-    list_tasks, run_echo, start_attempt,
+    list_tasks, run_echo,
 };
 
 /// Why a run could not proceed at all — never for how an attempt itself ended, which is a
@@ -155,8 +155,9 @@ pub fn run_queue(
     attempt_timeout: Duration,
 ) -> Result<RunReport, RunError> {
     lock.acquire()?;
-    if let Some((id, number)) = journal.running()? {
-        journal.end_attempt(
+    if let Some((id, number)) = crate::attempt::running(journal)? {
+        crate::attempt::end_attempt(
+            journal,
             id,
             number,
             AttemptRun {
@@ -203,9 +204,9 @@ pub fn run_queue(
         }
 
         let task = next.clone();
-        let token = start_attempt(journal, clock, project_name, task.id)?;
+        let number = crate::attempt::begin_attempt_running(journal, clock, task.id, echo::NAME)?;
+        let token = AttemptToken::new(project_name, task.id, number);
         let prompt = build_prompt(&task, &token);
-        journal.attempt_running(task.id, token.number, echo::NAME, clock.now())?;
 
         let started = clock.now();
         let result = run_echo(
@@ -221,7 +222,8 @@ pub fn run_queue(
 
         let (exit_code, status, reason) = attempt_outcome(journal, &task, &token, result)?;
 
-        journal.end_attempt(
+        crate::attempt::end_attempt(
+            journal,
             task.id,
             token.number,
             AttemptRun {
@@ -278,7 +280,7 @@ fn attempt_outcome(
             ));
         }
     };
-    let report = journal.last_report(task.id, token.number)?;
+    let report = crate::attempt::last_report(journal, task.id, token.number)?;
     let (status, reason) = match report {
         Some((Outcome::Done, _)) => (TaskStatus::Done, None),
         Some((Outcome::Failed | Outcome::TooLarge, reason)) => (TaskStatus::Failed, reason),
@@ -396,20 +398,20 @@ mod tests {
     fn a_queue_with_nothing_pending_ends_the_run_without_attempting_anything() {
         let journal = FakeJournal::default();
         add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
-        let number = journal.begin_attempt(TaskId(1), clock().0).unwrap();
-        journal
-            .end_attempt(
-                TaskId(1),
-                number,
-                AttemptRun {
-                    duration: Duration::ZERO,
-                    exit_code: Some(0),
-                    status: TaskStatus::Done,
-                    reason: None,
-                },
-                clock().0,
-            )
-            .unwrap();
+        let number = crate::attempt::begin_attempt(&journal, &clock(), TaskId(1)).unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(1),
+            number,
+            AttemptRun {
+                duration: Duration::ZERO,
+                exit_code: Some(0),
+                status: TaskStatus::Done,
+                reason: None,
+            },
+            clock().0,
+        )
+        .unwrap();
         let commands = commands_ok(Exit::Code(0));
         let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
         assert_eq!(
@@ -444,7 +446,10 @@ mod tests {
                 end: RunEnd::HumanTask(TaskId(1)),
             }
         );
-        assert_eq!(journal.tasks.borrow()[0].status, TaskStatus::Pending);
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Pending
+        );
         assert!(commands.last.borrow().is_none());
     }
 
@@ -516,7 +521,7 @@ mod tests {
                 end: RunEnd::Completed,
             }
         );
-        for task in journal.tasks.borrow().iter() {
+        for task in crate::list_all_tasks(&journal).unwrap() {
             assert_eq!(task.status, TaskStatus::Done, "{}", task.id);
         }
     }
@@ -544,7 +549,7 @@ mod tests {
                 },
             }
         );
-        let tasks = journal.tasks.borrow();
+        let tasks = crate::list_all_tasks(&journal).unwrap();
         assert_eq!(tasks[0].status, TaskStatus::Failed);
         assert_eq!(tasks[1].status, TaskStatus::Pending);
         assert_eq!(tasks[2].status, TaskStatus::Pending);
@@ -592,7 +597,7 @@ mod tests {
                 },
             }
         );
-        let tasks = journal.tasks.borrow();
+        let tasks = crate::list_all_tasks(&journal).unwrap();
         assert_eq!(tasks[0].status, TaskStatus::Blocked);
         assert_eq!(tasks[1].status, TaskStatus::Pending);
     }
@@ -622,7 +627,7 @@ mod tests {
                 status: TaskStatus::FailedUnknown,
             }
         );
-        let tasks = journal.tasks.borrow();
+        let tasks = crate::list_all_tasks(&journal).unwrap();
         assert_eq!(tasks[0].status, TaskStatus::FailedUnknown);
         assert_eq!(tasks[1].status, TaskStatus::Pending);
     }
@@ -714,7 +719,7 @@ mod tests {
         );
         assert!(error.to_string().contains("4321"), "{error}");
         assert!(commands.last.borrow().is_none());
-        for task in journal.tasks.borrow().iter() {
+        for task in crate::list_all_tasks(&journal).unwrap() {
             assert_eq!(task.status, TaskStatus::Pending, "{}", task.id);
         }
     }
@@ -724,7 +729,7 @@ mod tests {
         let journal = journal_of_abc();
         // Stands in for a previous run: it started an attempt at task `a` and never ended it,
         // as a kill mid-attempt would leave things.
-        journal.begin_attempt(TaskId(1), clock().0).unwrap();
+        crate::attempt::begin_attempt(&journal, &clock(), TaskId(1)).unwrap();
         let commands = commands_ok(Exit::Code(0));
 
         let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
@@ -743,7 +748,7 @@ mod tests {
                 },
             }
         );
-        let tasks = journal.tasks.borrow();
+        let tasks = crate::list_all_tasks(&journal).unwrap();
         assert_eq!(tasks[0].status, TaskStatus::FailedUnknown);
         assert_eq!(tasks[1].status, TaskStatus::Pending);
         assert_eq!(tasks[2].status, TaskStatus::Pending);

@@ -5,8 +5,7 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::SystemTime;
 
-use crate::journal::{AppendConflict, Event};
-use crate::queue_state::QueueState;
+use crate::queue_state::{QueueState, decide_and_append};
 use crate::{AppendError, CancelError, Clock, Journal, JournalError};
 
 /// The number a task is known by: assigned once, in order, never reused, never changed.
@@ -339,34 +338,6 @@ pub(crate) fn draft_problems(draft: &TaskDraft) -> Vec<AddError> {
     problems
 }
 
-/// Reads the queue's events, decides `build`'s events against the state they fold to, and
-/// appends them — retrying, from a fresh read, for as long as [`Journal::append_events`]
-/// reports that the journal moved on since. `build` does not check its own rules (title,
-/// criteria, links, and so on): the caller has done that before looping.
-///
-/// # Errors
-///
-/// Fails, appending nothing, with whatever `build` itself refuses with, or when the journal
-/// cannot be read or written.
-fn decide_and_append<T, E>(
-    journal: &impl Journal,
-    build: impl Fn(&QueueState) -> Result<(Vec<Event>, T), E>,
-) -> Result<T, E>
-where
-    E: From<JournalError>,
-{
-    loop {
-        let events = journal.events().map_err(E::from)?;
-        let state = QueueState::fold(&events);
-        let (new_events, result) = build(&state)?;
-        match journal.append_events(&new_events, events.len()) {
-            Ok(()) => return Ok(result),
-            Err(AppendConflict::Conflict) => {}
-            Err(AppendConflict::Journal(error)) => return Err(E::from(error)),
-        }
-    }
-}
-
 /// Use case: adds every task of `drafts`, together, to the queue at `placement`, in order.
 ///
 /// The journal records one event per task and places them together, with the next numbers.
@@ -457,26 +428,16 @@ pub fn remove_task(
     })
 }
 
-/// Every task, cancelled ones included, in queue order, with its full status: the queue's
-/// own state (pending or cancelled), overlaid with what its most recent attempt, if it has
-/// one, ended at — or `running`, while it has none yet.
+/// Every task, cancelled ones included, in queue order, with its full status: pending or
+/// cancelled, or what its most recent attempt, if it has one, is at — `running`, or what it
+/// ended at.
 ///
 /// # Errors
 ///
 /// Fails when the journal cannot be read.
 pub fn list_all_tasks(journal: &impl Journal) -> Result<Vec<Task>, JournalError> {
     let events = journal.events()?;
-    let mut tasks = QueueState::fold(&events).into_tasks();
-    for task in &mut tasks {
-        if task.status == TaskStatus::Cancelled {
-            continue;
-        }
-        task.status = match journal.last_attempt(task.id)? {
-            None => TaskStatus::Pending,
-            Some(attempt) => attempt.ended.map_or(TaskStatus::Running, |end| end.status),
-        };
-    }
-    Ok(tasks)
+    Ok(QueueState::fold(&events).into_tasks())
 }
 
 /// Use case: every task in the queue, in order, without the cancelled ones. Positions count

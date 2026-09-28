@@ -2,6 +2,7 @@
 //! performs no I/O: it depends on nothing else in this workspace, and reaches the
 //! outside world only through ports it defines itself. See docs/ARCHITECTURE.md.
 
+mod attempt;
 mod clock;
 mod commands;
 pub mod echo;
