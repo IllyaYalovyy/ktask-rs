@@ -363,6 +363,53 @@ fn every_invalid_task_is_named_by_its_index_with_every_problem_it_has() -> Resul
 }
 
 #[test]
+fn a_control_character_in_the_title_a_criterion_or_a_link_is_named_readably() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let tasks = json!([
+        {"title": "bad\ntitle", "criteria": ["c"]},
+        {"title": "t", "criteria": ["bad\tcriterion"]},
+        {"title": "t", "criteria": ["c"], "links": ["https://example.com/a\x1bb"]},
+    ]);
+
+    let outcome = fixture.import(&tasks, &[])?;
+
+    assert_refused(
+        &outcome,
+        &[
+            "task 1: the title contains a control character: \\n",
+            "task 2: an acceptance criterion contains a control character: \\t",
+            "task 3: a link contains a control character: \\x1b",
+        ],
+    );
+    assert!(!outcome.stderr.contains('\t'), "{}", outcome.stderr);
+    assert!(!outcome.stderr.contains('\x1b'), "{}", outcome.stderr);
+    assert_eq!(fixture.listed()?, Vec::<Value>::new());
+    Ok(())
+}
+
+#[test]
+fn the_body_accepts_newlines_and_tabs_but_refuses_an_escape_character() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let tasks = json!([{"title": "ok", "body": "line one\nline two\twith a tab",
+                         "criteria": ["c"]}]);
+    let outcome = fixture.import(&tasks, &[])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+
+    let broken = json!([{"title": "bad", "body": "before\x1bafter", "criteria": ["c"]}]);
+    let outcome = fixture.import(&broken, &[])?;
+    assert_refused(
+        &outcome,
+        &["task 1: the body contains a control character: \\x1b"],
+    );
+    assert_eq!(
+        fixture.queue()?,
+        ["1:ok"],
+        "only the accepted task was added"
+    );
+    Ok(())
+}
+
+#[test]
 fn a_placement_error_and_an_invalid_task_together_still_add_nothing() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add("Existing")?;

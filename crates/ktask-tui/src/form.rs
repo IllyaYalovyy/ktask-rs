@@ -41,7 +41,7 @@ impl Form {
             kind: TaskKind::default(),
             links: TextArea::new(false),
             body: TextArea::new(true),
-            criteria: vec![TextArea::new(true)],
+            criteria: vec![TextArea::new(false)],
             focus: Focus::Title,
             placement,
             problems: Vec::new(),
@@ -83,7 +83,7 @@ impl Form {
 
     /// The form with an empty criterion after the last, and the focus on it.
     pub(crate) fn with_criterion(mut self) -> Self {
-        self.criteria.push(TextArea::new(true));
+        self.criteria.push(TextArea::new(false));
         self.focus = Focus::Criterion(self.criteria.len() - 1);
         self
     }
@@ -165,18 +165,24 @@ mod tests {
         let form = type_in(Form::new(Placement::End), "Title");
         let form = type_in(form.moved(true).moved(true), "github:a/b#1  https://x.io ");
         let form = type_in(form.moved(true), "one\ntwo");
-        let form = type_in(form.moved(true), "first\nmore");
+        let form = type_in(form.moved(true), "first more");
         let form = type_in(form.with_criterion(), "second");
         assert_eq!(
             form.draft(),
             TaskDraft {
                 title: "Title".to_owned(),
                 body: "one\ntwo".to_owned(),
-                criteria: vec!["first\nmore".to_owned(), "second".to_owned()],
+                criteria: vec!["first more".to_owned(), "second".to_owned()],
                 kind: TaskKind::Agent,
                 links: vec!["github:a/b#1".to_owned(), "https://x.io".to_owned()],
             }
         );
+    }
+
+    #[test]
+    fn a_criterion_has_one_line_and_ignores_enter() {
+        let form = type_in(Form::new(Placement::End).moved(false), "a\nb");
+        assert_eq!(form.draft().criteria, ["ab"]);
     }
 
     #[test]

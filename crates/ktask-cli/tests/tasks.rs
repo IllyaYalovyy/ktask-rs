@@ -286,6 +286,94 @@ fn a_malformed_link_exits_two_naming_it_and_adds_nothing() -> Result<()> {
 }
 
 #[test]
+fn a_control_character_in_the_title_a_criterion_or_a_link_exits_two_naming_it_readably()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    for (args, naming) in [
+        (
+            vec!["--title", "bad\ntitle", "--criterion", "c"],
+            "the title contains a control character: \\n",
+        ),
+        (
+            vec!["--title", "t", "--criterion", "bad\tcriterion"],
+            "an acceptance criterion contains a control character: \\t",
+        ),
+        (
+            vec![
+                "--title",
+                "t",
+                "--criterion",
+                "c",
+                "--link",
+                "https://example.com/a\x1bb",
+            ],
+            "a link contains a control character: \\x1b",
+        ),
+    ] {
+        let mut full = vec!["add"];
+        full.extend(args);
+        let outcome = fixture.run(&full)?;
+        assert_usage_error(&outcome, &[naming]);
+        // Only the readable form is printed, never the raw control character.
+        assert!(!outcome.stderr.contains('\t'), "{:?}", outcome.stderr);
+        assert!(!outcome.stderr.contains('\x1b'), "{:?}", outcome.stderr);
+    }
+    fixture.assert_nothing_added()
+}
+
+#[test]
+fn the_body_accepts_newlines_and_tabs_but_refuses_an_escape_character() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let ok = fixture.run(&[
+        "add",
+        "--title",
+        "t",
+        "--criterion",
+        "c",
+        "--body",
+        "line one\nline two\twith a tab",
+    ])?;
+    assert_eq!(ok.code, Some(0), "{}", ok.stderr);
+
+    let refused = fixture.run(&[
+        "add",
+        "--title",
+        "t2",
+        "--criterion",
+        "c",
+        "--body",
+        "before\x1bafter",
+    ])?;
+    assert_usage_error(&refused, &["the body contains a control character: \\x1b"]);
+    let tasks = fixture.rows("tasks")?;
+    assert_eq!(tasks.len(), 1, "only the accepted task was added");
+    Ok(())
+}
+
+#[test]
+fn every_problem_with_a_task_is_reported_not_only_the_first() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let outcome = fixture.run(&[
+        "add",
+        "--title",
+        "bad\ntitle",
+        "--criterion",
+        "",
+        "--link",
+        "not-a-link",
+    ])?;
+    assert_usage_error(
+        &outcome,
+        &[
+            "the title contains a control character: \\n",
+            "criterion is empty",
+            "malformed link \"not-a-link\"",
+        ],
+    );
+    fixture.assert_nothing_added()
+}
+
+#[test]
 fn ids_are_sequential_and_survive_restarts() -> Result<()> {
     let fixture = Fixture::new()?;
     // Every run is a new process; the second starts with only the journal on disk.

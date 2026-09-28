@@ -198,6 +198,23 @@ impl From<AddError> for Failure {
     }
 }
 
+/// The failure a task refused for one or more reasons is reported with: every reason, not
+/// only the first, one per line, when there is more than one; a placement or journal
+/// failure is always alone and keeps the hint [`From<AddError>`] gives it.
+fn failure_from_add_problems(problems: Vec<AddError>) -> Failure {
+    match <[AddError; 1]>::try_from(problems) {
+        Ok([error]) => Failure::from(error),
+        Err(problems) => Failure {
+            message: problems
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            code: 2,
+        },
+    }
+}
+
 impl From<CancelError> for Failure {
     fn from(error: CancelError) -> Self {
         match error {
@@ -271,7 +288,9 @@ fn run(command: &Command, stdout: &mut impl Write) -> Result<(), Failure> {
             };
             let journal = open_queue(project.as_deref())?;
             let placement = placement(*before, *after);
-            let task = ktask_core::add_task(&journal, &SystemClock, &draft, placement)?;
+            let task =
+                ktask_core::add_task_listing_problems(&journal, &SystemClock, &draft, placement)
+                    .map_err(failure_from_add_problems)?;
             Ok(render::added(&task, stdout)?)
         }
         Command::Import {

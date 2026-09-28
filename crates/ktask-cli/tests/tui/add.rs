@@ -158,16 +158,17 @@ fn filling_every_field_and_submitting_adds_the_task_at_the_end_as_typed() -> Res
         "first line{ENTER}second line{ENTER}{ENTER}fourth — ünïcode"
     ))?;
     terminal.send(TAB)?;
-    terminal.send(&format!("It adds{ENTER}and it lists"))?;
+    terminal.send("It adds and it lists")?;
     terminal.send(ADD_CRITERION)?;
     terminal.send("It says \"no\" to a blank title")?;
     let lines = expect(
         &terminal,
         &[
             (11, "  Criteria:"),
-            (14, ">  2. It says \"no\" to a blank title"),
+            (12, "   1. It adds and it lists"),
+            (13, ">  2. It says \"no\" to a blank title"),
         ],
-        (14, 1 + 6 + 29),
+        (13, 1 + 6 + 29),
     )?;
     assert_eq!(lines[3], "  Title:     Ship the form");
     assert_eq!(lines[4], "  Kind:      < human >");
@@ -179,7 +180,6 @@ fn filling_every_field_and_submitting_adds_the_task_at_the_end_as_typed() -> Res
     assert_eq!(lines[8], "    second line");
     assert_eq!(lines[9], "");
     assert_eq!(lines[10], "    fourth — ünïcode");
-    assert_eq!(lines[13], "      and it lists");
     // Nothing is added until it is submitted.
     assert_eq!(listed(&fixture)?.len(), 5);
 
@@ -203,7 +203,7 @@ fn filling_every_field_and_submitting_adds_the_task_at_the_end_as_typed() -> Res
             "position": 6,
             "title": "Ship the form",
             "body": "first line\nsecond line\n\nfourth — ünïcode",
-            "criteria": ["It adds\nand it lists", "It says \"no\" to a blank title"],
+            "criteria": ["It adds and it lists", "It says \"no\" to a blank title"],
             "kind": "human",
             "links": ["github:owner/repo#7", "https://example.com/a"],
             "status": "pending",
@@ -545,7 +545,7 @@ fn enter_arrows_home_end_backspace_and_delete_edit_the_body_across_lines() -> Re
 }
 
 #[test]
-fn the_body_and_criteria_keep_their_line_breaks_in_the_journal() -> Result<()> {
+fn the_body_keeps_its_line_breaks_and_a_criterion_ignores_enter() -> Result<()> {
     let fixture = Fixture::empty()?;
     let mut terminal = open_form(&fixture)?;
     terminal.send(&format!("Lines{TAB}{TAB}{TAB}a{ENTER}{ENTER}b{ENTER}"))?;
@@ -558,10 +558,8 @@ fn the_body_and_criteria_keep_their_line_breaks_in_the_journal() -> Result<()> {
             (9, "    b"),
             (10, ""),
             (11, "  Criteria:"),
-            (12, "   1. x"),
-            (13, "      y"),
-            (14, ">  2."),
-            (15, "      z"),
+            (12, "   1. xy"),
+            (13, ">  2. z"),
         ],
     )?;
 
@@ -570,7 +568,7 @@ fn the_body_and_criteria_keep_their_line_breaks_in_the_journal() -> Result<()> {
     wait_queue_with(&terminal, "#1")?;
     let tasks = listed(&fixture)?;
     assert_eq!(tasks[0]["body"], "a\n\nb\n");
-    assert_eq!(tasks[0]["criteria"], json!(["x\ny", "\nz"]));
+    assert_eq!(tasks[0]["criteria"], json!(["xy", "z"]));
     Ok(())
 }
 

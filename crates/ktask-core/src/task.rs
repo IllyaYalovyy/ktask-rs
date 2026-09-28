@@ -174,12 +174,21 @@ impl Placement {
 pub enum AddError {
     /// The title is empty or only whitespace.
     EmptyTitle,
+    /// The title holds a character it may not: a control character.
+    ControlCharacterInTitle(char),
     /// There is no acceptance criterion.
     NoCriteria,
     /// An acceptance criterion is empty or only whitespace.
     EmptyCriterion,
+    /// An acceptance criterion holds a character it may not: a control character.
+    ControlCharacterInCriterion(char),
     /// A link is neither a `github:owner/repo#NUMBER` reference nor an `http(s)` URL.
     MalformedLink(String),
+    /// A link holds a character it may not: a control character.
+    ControlCharacterInLink(char),
+    /// The body holds a character it may not: a control character other than a newline or a
+    /// tab.
+    ControlCharacterInBody(char),
     /// The task the new one was to be placed next to does not exist.
     UnknownTask(TaskId),
     /// The task the new one was to be placed next to was cancelled.
@@ -188,15 +197,47 @@ pub enum AddError {
     Journal(JournalError),
 }
 
+/// `c` in a readable form that never prints the character itself: `\n`, `\t`, `\x1b`, or
+/// `\u{...}` for anything wider than a byte.
+fn readable_control_char(c: char) -> String {
+    match c {
+        '\n' => "\\n".to_owned(),
+        '\t' => "\\t".to_owned(),
+        '\r' => "\\r".to_owned(),
+        c if u32::from(c) < 0x100 => format!("\\x{:02x}", u32::from(c)),
+        c => format!("\\u{{{:x}}}", u32::from(c)),
+    }
+}
+
 impl fmt::Display for AddError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyTitle => f.write_str("the title is empty: a task needs a title"),
+            Self::ControlCharacterInTitle(c) => write!(
+                f,
+                "the title contains a control character: {}",
+                readable_control_char(*c)
+            ),
             Self::NoCriteria => f.write_str("a task needs at least one acceptance criterion"),
             Self::EmptyCriterion => f.write_str("an acceptance criterion is empty"),
+            Self::ControlCharacterInCriterion(c) => write!(
+                f,
+                "an acceptance criterion contains a control character: {}",
+                readable_control_char(*c)
+            ),
             Self::MalformedLink(link) => write!(
                 f,
                 "malformed link {link:?}: expected github:owner/repo#NUMBER or an http(s) URL"
+            ),
+            Self::ControlCharacterInLink(c) => write!(
+                f,
+                "a link contains a control character: {}",
+                readable_control_char(*c)
+            ),
+            Self::ControlCharacterInBody(c) => write!(
+                f,
+                "the body contains a control character: {}",
+                readable_control_char(*c)
             ),
             Self::UnknownTask(id) => write!(f, "there is no task {id}"),
             Self::CancelledTask(id) => write!(f, "task {id} is cancelled"),
@@ -245,11 +286,23 @@ fn is_link(link: &str) -> bool {
     })
 }
 
+/// The first character of `text` that is a control character and not one of `allowed`.
+fn control_char(text: &str, allowed: &[char]) -> Option<char> {
+    text.chars()
+        .find(|c| c.is_control() && !allowed.contains(c))
+}
+
 /// Every rule `draft` breaks, in the order of its fields; empty when it may be added.
 pub(crate) fn draft_problems(draft: &TaskDraft) -> Vec<AddError> {
     let mut problems = Vec::new();
     if draft.title.trim().is_empty() {
         problems.push(AddError::EmptyTitle);
+    }
+    if let Some(c) = control_char(&draft.title, &[]) {
+        problems.push(AddError::ControlCharacterInTitle(c));
+    }
+    if let Some(c) = control_char(&draft.body, &['\n', '\t']) {
+        problems.push(AddError::ControlCharacterInBody(c));
     }
     if draft.criteria.is_empty() {
         problems.push(AddError::NoCriteria);
@@ -257,13 +310,16 @@ pub(crate) fn draft_problems(draft: &TaskDraft) -> Vec<AddError> {
     if draft.criteria.iter().any(|c| c.trim().is_empty()) {
         problems.push(AddError::EmptyCriterion);
     }
-    problems.extend(
-        draft
-            .links
-            .iter()
-            .filter(|link| !is_link(link))
-            .map(|link| AddError::MalformedLink(link.clone())),
-    );
+    problems.extend(draft.criteria.iter().filter_map(|criterion| {
+        control_char(criterion, &[]).map(AddError::ControlCharacterInCriterion)
+    }));
+    for link in &draft.links {
+        if let Some(c) = control_char(link, &[]) {
+            problems.push(AddError::ControlCharacterInLink(c));
+        } else if !is_link(link) {
+            problems.push(AddError::MalformedLink(link.clone()));
+        }
+    }
     problems
 }
 
@@ -679,6 +735,147 @@ mod tests {
             );
             assert_eq!(list_tasks(&journal), Ok(vec![]));
         }
+    }
+
+    #[test]
+    fn a_title_a_criterion_or_a_link_with_a_control_character_is_refused_and_adds_nothing() {
+        let cases = [
+            (
+                TaskDraft {
+                    title: "a\nb".to_owned(),
+                    ..draft("x")
+                },
+                AddError::ControlCharacterInTitle('\n'),
+            ),
+            (
+                TaskDraft {
+                    title: "a\tb".to_owned(),
+                    ..draft("x")
+                },
+                AddError::ControlCharacterInTitle('\t'),
+            ),
+            (
+                TaskDraft {
+                    title: "a\x1bb".to_owned(),
+                    ..draft("x")
+                },
+                AddError::ControlCharacterInTitle('\x1b'),
+            ),
+            (
+                TaskDraft {
+                    criteria: vec!["a\nb".to_owned()],
+                    ..draft("x")
+                },
+                AddError::ControlCharacterInCriterion('\n'),
+            ),
+            (
+                TaskDraft {
+                    criteria: vec!["a\tb".to_owned()],
+                    ..draft("x")
+                },
+                AddError::ControlCharacterInCriterion('\t'),
+            ),
+            (
+                TaskDraft {
+                    criteria: vec!["a\x1bb".to_owned()],
+                    ..draft("x")
+                },
+                AddError::ControlCharacterInCriterion('\x1b'),
+            ),
+            (
+                TaskDraft {
+                    links: vec!["https://example.com/a\nb".to_owned()],
+                    ..draft("x")
+                },
+                AddError::ControlCharacterInLink('\n'),
+            ),
+            (
+                TaskDraft {
+                    links: vec!["https://example.com/a\tb".to_owned()],
+                    ..draft("x")
+                },
+                AddError::ControlCharacterInLink('\t'),
+            ),
+            (
+                TaskDraft {
+                    links: vec!["https://example.com/a\x1bb".to_owned()],
+                    ..draft("x")
+                },
+                AddError::ControlCharacterInLink('\x1b'),
+            ),
+        ];
+        for (bad, expected) in cases {
+            let journal = FakeJournal::default();
+            assert_eq!(
+                add_task(&journal, &clock(), &bad, Placement::End),
+                Err(expected.clone()),
+                "{expected:?}"
+            );
+            assert_eq!(list_tasks(&journal), Ok(vec![]));
+        }
+    }
+
+    #[test]
+    fn a_body_may_hold_newlines_and_tabs_but_no_other_control_character() {
+        let journal = FakeJournal::default();
+        let fine = TaskDraft {
+            body: "one\ntwo\tthree".to_owned(),
+            ..draft("x")
+        };
+        assert!(add_task(&journal, &clock(), &fine, Placement::End).is_ok());
+
+        let journal = FakeJournal::default();
+        let broken = TaskDraft {
+            body: "one\x1btwo".to_owned(),
+            ..draft("x")
+        };
+        assert_eq!(
+            add_task(&journal, &clock(), &broken, Placement::End),
+            Err(AddError::ControlCharacterInBody('\x1b'))
+        );
+        assert_eq!(list_tasks(&journal), Ok(vec![]));
+    }
+
+    #[test]
+    fn the_control_character_message_names_the_field_and_a_readable_form_of_the_character() {
+        assert_eq!(
+            AddError::ControlCharacterInTitle('\n').to_string(),
+            "the title contains a control character: \\n"
+        );
+        assert_eq!(
+            AddError::ControlCharacterInCriterion('\t').to_string(),
+            "an acceptance criterion contains a control character: \\t"
+        );
+        assert_eq!(
+            AddError::ControlCharacterInLink('\x1b').to_string(),
+            "a link contains a control character: \\x1b"
+        );
+        assert_eq!(
+            AddError::ControlCharacterInBody('\x07').to_string(),
+            "the body contains a control character: \\x07"
+        );
+    }
+
+    #[test]
+    fn listing_problems_reports_every_control_character_problem_alongside_the_others() {
+        let journal = FakeJournal::default();
+        let broken = TaskDraft {
+            title: "a\nb".to_owned(),
+            body: "fine\nbut\x1bnot this".to_owned(),
+            criteria: vec!["ok".to_owned(), "bad\tone".to_owned()],
+            links: vec!["https://ok.example".to_owned(), "https://x\x1by".to_owned()],
+            ..draft("x")
+        };
+        assert_eq!(
+            add_task_listing_problems(&journal, &clock(), &broken, Placement::End),
+            Err(vec![
+                AddError::ControlCharacterInTitle('\n'),
+                AddError::ControlCharacterInBody('\x1b'),
+                AddError::ControlCharacterInCriterion('\t'),
+                AddError::ControlCharacterInLink('\x1b'),
+            ])
+        );
+        assert_eq!(list_tasks(&journal), Ok(vec![]));
     }
 
     #[test]
