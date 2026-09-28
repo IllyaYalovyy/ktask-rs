@@ -4,32 +4,43 @@
 //! The `echo` provider runs the first fenced `bash` block of a task's prompt — which is the
 //! task's own body, carried through unchanged — so a task's body doubles as the script a
 //! real agent would have run: it calls back into `ktask-rs report`, the same binary under
-//! test, one level down. For that nested call to find `ktask-rs` on `PATH`, every run here
-//! puts the binary's own directory on the child's `PATH`.
+//! test, one level down. The binary under test puts its own directory first on that child's
+//! `PATH` itself, so the nested call reaches it whether or not `ktask-rs` is on the caller's
+//! `PATH` at all, and even when a different `ktask-rs` sits earlier on it — neither test
+//! fixture here does anything special with `PATH` to make that call succeed.
 
 #[path = "support/repo.rs"]
 mod repo;
 mod support;
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant};
 
+use ktask_core::{AttemptToken, Task, TaskId, TaskKind, TaskStatus};
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use repo::{git_repository, scratch};
 use rusqlite::OptionalExtension;
 use support::{Outcome, Result, Sandbox};
+use tempfile::TempDir;
 
-/// Puts the directory of the `ktask-rs` under test on `command`'s `PATH`, ahead of whatever
-/// is already there, so a task's own bash block — standing in for what a real agent would
-/// run — can call back into `ktask-rs report` and find this same binary.
-fn with_nested_ktask_rs_on_path(command: &mut std::process::Command) {
-    let mut paths = Path::new(env!("CARGO_BIN_EXE_ktask-rs"))
-        .parent()
-        .map(Path::to_path_buf)
-        .into_iter()
-        .collect::<Vec<_>>();
+/// A directory holding a fake `ktask-rs` that does nothing but exit `99` — standing in for
+/// some other tool of that name found earlier on a caller's `PATH`. Placed ahead of the real
+/// one on `PATH`, it proves whether the real one is still the one reached: if it ran instead,
+/// the attempt it was asked to report would be left unreported.
+fn decoy_ktask_rs_dir() -> Result<TempDir> {
+    let dir = TempDir::new()?;
+    let path = dir.path().join("ktask-rs");
+    std::fs::write(&path, "#!/bin/sh\nexit 99\n")?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+    Ok(dir)
+}
+
+/// Puts `dir` on `command`'s `PATH`, ahead of whatever is already there.
+fn with_dir_first_on_path(command: &mut std::process::Command, dir: &Path) {
+    let mut paths = vec![dir.to_path_buf()];
     if let Some(path) = std::env::var_os("PATH") {
         paths.extend(std::env::split_paths(&path));
     }
@@ -70,7 +81,7 @@ struct Fixture {
     sandbox: Sandbox,
     work: PathBuf,
     repository: PathBuf,
-    _keep: tempfile::TempDir,
+    _keep: TempDir,
 }
 
 /// A bash block that reports `outcome` for whatever token it is given as `$1`.
@@ -101,17 +112,17 @@ impl Fixture {
         self.sandbox.run(&self.repository, args)
     }
 
-    /// Runs `ktask-rs run` with `args` inside the repository, its `PATH` carrying the
-    /// directory of the `ktask-rs` under test, so a task's own bash block — standing in for
-    /// what a real agent would run — can call it back in with `ktask-rs report`.
+    /// Runs `ktask-rs run` with `args` inside the repository. A task's own bash block —
+    /// standing in for what a real agent would run — can call back in with
+    /// `ktask-rs report`: the binary under test puts its own directory on that child's `PATH`
+    /// itself, so this needs no help finding it.
     fn run_the_queue(&self, args: &[&str]) -> Result<Outcome> {
         self.run_the_queue_in(&self.repository, args)
     }
 
     /// Like [`Fixture::run_the_queue`], in `dir` instead of the repository.
     fn run_the_queue_in(&self, dir: &Path, args: &[&str]) -> Result<Outcome> {
-        self.sandbox
-            .run_with(dir, args, with_nested_ktask_rs_on_path)
+        self.sandbox.run(dir, args)
     }
 
     /// Like [`Fixture::run_the_queue`], without waiting for it: the caller drives or kills
@@ -120,7 +131,6 @@ impl Fixture {
         let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_ktask-rs"));
         command.args(args);
         self.sandbox.isolate(&mut command, &self.repository);
-        with_nested_ktask_rs_on_path(&mut command);
         command.stdout(std::process::Stdio::piped());
         command.stderr(std::process::Stdio::piped());
         Ok(command.spawn()?)
@@ -533,5 +543,77 @@ fn a_run_killed_mid_attempt_leaves_no_provider_process_and_the_next_run_marks_it
         "{}",
         second.stdout
     );
+    Ok(())
+}
+
+#[test]
+fn a_different_ktask_rs_earlier_on_the_callers_path_does_not_stop_the_real_one_being_reached()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", &reporting_body("done"))?;
+    let decoy = decoy_ktask_rs_dir()?;
+
+    let outcome = fixture
+        .sandbox
+        .run_with(&fixture.repository, &["run"], |command| {
+            with_dir_first_on_path(command, decoy.path());
+        })?;
+
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(fixture.task_status(1)?, "done");
+    Ok(())
+}
+
+/// A prediction: the first task added to a fresh project, run once, gets this token — good
+/// enough to build the exact prompt `ktask-rs run` will build for it, ahead of adding it.
+fn first_attempt_token() -> AttemptToken {
+    AttemptToken::new("my-app", TaskId(1), 1)
+}
+
+/// A minimal task, only as far as `ktask_core::build_prompt` cares: its title and criteria,
+/// nothing about its body, which the caller supplies separately.
+fn task_named(title: &str) -> Task {
+    Task {
+        id: TaskId(1),
+        position: 1,
+        title: title.to_owned(),
+        body: String::new(),
+        criteria: vec!["it works".to_owned()],
+        kind: TaskKind::Agent,
+        links: vec![],
+        status: TaskStatus::Running,
+        created_at: std::time::SystemTime::now(),
+    }
+}
+
+#[test]
+fn the_report_command_the_prompt_gives_the_agent_is_the_full_path_and_works_with_no_path_at_all()
+-> Result<()> {
+    // Builds, ahead of adding the task, the exact prompt `ktask-rs run` will build for its
+    // one attempt, and pulls the `done` command out of it — the line a real agent, not
+    // `echo`, would read and run verbatim.
+    let binary_path = PathBuf::from(env!("CARGO_BIN_EXE_ktask-rs"));
+    let token = first_attempt_token();
+    let prompt = ktask_core::build_prompt(&task_named("a"), &token, &binary_path);
+    let done_line = prompt
+        .lines()
+        .find(|line| line.trim_start().ends_with(" done"))
+        .expect("the prompt names a done command")
+        .trim();
+    assert!(
+        done_line.starts_with(binary_path.to_str().unwrap()),
+        "{done_line}"
+    );
+
+    // The task's body is that exact line, with its own `PATH` blanked out first — proving
+    // the line is a complete, self-sufficient command that in no way depends on `ktask-rs`
+    // being found on `PATH`, unlike the bare `ktask-rs report ...` other tests here use.
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", &format!("```bash\nPATH=\n{done_line}\n```\n"))?;
+
+    let outcome = fixture.run_the_queue(&["run"])?;
+
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(fixture.task_status(1)?, "done");
     Ok(())
 }
