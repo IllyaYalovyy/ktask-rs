@@ -70,11 +70,21 @@ finding in one task can change another; a plan can turn out to be wrong.
 
 ## Git
 
-The tool does the git work that needs no judgement, so no tokens are spent on it: before a
-task starts it makes sure the work begins from an up-to-date code base; it gives the agent
-an isolated working copy; it records what changed, for status, diffs and audit. It does not
-decide what gets committed, pushed or proposed — commits, pushes and PRs are configured
-steps. Each mechanism can be turned off per project.
+The project is the root of a git repository. The tool does the git work that needs no
+judgement, so no tokens are spent on it. Configuration names the remote branch to track,
+if any.
+
+Before each task:
+
+1. Pull with rebase from the tracked branch.
+2. Run the project's configured health check — all its tests — to prove the code base is
+   healthy before anything is built on it.
+3. If the rebase conflicts or the health check fails, the task does not start. The tool
+   injects a **recovery task** ahead of it: find the cause, then fix, commit and push — or
+   escalate to the operator with a what/why/ask.
+
+What gets committed, pushed or proposed as a result of a task is not the tool's decision:
+commits, pushes and PRs are configured steps.
 
 ## Providers
 
