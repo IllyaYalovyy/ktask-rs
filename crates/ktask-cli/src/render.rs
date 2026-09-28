@@ -220,49 +220,61 @@ pub(crate) fn status(
     out: &mut impl Write,
 ) -> Result<(), String> {
     if json {
-        let shown: Vec<_> = entries
-            .iter()
-            .map(|entry| StatusJson {
-                id: entry.task.0,
-                title: &entry.title,
-                status: entry.status.as_str(),
-                attempt: AttemptJson {
-                    number: entry.attempt.number,
-                    step: entry.attempt.step,
-                    provider: entry.attempt.provider.as_deref(),
-                    time_spent_seconds: entry.attempt.time_spent.as_secs(),
-                    outcome: entry.attempt.outcome.as_str(),
-                    reason: entry.attempt.reason.as_deref(),
-                },
-            })
-            .collect();
-        serde_json::to_writer(&mut *out, &shown).map_err(|e| e.to_string())?;
-        writeln!(out).map_err(|e| e.to_string())
+        status_json(entries, out)
     } else {
-        entries
-            .iter()
-            .try_for_each(|entry| {
-                writeln!(out, "#{}\t{}\t{}", entry.task, entry.status, entry.title)?;
-                let provider = entry.attempt.provider.as_deref().unwrap_or("-");
-                match &entry.attempt.reason {
-                    Some(reason) => writeln!(
-                        out,
-                        "\t{}\t{}\t{}s\t{}\t{reason}",
-                        entry.attempt.step,
-                        provider,
-                        entry.attempt.time_spent.as_secs(),
-                        entry.attempt.outcome
-                    ),
-                    None => writeln!(
-                        out,
-                        "\t{}\t{}\t{}s\t{}",
-                        entry.attempt.step,
-                        provider,
-                        entry.attempt.time_spent.as_secs(),
-                        entry.attempt.outcome
-                    ),
-                }
-            })
-            .map_err(|e: std::io::Error| e.to_string())
+        status_text(entries, out)
     }
+}
+
+/// Writes `entries` as a JSON array.
+fn status_json(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), String> {
+    let shown: Vec<_> = entries
+        .iter()
+        .map(|entry| StatusJson {
+            id: entry.task.0,
+            title: &entry.title,
+            status: entry.status.as_str(),
+            attempt: AttemptJson {
+                number: entry.attempt.number,
+                step: entry.attempt.step,
+                provider: entry.attempt.provider.as_deref(),
+                time_spent_seconds: entry.attempt.time_spent.as_secs(),
+                outcome: entry.attempt.outcome.as_str(),
+                reason: entry.attempt.reason.as_deref(),
+            },
+        })
+        .collect();
+    serde_json::to_writer(&mut *out, &shown).map_err(|e| e.to_string())?;
+    writeln!(out).map_err(|e| e.to_string())
+}
+
+/// Writes `entries`: for every task, one `#ID<TAB>status<TAB>title` line followed by an
+/// indented line for its attempt — step, provider, time spent, outcome, and the reason
+/// when it did not succeed.
+fn status_text(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), String> {
+    entries
+        .iter()
+        .try_for_each(|entry| {
+            writeln!(out, "#{}\t{}\t{}", entry.task, entry.status, entry.title)?;
+            let provider = entry.attempt.provider.as_deref().unwrap_or("-");
+            match &entry.attempt.reason {
+                Some(reason) => writeln!(
+                    out,
+                    "\t{}\t{}\t{}s\t{}\t{reason}",
+                    entry.attempt.step,
+                    provider,
+                    entry.attempt.time_spent.as_secs(),
+                    entry.attempt.outcome
+                ),
+                None => writeln!(
+                    out,
+                    "\t{}\t{}\t{}s\t{}",
+                    entry.attempt.step,
+                    provider,
+                    entry.attempt.time_spent.as_secs(),
+                    entry.attempt.outcome
+                ),
+            }
+        })
+        .map_err(|e: std::io::Error| e.to_string())
 }
