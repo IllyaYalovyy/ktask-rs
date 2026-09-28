@@ -30,6 +30,10 @@ struct State {
     /// The screen as it stood at the end of the last complete frame. This, not the live
     /// parser, is what a test ever sees.
     frame: vt100::Screen,
+    /// How many complete frames have been drawn so far, counting from the first. A test that
+    /// wants to know whether the child is still drawing without being told to compares this
+    /// before and after waiting, rather than trying to catch a frame in the act.
+    frames: u64,
     /// The child's exit code; `None` while it runs. A signal that ended it reads as a failure.
     exit: Option<u32>,
     /// Whether the reader has drained the terminal to its end. The child's exit and the last
@@ -83,6 +87,9 @@ pub(crate) struct Terminal {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    /// The child's process id, for reading its CPU time from `/proc`; `None` when the
+    /// platform did not hand one out.
+    pid: Option<u32>,
 }
 
 impl Terminal {
@@ -106,6 +113,7 @@ impl Terminal {
         let mut child = pair.slave.spawn_command(command)?;
         // With our copy of the slave closed, the terminal reads end when the child is gone.
         drop(pair.slave);
+        let pid = child.process_id();
         let killer = child.clone_killer();
         let mut reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
@@ -116,6 +124,7 @@ impl Terminal {
             state: Mutex::new(State {
                 parser,
                 frame,
+                frames: 0,
                 exit: None,
                 eof: false,
             }),
@@ -137,6 +146,7 @@ impl Terminal {
                             .process(bytes.get(start..=index).unwrap_or_default());
                         start = index + 1;
                         state.frame = state.parser.screen().clone();
+                        state.frames += 1;
                         output.changed.notify_all();
                     }
                 }
@@ -162,6 +172,7 @@ impl Terminal {
             master: pair.master,
             writer,
             killer,
+            pid,
         })
     }
 
@@ -181,6 +192,43 @@ impl Terminal {
     /// blanks trimmed. Never a frame caught half drawn.
     pub(crate) fn screen(&self) -> String {
         self.shared.lock().frame.contents()
+    }
+
+    /// How many complete frames have been drawn so far. A caller checks that this is unchanged
+    /// after a wait to show that nothing was drawn while it waited.
+    pub(crate) fn frame_count(&self) -> u64 {
+        self.shared.lock().frames
+    }
+
+    /// The user and system CPU time the child has used so far, in clock ticks, read from
+    /// `/proc`. A caller compares this before and after a wait to show that the child did
+    /// no work while it waited, rather than merely that it drew no frames.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the platform gave out no process id, or `/proc/<pid>/stat` cannot be read
+    /// or does not have the shape it always has on Linux.
+    pub(crate) fn cpu_ticks(&self) -> Result<u64> {
+        let pid = self.pid.ok_or("the child's process id is not known")?;
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+        // `comm`, the second field, is written in parentheses and may itself contain spaces
+        // or parentheses, so the fields before and including it are skipped by looking for
+        // the last `)` rather than splitting on whitespace from the start.
+        let after_comm = stat
+            .rsplit_once(')')
+            .map(|(_, rest)| rest)
+            .ok_or("/proc/<pid>/stat has no comm field")?;
+        let fields: Vec<&str> = after_comm.split_whitespace().collect();
+        // Field 3 (state) is fields[0] here; utime is field 14 and stime is field 15.
+        let utime: u64 = fields
+            .get(11)
+            .ok_or("/proc/<pid>/stat has no utime field")?
+            .parse()?;
+        let stime: u64 = fields
+            .get(12)
+            .ok_or("/proc/<pid>/stat has no stime field")?
+            .parse()?;
+        Ok(utime + stime)
     }
 
     /// Waits until `condition` holds of a complete frame, and returns that frame's text.
