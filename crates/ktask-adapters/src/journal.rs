@@ -4,10 +4,11 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use ktask_core::{
-    AppendError, BeginAttemptError, CancelError, Journal, JournalError, Outcome, Placement,
-    RecordReportError, Task, TaskDraft, TaskId, TaskKind, TaskStatus,
+    AppendError, AttemptRun, BeginAttemptError, CancelError, Journal, JournalError, Outcome,
+    Placement, RecordReportError, Task, TaskDraft, TaskId, TaskKind, TaskStatus,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
+use serde_json::Value;
 
 /// How long a writer waits for another process's transaction to finish.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -168,11 +169,7 @@ fn insert(
     .collect::<serde_json::Map<_, _>>();
     transaction.execute(
         "INSERT INTO events (at, kind, task_id, payload) VALUES (?1, 'task_added', ?2, ?3)",
-        (
-            created_at,
-            id,
-            serde_json::Value::Object(payload).to_string(),
-        ),
+        (created_at, id, Value::Object(payload).to_string()),
     )?;
     Ok(id)
 }
@@ -411,6 +408,127 @@ impl Journal for SqliteJournal {
         transaction.commit().map_err(|e| failed(doing, e))?;
         Ok(())
     }
+
+    fn attempt_running(
+        &self,
+        id: TaskId,
+        number: u32,
+        provider: &str,
+        at: SystemTime,
+    ) -> Result<(), JournalError> {
+        let doing = "cannot record that the attempt is running";
+        let number_id = i64::try_from(id.0).unwrap_or(i64::MAX);
+        self.connection
+            .execute(
+                "INSERT INTO events (at, kind, task_id, payload)
+                 VALUES (?1, 'attempt_running', ?2, ?3)",
+                (
+                    to_seconds(at),
+                    number_id,
+                    serde_json::json!({ "number": number, "provider": provider }).to_string(),
+                ),
+            )
+            .map_err(|e| failed(doing, e))?;
+        Ok(())
+    }
+
+    fn last_report(
+        &self,
+        id: TaskId,
+        number: u32,
+    ) -> Result<Option<(Outcome, Option<String>)>, JournalError> {
+        let doing = "cannot read the attempt's report";
+        let number_id = i64::try_from(id.0).unwrap_or(i64::MAX);
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT payload FROM events
+                 WHERE kind = 'attempt_reported' AND task_id = ?1
+                 ORDER BY seq DESC",
+            )
+            .map_err(|e| failed(doing, e))?;
+        let payloads = statement
+            .query_map([number_id], |row| row.get::<_, String>(0))
+            .map_err(|e| failed(doing, e))?;
+        for payload in payloads {
+            let payload = payload.map_err(|e| failed(doing, e))?;
+            let payload: Value = serde_json::from_str(&payload).map_err(|e| failed(doing, e))?;
+            if payload.get("number").and_then(Value::as_u64) != Some(u64::from(number)) {
+                continue;
+            }
+            let outcome = payload
+                .get("outcome")
+                .and_then(Value::as_str)
+                .ok_or_else(|| failed(doing, "a report event has no outcome"))?
+                .parse::<Outcome>()
+                .map_err(|e| failed(doing, e))?;
+            let reason = payload
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            return Ok(Some((outcome, reason)));
+        }
+        Ok(None)
+    }
+
+    fn end_attempt(
+        &self,
+        id: TaskId,
+        number: u32,
+        run: AttemptRun<'_>,
+        at: SystemTime,
+    ) -> Result<(), RecordReportError> {
+        let doing = "cannot end the attempt";
+        let number_id = i64::try_from(id.0).unwrap_or(i64::MAX);
+        let transaction =
+            Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)
+                .map_err(|e| failed(doing, e))?;
+        let found = transaction
+            .query_row(
+                "SELECT status, attempt_number FROM tasks WHERE id = ?1",
+                [number_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()
+            .map_err(|e| failed(doing, e))?;
+        match found {
+            None => return Err(RecordReportError::UnknownAttempt { task: id, number }),
+            Some((_, current)) if current != i64::from(number) => {
+                return Err(RecordReportError::UnknownAttempt { task: id, number });
+            }
+            Some((status, _)) if status != TaskStatus::Running.as_str() => {
+                return Err(RecordReportError::AttemptEnded { task: id, number });
+            }
+            Some(_) => {}
+        }
+        transaction
+            .execute(
+                "UPDATE tasks SET status = ?2 WHERE id = ?1",
+                (number_id, run.status.as_str()),
+            )
+            .map_err(|e| failed(doing, e))?;
+        transaction
+            .execute(
+                "INSERT INTO events (at, kind, task_id, payload)
+                 VALUES (?1, 'attempt_ended', ?2, ?3)",
+                (
+                    to_seconds(at),
+                    number_id,
+                    serde_json::json!({
+                        "number": number,
+                        "duration_ms":
+                            i64::try_from(run.duration.as_millis()).unwrap_or(i64::MAX),
+                        "exit_code": run.exit_code,
+                        "status": run.status.as_str(),
+                        "reason": run.reason,
+                    })
+                    .to_string(),
+                ),
+            )
+            .map_err(|e| failed(doing, e))?;
+        transaction.commit().map_err(|e| failed(doing, e))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -623,7 +741,7 @@ mod tests {
         journal
             .append_task(&draft("c"), Placement::After(TaskId(1)), at(1))
             .unwrap();
-        let payloads: Vec<serde_json::Value> = journal
+        let payloads: Vec<Value> = journal
             .connection
             .prepare("SELECT payload FROM events ORDER BY seq")
             .unwrap()
@@ -664,7 +782,7 @@ mod tests {
             (count, at, kind.as_str(), task_id),
             (1, 42, "task_added", 1)
         );
-        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        let payload: Value = serde_json::from_str(&payload).unwrap();
         assert_eq!(
             payload,
             serde_json::json!({
@@ -904,7 +1022,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!((kind.as_str(), task_id, when), ("attempt_started", 1, 50));
-        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        let payload: Value = serde_json::from_str(&payload).unwrap();
         assert_eq!(payload, serde_json::json!({ "number": 1 }));
     }
 
@@ -966,7 +1084,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(at_last, 20);
-        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        let payload: Value = serde_json::from_str(&payload).unwrap();
         assert_eq!(
             payload,
             serde_json::json!({ "number": 1, "outcome": "done", "reason": null })
@@ -1033,5 +1151,181 @@ mod tests {
             )
             .unwrap();
         assert_eq!(events, 0);
+    }
+
+    #[test]
+    fn attempt_running_records_one_event_with_the_provider_and_changes_no_status() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        journal
+            .append_task(&draft("a"), Placement::End, at(1))
+            .unwrap();
+        journal.begin_attempt(TaskId(1), at(1)).unwrap();
+
+        journal
+            .attempt_running(TaskId(1), 1, "echo", at(5))
+            .unwrap();
+
+        assert_eq!(journal.tasks().unwrap()[0].status, TaskStatus::Running);
+        let (kind, task_id, when, payload): (String, i64, i64, String) = journal
+            .connection
+            .query_row(
+                "SELECT kind, task_id, at, payload FROM events WHERE kind = 'attempt_running'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((kind.as_str(), task_id, when), ("attempt_running", 1, 5));
+        let payload: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(
+            payload,
+            serde_json::json!({ "number": 1, "provider": "echo" })
+        );
+    }
+
+    #[test]
+    fn last_report_is_none_until_the_agent_reports_and_then_the_most_recent_one() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        journal
+            .append_task(&draft("a"), Placement::End, at(1))
+            .unwrap();
+        journal.begin_attempt(TaskId(1), at(1)).unwrap();
+
+        assert_eq!(journal.last_report(TaskId(1), 1).unwrap(), None);
+
+        journal
+            .record_report(TaskId(1), 1, Outcome::Failed, Some("first try"), at(10))
+            .unwrap();
+        assert_eq!(
+            journal.last_report(TaskId(1), 1).unwrap(),
+            Some((Outcome::Failed, Some("first try".to_owned())))
+        );
+
+        journal
+            .record_report(TaskId(1), 1, Outcome::Done, None, at(20))
+            .unwrap();
+        assert_eq!(
+            journal.last_report(TaskId(1), 1).unwrap(),
+            Some((Outcome::Done, None))
+        );
+    }
+
+    #[test]
+    fn last_report_is_scoped_to_the_attempt_number_it_is_asked_for() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        journal
+            .append_task(&draft("a"), Placement::End, at(1))
+            .unwrap();
+        journal.begin_attempt(TaskId(1), at(1)).unwrap();
+        journal
+            .record_report(TaskId(1), 1, Outcome::Done, None, at(2))
+            .unwrap();
+
+        assert_eq!(journal.last_report(TaskId(1), 2).unwrap(), None);
+        assert_eq!(journal.last_report(TaskId(9), 1).unwrap(), None);
+    }
+
+    #[test]
+    fn end_attempt_sets_the_status_and_records_one_event_with_what_happened() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        journal
+            .append_task(&draft("a"), Placement::End, at(1))
+            .unwrap();
+        journal.begin_attempt(TaskId(1), at(1)).unwrap();
+
+        journal
+            .end_attempt(
+                TaskId(1),
+                1,
+                AttemptRun {
+                    duration: Duration::from_millis(1_500),
+                    exit_code: Some(7),
+                    status: TaskStatus::Failed,
+                    reason: Some("it broke"),
+                },
+                at(30),
+            )
+            .unwrap();
+
+        assert_eq!(journal.tasks().unwrap()[0].status, TaskStatus::Failed);
+        let (kind, task_id, when, payload): (String, i64, i64, String) = journal
+            .connection
+            .query_row(
+                "SELECT kind, task_id, at, payload FROM events WHERE kind = 'attempt_ended'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((kind.as_str(), task_id, when), ("attempt_ended", 1, 30));
+        let payload: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "number": 1,
+                "duration_ms": 1_500,
+                "exit_code": 7,
+                "status": "failed",
+                "reason": "it broke",
+            })
+        );
+    }
+
+    #[test]
+    fn end_attempt_for_an_unknown_or_wrong_attempt_is_refused_and_changes_nothing() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        journal
+            .append_task(&draft("a"), Placement::End, at(1))
+            .unwrap();
+        journal.begin_attempt(TaskId(1), at(1)).unwrap();
+        let run = AttemptRun {
+            duration: Duration::from_secs(1),
+            exit_code: Some(0),
+            status: TaskStatus::Done,
+            reason: None,
+        };
+        assert_eq!(
+            journal.end_attempt(TaskId(9), 1, run, at(2)),
+            Err(RecordReportError::UnknownAttempt {
+                task: TaskId(9),
+                number: 1
+            })
+        );
+        assert_eq!(
+            journal.end_attempt(TaskId(1), 2, run, at(2)),
+            Err(RecordReportError::UnknownAttempt {
+                task: TaskId(1),
+                number: 2
+            })
+        );
+        assert_eq!(journal.tasks().unwrap()[0].status, TaskStatus::Running);
+    }
+
+    #[test]
+    fn end_attempt_for_an_already_ended_attempt_is_refused_and_changes_nothing() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        journal
+            .append_task(&draft("a"), Placement::End, at(1))
+            .unwrap();
+        journal.begin_attempt(TaskId(1), at(1)).unwrap();
+        journal.cancel_task(TaskId(1), at(2)).unwrap();
+        let run = AttemptRun {
+            duration: Duration::from_secs(1),
+            exit_code: Some(0),
+            status: TaskStatus::Done,
+            reason: None,
+        };
+        assert_eq!(
+            journal.end_attempt(TaskId(1), 1, run, at(3)),
+            Err(RecordReportError::AttemptEnded {
+                task: TaskId(1),
+                number: 1
+            })
+        );
+        assert_eq!(journal.tasks().unwrap()[0].status, TaskStatus::Cancelled);
     }
 }
