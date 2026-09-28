@@ -16,8 +16,8 @@ pub struct App {
     pub show_cancelled: bool,
     /// Whether the key map covers the queue.
     pub help: bool,
-    /// The task the operator is being asked to confirm removing; the answer is the next key.
-    pub confirming: Option<TaskId>,
+    /// What the operator is being asked to confirm, if anything; the answer is the next key.
+    pub confirming: Option<Confirming>,
     /// The task whose removal was confirmed: the loop carries it out and clears this.
     pub removal: Option<TaskId>,
     /// The form a new task is written in, while it is open; it covers the queue.
@@ -27,6 +27,15 @@ pub struct App {
     pub submission: Option<(TaskDraft, Placement)>,
     /// Set when the operator asked to leave.
     pub quit: bool,
+}
+
+/// What [`App::confirming`] is asking about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Confirming {
+    /// Removing this task.
+    Removal(TaskId),
+    /// Discarding the open form's content, after a first Ctrl-C found something typed in it.
+    Discard,
 }
 
 /// Something that happened: the only way an [`App`] changes.
@@ -53,7 +62,10 @@ pub fn update(app: App, event: Event) -> App {
     match event {
         Event::Loaded(queue) => {
             let selected = reselect(&app, &queue);
-            let confirming = app.confirming.filter(|id| removable(&queue, *id));
+            let confirming = app.confirming.filter(|confirm| match confirm {
+                Confirming::Removal(id) => removable(&queue, *id),
+                Confirming::Discard => true,
+            });
             App {
                 queue: Some(queue),
                 selected,
@@ -61,6 +73,16 @@ pub fn update(app: App, event: Event) -> App {
                 ..app
             }
         }
+        Event::Ctrl('c') => ctrl_c(app),
+        Event::Key(key) if app.confirming == Some(Confirming::Discard) => match key {
+            KeyCode::Char('y') => App { quit: true, ..app },
+            KeyCode::Char('n') | KeyCode::Esc => App {
+                confirming: None,
+                ..app
+            },
+            _ => app,
+        },
+        Event::Ctrl(_) if app.confirming == Some(Confirming::Discard) => app,
         Event::Key(key) if app.form.is_some() => match key {
             KeyCode::Esc => App { form: None, ..app },
             KeyCode::Tab => in_form(app, |form| form.moved(true)),
@@ -100,11 +122,14 @@ pub fn update(app: App, event: Event) -> App {
             KeyCode::Char('o') => open_form_next_to(app, Placement::After),
             KeyCode::Char('O') => open_form_next_to(app, Placement::Before),
             KeyCode::Char('d') => App {
-                confirming: app.selected.filter(|id| {
-                    app.queue
-                        .as_ref()
-                        .is_some_and(|queue| removable(queue, *id))
-                }),
+                confirming: app
+                    .selected
+                    .filter(|id| {
+                        app.queue
+                            .as_ref()
+                            .is_some_and(|queue| removable(queue, *id))
+                    })
+                    .map(Confirming::Removal),
                 ..app
             },
             KeyCode::Char('g') => select(app, |_, _| 0),
@@ -112,6 +137,19 @@ pub fn update(app: App, event: Event) -> App {
             _ => app,
         },
         Event::Ctrl(_) | Event::Resize => app,
+    }
+}
+
+/// The app after Ctrl-C: it quits from every screen, except that a first Ctrl-C in a form
+/// that holds anything typed asks to discard it instead, and a second one then quits.
+fn ctrl_c(app: App) -> App {
+    let already_asked = app.confirming == Some(Confirming::Discard);
+    if already_asked || !app.form.as_ref().is_some_and(Form::has_content) {
+        return App { quit: true, ..app };
+    }
+    App {
+        confirming: Some(Confirming::Discard),
+        ..app
     }
 }
 
@@ -177,7 +215,7 @@ fn removable(queue: &QueueView, id: TaskId) -> bool {
 /// carry out, and the selection moves to the task after the one removed, or the one before
 /// it when it was the last, so that it is already there when the queue is loaded again.
 fn confirm_removal(app: App) -> App {
-    let Some(id) = app.confirming else {
+    let Some(Confirming::Removal(id)) = app.confirming else {
         return app;
     };
     let neighbour = app.queue.as_ref().and_then(|queue| {
@@ -395,7 +433,7 @@ mod tests {
             loaded(&[1, 2, 3]),
             &[KeyCode::Char('j'), KeyCode::Char('d')],
         );
-        assert_eq!(app.confirming, Some(TaskId(2)));
+        assert_eq!(app.confirming, Some(Confirming::Removal(TaskId(2))));
         assert_eq!(app.removal, None);
         assert_eq!(on(&app), Some(2));
         assert_eq!(app.queue, Some(queue_of(&[1, 2, 3])));
@@ -466,7 +504,7 @@ mod tests {
         let cancelled = update(asked.clone(), Event::Loaded(queue));
         assert_eq!(cancelled.confirming, None);
         let same = update(asked, Event::Loaded(queue_of(&[1, 2, 3])));
-        assert_eq!(same.confirming, Some(TaskId(1)));
+        assert_eq!(same.confirming, Some(Confirming::Removal(TaskId(1))));
     }
 
     fn form_of(app: &App) -> &Form {
@@ -599,6 +637,65 @@ mod tests {
         for letter in ['s', 'n', 'd', 'q'] {
             assert_eq!(update(app.clone(), Event::Ctrl(letter)), app);
         }
+    }
+
+    #[test]
+    fn ctrl_c_quits_from_the_queue_the_key_map_and_a_removal_question() {
+        assert!(update(loaded(&[1]), Event::Ctrl('c')).quit);
+        let help = press(loaded(&[1]), &[KeyCode::Char('?')]);
+        assert!(update(help, Event::Ctrl('c')).quit);
+        let asked = press(loaded(&[1]), &[KeyCode::Char('d')]);
+        assert!(update(asked, Event::Ctrl('c')).quit);
+    }
+
+    #[test]
+    fn ctrl_c_quits_an_empty_form_without_asking_to_discard() {
+        let app = press(loaded(&[1]), &[KeyCode::Char('n')]);
+        let app = update(app, Event::Ctrl('c'));
+        assert!(app.quit);
+        assert_eq!(app.confirming, None);
+    }
+
+    #[test]
+    fn ctrl_c_in_a_form_with_content_asks_to_discard_and_a_second_ctrl_c_quits() {
+        let app = typed(press(loaded(&[1]), &[KeyCode::Char('n')]), "Title");
+        let asked = update(app, Event::Ctrl('c'));
+        assert!(!asked.quit && asked.form.is_some());
+        assert_eq!(asked.confirming, Some(Confirming::Discard));
+        assert_eq!(form_of(&asked).draft().title, "Title");
+        assert!(update(asked, Event::Ctrl('c')).quit);
+    }
+
+    #[test]
+    fn y_quits_after_being_asked_to_discard() {
+        let app = typed(press(loaded(&[1]), &[KeyCode::Char('n')]), "Title");
+        let asked = update(app, Event::Ctrl('c'));
+        assert!(update(asked, Event::Key(KeyCode::Char('y'))).quit);
+    }
+
+    #[test]
+    fn n_and_esc_return_to_the_form_with_its_content_intact() {
+        let app = typed(press(loaded(&[1]), &[KeyCode::Char('n')]), "Title");
+        for answer in [KeyCode::Char('n'), KeyCode::Esc] {
+            let asked = update(app.clone(), Event::Ctrl('c'));
+            let back = update(asked, Event::Key(answer));
+            assert!(!back.quit && back.form.is_some());
+            assert_eq!(back.confirming, None);
+            assert_eq!(form_of(&back).draft().title, "Title");
+        }
+    }
+
+    #[test]
+    fn while_discard_is_asked_only_y_n_esc_and_a_second_ctrl_c_are_answered() {
+        let app = typed(press(loaded(&[1]), &[KeyCode::Char('n')]), "Title");
+        let asked = update(app, Event::Ctrl('c'));
+        for key in [KeyCode::Char('q'), KeyCode::Char('x'), KeyCode::Enter] {
+            assert_eq!(update(asked.clone(), Event::Key(key)), asked);
+        }
+        for letter in ['s', 'n', 'd'] {
+            assert_eq!(update(asked.clone(), Event::Ctrl(letter)), asked);
+        }
+        assert!(update(asked, Event::Ctrl('c')).quit);
     }
 
     #[test]

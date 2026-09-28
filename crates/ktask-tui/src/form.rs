@@ -48,6 +48,18 @@ impl Form {
         }
     }
 
+    /// Whether anything has been typed into the form: an empty title, body, links and
+    /// criteria are nothing a discard would lose.
+    pub(crate) fn has_content(&self) -> bool {
+        !self.title.text().is_empty()
+            || !self.body.text().is_empty()
+            || !self.links.text().is_empty()
+            || self
+                .criteria
+                .iter()
+                .any(|criterion| !criterion.text().is_empty())
+    }
+
     /// The task the form holds, as typed.
     pub(crate) fn draft(&self) -> TaskDraft {
         TaskDraft {

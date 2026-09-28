@@ -10,6 +10,6 @@ mod render;
 mod run;
 mod text;
 
-pub use app::{App, Event, update};
+pub use app::{App, Confirming, Event, update};
 pub use render::render;
 pub use run::run;

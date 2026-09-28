@@ -7,8 +7,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph, Widget};
 
-use crate::App;
 use crate::form_screen;
+use crate::{App, Confirming};
 
 /// Every key the queue screen answers, and what it does.
 const KEYS: [(&str, &str); 14] = [
@@ -32,11 +32,17 @@ const KEYS: [(&str, &str); 14] = [
 const FORM_KEYS: &str =
     " Ctrl-S add · Esc cancel · Tab, Shift-Tab field · Ctrl-N, Ctrl-D criterion ";
 
+/// What the form's frame says at the bottom while it asks to discard the task.
+const DISCARD_KEYS: &str = " y discard · n, Esc keep writing ";
+
 /// Draws `app` over the whole of `area`, and returns where the cursor goes when it is shown.
 pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
+    let discarding = app.confirming == Some(Confirming::Discard);
     let block = Block::bordered()
         .title(" ktask-rs ")
-        .title_bottom(if app.form.is_some() {
+        .title_bottom(if discarding {
+            DISCARD_KEYS
+        } else if app.form.is_some() {
             FORM_KEYS
         } else {
             " q quit · ? keys "
@@ -44,7 +50,7 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     let inner = block.inner(area);
     block.render(area, buf);
     if let Some(form) = &app.form {
-        return form_screen::draw(form, inner, buf);
+        return form_screen::draw(form, discarding, inner, buf);
     }
     match &app.queue {
         None => Paragraph::new("Loading the queue…").render(inner, buf),
@@ -81,7 +87,10 @@ fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
     let summary = queue.summary;
     let question = app
         .confirming
-        .and_then(|id| queue.tasks.iter().find(|task| task.id == id))
+        .and_then(|confirm| match confirm {
+            Confirming::Removal(id) => queue.tasks.iter().find(|task| task.id == id),
+            Confirming::Discard => None,
+        })
         .map_or_else(Line::default, |task| {
             Line::styled(
                 format!(
@@ -363,6 +372,28 @@ mod tests {
         let cursor = cursor.expect("the cursor is shown");
         assert!(cursor.x < 59, "{cursor:?}");
         assert!(inside(&rows[3]).ends_with('x'), "{rows:?}");
+    }
+
+    #[test]
+    fn ctrl_c_in_a_form_with_content_shows_the_discard_question_and_the_footer_that_answers_it() {
+        use ratatui::crossterm::event::KeyCode::Char;
+        let app = keys(
+            loaded(vec![task(1, "first", TaskKind::Agent)]),
+            &[Char('n')],
+        );
+        let app = keys(app, &"Title".chars().map(Char).collect::<Vec<_>>());
+        let app = update(app, Event::Ctrl('c'));
+        let (rows, _) = draw_form(&app, 14);
+        assert_eq!(inside(&rows[1]), "New task");
+        assert_eq!(
+            inside(&rows[2]),
+            "Discard this task? y to discard · n or Esc to keep writing"
+        );
+        assert!(
+            rows[13].starts_with("└ y discard · n, Esc keep writing"),
+            "{rows:?}"
+        );
+        assert!(inside(&rows[4]).ends_with("Title"), "{rows:?}");
     }
 
     #[test]

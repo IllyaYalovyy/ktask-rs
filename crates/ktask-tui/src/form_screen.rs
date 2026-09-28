@@ -94,8 +94,9 @@ fn heading(placement: Placement) -> String {
     }
 }
 
-/// Draws `form` over the whole of `area`, and returns where the cursor goes.
-pub(crate) fn draw(form: &Form, area: Rect, buf: &mut Buffer) -> Option<Position> {
+/// Draws `form` over the whole of `area`, asking to discard it when `discard` says so, and
+/// returns where the cursor goes.
+pub(crate) fn draw(form: &Form, discard: bool, area: Rect, buf: &mut Buffer) -> Option<Position> {
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let mut sheet = Sheet {
         width: usize::from(area.width),
@@ -103,6 +104,12 @@ pub(crate) fn draw(form: &Form, area: Rect, buf: &mut Buffer) -> Option<Position
         focus_row: 0,
         cursor_x: None,
     };
+    if discard {
+        sheet.rows.push(Line::styled(
+            "Discard this task? y to discard · n or Esc to keep writing",
+            bold,
+        ));
+    }
     for problem in &form.problems {
         for (index, row) in wrap(problem, sheet.width.saturating_sub(2))
             .into_iter()
