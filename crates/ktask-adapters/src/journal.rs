@@ -4,9 +4,8 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use ktask_core::{
-    AppendError, Attempt, AttemptEnd, AttemptRun, BeginAttemptError, CancelError, Journal,
-    JournalError, Outcome, Placement, RecordReportError, Task, TaskDraft, TaskId, TaskKind,
-    TaskStatus,
+    AppendConflict, Attempt, AttemptEnd, AttemptRun, BeginAttemptError, Event, Journal,
+    JournalError, Outcome, Placement, RecordReportError, TaskDraft, TaskId, TaskKind, TaskStatus,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value;
@@ -16,10 +15,12 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A project's journal, kept in a SQLite database file.
 ///
-/// `events` is the journal proper: one row per event, appended and never changed. `tasks` is
-/// the projection of it, changed only in the transaction that appends the event. Task
-/// numbers come from `AUTOINCREMENT`, which never hands out a number twice; the queue order
-/// is the separate `order_key`, which inserting a task shifts and a number never follows.
+/// `events` is the journal proper: one row per event, appended and never changed — the only
+/// thing this adapter decides is whether the count it was given still matches the table's;
+/// everything about what an event means (positions, numbers, which placements are valid) is
+/// `ktask_core::queue_state`'s. `tasks` is a mechanical mirror of the queue events in
+/// `events`, kept only so the attempt-tracking methods below have an id-keyed row to read and
+/// write, updated in the same transaction as the event that changes it.
 #[derive(Debug)]
 pub struct SqliteJournal {
     connection: Connection,
@@ -78,78 +79,15 @@ impl SqliteJournal {
     }
 }
 
-/// The order key a task placed at `placement` takes, after making room for it by moving
-/// every task from that key on one place later.
-///
-/// # Errors
-///
-/// Fails when `placement` names a task that does not exist or was cancelled, or when the
-/// database fails.
-fn make_room(transaction: &Transaction<'_>, placement: Placement) -> Result<i64, AppendError> {
-    let doing = "cannot add the task to the journal";
-    let (anchor, offset) = match placement {
-        Placement::End => {
-            let last = transaction
-                .query_row("SELECT COALESCE(MAX(order_key), 0) FROM tasks", [], |row| {
-                    row.get::<_, i64>(0)
-                })
-                .map_err(|e| failed(doing, e))?;
-            return Ok(last + 1);
-        }
-        Placement::Before(anchor) => (anchor, 0),
-        Placement::After(anchor) => (anchor, 1),
-    };
-    let found = transaction
-        .query_row(
-            "SELECT order_key, status FROM tasks WHERE id = ?1",
-            [i64::try_from(anchor.0).unwrap_or(i64::MAX)],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-        )
-        .optional()
-        .map_err(|e| failed(doing, e))?;
-    let Some((order_key, status)) = found else {
-        return Err(AppendError::UnknownTask(anchor));
-    };
-    if status == TaskStatus::Cancelled.as_str() {
-        return Err(AppendError::CancelledTask(anchor));
-    }
-    let key = order_key + offset;
-    transaction
-        .execute(
-            "UPDATE tasks SET order_key = order_key + 1 WHERE order_key >= ?1",
-            [key],
-        )
-        .map_err(|e| failed(doing, e))?;
-    Ok(key)
-}
+/// The kinds of event `events` and `append_events` know: the queue's own events. Every other
+/// kind recorded in the same table — the attempt-tracking ones — is the unrelated business of
+/// the methods below that still read and write `tasks` directly.
+const TASK_ADDED: &str = "task_added";
+const TASK_CANCELLED: &str = "task_cancelled";
 
-/// Inserts `draft` with order key `order_key` and records the event, inside `transaction`.
-/// Returns the new task's number.
-fn insert(
-    transaction: &Transaction<'_>,
-    draft: &TaskDraft,
-    placement: Placement,
-    order_key: i64,
-    created_at: i64,
-) -> Result<i64, rusqlite::Error> {
-    let criteria = serde_json::json!(draft.criteria).to_string();
-    let links = serde_json::json!(draft.links).to_string();
-    transaction.execute(
-        "INSERT INTO tasks
-             (order_key, title, body, criteria, kind, links, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        (
-            order_key,
-            &draft.title,
-            &draft.body,
-            &criteria,
-            draft.kind.as_str(),
-            &links,
-            TaskStatus::Pending.as_str(),
-            created_at,
-        ),
-    )?;
-    let id = transaction.last_insert_rowid();
+/// The payload [`Event::TaskAdded`] is written with: the draft's fields, and, when it was
+/// placed next to another task, which side.
+fn task_added_payload(draft: &TaskDraft, placement: Placement) -> String {
     let placed = match placement {
         Placement::End => None,
         Placement::Before(anchor) => Some(("before", anchor.0)),
@@ -168,11 +106,103 @@ fn insert(
     .flatten()
     .chain(placed.map(|(place, anchor)| (place.to_owned(), anchor.into())))
     .collect::<serde_json::Map<_, _>>();
-    transaction.execute(
-        "INSERT INTO events (at, kind, task_id, payload) VALUES (?1, 'task_added', ?2, ?3)",
-        (created_at, id, Value::Object(payload).to_string()),
-    )?;
-    Ok(id)
+    Value::Object(payload).to_string()
+}
+
+/// The event a `task_added` or `task_cancelled` row decodes to.
+fn decode_event(kind: &str, task_id: i64, at: i64, payload: &str) -> Result<Event, JournalError> {
+    let doing = "cannot read the journal's events";
+    let corrupt = |what: &str, cause: String| {
+        failed(
+            doing,
+            format!("event {kind} for task {task_id} has a bad {what}: {cause}"),
+        )
+    };
+    let id = TaskId(u64::try_from(task_id).map_err(|e| corrupt("task id", e.to_string()))?);
+    let at = from_seconds(at);
+    if kind == TASK_CANCELLED {
+        return Ok(Event::TaskCancelled { id, at });
+    }
+    let payload: Value =
+        serde_json::from_str(payload).map_err(|e| corrupt("payload", e.to_string()))?;
+    let field = |name: &str| -> Result<String, JournalError> {
+        payload
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| corrupt(name, "missing".to_owned()))
+    };
+    let strings = |name: &str| -> Result<Vec<String>, JournalError> {
+        payload
+            .get(name)
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|value| value.as_str().unwrap_or_default().to_owned())
+                    .collect()
+            })
+            .ok_or_else(|| corrupt(name, "missing".to_owned()))
+    };
+    let draft = TaskDraft {
+        title: field("title")?,
+        body: field("body")?,
+        criteria: strings("criteria")?,
+        kind: field("kind")?
+            .parse::<TaskKind>()
+            .map_err(|e| corrupt("kind", e))?,
+        links: strings("links")?,
+    };
+    let placement = if let Some(before) = payload.get("before").and_then(Value::as_u64) {
+        Placement::Before(TaskId(before))
+    } else if let Some(after) = payload.get("after").and_then(Value::as_u64) {
+        Placement::After(TaskId(after))
+    } else {
+        Placement::End
+    };
+    Ok(Event::TaskAdded {
+        id,
+        draft,
+        placement,
+        at,
+    })
+}
+
+/// Mirrors `event` into the `tasks` cache, inside `transaction`: mechanical bookkeeping for
+/// the attempt-tracking methods below, which still read and write `tasks` directly — no rule
+/// about the queue is decided here.
+fn mirror(transaction: &Transaction<'_>, event: &Event) -> Result<(), rusqlite::Error> {
+    match event {
+        Event::TaskAdded { id, draft, at, .. } => {
+            let criteria = serde_json::json!(draft.criteria).to_string();
+            let links = serde_json::json!(draft.links).to_string();
+            transaction.execute(
+                "INSERT INTO tasks
+                     (id, order_key, title, body, criteria, kind, links, status, created_at)
+                 VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                (
+                    i64::try_from(id.0).unwrap_or(i64::MAX),
+                    &draft.title,
+                    &draft.body,
+                    &criteria,
+                    draft.kind.as_str(),
+                    &links,
+                    TaskStatus::Pending.as_str(),
+                    to_seconds(*at),
+                ),
+            )?;
+        }
+        Event::TaskCancelled { id, .. } => {
+            transaction.execute(
+                "UPDATE tasks SET status = ?2 WHERE id = ?1",
+                (
+                    i64::try_from(id.0).unwrap_or(i64::MAX),
+                    TaskStatus::Cancelled.as_str(),
+                ),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn to_seconds(time: SystemTime) -> i64 {
@@ -223,131 +253,80 @@ impl SqliteJournal {
 }
 
 impl Journal for SqliteJournal {
-    fn append_tasks(
-        &self,
-        drafts: &[TaskDraft],
-        placement: Placement,
-        at: SystemTime,
-    ) -> Result<Vec<Task>, AppendError> {
-        let doing = "cannot add the task to the journal";
-        // Immediate: take the write lock first, so that reading the order keys and
-        // inserting among them cannot interleave with another process adding a task.
-        let transaction =
-            Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)
-                .map_err(|e| failed(doing, e))?;
-        let mut added = Vec::new();
-        let mut placement = placement;
-        for draft in drafts {
-            let order_key = make_room(&transaction, placement)?;
-            let id = insert(&transaction, draft, placement, order_key, to_seconds(at))
-                .map_err(|e| failed(doing, e))?;
-            let position: i64 = transaction
-                .query_row(
-                    "SELECT COUNT(*) FROM tasks WHERE order_key <= ?1",
-                    [order_key],
-                    |row| row.get(0),
-                )
-                .map_err(|e| failed(doing, e))?;
-            let id = TaskId(u64::try_from(id).map_err(|e| failed(doing, e))?);
-            added.push(Task {
-                id,
-                position: usize::try_from(position).map_err(|e| failed(doing, e))?,
-                title: draft.title.clone(),
-                body: draft.body.clone(),
-                criteria: draft.criteria.clone(),
-                kind: draft.kind,
-                links: draft.links.clone(),
-                status: TaskStatus::Pending,
-                created_at: from_seconds(to_seconds(at)),
-            });
-            placement = placement.then_after(id);
-        }
-        transaction.commit().map_err(|e| failed(doing, e))?;
-        Ok(added)
-    }
-
-    fn cancel_task(&self, id: TaskId, at: SystemTime) -> Result<(), CancelError> {
-        let doing = "cannot remove the task from the journal";
-        let number = i64::try_from(id.0).unwrap_or(i64::MAX);
-        let transaction =
-            Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)
-                .map_err(|e| failed(doing, e))?;
-        let status = transaction
-            .query_row("SELECT status FROM tasks WHERE id = ?1", [number], |row| {
-                row.get::<_, String>(0)
-            })
-            .optional()
-            .map_err(|e| failed(doing, e))?;
-        match status {
-            None => return Err(CancelError::UnknownTask(id)),
-            Some(status) if status == TaskStatus::Cancelled.as_str() => {
-                return Err(CancelError::AlreadyCancelled(id));
-            }
-            Some(_) => {}
-        }
-        transaction
-            .execute(
-                "UPDATE tasks SET status = ?2 WHERE id = ?1",
-                (number, TaskStatus::Cancelled.as_str()),
-            )
-            .map_err(|e| failed(doing, e))?;
-        transaction
-            .execute(
-                "INSERT INTO events (at, kind, task_id, payload)
-                 VALUES (?1, 'task_cancelled', ?2, '{}')",
-                (to_seconds(at), number),
-            )
-            .map_err(|e| failed(doing, e))?;
-        transaction.commit().map_err(|e| failed(doing, e))?;
-        Ok(())
-    }
-
-    fn tasks(&self) -> Result<Vec<Task>, JournalError> {
-        let doing = "cannot read the tasks from the journal";
+    fn events(&self) -> Result<Vec<Event>, JournalError> {
+        let doing = "cannot read the journal's events";
         let mut statement = self
             .connection
             .prepare(
-                "SELECT id, title, body, criteria, kind, links, status, created_at
-                 FROM tasks ORDER BY order_key",
+                "SELECT at, kind, task_id, payload FROM events
+                 WHERE kind IN (?1, ?2) ORDER BY seq",
             )
             .map_err(|e| failed(doing, e))?;
         let rows = statement
-            .query_map([], |row| {
+            .query_map([TASK_ADDED, TASK_CANCELLED], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(2)?,
                     row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)?,
                 ))
             })
             .map_err(|e| failed(doing, e))?;
-        let mut tasks = Vec::new();
-        for (index, row) in rows.enumerate() {
-            let (id, title, body, criteria, kind, links, status, created_at) =
-                row.map_err(|e| failed(doing, e))?;
-            let corrupt = |what: &str, cause: String| {
-                failed(doing, format!("task {id} has a bad {what}: {cause}"))
-            };
-            tasks.push(Task {
-                id: TaskId(u64::try_from(id).map_err(|e| corrupt("id", e.to_string()))?),
-                position: index + 1,
-                title,
-                body,
-                criteria: serde_json::from_str(&criteria)
-                    .map_err(|e| corrupt("criteria", e.to_string()))?,
-                kind: kind.parse::<TaskKind>().map_err(|e| corrupt("kind", e))?,
-                links: serde_json::from_str(&links).map_err(|e| corrupt("links", e.to_string()))?,
-                status: status
-                    .parse::<TaskStatus>()
-                    .map_err(|e| corrupt("status", e))?,
-                created_at: from_seconds(created_at),
-            });
+        let mut events = Vec::new();
+        for row in rows {
+            let (at, kind, task_id, payload) = row.map_err(|e| failed(doing, e))?;
+            events.push(decode_event(&kind, task_id, at, &payload)?);
         }
-        Ok(tasks)
+        Ok(events)
+    }
+
+    fn append_events(&self, events: &[Event], read: usize) -> Result<(), AppendConflict> {
+        let doing = "cannot append to the journal";
+        // Immediate: take the write lock first, so that checking how many events the journal
+        // holds and appending more cannot interleave with another process doing the same.
+        let transaction =
+            Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)
+                .map_err(|e| failed(doing, e))?;
+        let current: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE kind IN (?1, ?2)",
+                [TASK_ADDED, TASK_CANCELLED],
+                |row| row.get(0),
+            )
+            .map_err(|e| failed(doing, e))?;
+        if usize::try_from(current).unwrap_or(usize::MAX) != read {
+            return Err(AppendConflict::Conflict);
+        }
+        for event in events {
+            let (kind, task_id, at, payload) = match event {
+                Event::TaskAdded {
+                    id,
+                    draft,
+                    placement,
+                    at,
+                } => (
+                    TASK_ADDED,
+                    i64::try_from(id.0).unwrap_or(i64::MAX),
+                    to_seconds(*at),
+                    task_added_payload(draft, *placement),
+                ),
+                Event::TaskCancelled { id, at } => (
+                    TASK_CANCELLED,
+                    i64::try_from(id.0).unwrap_or(i64::MAX),
+                    to_seconds(*at),
+                    "{}".to_owned(),
+                ),
+            };
+            transaction
+                .execute(
+                    "INSERT INTO events (at, kind, task_id, payload) VALUES (?1, ?2, ?3, ?4)",
+                    (at, kind, task_id, payload),
+                )
+                .map_err(|e| failed(doing, e))?;
+            mirror(&transaction, event).map_err(|e| failed(doing, e))?;
+        }
+        transaction.commit().map_err(|e| failed(doing, e))?;
+        Ok(())
     }
 
     fn begin_attempt(&self, id: TaskId, at: SystemTime) -> Result<u32, BeginAttemptError> {
@@ -674,214 +653,151 @@ mod tests {
         SqliteJournal::open(&dir.path().join("journal.db")).unwrap()
     }
 
+    /// Appends a `task_added` event for a task numbered `id`, titled `title`, at `placement`
+    /// — as `ktask_core::task::add_tasks` would after deciding it — and returns the event.
+    fn add(journal: &SqliteJournal, id: u64, title: &str, placement: Placement) -> Event {
+        let read = journal.events().unwrap().len();
+        let event = Event::TaskAdded {
+            id: TaskId(id),
+            draft: draft(title),
+            placement,
+            at: at(1),
+        };
+        journal
+            .append_events(std::slice::from_ref(&event), read)
+            .unwrap();
+        event
+    }
+
+    /// Appends a `task_cancelled` event for task `id` at `moment`.
+    fn cancel(journal: &SqliteJournal, id: u64, moment: SystemTime) {
+        let read = journal.events().unwrap().len();
+        journal
+            .append_events(
+                &[Event::TaskCancelled {
+                    id: TaskId(id),
+                    at: moment,
+                }],
+                read,
+            )
+            .unwrap();
+    }
+
+    /// The `tasks` cache row's status for task `id` — what the attempt-tracking methods,
+    /// unrelated to and untouched by this task, see.
+    fn cached_status(journal: &SqliteJournal, id: u64) -> TaskStatus {
+        journal
+            .connection
+            .query_row(
+                "SELECT status FROM tasks WHERE id = ?1",
+                [i64::try_from(id).unwrap_or(i64::MAX)],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
     #[test]
-    fn a_new_journal_is_created_with_its_directory_and_holds_no_tasks() {
+    fn a_new_journal_is_created_with_its_directory_and_holds_no_events() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("nested").join("journal.db");
         let journal = SqliteJournal::open(&path).unwrap();
         assert!(path.is_file());
-        assert_eq!(journal.tasks(), Ok(vec![]));
+        assert_eq!(journal.events(), Ok(vec![]));
     }
 
     #[test]
-    fn an_added_task_is_returned_and_read_back_as_written_after_reopening() {
+    fn an_appended_event_is_read_back_as_written_after_reopening() {
         let dir = TempDir::new().unwrap();
-        let added = open(&dir)
-            .append_task(&draft("t"), Placement::End, at(700))
-            .unwrap();
+        let event = add(&open(&dir), 1, "t", Placement::End);
         assert_eq!(
-            added,
-            Task {
+            event,
+            Event::TaskAdded {
                 id: TaskId(1),
-                position: 1,
-                title: "t".to_owned(),
-                body: "line one\nline \"two\"".to_owned(),
-                criteria: vec!["first".to_owned(), "sécond".to_owned()],
-                kind: TaskKind::Human,
-                links: vec!["github:o/r#1".to_owned(), "https://example.com".to_owned()],
-                status: TaskStatus::Pending,
-                created_at: at(700),
+                draft: draft("t"),
+                placement: Placement::End,
+                at: at(1),
             }
         );
-        assert_eq!(open(&dir).tasks(), Ok(vec![added]));
+        assert_eq!(open(&dir).events().unwrap(), vec![event]);
     }
 
     #[test]
-    fn numbers_and_positions_are_sequential_across_reopenings() {
+    fn events_are_read_back_in_the_order_they_were_appended_across_reopenings() {
         let dir = TempDir::new().unwrap();
         for (index, title) in ["a", "b", "c"].into_iter().enumerate() {
-            let task = open(&dir)
-                .append_task(&draft(title), Placement::End, at(1))
-                .unwrap();
-            assert_eq!(task.id, TaskId(index as u64 + 1));
-            assert_eq!(task.position, index + 1);
+            let event = add(&open(&dir), index as u64 + 1, title, Placement::End);
+            let Event::TaskAdded { id, .. } = event else {
+                unreachable!("just added")
+            };
+            assert_eq!(id, TaskId(index as u64 + 1));
         }
         let titles: Vec<_> = open(&dir)
-            .tasks()
+            .events()
             .unwrap()
             .into_iter()
-            .map(|t| (t.position, t.title))
+            .map(|event| match event {
+                Event::TaskAdded { draft, .. } => draft.title,
+                Event::TaskCancelled { .. } => unreachable!("only additions were made"),
+            })
+            .collect();
+        assert_eq!(titles, ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn placement_before_and_after_round_trip_through_the_event() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "a", Placement::End);
+        add(&journal, 2, "b", Placement::Before(TaskId(1)));
+        add(&journal, 3, "c", Placement::After(TaskId(1)));
+        let placements: Vec<_> = journal
+            .events()
+            .unwrap()
+            .into_iter()
+            .map(|event| match event {
+                Event::TaskAdded { placement, .. } => placement,
+                Event::TaskCancelled { .. } => unreachable!("only additions were made"),
+            })
             .collect();
         assert_eq!(
-            titles,
+            placements,
             [
-                (1, "a".to_owned()),
-                (2, "b".to_owned()),
-                (3, "c".to_owned())
+                Placement::End,
+                Placement::Before(TaskId(1)),
+                Placement::After(TaskId(1))
             ]
         );
     }
 
     #[test]
-    fn a_number_is_never_reused_even_when_the_last_task_is_gone() {
+    fn a_cancelled_event_round_trips_too() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
-        journal
-            .append_task(&draft("b"), Placement::End, at(1))
-            .unwrap();
-        journal
-            .connection
-            .execute("DELETE FROM tasks WHERE id = 2", [])
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
+        cancel(&journal, 1, at(900));
         assert_eq!(
-            journal
-                .append_task(&draft("c"), Placement::End, at(1))
-                .unwrap()
-                .id,
-            TaskId(3)
+            journal.events().unwrap()[1],
+            Event::TaskCancelled {
+                id: TaskId(1),
+                at: at(900),
+            }
         );
     }
 
     #[test]
-    fn a_task_is_placed_before_or_after_another_and_no_number_changes() {
+    fn appending_a_task_added_event_records_exactly_one_row_with_the_expected_payload() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        for title in ["a", "b", "c"] {
-            journal
-                .append_task(&draft(title), Placement::End, at(1))
-                .unwrap();
-        }
-        let placements = [
-            ("before-a", Placement::Before(TaskId(1)), 4, 1),
-            ("after-a", Placement::After(TaskId(1)), 5, 3),
-            ("before-c", Placement::Before(TaskId(3)), 6, 5),
-            ("after-c", Placement::After(TaskId(3)), 7, 7),
-        ];
-        for (title, placement, id, position) in placements {
-            let added = journal
-                .append_task(&draft(title), placement, at(1))
-                .unwrap();
-            assert_eq!(
-                (added.id, added.position),
-                (TaskId(id), position),
-                "{title}"
-            );
-        }
-        let shown: Vec<_> = open(&dir)
-            .tasks()
-            .unwrap()
-            .into_iter()
-            .map(|t| (t.position, t.id.0, t.title))
-            .collect();
-        let expected = [
-            (1, 4, "before-a"),
-            (2, 1, "a"),
-            (3, 5, "after-a"),
-            (4, 2, "b"),
-            (5, 6, "before-c"),
-            (6, 3, "c"),
-            (7, 7, "after-c"),
-        ];
-        let expected: Vec<_> = expected
-            .into_iter()
-            .map(|(position, id, title)| (position, id, title.to_owned()))
-            .collect();
-        assert_eq!(shown, expected);
-    }
-
-    #[test]
-    fn placing_a_task_next_to_one_that_is_missing_or_cancelled_changes_nothing() {
-        let dir = TempDir::new().unwrap();
-        let journal = open(&dir);
-        for title in ["a", "b"] {
-            journal
-                .append_task(&draft(title), Placement::End, at(1))
-                .unwrap();
-        }
-        journal
-            .connection
-            .execute("UPDATE tasks SET status = 'cancelled' WHERE id = 1", [])
-            .unwrap();
-        let before = journal.tasks().unwrap();
-        for (placement, expected) in [
-            (
-                Placement::Before(TaskId(9)),
-                AppendError::UnknownTask(TaskId(9)),
-            ),
-            (
-                Placement::After(TaskId(9)),
-                AppendError::UnknownTask(TaskId(9)),
-            ),
-            (
-                Placement::Before(TaskId(1)),
-                AppendError::CancelledTask(TaskId(1)),
-            ),
-            (
-                Placement::After(TaskId(1)),
-                AppendError::CancelledTask(TaskId(1)),
-            ),
-        ] {
-            assert_eq!(
-                journal.append_task(&draft("x"), placement, at(1)),
-                Err(expected)
-            );
-            assert_eq!(journal.tasks().unwrap(), before);
-        }
-        let events: i64 = journal
-            .connection
-            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(events, 2);
-    }
-
-    #[test]
-    fn a_placed_task_records_where_it_was_placed_in_its_event() {
-        let dir = TempDir::new().unwrap();
-        let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
-        journal
-            .append_task(&draft("b"), Placement::Before(TaskId(1)), at(1))
-            .unwrap();
-        journal
-            .append_task(&draft("c"), Placement::After(TaskId(1)), at(1))
-            .unwrap();
-        let payloads: Vec<Value> = journal
-            .connection
-            .prepare("SELECT payload FROM events ORDER BY seq")
-            .unwrap()
-            .query_map([], |row| row.get::<_, String>(0))
-            .unwrap()
-            .map(|payload| serde_json::from_str(&payload.unwrap()).unwrap())
-            .collect();
-        assert_eq!(payloads[0].get("before"), None);
-        assert_eq!(payloads[0].get("after"), None);
-        assert_eq!(payloads[1]["before"], 1);
-        assert_eq!(payloads[2]["after"], 1);
-    }
-
-    #[test]
-    fn adding_a_task_appends_exactly_one_event_in_the_same_transaction() {
-        let dir = TempDir::new().unwrap();
-        let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(42))
-            .unwrap();
-        let (count, at, kind, task_id, payload): (i64, i64, String, i64, String) = journal
+        let event = Event::TaskAdded {
+            id: TaskId(1),
+            draft: draft("a"),
+            placement: Placement::End,
+            at: at(42),
+        };
+        journal.append_events(&[event], 0).unwrap();
+        let (count, when, kind, task_id, payload): (i64, i64, String, i64, String) = journal
             .connection
             .query_row(
                 "SELECT COUNT(*), at, kind, task_id, payload FROM events",
@@ -898,7 +814,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            (count, at, kind.as_str(), task_id),
+            (count, when, kind.as_str(), task_id),
             (1, 42, "task_added", 1)
         );
         let payload: Value = serde_json::from_str(&payload).unwrap();
@@ -915,189 +831,191 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_add_records_neither_the_task_nor_the_event() {
+    fn append_events_refuses_when_the_journal_has_moved_on_and_records_nothing() {
         let dir = TempDir::new().unwrap();
-        let journal = open(&dir);
-        journal
-            .connection
-            .execute_batch("DROP TABLE events")
-            .unwrap();
-        let error = journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap_err();
-        assert!(error.to_string().contains("cannot add the task"), "{error}");
-        assert_eq!(journal.tasks(), Ok(vec![]));
+        let path = dir.path().join("journal.db");
+        let writer_a = SqliteJournal::open(&path).unwrap();
+        let writer_b = SqliteJournal::open(&path).unwrap();
+        // Both read the journal empty, then `b` appends first.
+        assert_eq!(writer_a.events().unwrap().len(), 0);
+        assert_eq!(writer_b.events().unwrap().len(), 0);
+        add(&writer_b, 1, "from b", Placement::End);
+
+        let event = Event::TaskAdded {
+            id: TaskId(1),
+            draft: draft("from a"),
+            placement: Placement::End,
+            at: at(1),
+        };
+        assert_eq!(
+            writer_a.append_events(&[event], 0),
+            Err(AppendConflict::Conflict)
+        );
+        // Nothing from `a`'s stale attempt was recorded; only `b`'s event is there.
+        assert_eq!(writer_a.events().unwrap().len(), 1);
     }
 
     #[test]
-    fn a_stored_task_that_cannot_be_understood_is_an_error_naming_it() {
-        let dir = TempDir::new().unwrap();
-        let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
-        journal
-            .connection
-            .execute("UPDATE tasks SET status = 'stuck'", [])
-            .unwrap();
-        let error = journal.tasks().unwrap_err().to_string();
-        assert!(error.contains("task 1"), "{error}");
-        assert!(error.contains("status"), "{error}");
-    }
-
-    #[test]
-    fn a_batch_is_placed_together_in_order_with_one_event_per_task() {
-        let dir = TempDir::new().unwrap();
-        let journal = open(&dir);
-        for title in ["a", "b"] {
-            journal
-                .append_task(&draft(title), Placement::End, at(1))
-                .unwrap();
-        }
-        let batch = [draft("x"), draft("y"), draft("z")];
-        let added = journal
-            .append_tasks(&batch, Placement::Before(TaskId(2)), at(2))
-            .unwrap();
-        let placed: Vec<_> = added.iter().map(|t| (t.id.0, t.position)).collect();
-        assert_eq!(placed, [(3, 2), (4, 3), (5, 4)]);
-        let shown: Vec<_> = journal
-            .tasks()
-            .unwrap()
-            .into_iter()
-            .map(|t| t.title)
-            .collect();
-        assert_eq!(shown, ["a", "x", "y", "z", "b"]);
-        let events: i64 = journal
-            .connection
-            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(events, 5);
-    }
-
-    #[test]
-    fn a_batch_placed_next_to_a_missing_task_records_nothing() {
-        let dir = TempDir::new().unwrap();
-        let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
-        let error = journal
-            .append_tasks(
-                &[draft("x"), draft("y")],
-                Placement::After(TaskId(9)),
-                at(2),
-            )
-            .unwrap_err();
-        assert_eq!(error, AppendError::UnknownTask(TaskId(9)));
-        assert_eq!(journal.tasks().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn a_batch_that_fails_part_way_is_rolled_back() {
+    fn append_events_is_atomic_a_batch_that_fails_part_way_is_rolled_back() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
         journal
             .connection
             .execute_batch(
                 "CREATE TRIGGER refuse BEFORE INSERT ON events
-                 WHEN (SELECT COUNT(*) FROM events) >= 2
+                 WHEN (SELECT COUNT(*) FROM events) >= 1
                  BEGIN SELECT RAISE(ABORT, 'refused'); END",
             )
             .unwrap();
-        let error = journal
-            .append_tasks(&[draft("x"), draft("y"), draft("z")], Placement::End, at(2))
-            .unwrap_err();
+        let batch: Vec<_> = ["x", "y"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, title)| Event::TaskAdded {
+                id: TaskId(index as u64 + 1),
+                draft: draft(title),
+                placement: Placement::End,
+                at: at(2),
+            })
+            .collect();
+        let error = journal.append_events(&batch, 0).unwrap_err();
         assert!(error.to_string().contains("refused"), "{error}");
-        assert_eq!(journal.tasks().unwrap(), vec![]);
-        let events: i64 = journal
+        assert_eq!(journal.events().unwrap(), vec![]);
+        let cached: i64 = journal
             .connection
-            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(events, 0);
+        assert_eq!(cached, 0, "the tasks cache is rolled back too");
     }
 
-    fn added_abc(journal: &SqliteJournal) {
-        for title in ["a", "b", "c"] {
-            journal
-                .append_task(&draft(title), Placement::End, at(1))
+    #[test]
+    fn a_failed_append_records_nothing() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        journal
+            .connection
+            .execute_batch("DROP TABLE events")
+            .unwrap();
+        let event = Event::TaskAdded {
+            id: TaskId(1),
+            draft: draft("a"),
+            placement: Placement::End,
+            at: at(1),
+        };
+        let error = journal.append_events(&[event], 0).unwrap_err();
+        assert!(error.to_string().contains("cannot append"), "{error}");
+        let cached: i64 = journal
+            .connection
+            .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(cached, 0);
+    }
+
+    #[test]
+    fn appending_mirrors_into_the_tasks_cache_so_attempt_tracking_keeps_working() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "a", Placement::End);
+        assert_eq!(cached_status(&journal, 1), TaskStatus::Pending);
+        // The attempt-tracking methods, unchanged, read the mirror: a pending task may
+        // start an attempt.
+        journal.begin_attempt(TaskId(1), at(2)).unwrap();
+        assert_eq!(cached_status(&journal, 1), TaskStatus::Running);
+
+        add(&journal, 2, "b", Placement::End);
+        cancel(&journal, 2, at(3));
+        assert_eq!(cached_status(&journal, 2), TaskStatus::Cancelled);
+        assert_eq!(
+            journal.begin_attempt(TaskId(2), at(4)),
+            Err(BeginAttemptError::NotPending(TaskId(2)))
+        );
+    }
+
+    #[test]
+    fn an_events_table_written_by_the_previous_version_is_still_read_correctly() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("journal.db");
+        {
+            // The schema and the rows exactly as the previous version, which had no
+            // `append_events`, wrote them: one `tasks` row kept by hand, and the same
+            // `events` rows `task_added` and `task_cancelled` always had.
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE events (
+                         seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                         at INTEGER NOT NULL,
+                         kind TEXT NOT NULL,
+                         task_id INTEGER NOT NULL,
+                         payload TEXT NOT NULL
+                     );
+                     CREATE TABLE tasks (
+                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                         order_key INTEGER NOT NULL,
+                         title TEXT NOT NULL,
+                         body TEXT NOT NULL,
+                         criteria TEXT NOT NULL,
+                         kind TEXT NOT NULL,
+                         links TEXT NOT NULL,
+                         status TEXT NOT NULL,
+                         created_at INTEGER NOT NULL,
+                         attempt_number INTEGER NOT NULL DEFAULT 0
+                     )",
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO tasks
+                         (id, order_key, title, body, criteria, kind, links, status, created_at)
+                     VALUES (1, 1, 'old task', '', '[\"c\"]', 'agent', '[]', 'cancelled', 100)",
+                    [],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO events (at, kind, task_id, payload) VALUES (100, 'task_added', 1, ?1)",
+                    [r#"{"title":"old task","body":"","criteria":["c"],"kind":"agent","links":[]}"#],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO events (at, kind, task_id, payload) VALUES (200, 'task_cancelled', 1, '{}')",
+                    [],
+                )
                 .unwrap();
         }
-    }
 
-    #[test]
-    fn a_cancelled_task_stays_in_its_place_with_its_number_and_records_one_event() {
-        let dir = TempDir::new().unwrap();
-        let journal = open(&dir);
-        added_abc(&journal);
-
-        journal.cancel_task(TaskId(2), at(900)).unwrap();
-
-        let shown: Vec<_> = open(&dir)
-            .tasks()
-            .unwrap()
-            .iter()
-            .map(|t| (t.position, t.id, t.status))
-            .collect();
+        let journal = SqliteJournal::open(&path).unwrap();
         assert_eq!(
-            shown,
-            [
-                (1, TaskId(1), TaskStatus::Pending),
-                (2, TaskId(2), TaskStatus::Cancelled),
-                (3, TaskId(3), TaskStatus::Pending)
+            journal.events().unwrap(),
+            vec![
+                Event::TaskAdded {
+                    id: TaskId(1),
+                    draft: TaskDraft {
+                        title: "old task".to_owned(),
+                        body: String::new(),
+                        criteria: vec!["c".to_owned()],
+                        kind: TaskKind::Agent,
+                        links: vec![],
+                    },
+                    placement: Placement::End,
+                    at: at(100),
+                },
+                Event::TaskCancelled {
+                    id: TaskId(1),
+                    at: at(200),
+                },
             ]
         );
-        let (events, kind, task_id, when): (i64, String, i64, i64) = journal
-            .connection
-            .query_row(
-                "SELECT COUNT(*), kind, task_id, at FROM events WHERE seq > 3",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
+        // The attempt-tracking methods, untouched by this task, still work against the
+        // pre-existing `tasks` row.
         assert_eq!(
-            (events, kind.as_str(), task_id, when),
-            (1, "task_cancelled", 2, 900)
+            journal.begin_attempt(TaskId(1), at(300)),
+            Err(BeginAttemptError::NotPending(TaskId(1)))
         );
-    }
-
-    #[test]
-    fn a_cancelled_tasks_number_is_never_reused_even_at_the_end() {
-        let dir = TempDir::new().unwrap();
-        let journal = open(&dir);
-        added_abc(&journal);
-        journal.cancel_task(TaskId(3), at(2)).unwrap();
-        let next = journal
-            .append_task(&draft("d"), Placement::End, at(3))
-            .unwrap();
-        assert_eq!(next.id, TaskId(4));
-    }
-
-    #[test]
-    fn cancelling_an_unknown_or_a_cancelled_task_changes_nothing() {
-        let dir = TempDir::new().unwrap();
-        let journal = open(&dir);
-        added_abc(&journal);
-        journal.cancel_task(TaskId(2), at(2)).unwrap();
-        let tasks = journal.tasks().unwrap();
-        let events = || -> i64 {
-            journal
-                .connection
-                .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
-                .unwrap()
-        };
-        let recorded = events();
-
-        assert_eq!(
-            journal.cancel_task(TaskId(9), at(3)),
-            Err(CancelError::UnknownTask(TaskId(9)))
-        );
-        assert_eq!(
-            journal.cancel_task(TaskId(2), at(3)),
-            Err(CancelError::AlreadyCancelled(TaskId(2)))
-        );
-
-        assert_eq!(journal.tasks().unwrap(), tasks);
-        assert_eq!(events(), recorded);
+        // New events append correctly after it, with the next id continuing on from the
+        // highest one the old journal ever used.
+        add(&journal, 2, "new", Placement::End);
+        assert_eq!(journal.events().unwrap().len(), 3);
     }
 
     #[test]
@@ -1126,12 +1044,10 @@ mod tests {
     fn starting_an_attempt_numbers_it_from_one_marks_the_task_running_and_records_one_event() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         let number = journal.begin_attempt(TaskId(1), at(50)).unwrap();
         assert_eq!(number, 1);
-        assert_eq!(journal.tasks().unwrap()[0].status, TaskStatus::Running);
+        assert_eq!(cached_status(&journal, 1), TaskStatus::Running);
         let (kind, task_id, when, payload): (String, i64, i64, String) = journal
             .connection
             .query_row(
@@ -1149,9 +1065,7 @@ mod tests {
     fn starting_an_attempt_at_an_unknown_or_a_non_pending_task_changes_nothing() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         assert_eq!(
             journal.begin_attempt(TaskId(9), at(1)),
             Err(BeginAttemptError::UnknownTask(TaskId(9)))
@@ -1172,9 +1086,7 @@ mod tests {
     fn a_valid_report_is_recorded_and_a_second_one_is_recorded_too() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         journal.begin_attempt(TaskId(1), at(1)).unwrap();
 
         journal
@@ -1209,16 +1121,14 @@ mod tests {
             serde_json::json!({ "number": 1, "outcome": "done", "reason": null })
         );
         // The task stays running: reporting alone does not end the attempt.
-        assert_eq!(journal.tasks().unwrap()[0].status, TaskStatus::Running);
+        assert_eq!(cached_status(&journal, 1), TaskStatus::Running);
     }
 
     #[test]
     fn a_report_for_an_unknown_task_or_the_wrong_attempt_number_is_refused_and_records_nothing() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         journal.begin_attempt(TaskId(1), at(1)).unwrap();
         assert_eq!(
             journal.record_report(TaskId(9), 1, Outcome::Done, None, at(2)),
@@ -1249,11 +1159,9 @@ mod tests {
     fn a_report_for_an_ended_attempt_is_refused_and_records_nothing() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         journal.begin_attempt(TaskId(1), at(1)).unwrap();
-        journal.cancel_task(TaskId(1), at(2)).unwrap();
+        cancel(&journal, 1, at(2));
         assert_eq!(
             journal.record_report(TaskId(1), 1, Outcome::Done, None, at(3)),
             Err(RecordReportError::AttemptEnded {
@@ -1276,16 +1184,14 @@ mod tests {
     fn attempt_running_records_one_event_with_the_provider_and_changes_no_status() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         journal.begin_attempt(TaskId(1), at(1)).unwrap();
 
         journal
             .attempt_running(TaskId(1), 1, "echo", at(5))
             .unwrap();
 
-        assert_eq!(journal.tasks().unwrap()[0].status, TaskStatus::Running);
+        assert_eq!(cached_status(&journal, 1), TaskStatus::Running);
         let (kind, task_id, when, payload): (String, i64, i64, String) = journal
             .connection
             .query_row(
@@ -1306,9 +1212,7 @@ mod tests {
     fn last_report_is_none_until_the_agent_reports_and_then_the_most_recent_one() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         journal.begin_attempt(TaskId(1), at(1)).unwrap();
 
         assert_eq!(journal.last_report(TaskId(1), 1).unwrap(), None);
@@ -1334,9 +1238,7 @@ mod tests {
     fn last_report_is_scoped_to_the_attempt_number_it_is_asked_for() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         journal.begin_attempt(TaskId(1), at(1)).unwrap();
         journal
             .record_report(TaskId(1), 1, Outcome::Done, None, at(2))
@@ -1350,9 +1252,7 @@ mod tests {
     fn end_attempt_sets_the_status_and_records_one_event_with_what_happened() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         journal.begin_attempt(TaskId(1), at(1)).unwrap();
 
         journal
@@ -1369,7 +1269,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(journal.tasks().unwrap()[0].status, TaskStatus::Failed);
+        assert_eq!(cached_status(&journal, 1), TaskStatus::Failed);
         let (kind, task_id, when, payload): (String, i64, i64, String) = journal
             .connection
             .query_row(
@@ -1396,9 +1296,7 @@ mod tests {
     fn end_attempt_for_an_unknown_or_wrong_attempt_is_refused_and_changes_nothing() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         journal.begin_attempt(TaskId(1), at(1)).unwrap();
         let run = AttemptRun {
             duration: Duration::from_secs(1),
@@ -1420,18 +1318,16 @@ mod tests {
                 number: 2
             })
         );
-        assert_eq!(journal.tasks().unwrap()[0].status, TaskStatus::Running);
+        assert_eq!(cached_status(&journal, 1), TaskStatus::Running);
     }
 
     #[test]
     fn end_attempt_for_an_already_ended_attempt_is_refused_and_changes_nothing() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         journal.begin_attempt(TaskId(1), at(1)).unwrap();
-        journal.cancel_task(TaskId(1), at(2)).unwrap();
+        cancel(&journal, 1, at(2));
         let run = AttemptRun {
             duration: Duration::from_secs(1),
             exit_code: Some(0),
@@ -1445,16 +1341,14 @@ mod tests {
                 number: 1
             })
         );
-        assert_eq!(journal.tasks().unwrap()[0].status, TaskStatus::Cancelled);
+        assert_eq!(cached_status(&journal, 1), TaskStatus::Cancelled);
     }
 
     #[test]
     fn running_is_none_until_an_attempt_starts_and_names_its_task_and_attempt_number() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         assert_eq!(journal.running().unwrap(), None);
 
         journal.begin_attempt(TaskId(1), at(1)).unwrap();
@@ -1465,9 +1359,7 @@ mod tests {
     fn running_is_none_again_once_the_attempt_ends() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         journal.begin_attempt(TaskId(1), at(1)).unwrap();
         journal
             .end_attempt(
@@ -1489,9 +1381,7 @@ mod tests {
     fn last_attempt_is_none_for_a_task_never_attempted() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         assert_eq!(journal.last_attempt(TaskId(1)).unwrap(), None);
         assert_eq!(journal.last_attempt(TaskId(9)).unwrap(), None);
     }
@@ -1500,9 +1390,7 @@ mod tests {
     fn last_attempt_while_running_carries_its_number_start_and_provider_but_no_ending() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         journal.begin_attempt(TaskId(1), at(50)).unwrap();
         journal
             .attempt_running(TaskId(1), 1, "echo", at(55))
@@ -1519,9 +1407,7 @@ mod tests {
     fn last_attempt_once_ended_carries_its_duration_status_and_reason() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
-        journal
-            .append_task(&draft("a"), Placement::End, at(1))
-            .unwrap();
+        add(&journal, 1, "a", Placement::End);
         journal.begin_attempt(TaskId(1), at(50)).unwrap();
         journal
             .attempt_running(TaskId(1), 1, "echo", at(55))
