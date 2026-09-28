@@ -81,3 +81,9 @@ pub(crate) fn run_lock_file(project: &Project) -> Result<PathBuf, String> {
 pub(crate) fn current_dir() -> Result<PathBuf, String> {
     std::env::current_dir().map_err(|e| format!("cannot find the current directory: {e}"))
 }
+
+/// The path of the running `ktask-rs` binary, so a prompt can tell an agent exactly which one
+/// to call back into, whatever is or is not on its `PATH`.
+pub(crate) fn current_exe() -> Result<PathBuf, String> {
+    std::env::current_exe().map_err(|e| format!("cannot find the running binary: {e}"))
+}

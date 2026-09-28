@@ -8,7 +8,7 @@ use std::time::Duration;
 use ktask_adapters::{FileRunLock, ProcessCommands, SystemClock, echo};
 use ktask_core::RunContext;
 
-use crate::context::{open_journal, open_registry, resolve, run_lock_file};
+use crate::context::{current_exe, open_journal, open_registry, resolve, run_lock_file};
 use crate::error::Failure;
 use crate::render;
 
@@ -33,6 +33,7 @@ pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Fail
     let project = resolve(&registry, args.project.as_deref())?;
     let journal = open_journal(&project)?;
     let lock = FileRunLock::new(run_lock_file(&project)?);
+    let binary_path = current_exe()?;
     let report = ktask_core::run_queue(
         &journal,
         &SystemClock,
@@ -42,6 +43,7 @@ pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Fail
         RunContext {
             project_name: &project.name,
             project_dir: &project.path,
+            binary_path: &binary_path,
             attempt_timeout: Duration::from_secs(args.attempt_timeout),
         },
     )?;
