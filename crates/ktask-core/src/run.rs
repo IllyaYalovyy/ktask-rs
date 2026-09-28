@@ -1,5 +1,5 @@
 //! `run`: takes the pending tasks in queue order and attempts each one, once, with the
-//! `echo` provider — the only one that exists so far.
+//! [`Provider`] it is given.
 
 use std::error::Error;
 use std::fmt::{self, Write as _};
@@ -7,9 +7,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::{
-    AttemptRun, AttemptToken, BeginAttemptError, Clock, Commands, EchoError, Journal, JournalError,
-    Outcome, RecordReportError, RunLock, RunLockError, Task, TaskId, TaskKind, TaskStatus, echo,
-    list_tasks, run_echo,
+    AttemptRun, AttemptToken, BeginAttemptError, Clock, Commands, Journal, JournalError, Outcome,
+    Provider, ProviderRunError, RecordReportError, RunLock, RunLockError, Task, TaskId, TaskKind,
+    TaskStatus, list_tasks, run_provider,
 };
 
 /// Why a run could not proceed at all — never for how an attempt itself ended, which is a
@@ -102,6 +102,18 @@ pub struct RunReport {
     pub end: RunEnd,
 }
 
+/// Where a run executes: the project's name, carried in every attempt token, the directory
+/// its provider's commands run in, and how long one attempt may run before it is killed.
+#[derive(Debug, Clone, Copy)]
+pub struct RunContext<'a> {
+    /// The project's name.
+    pub project_name: &'a str,
+    /// The directory the provider's commands run in.
+    pub project_dir: &'a Path,
+    /// How long one attempt may run before it, and everything it started, is killed.
+    pub attempt_timeout: Duration,
+}
+
 /// The prompt for attempt `token` of `task`: its title, body and acceptance criteria, and
 /// the exact `ktask-rs report` command to run for each possible outcome.
 #[must_use]
@@ -130,15 +142,206 @@ pub fn build_prompt(task: &Task, token: &AttemptToken) -> String {
     prompt
 }
 
-/// Use case: runs the pending tasks of `project` in queue order, one attempt each, with the
-/// `echo` provider, in `project_dir` — stopping at the first task of kind `human`, at the
-/// first attempt that does not report `done`, or when nothing is left pending.
+/// Takes `lock` for the whole run, so that two runs of the same project never overlap.
+///
+/// # Errors
+///
+/// Fails when another run already holds `lock`.
+fn take_lock(lock: &impl RunLock) -> Result<(), RunError> {
+    lock.acquire()?;
+    Ok(())
+}
+
+/// Accounts for a previous run that was killed while an attempt was in progress: that
+/// attempt's task is left `running` in the journal with no attempt-ended event. Ends it
+/// `failed-unknown` with the reason [`INTERRUPTED`] and returns it. Returns `None` when no
+/// task was left running.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read or written.
+fn account_for_interrupted_run(
+    journal: &impl Journal,
+    clock: &impl Clock,
+) -> Result<Option<Attempted>, RunError> {
+    let Some((id, number)) = crate::attempt::running(journal)? else {
+        return Ok(None);
+    };
+    crate::attempt::end_attempt(
+        journal,
+        id,
+        number,
+        AttemptRun {
+            duration: Duration::ZERO,
+            exit_code: None,
+            status: TaskStatus::FailedUnknown,
+            reason: Some(INTERRUPTED),
+        },
+        clock.now(),
+    )?;
+    Ok(Some(Attempted {
+        id,
+        status: TaskStatus::FailedUnknown,
+        reason: Some(INTERRUPTED.to_owned()),
+    }))
+}
+
+/// What [`pick_next_task`] found the run should do next.
+enum Pick {
+    /// Attempt this pending task.
+    Task(Task),
+    /// Stop: the next pending task is kind `human`.
+    Human(TaskId),
+    /// Stop: nothing is pending — `queue_is_empty` says whether the queue holds no tasks at
+    /// all, or holds tasks that are all already decided.
+    NothingLeft { queue_is_empty: bool },
+}
+
+/// Looks at the queue in order and decides what the run does next.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+fn pick_next_task(journal: &impl Journal) -> Result<Pick, RunError> {
+    let tasks = list_tasks(journal)?;
+    let Some(next) = tasks.iter().find(|task| task.status == TaskStatus::Pending) else {
+        return Ok(Pick::NothingLeft {
+            queue_is_empty: tasks.is_empty(),
+        });
+    };
+    Ok(if next.kind == TaskKind::Human {
+        Pick::Human(next.id)
+    } else {
+        Pick::Task(next.clone())
+    })
+}
+
+/// Why the run ends when nothing is left pending: `Completed` when this run attempted
+/// something first, otherwise `EmptyQueue` or `NothingPending` depending on `queue_is_empty`.
+fn end_when_nothing_left(attempted: &[Attempted], queue_is_empty: bool) -> RunEnd {
+    if !attempted.is_empty() {
+        RunEnd::Completed
+    } else if queue_is_empty {
+        RunEnd::EmptyQueue
+    } else {
+        RunEnd::NothingPending
+    }
+}
+
+/// Runs `provider` on `prompt` for attempt `token`, timing it from `clock`.
+fn timed_provider_run(
+    commands: &impl Commands,
+    provider: &Provider,
+    clock: &impl Clock,
+    prompt: &str,
+    token: &AttemptToken,
+    context: RunContext<'_>,
+) -> (Duration, Result<crate::Output, ProviderRunError>) {
+    let started = clock.now();
+    let result = run_provider(
+        commands,
+        provider,
+        prompt,
+        &token.to_string(),
+        token.number,
+        context.project_dir,
+        context.attempt_timeout,
+    );
+    (
+        clock.now().duration_since(started).unwrap_or_default(),
+        result,
+    )
+}
+
+/// Runs one attempt at `task` with `provider`: begins it, builds its prompt, runs the
+/// provider, decides the outcome, and ends the attempt with it.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read or written.
+fn run_one_attempt(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    commands: &impl Commands,
+    provider: &Provider,
+    context: RunContext<'_>,
+    task: &Task,
+) -> Result<Attempted, RunError> {
+    let number = crate::attempt::begin_attempt_running(journal, clock, task.id, provider.name)?;
+    let token = AttemptToken::new(context.project_name, task.id, number);
+    let prompt = build_prompt(task, &token);
+
+    let (duration, result) =
+        timed_provider_run(commands, provider, clock, &prompt, &token, context);
+
+    let (exit_code, status, reason) = attempt_outcome(journal, task, &token, result)?;
+    crate::attempt::end_attempt(
+        journal,
+        task.id,
+        token.number,
+        AttemptRun {
+            duration,
+            exit_code,
+            status,
+            reason: reason.as_deref(),
+        },
+        clock.now(),
+    )?;
+    Ok(Attempted {
+        id: task.id,
+        status,
+        reason,
+    })
+}
+
+/// Picks and attempts pending tasks, one at a time, until the queue stops the run: a task of
+/// kind `human`, an attempt that does not report `done`, or nothing left pending.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read or written.
+fn attempt_loop(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    commands: &impl Commands,
+    provider: &Provider,
+    context: RunContext<'_>,
+) -> Result<RunReport, RunError> {
+    let mut attempted = Vec::new();
+    loop {
+        match pick_next_task(journal)? {
+            Pick::Task(task) => {
+                let result = run_one_attempt(journal, clock, commands, provider, context, &task)?;
+                let status = result.status;
+                attempted.push(result);
+                if status != TaskStatus::Done {
+                    let end = RunEnd::Stopped {
+                        id: task.id,
+                        status,
+                    };
+                    return Ok(RunReport { attempted, end });
+                }
+            }
+            Pick::Human(id) => {
+                let end = RunEnd::HumanTask(id);
+                return Ok(RunReport { attempted, end });
+            }
+            Pick::NothingLeft { queue_is_empty } => {
+                let end = end_when_nothing_left(&attempted, queue_is_empty);
+                return Ok(RunReport { attempted, end });
+            }
+        }
+    }
+}
+
+/// Use case: runs the pending tasks of `context.project_name`, in queue order, one attempt
+/// each, with `provider` — stopping at the first task of kind `human`, at the first attempt
+/// that does not report `done`, or when nothing is left pending.
 ///
 /// Takes `lock` for the whole run, so that two runs of the same project never overlap. When
-/// the previous run was killed while an attempt was in progress, that attempt's task is left
-/// `running` in the journal with no attempt-ended event; this run finds it, ends it
-/// `failed-unknown` with the reason "the run was interrupted", and stops there without
-/// attempting anything else.
+/// the previous run was killed while an attempt was in progress, this run finds its task
+/// still `running`, ends it `failed-unknown` with the reason "the run was interrupted", and
+/// stops there without attempting anything else.
 ///
 /// # Errors
 ///
@@ -149,106 +352,22 @@ pub fn run_queue(
     journal: &impl Journal,
     clock: &impl Clock,
     commands: &impl Commands,
+    provider: &Provider,
     lock: &impl RunLock,
-    project_name: &str,
-    project_dir: &Path,
-    attempt_timeout: Duration,
+    context: RunContext<'_>,
 ) -> Result<RunReport, RunError> {
-    lock.acquire()?;
-    if let Some((id, number)) = crate::attempt::running(journal)? {
-        crate::attempt::end_attempt(
-            journal,
-            id,
-            number,
-            AttemptRun {
-                duration: Duration::ZERO,
-                exit_code: None,
-                status: TaskStatus::FailedUnknown,
-                reason: Some(INTERRUPTED),
-            },
-            clock.now(),
-        )?;
-        return Ok(RunReport {
-            attempted: vec![Attempted {
-                id,
-                status: TaskStatus::FailedUnknown,
-                reason: Some(INTERRUPTED.to_owned()),
-            }],
-            end: RunEnd::Stopped {
-                id,
-                status: TaskStatus::FailedUnknown,
-            },
-        });
-    }
-
-    let mut attempted = Vec::new();
-    loop {
-        let tasks = list_tasks(journal)?;
-        let Some(next) = tasks.iter().find(|task| task.status == TaskStatus::Pending) else {
-            let end = if attempted.is_empty() {
-                if tasks.is_empty() {
-                    RunEnd::EmptyQueue
-                } else {
-                    RunEnd::NothingPending
-                }
-            } else {
-                RunEnd::Completed
-            };
-            return Ok(RunReport { attempted, end });
+    take_lock(lock)?;
+    if let Some(attempted) = account_for_interrupted_run(journal, clock)? {
+        let end = RunEnd::Stopped {
+            id: attempted.id,
+            status: attempted.status,
         };
-        if next.kind == TaskKind::Human {
-            return Ok(RunReport {
-                attempted,
-                end: RunEnd::HumanTask(next.id),
-            });
-        }
-
-        let task = next.clone();
-        let number = crate::attempt::begin_attempt_running(journal, clock, task.id, echo::NAME)?;
-        let token = AttemptToken::new(project_name, task.id, number);
-        let prompt = build_prompt(&task, &token);
-
-        let started = clock.now();
-        let result = run_echo(
-            commands,
-            &prompt,
-            &token.to_string(),
-            token.number,
-            project_dir,
-            attempt_timeout,
-        );
-        let ended = clock.now();
-        let duration = ended.duration_since(started).unwrap_or_default();
-
-        let (exit_code, status, reason) = attempt_outcome(journal, &task, &token, result)?;
-
-        crate::attempt::end_attempt(
-            journal,
-            task.id,
-            token.number,
-            AttemptRun {
-                duration,
-                exit_code,
-                status,
-                reason: reason.as_deref(),
-            },
-            clock.now(),
-        )?;
-        attempted.push(Attempted {
-            id: task.id,
-            status,
-            reason,
+        return Ok(RunReport {
+            attempted: vec![attempted],
+            end,
         });
-        if status != TaskStatus::Done {
-            return Ok(RunReport {
-                attempted,
-                end: RunEnd::Stopped {
-                    id: task.id,
-                    status,
-                },
-            });
-        }
     }
+    attempt_loop(journal, clock, commands, provider, context)
 }
 
 /// What attempt `token` of `task` ended at, given what running the provider produced: its
@@ -258,7 +377,7 @@ fn attempt_outcome(
     journal: &impl Journal,
     task: &Task,
     token: &AttemptToken,
-    result: Result<crate::Output, EchoError>,
+    result: Result<crate::Output, ProviderRunError>,
 ) -> Result<(Option<i32>, TaskStatus, Option<String>), RunError> {
     let output = match result {
         Ok(output) => output,
@@ -301,7 +420,10 @@ mod tests {
     use std::time::SystemTime;
 
     use crate::fakes::{FakeClock, FakeCommands, FakeJournal, FakeRunLock, at, draft};
-    use crate::{Exit, Outcome, Placement, TaskDraft, TaskKind, TaskStatus, add_task, report};
+    use crate::{
+        Exit, Outcome, Placement, ProviderCommand, TaskDraft, TaskKind, TaskStatus, add_task,
+        report,
+    };
 
     use super::*;
 
@@ -309,12 +431,20 @@ mod tests {
         FakeClock(at(1_000))
     }
 
-    /// A valid draft titled `title`, whose body holds a fenced bash block, so the `echo`
-    /// provider — which runs the first one it finds in the prompt — has something to run.
-    fn agent_draft(title: &str) -> TaskDraft {
-        TaskDraft {
-            body: "```bash\necho ok\n```\n".to_owned(),
-            ..draft(title)
+    /// A provider whose command carries the token as `args[1]` (after a placeholder at
+    /// `args[0]`, mirroring what a real provider's own flags might occupy) and the attempt as
+    /// `args[2]`, and the prompt as its standard input — enough for tests to see what `run`
+    /// passed it, without this being any particular real provider.
+    fn test_provider() -> Provider {
+        Provider {
+            name: "test",
+            command: |prompt, token, attempt| {
+                Ok(ProviderCommand {
+                    program: "run-it".to_owned(),
+                    args: vec!["-s".to_owned(), token.to_owned(), attempt.to_string()],
+                    stdin: prompt.as_bytes().to_vec(),
+                })
+            },
         }
     }
 
@@ -326,19 +456,27 @@ mod tests {
         }))
     }
 
+    fn context(timeout: Duration) -> RunContext<'static> {
+        RunContext {
+            project_name: "proj",
+            project_dir: Path::new("/work/proj"),
+            attempt_timeout: timeout,
+        }
+    }
+
     fn run(
         journal: &FakeJournal,
         commands: &impl Commands,
+        provider: &Provider,
         timeout: Duration,
     ) -> Result<RunReport, RunError> {
         run_queue(
             journal,
             &clock(),
             commands,
+            provider,
             &FakeRunLock::free(),
-            "proj",
-            Path::new("/work/proj"),
-            timeout,
+            context(timeout),
         )
     }
 
@@ -383,7 +521,13 @@ mod tests {
     fn an_empty_queue_ends_the_run_at_once() {
         let journal = FakeJournal::default();
         let commands = commands_ok(Exit::Code(0));
-        let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
         assert_eq!(
             report,
             RunReport {
@@ -413,7 +557,13 @@ mod tests {
         )
         .unwrap();
         let commands = commands_ok(Exit::Code(0));
-        let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
         assert_eq!(
             report,
             RunReport {
@@ -438,7 +588,13 @@ mod tests {
         )
         .unwrap();
         let commands = commands_ok(Exit::Code(0));
-        let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
         assert_eq!(
             report,
             RunReport {
@@ -457,13 +613,13 @@ mod tests {
     fn journal_of_abc() -> FakeJournal {
         let journal = FakeJournal::default();
         for title in ["a", "b", "c"] {
-            add_task(&journal, &clock(), &agent_draft(title), Placement::End).unwrap();
+            add_task(&journal, &clock(), &draft(title), Placement::End).unwrap();
         }
         journal
     }
 
-    /// A fake commands port that, once run, reports `outcome` for whatever token it is given
-    /// as `$1`, then exits with `exit`.
+    /// A fake commands port that, once run, reports `outcome` for whatever token it finds
+    /// among its args, then exits with `exit`.
     struct ReportingCommands<'a> {
         journal: &'a FakeJournal,
         outcome: Outcome,
@@ -472,7 +628,11 @@ mod tests {
 
     impl Commands for ReportingCommands<'_> {
         fn run(&self, spec: &crate::CommandSpec) -> Result<crate::Output, crate::CommandsError> {
-            let token: AttemptToken = spec.args[1].parse().unwrap();
+            let token: AttemptToken = spec
+                .args
+                .iter()
+                .find_map(|arg| arg.parse().ok())
+                .expect("one arg is the attempt token");
             report(
                 self.journal,
                 &FakeClock(SystemTime::UNIX_EPOCH),
@@ -497,7 +657,13 @@ mod tests {
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
         assert_eq!(
             report,
             RunReport {
@@ -527,6 +693,36 @@ mod tests {
     }
 
     #[test]
+    fn a_second_different_provider_value_can_run_the_queue_too() {
+        let journal = journal_of_abc();
+        // A provider unlike `test_provider`: a different program, a different argument
+        // layout (the token first, no placeholder flag), and a name of its own — proving
+        // `run` works with any [`Provider`] value, not one it recognizes by name.
+        let other = Provider {
+            name: "other",
+            command: |_prompt, token, attempt| {
+                Ok(ProviderCommand {
+                    program: "printf".to_owned(),
+                    args: vec![token.to_owned(), format!("attempt={attempt}")],
+                    stdin: Vec::new(),
+                })
+            },
+        };
+        let commands = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let report = run(&journal, &commands, &other, Duration::from_secs(60)).unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        assert_eq!(report.attempted.len(), 3);
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt.provider.as_deref(), Some("other"));
+    }
+
+    #[test]
     fn a_failed_report_ends_that_task_failed_and_stops_the_run_leaving_the_rest_pending() {
         let journal = journal_of_abc();
         let commands = ReportingCommands {
@@ -534,7 +730,13 @@ mod tests {
             outcome: Outcome::Failed,
             exit: Exit::Code(0),
         };
-        let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
         assert_eq!(
             report,
             RunReport {
@@ -563,7 +765,13 @@ mod tests {
             outcome: Outcome::TooLarge,
             exit: Exit::Code(0),
         };
-        let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
         assert_eq!(
             report.attempted,
             vec![Attempted {
@@ -582,7 +790,13 @@ mod tests {
             outcome: Outcome::NeedsInput,
             exit: Exit::Code(0),
         };
-        let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
         assert_eq!(
             report,
             RunReport {
@@ -606,7 +820,13 @@ mod tests {
     fn no_report_at_all_ends_the_task_failed_unknown_and_stops_the_run() {
         let journal = journal_of_abc();
         let commands = commands_ok(Exit::Code(0));
-        let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
         assert_eq!(report.attempted.len(), 1);
         let attempted = &report.attempted[0];
         assert_eq!(attempted.id, TaskId(1));
@@ -636,7 +856,13 @@ mod tests {
     fn a_killed_provider_ends_the_task_failed_unknown_and_stops_the_run() {
         let journal = journal_of_abc();
         let commands = commands_ok(Exit::Killed);
-        let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
         assert_eq!(report.attempted.len(), 1);
         assert_eq!(report.attempted[0].status, TaskStatus::FailedUnknown);
         assert!(
@@ -654,7 +880,13 @@ mod tests {
     fn a_provider_that_cannot_be_started_ends_the_task_failed_unknown() {
         let journal = journal_of_abc();
         let commands = FakeCommands::returning(Err(crate::CommandsError::new("bash not found")));
-        let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
         assert_eq!(report.attempted.len(), 1);
         assert_eq!(report.attempted[0].status, TaskStatus::FailedUnknown);
         assert!(
@@ -669,18 +901,40 @@ mod tests {
     }
 
     #[test]
+    fn a_provider_that_cannot_build_a_command_ends_the_task_failed_unknown() {
+        let journal = journal_of_abc();
+        let refusing = Provider {
+            name: "refusing",
+            command: |_, _, _| Err("cannot build it".to_owned()),
+        };
+        let commands = commands_ok(Exit::Code(0));
+        let report = run(&journal, &commands, &refusing, Duration::from_secs(60)).unwrap();
+        assert_eq!(report.attempted.len(), 1);
+        assert_eq!(report.attempted[0].status, TaskStatus::FailedUnknown);
+        assert!(
+            report.attempted[0]
+                .reason
+                .as_deref()
+                .unwrap()
+                .contains("cannot build it"),
+            "{:?}",
+            report.attempted[0].reason
+        );
+        assert!(commands.last.borrow().is_none());
+    }
+
+    #[test]
     fn the_provider_runs_in_the_projects_directory_with_the_attempts_timeout() {
         let journal = FakeJournal::default();
-        add_task(&journal, &clock(), &agent_draft("a"), Placement::End).unwrap();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
         let commands = commands_ok(Exit::Code(0));
         run_queue(
             &journal,
             &clock(),
             &commands,
+            &test_provider(),
             &FakeRunLock::free(),
-            "proj",
-            Path::new("/work/proj"),
-            Duration::from_secs(42),
+            context(Duration::from_secs(42)),
         )
         .unwrap();
         let spec = commands.last.borrow().clone().unwrap();
@@ -694,7 +948,13 @@ mod tests {
         let failure = JournalError::new("disk on fire");
         let journal = FakeJournal::failing(failure.clone());
         let commands = commands_ok(Exit::Code(0));
-        let error = run(&journal, &commands, Duration::from_secs(60)).unwrap_err();
+        let error = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap_err();
         assert_eq!(error.to_string(), failure.to_string());
     }
 
@@ -707,10 +967,9 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &test_provider(),
             &lock,
-            "proj",
-            Path::new("/work/proj"),
-            Duration::from_secs(60),
+            context(Duration::from_secs(60)),
         )
         .unwrap_err();
         assert_eq!(
@@ -732,7 +991,13 @@ mod tests {
         crate::attempt::begin_attempt(&journal, &clock(), TaskId(1)).unwrap();
         let commands = commands_ok(Exit::Code(0));
 
-        let report = run(&journal, &commands, Duration::from_secs(60)).unwrap();
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
 
         assert_eq!(
             report,
