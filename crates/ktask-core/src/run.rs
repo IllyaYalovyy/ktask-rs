@@ -103,21 +103,27 @@ pub struct RunReport {
 }
 
 /// Where a run executes: the project's name, carried in every attempt token, the directory
-/// its provider's commands run in, and how long one attempt may run before it is killed.
+/// its provider's commands run in, the path of the `ktask-rs` binary that is running it, and
+/// how long one attempt may run before it is killed.
 #[derive(Debug, Clone, Copy)]
 pub struct RunContext<'a> {
     /// The project's name.
     pub project_name: &'a str,
     /// The directory the provider's commands run in.
     pub project_dir: &'a Path,
+    /// The path of the running `ktask-rs` binary, so the prompt tells an agent exactly which
+    /// one to call back into, whatever is or is not on its `PATH`.
+    pub binary_path: &'a Path,
     /// How long one attempt may run before it, and everything it started, is killed.
     pub attempt_timeout: Duration,
 }
 
 /// The prompt for attempt `token` of `task`: its title, body and acceptance criteria, and
-/// the exact `ktask-rs report` command to run for each possible outcome.
+/// the exact `report` command, run through `binary_path`, to run for each possible outcome.
+/// The full path is used, rather than the name `ktask-rs`, so the command works whether or
+/// not the binary that is running is on the agent's `PATH`.
 #[must_use]
-pub fn build_prompt(task: &Task, token: &AttemptToken) -> String {
+pub fn build_prompt(task: &Task, token: &AttemptToken, binary_path: &Path) -> String {
     let mut prompt = format!("# {}\n", task.title);
     if !task.body.is_empty() {
         prompt.push('\n');
@@ -130,14 +136,15 @@ pub fn build_prompt(task: &Task, token: &AttemptToken) -> String {
         prompt.push_str(criterion);
         prompt.push('\n');
     }
+    let binary = binary_path.display();
     let _ = write!(
         prompt,
         "\n## Reporting\n\n\
          When you are done, run exactly one of these, with the outcome that fits:\n\n\
-         \x20\x20\x20\x20ktask-rs report --token {token} done\n\
-         \x20\x20\x20\x20ktask-rs report --token {token} failed --reason \"<why>\"\n\
-         \x20\x20\x20\x20ktask-rs report --token {token} needs-input --reason \"<why>\"\n\
-         \x20\x20\x20\x20ktask-rs report --token {token} too-large --reason \"<why>\"\n"
+         \x20\x20\x20\x20{binary} report --token {token} done\n\
+         \x20\x20\x20\x20{binary} report --token {token} failed --reason \"<why>\"\n\
+         \x20\x20\x20\x20{binary} report --token {token} needs-input --reason \"<why>\"\n\
+         \x20\x20\x20\x20{binary} report --token {token} too-large --reason \"<why>\"\n"
     );
     prompt
 }
@@ -269,7 +276,7 @@ fn run_one_attempt(
 ) -> Result<Attempted, RunError> {
     let number = crate::attempt::begin_attempt_running(journal, clock, task.id, provider.name)?;
     let token = AttemptToken::new(context.project_name, task.id, number);
-    let prompt = build_prompt(task, &token);
+    let prompt = build_prompt(task, &token, context.binary_path);
 
     let (duration, result) =
         timed_provider_run(commands, provider, clock, &prompt, &token, context);
@@ -460,6 +467,7 @@ mod tests {
         RunContext {
             project_name: "proj",
             project_dir: Path::new("/work/proj"),
+            binary_path: Path::new("/opt/ktask-rs/bin/ktask-rs"),
             attempt_timeout: timeout,
         }
     }
@@ -494,27 +502,34 @@ mod tests {
             created_at: at(1),
         };
         let token = AttemptToken::new("proj", TaskId(7), 3);
-        let prompt = build_prompt(&task, &token);
+        let binary_path = Path::new("/opt/ktask-rs/bin/ktask-rs");
+        let prompt = build_prompt(&task, &token, binary_path);
         assert!(prompt.contains("Do the thing"), "{prompt}");
         assert!(prompt.contains("Some body text."), "{prompt}");
         assert!(prompt.contains("- first thing"), "{prompt}");
         assert!(prompt.contains("- second thing"), "{prompt}");
         assert!(
-            prompt.contains("ktask-rs report --token proj/7/3 done"),
+            prompt.contains("/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 done"),
             "{prompt}"
         );
         assert!(
-            prompt.contains("ktask-rs report --token proj/7/3 failed --reason"),
+            prompt.contains("/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 failed --reason"),
             "{prompt}"
         );
         assert!(
-            prompt.contains("ktask-rs report --token proj/7/3 needs-input --reason"),
+            prompt.contains(
+                "/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 needs-input --reason"
+            ),
             "{prompt}"
         );
         assert!(
-            prompt.contains("ktask-rs report --token proj/7/3 too-large --reason"),
+            prompt
+                .contains("/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 too-large --reason"),
             "{prompt}"
         );
+        // No line names the binary by its bare name alone: an agent that runs the shown
+        // command must never depend on `ktask-rs` being on its own `PATH`.
+        assert!(!prompt.contains("\n    ktask-rs report"), "{prompt}");
     }
 
     #[test]
