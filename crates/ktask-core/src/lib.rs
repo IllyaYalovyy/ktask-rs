@@ -15,7 +15,7 @@ mod task;
 pub use clock::Clock;
 pub use git::{Git, GitError};
 pub use import::{ImportError, InvalidTask, import_tasks};
-pub use journal::{AppendError, CancelError, Journal, JournalError};
+pub use journal::{AppendError, CancelError, Journal, JournalError, JournalWatch};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
 pub use queue::{QueueView, StatusSummary, queue_view};
 pub use register::{RegisterError, register_project};

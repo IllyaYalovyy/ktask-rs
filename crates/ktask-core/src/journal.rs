@@ -142,3 +142,16 @@ pub trait Journal {
     /// Fails when the journal cannot be read.
     fn tasks(&self) -> Result<Vec<Task>, JournalError>;
 }
+
+/// Port: notices when a project's journal changes, so a frontend can show what another
+/// process did to it without polling.
+pub trait JournalWatch {
+    /// Blocks the calling thread until the journal changes, then returns. Meant to be called
+    /// again and again, from a dedicated thread, so that every change after the first is
+    /// reported too.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the watch cannot be kept up, and will not report further changes.
+    fn wait(&self) -> Result<(), JournalError>;
+}
