@@ -147,7 +147,8 @@ type GetSetting = Box<dyn Fn(&Settings) -> (String, bool)>;
 /// [`set_setting`]'s work for one setting: check a new value, apply it to [`Settings`], and
 /// answer with the value to show for it. The `&dyn Git` and `&Path` are unused except by
 /// [`TRACKED_BRANCH`].
-type SetSetting = Box<dyn Fn(&mut Settings, &str, &dyn Git, &Path) -> Result<String, SetSettingError>>;
+type SetSetting =
+    Box<dyn Fn(&mut Settings, &str, &dyn Git, &Path) -> Result<String, SetSettingError>>;
 
 /// One setting's whole description: its name, how its current value and default are read
 /// from [`Settings`], and how a new value for it is checked and applied. [`show_settings`]
@@ -166,15 +167,27 @@ fn setting_specs() -> Vec<SettingSpec> {
         health_check_spec(),
         tracked_branch_spec(),
         step_toggle_spec(STEP_SYNC, |s| s.sync_step, |s, on| s.sync_step = Some(on)),
-        step_toggle_spec(STEP_HEALTH_CHECK, |s| s.health_check_step, |s, on| {
-            s.health_check_step = Some(on);
-        }),
-        step_toggle_spec(STEP_REVIEW, |s| s.review_step, |s, on| {
-            s.review_step = Some(on);
-        }),
-        step_toggle_spec(STEP_TESTING, |s| s.testing_step, |s, on| {
-            s.testing_step = Some(on);
-        }),
+        step_toggle_spec(
+            STEP_HEALTH_CHECK,
+            |s| s.health_check_step,
+            |s, on| {
+                s.health_check_step = Some(on);
+            },
+        ),
+        step_toggle_spec(
+            STEP_REVIEW,
+            |s| s.review_step,
+            |s, on| {
+                s.review_step = Some(on);
+            },
+        ),
+        step_toggle_spec(
+            STEP_TESTING,
+            |s| s.testing_step,
+            |s, on| {
+                s.testing_step = Some(on);
+            },
+        ),
         commit_step_spec(),
         push_step_spec(),
     ]

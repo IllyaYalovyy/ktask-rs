@@ -59,81 +59,34 @@ impl QueueState {
     /// `(state, event) -> state`: the one place an event changes the queue's state.
     fn apply(&mut self, event: &Event) {
         match event {
-            Event::TaskAdded {
-                id,
-                draft,
-                placement,
-                at,
-            } => self.apply_task_added(*id, draft, *placement, *at),
-            Event::TaskCancelled { id, .. } => self.apply_task_cancelled(*id),
-            Event::AttemptStarted { id, number, at } => {
-                self.apply_attempt_started(*id, *number, *at);
-            }
-            Event::AttemptRunning {
-                id,
-                number,
-                provider,
-                ..
-            } => self.apply_attempt_running(*id, *number, provider),
-            Event::AttemptReported {
-                id,
-                number,
-                outcome,
-                reason,
-                step,
-                ..
-            } => self.apply_attempt_reported(*id, *number, *outcome, reason.as_ref(), step.as_ref()),
-            Event::AttemptEnded {
-                id,
-                number,
-                duration,
-                status,
-                reason,
-                ..
-            } => self.apply_attempt_ended(*id, *number, *duration, *status, reason.as_ref()),
-            Event::StepStarted {
-                id,
-                number,
-                step,
-                at,
-            } => self.apply_step_started(*id, *number, step, *at),
-            Event::StepEnded {
-                id,
-                number,
-                step,
-                duration,
-                status,
-                reason,
-                reported,
-                ..
-            } => self.apply_step_ended(
-                *id,
-                *number,
-                step,
-                AttemptEnd {
-                    duration: *duration,
-                    status: *status,
-                    reason: reason.clone(),
-                    reported: *reported,
-                },
-            ),
+            Event::TaskAdded { .. } => self.apply_task_added(event),
+            Event::TaskCancelled { .. } => self.apply_task_cancelled(event),
+            Event::AttemptStarted { .. } => self.apply_attempt_started(event),
+            Event::AttemptRunning { .. } => self.apply_attempt_running(event),
+            Event::AttemptReported { .. } => self.apply_attempt_reported(event),
+            Event::AttemptEnded { .. } => self.apply_attempt_ended(event),
+            Event::StepStarted { .. } => self.apply_step_started(event),
+            Event::StepEnded { .. } => self.apply_step_ended(event),
         }
     }
 
     /// Applies a [`Event::TaskAdded`]: inserts the task `placement` names, at its number, into
     /// queue order.
-    fn apply_task_added(
-        &mut self,
-        id: TaskId,
-        draft: &TaskDraft,
-        placement: Placement,
-        at: SystemTime,
-    ) {
-        let index = self.insertion_index(placement);
+    fn apply_task_added(&mut self, event: &Event) {
+        let Event::TaskAdded {
+            id,
+            draft,
+            placement,
+            at,
+        } = event
+        else {
+            return;
+        };
+        let index = self.insertion_index(*placement);
         self.tasks.insert(
             index,
             Task {
-                id,
+                id: *id,
                 position: 0,
                 title: draft.title.clone(),
                 body: draft.body.clone(),
@@ -141,30 +94,36 @@ impl QueueState {
                 kind: draft.kind,
                 links: draft.links.clone(),
                 status: TaskStatus::Pending,
-                created_at: at,
+                created_at: *at,
             },
         );
         self.renumber();
     }
 
-    /// Applies a [`Event::TaskCancelled`]: marks task `id` cancelled, in place.
-    fn apply_task_cancelled(&mut self, id: TaskId) {
-        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == id) {
+    /// Applies a [`Event::TaskCancelled`]: marks the task it names cancelled, in place.
+    fn apply_task_cancelled(&mut self, event: &Event) {
+        let Event::TaskCancelled { id, .. } = event else {
+            return;
+        };
+        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id) {
             task.status = TaskStatus::Cancelled;
         }
     }
 
-    /// Applies a [`Event::AttemptStarted`]: marks task `id` running and starts folding a fresh
-    /// attempt `number` for it.
-    fn apply_attempt_started(&mut self, id: TaskId, number: u32, at: SystemTime) {
-        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == id) {
+    /// Applies a [`Event::AttemptStarted`]: marks the task it names running and starts
+    /// folding a fresh attempt for it.
+    fn apply_attempt_started(&mut self, event: &Event) {
+        let Event::AttemptStarted { id, number, at } = event else {
+            return;
+        };
+        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id) {
             task.status = TaskStatus::Running;
         }
         self.attempts.insert(
-            id,
+            *id,
             AttemptFold {
-                number,
-                started_at: at,
+                number: *number,
+                started_at: *at,
                 provider: None,
                 ended: None,
                 steps: Vec::new(),
@@ -172,85 +131,129 @@ impl QueueState {
         );
     }
 
-    /// Applies a [`Event::AttemptRunning`]: records `provider` on attempt `number` of task
-    /// `id`, when it is the attempt currently folded for that task.
-    fn apply_attempt_running(&mut self, id: TaskId, number: u32, provider: &str) {
-        if let Some(attempt) = self.attempts.get_mut(&id)
-            && attempt.number == number
+    /// Applies a [`Event::AttemptRunning`]: records its provider, when it is the attempt
+    /// currently folded for the task it names.
+    fn apply_attempt_running(&mut self, event: &Event) {
+        let Event::AttemptRunning {
+            id,
+            number,
+            provider,
+            ..
+        } = event
+        else {
+            return;
+        };
+        if let Some(attempt) = self.attempts.get_mut(id)
+            && attempt.number == *number
         {
-            attempt.provider = Some(provider.to_owned());
+            attempt.provider = Some(provider.clone());
         }
     }
 
-    /// Applies a [`Event::AttemptReported`]: records the report against attempt `number` of
-    /// task `id`, and against `step` too, when it names one.
-    fn apply_attempt_reported(
-        &mut self,
-        id: TaskId,
-        number: u32,
-        outcome: Outcome,
-        reason: Option<&String>,
-        step: Option<&String>,
-    ) {
+    /// Applies a [`Event::AttemptReported`]: records the report against the attempt it names,
+    /// and against its step too, when it names one.
+    fn apply_attempt_reported(&mut self, event: &Event) {
+        let Event::AttemptReported {
+            id,
+            number,
+            outcome,
+            reason,
+            step,
+            ..
+        } = event
+        else {
+            return;
+        };
         self.reports
-            .insert((id, number), (outcome, reason.cloned()));
+            .insert((*id, *number), (*outcome, reason.clone()));
         if let Some(step) = step {
             self.step_reports
-                .insert((id, number, step.clone()), (outcome, reason.cloned()));
+                .insert((*id, *number, step.clone()), (*outcome, reason.clone()));
         }
     }
 
-    /// Applies a [`Event::AttemptEnded`]: sets task `id`'s status and, when it is the attempt
-    /// currently folded for that task, ends attempt `number`.
-    fn apply_attempt_ended(
-        &mut self,
-        id: TaskId,
-        number: u32,
-        duration: std::time::Duration,
-        status: TaskStatus,
-        reason: Option<&String>,
-    ) {
-        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == id) {
-            task.status = status;
+    /// Applies a [`Event::AttemptEnded`]: sets the task's status and, when it is the attempt
+    /// currently folded for it, ends the attempt it names.
+    fn apply_attempt_ended(&mut self, event: &Event) {
+        let Event::AttemptEnded {
+            id,
+            number,
+            duration,
+            status,
+            reason,
+            ..
+        } = event
+        else {
+            return;
+        };
+        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id) {
+            task.status = *status;
         }
-        if let Some(attempt) = self.attempts.get_mut(&id)
-            && attempt.number == number
+        if let Some(attempt) = self.attempts.get_mut(id)
+            && attempt.number == *number
         {
             attempt.ended = Some(AttemptEnd {
-                duration,
-                status,
-                reason: reason.cloned(),
+                duration: *duration,
+                status: *status,
+                reason: reason.clone(),
                 reported: None,
             });
         }
     }
 
-    /// Applies a [`Event::StepStarted`]: pushes a fresh, unended step onto attempt `number` of
-    /// task `id`'s steps, when it is the attempt currently folded for that task.
-    fn apply_step_started(&mut self, id: TaskId, number: u32, step: &str, at: SystemTime) {
-        if let Some(attempt) = self.attempts.get_mut(&id)
-            && attempt.number == number
+    /// Applies a [`Event::StepStarted`]: pushes a fresh, unended step onto the attempt it
+    /// names, when it is the attempt currently folded for that task.
+    fn apply_step_started(&mut self, event: &Event) {
+        let Event::StepStarted {
+            id,
+            number,
+            step,
+            at,
+        } = event
+        else {
+            return;
+        };
+        if let Some(attempt) = self.attempts.get_mut(id)
+            && attempt.number == *number
         {
             attempt.steps.push(StepFold {
-                name: step.to_owned(),
-                started_at: at,
+                name: step.clone(),
+                started_at: *at,
                 ended: None,
             });
         }
     }
 
-    /// Applies a [`Event::StepEnded`]: ends the most recent unended step named `step` of
-    /// attempt `number` of task `id`, when there is one, with `end`.
-    fn apply_step_ended(&mut self, id: TaskId, number: u32, step: &str, end: AttemptEnd) {
-        if let Some(attempt) = self.attempts.get_mut(&id)
-            && attempt.number == number
+    /// Applies a [`Event::StepEnded`]: ends the most recent unended step of that name on the
+    /// attempt it names, when there is one.
+    fn apply_step_ended(&mut self, event: &Event) {
+        let Event::StepEnded {
+            id,
+            number,
+            step,
+            duration,
+            status,
+            reason,
+            reported,
+            ..
+        } = event
+        else {
+            return;
+        };
+        if let Some(attempt) = self.attempts.get_mut(id)
+            && attempt.number == *number
             && let Some(current) = attempt
                 .steps
                 .iter_mut()
                 .rev()
-                .find(|fold| fold.name == step && fold.ended.is_none())
+                .find(|fold| fold.name == *step && fold.ended.is_none())
         {
-            current.ended = Some(end);
+            current.ended = Some(AttemptEnd {
+                duration: *duration,
+                status: *status,
+                reason: reason.clone(),
+                reported: *reported,
+            });
         }
     }
 
