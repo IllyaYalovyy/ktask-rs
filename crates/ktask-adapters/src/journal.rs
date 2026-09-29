@@ -185,7 +185,7 @@ fn decode_task_added(
 /// carries — the fields the two kinds decode identically.
 fn decode_duration_exit_status(
     payload: &Value,
-    corrupt: impl Fn(&str, String) -> JournalError,
+    corrupt: &impl Fn(&str, String) -> JournalError,
 ) -> Result<(Duration, Option<i32>, TaskStatus), JournalError> {
     let duration_ms = payload
         .get("duration_ms")
@@ -205,6 +205,132 @@ fn decode_duration_exit_status(
         u64::try_from(duration_ms).map_err(|e| corrupt("duration_ms", e.to_string()))?,
     );
     Ok((duration, exit_code, status))
+}
+
+/// The [`Event::AttemptRunning`] a `attempt_running` row's `payload` decodes to.
+fn decode_attempt_running(
+    payload: &Value,
+    id: TaskId,
+    number: u32,
+    at: SystemTime,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Event, JournalError> {
+    let provider = payload
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| corrupt("provider", "missing".to_owned()))?;
+    Ok(Event::AttemptRunning {
+        id,
+        number,
+        provider,
+        at,
+    })
+}
+
+/// The [`Event::AttemptReported`] an `attempt_reported` row's `payload` decodes to.
+fn decode_attempt_reported(
+    payload: &Value,
+    id: TaskId,
+    number: u32,
+    reason: Option<String>,
+    at: SystemTime,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Event, JournalError> {
+    let outcome = payload
+        .get("outcome")
+        .and_then(Value::as_str)
+        .ok_or_else(|| corrupt("outcome", "missing".to_owned()))?
+        .parse::<Outcome>()
+        .map_err(|e| corrupt("outcome", e))?;
+    let step = payload
+        .get("step")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    Ok(Event::AttemptReported {
+        id,
+        number,
+        outcome,
+        reason,
+        step,
+        at,
+    })
+}
+
+/// The [`Event::AttemptEnded`] an `attempt_ended` row's `payload` decodes to.
+fn decode_attempt_ended(
+    payload: &Value,
+    id: TaskId,
+    number: u32,
+    reason: Option<String>,
+    at: SystemTime,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Event, JournalError> {
+    let (duration, exit_code, status) = decode_duration_exit_status(payload, corrupt)?;
+    Ok(Event::AttemptEnded {
+        id,
+        number,
+        duration,
+        exit_code,
+        status,
+        reason,
+        at,
+    })
+}
+
+/// The [`Event::StepStarted`] a `step_started` row's `payload` decodes to.
+fn decode_step_started(
+    payload: &Value,
+    id: TaskId,
+    number: u32,
+    at: SystemTime,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Event, JournalError> {
+    let step = payload
+        .get("step")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| corrupt("step", "missing".to_owned()))?;
+    Ok(Event::StepStarted {
+        id,
+        number,
+        step,
+        at,
+    })
+}
+
+/// The [`Event::StepEnded`] a `step_ended` row's `payload` decodes to.
+fn decode_step_ended(
+    payload: &Value,
+    id: TaskId,
+    number: u32,
+    reason: Option<String>,
+    at: SystemTime,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Event, JournalError> {
+    let step = payload
+        .get("step")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| corrupt("step", "missing".to_owned()))?;
+    let (duration, exit_code, status) = decode_duration_exit_status(payload, corrupt)?;
+    let reported = payload
+        .get("reported")
+        .and_then(Value::as_str)
+        .map(str::parse::<Outcome>)
+        .transpose()
+        .map_err(|e| corrupt("reported", e))?;
+    Ok(Event::StepEnded {
+        id,
+        number,
+        step,
+        duration,
+        exit_code,
+        status,
+        reason,
+        reported,
+        at,
+    })
 }
 
 /// The attempt event an `attempt_started`, `attempt_running`, `attempt_reported`,
@@ -228,89 +354,11 @@ fn decode_attempt_event(
         .map(str::to_owned);
     match kind {
         ATTEMPT_STARTED => Ok(Event::AttemptStarted { id, number, at }),
-        ATTEMPT_RUNNING => {
-            let provider = payload
-                .get("provider")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .ok_or_else(|| corrupt("provider", "missing".to_owned()))?;
-            Ok(Event::AttemptRunning {
-                id,
-                number,
-                provider,
-                at,
-            })
-        }
-        ATTEMPT_REPORTED => {
-            let outcome = payload
-                .get("outcome")
-                .and_then(Value::as_str)
-                .ok_or_else(|| corrupt("outcome", "missing".to_owned()))?
-                .parse::<Outcome>()
-                .map_err(|e| corrupt("outcome", e))?;
-            let step = payload
-                .get("step")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            Ok(Event::AttemptReported {
-                id,
-                number,
-                outcome,
-                reason,
-                step,
-                at,
-            })
-        }
-        ATTEMPT_ENDED => {
-            let (duration, exit_code, status) = decode_duration_exit_status(payload, corrupt)?;
-            Ok(Event::AttemptEnded {
-                id,
-                number,
-                duration,
-                exit_code,
-                status,
-                reason,
-                at,
-            })
-        }
-        STEP_STARTED => {
-            let step = payload
-                .get("step")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .ok_or_else(|| corrupt("step", "missing".to_owned()))?;
-            Ok(Event::StepStarted {
-                id,
-                number,
-                step,
-                at,
-            })
-        }
-        STEP_ENDED => {
-            let step = payload
-                .get("step")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .ok_or_else(|| corrupt("step", "missing".to_owned()))?;
-            let (duration, exit_code, status) = decode_duration_exit_status(payload, corrupt)?;
-            let reported = payload
-                .get("reported")
-                .and_then(Value::as_str)
-                .map(str::parse::<Outcome>)
-                .transpose()
-                .map_err(|e| corrupt("reported", e))?;
-            Ok(Event::StepEnded {
-                id,
-                number,
-                step,
-                duration,
-                exit_code,
-                status,
-                reason,
-                reported,
-                at,
-            })
-        }
+        ATTEMPT_RUNNING => decode_attempt_running(payload, id, number, at, &corrupt),
+        ATTEMPT_REPORTED => decode_attempt_reported(payload, id, number, reason, at, &corrupt),
+        ATTEMPT_ENDED => decode_attempt_ended(payload, id, number, reason, at, &corrupt),
+        STEP_STARTED => decode_step_started(payload, id, number, at, &corrupt),
+        STEP_ENDED => decode_step_ended(payload, id, number, reason, at, &corrupt),
         _ => Err(corrupt("kind", kind.to_owned())),
     }
 }
@@ -332,121 +380,181 @@ fn decode_event(kind: &str, task_id: i64, at: i64, payload: &str) -> Result<Even
     }
 }
 
-/// `event`, as the `(kind, task_id, at, payload)` an events row is written with.
-fn encode_event(event: &Event) -> (&'static str, i64, i64, String) {
-    let task_id = |id: TaskId| i64::try_from(id.0).unwrap_or(i64::MAX);
+/// The payload an `attempt_started` row is written with.
+fn attempt_started_payload(event: &Event) -> String {
+    let Event::AttemptStarted { number, .. } = event else {
+        unreachable!("only called for Event::AttemptStarted")
+    };
+    serde_json::json!({ "number": number }).to_string()
+}
+
+/// The payload an `attempt_running` row is written with.
+fn attempt_running_payload(event: &Event) -> String {
+    let Event::AttemptRunning {
+        number, provider, ..
+    } = event
+    else {
+        unreachable!("only called for Event::AttemptRunning")
+    };
+    serde_json::json!({ "number": number, "provider": provider }).to_string()
+}
+
+/// The payload an `attempt_reported` row is written with.
+fn attempt_reported_payload(event: &Event) -> String {
+    let Event::AttemptReported {
+        number,
+        outcome,
+        reason,
+        step,
+        ..
+    } = event
+    else {
+        unreachable!("only called for Event::AttemptReported")
+    };
+    serde_json::json!({
+        "number": number,
+        "outcome": outcome.as_str(),
+        "reason": reason,
+        "step": step,
+    })
+    .to_string()
+}
+
+/// The payload an `attempt_ended` row is written with.
+fn attempt_ended_payload(event: &Event) -> String {
+    let Event::AttemptEnded {
+        number,
+        duration,
+        exit_code,
+        status,
+        reason,
+        ..
+    } = event
+    else {
+        unreachable!("only called for Event::AttemptEnded")
+    };
+    serde_json::json!({
+        "number": number,
+        "duration_ms": i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+        "exit_code": exit_code,
+        "status": status.as_str(),
+        "reason": reason,
+    })
+    .to_string()
+}
+
+/// The payload a `step_started` row is written with.
+fn step_started_payload(event: &Event) -> String {
+    let Event::StepStarted { number, step, .. } = event else {
+        unreachable!("only called for Event::StepStarted")
+    };
+    serde_json::json!({ "number": number, "step": step }).to_string()
+}
+
+/// The payload a `step_ended` row is written with.
+fn step_ended_payload(event: &Event) -> String {
+    let Event::StepEnded {
+        number,
+        step,
+        duration,
+        exit_code,
+        status,
+        reason,
+        reported,
+        ..
+    } = event
+    else {
+        unreachable!("only called for Event::StepEnded")
+    };
+    serde_json::json!({
+        "number": number,
+        "step": step,
+        "duration_ms": i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+        "exit_code": exit_code,
+        "status": status.as_str(),
+        "reason": reason,
+        "reported": reported.map(Outcome::as_str),
+    })
+    .to_string()
+}
+
+/// The task any `event` carries — every kind of event names one.
+fn event_task_id(event: &Event) -> TaskId {
+    match event {
+        Event::TaskAdded { id, .. }
+        | Event::TaskCancelled { id, .. }
+        | Event::AttemptStarted { id, .. }
+        | Event::AttemptRunning { id, .. }
+        | Event::AttemptReported { id, .. }
+        | Event::AttemptEnded { id, .. }
+        | Event::StepStarted { id, .. }
+        | Event::StepEnded { id, .. } => *id,
+    }
+}
+
+/// The time any `event` carries — every kind of event happened at one.
+fn event_at(event: &Event) -> SystemTime {
+    match event {
+        Event::TaskAdded { at, .. }
+        | Event::TaskCancelled { at, .. }
+        | Event::AttemptStarted { at, .. }
+        | Event::AttemptRunning { at, .. }
+        | Event::AttemptReported { at, .. }
+        | Event::AttemptEnded { at, .. }
+        | Event::StepStarted { at, .. }
+        | Event::StepEnded { at, .. } => *at,
+    }
+}
+
+/// `event`'s own kind and payload, without the task and time every kind carries alike — the
+/// pieces [`encode_event`] adds itself, through [`event_task_id`] and [`event_at`].
+fn event_kind_and_payload(event: &Event) -> (&'static str, String) {
     match event {
         Event::TaskAdded {
-            id,
-            draft,
-            placement,
-            at,
-        } => (
-            TASK_ADDED,
-            task_id(*id),
-            to_seconds(*at),
-            task_added_payload(draft, *placement),
-        ),
-        Event::TaskCancelled { id, at } => (
-            TASK_CANCELLED,
-            task_id(*id),
-            to_seconds(*at),
-            "{}".to_owned(),
-        ),
-        Event::AttemptStarted { id, number, at } => (
-            ATTEMPT_STARTED,
-            task_id(*id),
-            to_seconds(*at),
-            serde_json::json!({ "number": number }).to_string(),
-        ),
-        Event::AttemptRunning {
-            id,
-            number,
-            provider,
-            at,
-        } => (
-            ATTEMPT_RUNNING,
-            task_id(*id),
-            to_seconds(*at),
-            serde_json::json!({ "number": number, "provider": provider }).to_string(),
-        ),
-        Event::AttemptReported {
-            id,
-            number,
-            outcome,
-            reason,
-            step,
-            at,
-        } => (
-            ATTEMPT_REPORTED,
-            task_id(*id),
-            to_seconds(*at),
-            serde_json::json!({
-                "number": number,
-                "outcome": outcome.as_str(),
-                "reason": reason,
-                "step": step,
-            })
-            .to_string(),
-        ),
-        Event::AttemptEnded {
-            id,
-            number,
-            duration,
-            exit_code,
-            status,
-            reason,
-            at,
-        } => (
-            ATTEMPT_ENDED,
-            task_id(*id),
-            to_seconds(*at),
-            serde_json::json!({
-                "number": number,
-                "duration_ms": i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
-                "exit_code": exit_code,
-                "status": status.as_str(),
-                "reason": reason,
-            })
-            .to_string(),
-        ),
-        Event::StepStarted {
-            id,
-            number,
-            step,
-            at,
-        } => (
-            STEP_STARTED,
-            task_id(*id),
-            to_seconds(*at),
-            serde_json::json!({ "number": number, "step": step }).to_string(),
-        ),
-        Event::StepEnded {
-            id,
-            number,
-            step,
-            duration,
-            exit_code,
-            status,
-            reason,
-            reported,
-            at,
-        } => (
-            STEP_ENDED,
-            task_id(*id),
-            to_seconds(*at),
-            serde_json::json!({
-                "number": number,
-                "step": step,
-                "duration_ms": i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
-                "exit_code": exit_code,
-                "status": status.as_str(),
-                "reason": reason,
-                "reported": reported.map(Outcome::as_str),
-            })
-            .to_string(),
-        ),
+            draft, placement, ..
+        } => (TASK_ADDED, task_added_payload(draft, *placement)),
+        Event::TaskCancelled { .. } => (TASK_CANCELLED, "{}".to_owned()),
+        Event::AttemptStarted { .. } => (ATTEMPT_STARTED, attempt_started_payload(event)),
+        Event::AttemptRunning { .. } => (ATTEMPT_RUNNING, attempt_running_payload(event)),
+        Event::AttemptReported { .. } => (ATTEMPT_REPORTED, attempt_reported_payload(event)),
+        Event::AttemptEnded { .. } => (ATTEMPT_ENDED, attempt_ended_payload(event)),
+        Event::StepStarted { .. } => (STEP_STARTED, step_started_payload(event)),
+        Event::StepEnded { .. } => (STEP_ENDED, step_ended_payload(event)),
     }
+}
+
+/// `event`, as the `(kind, task_id, at, payload)` an events row is written with.
+fn encode_event(event: &Event) -> (&'static str, i64, i64, String) {
+    let (kind, payload) = event_kind_and_payload(event);
+    let task_id = i64::try_from(event_task_id(event).0).unwrap_or(i64::MAX);
+    (kind, task_id, to_seconds(event_at(event)), payload)
+}
+
+/// Inserts the row [`Event::TaskAdded`] mirrors into the `tasks` cache.
+fn mirror_task_added(
+    transaction: &Transaction<'_>,
+    task_id: i64,
+    draft: &TaskDraft,
+    at: SystemTime,
+) -> Result<(), rusqlite::Error> {
+    let criteria = serde_json::json!(draft.criteria).to_string();
+    let links = serde_json::json!(draft.links).to_string();
+    transaction.execute(
+        "INSERT INTO tasks
+             (id, order_key, title, body, criteria, kind, links, status, created_at)
+         VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        (
+            task_id,
+            &draft.title,
+            &draft.body,
+            &criteria,
+            draft.kind.as_str(),
+            &links,
+            TaskStatus::Pending.as_str(),
+            to_seconds(at),
+        ),
+    )?;
+    Ok(())
 }
 
 /// Mirrors `event` into the `tasks` cache, inside `transaction`: mechanical bookkeeping so a
@@ -456,23 +564,7 @@ fn mirror(transaction: &Transaction<'_>, event: &Event) -> Result<(), rusqlite::
     let task_id = |id: TaskId| i64::try_from(id.0).unwrap_or(i64::MAX);
     match event {
         Event::TaskAdded { id, draft, at, .. } => {
-            let criteria = serde_json::json!(draft.criteria).to_string();
-            let links = serde_json::json!(draft.links).to_string();
-            transaction.execute(
-                "INSERT INTO tasks
-                     (id, order_key, title, body, criteria, kind, links, status, created_at)
-                 VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                (
-                    task_id(*id),
-                    &draft.title,
-                    &draft.body,
-                    &criteria,
-                    draft.kind.as_str(),
-                    &links,
-                    TaskStatus::Pending.as_str(),
-                    to_seconds(*at),
-                ),
-            )?;
+            mirror_task_added(transaction, task_id(*id), draft, *at)?;
         }
         Event::TaskCancelled { id, .. } => {
             transaction.execute(
