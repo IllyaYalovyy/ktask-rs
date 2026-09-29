@@ -2,20 +2,21 @@
 
 use std::io::{self, IsTerminal, Read};
 use std::os::unix::process::CommandExt as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::JoinHandle;
 
 use ktask_adapters::{
     FileJournalWatch, FileRunLock, GitCli, SqliteJournal, SystemClock, TomlSettingsStore,
 };
-use ktask_core::{Project, SettingView};
+use ktask_core::{Placement, Project, SettingView, TaskDraft};
 
 use crate::context::{
     current_exe, journal_file, merge_project, open_registry, open_settings_store, resolve,
     run_lock_file,
 };
 use crate::error::Failure;
+use crate::render;
 
 /// `ktask-rs tui`'s arguments.
 #[derive(Debug, clap::Args)]
@@ -36,31 +37,73 @@ pub(crate) fn run(args: &Args, project: Option<&str>) -> Result<(), Failure> {
     let watch = FileJournalWatch::open(&path).map_err(|e| e.to_string())?;
     let lock = FileRunLock::new(run_lock_file(&project)?);
     let binary_path = current_exe()?;
-    let run_project = project.clone();
     let settings_store = open_settings_store(&project)?;
-    let settings_project_dir = project.path.clone();
-    Ok(ktask_tui::run(
-        |show_cancelled| {
-            ktask_core::queue_view(
-                project.clone(),
-                &journal,
-                &SystemClock,
-                &lock,
-                show_cancelled,
-            )
-            .map_err(|e| e.to_string())
-        },
-        |id| ktask_core::remove_task(&journal, &SystemClock, id).map_err(|e| e.to_string()),
-        |draft, placement| {
-            ktask_core::add_task(&journal, &SystemClock, draft, placement)
-                .map(|task| task.id)
-                .map_err(|problems| problems.iter().map(ToString::to_string).collect())
-        },
-        move || start_run(&binary_path, &run_project),
-        || load_settings(&settings_store),
-        |name, value| save_setting(&settings_store, &settings_project_dir, name, value),
+    Ok(drive(
+        &project,
+        &journal,
+        &lock,
+        &settings_store,
+        binary_path,
         watch,
     )?)
+}
+
+/// Wires every action the screen can take to `project`'s journal, run lock and settings, and
+/// runs the terminal interface with them until the operator quits.
+fn drive(
+    project: &Project,
+    journal: &SqliteJournal,
+    lock: &FileRunLock,
+    settings_store: &TomlSettingsStore,
+    binary_path: PathBuf,
+    watch: FileJournalWatch,
+) -> Result<(), String> {
+    let run_project = project.clone();
+    let settings_project_dir = project.path.clone();
+    ktask_tui::run(
+        ktask_tui::Actions {
+            load: |show_cancelled| {
+                ktask_core::queue_view(project.clone(), journal, &SystemClock, lock, show_cancelled)
+                    .map_err(|e| e.to_string())
+            },
+            remove: |id| {
+                ktask_core::remove_task(journal, &SystemClock, id).map_err(|e| e.to_string())
+            },
+            add: |draft: &TaskDraft, placement: Placement| {
+                ktask_core::add_task(journal, &SystemClock, draft, placement)
+                    .map(|task| task.id)
+                    .map_err(|problems| problems.iter().map(ToString::to_string).collect())
+            },
+            load_settings: || load_settings(settings_store),
+            save_setting: |name: &str, value: &str| {
+                save_setting(settings_store, &settings_project_dir, name, value)
+            },
+            import: |path: &str| import_into(journal, path),
+        },
+        move || start_run(&binary_path, &run_project),
+        watch,
+    )
+}
+
+/// Reads the file `path` names as text, refusing with the same wording `ktask-rs import`
+/// gives for the same problem.
+fn read_file(path: &str) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))
+}
+
+/// Imports the tasks of the file `path` names into `journal`, at the end of the queue, giving
+/// what to show for it — the same words `ktask-rs import` itself would print, whether it
+/// succeeded or was refused.
+fn import_into(journal: &SqliteJournal, path: &str) -> Result<String, String> {
+    let json = read_file(path)?;
+    match ktask_core::import_tasks(journal, &SystemClock, &json, Placement::End) {
+        Ok(import) => {
+            let mut buf = Vec::new();
+            render::imported(&import, &mut buf)?;
+            Ok(String::from_utf8_lossy(&buf).trim_end().to_owned())
+        }
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// Refuses to open the terminal interface when there is no terminal to draw it on.

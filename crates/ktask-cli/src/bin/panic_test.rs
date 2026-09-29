@@ -40,23 +40,28 @@ fn empty_queue() -> QueueView {
 fn main() {
     let mut loaded_once = false;
     let _ = ktask_tui::run(
-        move |_show_cancelled| {
-            let already_loaded = std::mem::replace(&mut loaded_once, true);
-            assert!(
-                !already_loaded,
-                "deliberate crash for the terminal-recovery test"
-            );
-            Ok(empty_queue())
-        },
-        |_id: TaskId| Ok(()),
-        |_draft: &TaskDraft, _placement: Placement| {
-            Err(vec!["not supported in this test binary".to_owned()])
+        ktask_tui::Actions {
+            load: move |_show_cancelled| {
+                let already_loaded = std::mem::replace(&mut loaded_once, true);
+                assert!(
+                    !already_loaded,
+                    "deliberate crash for the terminal-recovery test"
+                );
+                Ok(empty_queue())
+            },
+            remove: |_id: TaskId| Ok(()),
+            add: |_draft: &TaskDraft, _placement: Placement| {
+                Err(vec!["not supported in this test binary".to_owned()])
+            },
+            load_settings: || -> Result<Vec<SettingView>, String> {
+                Err("not supported in this test binary".to_owned())
+            },
+            save_setting: |_name: &str, _value: &str| {
+                Err("not supported in this test binary".to_owned())
+            },
+            import: |_path: &str| Err("not supported in this test binary".to_owned()),
         },
         || Err("not supported in this test binary".to_owned()),
-        || -> Result<Vec<SettingView>, String> {
-            Err("not supported in this test binary".to_owned())
-        },
-        |_name: &str, _value: &str| Err("not supported in this test binary".to_owned()),
         NeverChanges,
     );
 }

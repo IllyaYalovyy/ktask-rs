@@ -10,6 +10,8 @@ mod dashboard;
 mod exit;
 #[path = "tui/idle.rs"]
 mod idle;
+#[path = "tui/import.rs"]
+mod import;
 #[path = "tui/insert.rs"]
 mod insert;
 #[path = "tui/navigate.rs"]
