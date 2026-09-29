@@ -13,6 +13,22 @@ words of the person who benefits.
 
 A title never names an interface, a command, a screen, a module or a technique.
 
+A title is complete on its own. Someone who reads only the title knows exactly what they
+will be able to do and with what.
+
+- No pronouns and no loose ends: not "start a run and watch it" — watch what?
+- No empty verbs — manage, handle, support, choose, see, watch — without the thing acted
+  on and the result.
+- No two deliverables joined by "and".
+
+## Every task states its value
+
+Directly under the title, one line: **Value:** who needs this and what it gets them. If
+that line cannot be written, the task is not worth doing.
+
+    A user can work on another project's queue without restarting the tool
+    Value: someone running several projects checks and changes each queue from one place.
+
 ## Every feature is delivered in both interfaces, in one task
 
 A feature a user can use exists in the CLI **and** in the TUI, and one task delivers both,
