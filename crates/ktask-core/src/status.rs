@@ -85,6 +85,11 @@ impl fmt::Display for AttemptOutcome {
 pub struct StepLine {
     /// The step's name.
     pub step: String,
+    /// The provider that ran it, for a step an agent runs — the implementation, review and
+    /// test steps. `None` for a step the tool runs itself — the sync, health check, commit
+    /// and push steps, today — which names no provider because none had anything to do with
+    /// it.
+    pub provider: Option<String>,
     /// How long it has run: the recorded duration once it has ended, elapsed time so far
     /// while it is running.
     pub time_spent: Duration,
@@ -104,7 +109,8 @@ pub struct AttemptLine {
     pub number: u32,
     /// The name of its most recent step.
     pub step: String,
-    /// The provider it ran with, once that is known.
+    /// The provider that ran the most recent step, when it is run by an agent; `None` when
+    /// that step is run by the tool itself.
     pub provider: Option<String>,
     /// How long the most recent step has run: the recorded duration once it has ended,
     /// elapsed time so far while it is running.
@@ -180,10 +186,23 @@ fn step_outcome(
     }
 }
 
+/// The provider named for a step called `name`, given the provider the attempt ran with, when
+/// one is known: the implementation, review and test steps are run by an agent, and name it;
+/// every other step — the sync, health check, commit and push steps, today — is run by the
+/// tool itself, and names none.
+fn step_provider(name: &str, provider: Option<&str>) -> Option<String> {
+    if name == IMPLEMENTATION || name == REVIEW_STEP || name == TEST_STEP {
+        provider.map(str::to_owned)
+    } else {
+        None
+    }
+}
+
 /// The still-running step line for a step named `name`, started at `started_at`: its elapsed
 /// time so far, and whether it shows `running` or `interrupted` depending on `run_alive`.
 fn running_step(
     name: &str,
+    provider: Option<&str>,
     started_at: std::time::SystemTime,
     clock: &impl Clock,
     run_alive: bool,
@@ -196,6 +215,7 @@ fn running_step(
     };
     StepLine {
         step: name.to_owned(),
+        provider: step_provider(name, provider),
         time_spent: elapsed,
         outcome,
         reason: None,
@@ -214,6 +234,7 @@ fn running_step(
 /// attempt's most recent one, which a later report-driven step (review, after implementation)
 /// would otherwise overwrite here.
 fn step_lines(attempt: &crate::Attempt, clock: &impl Clock, run_alive: bool) -> Vec<StepLine> {
+    let provider = attempt.provider.as_deref();
     attempt
         .steps
         .iter()
@@ -223,12 +244,13 @@ fn step_lines(attempt: &crate::Attempt, clock: &impl Clock, run_alive: bool) -> 
                 let (outcome, reason) = step_outcome(&step.name, end, own_report);
                 StepLine {
                     step: step.name.clone(),
+                    provider: step_provider(&step.name, provider),
                     time_spent: end.duration,
                     outcome,
                     reason,
                 }
             }
-            None => running_step(&step.name, step.started_at, clock, run_alive),
+            None => running_step(&step.name, provider, step.started_at, clock, run_alive),
         })
         .collect()
 }
@@ -251,12 +273,19 @@ fn current_step_line(
             let (outcome, reason) = step_outcome(IMPLEMENTATION, end, reported);
             StepLine {
                 step: IMPLEMENTATION.to_owned(),
+                provider: step_provider(IMPLEMENTATION, attempt.provider.as_deref()),
                 time_spent: end.duration,
                 outcome,
                 reason,
             }
         }
-        None => running_step(IMPLEMENTATION, attempt.started_at, clock, run_alive),
+        None => running_step(
+            IMPLEMENTATION,
+            attempt.provider.as_deref(),
+            attempt.started_at,
+            clock,
+            run_alive,
+        ),
     };
     steps.push(fallback.clone());
     fallback
@@ -264,13 +293,13 @@ fn current_step_line(
 
 fn entry_for(
     task: Task,
-    attempt: crate::Attempt,
+    attempt: &crate::Attempt,
     reported: Option<(Outcome, Option<String>)>,
     clock: &impl Clock,
     run_alive: bool,
 ) -> StatusEntry {
-    let mut steps = step_lines(&attempt, clock, run_alive);
-    let current = current_step_line(&mut steps, &attempt, reported, clock, run_alive);
+    let mut steps = step_lines(attempt, clock, run_alive);
+    let current = current_step_line(&mut steps, attempt, reported, clock, run_alive);
     StatusEntry {
         task: task.id,
         title: task.title,
@@ -278,7 +307,7 @@ fn entry_for(
         attempt: AttemptLine {
             number: attempt.number,
             step: current.step,
-            provider: attempt.provider,
+            provider: current.provider,
             time_spent: current.time_spent,
             outcome: current.outcome,
             reason: current.reason,
@@ -294,6 +323,7 @@ fn entry_for(
 fn gate_stop_entry(task: Task, step: String, reason: String) -> StatusEntry {
     let line = StepLine {
         step,
+        provider: None,
         time_spent: Duration::ZERO,
         outcome: AttemptOutcome::Failed,
         reason: Some(reason),
@@ -349,7 +379,7 @@ pub fn status(
             continue;
         };
         let reported = crate::attempt::last_report(journal, task.id, attempt.number)?;
-        entries.push(entry_for(task, attempt, reported, clock, run_alive));
+        entries.push(entry_for(task, &attempt, reported, clock, run_alive));
     }
     Ok(entries)
 }
@@ -428,6 +458,7 @@ mod tests {
                     reason: None,
                     steps: vec![StepLine {
                         step: IMPLEMENTATION.to_owned(),
+                        provider: Some("echo".to_owned()),
                         time_spent: Duration::from_secs(30),
                         outcome: AttemptOutcome::Running,
                         reason: None,
@@ -459,6 +490,7 @@ mod tests {
                     reason: None,
                     steps: vec![StepLine {
                         step: IMPLEMENTATION.to_owned(),
+                        provider: Some("echo".to_owned()),
                         time_spent: Duration::from_secs(30),
                         outcome: AttemptOutcome::Interrupted,
                         reason: None,
@@ -732,12 +764,16 @@ mod tests {
             vec![
                 StepLine {
                     step: HEALTH_CHECK_STEP.to_owned(),
+                    // The health check is run by the tool itself, not the agent: it names no
+                    // provider, even though the attempt ran with `echo`.
+                    provider: None,
                     time_spent: Duration::from_secs(4),
                     outcome: AttemptOutcome::Passed,
                     reason: None,
                 },
                 StepLine {
                     step: IMPLEMENTATION.to_owned(),
+                    provider: Some("echo".to_owned()),
                     time_spent: Duration::from_secs(6),
                     outcome: AttemptOutcome::Running,
                     reason: None,
@@ -745,6 +781,7 @@ mod tests {
             ]
         );
         assert_eq!(entries[0].attempt.step, IMPLEMENTATION);
+        assert_eq!(entries[0].attempt.provider.as_deref(), Some("echo"));
     }
 
     /// Appends a [`crate::Event::GateFailed`] for task `id`, naming `step` and `reason`, at
@@ -796,6 +833,7 @@ mod tests {
             entries[0].attempt.steps,
             vec![StepLine {
                 step: SYNC_STEP.to_owned(),
+                provider: None,
                 time_spent: Duration::ZERO,
                 outcome: AttemptOutcome::Failed,
                 reason: Some("uncommitted changes; commit or stash".to_owned()),
