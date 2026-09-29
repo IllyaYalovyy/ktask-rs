@@ -32,10 +32,14 @@ pub struct App {
     /// Set when the operator asked to start executing the pending tasks: the loop starts a
     /// run, exactly as `ktask-rs run` does, and clears this.
     pub run_requested: Option<()>,
-    /// What starting a run from this screen last ended with, shown until the next key — the
-    /// same words `ktask-rs run` itself would print, whether it ran to completion, stopped
-    /// partway, or refused to start at all.
-    pub run_message: Option<String>,
+    /// What starting a run from this screen last ended with — the same words `ktask-rs run`
+    /// itself would print, one per line, whether it ran to completion, stopped partway, or
+    /// refused to start at all — shown in place of the task list until a key that is not one
+    /// of the ones that scroll it dismisses it.
+    pub run_message: Option<Vec<String>>,
+    /// The first of `run_message`'s lines shown, when there are more than fit; reset to `0`
+    /// whenever a fresh message arrives.
+    pub run_message_offset: usize,
     /// The settings screen, while it is open; it covers the queue like the task form does.
     pub(crate) settings: Option<SettingsForm>,
     /// Set when the operator asked to open the settings screen: the loop loads the
@@ -114,10 +118,12 @@ pub fn update(app: App, event: Event) -> App {
         Event::Added(id) => added(app, id),
         Event::Rejected(problems) => in_form(app, |form| Form { problems, ..form }),
         Event::RunMessage(text) => App {
-            run_message: Some(text),
+            run_message: Some(text.lines().map(str::to_owned).collect()),
+            run_message_offset: 0,
             ..app
         },
         Event::Key(KeyCode::Char('q')) => App { quit: true, ..app },
+        Event::Key(key) if app.run_message.is_some() => update_run_message_key(app, key),
         Event::Key(key) if app.confirming.is_some() => update_removal_confirm_key(app, key),
         Event::Key(key) if app.help => update_help_key(app, key),
         Event::Key(key) => update_queue_key(app, key),
@@ -216,13 +222,59 @@ fn update_help_key(app: App, key: KeyCode) -> App {
     }
 }
 
-/// A key on the plain queue screen: no form, settings, confirmation or help in the way.
+/// A key while the last run's results are shown in place of the task list: `j`/`Down` and
+/// `k`/`Up` scroll one line, `g`/`G` jump to the first or last line, and any other key
+/// dismisses the results, then is handled as it would be on the plain queue screen — so, for
+/// example, `r` both dismisses a shown message and starts a fresh run.
+fn update_run_message_key(app: App, key: KeyCode) -> App {
+    match key {
+        KeyCode::Char('j') | KeyCode::Down => scroll_run_message(app, 1),
+        KeyCode::Char('k') | KeyCode::Up => scroll_run_message(app, -1),
+        KeyCode::Char('g') => App {
+            run_message_offset: 0,
+            ..app
+        },
+        KeyCode::Char('G') => App {
+            run_message_offset: last_run_message_line(&app),
+            ..app
+        },
+        _ => update_queue_key(
+            App {
+                run_message: None,
+                run_message_offset: 0,
+                ..app
+            },
+            key,
+        ),
+    }
+}
+
+/// The index of `app.run_message`'s last line, or `0` when there is none.
+fn last_run_message_line(app: &App) -> usize {
+    app.run_message
+        .as_ref()
+        .map_or(0, |lines| lines.len().saturating_sub(1))
+}
+
+/// `app.run_message_offset` moved by `delta`, clamped to stay within the message's lines.
+fn scroll_run_message(app: App, delta: isize) -> App {
+    let offset = app
+        .run_message_offset
+        .saturating_add_signed(delta)
+        .min(last_run_message_line(&app));
+    App {
+        run_message_offset: offset,
+        ..app
+    }
+}
+
+/// A key on the plain queue screen: no form, settings, confirmation, help or run message in
+/// the way.
 fn update_queue_key(app: App, key: KeyCode) -> App {
-    // `refused` and `run_message` are one-shot notices: any key past the one that raised
-    // them dismisses it, whether or not that key is `d` or `r` again.
+    // `refused` is a one-shot notice: any key past the one that raised it dismisses it,
+    // whether or not that key is `d` again.
     let app = App {
         refused: None,
-        run_message: None,
         ..app
     };
     match key {
@@ -668,16 +720,62 @@ mod tests {
     }
 
     #[test]
-    fn a_run_message_is_shown_until_the_next_key_dismisses_it() {
+    fn a_run_message_is_shown_until_a_key_that_does_not_scroll_it_dismisses_it() {
         let app = update(
             loaded(&[1]),
             Event::RunMessage("nothing is pending".to_owned()),
         );
-        assert_eq!(app.run_message.as_deref(), Some("nothing is pending"));
+        assert_eq!(
+            app.run_message.as_deref(),
+            Some(["nothing is pending".to_owned()].as_slice())
+        );
 
-        for key in [KeyCode::Char('j'), KeyCode::Char('x')] {
-            assert_eq!(press(app.clone(), &[key]).run_message, None);
+        // `j`, `k`, the arrows, `g` and `G` scroll the message rather than dismiss it.
+        for key in [
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Char('g'),
+            KeyCode::Char('G'),
+        ] {
+            assert_eq!(
+                press(app.clone(), &[key]).run_message,
+                app.run_message,
+                "{key:?} should scroll, not dismiss"
+            );
         }
+
+        assert_eq!(press(app.clone(), &[KeyCode::Char('x')]).run_message, None);
+    }
+
+    #[test]
+    fn j_and_k_scroll_a_run_message_that_does_not_fit_and_g_and_shift_g_jump_to_its_ends() {
+        let text = (1..=5)
+            .map(|n| format!("task {n}: done"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let app = update(loaded(&[1]), Event::RunMessage(text));
+        assert_eq!(app.run_message_offset, 0);
+
+        let scrolled = press(app.clone(), &[KeyCode::Char('j'), KeyCode::Char('j')]);
+        assert_eq!(scrolled.run_message_offset, 2);
+        assert_eq!(scrolled.run_message, app.run_message);
+
+        let back = press(scrolled.clone(), &[KeyCode::Char('k')]);
+        assert_eq!(back.run_message_offset, 1);
+
+        let bottom = press(app.clone(), &[KeyCode::Char('G')]);
+        assert_eq!(bottom.run_message_offset, 4);
+
+        // Scrolling past either end holds at it rather than wrapping or panicking.
+        let held = press(app.clone(), &[KeyCode::Char('k')]);
+        assert_eq!(held.run_message_offset, 0);
+        let past_bottom = press(bottom, &[KeyCode::Char('j')]);
+        assert_eq!(past_bottom.run_message_offset, 4);
+
+        let top = press(scrolled, &[KeyCode::Char('g')]);
+        assert_eq!(top.run_message_offset, 0);
     }
 
     #[test]

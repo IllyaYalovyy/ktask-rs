@@ -105,10 +105,11 @@ impl Fixture {
     }
 }
 
-/// The header's message row — where a refusal or a removal question is shown.
-fn message_line(screen: &str) -> String {
+/// The first row of the list area — where the last run's results are shown, one per line, in
+/// place of the task list.
+fn result_line(screen: &str, index: usize) -> String {
     lines_inside_frame(screen)
-        .get(3)
+        .get(4 + index)
         .cloned()
         .unwrap_or_default()
 }
@@ -164,7 +165,7 @@ fn r_on_a_queue_with_nothing_pending_refuses_in_the_same_words_ktask_rs_run_woul
     terminal.send("r")?;
 
     let screen = terminal.wait_for_text("nothing is pending")?;
-    assert_eq!(message_line(&screen), "nothing is pending");
+    assert_eq!(result_line(&screen, 0), "nothing is pending");
 
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
@@ -183,9 +184,64 @@ fn r_past_an_earlier_task_that_did_not_finish_refuses_in_the_same_words_ktask_rs
 
     let screen = terminal.wait_for_text("run did not start")?;
     assert_eq!(
-        message_line(&screen),
+        result_line(&screen, 0),
         "task 1: failed: it broke; run did not start"
     );
+
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
+fn a_run_that_attempts_several_tasks_shows_one_result_per_line_scrollable_when_more_than_fit()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    for letter in ["a", "b", "c", "d", "e", "f"] {
+        fixture.add_agent_task(letter, &reporting_body("done"))?;
+    }
+    // Small enough that the list area (5 rows: 8 inner rows minus the 3-row header) holds
+    // fewer than the six result lines a run through every task prints.
+    let terminal = Terminal::launch(&fixture.sandbox, &fixture.repository, &["tui"], 10, 80)?;
+    terminal.wait_for("the queue screen", |screen| {
+        screen.contents().ends_with('┘')
+    })?;
+    let mut terminal = terminal;
+
+    terminal.send("r")?;
+
+    // The header's counts can already say `done 6` — they follow the journal live, task by
+    // task — while the run's own results, printed only once the whole `ktask-rs run`
+    // subprocess exits, are still on their way; waiting for the first result line is what
+    // actually proves they arrived.
+    let screen = terminal.wait_for("the run's results to show", |screen| {
+        result_line(&screen.contents(), 0) == "task 1: done"
+    })?;
+    // Each result is its own line, in the words `ktask-rs run` itself prints — not joined —
+    // and only as many as fit in the list area are shown.
+    assert_eq!(result_line(&screen, 0), "task 1: done");
+    assert_eq!(result_line(&screen, 1), "task 2: done");
+    assert_eq!(result_line(&screen, 2), "task 3: done");
+    assert_eq!(result_line(&screen, 3), "task 4: done");
+    assert_eq!(result_line(&screen, 4), "task 5: done");
+    assert!(!screen.contains("task 6: done"), "{screen}");
+
+    terminal.send("G")?;
+
+    let screen = terminal.wait_for("the results scrolled to the last line", |screen| {
+        result_line(&screen.contents(), 4) == "task 6: done"
+    })?;
+    assert_eq!(result_line(&screen, 0), "task 2: done");
+    assert_eq!(result_line(&screen, 1), "task 3: done");
+    assert_eq!(result_line(&screen, 2), "task 4: done");
+    assert_eq!(result_line(&screen, 3), "task 5: done");
+    assert_eq!(result_line(&screen, 4), "task 6: done");
+
+    terminal.send("g")?;
+    let screen = terminal.wait_for("the results scrolled back to the first line", |screen| {
+        result_line(&screen.contents(), 0) == "task 1: done"
+    })?;
+    assert_eq!(result_line(&screen, 4), "task 5: done");
 
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
@@ -210,7 +266,7 @@ fn r_while_a_run_started_elsewhere_holds_the_queue_refuses_naming_its_process() 
 
     let screen = terminal.wait_for_text("already in progress")?;
     assert_eq!(
-        message_line(&screen),
+        result_line(&screen, 0),
         format!("ktask-rs: a run is already in progress: process {outside_pid}")
     );
 

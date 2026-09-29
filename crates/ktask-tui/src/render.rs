@@ -71,14 +71,22 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     match &app.queue {
         None => Paragraph::new("Loading the queue…").render(inner, buf),
         Some(_) if app.help => key_map(inner, buf),
-        Some(queue) => {
-            let [header, list] =
-                Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(inner);
-            Paragraph::new(header_lines(app, queue)).render(header, buf);
-            Paragraph::new(task_lines(app, queue, usize::from(list.height))).render(list, buf);
-        }
+        Some(queue) => draw_queue(app, queue, inner, buf),
     }
     None
+}
+
+/// Draws the header — the project, the counts and the question line — over `area`'s first
+/// three rows, then, under it, either the last run's results, one per line, when there are
+/// any, or the task list otherwise.
+fn draw_queue(app: &App, queue: &QueueView, area: Rect, buf: &mut Buffer) {
+    let [header, list] = Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(area);
+    Paragraph::new(header_lines(app, queue)).render(header, buf);
+    let height = usize::from(list.height);
+    match &app.run_message {
+        Some(message) => Paragraph::new(run_message_lines(app, message, height)).render(list, buf),
+        None => Paragraph::new(task_lines(app, queue, height)).render(list, buf),
+    }
 }
 
 fn key_map(area: Rect, buf: &mut Buffer) {
@@ -100,9 +108,10 @@ fn key_map(area: Rect, buf: &mut Buffer) {
 
 /// The header: the project, the counts, and the question of a removal or the refusal of one,
 /// while there is either.
-/// The one-line question or notice shown under the summary — a removal confirmation, a
-/// running-task refusal, or the last run this screen started's own message, whichever was
-/// raised most recently — or an empty line when none of those apply.
+/// The one-line question or notice shown under the summary — a removal confirmation or a
+/// running-task refusal, whichever was raised most recently — or an empty line when neither
+/// applies. The last run this screen started's own results are shown in the list area below
+/// instead, by [`run_message_lines`], since there can be more than one line of them.
 fn question_line(app: &App, queue: &QueueView) -> Line<'static> {
     let question = app
         .confirming
@@ -119,15 +128,31 @@ fn question_line(app: &App, queue: &QueueView) -> Line<'static> {
                 Style::new().add_modifier(Modifier::BOLD),
             )
         });
-    let question = app.refused.map_or(question, |id| {
+    app.refused.map_or(question, |id| {
         Line::styled(
             CancelError::Running(id).to_string(),
             Style::new().add_modifier(Modifier::BOLD),
         )
-    });
-    app.run_message.clone().map_or(question, |text| {
-        Line::styled(text, Style::new().add_modifier(Modifier::BOLD))
     })
+}
+
+/// `message` — the last run this screen started's own results, one per line, the same words
+/// `ktask-rs run` itself printed — windowed to the `height` lines that fit, scrolled to
+/// `app.run_message_offset`, clamped so the window never runs past the last line.
+fn run_message_lines(app: &App, message: &[String], height: usize) -> Vec<Line<'static>> {
+    if message.is_empty() || height == 0 {
+        return Vec::new();
+    }
+    let first = app
+        .run_message_offset
+        .min(message.len().saturating_sub(height));
+    message
+        .iter()
+        .skip(first)
+        .take(height)
+        .cloned()
+        .map(Line::from)
+        .collect()
 }
 
 fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
@@ -757,13 +782,42 @@ mod tests {
     }
 
     #[test]
-    fn a_run_message_shows_in_place_of_the_question() {
+    fn a_run_message_shows_in_place_of_the_task_list_one_line_per_line_it_printed() {
+        let text = "task 1: done\ntask 2: failed: it broke\nnothing else is pending";
         let app = update(
             loaded(vec![task(1, "first", TaskKind::Agent)]),
-            Event::RunMessage("nothing is pending".to_owned()),
+            Event::RunMessage(text.to_owned()),
         );
+        // The question line stays empty — the message is not squeezed into it.
         let rows = drawn(&app, 60, 8);
-        assert_eq!(inside(&rows[3]), "nothing is pending");
+        assert_eq!(inside(&rows[3]), "");
+        assert_eq!(inside(&rows[4]), "task 1: done");
+        assert_eq!(inside(&rows[5]), "task 2: failed: it broke");
+        assert_eq!(inside(&rows[6]), "nothing else is pending");
+    }
+
+    #[test]
+    fn more_run_message_lines_than_fit_are_reached_by_scrolling() {
+        use ratatui::crossterm::event::KeyCode::Char;
+        let text = (1..=5)
+            .map(|n| format!("task {n}: done"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let app = update(
+            loaded(vec![task(1, "first", TaskKind::Agent)]),
+            Event::RunMessage(text),
+        );
+        // Three lines fit under the header on an 8-row screen.
+        let rows = drawn(&app, 60, 8);
+        assert_eq!(inside(&rows[4]), "task 1: done");
+        assert_eq!(inside(&rows[5]), "task 2: done");
+        assert_eq!(inside(&rows[6]), "task 3: done");
+
+        let scrolled = keys(app, &[Char('G')]);
+        let rows = drawn(&scrolled, 60, 8);
+        assert_eq!(inside(&rows[4]), "task 3: done");
+        assert_eq!(inside(&rows[5]), "task 4: done");
+        assert_eq!(inside(&rows[6]), "task 5: done");
     }
 
     #[test]
