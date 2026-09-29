@@ -20,6 +20,8 @@ mod navigate;
 mod projects;
 #[path = "support/pty.rs"]
 mod pty;
+#[path = "tui/register.rs"]
+mod register;
 #[path = "tui/remove.rs"]
 mod remove;
 #[path = "support/repo.rs"]

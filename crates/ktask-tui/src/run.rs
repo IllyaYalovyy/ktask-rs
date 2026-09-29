@@ -12,7 +12,24 @@ use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, Key
 use signal_hook::consts::{SIGHUP, SIGTERM};
 use signal_hook::iterator::Signals;
 
+use crate::registration_form::RegistrationForm;
 use crate::{App, Event, render, update};
+
+/// What the loop starts on: the project's queue, already resolved, or a name still needed to
+/// register the current directory under, because its own folder name is already registered for
+/// another path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Start {
+    /// The project was resolved already; the loop starts by loading its queue.
+    Ready,
+    /// The directory could not be resolved to a project: `message` is the refusal that says
+    /// why, the same words `ktask-rs` gives for the same conflict, and the loop starts by
+    /// asking for a name to register the directory under instead.
+    NameTaken {
+        /// The refusal to show above the name field.
+        message: String,
+    },
+}
 
 /// Something the loop is woken by: a key (or resize) at the terminal, the journal having
 /// changed under it, the process being told to stop, a run this screen started ending or
@@ -46,6 +63,7 @@ pub struct Actions<
     Import,
     LoadProjects,
     SwitchProject,
+    Register,
 > {
     /// Fetches the queue to show, with the cancelled tasks when told to.
     pub load: Load,
@@ -68,13 +86,28 @@ pub struct Actions<
     /// Switches to the project the picker was submitted with, so every action from here on
     /// applies to it, giving its fresh queue, or why the switch did not happen.
     pub switch_project: SwitchProject,
+    /// Registers the current directory under the name the registration screen was submitted
+    /// with, giving its fresh queue on success — the same outcome `ktask-rs project register
+    /// --name` gives for the same name — or why nothing was registered, for the screen to show
+    /// and ask again.
+    pub register: Register,
 }
 
 /// Closures carry no useful debug representation of their own; this names the type without
 /// them, which is all `#[derive(Debug)]` could offer here in any case.
-impl<Load, Remove, Add, LoadSettings, SaveSetting, Import, LoadProjects, SwitchProject>
+impl<Load, Remove, Add, LoadSettings, SaveSetting, Import, LoadProjects, SwitchProject, Register>
     std::fmt::Debug
-    for Actions<Load, Remove, Add, LoadSettings, SaveSetting, Import, LoadProjects, SwitchProject>
+    for Actions<
+        Load,
+        Remove,
+        Add,
+        LoadSettings,
+        SaveSetting,
+        Import,
+        LoadProjects,
+        SwitchProject,
+        Register,
+    >
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Actions").finish_non_exhaustive()
@@ -149,8 +182,13 @@ fn draw(terminal: &mut DefaultTerminal, app: &App) -> Result<(), String> {
 /// # Errors
 ///
 /// Fails when the queue or the settings cannot be loaded, a task cannot be removed or the
-/// terminal cannot be used.
+/// terminal cannot be used. `start` chooses what the loop shows first: `Start::Ready` loads the
+/// queue with `actions.load` as described above; `Start::NameTaken` opens the registration
+/// screen instead, showing its message, and `actions.load` is not called until a name typed
+/// there is submitted and `actions.register` succeeds with it, exactly as `switch_project`
+/// replaces the queue on show when the picker is submitted.
 pub fn run(
+    start: Start,
     actions: Actions<
         impl FnMut(bool) -> Result<QueueView, String>,
         impl FnMut(TaskId) -> Result<(), String>,
@@ -160,14 +198,16 @@ pub fn run(
         impl FnMut(&str) -> Result<String, String>,
         impl FnMut() -> Result<Vec<Project>, String>,
         impl FnMut(&str) -> Result<QueueView, String>,
+        impl FnMut(&str) -> Result<QueueView, String>,
     >,
     start_run: impl Fn() -> Result<String, String> + Send + Sync + 'static,
     watch: impl JournalWatch + Send + 'static,
 ) -> Result<(), String> {
     let mut terminal = ratatui::try_init().map_err(|e| format!("cannot use the terminal: {e}"))?;
     let start_run = Arc::new(start_run);
-    let result = spawn_wakes(watch)
-        .and_then(|(sender, wakes)| drive(&mut terminal, actions, &start_run, &sender, &wakes));
+    let result = spawn_wakes(watch).and_then(|(sender, wakes)| {
+        drive(start, &mut terminal, actions, &start_run, &sender, &wakes)
+    });
     ratatui::restore();
     result
 }
@@ -334,6 +374,26 @@ where
     Ok((app, false))
 }
 
+/// Registers the current directory under the name `app`'s registration screen was submitted
+/// with, if any. Succeeding gives the fresh queue to show, exactly as if it had been loaded
+/// from the start, so `(app, true)`, the same as every other background action, tells the loop
+/// to load it. Failing keeps the screen open and shows why, the same words `ktask-rs project
+/// register --name` gives for the same conflict, so another name can be tried — `(app, false)`
+/// here, unlike every other background action's own failure, since there is no project open yet
+/// for the loop to load a queue from.
+fn handle_registration_action<Register>(mut app: App, register: &mut Register) -> (App, bool)
+where
+    Register: FnMut(&str) -> Result<QueueView, String>,
+{
+    let Some(name) = app.registration_submission.take() else {
+        return (app, false);
+    };
+    match register(&name) {
+        Ok(queue) => (update(app, Event::Registered(queue)), true),
+        Err(message) => (update(app, Event::RegistrationFailed(message)), false),
+    }
+}
+
 /// Imports the file `app` has pending, if any: `(app, true)` when one was, `(app, false)`,
 /// unchanged, otherwise. Shows the same result, or the same refusal, `ktask-rs import` itself
 /// would print, one line per line of it.
@@ -363,17 +423,12 @@ macro_rules! or_return_handled {
     }};
 }
 
-/// Tries removing or adding a task, loading or saving a setting, and loading or switching the
-/// active project, in that order: the first one `app` has pending wins. `(app, true)` when one
-/// did, `(app, false)` otherwise.
-fn try_background_actions<R, A, LS, SS, LP, SP>(
+/// Tries registering the current directory, removing or adding a task, loading or saving a
+/// setting, and loading or switching the active project, in that order: the first one `app` has
+/// pending wins. `(app, true)` when one did, `(app, false)` otherwise.
+fn try_background_actions<L, R, A, LS, SS, I, LP, SP, Rg>(
     app: App,
-    remove: &mut R,
-    add: &mut A,
-    load_settings: &mut LS,
-    save_setting: &mut SS,
-    load_projects: &mut LP,
-    switch_project: &mut SP,
+    actions: &mut Actions<L, R, A, LS, SS, I, LP, SP, Rg>,
 ) -> Result<(App, bool), String>
 where
     R: FnMut(TaskId) -> Result<(), String>,
@@ -382,15 +437,25 @@ where
     SS: FnMut(&str, &str) -> Result<SettingView, String>,
     LP: FnMut() -> Result<Vec<Project>, String>,
     SP: FnMut(&str) -> Result<QueueView, String>,
+    Rg: FnMut(&str) -> Result<QueueView, String>,
 {
-    let app = or_return_handled!(handle_task_action(app, remove, add)?);
-    let app = or_return_handled!(handle_settings_action(app, load_settings, save_setting)?);
-    handle_projects_action(app, load_projects, switch_project)
+    let app = or_return_handled!(handle_registration_action(app, &mut actions.register));
+    let app = or_return_handled!(handle_task_action(
+        app,
+        &mut actions.remove,
+        &mut actions.add
+    )?);
+    let app = or_return_handled!(handle_settings_action(
+        app,
+        &mut actions.load_settings,
+        &mut actions.save_setting,
+    )?);
+    handle_projects_action(app, &mut actions.load_projects, &mut actions.switch_project)
 }
 
-fn handle_input<L, R, A, LS, SS, I, LP, SP>(
+fn handle_input<L, R, A, LS, SS, I, LP, SP, Rg>(
     mut app: App,
-    actions: &mut Actions<L, R, A, LS, SS, I, LP, SP>,
+    actions: &mut Actions<L, R, A, LS, SS, I, LP, SP, Rg>,
     input: &Input,
     start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,
     sender: &Sender<Wake>,
@@ -403,20 +468,13 @@ where
     I: FnMut(&str) -> Result<String, String>,
     LP: FnMut() -> Result<Vec<Project>, String>,
     SP: FnMut(&str) -> Result<QueueView, String>,
+    Rg: FnMut(&str) -> Result<QueueView, String>,
 {
     let asked = app.show_cancelled;
     if let Some(event) = translate(input) {
         app = update(app, event);
     }
-    let app = or_return_handled!(try_background_actions(
-        app,
-        &mut actions.remove,
-        &mut actions.add,
-        &mut actions.load_settings,
-        &mut actions.save_setting,
-        &mut actions.load_projects,
-        &mut actions.switch_project,
-    )?);
+    let app = or_return_handled!(try_background_actions(app, actions)?);
     let mut app = or_return_handled!(handle_import_action(app, &mut actions.import));
     if app.run_requested.take().is_some() {
         spawn_run(Arc::clone(start_run), sender.clone());
@@ -437,11 +495,11 @@ fn task_running(app: &App) -> bool {
 /// carry on with, a wake drained ahead of its turn while collapsing a burst of
 /// [`Wake::Changed`] for the next call to receive first, and whether the queue is worth
 /// loading again before the next frame.
-fn step<L, R, A, LS, SS, I, LP, SP>(
+fn step<L, R, A, LS, SS, I, LP, SP, Rg>(
     app: App,
     wake: Wake,
     wakes: &Receiver<Wake>,
-    actions: &mut Actions<L, R, A, LS, SS, I, LP, SP>,
+    actions: &mut Actions<L, R, A, LS, SS, I, LP, SP, Rg>,
     start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,
     sender: &Sender<Wake>,
 ) -> Result<Option<(App, Option<Wake>, bool)>, String>
@@ -453,6 +511,7 @@ where
     I: FnMut(&str) -> Result<String, String>,
     LP: FnMut() -> Result<Vec<Project>, String>,
     SP: FnMut(&str) -> Result<QueueView, String>,
+    Rg: FnMut(&str) -> Result<QueueView, String>,
 {
     match wake {
         Wake::Stop => Ok(None),
@@ -472,7 +531,23 @@ where
     }
 }
 
+/// The app the loop starts on: the queue `load` fetches, or the registration screen open on
+/// `start`'s message, when it says a name is needed first.
+fn initial_app(
+    start: Start,
+    load: &mut impl FnMut(bool) -> Result<QueueView, String>,
+) -> Result<App, String> {
+    Ok(match start {
+        Start::Ready => update(App::default(), Event::Loaded(load(false)?)),
+        Start::NameTaken { message } => App {
+            registration: Some(RegistrationForm::new(message)),
+            ..App::default()
+        },
+    })
+}
+
 fn drive(
+    start: Start,
     terminal: &mut DefaultTerminal,
     mut actions: Actions<
         impl FnMut(bool) -> Result<QueueView, String>,
@@ -483,14 +558,38 @@ fn drive(
         impl FnMut(&str) -> Result<String, String>,
         impl FnMut() -> Result<Vec<Project>, String>,
         impl FnMut(&str) -> Result<QueueView, String>,
+        impl FnMut(&str) -> Result<QueueView, String>,
     >,
     start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,
     sender: &Sender<Wake>,
     wakes: &Receiver<Wake>,
 ) -> Result<(), String> {
-    let mut app = update(App::default(), Event::Loaded((actions.load)(false)?));
-    // A wake drained ahead of its turn while collapsing a burst of `Wake::Changed`, carried
-    // over so the next iteration handles it rather than losing it.
+    let app = initial_app(start, &mut actions.load)?;
+    run_loop(app, terminal, actions, start_run, sender, wakes)
+}
+
+/// Draws `app`, then feeds it whatever wakes the loop until the operator quits or a fatal error
+/// occurs, reloading the queue whenever handling a wake calls for it. A wake drained ahead of
+/// its turn while collapsing a burst of [`Wake::Changed`] is carried in `pending`, so the next
+/// iteration handles it rather than losing it.
+fn run_loop(
+    mut app: App,
+    terminal: &mut DefaultTerminal,
+    mut actions: Actions<
+        impl FnMut(bool) -> Result<QueueView, String>,
+        impl FnMut(TaskId) -> Result<(), String>,
+        impl FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
+        impl FnMut() -> Result<Vec<SettingView>, String>,
+        impl FnMut(&str, &str) -> Result<SettingView, String>,
+        impl FnMut(&str) -> Result<String, String>,
+        impl FnMut() -> Result<Vec<Project>, String>,
+        impl FnMut(&str) -> Result<QueueView, String>,
+        impl FnMut(&str) -> Result<QueueView, String>,
+    >,
+    start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,
+    sender: &Sender<Wake>,
+    wakes: &Receiver<Wake>,
+) -> Result<(), String> {
     let mut pending: Option<Wake> = None;
     loop {
         draw(terminal, &app)?;

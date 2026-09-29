@@ -5,10 +5,11 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Paragraph, Widget};
+use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
 
 use crate::form_screen;
 use crate::import_form::ImportForm;
+use crate::registration_form::RegistrationForm;
 use crate::settings_screen;
 use crate::{App, Confirming};
 
@@ -57,26 +58,41 @@ const IMPORT_KEYS: &str = " Ctrl-S import · Esc cancel ";
 /// What the project picker's frame says at the bottom.
 const PROJECTS_KEYS: &str = " j, k select · Enter switch · Esc cancel ";
 
+/// What the registration screen's frame says at the bottom: there is no queue behind it to
+/// cancel back onto, so Esc quits rather than cancelling.
+const REGISTRATION_KEYS: &str = " Ctrl-S register · Esc quit ";
+
+/// What the frame's bottom border says for whichever screen is open, `discarding` being
+/// whether a first Ctrl-C is asking to discard the open form's content.
+fn footer_keys(app: &App, discarding: bool) -> &'static str {
+    if discarding {
+        DISCARD_KEYS
+    } else if app.settings.is_some() {
+        SETTINGS_KEYS
+    } else if app.form.is_some() {
+        FORM_KEYS
+    } else if app.import.is_some() {
+        IMPORT_KEYS
+    } else if app.projects.is_some() {
+        PROJECTS_KEYS
+    } else if app.registration.is_some() {
+        REGISTRATION_KEYS
+    } else {
+        " q quit · ? keys "
+    }
+}
+
 /// Draws `app` over the whole of `area`, and returns where the cursor goes when it is shown.
 pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     let discarding = app.confirming == Some(Confirming::Discard);
     let block = Block::bordered()
         .title(" ktask-rs ")
-        .title_bottom(if discarding {
-            DISCARD_KEYS
-        } else if app.settings.is_some() {
-            SETTINGS_KEYS
-        } else if app.form.is_some() {
-            FORM_KEYS
-        } else if app.import.is_some() {
-            IMPORT_KEYS
-        } else if app.projects.is_some() {
-            PROJECTS_KEYS
-        } else {
-            " q quit · ? keys "
-        });
+        .title_bottom(footer_keys(app, discarding));
     let inner = block.inner(area);
     block.render(area, buf);
+    if let Some(registration) = &app.registration {
+        return Some(registration_screen(registration, inner, buf));
+    }
     if let Some(settings) = &app.settings {
         return Some(settings_screen::draw(settings, inner, buf));
     }
@@ -128,6 +144,36 @@ fn import_screen(form: &ImportForm, area: Rect, buf: &mut Buffer) -> Position {
     );
     Paragraph::new(lines).render(area, buf);
     cursor
+}
+
+/// Draws the registration screen over the whole of `area`: the refusal that made a name
+/// necessary, wrapped to fit — a path can run well past the width of the screen — over the top
+/// of it, and the name field pinned to its last two rows regardless of how many rows that
+/// takes; registering under the name typed there gives the same outcome `ktask-rs project
+/// register --name` would for the same name. Returns where the cursor goes, in the name.
+fn registration_screen(form: &RegistrationForm, area: Rect, buf: &mut Buffer) -> Position {
+    let [info, prompt] = Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(area);
+    let info_lines = vec![
+        Line::styled(
+            "This directory cannot be opened",
+            Style::new().add_modifier(Modifier::BOLD),
+        ),
+        Line::default(),
+        Line::from(form.problem.clone()),
+    ];
+    Paragraph::new(info_lines)
+        .wrap(Wrap { trim: false })
+        .render(info, buf);
+    let prompt_lines = vec![
+        Line::from("Register it under this name instead:"),
+        Line::from(format!("> {}", form.name.text())),
+    ];
+    Paragraph::new(prompt_lines).render(prompt, buf);
+    Position::new(
+        (prompt.x + 2 + u16::try_from(form.name.cursor().1).unwrap_or(u16::MAX))
+            .min(prompt.x + prompt.width.saturating_sub(1)),
+        prompt.y + 1,
+    )
 }
 
 /// Draws the registered-projects picker over the whole of `area`: name and path per project —
@@ -1151,6 +1197,43 @@ mod tests {
         let (rows, cursor) = draw_form(&app, 8);
         assert_eq!(inside(&rows[4]), "> /tmp/x");
         assert_eq!(cursor, Some(Position::new(9, 4)));
+    }
+
+    fn awaiting_registration(problem: &str) -> App {
+        App {
+            registration: Some(RegistrationForm::new(problem.to_owned())),
+            ..App::default()
+        }
+    }
+
+    #[test]
+    fn the_registration_screen_shows_the_conflict_and_the_name_field_with_the_cursor_in_it() {
+        let app = awaiting_registration("that name is already registered for /elsewhere/app");
+        let (rows, cursor) = draw_form(&app, 8);
+        assert_eq!(inside(&rows[1]), "This directory cannot be opened");
+        assert_eq!(
+            inside(&rows[3]),
+            "that name is already registered for /elsewhere/app"
+        );
+        assert_eq!(inside(&rows[5]), "Register it under this name instead:");
+        assert_eq!(inside(&rows[6]), ">");
+        assert!(
+            rows[7].starts_with("└ Ctrl-S register · Esc quit"),
+            "{rows:?}"
+        );
+        assert_eq!(cursor, Some(Position::new(3, 6)));
+    }
+
+    #[test]
+    fn typing_a_name_shows_it_with_the_cursor_after_it() {
+        use ratatui::crossterm::event::KeyCode::Char;
+        let app = keys(
+            awaiting_registration("conflict"),
+            &"my-app-2".chars().map(Char).collect::<Vec<_>>(),
+        );
+        let (rows, cursor) = draw_form(&app, 8);
+        assert_eq!(inside(&rows[6]), "> my-app-2");
+        assert_eq!(cursor, Some(Position::new(11, 6)));
     }
 
     fn other_project(name: &str) -> Project {

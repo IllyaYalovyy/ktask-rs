@@ -40,6 +40,7 @@ fn empty_queue() -> QueueView {
 fn main() {
     let mut loaded_once = false;
     let _ = ktask_tui::run(
+        ktask_tui::Start::Ready,
         ktask_tui::Actions {
             load: move |_show_cancelled| {
                 let already_loaded = std::mem::replace(&mut loaded_once, true);
@@ -64,6 +65,7 @@ fn main() {
                 Err("not supported in this test binary".to_owned())
             },
             switch_project: |_name: &str| Err("not supported in this test binary".to_owned()),
+            register: |_name: &str| Err("not supported in this test binary".to_owned()),
         },
         || Err("not supported in this test binary".to_owned()),
         NeverChanges,

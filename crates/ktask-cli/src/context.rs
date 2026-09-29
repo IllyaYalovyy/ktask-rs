@@ -38,6 +38,15 @@ pub(crate) fn resolve(
 ) -> Result<(Project, Settings), Failure> {
     let cwd = current_dir()?;
     let resolution = ktask_core::resolve_project(registry, &GitCli, &SystemClock, &cwd, selected)?;
+    resolved(resolution)
+}
+
+/// What [`resolve`] does once a [`ktask_core::Resolution`] is in hand — telling on standard
+/// error when it registered the project, and reading its settings so that a settings file that
+/// cannot be read stops the command at once. Also used by `ktask-rs tui`, which resolves the
+/// project itself so it can ask for a name interactively when the folder name is already taken,
+/// instead of refusing outright.
+pub(crate) fn resolved(resolution: ktask_core::Resolution) -> Result<(Project, Settings), Failure> {
     if resolution.registered {
         render::registered(&resolution.project, &mut io::stderr())?;
     }

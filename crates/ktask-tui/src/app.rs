@@ -8,6 +8,7 @@ use ratatui::crossterm::event::KeyCode;
 
 use crate::form::Form;
 use crate::import_form::ImportForm;
+use crate::registration_form::RegistrationForm;
 use crate::settings_form::SettingsForm;
 
 /// Everything the screen shows and remembers.
@@ -72,6 +73,14 @@ pub struct App {
     /// The name of the project the picker was submitted with, for the loop to switch to, and
     /// clears this.
     pub project_switch: Option<String>,
+    /// The refusal that made a name necessary to register the current directory under, and the
+    /// name being typed for it, while this is open. It is the whole screen — there is no
+    /// project resolved yet, so no queue to show behind it — and it is only ever open before
+    /// the first queue is loaded.
+    pub(crate) registration: Option<RegistrationForm>,
+    /// The name the registration screen was submitted with, for the loop to register the
+    /// current directory under, and clears this.
+    pub registration_submission: Option<String>,
     /// Set when the operator asked to leave.
     pub quit: bool,
 }
@@ -149,6 +158,13 @@ pub enum Event {
     /// The picker's submission did not switch the project, for this reason: it stays open and
     /// shows it.
     ProjectSwitchFailed(String),
+    /// The current directory was registered under the name the registration screen was
+    /// submitted with: its queue opens, exactly as if it had been loaded from the start.
+    Registered(QueueView),
+    /// The registration screen's submission registered nothing, for this reason — the same
+    /// words `ktask-rs project register --name` gives for the same conflict: it stays open,
+    /// keeps what was typed, and shows it.
+    RegistrationFailed(String),
 }
 
 /// The app after `event` happened to `app`. `Loaded` and a first Ctrl-C are handled here,
@@ -174,9 +190,19 @@ enum Overlay {
     Unhandled(App, Event),
 }
 
-/// The app after `event`, when it belongs to the settings screen or the project picker —
-/// opening either, a key pressed while one is open, or how either's submission came back.
+/// The app after `event`, when it belongs to the settings screen, the project picker or the
+/// registration screen — opening one of them, a key pressed while one is open, or how one's
+/// submission came back.
 fn update_overlay_event(app: App, event: Event) -> Overlay {
+    match update_settings_or_projects(app, event) {
+        Overlay::Handled(app) => Overlay::Handled(app),
+        Overlay::Unhandled(app, event) => update_registration_overlay(app, event),
+    }
+}
+
+/// The part of [`update_overlay_event`] that belongs to the settings screen or the project
+/// picker, handing the event back unhandled when it belongs to neither.
+fn update_settings_or_projects(app: App, event: Event) -> Overlay {
     match event {
         Event::Key(key) if app.settings.is_some() => {
             Overlay::Handled(update_settings_key(app, key))
@@ -207,6 +233,24 @@ fn update_overlay_event(app: App, event: Event) -> Overlay {
             project_problem: Some(message),
             ..app
         }),
+        other => Overlay::Unhandled(app, other),
+    }
+}
+
+/// The part of [`update_overlay_event`] that belongs to the registration screen, handing the
+/// event back unhandled when it belongs to none of the overlays.
+fn update_registration_overlay(app: App, event: Event) -> Overlay {
+    match event {
+        Event::Key(key) if app.registration.is_some() => {
+            Overlay::Handled(update_registration_key(app, key))
+        }
+        Event::Ctrl(letter) if app.registration.is_some() => {
+            Overlay::Handled(update_registration_ctrl(app, letter))
+        }
+        Event::Registered(queue) => Overlay::Handled(registered(app, queue)),
+        Event::RegistrationFailed(problem) => Overlay::Handled(in_registration(app, |form| {
+            RegistrationForm { problem, ..form }
+        })),
         other => Overlay::Unhandled(app, other),
     }
 }
@@ -349,6 +393,58 @@ fn project_switched(app: App, queue: QueueView) -> App {
             show_cancelled: false,
             confirming: None,
             refused: None,
+            ..app
+        },
+        queue,
+    )
+}
+
+/// A key while the registration screen is open: any key but Esc is typed into the name field.
+/// There is no queue behind this screen to fall back to, so unlike the other overlays, Esc does
+/// not close it back onto one — it quits, the same as `q` would elsewhere.
+fn update_registration_key(app: App, key: KeyCode) -> App {
+    match key {
+        KeyCode::Esc => App { quit: true, ..app },
+        _ => in_registration(app, |form| form.press(key)),
+    }
+}
+
+/// A Ctrl-letter while the registration screen is open.
+fn update_registration_ctrl(app: App, letter: char) -> App {
+    match letter {
+        's' => submit_registration(app),
+        _ => app,
+    }
+}
+
+/// The app with `change` made to the registration screen, if it is open.
+fn in_registration(app: App, change: impl FnOnce(RegistrationForm) -> RegistrationForm) -> App {
+    App {
+        registration: app.registration.map(change),
+        ..app
+    }
+}
+
+/// The app with the registration screen's typed name left for the loop to register the current
+/// directory under.
+fn submit_registration(app: App) -> App {
+    let name = app
+        .registration
+        .as_ref()
+        .map(|form| form.name.text())
+        .unwrap_or_default();
+    App {
+        registration_submission: Some(name),
+        ..app
+    }
+}
+
+/// The app once the current directory is registered: the registration screen closes and its
+/// queue shows, exactly as if it had been loaded from the start.
+fn registered(app: App, queue: QueueView) -> App {
+    update_loaded(
+        App {
+            registration: None,
             ..app
         },
         queue,
@@ -1669,5 +1765,82 @@ mod tests {
         ] {
             assert_eq!(update(app.clone(), event), app);
         }
+    }
+
+    fn awaiting_registration(problem: &str) -> App {
+        App {
+            registration: Some(RegistrationForm::new(problem.to_owned())),
+            ..App::default()
+        }
+    }
+
+    fn registration_of(app: &App) -> &RegistrationForm {
+        app.registration
+            .as_ref()
+            .expect("the registration screen is open")
+    }
+
+    #[test]
+    fn opening_on_a_name_conflict_shows_it_with_an_empty_name_and_no_queue() {
+        let app = awaiting_registration(
+            "cannot register /work/app as project \"app\": \
+            that name is already registered for /elsewhere/app",
+        );
+        assert_eq!(
+            registration_of(&app).problem,
+            "cannot register /work/app as project \"app\": that name is already registered for \
+             /elsewhere/app"
+        );
+        assert_eq!(registration_of(&app).name.text(), "");
+        assert_eq!(app.queue, None);
+    }
+
+    #[test]
+    fn typing_edits_the_name_and_no_queue_key_acts() {
+        let app = typed(awaiting_registration("conflict"), "my-app-two");
+        assert_eq!(registration_of(&app).name.text(), "my-app-two");
+        assert!(!app.quit);
+        assert_eq!(app.queue, None);
+    }
+
+    #[test]
+    fn ctrl_s_submits_the_typed_name_and_leaves_the_screen_open() {
+        let app = typed(awaiting_registration("conflict"), "my-app-two");
+        let app = update(app, Event::Ctrl('s'));
+        assert_eq!(app.registration_submission, Some("my-app-two".to_owned()));
+        assert!(app.registration.is_some());
+    }
+
+    #[test]
+    fn esc_quits_since_there_is_no_queue_to_fall_back_to() {
+        let app = press(awaiting_registration("conflict"), &[KeyCode::Esc]);
+        assert!(app.quit);
+    }
+
+    #[test]
+    fn ctrl_c_quits_from_the_registration_screen() {
+        let app = update(awaiting_registration("conflict"), Event::Ctrl('c'));
+        assert!(app.quit);
+    }
+
+    #[test]
+    fn registration_failed_keeps_the_screen_open_with_the_name_and_shows_why() {
+        let app = typed(awaiting_registration("conflict"), "taken");
+        let app = update(
+            app,
+            Event::RegistrationFailed("that name is taken too".to_owned()),
+        );
+        let form = registration_of(&app);
+        assert_eq!(form.problem, "that name is taken too");
+        assert_eq!(form.name.text(), "taken");
+    }
+
+    #[test]
+    fn registered_closes_the_screen_and_opens_the_fresh_queue() {
+        let app = awaiting_registration("conflict");
+        let app = update(app, Event::Registered(queue_of(&[1, 2])));
+        assert_eq!(app.registration, None);
+        assert_eq!(app.queue, Some(queue_of(&[1, 2])));
+        assert_eq!(on(&app), Some(1));
     }
 }

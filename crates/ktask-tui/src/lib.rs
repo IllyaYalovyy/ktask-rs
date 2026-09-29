@@ -7,6 +7,7 @@ mod app;
 mod form;
 mod form_screen;
 mod import_form;
+mod registration_form;
 mod render;
 mod run;
 mod settings_form;
@@ -15,4 +16,4 @@ mod text;
 
 pub use app::{App, Confirming, Event, Refusal, update};
 pub use render::render;
-pub use run::{Actions, run};
+pub use run::{Actions, Start, run};

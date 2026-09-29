@@ -12,11 +12,11 @@ use ktask_adapters::{
     FileJournalWatch, FileRunLock, GitCli, SqliteJournal, SqliteRegistry, SystemClock,
     TomlSettingsStore,
 };
-use ktask_core::{Placement, Project, QueueView, SettingView, TaskDraft, TaskId};
+use ktask_core::{Placement, Project, QueueView, ResolveError, SettingView, TaskDraft, TaskId};
 
 use crate::context::{
-    current_exe, journal_file, merge_project, open_registry, open_settings_store, resolve,
-    run_lock_file, state_root,
+    current_dir, current_exe, journal_file, merge_project, open_registry, open_settings_store,
+    resolved, run_lock_file, state_root,
 };
 use crate::error::Failure;
 use crate::render;
@@ -29,19 +29,50 @@ pub(crate) struct Args {
     project: Option<String>,
 }
 
-/// Opens the terminal interface on the queue of the project selected, or the current one.
+/// What the terminal interface opens on: the project's queue, already resolved, or a name still
+/// needed to register the current directory under, because its own folder name is already
+/// registered for another path.
+enum Start {
+    Ready(Project),
+    NameTaken(String),
+}
+
+/// Opens the terminal interface on the queue of the project selected, or the current one — or,
+/// when the current directory's own folder name is already taken by another registered path,
+/// asks for a name to register it under instead of refusing outright, since there is a terminal
+/// right here to ask on; the outcome either way is the one `ktask-rs project register --name`
+/// gives for the same name.
 pub(crate) fn run(args: &Args, project: Option<&str>) -> Result<(), Failure> {
     ensure_terminal()?;
     let registry = open_registry()?;
-    let project = merge_project(project, args.project.as_deref())?;
-    let (project, _settings) = resolve(&registry, project.as_deref())?;
+    let selected = merge_project(project, args.project.as_deref())?;
+    let cwd = current_dir()?;
+    let start = resolve_or_ask_to_register(&registry, &cwd, selected.as_deref())?;
     let binary_path = current_exe()?;
-    Ok(drive(&registry, project, binary_path)?)
+    Ok(drive(&registry, &cwd, start, binary_path)?)
+}
+
+/// Resolves the project the terminal interface opens on, exactly as every other command does,
+/// except that a folder name already taken by another path is not refused outright: it is
+/// handed to the screen instead, to ask for a name interactively.
+fn resolve_or_ask_to_register(
+    registry: &SqliteRegistry,
+    cwd: &Path,
+    selected: Option<&str>,
+) -> Result<Start, Failure> {
+    match ktask_core::resolve_project(registry, &GitCli, &SystemClock, cwd, selected) {
+        Ok(resolution) => {
+            let (project, _settings) = resolved(resolution)?;
+            Ok(Start::Ready(project))
+        }
+        Err(error @ ResolveError::NameTaken { .. }) => Ok(Start::NameTaken(error.to_string())),
+        Err(other) => Err(other.into()),
+    }
 }
 
 /// Everything wired to whichever project is active: its journal, run lock and settings —
-/// reopened fresh each time the operator switches to another one, so every action from then on
-/// applies to it.
+/// reopened fresh each time the operator switches to another one, or once the current directory
+/// is registered under a name it was asked for, so every action from then on applies to it.
 struct ProjectContext {
     project: Project,
     journal: SqliteJournal,
@@ -63,36 +94,78 @@ impl ProjectContext {
     }
 }
 
+/// `project`'s context, opened fresh, with its queue — the two steps that always go together
+/// when the active project changes, whether by switching to another registered one or by
+/// registering the current directory under a name it was asked for.
+fn opened(project: Project) -> Result<(ProjectContext, QueueView), String> {
+    let context = ProjectContext::open(project.clone())?;
+    let view = ktask_core::queue_view(
+        project,
+        &context.journal,
+        &SystemClock,
+        &context.lock,
+        false,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok((context, view))
+}
+
+/// The project context `guard` holds, when one is open yet: absent only until the current
+/// directory is registered under a name asked for on the registration screen, before which no
+/// other action the screen offers can be reached.
+fn project_context(guard: Option<&ProjectContext>) -> Result<&ProjectContext, String> {
+    guard.ok_or_else(|| "no project is open yet".to_owned())
+}
+
 /// Wires every action the screen can take to the active project's journal, run lock and
-/// settings, starting on `project`, and runs the terminal interface with them until the
-/// operator quits. The journal watch covers every registered project's state, not just
-/// `project`'s, so a project switched to after the screen opened is covered too.
-fn drive(registry: &SqliteRegistry, project: Project, binary_path: PathBuf) -> Result<(), String> {
-    let context = RefCell::new(ProjectContext::open(project.clone())?);
+/// settings, starting on `start`, and runs the terminal interface with them until the operator
+/// quits. The journal watch covers every registered project's state, not just the active
+/// project's, so a project switched to, or a directory registered, after the screen opened is
+/// covered too.
+fn drive(
+    registry: &SqliteRegistry,
+    cwd: &Path,
+    start: Start,
+    binary_path: PathBuf,
+) -> Result<(), String> {
+    let (initial_context, tui_start, initial_project) = match start {
+        Start::Ready(project) => (
+            Some(ProjectContext::open(project.clone())?),
+            ktask_tui::Start::Ready,
+            Some(project),
+        ),
+        Start::NameTaken(message) => (None, ktask_tui::Start::NameTaken { message }, None),
+    };
+    let context = RefCell::new(initial_context);
     let watch = FileJournalWatch::open(&state_root()?, true).map_err(|e| e.to_string())?;
-    let active_project = Arc::new(Mutex::new(project));
+    let active_project = Arc::new(Mutex::new(initial_project));
     let run_project = Arc::clone(&active_project);
     ktask_tui::run(
-        actions(&context, &active_project, registry),
+        tui_start,
+        actions(&context, &active_project, registry, cwd),
         move || {
             let project = run_project
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
-            start_run(&binary_path, &project)
+            match project {
+                Some(project) => start_run(&binary_path, &project),
+                None => Err("no project is open yet".to_owned()),
+            }
         },
         watch,
     )
 }
 
 /// Every action the screen can take, wired to whichever project `context` and
-/// `active_project` currently hold — switching either is `switch_project`'s job, not this
-/// function's.
+/// `active_project` currently hold — switching either is `switch_project`'s or
+/// `register_directory`'s job, not this function's.
 #[allow(clippy::type_complexity)]
 fn actions<'a>(
-    context: &'a RefCell<ProjectContext>,
-    active_project: &'a Mutex<Project>,
+    context: &'a RefCell<Option<ProjectContext>>,
+    active_project: &'a Mutex<Option<Project>>,
     registry: &'a SqliteRegistry,
+    cwd: &'a Path,
 ) -> ktask_tui::Actions<
     impl FnMut(bool) -> Result<QueueView, String> + 'a,
     impl FnMut(TaskId) -> Result<(), String> + 'a,
@@ -102,32 +175,61 @@ fn actions<'a>(
     impl FnMut(&str) -> Result<String, String> + 'a,
     impl FnMut() -> Result<Vec<Project>, String> + 'a,
     impl FnMut(&str) -> Result<QueueView, String> + 'a,
+    impl FnMut(&str) -> Result<QueueView, String> + 'a,
 > {
     ktask_tui::Actions {
         load: |show_cancelled| load_queue(context, show_cancelled),
-        remove: |id| {
-            ktask_core::remove_task(&context.borrow().journal, &SystemClock, id)
-                .map_err(|e| e.to_string())
-        },
-        add: |draft: &TaskDraft, placement: Placement| {
-            ktask_core::add_task(&context.borrow().journal, &SystemClock, draft, placement)
-                .map(|task| task.id)
-                .map_err(|problems| problems.iter().map(ToString::to_string).collect())
-        },
-        load_settings: || load_settings(&context.borrow().settings_store),
+        remove: |id| remove_from(context, id),
+        add: |draft: &TaskDraft, placement: Placement| add_to(context, draft, placement),
+        load_settings: || settings_of(context),
         save_setting: |name: &str, value: &str| save_setting_for(context, name, value),
-        import: |path: &str| import_into(&context.borrow().journal, path),
+        import: |path: &str| import_to(context, path),
         load_projects: || ktask_core::list_projects(registry).map_err(|e| e.to_string()),
         switch_project: |name: &str| switch_project(context, active_project, registry, name),
+        register: |name: &str| register_directory(context, active_project, registry, cwd, name),
     }
+}
+
+/// Removes the task numbered `id` from the active project's queue.
+fn remove_from(context: &RefCell<Option<ProjectContext>>, id: TaskId) -> Result<(), String> {
+    let guard = context.borrow();
+    let ctx = project_context(guard.as_ref())?;
+    ktask_core::remove_task(&ctx.journal, &SystemClock, id).map_err(|e| e.to_string())
+}
+
+/// Adds `draft` to the active project's queue at `placement`, giving its number, or every rule
+/// it broke.
+fn add_to(
+    context: &RefCell<Option<ProjectContext>>,
+    draft: &TaskDraft,
+    placement: Placement,
+) -> Result<TaskId, Vec<String>> {
+    let guard = context.borrow();
+    let ctx = project_context(guard.as_ref()).map_err(|error| vec![error])?;
+    ktask_core::add_task(&ctx.journal, &SystemClock, draft, placement)
+        .map(|task| task.id)
+        .map_err(|problems| problems.iter().map(ToString::to_string).collect())
+}
+
+/// Every setting of the active project, for the settings screen to open on.
+fn settings_of(context: &RefCell<Option<ProjectContext>>) -> Result<Vec<SettingView>, String> {
+    let guard = context.borrow();
+    load_settings(&project_context(guard.as_ref())?.settings_store)
+}
+
+/// Imports the tasks of the file `path` names into the active project's queue.
+fn import_to(context: &RefCell<Option<ProjectContext>>, path: &str) -> Result<String, String> {
+    let guard = context.borrow();
+    import_into(&project_context(guard.as_ref())?.journal, path)
 }
 
 /// The active project's queue, with the cancelled tasks when `show_cancelled`.
 fn load_queue(
-    context: &RefCell<ProjectContext>,
+    context: &RefCell<Option<ProjectContext>>,
     show_cancelled: bool,
 ) -> Result<QueueView, String> {
-    let ctx = context.borrow();
+    let guard = context.borrow();
+    let ctx = project_context(guard.as_ref())?;
     ktask_core::queue_view(
         ctx.project.clone(),
         &ctx.journal,
@@ -141,11 +243,12 @@ fn load_queue(
 /// Changes the active project's setting `name` to `value`, as the settings screen was
 /// submitted.
 fn save_setting_for(
-    context: &RefCell<ProjectContext>,
+    context: &RefCell<Option<ProjectContext>>,
     name: &str,
     value: &str,
 ) -> Result<SettingView, String> {
-    let ctx = context.borrow();
+    let guard = context.borrow();
+    let ctx = project_context(guard.as_ref())?;
     save_setting(&ctx.settings_store, &ctx.project.path, name, value)
 }
 
@@ -154,8 +257,8 @@ fn save_setting_for(
 /// every action after this applies to the new project. Fails, changing nothing, when `name` is
 /// not a registered project or its state cannot be opened.
 fn switch_project(
-    context: &RefCell<ProjectContext>,
-    active_project: &Mutex<Project>,
+    context: &RefCell<Option<ProjectContext>>,
+    active_project: &Mutex<Option<Project>>,
     registry: &SqliteRegistry,
     name: &str,
 ) -> Result<QueueView, String> {
@@ -164,19 +267,32 @@ fn switch_project(
         .into_iter()
         .find(|project| project.name == name)
         .ok_or_else(|| format!("unknown project {name:?}"))?;
-    let fresh = ProjectContext::open(project.clone())?;
-    let view = ktask_core::queue_view(
-        project.clone(),
-        &fresh.journal,
-        &SystemClock,
-        &fresh.lock,
-        false,
-    )
-    .map_err(|e| e.to_string())?;
-    *context.borrow_mut() = fresh;
+    let (fresh, view) = opened(project.clone())?;
+    *context.borrow_mut() = Some(fresh);
     *active_project
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = project;
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project);
+    Ok(view)
+}
+
+/// Registers `cwd`'s directory under `name`, exactly as `ktask-rs project register --name`
+/// would, and, once it succeeds, opens its queue so every action from then on applies to it —
+/// the same as switching to a freshly registered project from the picker. Fails, registering
+/// nothing, when `name` is refused or its state cannot be opened.
+fn register_directory(
+    context: &RefCell<Option<ProjectContext>>,
+    active_project: &Mutex<Option<Project>>,
+    registry: &SqliteRegistry,
+    cwd: &Path,
+    name: &str,
+) -> Result<QueueView, String> {
+    let project = ktask_core::register_project(registry, &GitCli, &SystemClock, cwd, name)
+        .map_err(|e| e.to_string())?;
+    let (fresh, view) = opened(project.clone())?;
+    *context.borrow_mut() = Some(fresh);
+    *active_project
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project);
     Ok(view)
 }
 
