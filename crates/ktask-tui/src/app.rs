@@ -73,6 +73,13 @@ pub struct App {
     /// The name of the project the picker was submitted with, for the loop to switch to, and
     /// clears this.
     pub project_switch: Option<String>,
+    /// While the picker is open, the name of the project `d` there asked to forget: the picker
+    /// shows this question in place of the list, and the answer is the next key.
+    pub(crate) project_forgetting: Option<String>,
+    /// The name of the project the picker's forget question was confirmed with, for the loop to
+    /// forget — the same outcome `ktask-rs project forget --yes <NAME>` gives for the same
+    /// name — and clears this.
+    pub project_forget: Option<String>,
     /// The refusal that made a name necessary to register the current directory under, and the
     /// name being typed for it, while this is open. It is the whole screen — there is no
     /// project resolved yet, so no queue to show behind it — and it is only ever open before
@@ -158,6 +165,14 @@ pub enum Event {
     /// The picker's submission did not switch the project, for this reason: it stays open and
     /// shows it.
     ProjectSwitchFailed(String),
+    /// The picker's forget question was confirmed and carried out: the loop forgot the project
+    /// and gives the registered projects that remain, the same list `ktask-rs project list`
+    /// prints afterward; the picker stays open, showing them.
+    ProjectForgotten(Vec<Project>),
+    /// Forgetting the project the picker's question named did not happen, for this reason — the
+    /// same words `ktask-rs project forget` gives for the same conflict: the picker stays open
+    /// and shows it.
+    ProjectForgetFailed(String),
     /// The current directory was registered under the name the registration screen was
     /// submitted with: its queue opens, exactly as if it had been loaded from the start.
     Registered(QueueView),
@@ -230,6 +245,12 @@ fn update_settings_or_projects(app: App, event: Event) -> Overlay {
         Event::ProjectsLoaded(projects) => Overlay::Handled(open_projects(app, projects)),
         Event::ProjectSwitched(queue) => Overlay::Handled(project_switched(app, queue)),
         Event::ProjectSwitchFailed(message) => Overlay::Handled(App {
+            project_problem: Some(message),
+            ..app
+        }),
+        Event::ProjectForgotten(projects) => Overlay::Handled(project_forgotten(app, projects)),
+        Event::ProjectForgetFailed(message) => Overlay::Handled(App {
+            project_forgetting: None,
             project_problem: Some(message),
             ..app
         }),
@@ -322,8 +343,12 @@ fn update_settings_ctrl(app: App, letter: char) -> App {
     }
 }
 
-/// A key while the project picker is open.
+/// A key while the project picker is open: while it is asking to confirm forgetting a project,
+/// only that question's own keys answer.
 fn update_projects_key(app: App, key: KeyCode) -> App {
+    if app.project_forgetting.is_some() {
+        return update_forget_confirm_key(app, key);
+    }
     match key {
         KeyCode::Esc => App {
             projects: None,
@@ -333,7 +358,57 @@ fn update_projects_key(app: App, key: KeyCode) -> App {
         KeyCode::Char('j') | KeyCode::Down => move_project_selection(app, 1),
         KeyCode::Char('k') | KeyCode::Up => move_project_selection(app, -1),
         KeyCode::Enter => submit_project_switch(app),
+        KeyCode::Char('d') => ask_forget_selected(app),
         _ => app,
+    }
+}
+
+/// The name of the picker's selected project, when there is one.
+fn selected_project_name(app: &App) -> Option<String> {
+    app.projects
+        .as_ref()
+        .and_then(|projects| projects.get(app.project_selection))
+        .map(|project| project.name.clone())
+}
+
+/// The app with the picker asking to confirm forgetting its selected project.
+fn ask_forget_selected(app: App) -> App {
+    let Some(name) = selected_project_name(&app) else {
+        return app;
+    };
+    App {
+        project_forgetting: Some(name),
+        project_problem: None,
+        ..app
+    }
+}
+
+/// A key while the picker is asking to confirm forgetting the project it named.
+fn update_forget_confirm_key(app: App, key: KeyCode) -> App {
+    match key {
+        KeyCode::Char('y') => App {
+            project_forget: app.project_forgetting.clone(),
+            project_forgetting: None,
+            ..app
+        },
+        KeyCode::Char('n') | KeyCode::Esc => App {
+            project_forgetting: None,
+            ..app
+        },
+        _ => app,
+    }
+}
+
+/// The app once the picker's forget question is carried out: the fresh registered projects
+/// replace the ones it showed, the selection stays inside them, and the question closes.
+fn project_forgotten(app: App, projects: Vec<Project>) -> App {
+    let last = projects.len().saturating_sub(1);
+    App {
+        project_selection: app.project_selection.min(last),
+        projects: Some(projects),
+        project_forgetting: None,
+        project_problem: None,
+        ..app
     }
 }
 
@@ -1714,12 +1789,7 @@ mod tests {
     #[test]
     fn while_the_picker_is_open_only_its_own_keys_and_ctrl_c_are_heard() {
         let open = update(loaded(&[1]), Event::ProjectsLoaded(projects()));
-        for key in [
-            KeyCode::Char('q'),
-            KeyCode::Char('a'),
-            KeyCode::Char('d'),
-            KeyCode::Char('?'),
-        ] {
+        for key in [KeyCode::Char('q'), KeyCode::Char('a'), KeyCode::Char('?')] {
             assert_eq!(press(open.clone(), &[key]), open);
         }
         assert!(update(open, Event::Ctrl('c')).quit);
@@ -1752,6 +1822,100 @@ mod tests {
         let app = update(loaded(&[1]), Event::ProjectsLoaded(projects()));
         let app = update(app, Event::ProjectSwitchFailed("cannot open it".to_owned()));
         assert_eq!(app.project_problem.as_deref(), Some("cannot open it"));
+        assert!(app.projects.is_some());
+    }
+
+    #[test]
+    fn d_in_the_picker_asks_to_confirm_forgetting_the_selected_project() {
+        let app = update(loaded(&[1]), Event::ProjectsLoaded(projects()));
+        let app = press(app, &[KeyCode::Char('j'), KeyCode::Char('d')]);
+        assert_eq!(app.project_forgetting.as_deref(), Some("other"));
+        assert_eq!(app.project_forget, None);
+        assert!(app.projects.is_some());
+    }
+
+    #[test]
+    fn while_the_forget_question_is_open_only_y_n_and_esc_answer_it() {
+        let asked = press(
+            update(loaded(&[1]), Event::ProjectsLoaded(projects())),
+            &[KeyCode::Char('d')],
+        );
+        for key in [
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Enter,
+            KeyCode::Char('q'),
+        ] {
+            assert_eq!(press(asked.clone(), &[key]), asked);
+        }
+    }
+
+    #[test]
+    fn y_confirms_the_forget_question_leaving_the_name_for_the_loop_to_forget() {
+        let app = update(loaded(&[1]), Event::ProjectsLoaded(projects()));
+        let app = press(app, &[KeyCode::Char('d'), KeyCode::Char('y')]);
+        assert_eq!(app.project_forget, Some("app".to_owned()));
+        assert_eq!(app.project_forgetting, None);
+        assert!(app.projects.is_some());
+    }
+
+    #[test]
+    fn n_and_esc_drop_the_forget_question_and_forget_nothing() {
+        let asked = press(
+            update(loaded(&[1]), Event::ProjectsLoaded(projects())),
+            &[KeyCode::Char('d')],
+        );
+        for key in [KeyCode::Char('n'), KeyCode::Esc] {
+            let app = press(asked.clone(), &[key]);
+            assert_eq!(app.project_forgetting, None);
+            assert_eq!(app.project_forget, None);
+            assert!(app.projects.is_some());
+        }
+    }
+
+    #[test]
+    fn project_forgotten_shows_the_fresh_list_and_closes_the_question() {
+        let app = press(
+            update(loaded(&[1]), Event::ProjectsLoaded(projects())),
+            &[KeyCode::Char('d'), KeyCode::Char('y')],
+        );
+        // The loop takes `project_forget` before handing the outcome back as an event, the
+        // same as it does for `project_switch`; `update` itself never clears it.
+        let app = App {
+            project_forget: None,
+            ..app
+        };
+        let remaining = vec![other_project("other")];
+        let app = update(app, Event::ProjectForgotten(remaining.clone()));
+        assert_eq!(app.projects, Some(remaining));
+        assert_eq!(app.project_forgetting, None);
+        assert_eq!(app.project_forget, None);
+        assert_eq!(app.project_selection, 0);
+    }
+
+    #[test]
+    fn project_forgotten_clamps_the_selection_when_it_ran_past_the_fresh_list() {
+        let app = press(
+            update(loaded(&[1]), Event::ProjectsLoaded(projects())),
+            &[KeyCode::Char('j'), KeyCode::Char('d'), KeyCode::Char('y')],
+        );
+        let remaining = vec![other_project("app")];
+        let app = update(app, Event::ProjectForgotten(remaining));
+        assert_eq!(app.project_selection, 0);
+    }
+
+    #[test]
+    fn project_forget_failed_keeps_the_picker_open_and_shows_why() {
+        let app = press(
+            update(loaded(&[1]), Event::ProjectsLoaded(projects())),
+            &[KeyCode::Char('d'), KeyCode::Char('y')],
+        );
+        let app = update(
+            app,
+            Event::ProjectForgetFailed("unknown project".to_owned()),
+        );
+        assert_eq!(app.project_problem.as_deref(), Some("unknown project"));
+        assert_eq!(app.project_forgetting, None);
         assert!(app.projects.is_some());
     }
 

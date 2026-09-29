@@ -1,6 +1,7 @@
 //! `p` on the queue screen: it opens the list of registered projects — the same one
 //! `ktask-rs project list` prints — the current one marked, and selecting one replaces the
-//! queue screen with that project's queue, every action from then on applying to it.
+//! queue screen with that project's queue, every action from then on applying to it. `d` there
+//! forgets the selected project, after asking, the same as `ktask-rs project forget --yes`.
 
 use std::path::PathBuf;
 
@@ -86,6 +87,15 @@ impl Fixture {
         })?;
         Ok(terminal)
     }
+
+    /// Where the binary keeps `name`'s journal under this fixture's `XDG_STATE_HOME`.
+    fn journal_file(&self, name: &str) -> PathBuf {
+        self.sandbox
+            .state_home()
+            .join("ktask-rs")
+            .join(name)
+            .join("journal.db")
+    }
 }
 
 #[test]
@@ -122,7 +132,8 @@ fn p_opens_the_list_project_list_prints_with_name_and_path_the_current_one_marke
         "{lines:?}"
     );
     assert!(
-        lines[ROWS as usize - 1].starts_with("└ j, k select · Enter switch · Esc cancel"),
+        lines[ROWS as usize - 1]
+            .starts_with("└ j, k select · Enter switch · d forget · Esc cancel"),
         "{lines:?}"
     );
 
@@ -188,6 +199,104 @@ fn selecting_a_project_replaces_the_queue_screen_and_every_action_then_applies_t
     let my_app_list = fixture.cli_list(&fixture.my_app)?;
     assert!(my_app_list.contains("alpha"), "{my_app_list}");
     assert!(!my_app_list.contains("charlie"), "{my_app_list}");
+    Ok(())
+}
+
+#[test]
+fn d_asks_to_confirm_forgetting_the_selected_project() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let mut terminal = fixture.open_picker()?;
+
+    terminal.send("d")?;
+    terminal.wait_for("the forget question", |screen| {
+        screen.contents().contains("Forget project \"my-app\"?")
+    })?;
+    let screen = terminal.screen();
+    let lines = lines_inside_frame(&screen);
+    assert!(
+        lines[ROWS as usize - 1].starts_with("└ y forget · n, Esc keep it"),
+        "{lines:?}"
+    );
+
+    terminal.send(ESC)?;
+    terminal.wait_for("the plain picker, the question gone", |screen| {
+        !screen.contents().contains("Forget project")
+    })?;
+    terminal.send(ESC)?;
+    terminal.wait_for("the queue back, without the picker", |screen| {
+        !screen.contents().contains("Projects")
+    })?;
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
+fn n_and_esc_drop_the_forget_question_and_forget_nothing() -> Result<()> {
+    let fixture = Fixture::new()?;
+    for answer in ["n", ESC] {
+        let mut terminal = fixture.open_picker()?;
+        terminal.send("d")?;
+        terminal.wait_for("the forget question", |screen| {
+            screen.contents().contains("Forget project")
+        })?;
+
+        terminal.send(answer)?;
+        terminal.wait_for(
+            "the picker back, with both projects still listed",
+            |screen| {
+                let contents = screen.contents();
+                !contents.contains("Forget project")
+                    && contents.contains("my-app")
+                    && contents.contains("other-app")
+            },
+        )?;
+
+        terminal.send(ESC)?;
+        terminal.wait_for("the queue back, without the picker", |screen| {
+            !screen.contents().contains("Projects")
+        })?;
+        terminal.send("q")?;
+        assert_eq!(terminal.wait_for_exit()?, 0);
+    }
+    assert!(fixture.cli_project_list()?.contains("my-app"));
+    Ok(())
+}
+
+#[test]
+fn y_forgets_the_selected_project_leaving_its_journal_on_disk() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let journal = fixture.journal_file("my-app");
+    assert!(journal.is_file(), "{}", journal.display());
+    let mut terminal = fixture.open_picker()?;
+
+    terminal.send("d")?;
+    terminal.wait_for("the forget question", |screen| {
+        screen.contents().contains("Forget project")
+    })?;
+    terminal.send("y")?;
+
+    // The picker stays open, now showing only `other-app`.
+    terminal.wait_for("the picker with my-app gone", |screen| {
+        let contents = screen.contents();
+        contents.contains("Projects")
+            && !contents.contains("my-app")
+            && contents.contains("other-app")
+    })?;
+    terminal.send(ESC)?;
+    terminal.wait_for("the queue back", |screen| {
+        !screen.contents().contains("Projects")
+    })?;
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+
+    // Forgetting through the terminal interface gives the same result `ktask-rs project
+    // forget --yes my-app` would: gone from the registry, its journal left where it was.
+    assert_eq!(
+        fixture.cli_project_list()?,
+        format!("other-app\t{}\n", fixture.other_app.display())
+    );
+    assert!(journal.is_file(), "{}", journal.display());
     Ok(())
 }
 

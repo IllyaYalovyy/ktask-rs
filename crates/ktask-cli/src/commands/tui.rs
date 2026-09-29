@@ -175,6 +175,7 @@ fn actions<'a>(
     impl FnMut(&str) -> Result<String, String> + 'a,
     impl FnMut() -> Result<Vec<Project>, String> + 'a,
     impl FnMut(&str) -> Result<QueueView, String> + 'a,
+    impl FnMut(&str) -> Result<Vec<Project>, String> + 'a,
     impl FnMut(&str) -> Result<QueueView, String> + 'a,
 > {
     ktask_tui::Actions {
@@ -186,8 +187,16 @@ fn actions<'a>(
         import: |path: &str| import_to(context, path),
         load_projects: || ktask_core::list_projects(registry).map_err(|e| e.to_string()),
         switch_project: |name: &str| switch_project(context, active_project, registry, name),
+        forget_project: |name: &str| forget_project(registry, name),
         register: |name: &str| register_directory(context, active_project, registry, cwd, name),
     }
+}
+
+/// Forgets the registered project named `name`, giving the registered projects that remain —
+/// the same list `ktask-rs project list` prints afterward.
+fn forget_project(registry: &SqliteRegistry, name: &str) -> Result<Vec<Project>, String> {
+    ktask_core::forget_project(registry, name).map_err(|e| e.to_string())?;
+    ktask_core::list_projects(registry).map_err(|e| e.to_string())
 }
 
 /// Removes the task numbered `id` from the active project's queue.

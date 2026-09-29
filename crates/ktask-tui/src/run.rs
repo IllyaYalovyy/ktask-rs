@@ -63,6 +63,7 @@ pub struct Actions<
     Import,
     LoadProjects,
     SwitchProject,
+    ForgetProject,
     Register,
 > {
     /// Fetches the queue to show, with the cancelled tasks when told to.
@@ -86,6 +87,10 @@ pub struct Actions<
     /// Switches to the project the picker was submitted with, so every action from here on
     /// applies to it, giving its fresh queue, or why the switch did not happen.
     pub switch_project: SwitchProject,
+    /// Forgets the project the picker's confirmation named, giving the registered projects
+    /// that remain — the same list `ktask-rs project list` prints afterward — or why nothing
+    /// was forgotten.
+    pub forget_project: ForgetProject,
     /// Registers the current directory under the name the registration screen was submitted
     /// with, giving its fresh queue on success — the same outcome `ktask-rs project register
     /// --name` gives for the same name — or why nothing was registered, for the screen to show
@@ -95,8 +100,18 @@ pub struct Actions<
 
 /// Closures carry no useful debug representation of their own; this names the type without
 /// them, which is all `#[derive(Debug)]` could offer here in any case.
-impl<Load, Remove, Add, LoadSettings, SaveSetting, Import, LoadProjects, SwitchProject, Register>
-    std::fmt::Debug
+impl<
+    Load,
+    Remove,
+    Add,
+    LoadSettings,
+    SaveSetting,
+    Import,
+    LoadProjects,
+    SwitchProject,
+    ForgetProject,
+    Register,
+> std::fmt::Debug
     for Actions<
         Load,
         Remove,
@@ -106,6 +121,7 @@ impl<Load, Remove, Add, LoadSettings, SaveSetting, Import, LoadProjects, SwitchP
         Import,
         LoadProjects,
         SwitchProject,
+        ForgetProject,
         Register,
     >
 {
@@ -198,6 +214,7 @@ pub fn run(
         impl FnMut(&str) -> Result<String, String>,
         impl FnMut() -> Result<Vec<Project>, String>,
         impl FnMut(&str) -> Result<QueueView, String>,
+        impl FnMut(&str) -> Result<Vec<Project>, String>,
         impl FnMut(&str) -> Result<QueueView, String>,
     >,
     start_run: impl Fn() -> Result<String, String> + Send + Sync + 'static,
@@ -349,16 +366,19 @@ where
     Ok((app, false))
 }
 
-/// Loads the project picker or switches to the project `app` has pending, if either: `(app,
-/// true)` when one was, `(app, false)`, unchanged, otherwise.
-fn handle_projects_action<LoadProjects, SwitchProject>(
+/// Loads the project picker, switches to the project `app` has pending, or forgets the one its
+/// confirmation named, whichever `app` has pending: `(app, true)` when one was, `(app, false)`,
+/// unchanged, otherwise.
+fn handle_projects_action<LoadProjects, SwitchProject, ForgetProject>(
     mut app: App,
     load_projects: &mut LoadProjects,
     switch_project: &mut SwitchProject,
+    forget_project: &mut ForgetProject,
 ) -> Result<(App, bool), String>
 where
     LoadProjects: FnMut() -> Result<Vec<Project>, String>,
     SwitchProject: FnMut(&str) -> Result<QueueView, String>,
+    ForgetProject: FnMut(&str) -> Result<Vec<Project>, String>,
 {
     if app.projects_requested.take().is_some() {
         let projects = load_projects()?;
@@ -368,6 +388,13 @@ where
         let event = match switch_project(&name) {
             Ok(queue) => Event::ProjectSwitched(queue),
             Err(message) => Event::ProjectSwitchFailed(message),
+        };
+        return Ok((update(app, event), true));
+    }
+    if let Some(name) = app.project_forget.take() {
+        let event = match forget_project(&name) {
+            Ok(projects) => Event::ProjectForgotten(projects),
+            Err(message) => Event::ProjectForgetFailed(message),
         };
         return Ok((update(app, event), true));
     }
@@ -424,11 +451,11 @@ macro_rules! or_return_handled {
 }
 
 /// Tries registering the current directory, removing or adding a task, loading or saving a
-/// setting, and loading or switching the active project, in that order: the first one `app` has
-/// pending wins. `(app, true)` when one did, `(app, false)` otherwise.
-fn try_background_actions<L, R, A, LS, SS, I, LP, SP, Rg>(
+/// setting, and loading, switching or forgetting a project, in that order: the first one `app`
+/// has pending wins. `(app, true)` when one did, `(app, false)` otherwise.
+fn try_background_actions<L, R, A, LS, SS, I, LP, SP, FP, Rg>(
     app: App,
-    actions: &mut Actions<L, R, A, LS, SS, I, LP, SP, Rg>,
+    actions: &mut Actions<L, R, A, LS, SS, I, LP, SP, FP, Rg>,
 ) -> Result<(App, bool), String>
 where
     R: FnMut(TaskId) -> Result<(), String>,
@@ -437,6 +464,7 @@ where
     SS: FnMut(&str, &str) -> Result<SettingView, String>,
     LP: FnMut() -> Result<Vec<Project>, String>,
     SP: FnMut(&str) -> Result<QueueView, String>,
+    FP: FnMut(&str) -> Result<Vec<Project>, String>,
     Rg: FnMut(&str) -> Result<QueueView, String>,
 {
     let app = or_return_handled!(handle_registration_action(app, &mut actions.register));
@@ -450,12 +478,17 @@ where
         &mut actions.load_settings,
         &mut actions.save_setting,
     )?);
-    handle_projects_action(app, &mut actions.load_projects, &mut actions.switch_project)
+    handle_projects_action(
+        app,
+        &mut actions.load_projects,
+        &mut actions.switch_project,
+        &mut actions.forget_project,
+    )
 }
 
-fn handle_input<L, R, A, LS, SS, I, LP, SP, Rg>(
+fn handle_input<L, R, A, LS, SS, I, LP, SP, FP, Rg>(
     mut app: App,
-    actions: &mut Actions<L, R, A, LS, SS, I, LP, SP, Rg>,
+    actions: &mut Actions<L, R, A, LS, SS, I, LP, SP, FP, Rg>,
     input: &Input,
     start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,
     sender: &Sender<Wake>,
@@ -468,6 +501,7 @@ where
     I: FnMut(&str) -> Result<String, String>,
     LP: FnMut() -> Result<Vec<Project>, String>,
     SP: FnMut(&str) -> Result<QueueView, String>,
+    FP: FnMut(&str) -> Result<Vec<Project>, String>,
     Rg: FnMut(&str) -> Result<QueueView, String>,
 {
     let asked = app.show_cancelled;
@@ -495,11 +529,11 @@ fn task_running(app: &App) -> bool {
 /// carry on with, a wake drained ahead of its turn while collapsing a burst of
 /// [`Wake::Changed`] for the next call to receive first, and whether the queue is worth
 /// loading again before the next frame.
-fn step<L, R, A, LS, SS, I, LP, SP, Rg>(
+fn step<L, R, A, LS, SS, I, LP, SP, FP, Rg>(
     app: App,
     wake: Wake,
     wakes: &Receiver<Wake>,
-    actions: &mut Actions<L, R, A, LS, SS, I, LP, SP, Rg>,
+    actions: &mut Actions<L, R, A, LS, SS, I, LP, SP, FP, Rg>,
     start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,
     sender: &Sender<Wake>,
 ) -> Result<Option<(App, Option<Wake>, bool)>, String>
@@ -511,6 +545,7 @@ where
     I: FnMut(&str) -> Result<String, String>,
     LP: FnMut() -> Result<Vec<Project>, String>,
     SP: FnMut(&str) -> Result<QueueView, String>,
+    FP: FnMut(&str) -> Result<Vec<Project>, String>,
     Rg: FnMut(&str) -> Result<QueueView, String>,
 {
     match wake {
@@ -558,6 +593,7 @@ fn drive(
         impl FnMut(&str) -> Result<String, String>,
         impl FnMut() -> Result<Vec<Project>, String>,
         impl FnMut(&str) -> Result<QueueView, String>,
+        impl FnMut(&str) -> Result<Vec<Project>, String>,
         impl FnMut(&str) -> Result<QueueView, String>,
     >,
     start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,
@@ -584,6 +620,7 @@ fn run_loop(
         impl FnMut(&str) -> Result<String, String>,
         impl FnMut() -> Result<Vec<Project>, String>,
         impl FnMut(&str) -> Result<QueueView, String>,
+        impl FnMut(&str) -> Result<Vec<Project>, String>,
         impl FnMut(&str) -> Result<QueueView, String>,
     >,
     start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,

@@ -56,7 +56,11 @@ const SETTINGS_KEYS: &str = " Tab, Shift-Tab field · Ctrl-S save · Esc cancel 
 const IMPORT_KEYS: &str = " Ctrl-S import · Esc cancel ";
 
 /// What the project picker's frame says at the bottom.
-const PROJECTS_KEYS: &str = " j, k select · Enter switch · Esc cancel ";
+const PROJECTS_KEYS: &str = " j, k select · Enter switch · d forget · Esc cancel ";
+
+/// What the project picker's frame says at the bottom while it asks to confirm forgetting a
+/// project.
+const FORGET_KEYS: &str = " y forget · n, Esc keep it ";
 
 /// What the registration screen's frame says at the bottom: there is no queue behind it to
 /// cancel back onto, so Esc quits rather than cancelling.
@@ -73,6 +77,8 @@ fn footer_keys(app: &App, discarding: bool) -> &'static str {
         FORM_KEYS
     } else if app.import.is_some() {
         IMPORT_KEYS
+    } else if app.project_forgetting.is_some() {
+        FORGET_KEYS
     } else if app.projects.is_some() {
         PROJECTS_KEYS
     } else if app.registration.is_some() {
@@ -176,16 +182,57 @@ fn registration_screen(form: &RegistrationForm, area: Rect, buf: &mut Buffer) ->
     )
 }
 
-/// Draws the registered-projects picker over the whole of `area`: name and path per project —
-/// the same list `ktask-rs project list` prints, from the same use case — the one whose queue
-/// is on show marked, and the selection marked and shown reversed.
-fn projects_screen(app: &App, projects: &[Project], area: Rect, buf: &mut Buffer) {
+/// The picker's title, its problem line when its last submission changed nothing, and its
+/// forget question while one is open — everything above the project rows themselves.
+fn projects_header(app: &App) -> Vec<Line<'static>> {
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let mut lines = vec![Line::styled("Projects", bold)];
     if let Some(problem) = &app.project_problem {
         lines.push(Line::styled(format!("! {problem}"), bold));
     }
+    if let Some(name) = &app.project_forgetting {
+        lines.push(Line::styled(
+            format!(
+                "Forget project {name:?}? Its journal stays on disk. \
+                 y to forget · n or Esc to keep it"
+            ),
+            bold,
+        ));
+    }
     lines.push(Line::default());
+    lines
+}
+
+/// One row of the picker: `project`'s name, padded to `name_width`, and its path — marked
+/// `>` and shown reversed when it is `selected`, and suffixed `(current)` when it is the one
+/// whose queue is on show.
+fn project_row(
+    project: &Project,
+    selected: bool,
+    current: bool,
+    name_width: usize,
+) -> Line<'static> {
+    let marker = if selected { '>' } else { ' ' };
+    let mut style = Style::new();
+    if selected {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    let current_mark = if current { " (current)" } else { "" };
+    Line::styled(
+        format!(
+            "{marker} {:<name_width$}  {}{current_mark}",
+            project.name,
+            project.path.display(),
+        ),
+        style,
+    )
+}
+
+/// Draws the registered-projects picker over the whole of `area`: name and path per project —
+/// the same list `ktask-rs project list` prints, from the same use case — the one whose queue
+/// is on show marked, and the selection marked and shown reversed.
+fn projects_screen(app: &App, projects: &[Project], area: Rect, buf: &mut Buffer) {
+    let mut lines = projects_header(app);
     if projects.is_empty() {
         lines.push(Line::from("No projects are registered."));
     }
@@ -195,27 +242,11 @@ fn projects_screen(app: &App, projects: &[Project], area: Rect, buf: &mut Buffer
         .max()
         .unwrap_or(0);
     let current = app.queue.as_ref().map(|queue| queue.project.name.as_str());
-    for (index, project) in projects.iter().enumerate() {
+    lines.extend(projects.iter().enumerate().map(|(index, project)| {
         let selected = index == app.project_selection;
-        let marker = if selected { '>' } else { ' ' };
-        let mut style = Style::new();
-        if selected {
-            style = style.add_modifier(Modifier::REVERSED);
-        }
-        let current_mark = if Some(project.name.as_str()) == current {
-            " (current)"
-        } else {
-            ""
-        };
-        lines.push(Line::styled(
-            format!(
-                "{marker} {:<name_width$}  {}{current_mark}",
-                project.name,
-                project.path.display(),
-            ),
-            style,
-        ));
-    }
+        let is_current = Some(project.name.as_str()) == current;
+        project_row(project, selected, is_current, name_width)
+    }));
     Paragraph::new(lines).render(area, buf);
 }
 
@@ -1255,7 +1286,7 @@ mod tests {
         assert_eq!(inside(&rows[3]), "> app    /work/app (current)");
         assert_eq!(inside(&rows[4]), "  other  /work/other");
         assert!(
-            rows[7].starts_with("└ j, k select · Enter switch · Esc cancel"),
+            rows[7].starts_with("└ j, k select · Enter switch · d forget · Esc cancel"),
             "{rows:?}"
         );
         assert!(!rows.join("\n").contains("first"));
