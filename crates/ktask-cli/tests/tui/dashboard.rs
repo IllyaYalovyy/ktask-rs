@@ -12,6 +12,7 @@ use nix::unistd::Pid;
 use super::pty::{Terminal, lines_inside_frame};
 use super::repo::{git_repository, scratch};
 use super::support::{Result, Sandbox};
+use super::tracked_branch::cloned_repository;
 
 const ROWS: u16 = 24;
 const COLS: u16 = 110;
@@ -624,6 +625,94 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
     terminal.wait_for("the cancelled task hidden again", |screen| {
         !screen.contents().contains("cancelled  agent  c")
     })?;
+
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
+fn a_task_that_commits_and_pushes_shows_the_dashboard_its_push_line() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, scratch) = scratch()?;
+    let repository = cloned_repository(&sandbox, &scratch, "my-app")?;
+    let bare = scratch.join("my-app.git");
+    let set = sandbox.run(
+        &repository,
+        &["settings", "set", "tracked-branch", "origin/main"],
+    )?;
+    assert_eq!(set.code, Some(0), "{}", set.stderr);
+    let added = sandbox.run(
+        &repository,
+        &[
+            "add",
+            "--title",
+            "a",
+            "--criterion",
+            "it works",
+            "--body",
+            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  echo fresh > new.txt\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+        ],
+    )?;
+    assert_eq!(added.code, Some(0), "{}", added.stderr);
+
+    let mut terminal = Terminal::launch(&sandbox, &repository, &["tui"], ROWS, COLS)?;
+    terminal.wait_for("the queue screen", |screen| {
+        screen.contents().ends_with('┘')
+    })?;
+    let mut run = {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ktask-rs"));
+        command.arg("run");
+        sandbox.isolate(&mut command, &repository);
+        with_nested_ktask_rs_on_path(&mut command);
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+        command.spawn()?
+    };
+    let screen = terminal.wait_for("a's push line with the task shown done", |screen| {
+        let contents = screen.contents();
+        contents.contains("pushed")
+            && lines_inside_frame(&contents)
+                .get(4)
+                .is_some_and(|line| line.starts_with(">  1  #1  done"))
+    })?;
+    assert!(run.wait()?.success());
+
+    let mut rev_parse = Command::new("git");
+    rev_parse.args(["rev-parse", "--short", "HEAD"]);
+    let head = sandbox.isolate(&mut rev_parse, &repository).output()?;
+    assert!(head.status.success());
+    let hash = String::from_utf8(head.stdout)?.trim().to_owned();
+
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[4], ">  1  #1  done  agent  a");
+    assert!(
+        lines[5].contains("push · echo")
+            && lines[5].ends_with(&format!("pushed {hash} to origin/main")),
+        "{} (expected hash {hash})",
+        lines[5]
+    );
+
+    // The remote itself, not merely the push's own exit code, holds the commit: this is what
+    // the push step confirmed before it showed `done`.
+    let mut ls_remote = Command::new("git");
+    ls_remote.args([
+        "ls-remote",
+        bare.to_str().expect("bare path is text"),
+        "refs/heads/main",
+    ]);
+    let remote = sandbox.isolate(&mut ls_remote, &repository).output()?;
+    assert!(remote.status.success());
+    let remote_tip = String::from_utf8(remote.stdout)?
+        .split_whitespace()
+        .next()
+        .expect("ls-remote printed a hash")
+        .to_owned();
+    let mut full_rev_parse = Command::new("git");
+    full_rev_parse.args(["rev-parse", "HEAD"]);
+    let full_head = sandbox.isolate(&mut full_rev_parse, &repository).output()?;
+    assert!(full_head.status.success());
+    assert_eq!(remote_tip, String::from_utf8(full_head.stdout)?.trim());
 
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
