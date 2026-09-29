@@ -99,19 +99,19 @@ struct Fixture {
 }
 
 /// A bash block that reports `outcome` for whatever token it is given as `$1`, for the
-/// implementation step — the same block, run again for the review step (`$3`), approves it, so
-/// a task meant to succeed end to end still does.
+/// implementation step — the same block, run again for the review step (`$3`), approves it,
+/// and again for the test step, accepts it, so a task meant to succeed end to end still does.
 fn reporting_body(outcome: &str) -> String {
     format!(
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" {outcome}\nfi\n```\n"
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" {outcome}\nfi\n```\n"
     )
 }
 
 /// A bash block that reports `outcome` with `--reason` for whatever token it is given, for the
-/// implementation step; the review step, when reached, approves.
+/// implementation step; the review and test steps, when reached, approve and accept.
 fn reporting_body_with_reason(outcome: &str, reason: &str) -> String {
     format!(
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nfi\n```\n"
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nfi\n```\n"
     )
 }
 
@@ -418,7 +418,7 @@ fn the_command_lines_attempt_timeout_still_overrides_the_projects_setting() -> R
     assert_eq!(set.code, Some(0), "{}", set.stderr);
     fixture.add_agent_task(
         "a",
-        "```bash\nsleep 2\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+        "```bash\nsleep 2\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
     )?;
 
     let outcome = fixture.run_the_queue(&["run", "--attempt-timeout", "30"])?;
@@ -622,7 +622,7 @@ fn a_second_run_while_one_is_in_progress_exits_two_naming_the_running_process() 
     fixture.add_agent_task(
         "a",
         &format!(
-            "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+            "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
             go.display()
         ),
     )?;
@@ -892,7 +892,7 @@ fn the_scripts_third_argument_is_the_steps_name() -> Result<()> {
 }
 
 #[test]
-fn the_implementation_and_review_steps_each_record_exactly_one_start_and_one_end_event()
+fn the_implementation_review_and_test_steps_each_record_exactly_one_start_and_one_end_event()
 -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add_agent_task("a", &reporting_body("done"))?;
@@ -908,8 +908,8 @@ fn the_implementation_and_review_steps_each_record_exactly_one_start_and_one_end
             |row| row.get(0),
         )
     };
-    assert_eq!(count("step_started")?, 2);
-    assert_eq!(count("step_ended")?, 2);
+    assert_eq!(count("step_started")?, 3);
+    assert_eq!(count("step_ended")?, 3);
     Ok(())
 }
 
@@ -964,8 +964,19 @@ fn the_report_command_the_prompt_gives_the_agent_is_the_full_path_and_works_with
         approved_line.starts_with(binary_path.to_str().unwrap()),
         "{approved_line}"
     );
+    // Same proof again, for the test step's own prompt and its `accepted` command.
+    let test_prompt = ktask_core::build_test_prompt(&task_named("a"), &token, &binary_path, "");
+    let accepted_line = test_prompt
+        .lines()
+        .find(|line| line.trim_start().ends_with(" accepted"))
+        .expect("the test prompt names an accepted command")
+        .trim();
+    assert!(
+        accepted_line.starts_with(binary_path.to_str().unwrap()),
+        "{accepted_line}"
+    );
 
-    // The task's body runs one exact line or the other, depending on the step, with its own
+    // The task's body runs one exact line or another, depending on the step, with its own
     // `PATH` blanked out first — proving each line is a complete, self-sufficient command that
     // in no way depends on `ktask-rs` being found on `PATH`, unlike the bare
     // `ktask-rs report ...` other tests here use.
@@ -973,7 +984,7 @@ fn the_report_command_the_prompt_gives_the_agent_is_the_full_path_and_works_with
     fixture.add_agent_task(
         "a",
         &format!(
-            "```bash\nPATH=\nif [ \"$3\" = \"review\" ]; then\n  {approved_line}\nelse\n  {done_line}\nfi\n```\n"
+            "```bash\nPATH=\nif [ \"$3\" = \"review\" ]; then\n  {approved_line}\nelif [ \"$3\" = \"testing\" ]; then\n  {accepted_line}\nelse\n  {done_line}\nfi\n```\n"
         ),
     )?;
 
@@ -984,16 +995,16 @@ fn the_report_command_the_prompt_gives_the_agent_is_the_full_path_and_works_with
     Ok(())
 }
 
-/// A bash block that reports `done` for the implementation step and `outcome` (with `reason`,
-/// when it is not empty) for the review step.
+/// A bash block that reports `done` for the implementation step, `outcome` (with `reason`,
+/// when it is not empty) for the review step, and `accepted` for the test step, when reached.
 fn review_body(outcome: &str, reason: &str) -> String {
     if reason.is_empty() {
         format!(
-            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" {outcome}\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
+            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" {outcome}\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
         )
     } else {
         format!(
-            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
+            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
         )
     }
 }
@@ -1015,6 +1026,7 @@ fn an_approving_review_carries_the_task_on_as_done_and_the_review_line_shows_it(
             "#1\tdone\ta",
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
+            "\ttesting\techo\t0s\taccepted",
         ]
     );
     Ok(())
@@ -1115,7 +1127,7 @@ fn ktask_rs_report_refuses_an_outcome_outside_the_running_step_naming_the_ones_t
     fixture.add_agent_task(
         "a",
         &format!(
-            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" done 2> \"{}\"; echo $? > \"{}\"\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" done 2> \"{}\"; echo $? > \"{}\"\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
             stderr_file.display(),
             exit_file.display(),
         ),
@@ -1136,5 +1148,159 @@ fn ktask_rs_report_refuses_an_outcome_outside_the_running_step_naming_the_ones_t
     );
     assert!(stderr.contains("approved"), "{stderr}");
     assert!(stderr.contains("changes-requested"), "{stderr}");
+    Ok(())
+}
+
+/// A bash block that reports `done` for the implementation step, `approved` for the review
+/// step, and `outcome` (with `reason`, when it is not empty) for the test step.
+fn test_body(outcome: &str, reason: &str) -> String {
+    if reason.is_empty() {
+        format!(
+            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" {outcome}\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
+        )
+    } else {
+        format!(
+            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
+        )
+    }
+}
+
+#[test]
+fn an_accepting_tester_carries_the_task_on_as_done_and_the_testing_line_shows_it() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", &test_body("accepted", ""))?;
+
+    let outcome = fixture.run_the_queue(&["run"])?;
+
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(fixture.task_status(1)?, "done");
+    let status = fixture.run(&["status"])?;
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    assert_eq!(
+        status.stdout.lines().collect::<Vec<_>>(),
+        [
+            "#1\tdone\ta",
+            "\timplementation\techo\t0s\tdone",
+            "\treview\techo\t0s\tapproved",
+            "\ttesting\techo\t0s\taccepted",
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn a_tester_that_rejects_ends_the_task_failed_with_what_failed_as_the_reason_and_stops_the_run()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", &test_body("rejected", "the login button does nothing"))?;
+    fixture.add_agent_task("b", &reporting_body("done"))?;
+
+    let outcome = fixture.run_the_queue(&["run"])?;
+
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stderr);
+    assert_eq!(fixture.task_status(1)?, "failed");
+    assert_eq!(fixture.task_status(2)?, "pending");
+    let (_, _, status, reason) = fixture.attempt_ended(1)?;
+    assert_eq!(status, "failed");
+    assert_eq!(reason.as_deref(), Some("the login button does nothing"));
+    assert!(outcome.stdout.contains("failed"), "{}", outcome.stdout);
+    assert!(
+        outcome.stdout.contains("the login button does nothing"),
+        "{}",
+        outcome.stdout
+    );
+    // Both interfaces show the testing line and the reason.
+    let status_lines = fixture.run(&["status"])?;
+    assert_eq!(
+        status_lines.stdout.lines().collect::<Vec<_>>(),
+        [
+            "#1\tfailed\ta",
+            "\timplementation\techo\t0s\tdone",
+            "\treview\techo\t0s\tapproved",
+            "\ttesting\techo\t0s\trejected\tthe login button does nothing",
+        ]
+    );
+    let json = fixture.run(&["status", "--json"])?;
+    assert_eq!(json.code, Some(0), "{}", json.stderr);
+    let entries: serde_json::Value = serde_json::from_str(&json.stdout)?;
+    assert_eq!(entries[0]["attempt"]["outcome"], "rejected");
+    assert_eq!(
+        entries[0]["attempt"]["reason"],
+        "the login button does nothing"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_tester_that_reports_nothing_ends_the_task_failed_unknown_and_stops_the_run() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task(
+        "a",
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  echo did nothing\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+    )?;
+    fixture.add_agent_task("b", &reporting_body("done"))?;
+
+    let outcome = fixture.run_the_queue(&["run"])?;
+
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stderr);
+    assert_eq!(fixture.task_status(1)?, "failed-unknown");
+    assert_eq!(fixture.task_status(2)?, "pending");
+    let (_, exit_code, status, reason) = fixture.attempt_ended(1)?;
+    assert_eq!(exit_code, Some(0));
+    assert_eq!(status, "failed-unknown");
+    assert!(
+        reason.as_deref().unwrap().contains("reported nothing"),
+        "{reason:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_tester_that_crashes_ends_the_task_failed_unknown_and_stops_the_run() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task(
+        "a",
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  exit 7\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+    )?;
+
+    let outcome = fixture.run_the_queue(&["run"])?;
+
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stderr);
+    assert_eq!(fixture.task_status(1)?, "failed-unknown");
+    let (_, exit_code, status, reason) = fixture.attempt_ended(1)?;
+    assert_eq!(exit_code, Some(7));
+    assert_eq!(status, "failed-unknown");
+    assert!(
+        reason.as_deref().unwrap().contains("reported nothing"),
+        "{reason:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_tester_past_its_time_limit_is_killed_and_ends_the_task_failed_unknown() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task(
+        "a",
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  sleep 30\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+    )?;
+
+    let started = Instant::now();
+    let outcome = fixture.run_the_queue(&["run", "--attempt-timeout", "1"])?;
+
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stderr);
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(fixture.task_status(1)?, "failed-unknown");
+    let (_, exit_code, status, reason) = fixture.attempt_ended(1)?;
+    assert_eq!(exit_code, None);
+    assert_eq!(status, "failed-unknown");
+    assert!(
+        reason.as_deref().unwrap().contains("time limit"),
+        "{reason:?}"
+    );
     Ok(())
 }

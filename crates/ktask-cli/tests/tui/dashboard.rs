@@ -34,26 +34,27 @@ fn with_nested_ktask_rs_on_path(command: &mut Command) {
 }
 
 /// A bash block that reports `outcome` for whatever token it is given as `$1`, for the
-/// implementation step; the review step, when reached, approves.
+/// implementation step; the review and test steps, when reached, approve and accept.
 fn reporting_body(outcome: &str) -> String {
     format!(
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" {outcome}\nfi\n```\n"
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" {outcome}\nfi\n```\n"
     )
 }
 
 /// A bash block that reports `outcome` with `--reason` for whatever token it is given, for the
-/// implementation step; the review step, when reached, approves.
+/// implementation step; the review and test steps, when reached, approve and accept.
 fn reporting_body_with_reason(outcome: &str, reason: &str) -> String {
     format!(
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nfi\n```\n"
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nfi\n```\n"
     )
 }
 
 /// A bash block that waits for the file at `go` to exist, then reports `done` (or, for the
-/// review step, `approved`): an attempt that stays running until the test lets it finish.
+/// review step, `approved`; for the test step, `accepted`): an attempt that stays running
+/// until the test lets it finish.
 fn gated_body(go: &Path) -> String {
     format!(
-        "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+        "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
         go.display()
     )
 }
@@ -219,7 +220,7 @@ fn a_run_started_elsewhere_shows_pending_then_running_with_elapsed_time_increasi
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">  1  #1  done  agent  a");
     assert!(
-        lines[5].contains("review · echo") && lines[5].ends_with("approved"),
+        lines[5].contains("testing · echo") && lines[5].ends_with("accepted"),
         "{}",
         lines[5]
     );
@@ -342,12 +343,12 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     done.run_the_queue_to_completion()?;
     let terminal = done.open()?;
     let screen = terminal.wait_for("a's attempt line", |screen| {
-        screen.contents().contains("review") && screen.contents().ends_with('┘')
+        screen.contents().contains("testing") && screen.contents().ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">  1  #1  done  agent  a");
     assert!(
-        lines[5].contains("review · echo") && lines[5].ends_with("approved"),
+        lines[5].contains("testing · echo") && lines[5].ends_with("accepted"),
         "{}",
         lines[5]
     );
@@ -452,6 +453,32 @@ fn a_changes_requested_review_shows_its_own_outcome_and_findings() -> Result<()>
 }
 
 #[test]
+fn a_rejecting_tester_shows_its_own_outcome_and_what_failed() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task(
+        "a",
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" rejected --reason \"login is broken\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+    )?;
+    fixture.run_the_queue()?;
+
+    let mut terminal = fixture.open()?;
+    let screen = terminal.wait_for("a's testing line", |screen| {
+        screen.contents().contains("rejected") && screen.contents().ends_with('┘')
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[4], ">  1  #1  failed  agent  a");
+    assert!(
+        lines[5].contains("testing · echo") && lines[5].ends_with("rejected: login is broken"),
+        "{}",
+        lines[5]
+    );
+
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
 fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines_shown()
 -> Result<()> {
     let fixture = Fixture::new()?;
@@ -464,11 +491,11 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
     let mut terminal = fixture.open()?;
     let screen = terminal.wait_for("the queue with a's attempt line", |screen| {
         let contents = screen.contents();
-        contents.contains("review") && contents.ends_with('┘')
+        contents.contains("testing") && contents.ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">  1  #1  done  agent  a");
-    assert!(lines[5].contains("review"), "{}", lines[5]);
+    assert!(lines[5].contains("testing"), "{}", lines[5]);
     assert_eq!(lines[6], "   2  #2  pending  agent  b");
 
     // Down moves past the two-line block of the attempted task onto the very next task.
@@ -480,7 +507,7 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
     })?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[6], ">  2  #2  pending  agent  b");
-    assert!(lines[5].contains("review"), "{}", lines[5]);
+    assert!(lines[5].contains("testing"), "{}", lines[5]);
 
     terminal.send("k")?;
     terminal.wait_for("the selection back on a", |screen| {
@@ -505,16 +532,16 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
     // The key map replaces the queue, attempt lines included, and comes back unchanged.
     terminal.send("?")?;
     let screen = terminal.wait_for("the key map", |screen| screen.contents().contains("Keys"))?;
-    assert!(!screen.contains("review"), "{screen}");
+    assert!(!screen.contains("testing"), "{screen}");
     assert!(!screen.contains("pending"), "{screen}");
     terminal.send("?")?;
     let screen = terminal.wait_for("the queue back with a's attempt line", |screen| {
         let contents = screen.contents();
-        !contents.contains("Keys") && contents.contains("review")
+        !contents.contains("Keys") && contents.contains("testing")
     })?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">  1  #1  done  agent  a");
-    assert!(lines[5].contains("review"), "{}", lines[5]);
+    assert!(lines[5].contains("testing"), "{}", lines[5]);
 
     // The cancelled task, never attempted, appears in its place with no attempt line of its
     // own, and the attempted task's block is unaffected.
@@ -524,7 +551,7 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
     })?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">  1  #1  done  agent  a");
-    assert!(lines[5].contains("review"), "{}", lines[5]);
+    assert!(lines[5].contains("testing"), "{}", lines[5]);
     assert_eq!(lines[6], "   2  #2  pending  agent  b");
     assert_eq!(lines[7], "   3  #3  cancelled  agent  c");
 
