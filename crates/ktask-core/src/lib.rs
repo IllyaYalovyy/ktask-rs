@@ -5,6 +5,7 @@
 mod attempt;
 mod clock;
 mod commands;
+mod forget;
 mod git;
 mod import;
 mod journal;
@@ -25,6 +26,7 @@ mod task;
 
 pub use clock::Clock;
 pub use commands::{CommandSpec, Commands, CommandsError, Exit, Output};
+pub use forget::{ForgetError, forget_project};
 pub use git::{CommitAllError, Git, GitError, PullRebase, PullRebaseError, PushError};
 pub use import::{Import, ImportError, InvalidTask, import_tasks};
 pub use journal::{

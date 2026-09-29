@@ -54,6 +54,14 @@ pub trait ProjectRegistry {
     ///
     /// Fails when the registry cannot be written.
     fn add(&self, project: &Project) -> Result<(), RegistryError>;
+
+    /// Removes the project named `name` from the registry. The caller has checked that it is
+    /// registered; nothing else the tool wrote for it — its journal included — is touched.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the registry cannot be written.
+    fn remove(&self, name: &str) -> Result<(), RegistryError>;
 }
 
 /// Use case: the registered projects, oldest registration first, ties broken by name.

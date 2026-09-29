@@ -83,6 +83,13 @@ impl ProjectRegistry for SqliteRegistry {
                 RegistryError::new(format!("cannot register project {}: {cause}", project.name))
             })
     }
+
+    fn remove(&self, name: &str) -> Result<(), RegistryError> {
+        self.connection
+            .execute("DELETE FROM projects WHERE name = ?1", (name,))
+            .map(drop)
+            .map_err(|cause| RegistryError::new(format!("cannot forget project {name}: {cause}")))
+    }
 }
 
 fn to_seconds(duration: Duration) -> i64 {
@@ -186,6 +193,40 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, ["alpha", "beta"]);
+    }
+
+    #[test]
+    fn a_removed_project_is_no_longer_listed_and_stays_gone_after_reopening() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("registry.db");
+        let registry = SqliteRegistry::open(&path).unwrap();
+        insert(&registry, "alpha", "/work/alpha", 1);
+        insert(&registry, "beta", "/work/beta", 2);
+        registry.remove("alpha").unwrap();
+        let mut names: Vec<_> = registry
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(names, ["beta"]);
+        names = SqliteRegistry::open(&path)
+            .unwrap()
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(names, ["beta"]);
+    }
+
+    #[test]
+    fn removing_a_name_that_is_not_registered_changes_nothing() {
+        let dir = TempDir::new().unwrap();
+        let registry = SqliteRegistry::open(&dir.path().join("registry.db")).unwrap();
+        insert(&registry, "alpha", "/work/alpha", 1);
+        registry.remove("ghost").unwrap();
+        assert_eq!(registry.list().unwrap().len(), 1);
     }
 
     #[test]

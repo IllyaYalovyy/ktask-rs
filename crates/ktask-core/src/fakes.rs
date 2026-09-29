@@ -49,6 +49,16 @@ impl ProjectRegistry for FakeRegistry {
         self.projects.borrow_mut().push(project.clone());
         Ok(())
     }
+
+    fn remove(&self, name: &str) -> Result<(), RegistryError> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone());
+        }
+        self.projects
+            .borrow_mut()
+            .retain(|project| project.name != name);
+        Ok(())
+    }
 }
 
 /// A git that knows the work trees it was given, and which `"<remote>/<branch>"` values it

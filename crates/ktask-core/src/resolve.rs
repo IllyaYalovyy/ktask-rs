@@ -307,6 +307,9 @@ mod tests {
             fn add(&self, _: &Project) -> Result<(), RegistryError> {
                 Err(RegistryError::new("read-only"))
             }
+            fn remove(&self, name: &str) -> Result<(), RegistryError> {
+                self.0.remove(name)
+            }
         }
         let result = resolve_project(
             &ReadOnly(FakeRegistry::default()),
