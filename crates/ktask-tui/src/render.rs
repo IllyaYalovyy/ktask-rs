@@ -42,7 +42,7 @@ const FORM_KEYS: &str =
 const DISCARD_KEYS: &str = " y discard · n, Esc keep writing ";
 
 /// What the settings screen's frame says at the bottom.
-const SETTINGS_KEYS: &str = " Ctrl-S save · Esc cancel ";
+const SETTINGS_KEYS: &str = " Tab, Shift-Tab field · Ctrl-S save · Esc cancel ";
 
 /// Draws `app` over the whole of `area`, and returns where the cursor goes when it is shown.
 pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
@@ -331,6 +331,12 @@ mod tests {
             time_spent: Duration::from_secs(time_spent_secs),
             outcome,
             reason: reason.map(str::to_owned),
+            steps: vec![ktask_core::StepLine {
+                step: IMPLEMENTATION.to_owned(),
+                time_spent: Duration::from_secs(time_spent_secs),
+                outcome,
+                reason: reason.map(str::to_owned),
+            }],
         }
     }
 
@@ -629,22 +635,37 @@ mod tests {
         assert!(inside(&rows[4]).ends_with("Title"), "{rows:?}");
     }
 
+    /// The two settings, as `show_settings` would give them: attempt-timeout at `value`,
+    /// health-check unset.
+    fn settings_views(value: &str, is_default: bool) -> Vec<SettingView> {
+        vec![
+            SettingView {
+                name: "attempt-timeout",
+                value: value.to_owned(),
+                is_default,
+            },
+            SettingView {
+                name: "health-check",
+                value: String::new(),
+                is_default: true,
+            },
+        ]
+    }
+
     #[test]
     fn the_settings_screen_shows_the_value_default_tag_and_footer() {
         let app = update(
             loaded(vec![task(1, "first", TaskKind::Agent)]),
-            Event::SettingsLoaded(SettingView {
-                name: "attempt-timeout",
-                value: 14_400,
-                is_default: true,
-            }),
+            Event::SettingsLoaded(settings_views("14400", true)),
         );
-        let (rows, cursor) = draw_form(&app, 8);
+        let (rows, cursor) = draw_form(&app, 11);
         assert_eq!(inside(&rows[1]), "Settings");
         assert_eq!(inside(&rows[3]), "Attempt timeout, in seconds (default):");
         assert_eq!(inside(&rows[4]), "> 14400");
+        assert_eq!(inside(&rows[6]), "Health check command (default):");
+        assert_eq!(inside(&rows[7]), "");
         assert!(
-            rows[7].starts_with("└ Ctrl-S save · Esc cancel"),
+            rows[10].starts_with("└ Tab, Shift-Tab field · Ctrl-S save · Esc cancel"),
             "{rows:?}"
         );
         assert!(!rows.join("\n").contains("first"));
@@ -652,14 +673,22 @@ mod tests {
     }
 
     #[test]
+    fn tab_moves_the_cursor_to_the_next_fields_value() {
+        let app = update(
+            loaded(vec![]),
+            Event::SettingsLoaded(settings_views("14400", true)),
+        );
+        let app = update(app, Event::Key(ratatui::crossterm::event::KeyCode::Tab));
+        let (rows, cursor) = draw_form(&app, 11);
+        assert_eq!(inside(&rows[7]), ">");
+        assert_eq!(cursor, Some(Position::new(3, 7)));
+    }
+
+    #[test]
     fn a_refused_setting_shows_the_reason_above_the_field() {
         let app = update(
             loaded(vec![]),
-            Event::SettingsLoaded(SettingView {
-                name: "attempt-timeout",
-                value: 60,
-                is_default: false,
-            }),
+            Event::SettingsLoaded(settings_views("60", false)),
         );
         let app = update(app, Event::SettingRejected("not a number".to_owned()));
         let (rows, _) = draw_form(&app, 8);

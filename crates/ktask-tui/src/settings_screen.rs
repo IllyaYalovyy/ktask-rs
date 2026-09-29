@@ -8,32 +8,58 @@ use ratatui::widgets::{Paragraph, Widget};
 
 use crate::settings_form::SettingsForm;
 
-/// The field's marker, ahead of the typed value.
-const PREFIX: &str = "> ";
+/// The field's marker, ahead of the typed value, when it has the focus.
+const FOCUSED_PREFIX: &str = "> ";
+/// The field's marker, ahead of the typed value, when it does not have the focus.
+const UNFOCUSED_PREFIX: &str = "  ";
 
-/// Draws `form` over the whole of `area`, and returns where the cursor goes.
+/// The label a setting's own field is shown under, by name.
+fn label(name: &str) -> &'static str {
+    match name {
+        "health-check" => "Health check command",
+        _ => "Attempt timeout, in seconds",
+    }
+}
+
+/// Draws `form` over the whole of `area`, and returns where the cursor goes: in the field that
+/// has the focus.
 pub(crate) fn draw(form: &SettingsForm, area: Rect, buf: &mut Buffer) -> Position {
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let mut lines = vec![Line::styled("Settings", bold)];
     if let Some(problem) = &form.problem {
         lines.push(Line::styled(format!("! {problem}"), bold));
     }
-    lines.push(Line::default());
-    let kind = if form.is_default { "default" } else { "custom" };
-    lines.push(Line::from(format!("Attempt timeout, in seconds ({kind}):")));
-    lines.push(Line::from(format!(
-        "{PREFIX}{}",
-        form.attempt_timeout.text()
-    )));
-
-    let cursor_row = lines.len() - 1;
-    let cursor_col = PREFIX.chars().count() + form.attempt_timeout.cursor().1;
+    let mut cursor = Position::new(area.x, area.y);
+    for (index, field) in form.fields.iter().enumerate() {
+        lines.push(Line::default());
+        let kind = if field.is_default {
+            "default"
+        } else {
+            "custom"
+        };
+        lines.push(Line::from(format!("{} ({kind}):", label(field.name))));
+        let focused = index == form.focus;
+        let prefix = if focused {
+            FOCUSED_PREFIX
+        } else {
+            UNFOCUSED_PREFIX
+        };
+        lines.push(Line::from(format!("{prefix}{}", field.text.text())));
+        if focused {
+            let row = lines.len() - 1;
+            let col = prefix.chars().count() + field.text.cursor().1;
+            cursor = Position::new(
+                area.x
+                    + u16::try_from(col)
+                        .unwrap_or(u16::MAX)
+                        .min(area.width.saturating_sub(1)),
+                area.y
+                    + u16::try_from(row)
+                        .unwrap_or(u16::MAX)
+                        .min(area.height.saturating_sub(1)),
+            );
+        }
+    }
     Paragraph::new(lines).render(area, buf);
-    let x = u16::try_from(cursor_col)
-        .unwrap_or(u16::MAX)
-        .min(area.width.saturating_sub(1));
-    let y = u16::try_from(cursor_row)
-        .unwrap_or(u16::MAX)
-        .min(area.height.saturating_sub(1));
-    Position::new(area.x + x, area.y + y)
+    cursor
 }

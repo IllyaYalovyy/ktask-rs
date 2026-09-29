@@ -41,9 +41,9 @@ pub struct App {
     /// Set when the operator asked to open the settings screen: the loop loads the
     /// project's settings and opens it with [`Event::SettingsLoaded`], and clears this.
     pub settings_requested: Option<()>,
-    /// The settings screen's field, submitted as typed for the loop to save, and clears
-    /// this.
-    pub setting_submission: Option<String>,
+    /// The settings screen's focused field, submitted as its setting's name and its value
+    /// typed, for the loop to save, and clears this.
+    pub setting_submission: Option<(&'static str, String)>,
     /// Set when the operator asked to leave.
     pub quit: bool,
 }
@@ -76,8 +76,8 @@ pub enum Event {
     /// The run this screen started has ended, or could not start, printing this — the same
     /// words `ktask-rs run` itself would show.
     RunMessage(String),
-    /// The project's settings were loaded: the settings screen opens on this value.
-    SettingsLoaded(SettingView),
+    /// The project's settings were loaded: the settings screen opens on these values.
+    SettingsLoaded(Vec<SettingView>),
     /// The settings screen's submission was saved: it closes.
     SettingSaved,
     /// The settings screen's submission was refused, for this reason: it stays open and
@@ -110,14 +110,16 @@ pub fn update(app: App, event: Event) -> App {
                 settings: None,
                 ..app
             },
+            KeyCode::Tab => in_settings(app, |form| form.moved(true)),
+            KeyCode::BackTab => in_settings(app, |form| form.moved(false)),
             _ => in_settings(app, |form| form.press(key)),
         },
         Event::Ctrl(letter) if app.settings.is_some() => match letter {
             's' => submit_setting(app),
             _ => app,
         },
-        Event::SettingsLoaded(view) => App {
-            settings: Some(SettingsForm::new(&view)),
+        Event::SettingsLoaded(views) => App {
+            settings: Some(SettingsForm::new(&views)),
             ..app
         },
         Event::SettingSaved => App {
@@ -236,10 +238,14 @@ fn in_settings(app: App, change: impl FnOnce(SettingsForm) -> SettingsForm) -> A
     }
 }
 
-/// The app with the settings screen's field left for the loop to save, if it is open.
+/// The app with the settings screen's focused field left for the loop to save, if it is open.
 fn submit_setting(app: App) -> App {
+    let submission = app.settings.as_ref().and_then(|form| {
+        let name = form.name()?;
+        Some((name, form.value()))
+    });
     App {
-        setting_submission: app.settings.as_ref().map(SettingsForm::value),
+        setting_submission: submission,
         ..app
     }
 }
@@ -900,12 +906,21 @@ mod tests {
         assert_eq!(form_of(&app).draft().title, "Ti");
     }
 
-    fn setting_view(value: u64, is_default: bool) -> SettingView {
-        SettingView {
-            name: "attempt-timeout",
-            value,
-            is_default,
-        }
+    /// The two settings, as `show_settings` would give them: attempt-timeout at `value`,
+    /// health-check unset.
+    fn settings_views(value: &str, is_default: bool) -> Vec<SettingView> {
+        vec![
+            SettingView {
+                name: "attempt-timeout",
+                value: value.to_owned(),
+                is_default,
+            },
+            SettingView {
+                name: "health-check",
+                value: String::new(),
+                is_default: true,
+            },
+        ]
     }
 
     #[test]
@@ -917,21 +932,22 @@ mod tests {
     }
 
     #[test]
-    fn settings_loaded_opens_the_screen_on_the_given_value() {
+    fn settings_loaded_opens_the_screen_on_the_first_setting() {
         let app = update(
             loaded(&[1]),
-            Event::SettingsLoaded(setting_view(14_400, true)),
+            Event::SettingsLoaded(settings_views("14400", true)),
         );
         let settings = app.settings.as_ref().expect("the settings screen is open");
+        assert_eq!(settings.name(), Some("attempt-timeout"));
         assert_eq!(settings.value(), "14400");
-        assert!(settings.is_default);
+        assert!(settings.fields[0].is_default);
     }
 
     #[test]
     fn esc_closes_the_settings_screen_without_submitting_anything() {
         let app = update(
             loaded(&[1]),
-            Event::SettingsLoaded(setting_view(14_400, true)),
+            Event::SettingsLoaded(settings_views("14400", true)),
         );
         let app = press(app, &[KeyCode::Esc]);
         assert_eq!(app.settings, None);
@@ -942,7 +958,7 @@ mod tests {
     fn typing_in_the_settings_screen_edits_the_field_and_no_queue_key_acts() {
         let app = update(
             loaded(&[1, 2]),
-            Event::SettingsLoaded(setting_view(14_400, true)),
+            Event::SettingsLoaded(settings_views("14400", true)),
         );
         let app = press(
             app,
@@ -964,21 +980,63 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_s_submits_the_typed_value_and_leaves_the_screen_open() {
+    fn tab_and_shift_tab_move_the_focus_between_settings_and_wrap() {
         let app = update(
             loaded(&[1]),
-            Event::SettingsLoaded(setting_view(14_400, true)),
+            Event::SettingsLoaded(settings_views("14400", true)),
+        );
+        let app = press(app, &[KeyCode::Tab]);
+        assert_eq!(app.settings.as_ref().unwrap().name(), Some("health-check"));
+        let app = press(app, &[KeyCode::Tab]);
+        assert_eq!(
+            app.settings.as_ref().unwrap().name(),
+            Some("attempt-timeout")
+        );
+        let app = press(app, &[KeyCode::BackTab]);
+        assert_eq!(app.settings.as_ref().unwrap().name(), Some("health-check"));
+    }
+
+    #[test]
+    fn typing_after_tab_edits_the_health_check_field_leaving_the_timeout_untouched() {
+        let app = update(
+            loaded(&[1]),
+            Event::SettingsLoaded(settings_views("14400", true)),
+        );
+        let app = press(app, &[KeyCode::Tab]);
+        let app = "cargo test"
+            .chars()
+            .fold(app, |app, c| update(app, Event::Key(KeyCode::Char(c))));
+        let settings = app.settings.as_ref().unwrap();
+        assert_eq!(settings.value(), "cargo test");
+        assert_eq!(settings.fields[0].text.text(), "14400");
+    }
+
+    #[test]
+    fn ctrl_s_submits_the_focused_fields_name_and_value_and_leaves_the_screen_open() {
+        let app = update(
+            loaded(&[1]),
+            Event::SettingsLoaded(settings_views("14400", true)),
         );
         let app = update(app, Event::Ctrl('s'));
-        assert_eq!(app.setting_submission.as_deref(), Some("14400"));
+        assert_eq!(
+            app.setting_submission,
+            Some(("attempt-timeout", "14400".to_owned()))
+        );
         assert!(app.settings.is_some());
+
+        let app = press(app, &[KeyCode::Tab]);
+        let app = update(app, Event::Ctrl('s'));
+        assert_eq!(
+            app.setting_submission,
+            Some(("health-check", String::new()))
+        );
     }
 
     #[test]
     fn setting_saved_closes_the_screen() {
         let app = update(
             loaded(&[1]),
-            Event::SettingsLoaded(setting_view(14_400, true)),
+            Event::SettingsLoaded(settings_views("14400", true)),
         );
         let app = update(app, Event::SettingSaved);
         assert_eq!(app.settings, None);
@@ -988,7 +1046,7 @@ mod tests {
     fn setting_rejected_keeps_the_screen_open_with_its_value_and_shows_why() {
         let app = update(
             loaded(&[1]),
-            Event::SettingsLoaded(setting_view(14_400, true)),
+            Event::SettingsLoaded(settings_views("14400", true)),
         );
         let app = press(app, &[KeyCode::Char('x')]);
         let app = update(app, Event::SettingRejected("not a number".to_owned()));
@@ -1001,7 +1059,7 @@ mod tests {
     fn ctrl_c_quits_from_the_settings_screen() {
         let app = update(
             loaded(&[1]),
-            Event::SettingsLoaded(setting_view(14_400, true)),
+            Event::SettingsLoaded(settings_views("14400", true)),
         );
         assert!(update(app, Event::Ctrl('c')).quit);
     }
