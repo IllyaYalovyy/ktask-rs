@@ -27,5 +27,5 @@ pub use process::{
 };
 pub use registry::SqliteRegistry;
 pub use settings::TomlSettingsStore;
-pub use state::{journal_path, registry_path, run_lock_path, settings_path};
+pub use state::{journal_path, registry_path, run_lock_path, settings_path, state_root_path};
 pub use watch::FileJournalWatch;

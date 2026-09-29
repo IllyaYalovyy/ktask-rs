@@ -23,6 +23,18 @@ pub fn registry_path(xdg_state_home: Option<OsString>, home: Option<OsString>) -
     Some(state_directory(xdg_state_home, home)?.join("registry.db"))
 }
 
+/// The directory every registered project's own state lives under, `<state home>/ktask-rs`
+/// itself — for watching every project's journal at once, so the terminal interface notices a
+/// change made to whichever project's queue is on show, including one switched to after it
+/// started.
+#[must_use]
+pub fn state_root_path(
+    xdg_state_home: Option<OsString>,
+    home: Option<OsString>,
+) -> Option<PathBuf> {
+    state_directory(xdg_state_home, home)
+}
+
 /// The journal of the project called `project`, `<state home>/ktask-rs/<project>/journal.db`.
 #[must_use]
 pub fn journal_path(
@@ -82,6 +94,21 @@ mod tests {
             registry_path(Some(set("/state")), Some(set("/home/me"))),
             Some(Path::new("/state/ktask-rs/registry.db").to_owned())
         );
+    }
+
+    #[test]
+    fn the_state_root_is_the_directory_every_project_and_the_registry_live_under() {
+        assert_eq!(
+            state_root_path(Some(set("/state")), None),
+            Some(Path::new("/state/ktask-rs").to_owned())
+        );
+        assert_eq!(
+            registry_path(Some(set("/state")), None)
+                .as_deref()
+                .and_then(Path::parent),
+            state_root_path(Some(set("/state")), None).as_deref()
+        );
+        assert_eq!(state_root_path(None, None), None);
     }
 
     #[test]
