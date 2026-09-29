@@ -310,6 +310,42 @@ fn spawn_io_threads(
 /// Waits for `child`, in process group `pgid`, to exit or run past `timeout`, or for this
 /// process to be asked to stop while it still runs — killing the whole group in either of the
 /// last two cases.
+/// Kills process group `pgid` outright — the whole group, not just its leader, so nothing it
+/// started is left behind. A failure here means it is already gone.
+fn kill_group(pgid: i32) {
+    let _ = kill(Pid::from_raw(-pgid), Signal::SIGKILL);
+}
+
+/// What `receiver` reports before `timeout` passes — killing process group `pgid` and waiting
+/// for the report either once it is asked to stop, or once `timeout` passes with nothing yet.
+fn resolve_ended(
+    receiver: &mpsc::Receiver<Awaited>,
+    timeout: Duration,
+    pgid: i32,
+    fail: &impl Fn(String) -> CommandsError,
+) -> Result<Ended, CommandsError> {
+    match receiver.recv_timeout(timeout) {
+        Ok(Awaited::Exited(status)) => Ok(Ended::Exited(status)),
+        Ok(Awaited::AskedToStop) => {
+            kill_group(pgid);
+            // Waited for, so it is reaped rather than left a zombie; the status itself is of
+            // no interest, since this attempt is ending `Interrupted` regardless of it.
+            let _ = receiver.recv();
+            Ok(Ended::Interrupted)
+        }
+        Err(RecvTimeoutError::Timeout) => {
+            kill_group(pgid);
+            match receiver.recv() {
+                Ok(Awaited::Exited(_) | Awaited::AskedToStop) => Ok(Ended::TimedOut),
+                Err(_) => Err(fail("the wait thread stopped without a result".to_owned())),
+            }
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            Err(fail("the wait thread stopped without a result".to_owned()))
+        }
+    }
+}
+
 fn wait_for_child(
     mut child: std::process::Child,
     pgid: i32,
@@ -332,36 +368,11 @@ fn wait_for_child(
         }
     });
 
-    let ended = match receiver.recv_timeout(timeout) {
-        Ok(Awaited::Exited(status)) => Ended::Exited(status),
-        Ok(Awaited::AskedToStop) => {
-            // The whole group, not just the child itself, so nothing it started is left
-            // behind. A failure here means it is already gone.
-            let _ = kill(Pid::from_raw(-pgid), Signal::SIGKILL);
-            // Waited for, so it is reaped rather than left a zombie; the status itself is
-            // of no interest, since this attempt is ending `Interrupted` regardless of it.
-            let _ = receiver.recv();
-            Ended::Interrupted
-        }
-        Err(RecvTimeoutError::Timeout) => {
-            // The whole group, not just the child itself, so nothing it started is left
-            // behind. A failure here means it is already gone.
-            let _ = kill(Pid::from_raw(-pgid), Signal::SIGKILL);
-            match receiver.recv() {
-                Ok(Awaited::Exited(_) | Awaited::AskedToStop) => Ended::TimedOut,
-                Err(_) => {
-                    return Err(fail("the wait thread stopped without a result".to_owned()));
-                }
-            }
-        }
-        Err(RecvTimeoutError::Disconnected) => {
-            return Err(fail("the wait thread stopped without a result".to_owned()));
-        }
-    };
+    let ended = resolve_ended(&receiver, timeout, pgid, fail);
     handle.close();
     let _ = signal_watcher.join();
     let _ = waiter.join();
-    Ok(ended)
+    ended
 }
 
 /// The [`Exit`] `ended` means, once the child's real exit status, when it has one, has been

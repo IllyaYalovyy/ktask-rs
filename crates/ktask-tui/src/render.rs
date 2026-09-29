@@ -98,8 +98,10 @@ fn key_map(area: Rect, buf: &mut Buffer) {
 
 /// The header: the project, the counts, and the question of a removal or the refusal of one,
 /// while there is either.
-fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
-    let summary = queue.summary;
+/// The one-line question or notice shown under the summary — a removal confirmation, a
+/// running-task refusal, or the last run this screen started's own message, whichever was
+/// raised most recently — or an empty line when none of those apply.
+fn question_line(app: &App, queue: &QueueView) -> Line<'static> {
     let question = app
         .confirming
         .and_then(|confirm| match confirm {
@@ -121,9 +123,13 @@ fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
             Style::new().add_modifier(Modifier::BOLD),
         )
     });
-    let question = app.run_message.clone().map_or(question, |text| {
+    app.run_message.clone().map_or(question, |text| {
         Line::styled(text, Style::new().add_modifier(Modifier::BOLD))
-    });
+    })
+}
+
+fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
+    let summary = queue.summary;
     vec![
         Line::styled(
             queue.project.name.clone(),
@@ -139,7 +145,7 @@ fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
             summary.failed_unknown,
             summary.cancelled
         )),
-        question,
+        question_line(app, queue),
     ]
 }
 
