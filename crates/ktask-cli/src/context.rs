@@ -5,9 +5,10 @@ use std::io;
 use std::path::PathBuf;
 
 use ktask_adapters::{
-    GitCli, SqliteJournal, SqliteRegistry, SystemClock, journal_path, registry_path, run_lock_path,
+    GitCli, SqliteJournal, SqliteRegistry, SystemClock, TomlSettingsStore, journal_path,
+    registry_path, run_lock_path, settings_path,
 };
-use ktask_core::{Placement, Project, TaskId};
+use ktask_core::{Placement, Project, Settings, SettingsStore, TaskId};
 
 use crate::error::Failure;
 use crate::render;
@@ -24,21 +25,26 @@ pub(crate) fn placement(before: Option<u64>, after: Option<u64>) -> Placement {
 /// The journal of the project a command works on.
 pub(crate) fn open_queue(selected: Option<&str>) -> Result<SqliteJournal, Failure> {
     let registry = open_registry()?;
-    let project = resolve(&registry, selected)?;
+    let (project, _settings) = resolve(&registry, selected)?;
     Ok(open_journal(&project)?)
 }
 
-/// The project a command works on, telling on standard error when that registered it.
+/// The project a command works on, telling on standard error when that registered it, and
+/// its settings — read here so that a settings file that cannot be read stops the command at
+/// once, whether or not it goes on to use the settings themselves.
 pub(crate) fn resolve(
     registry: &SqliteRegistry,
     selected: Option<&str>,
-) -> Result<Project, Failure> {
+) -> Result<(Project, Settings), Failure> {
     let cwd = current_dir()?;
     let resolution = ktask_core::resolve_project(registry, &GitCli, &SystemClock, &cwd, selected)?;
     if resolution.registered {
         render::registered(&resolution.project, &mut io::stderr())?;
     }
-    Ok(resolution.project)
+    let settings = open_settings_store(&resolution.project)?
+        .load()
+        .map_err(|e| e.to_string())?;
+    Ok((resolution.project, settings))
 }
 
 pub(crate) fn open_registry() -> Result<SqliteRegistry, String> {
@@ -76,6 +82,24 @@ pub(crate) fn run_lock_file(project: &Project) -> Result<PathBuf, String> {
         "cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path"
             .to_owned()
     })
+}
+
+/// Where the settings of `project` live.
+pub(crate) fn settings_file(project: &Project) -> Result<PathBuf, String> {
+    settings_path(
+        std::env::var_os("XDG_STATE_HOME"),
+        std::env::var_os("HOME"),
+        &project.name,
+    )
+    .ok_or_else(|| {
+        "cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path"
+            .to_owned()
+    })
+}
+
+/// The settings store of `project`.
+pub(crate) fn open_settings_store(project: &Project) -> Result<TomlSettingsStore, String> {
+    Ok(TomlSettingsStore::new(settings_file(project)?))
 }
 
 pub(crate) fn current_dir() -> Result<PathBuf, String> {

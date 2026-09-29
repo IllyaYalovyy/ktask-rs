@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use ktask_core::{
-    JournalError, JournalWatch, Placement, Project, QueueView, StatusSummary, TaskDraft, TaskId,
+    JournalError, JournalWatch, Placement, Project, QueueView, SettingView, StatusSummary,
+    TaskDraft, TaskId,
 };
 
 /// Never reports a change: this binary only cares about the first frame.
@@ -52,6 +53,8 @@ fn main() {
             Err(vec!["not supported in this test binary".to_owned()])
         },
         || Err("not supported in this test binary".to_owned()),
+        || -> Result<SettingView, String> { Err("not supported in this test binary".to_owned()) },
+        |_value: &str| Err("not supported in this test binary".to_owned()),
         NeverChanges,
     );
 }

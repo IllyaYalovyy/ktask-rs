@@ -25,7 +25,7 @@ pub(crate) struct Args {
 /// rather than waiting for the next `run` to reconcile it.
 pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
     let registry = open_registry()?;
-    let project = resolve(&registry, args.project.as_deref())?;
+    let (project, _settings) = resolve(&registry, args.project.as_deref())?;
     let journal = open_journal(&project)?;
     let lock = FileRunLock::new(run_lock_file(&project)?);
     let entries = ktask_core::status(&journal, &SystemClock, &lock).map_err(|e| e.to_string())?;

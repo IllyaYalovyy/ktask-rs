@@ -9,5 +9,6 @@ pub(crate) mod provider;
 pub(crate) mod remove;
 pub(crate) mod report;
 pub(crate) mod run;
+pub(crate) mod settings;
 pub(crate) mod status;
 pub(crate) mod tui;

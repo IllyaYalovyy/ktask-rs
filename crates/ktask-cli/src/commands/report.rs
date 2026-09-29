@@ -37,7 +37,7 @@ pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Fail
         .parse()
         .map_err(|message| Failure { message, code: 2 })?;
     let registry = open_registry()?;
-    let project = resolve(&registry, Some(&token.project))?;
+    let (project, _settings) = resolve(&registry, Some(&token.project))?;
     let journal = open_journal(&project)?;
     ktask_core::report(
         &journal,

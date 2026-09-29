@@ -6,10 +6,14 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread::JoinHandle;
 
-use ktask_adapters::{FileJournalWatch, FileRunLock, SqliteJournal, SystemClock};
-use ktask_core::Project;
+use ktask_adapters::{
+    FileJournalWatch, FileRunLock, SqliteJournal, SystemClock, TomlSettingsStore,
+};
+use ktask_core::{Project, SettingView};
 
-use crate::context::{current_exe, journal_file, open_registry, resolve, run_lock_file};
+use crate::context::{
+    current_exe, journal_file, open_registry, open_settings_store, resolve, run_lock_file,
+};
 use crate::error::Failure;
 
 /// `ktask-rs tui`'s arguments.
@@ -22,22 +26,16 @@ pub(crate) struct Args {
 
 /// Opens the terminal interface on the queue of the project selected, or the current one.
 pub(crate) fn run(args: &Args) -> Result<(), Failure> {
-    if !io::stdout().is_terminal() {
-        return Err(Failure {
-            message: "the terminal interface needs a terminal; \
-                      `ktask-rs list` shows the queue without one"
-                .to_owned(),
-            code: 2,
-        });
-    }
+    ensure_terminal()?;
     let registry = open_registry()?;
-    let project = resolve(&registry, args.project.as_deref())?;
+    let (project, _settings) = resolve(&registry, args.project.as_deref())?;
     let path = journal_file(&project)?;
     let journal = SqliteJournal::open(&path).map_err(|e| e.to_string())?;
     let watch = FileJournalWatch::open(&path).map_err(|e| e.to_string())?;
     let lock = FileRunLock::new(run_lock_file(&project)?);
     let binary_path = current_exe()?;
     let run_project = project.clone();
+    let settings_store = open_settings_store(&project)?;
     Ok(ktask_tui::run(
         |show_cancelled| {
             ktask_core::queue_view(
@@ -56,8 +54,37 @@ pub(crate) fn run(args: &Args) -> Result<(), Failure> {
                 .map_err(|problems| problems.iter().map(ToString::to_string).collect())
         },
         move || start_run(&binary_path, &run_project),
+        || load_setting(&settings_store),
+        |value| save_setting(&settings_store, value),
         watch,
     )?)
+}
+
+/// Refuses to open the terminal interface when there is no terminal to draw it on.
+fn ensure_terminal() -> Result<(), Failure> {
+    if io::stdout().is_terminal() {
+        return Ok(());
+    }
+    Err(Failure {
+        message: "the terminal interface needs a terminal; \
+                  `ktask-rs list` shows the queue without one"
+            .to_owned(),
+        code: 2,
+    })
+}
+
+/// The attempt-timeout setting, for the settings screen to open on.
+fn load_setting(store: &TomlSettingsStore) -> Result<SettingView, String> {
+    ktask_core::show_settings(store)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|view| view.name == ktask_core::ATTEMPT_TIMEOUT)
+        .ok_or_else(|| "no attempt-timeout setting".to_owned())
+}
+
+/// Changes the attempt-timeout setting to `value`, as the settings screen was submitted.
+fn save_setting(store: &TomlSettingsStore, value: &str) -> Result<SettingView, String> {
+    ktask_core::set_setting(store, ktask_core::ATTEMPT_TIMEOUT, value).map_err(|e| e.to_string())
 }
 
 /// Starts `binary_path run --project <project.name>`, detached from this process — its own

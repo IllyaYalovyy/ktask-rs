@@ -59,7 +59,7 @@ fn list(json: bool, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
 /// Shows the resolved project, registering it on first use.
 fn show(project: Option<&str>, json: bool, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
     let registry = open_registry()?;
-    let project = resolve(&registry, project)?;
+    let (project, _settings) = resolve(&registry, project)?;
     render::project(&project, json, stdout)?;
     Ok(ExitCode::SUCCESS)
 }

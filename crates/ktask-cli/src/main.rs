@@ -50,6 +50,9 @@ enum Command {
         #[command(subcommand)]
         command: commands::provider::Command,
     },
+    /// A project's settings: the attempt time limit, so far — shows every setting, or
+    /// changes one with `settings set`
+    Settings(commands::settings::Args),
     /// What ran and how it ended: every task that was attempted, with its most recent
     /// attempt
     Status(commands::status::Args),
@@ -93,6 +96,7 @@ fn dispatch(command: &Command, stdout: &mut impl Write) -> Result<ExitCode, Fail
         }
         Command::Run(args) => commands::run::run(args, stdout),
         Command::Provider { command } => commands::provider::run(command, stdout),
+        Command::Settings(args) => commands::settings::run(args, stdout),
         Command::Status(args) => commands::status::run(args, stdout),
         Command::Report(args) => commands::report::run(args, stdout),
     }

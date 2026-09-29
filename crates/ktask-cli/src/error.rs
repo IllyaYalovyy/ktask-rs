@@ -3,6 +3,7 @@
 
 use ktask_core::{
     AddError, CancelError, ImportError, RegisterError, ReportError, ResolveError, RunError,
+    SetSettingError,
 };
 
 /// Why a command failed, and the exit code to report it with.
@@ -123,6 +124,18 @@ impl From<RunError> for Failure {
                 code: 2,
             },
             RunError::Other(message) => Self::from(message),
+        }
+    }
+}
+
+impl From<SetSettingError> for Failure {
+    fn from(error: SetSettingError) -> Self {
+        match error {
+            SetSettingError::Store(_) => Self::from(error.to_string()),
+            SetSettingError::UnknownSetting(_) | SetSettingError::InvalidValue { .. } => Self {
+                message: error.to_string(),
+                code: 2,
+            },
         }
     }
 }
