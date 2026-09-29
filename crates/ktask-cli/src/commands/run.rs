@@ -5,11 +5,30 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use ktask_adapters::{FileRunLock, ProcessCommands, SystemClock, echo};
-use ktask_core::RunContext;
+use ktask_core::{
+    COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, SYNC_STEP, Settings,
+    TEST_STEP,
+};
 
 use crate::context::{current_exe, open_journal, open_registry, resolve, run_lock_file};
 use crate::error::Failure;
 use crate::render;
+
+/// The steps `settings` has switched off, named as [`RunContext`]'s `disabled_steps` expects.
+fn disabled_steps(settings: &Settings) -> Vec<&'static str> {
+    [
+        (SYNC_STEP, settings.sync_step),
+        (HEALTH_CHECK_STEP, settings.health_check_step),
+        (REVIEW_STEP, settings.review_step),
+        (TEST_STEP, settings.testing_step),
+        (COMMIT_STEP, settings.commit_step),
+        (PUSH_STEP, settings.push_step),
+    ]
+    .into_iter()
+    .filter(|(_, switch)| !ktask_core::step_enabled(*switch))
+    .map(|(step, _)| step)
+    .collect()
+}
 
 /// `ktask-rs run`'s arguments.
 #[derive(Debug, clap::Args)]
@@ -32,6 +51,7 @@ pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Fail
     let lock = FileRunLock::new(run_lock_file(&project)?);
     let binary_path = current_exe()?;
     let attempt_timeout = ktask_core::effective_attempt_timeout(&settings, args.attempt_timeout);
+    let disabled = disabled_steps(&settings);
     let report = ktask_core::run_queue(
         &journal,
         &SystemClock,
@@ -45,6 +65,7 @@ pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Fail
             attempt_timeout,
             health_check_command: settings.health_check_command.as_deref(),
             tracked_branch: settings.tracked_branch.as_deref(),
+            disabled_steps: &disabled,
         },
     )?;
     let stopped = render::run(&report, stdout)?;

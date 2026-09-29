@@ -18,6 +18,12 @@ fn label(name: &str) -> &'static str {
     match name {
         "health-check" => "Health check command",
         "tracked-branch" => "Tracked branch (remote/branch)",
+        "step-sync" => "Sync step (on/off)",
+        "step-health-check" => "Health check step (on/off)",
+        "step-review" => "Review step (on/off)",
+        "step-testing" => "Testing step (on/off)",
+        "step-commit" => "Commit step (on/off)",
+        "step-push" => "Push step (on/off)",
         _ => "Attempt timeout, in seconds",
     }
 }
