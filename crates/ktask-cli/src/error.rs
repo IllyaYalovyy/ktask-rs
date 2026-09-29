@@ -2,8 +2,8 @@
 //! one place, so a command module only ever produces a [`Failure`].
 
 use ktask_core::{
-    AddError, CancelError, ImportError, RegisterError, ReportError, ResolveError, RunError,
-    SetSettingError,
+    AddError, CancelError, ForgetError, ImportError, RegisterError, ReportError, ResolveError,
+    RunError, SetSettingError,
 };
 
 /// Why a command failed, and the exit code to report it with.
@@ -47,6 +47,18 @@ impl From<RegisterError> for Failure {
                 message: error.to_string(),
                 code: 2,
             },
+        }
+    }
+}
+
+impl From<ForgetError> for Failure {
+    fn from(error: ForgetError) -> Self {
+        match error {
+            ForgetError::UnknownProject(_) => Self {
+                message: format!("{error}; `ktask-rs project list` shows the registered projects"),
+                code: 2,
+            },
+            ForgetError::Registry(_) => Self::from(error.to_string()),
         }
     }
 }

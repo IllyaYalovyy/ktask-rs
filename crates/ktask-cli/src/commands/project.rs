@@ -1,12 +1,14 @@
 //! `ktask-rs project`: the projects the tool knows about.
 
-use std::io::Write;
+use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
 use clap::Subcommand;
 use ktask_adapters::{GitCli, SystemClock};
 
-use crate::context::{current_dir, merge_project, open_registry, reject_project, resolve};
+use crate::context::{
+    current_dir, journal_file, merge_project, open_registry, reject_project, resolve,
+};
 use crate::error::Failure;
 use crate::render;
 
@@ -37,6 +39,15 @@ pub(crate) enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Remove a registered project, leaving its journal on disk
+    Forget {
+        /// The name of the project to forget
+        #[arg(value_name = "NAME")]
+        name: String,
+        /// Skip the confirmation
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// Runs the `project` subcommand `command` names.
@@ -60,6 +71,10 @@ pub(crate) fn run(
         Command::Register { name, json } => {
             reject_project(project)?;
             register(name, *json, stdout)
+        }
+        Command::Forget { name, yes } => {
+            reject_project(project)?;
+            forget(name, *yes, stdout)
         }
     }
 }
@@ -87,4 +102,36 @@ fn register(name: &str, json: bool, stdout: &mut impl Write) -> Result<ExitCode,
     let project = ktask_core::register_project(&registry, &GitCli, &SystemClock, &cwd, name)?;
     render::project(&project, json, stdout)?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Removes the registered project `name`, after confirming on the terminal unless `yes` skips
+/// it, and reports where its journal was left.
+fn forget(name: &str, yes: bool, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
+    let registry = open_registry()?;
+    if !yes && !confirmed(name, stdout)? {
+        render::forget_declined(name, stdout)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    let project = ktask_core::forget_project(&registry, name)?;
+    let journal = journal_file(&project)?;
+    render::forgotten(&project, &journal, stdout)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Asks on `stdout` whether to forget `name`, reading the answer from standard input: `y` or
+/// `yes`, in any case, is the only answer that confirms; anything else, including no input at
+/// all, declines.
+fn confirmed(name: &str, stdout: &mut impl Write) -> Result<bool, Failure> {
+    write!(
+        stdout,
+        "Forget project {name:?}? Its journal stays on disk. [y/N] "
+    )
+    .map_err(|e| e.to_string())?;
+    stdout.flush().map_err(|e| e.to_string())?;
+    let mut answer = String::new();
+    io::stdin()
+        .lock()
+        .read_line(&mut answer)
+        .map_err(|e| e.to_string())?;
+    Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
 }

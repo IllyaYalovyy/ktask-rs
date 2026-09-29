@@ -36,6 +36,28 @@ pub(crate) fn registered(project: &Project, out: &mut impl Write) -> Result<(), 
     .map_err(|e| e.to_string())
 }
 
+/// Writes the line telling that `project` has just been forgotten, and where its journal was
+/// left, since forgetting a project does not remove it.
+pub(crate) fn forgotten(
+    project: &Project,
+    journal: &Path,
+    out: &mut impl Write,
+) -> Result<(), String> {
+    writeln!(
+        out,
+        "forgot project {}; its journal stays at {}",
+        project.name,
+        journal.display()
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Writes the line telling that `name` was not forgotten because the confirmation was
+/// declined.
+pub(crate) fn forget_declined(name: &str, out: &mut impl Write) -> Result<(), String> {
+    writeln!(out, "project {name:?} was not forgotten").map_err(|e| e.to_string())
+}
+
 /// Writes `project`: a `name<TAB>path` line, or a JSON object with `json`.
 pub(crate) fn project(project: &Project, json: bool, out: &mut impl Write) -> Result<(), String> {
     if json {
