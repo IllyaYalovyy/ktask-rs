@@ -16,6 +16,18 @@ struct SettingsFile {
     health_check: Option<String>,
     #[serde(rename = "tracked-branch", skip_serializing_if = "Option::is_none")]
     tracked_branch: Option<String>,
+    #[serde(rename = "step-sync", skip_serializing_if = "Option::is_none")]
+    step_sync: Option<bool>,
+    #[serde(rename = "step-health-check", skip_serializing_if = "Option::is_none")]
+    step_health_check: Option<bool>,
+    #[serde(rename = "step-review", skip_serializing_if = "Option::is_none")]
+    step_review: Option<bool>,
+    #[serde(rename = "step-testing", skip_serializing_if = "Option::is_none")]
+    step_testing: Option<bool>,
+    #[serde(rename = "step-commit", skip_serializing_if = "Option::is_none")]
+    step_commit: Option<bool>,
+    #[serde(rename = "step-push", skip_serializing_if = "Option::is_none")]
+    step_push: Option<bool>,
 }
 
 impl From<Settings> for SettingsFile {
@@ -24,6 +36,12 @@ impl From<Settings> for SettingsFile {
             attempt_timeout: settings.attempt_timeout_seconds,
             health_check: settings.health_check_command,
             tracked_branch: settings.tracked_branch,
+            step_sync: settings.sync_step,
+            step_health_check: settings.health_check_step,
+            step_review: settings.review_step,
+            step_testing: settings.testing_step,
+            step_commit: settings.commit_step,
+            step_push: settings.push_step,
         }
     }
 }
@@ -34,6 +52,12 @@ impl From<SettingsFile> for Settings {
             attempt_timeout_seconds: file.attempt_timeout,
             health_check_command: file.health_check,
             tracked_branch: file.tracked_branch,
+            sync_step: file.step_sync,
+            health_check_step: file.step_health_check,
+            review_step: file.step_review,
+            testing_step: file.step_testing,
+            commit_step: file.step_commit,
+            push_step: file.step_push,
         }
     }
 }
@@ -107,6 +131,12 @@ mod tests {
             attempt_timeout_seconds: Some(7_200),
             health_check_command: Some("cargo test".to_owned()),
             tracked_branch: Some("origin/main".to_owned()),
+            sync_step: Some(false),
+            health_check_step: Some(false),
+            review_step: Some(true),
+            testing_step: Some(false),
+            commit_step: Some(true),
+            push_step: Some(false),
         };
         store.save(&settings).unwrap();
         assert_eq!(store.load(), Ok(settings.clone()));
@@ -123,6 +153,7 @@ mod tests {
                 attempt_timeout_seconds: Some(60),
                 health_check_command: None,
                 tracked_branch: None,
+                ..Settings::default()
             })
             .unwrap();
         assert!(path.is_file());

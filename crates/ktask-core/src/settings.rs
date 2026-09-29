@@ -19,6 +19,29 @@ pub const HEALTH_CHECK: &str = "health-check";
 /// The tracked-branch setting's name.
 pub const TRACKED_BRANCH: &str = "tracked-branch";
 
+/// The sync step's on/off switch setting's name.
+pub const STEP_SYNC: &str = "step-sync";
+
+/// The health-check step's on/off switch setting's name.
+pub const STEP_HEALTH_CHECK: &str = "step-health-check";
+
+/// The review step's on/off switch setting's name.
+pub const STEP_REVIEW: &str = "step-review";
+
+/// The testing step's on/off switch setting's name.
+pub const STEP_TESTING: &str = "step-testing";
+
+/// The commit step's on/off switch setting's name.
+pub const STEP_COMMIT: &str = "step-commit";
+
+/// The push step's on/off switch setting's name.
+pub const STEP_PUSH: &str = "step-push";
+
+/// The name [`set_setting`] refuses under: the implementation step always runs, for every
+/// task, so it is never one of the switches [`show_settings`] lists — this name exists only
+/// so trying to switch it off gets a clear refusal instead of "unknown setting".
+pub const STEP_IMPLEMENTATION: &str = "step-implementation";
+
 /// A project's settings: only the ones it has changed from their default.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Settings {
@@ -32,6 +55,35 @@ pub struct Settings {
     /// `"<remote>/<branch>"` (for example `"origin/main"`), when the project has set one.
     /// `None` means the sync step is skipped: it is run for no task, and leaves no line.
     pub tracked_branch: Option<String>,
+    /// Whether the sync step runs, when the project has switched it. `None` means on: the
+    /// step still only actually runs when [`Settings::tracked_branch`] is also set.
+    pub sync_step: Option<bool>,
+    /// Whether the health-check step runs, when the project has switched it. `None` means on:
+    /// the step still only actually runs when [`Settings::health_check_command`] is also set.
+    pub health_check_step: Option<bool>,
+    /// Whether the review step runs, when the project has switched it. `None` means on.
+    pub review_step: Option<bool>,
+    /// Whether the testing step runs, when the project has switched it. `None` means on.
+    pub testing_step: Option<bool>,
+    /// Whether the commit step runs, when the project has switched it. `None` means on.
+    /// Switching it off is refused while [`Settings::push_step`] is on, since the push step
+    /// needs the commit step's commit.
+    pub commit_step: Option<bool>,
+    /// Whether the push step runs, when the project has switched it. `None` means on.
+    /// Switching it on is refused while [`Settings::commit_step`] is off.
+    pub push_step: Option<bool>,
+}
+
+/// Whether a step whose own setting is `value` runs: on unless the project explicitly
+/// switched it off.
+#[must_use]
+pub fn step_enabled(value: Option<bool>) -> bool {
+    value.unwrap_or(true)
+}
+
+/// `"on"` or `"off"`, as a step's own switch setting shows it.
+fn toggle_value(enabled: bool) -> String {
+    (if enabled { "on" } else { "off" }).to_owned()
 }
 
 /// Why a project's settings could not be read or written.
@@ -116,6 +168,36 @@ pub fn show_settings(store: &impl SettingsStore) -> Result<Vec<SettingView>, Set
             value: settings.tracked_branch.clone().unwrap_or_default(),
             is_default: settings.tracked_branch.is_none(),
         },
+        SettingView {
+            name: STEP_SYNC,
+            value: toggle_value(step_enabled(settings.sync_step)),
+            is_default: settings.sync_step.is_none(),
+        },
+        SettingView {
+            name: STEP_HEALTH_CHECK,
+            value: toggle_value(step_enabled(settings.health_check_step)),
+            is_default: settings.health_check_step.is_none(),
+        },
+        SettingView {
+            name: STEP_REVIEW,
+            value: toggle_value(step_enabled(settings.review_step)),
+            is_default: settings.review_step.is_none(),
+        },
+        SettingView {
+            name: STEP_TESTING,
+            value: toggle_value(step_enabled(settings.testing_step)),
+            is_default: settings.testing_step.is_none(),
+        },
+        SettingView {
+            name: STEP_COMMIT,
+            value: toggle_value(step_enabled(settings.commit_step)),
+            is_default: settings.commit_step.is_none(),
+        },
+        SettingView {
+            name: STEP_PUSH,
+            value: toggle_value(step_enabled(settings.push_step)),
+            is_default: settings.push_step.is_none(),
+        },
     ])
 }
 
@@ -192,6 +274,19 @@ fn parse_health_check(value: &str) -> Result<String, SetSettingError> {
     Ok(command.to_owned())
 }
 
+/// A step switch's part of [`set_setting`]: `value` read as `"on"` or `"off"`, or why it was
+/// refused.
+fn parse_step_toggle(name: &'static str, value: &str) -> Result<bool, SetSettingError> {
+    match value.trim() {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        _ => Err(SetSettingError::InvalidValue {
+            name,
+            message: format!("{value:?} must be \"on\" or \"off\""),
+        }),
+    }
+}
+
 /// The tracked-branch part of [`set_setting`]: `value` trimmed and confirmed to name a real
 /// remote branch of the repository at `project_dir`, or why it was refused.
 fn parse_tracked_branch(
@@ -262,6 +357,83 @@ pub fn set_setting(
                 is_default: false,
             }
         }
+        STEP_SYNC => {
+            let on = parse_step_toggle(STEP_SYNC, value)?;
+            settings.sync_step = Some(on);
+            SettingView {
+                name: STEP_SYNC,
+                value: toggle_value(on),
+                is_default: false,
+            }
+        }
+        STEP_HEALTH_CHECK => {
+            let on = parse_step_toggle(STEP_HEALTH_CHECK, value)?;
+            settings.health_check_step = Some(on);
+            SettingView {
+                name: STEP_HEALTH_CHECK,
+                value: toggle_value(on),
+                is_default: false,
+            }
+        }
+        STEP_REVIEW => {
+            let on = parse_step_toggle(STEP_REVIEW, value)?;
+            settings.review_step = Some(on);
+            SettingView {
+                name: STEP_REVIEW,
+                value: toggle_value(on),
+                is_default: false,
+            }
+        }
+        STEP_TESTING => {
+            let on = parse_step_toggle(STEP_TESTING, value)?;
+            settings.testing_step = Some(on);
+            SettingView {
+                name: STEP_TESTING,
+                value: toggle_value(on),
+                is_default: false,
+            }
+        }
+        STEP_COMMIT => {
+            let on = parse_step_toggle(STEP_COMMIT, value)?;
+            if !on && step_enabled(settings.push_step) {
+                return Err(SetSettingError::InvalidValue {
+                    name: STEP_COMMIT,
+                    message: "cannot switch off while push is on: the push step needs the \
+                              commit step's commit; switch push off first"
+                        .to_owned(),
+                });
+            }
+            settings.commit_step = Some(on);
+            SettingView {
+                name: STEP_COMMIT,
+                value: toggle_value(on),
+                is_default: false,
+            }
+        }
+        STEP_PUSH => {
+            let on = parse_step_toggle(STEP_PUSH, value)?;
+            if on && !step_enabled(settings.commit_step) {
+                return Err(SetSettingError::InvalidValue {
+                    name: STEP_PUSH,
+                    message: "cannot switch on while commit is off: the push step needs the \
+                              commit step's commit; switch commit on first"
+                        .to_owned(),
+                });
+            }
+            settings.push_step = Some(on);
+            SettingView {
+                name: STEP_PUSH,
+                value: toggle_value(on),
+                is_default: false,
+            }
+        }
+        STEP_IMPLEMENTATION => {
+            return Err(SetSettingError::InvalidValue {
+                name: STEP_IMPLEMENTATION,
+                message: "the implementation step always runs and cannot be switched off"
+                    .to_owned(),
+            });
+        }
         _ => return Err(SetSettingError::UnknownSetting(name.to_owned())),
     };
     store.save(&settings).map_err(SetSettingError::Store)?;
@@ -326,6 +498,36 @@ mod tests {
                     value: String::new(),
                     is_default: true,
                 },
+                SettingView {
+                    name: STEP_SYNC,
+                    value: "on".to_owned(),
+                    is_default: true,
+                },
+                SettingView {
+                    name: STEP_HEALTH_CHECK,
+                    value: "on".to_owned(),
+                    is_default: true,
+                },
+                SettingView {
+                    name: STEP_REVIEW,
+                    value: "on".to_owned(),
+                    is_default: true,
+                },
+                SettingView {
+                    name: STEP_TESTING,
+                    value: "on".to_owned(),
+                    is_default: true,
+                },
+                SettingView {
+                    name: STEP_COMMIT,
+                    value: "on".to_owned(),
+                    is_default: true,
+                },
+                SettingView {
+                    name: STEP_PUSH,
+                    value: "on".to_owned(),
+                    is_default: true,
+                },
             ])
         );
     }
@@ -336,6 +538,12 @@ mod tests {
             attempt_timeout_seconds: Some(7_200),
             health_check_command: Some("cargo test".to_owned()),
             tracked_branch: Some("origin/main".to_owned()),
+            sync_step: Some(false),
+            health_check_step: Some(false),
+            review_step: Some(false),
+            testing_step: Some(false),
+            commit_step: Some(false),
+            push_step: Some(false),
         });
         assert_eq!(
             show_settings(&store),
@@ -353,6 +561,36 @@ mod tests {
                 SettingView {
                     name: TRACKED_BRANCH,
                     value: "origin/main".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: STEP_SYNC,
+                    value: "off".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: STEP_HEALTH_CHECK,
+                    value: "off".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: STEP_REVIEW,
+                    value: "off".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: STEP_TESTING,
+                    value: "off".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: STEP_COMMIT,
+                    value: "off".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: STEP_PUSH,
+                    value: "off".to_owned(),
                     is_default: false,
                 },
             ])
@@ -387,6 +625,7 @@ mod tests {
                 attempt_timeout_seconds: Some(7_200),
                 health_check_command: None,
                 tracked_branch: None,
+                ..Settings::default()
             })
         );
     }
@@ -397,6 +636,7 @@ mod tests {
             attempt_timeout_seconds: Some(60),
             health_check_command: None,
             tracked_branch: None,
+            ..Settings::default()
         });
         let view = set(&store, HEALTH_CHECK, "  cargo test  ").unwrap();
         assert_eq!(
@@ -413,6 +653,7 @@ mod tests {
                 attempt_timeout_seconds: Some(60),
                 health_check_command: Some("cargo test".to_owned()),
                 tracked_branch: None,
+                ..Settings::default()
             })
         );
     }
@@ -437,6 +678,7 @@ mod tests {
             attempt_timeout_seconds: Some(60),
             health_check_command: None,
             tracked_branch: None,
+            ..Settings::default()
         });
         let git = FakeGit {
             remote_branches: vec!["origin/main".to_owned()],
@@ -457,6 +699,7 @@ mod tests {
                 attempt_timeout_seconds: Some(60),
                 health_check_command: None,
                 tracked_branch: Some("origin/main".to_owned()),
+                ..Settings::default()
             })
         );
     }
@@ -566,6 +809,7 @@ mod tests {
             attempt_timeout_seconds: Some(7_200),
             health_check_command: None,
             tracked_branch: None,
+            ..Settings::default()
         };
         assert_eq!(
             effective_attempt_timeout(&project_set, None),
@@ -575,5 +819,158 @@ mod tests {
             effective_attempt_timeout(&project_set, Some(60)),
             Duration::from_secs(60)
         );
+    }
+
+    #[test]
+    fn switching_a_step_off_and_back_on_persists_and_shows_as_no_longer_the_default() {
+        let store = FakeSettingsStore::with(Settings::default());
+        for name in [
+            STEP_SYNC,
+            STEP_HEALTH_CHECK,
+            STEP_REVIEW,
+            STEP_TESTING,
+            // STEP_COMMIT and STEP_PUSH have their own tests: switching either off or on in
+            // isolation runs into the other's refusal.
+        ] {
+            let off = set(&store, name, "off").unwrap();
+            assert_eq!(
+                off,
+                SettingView {
+                    name,
+                    value: "off".to_owned(),
+                    is_default: false,
+                }
+            );
+            let on = set(&store, name, "on").unwrap();
+            assert_eq!(
+                on,
+                SettingView {
+                    name,
+                    value: "on".to_owned(),
+                    is_default: false,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_step_switch_that_is_not_on_or_off_is_refused_and_nothing_changes() {
+        let store = FakeSettingsStore::with(Settings::default());
+        let error = set(&store, STEP_REVIEW, "nope").unwrap_err();
+        assert_eq!(
+            error,
+            SetSettingError::InvalidValue {
+                name: STEP_REVIEW,
+                message: "\"nope\" must be \"on\" or \"off\"".to_owned(),
+            }
+        );
+        assert_eq!(store.load(), Ok(Settings::default()));
+    }
+
+    #[test]
+    fn switching_commit_off_while_push_is_on_by_default_is_refused_and_nothing_changes() {
+        let store = FakeSettingsStore::with(Settings::default());
+        let error = set(&store, STEP_COMMIT, "off").unwrap_err();
+        assert_eq!(
+            error,
+            SetSettingError::InvalidValue {
+                name: STEP_COMMIT,
+                message: "cannot switch off while push is on: the push step needs the commit \
+                          step's commit; switch push off first"
+                    .to_owned(),
+            }
+        );
+        assert_eq!(store.load(), Ok(Settings::default()));
+    }
+
+    #[test]
+    fn switching_commit_off_once_push_is_already_off_is_accepted() {
+        let store = FakeSettingsStore::with(Settings::default());
+        set(&store, STEP_PUSH, "off").unwrap();
+        let view = set(&store, STEP_COMMIT, "off").unwrap();
+        assert_eq!(
+            view,
+            SettingView {
+                name: STEP_COMMIT,
+                value: "off".to_owned(),
+                is_default: false,
+            }
+        );
+        assert_eq!(
+            store.load(),
+            Ok(Settings {
+                push_step: Some(false),
+                commit_step: Some(false),
+                ..Settings::default()
+            })
+        );
+    }
+
+    #[test]
+    fn switching_push_on_while_commit_is_off_is_refused_and_nothing_changes() {
+        let store = FakeSettingsStore::with(Settings::default());
+        set(&store, STEP_PUSH, "off").unwrap();
+        set(&store, STEP_COMMIT, "off").unwrap();
+        let error = set(&store, STEP_PUSH, "on").unwrap_err();
+        assert_eq!(
+            error,
+            SetSettingError::InvalidValue {
+                name: STEP_PUSH,
+                message: "cannot switch on while commit is off: the push step needs the \
+                          commit step's commit; switch commit on first"
+                    .to_owned(),
+            }
+        );
+        assert_eq!(
+            store.load(),
+            Ok(Settings {
+                push_step: Some(false),
+                commit_step: Some(false),
+                ..Settings::default()
+            })
+        );
+    }
+
+    #[test]
+    fn switching_push_on_once_commit_is_on_again_is_accepted() {
+        let store = FakeSettingsStore::with(Settings::default());
+        set(&store, STEP_PUSH, "off").unwrap();
+        set(&store, STEP_COMMIT, "off").unwrap();
+        set(&store, STEP_COMMIT, "on").unwrap();
+        let view = set(&store, STEP_PUSH, "on").unwrap();
+        assert_eq!(
+            view,
+            SettingView {
+                name: STEP_PUSH,
+                value: "on".to_owned(),
+                is_default: false,
+            }
+        );
+    }
+
+    #[test]
+    fn switching_implementation_off_is_always_refused_and_nothing_changes() {
+        let store = FakeSettingsStore::with(Settings::default());
+        let error = set(&store, STEP_IMPLEMENTATION, "off").unwrap_err();
+        assert_eq!(
+            error,
+            SetSettingError::InvalidValue {
+                name: STEP_IMPLEMENTATION,
+                message: "the implementation step always runs and cannot be switched off"
+                    .to_owned(),
+            }
+        );
+        assert_eq!(store.load(), Ok(Settings::default()));
+    }
+
+    #[test]
+    fn implementation_is_not_one_of_the_switches_shown() {
+        let store = FakeSettingsStore::with(Settings::default());
+        let names: Vec<_> = show_settings(&store)
+            .unwrap()
+            .into_iter()
+            .map(|view| view.name)
+            .collect();
+        assert!(!names.contains(&STEP_IMPLEMENTATION), "{names:?}");
     }
 }

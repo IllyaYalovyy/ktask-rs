@@ -41,9 +41,10 @@ pub use run::{
     build_review_prompt, build_test_prompt, run_queue,
 };
 pub use settings::{
-    ATTEMPT_TIMEOUT, DEFAULT_ATTEMPT_TIMEOUT_SECS, HEALTH_CHECK, SetSettingError, SettingView,
-    Settings, SettingsError, SettingsStore, TRACKED_BRANCH, effective_attempt_timeout, set_setting,
-    show_settings,
+    ATTEMPT_TIMEOUT, DEFAULT_ATTEMPT_TIMEOUT_SECS, HEALTH_CHECK, STEP_COMMIT, STEP_HEALTH_CHECK,
+    STEP_IMPLEMENTATION, STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING, SetSettingError,
+    SettingView, Settings, SettingsError, SettingsStore, TRACKED_BRANCH, effective_attempt_timeout,
+    set_setting, show_settings, step_enabled,
 };
 pub use status::{
     AttemptLine, AttemptOutcome, COMMIT_STEP, HEALTH_CHECK_STEP, IMPLEMENTATION, PUSH_STEP,
