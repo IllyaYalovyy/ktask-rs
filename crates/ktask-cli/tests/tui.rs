@@ -25,6 +25,8 @@ mod run;
 #[path = "tui/settings.rs"]
 mod settings;
 mod support;
+#[path = "support/tracked_branch.rs"]
+mod tracked_branch;
 
 use std::path::Path;
 
