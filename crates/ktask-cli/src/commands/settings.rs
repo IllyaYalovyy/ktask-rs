@@ -5,6 +5,7 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use clap::Subcommand;
+use ktask_adapters::GitCli;
 
 use crate::context::{open_registry, open_settings_store, resolve};
 use crate::error::Failure;
@@ -28,7 +29,7 @@ pub(crate) struct Args {
 pub(crate) enum Command {
     /// Change a setting
     Set {
-        /// The setting to change: attempt-timeout or health-check
+        /// The setting to change: attempt-timeout, health-check or tracked-branch
         #[arg(value_name = "NAME")]
         name: String,
         /// The new value
@@ -79,7 +80,7 @@ fn set(
     let registry = open_registry()?;
     let (project, _settings) = resolve(&registry, project)?;
     let store = open_settings_store(&project)?;
-    let view = ktask_core::set_setting(&store, name, value)?;
+    let view = ktask_core::set_setting(&store, &GitCli, &project.path, name, value)?;
     render::setting_set(&view, json, stdout)?;
     Ok(ExitCode::SUCCESS)
 }

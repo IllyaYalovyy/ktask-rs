@@ -131,7 +131,7 @@ impl From<RunError> for Failure {
 impl From<SetSettingError> for Failure {
     fn from(error: SetSettingError) -> Self {
         match error {
-            SetSettingError::Store(_) => Self::from(error.to_string()),
+            SetSettingError::Store(_) | SetSettingError::Git(_) => Self::from(error.to_string()),
             SetSettingError::UnknownSetting(_) | SetSettingError::InvalidValue { .. } => Self {
                 message: error.to_string(),
                 code: 2,

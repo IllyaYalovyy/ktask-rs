@@ -44,6 +44,7 @@ pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Fail
             binary_path: &binary_path,
             attempt_timeout,
             health_check_command: settings.health_check_command.as_deref(),
+            tracked_branch: settings.tracked_branch.as_deref(),
         },
     )?;
     let stopped = render::run(&report, stdout)?;

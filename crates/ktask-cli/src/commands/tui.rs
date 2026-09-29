@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::thread::JoinHandle;
 
 use ktask_adapters::{
-    FileJournalWatch, FileRunLock, SqliteJournal, SystemClock, TomlSettingsStore,
+    FileJournalWatch, FileRunLock, GitCli, SqliteJournal, SystemClock, TomlSettingsStore,
 };
 use ktask_core::{Project, SettingView};
 
@@ -36,6 +36,7 @@ pub(crate) fn run(args: &Args) -> Result<(), Failure> {
     let binary_path = current_exe()?;
     let run_project = project.clone();
     let settings_store = open_settings_store(&project)?;
+    let settings_project_dir = project.path.clone();
     Ok(ktask_tui::run(
         |show_cancelled| {
             ktask_core::queue_view(
@@ -55,7 +56,7 @@ pub(crate) fn run(args: &Args) -> Result<(), Failure> {
         },
         move || start_run(&binary_path, &run_project),
         || load_settings(&settings_store),
-        |name, value| save_setting(&settings_store, name, value),
+        |name, value| save_setting(&settings_store, &settings_project_dir, name, value),
         watch,
     )?)
 }
@@ -79,8 +80,13 @@ fn load_settings(store: &TomlSettingsStore) -> Result<Vec<SettingView>, String> 
 }
 
 /// Changes the setting `name` to `value`, as the settings screen was submitted.
-fn save_setting(store: &TomlSettingsStore, name: &str, value: &str) -> Result<SettingView, String> {
-    ktask_core::set_setting(store, name, value).map_err(|e| e.to_string())
+fn save_setting(
+    store: &TomlSettingsStore,
+    project_dir: &Path,
+    name: &str,
+    value: &str,
+) -> Result<SettingView, String> {
+    ktask_core::set_setting(store, &GitCli, project_dir, name, value).map_err(|e| e.to_string())
 }
 
 /// Starts `binary_path run --project <project.name>`, detached from this process — its own

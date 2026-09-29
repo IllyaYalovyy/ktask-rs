@@ -5,8 +5,8 @@ use std::path::Path;
 
 use jiff::Timestamp;
 use ktask_core::{
-    AttemptToken, Outcome, Output, Project, RunEnd, RunReport, SettingView, StatusEntry, Task,
-    TaskId,
+    AttemptToken, Outcome, Output, Project, RunEnd, RunReport, SettingView, StatusEntry,
+    SyncProblem, Task, TaskId,
 };
 use serde::Serialize;
 
@@ -130,33 +130,44 @@ pub(crate) fn run(report: &RunReport, out: &mut impl Write) -> Result<bool, Stri
         }
         .map_err(|e| e.to_string())?;
     }
-    match &report.end {
-        RunEnd::EmptyQueue => writeln!(out, "the queue is empty").map_err(|e| e.to_string())?,
-        RunEnd::NothingPending => {
-            writeln!(out, "nothing is pending").map_err(|e| e.to_string())?;
-        }
+    run_end(&report.end, out)?;
+    Ok(matches!(
+        report.end,
+        RunEnd::Stopped { .. }
+            | RunEnd::Blocked { .. }
+            | RunEnd::HealthCheckFailed { .. }
+            | RunEnd::SyncFailed { .. }
+    ))
+}
+
+/// Writes the line, or lines, saying why a run ended at `end` — nothing for `Completed` or
+/// `Stopped`, whose own attempt line, written by [`run`] before this is reached, already said
+/// so.
+fn run_end(end: &RunEnd, out: &mut impl Write) -> Result<(), String> {
+    match end {
+        RunEnd::EmptyQueue => writeln!(out, "the queue is empty").map_err(|e| e.to_string()),
+        RunEnd::NothingPending => writeln!(out, "nothing is pending").map_err(|e| e.to_string()),
         RunEnd::HumanTask(id) => {
-            writeln!(out, "task {id} is a human task; run stopped").map_err(|e| e.to_string())?;
+            writeln!(out, "task {id} is a human task; run stopped").map_err(|e| e.to_string())
         }
-        RunEnd::Blocked { id, status, reason } => {
-            match reason {
-                Some(reason) => writeln!(out, "task {id}: {status}: {reason}; run did not start"),
-                None => writeln!(out, "task {id}: {status}; run did not start"),
-            }
-            .map_err(|e| e.to_string())?;
+        RunEnd::Blocked { id, status, reason } => match reason {
+            Some(reason) => writeln!(out, "task {id}: {status}: {reason}; run did not start"),
+            None => writeln!(out, "task {id}: {status}; run did not start"),
         }
+        .map_err(|e| e.to_string()),
         RunEnd::HealthCheckFailed {
             id,
             command,
             reason,
             output_tail,
-        } => health_check_failed(*id, command, reason, output_tail, out)?,
-        RunEnd::Completed | RunEnd::Stopped { .. } => {}
+        } => health_check_failed(*id, command, reason, output_tail, out),
+        RunEnd::SyncFailed {
+            id,
+            tracked_branch,
+            problem,
+        } => sync_failed(*id, tracked_branch, problem, out),
+        RunEnd::Completed | RunEnd::Stopped { .. } => Ok(()),
     }
-    Ok(matches!(
-        report.end,
-        RunEnd::Stopped { .. } | RunEnd::Blocked { .. } | RunEnd::HealthCheckFailed { .. }
-    ))
 }
 
 /// Writes why the health check ahead of task `id` failed: the command, why, the end of what it
@@ -178,6 +189,72 @@ fn health_check_failed(
         "task {id} was not started; fix the health check, then run again"
     )
     .map_err(|e| e.to_string())
+}
+
+/// Writes why the sync ahead of task `id`'s health check refused to pull `tracked_branch`, and
+/// what the operator is expected to do about it.
+fn sync_failed(
+    id: TaskId,
+    tracked_branch: &str,
+    problem: &SyncProblem,
+    out: &mut impl Write,
+) -> Result<(), String> {
+    match problem {
+        SyncProblem::UncommittedChanges(status) => {
+            writeln!(
+                out,
+                "task {id}: sync: the project's directory has uncommitted changes:"
+            )
+            .map_err(|e| e.to_string())?;
+            writeln!(out, "{status}").map_err(|e| e.to_string())?;
+            writeln!(
+                out,
+                "task {id} was not started; commit or stash your changes, then run again"
+            )
+            .map_err(|e| e.to_string())
+        }
+        SyncProblem::RemoteUnreachable(reason) => {
+            writeln!(
+                out,
+                "task {id}: sync: {tracked_branch}'s remote could not be reached: {reason}"
+            )
+            .map_err(|e| e.to_string())?;
+            writeln!(
+                out,
+                "task {id} was not started; make the remote reachable, then run again"
+            )
+            .map_err(|e| e.to_string())
+        }
+        SyncProblem::Conflict(files) => {
+            writeln!(
+                out,
+                "task {id}: sync: rebasing onto {tracked_branch} conflicted in:"
+            )
+            .map_err(|e| e.to_string())?;
+            for file in files {
+                writeln!(out, "  {file}").map_err(|e| e.to_string())?;
+            }
+            writeln!(
+                out,
+                "the rebase was undone; the project's directory is exactly as it was"
+            )
+            .map_err(|e| e.to_string())?;
+            writeln!(
+                out,
+                "task {id} was not started; resolve the conflict yourself \
+                 (pull --rebase, fix, push), then run again"
+            )
+            .map_err(|e| e.to_string())
+        }
+        SyncProblem::GitFailed(reason) => {
+            writeln!(out, "task {id}: sync: {reason}").map_err(|e| e.to_string())?;
+            writeln!(
+                out,
+                "task {id} was not started; fix the problem, then run again"
+            )
+            .map_err(|e| e.to_string())
+        }
+    }
 }
 
 /// One task as `list --json` shows it.
