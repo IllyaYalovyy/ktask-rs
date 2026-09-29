@@ -12,7 +12,10 @@ use crate::render;
 /// `ktask-rs import`'s arguments.
 ///
 /// Each task has the authored fields `list --json` prints: title, body, criteria, kind
-/// and links. Only title and criteria are required.
+/// and links. Only title and criteria are required. The tool-managed fields `list --json`
+/// and `list --all --json` also print — `id`, `position`, `status`, `created_at` — are
+/// ignored, so what one project lists imports into another unchanged; a cancelled task is
+/// left out.
 #[derive(Debug, clap::Args)]
 pub(crate) struct Args {
     /// The JSON file to read, or - for standard input
@@ -40,15 +43,12 @@ pub(crate) fn run(
     let json = read_text(&args.file).map_err(|message| Failure { message, code: 2 })?;
     let project = merge_project(project, args.project.as_deref())?;
     let journal = open_queue(project.as_deref())?;
-    let tasks = ktask_core::import_tasks(
+    let import = ktask_core::import_tasks(
         &journal,
         &SystemClock,
         &json,
         placement(args.before, args.after),
     )?;
-    tasks
-        .iter()
-        .try_for_each(|task| render::added(task, stdout))
-        .map_err(Failure::from)?;
+    render::imported(&import, stdout).map_err(Failure::from)?;
     Ok(ExitCode::SUCCESS)
 }

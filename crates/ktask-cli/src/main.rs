@@ -38,7 +38,10 @@ enum Command {
     /// Add the tasks of a JSON array, in order and all or none, and print their IDs
     ///
     /// Each task has the authored fields `list --json` prints: title, body, criteria, kind
-    /// and links. Only title and criteria are required.
+    /// and links. Only title and criteria are required. The tool-managed fields `list --json`
+    /// and `list --all --json` also print — `id`, `position`, `status`, `created_at` — are
+    /// ignored, so what one project lists imports into another unchanged; a cancelled task is
+    /// left out.
     Import(commands::import::Args),
     /// Remove a task from the queue: it is cancelled, and stays in the journal
     Remove(commands::remove::Args),

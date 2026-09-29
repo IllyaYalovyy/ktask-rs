@@ -96,6 +96,16 @@ pub(crate) fn added(task: &Task, out: &mut impl Write) -> Result<(), String> {
     writeln!(out, "{}", task.id).map_err(|e| e.to_string())
 }
 
+/// Writes `import`: the ID of each task added, one per line, then, when any cancelled task
+/// was left out, one line saying how many.
+pub(crate) fn imported(import: &ktask_core::Import, out: &mut impl Write) -> Result<(), String> {
+    import.tasks.iter().try_for_each(|task| added(task, out))?;
+    if let Some(message) = import.skipped_message() {
+        writeln!(out, "{message}").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Writes the line telling that the task numbered `id` has just been removed.
 pub(crate) fn removed(id: TaskId, out: &mut impl Write) -> Result<(), String> {
     writeln!(out, "removed task {id}").map_err(|e| e.to_string())

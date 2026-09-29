@@ -336,7 +336,7 @@ fn every_invalid_task_is_named_by_its_index_with_every_problem_it_has() -> Resul
         {"title": "no criteria"},
         task("fine"),
         {"title": "bad", "criteria": ["c", ""], "kind": "robot", "links": ["nonsense"]},
-        {"title": "extra field", "criteria": ["c"], "status": "done"},
+        {"title": "extra field", "criteria": ["c"], "assignee": "bob"},
         {"title": 5, "criteria": ["c"]},
         "just text",
     ]);
@@ -351,7 +351,7 @@ fn every_invalid_task_is_named_by_its_index_with_every_problem_it_has() -> Resul
             "task 3: unknown kind \"robot\"",
             "task 3: an acceptance criterion is empty",
             "task 3: malformed link \"nonsense\"",
-            "task 4: unknown field `status`",
+            "task 4: unknown field `assignee`",
             "task 5: invalid type: integer `5`, expected a string",
             "task 6: invalid type: string \"just text\"",
         ],
@@ -559,19 +559,60 @@ fn the_output_of_list_json_reduced_to_authored_fields_imports_into_another_proje
 }
 
 #[test]
-fn the_unreduced_output_of_list_json_is_refused_naming_the_fields_that_are_not_authored()
--> Result<()> {
+fn the_full_output_of_list_json_with_its_tool_managed_fields_imports_unchanged() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add("First")?;
+    fixture.add("Second")?;
+    let listed = fixture.listed()?;
+    let other = git_repository(&fixture.sandbox, &fixture.work, "other-app")?;
+    let file = fixture.file("full.json", &json!(listed).to_string())?;
+
+    let outcome = fixture.sandbox.run(&other, &["import", &file])?;
+
+    assert_eq!(outcome.stdout, "1\n2\n");
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    let imported = fixture.sandbox.run(&other, &["list", "--json"])?;
+    let imported: Vec<Value> = serde_json::from_str(&imported.stdout)?;
+    assert_eq!(authored(&imported), authored(&listed));
+    Ok(())
+}
+
+#[test]
+fn a_field_that_is_neither_authored_nor_tool_managed_is_refused_naming_it() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add("Plain")?;
-    let listed = fixture.run(&["list", "--json"])?;
+    let mut listed: Vec<Value> = serde_json::from_str(&fixture.run(&["list", "--json"])?.stdout)?;
+    listed[0]["assignee"] = json!("bob");
 
-    let outcome = fixture.run_with_stdin(&["import", "-"], &listed.stdout)?;
+    let outcome = fixture.run_with_stdin(&["import", "-"], &json!(listed).to_string())?;
 
-    assert_refused(
-        &outcome,
-        &["task 1: unknown field", "expected one of `title`, `body`"],
-    );
+    assert_refused(&outcome, &["task 1: unknown field `assignee`"]);
     assert_eq!(fixture.queue()?, ["1:Plain"]);
+    Ok(())
+}
+
+#[test]
+fn a_cancelled_task_from_list_all_json_is_skipped_saying_how_many() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add("Keep one")?;
+    fixture.add("Remove me")?;
+    fixture.add("Keep two")?;
+    let removed = fixture.run(&["remove", "2"])?;
+    assert_eq!(removed.code, Some(0), "{}", removed.stderr);
+    let listed = fixture.run(&["list", "--all", "--json"])?;
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    let other = git_repository(&fixture.sandbox, &fixture.work, "other-app")?;
+    let file = fixture.file("all.json", &listed.stdout)?;
+
+    let outcome = fixture.sandbox.run(&other, &["import", &file])?;
+
+    assert_eq!(outcome.stdout, "1\n2\n1 cancelled task was skipped\n");
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    let queued = fixture.sandbox.run(&other, &["list"])?;
+    assert_eq!(
+        queued.stdout,
+        "1\t#1\tpending\tagent\tKeep one\n2\t#2\tpending\tagent\tKeep two\n"
+    );
     Ok(())
 }
 
