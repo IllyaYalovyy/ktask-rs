@@ -46,8 +46,8 @@ pub use settings::{
     show_settings,
 };
 pub use status::{
-    AttemptLine, AttemptOutcome, HEALTH_CHECK_STEP, IMPLEMENTATION, REVIEW_STEP, SYNC_STEP,
-    StatusEntry, StepLine, TEST_STEP, displayed_status, status,
+    AttemptLine, AttemptOutcome, COMMIT_STEP, HEALTH_CHECK_STEP, IMPLEMENTATION, REVIEW_STEP,
+    SYNC_STEP, StatusEntry, StepLine, TEST_STEP, displayed_status, status,
 };
 pub use task::{
     AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, add_task,

@@ -8,10 +8,10 @@ use std::time::Duration;
 
 use crate::settings::split_tracked_branch;
 use crate::{
-    AttemptRun, AttemptToken, BeginAttemptError, Clock, CommandSpec, Commands, CommandsError, Exit,
-    HEALTH_CHECK_STEP, IMPLEMENTATION, Journal, JournalError, Outcome, Output, Provider,
-    ProviderRunError, REVIEW_STEP, RecordReportError, RunLock, RunLockError, SYNC_STEP, StepCall,
-    TEST_STEP, Task, TaskId, TaskKind, TaskStatus, list_tasks, run_provider,
+    AttemptRun, AttemptToken, BeginAttemptError, COMMIT_STEP, Clock, CommandSpec, Commands,
+    CommandsError, Exit, HEALTH_CHECK_STEP, IMPLEMENTATION, Journal, JournalError, Outcome, Output,
+    Provider, ProviderRunError, REVIEW_STEP, RecordReportError, RunLock, RunLockError, SYNC_STEP,
+    StepCall, TEST_STEP, Task, TaskId, TaskKind, TaskStatus, list_tasks, run_provider,
 };
 
 /// Why a run could not proceed at all — never for how an attempt itself ended, which is a
@@ -405,10 +405,10 @@ fn end_when_nothing_left(attempted: &[Attempted], queue_is_empty: bool) -> RunEn
 
 /// The steps every task's attempt runs through, in order, stopping at the first that ends
 /// badly: the provider runs on the task's whole prompt, then again in the reviewer role, then
-/// again in the tester role — both on the diff the implementation step made. Later tasks each
-/// add one more name here, and one more way of running it. The health-check step, when the
-/// project has configured one, runs ahead of an attempt even being begun, so it is not one of
-/// these.
+/// again in the tester role — both on the diff the implementation step made. The health-check
+/// step, when the project has configured one, runs ahead of an attempt even being begun; the
+/// commit step runs after these, once they have all passed. Neither spends a token, so neither
+/// is one of these.
 const STEPS: &[&str] = &[IMPLEMENTATION, REVIEW_STEP, TEST_STEP];
 
 /// How many lines of a failing health check's combined output are shown to the operator.
@@ -534,14 +534,14 @@ fn run_git(
     })
 }
 
-/// Runs `args` as `git`, turning anything other than a clean exit into a [`SyncProblem`] built
-/// by `problem` from a description of what went wrong.
-fn require_git(
+/// Runs `args` as `git`, turning anything other than a clean exit into an error built by
+/// `problem` from a description of what went wrong.
+fn require_git<E>(
     commands: &impl Commands,
     context: RunContext<'_>,
     args: &[&str],
-    problem: impl Fn(String) -> SyncProblem,
-) -> Result<Output, SyncProblem> {
+    problem: impl Fn(String) -> E,
+) -> Result<Output, E> {
     let description = || format!("`git {}`", args.join(" "));
     match run_git(commands, context, args) {
         Ok(output) => match output.exit {
@@ -562,6 +562,176 @@ fn require_git(
             description()
         ))),
     }
+}
+
+/// Why the commit step refuses when the project directory has changes but git has not been
+/// told whose they are, and what is expected of the operator because of it.
+const IDENTITY_NOT_CONFIGURED: &str = "git identity is not configured: set it with `git config \
+    user.name \"Your Name\"` and `git config user.email you@example.com`, then run again";
+
+/// What committing everything the attempt changed, once its test step has passed, found and
+/// did.
+enum CommitOutcome {
+    /// Nothing in the project directory had changed: no commit was made.
+    NothingChanged,
+    /// A commit was made: its short hash.
+    Committed(String),
+    /// It could not commit: why, and — since this ends the task `failed` — what is expected of
+    /// the operator.
+    Refused(String),
+}
+
+/// `git config --get key`'s value in `context`'s project directory, trimmed. `None` when it is
+/// unset, blank, or git could not answer — never the identity git might otherwise guess from
+/// the machine's own account, which does not count as configured for this step's purposes.
+fn git_config_value(
+    commands: &impl Commands,
+    context: RunContext<'_>,
+    key: &str,
+) -> Option<String> {
+    match run_git(commands, context, &["config", "--get", key]) {
+        Ok(output) if matches!(output.exit, Exit::Code(0)) => {
+            let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            (!value.is_empty()).then_some(value)
+        }
+        _ => None,
+    }
+}
+
+/// Whether `context`'s project directory has both `user.name` and `user.email` configured.
+fn git_identity_configured(commands: &impl Commands, context: RunContext<'_>) -> bool {
+    git_config_value(commands, context, "user.name").is_some()
+        && git_config_value(commands, context, "user.email").is_some()
+}
+
+/// The message the commit step gives its commit: `task`'s title as the subject, then its ID
+/// and acceptance criteria as the body. Carries no trailer of any kind — no co-author line, no
+/// tool or model named — so the commit reads as the user's own.
+fn build_commit_message(task: &Task) -> String {
+    let mut message = format!("{}\n\nTask #{}\n", task.title, task.id);
+    if !task.criteria.is_empty() {
+        message.push_str("\nAcceptance criteria:\n");
+        for criterion in &task.criteria {
+            message.push_str("- ");
+            message.push_str(criterion);
+            message.push('\n');
+        }
+    }
+    message
+}
+
+/// Commits everything changed in `context`'s project directory, for `task`, under whatever
+/// identity git is configured with there — author and committer both, since neither is ever
+/// overridden. Makes no commit, refusing nothing, when nothing had changed. Refuses, changing
+/// nothing, when the identity is not configured or git itself refuses the commit.
+fn commit_everything_changed(
+    commands: &impl Commands,
+    context: RunContext<'_>,
+    task: &Task,
+) -> CommitOutcome {
+    let dirty = match require_git(commands, context, &["status", "--porcelain"], |s: String| s) {
+        Ok(output) => !String::from_utf8_lossy(&output.stdout).trim().is_empty(),
+        Err(reason) => return CommitOutcome::Refused(reason),
+    };
+    if !dirty {
+        return CommitOutcome::NothingChanged;
+    }
+    if !git_identity_configured(commands, context) {
+        return CommitOutcome::Refused(IDENTITY_NOT_CONFIGURED.to_owned());
+    }
+    if let Err(reason) = require_git(commands, context, &["add", "-A"], |s: String| s) {
+        return CommitOutcome::Refused(reason);
+    }
+    let message = build_commit_message(task);
+    if let Err(reason) = require_git(
+        commands,
+        context,
+        &["commit", "-m", &message],
+        |s: String| s,
+    ) {
+        return CommitOutcome::Refused(reason);
+    }
+    match require_git(
+        commands,
+        context,
+        &["rev-parse", "--short", "HEAD"],
+        |s: String| s,
+    ) {
+        Ok(output) => {
+            CommitOutcome::Committed(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        }
+        Err(reason) => CommitOutcome::Refused(reason),
+    }
+}
+
+/// Records the commit step as one of attempt `number` of task `id`'s own steps, begun and
+/// ended in the same call since — like [`record_passed_step`]'s steps — nothing streams while
+/// it runs.
+fn record_commit_step(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    id: TaskId,
+    number: u32,
+    duration: Duration,
+    status: TaskStatus,
+    reason: Option<&str>,
+) -> Result<(), RunError> {
+    crate::attempt::begin_step(journal, clock, id, number, COMMIT_STEP)?;
+    crate::attempt::end_step(
+        journal,
+        clock,
+        id,
+        number,
+        COMMIT_STEP,
+        AttemptRun {
+            duration,
+            exit_code: if status == TaskStatus::Done {
+                Some(0)
+            } else {
+                None
+            },
+            status,
+            reason,
+        },
+        None,
+    )?;
+    Ok(())
+}
+
+/// Runs the commit step for `task`'s attempt `token`, once its test step has passed: times
+/// [`commit_everything_changed`], records it as the attempt's next step, and returns how long
+/// it took together with what it leaves the attempt at — `done`, whether or not it made a
+/// commit, or `failed` with why and what is expected of the operator.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be written.
+fn run_commit_step(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    commands: &impl Commands,
+    context: RunContext<'_>,
+    task: &Task,
+    token: &AttemptToken,
+) -> Result<(Duration, TaskStatus, Option<String>), RunError> {
+    let started = clock.now();
+    let outcome = commit_everything_changed(commands, context, task);
+    let duration = clock.now().duration_since(started).unwrap_or_default();
+    let (status, reason) = match outcome {
+        CommitOutcome::NothingChanged => (TaskStatus::Done, Some("nothing was changed".to_owned())),
+        CommitOutcome::Committed(hash) => (TaskStatus::Done, Some(format!("committed as {hash}"))),
+        CommitOutcome::Refused(why) => (TaskStatus::Failed, Some(why)),
+    };
+    record_commit_step(
+        journal,
+        clock,
+        task.id,
+        token.number,
+        duration,
+        status,
+        reason.as_deref(),
+    )?;
+    Ok((duration, status, reason))
 }
 
 /// The commit `HEAD` names in `context`'s project directory, right now — the baseline the
@@ -871,15 +1041,30 @@ fn run_one_attempt(
         start_commit: start_commit.as_deref(),
     };
 
-    let (duration, exit_code, status, reason) =
+    let (steps_duration, exit_code, steps_status, steps_reason) =
         run_steps(journal, clock, commands, provider, context, &target, STEPS)?;
+
+    let (commit_duration, status, reason) = if steps_status == TaskStatus::Done {
+        let (duration, commit_status, commit_reason) =
+            run_commit_step(journal, clock, commands, context, task, &token)?;
+        if commit_status == TaskStatus::Done {
+            // The commit step's own reason — that it made a commit, naming its hash, or that
+            // there was nothing to commit — belongs on its own step line, not on the whole
+            // attempt's, whose `reason` means why it is not `done`.
+            (duration, steps_status, steps_reason)
+        } else {
+            (duration, commit_status, commit_reason)
+        }
+    } else {
+        (Duration::ZERO, steps_status, steps_reason)
+    };
 
     crate::attempt::end_attempt(
         journal,
         task.id,
         token.number,
         AttemptRun {
-            duration: pre_duration + duration,
+            duration: pre_duration + steps_duration + commit_duration,
             exit_code,
             status,
             reason: reason.as_deref(),
@@ -1454,7 +1639,7 @@ mod tests {
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt.steps.len(), 4, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps.len(), 5, "{:?}", attempt.steps);
         assert_eq!(attempt.steps[0].name, HEALTH_CHECK_STEP);
         assert_eq!(
             attempt.steps[0].ended.as_ref().unwrap().status,
@@ -1470,6 +1655,11 @@ mod tests {
         assert_eq!(
             attempt.steps[3].ended.as_ref().unwrap().reported,
             Some(Outcome::Accepted)
+        );
+        assert_eq!(attempt.steps[4].name, COMMIT_STEP);
+        assert_eq!(
+            attempt.steps[4].ended.as_ref().unwrap().status,
+            TaskStatus::Done
         );
     }
 
@@ -1590,10 +1780,11 @@ mod tests {
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt.steps.len(), 3, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps.len(), 4, "{:?}", attempt.steps);
         assert_eq!(attempt.steps[0].name, IMPLEMENTATION);
         assert_eq!(attempt.steps[1].name, REVIEW_STEP);
         assert_eq!(attempt.steps[2].name, TEST_STEP);
+        assert_eq!(attempt.steps[3].name, COMMIT_STEP);
     }
 
     /// A ready-to-return, always-successful [`Output`] carrying `stdout`.
@@ -1679,7 +1870,7 @@ mod tests {
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt.steps.len(), 4, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps.len(), 5, "{:?}", attempt.steps);
         assert_eq!(attempt.steps[0].name, SYNC_STEP);
         let synced = attempt.steps[0].ended.as_ref().unwrap();
         assert_eq!(synced.status, TaskStatus::Done);
@@ -1690,6 +1881,7 @@ mod tests {
         assert_eq!(attempt.steps[1].name, IMPLEMENTATION);
         assert_eq!(attempt.steps[2].name, REVIEW_STEP);
         assert_eq!(attempt.steps[3].name, TEST_STEP);
+        assert_eq!(attempt.steps[4].name, COMMIT_STEP);
     }
 
     #[test]
@@ -1944,10 +2136,11 @@ mod tests {
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt.steps.len(), 3, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps.len(), 4, "{:?}", attempt.steps);
         assert_eq!(attempt.steps[0].name, IMPLEMENTATION);
         assert_eq!(attempt.steps[1].name, REVIEW_STEP);
         assert_eq!(attempt.steps[2].name, TEST_STEP);
+        assert_eq!(attempt.steps[3].name, COMMIT_STEP);
     }
 
     #[test]
@@ -1991,12 +2184,13 @@ mod tests {
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt.steps.len(), 5, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps.len(), 6, "{:?}", attempt.steps);
         assert_eq!(attempt.steps[0].name, SYNC_STEP);
         assert_eq!(attempt.steps[1].name, HEALTH_CHECK_STEP);
         assert_eq!(attempt.steps[2].name, IMPLEMENTATION);
         assert_eq!(attempt.steps[3].name, REVIEW_STEP);
         assert_eq!(attempt.steps[4].name, TEST_STEP);
+        assert_eq!(attempt.steps[5].name, COMMIT_STEP);
     }
 
     #[test]
@@ -2616,7 +2810,7 @@ mod tests {
     }
 
     #[test]
-    fn the_implementation_review_and_test_steps_each_begin_and_end_with_one_journal_event() {
+    fn the_implementation_review_test_and_commit_steps_each_begin_and_end_with_one_journal_event() {
         let journal = FakeJournal::default();
         add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
         let commands = ReportingCommands {
@@ -2635,7 +2829,7 @@ mod tests {
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt.steps.len(), 3, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps.len(), 4, "{:?}", attempt.steps);
         let implementation = &attempt.steps[0];
         assert_eq!(implementation.name, IMPLEMENTATION);
         let end = implementation.ended.as_ref().expect("the step ended");
@@ -2651,6 +2845,10 @@ mod tests {
         let end = test.ended.as_ref().expect("the step ended");
         assert_eq!(end.status, TaskStatus::Done);
         assert_eq!(end.reported, Some(Outcome::Accepted));
+        let commit = &attempt.steps[3];
+        assert_eq!(commit.name, COMMIT_STEP);
+        let end = commit.ended.as_ref().expect("the step ended");
+        assert_eq!(end.status, TaskStatus::Done);
 
         let started = journal
             .events()
@@ -2664,7 +2862,7 @@ mod tests {
             .iter()
             .filter(|event| matches!(event, Event::StepEnded { .. }))
             .count();
-        assert_eq!((started, ended), (3, 3));
+        assert_eq!((started, ended), (4, 4));
     }
 
     #[test]
@@ -2973,5 +3171,271 @@ mod tests {
             ]
         );
         assert_eq!(report.end, RunEnd::Completed);
+    }
+
+    #[test]
+    fn the_commit_message_carries_the_title_id_and_criteria_and_no_trailer() {
+        let task = Task {
+            id: TaskId(7),
+            position: 1,
+            title: "Do the thing".to_owned(),
+            body: "ignored here".to_owned(),
+            criteria: vec!["first thing".to_owned(), "second thing".to_owned()],
+            kind: TaskKind::Agent,
+            links: vec![],
+            status: TaskStatus::Running,
+            created_at: at(1),
+        };
+        let message = build_commit_message(&task);
+        assert!(message.starts_with("Do the thing\n\n"), "{message}");
+        assert!(message.contains("Task #7"), "{message}");
+        assert!(message.contains("- first thing"), "{message}");
+        assert!(message.contains("- second thing"), "{message}");
+        let lower = message.to_lowercase();
+        assert!(!lower.contains("co-authored-by"), "{message}");
+        assert!(!lower.contains("claude"), "{message}");
+        assert!(!lower.contains("generated"), "{message}");
+    }
+
+    /// A commands port that answers every `git` call the commit step could make, driven by
+    /// `dirty` (whether `status --porcelain` reports changes), `identity` (whether
+    /// `config --get` finds `user.name` and `user.email`) and `commit_exit` (what `commit`
+    /// itself exits with) — and passes anything that is not `git` on to `other`. Records every
+    /// `git` call it received, in order.
+    struct CommitScript<'a> {
+        dirty: bool,
+        identity: bool,
+        commit_exit: Exit,
+        hash: &'static str,
+        calls: RefCell<Vec<Vec<String>>>,
+        other: &'a dyn Commands,
+    }
+
+    impl Commands for CommitScript<'_> {
+        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+            if spec.program != "git" {
+                return self.other.run(spec);
+            }
+            self.calls.borrow_mut().push(spec.args.clone());
+            match spec.args.first().map(String::as_str) {
+                Some("status") => Ok(git_ok(if self.dirty { b"M file.txt\n" } else { b"" })),
+                Some("config") => {
+                    if self.identity {
+                        Ok(git_ok(b"configured\n"))
+                    } else {
+                        Ok(Output {
+                            stdout: Vec::new(),
+                            stderr: Vec::new(),
+                            exit: Exit::Code(1),
+                        })
+                    }
+                }
+                Some("commit") => Ok(Output {
+                    stdout: Vec::new(),
+                    stderr: b"the pre-commit hook refused it\n".to_vec(),
+                    exit: self.commit_exit,
+                }),
+                Some("rev-parse") => Ok(git_ok(self.hash.as_bytes())),
+                _ => Ok(git_ok(b"")),
+            }
+        }
+    }
+
+    #[test]
+    fn a_dirty_tree_with_a_configured_identity_is_committed_and_the_step_shows_its_short_hash() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = CommitScript {
+            dirty: true,
+            identity: true,
+            commit_exit: Exit::Code(0),
+            hash: "abc1234",
+            calls: RefCell::default(),
+            other: &reporting,
+        };
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Done
+        );
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        let commit = attempt.steps.last().expect("the commit step ran");
+        assert_eq!(commit.name, COMMIT_STEP);
+        let end = commit.ended.as_ref().expect("the step ended");
+        assert_eq!(end.status, TaskStatus::Done);
+        assert_eq!(end.reason.as_deref(), Some("committed as abc1234"));
+        // The attempt's own reason — as opposed to the commit step's own line — is untouched:
+        // it means why the attempt is not `done`, and it is.
+        assert_eq!(report.attempted[0].reason, None);
+        let calls = commands.calls.borrow();
+        assert!(
+            calls
+                .iter()
+                .any(|call| call.first().map(String::as_str) == Some("add")),
+            "{calls:?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|call| call.first().map(String::as_str) == Some("commit")),
+            "{calls:?}"
+        );
+    }
+
+    #[test]
+    fn a_clean_tree_makes_no_commit_and_the_step_says_so() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = CommitScript {
+            dirty: false,
+            identity: true,
+            commit_exit: Exit::Code(0),
+            hash: "abc1234",
+            calls: RefCell::default(),
+            other: &reporting,
+        };
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Done
+        );
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        let commit = attempt.steps.last().expect("the commit step ran");
+        assert_eq!(commit.name, COMMIT_STEP);
+        let end = commit.ended.as_ref().expect("the step ended");
+        assert_eq!(end.status, TaskStatus::Done);
+        assert_eq!(end.reason.as_deref(), Some("nothing was changed"));
+        let calls = commands.calls.borrow();
+        assert!(
+            !calls
+                .iter()
+                .any(|call| call.first().map(String::as_str) == Some("add")),
+            "no staging should happen when nothing changed: {calls:?}"
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|call| call.first().map(String::as_str) == Some("commit")),
+            "no commit should happen when nothing changed: {calls:?}"
+        );
+    }
+
+    #[test]
+    fn an_unconfigured_git_identity_refuses_the_commit_and_ends_the_task_failed() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = CommitScript {
+            dirty: true,
+            identity: false,
+            commit_exit: Exit::Code(0),
+            hash: "abc1234",
+            calls: RefCell::default(),
+            other: &reporting,
+        };
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        assert_eq!(
+            report.end,
+            RunEnd::Stopped {
+                id: TaskId(1),
+                status: TaskStatus::Failed,
+            }
+        );
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Failed
+        );
+        let reason = report.attempted[0].reason.as_deref().unwrap();
+        assert!(
+            reason.contains("git identity is not configured"),
+            "{reason}"
+        );
+        assert!(reason.contains("user.name"), "{reason}");
+        assert!(reason.contains("user.email"), "{reason}");
+        let calls = commands.calls.borrow();
+        assert!(
+            !calls
+                .iter()
+                .any(|call| call.first().map(String::as_str) == Some("add")),
+            "nothing should be staged once the identity check refuses: {calls:?}"
+        );
+    }
+
+    #[test]
+    fn a_commit_git_itself_refuses_ends_the_task_failed_with_what_git_said() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = CommitScript {
+            dirty: true,
+            identity: true,
+            commit_exit: Exit::Code(1),
+            hash: "abc1234",
+            calls: RefCell::default(),
+            other: &reporting,
+        };
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        assert_eq!(
+            report.end,
+            RunEnd::Stopped {
+                id: TaskId(1),
+                status: TaskStatus::Failed,
+            }
+        );
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Failed
+        );
+        let reason = report.attempted[0].reason.as_deref().unwrap();
+        assert!(reason.contains("git commit"), "{reason}");
+        assert!(reason.contains("exited with code 1"), "{reason}");
+        assert!(
+            reason.contains("the pre-commit hook refused it"),
+            "{reason}"
+        );
     }
 }

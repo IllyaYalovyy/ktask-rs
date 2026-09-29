@@ -27,6 +27,10 @@ pub const SYNC_STEP: &str = "sync";
 /// implementation step.
 pub const HEALTH_CHECK_STEP: &str = "health check";
 
+/// The step kind that commits everything the task's attempt changed, once the test step has
+/// passed.
+pub const COMMIT_STEP: &str = "commit";
+
 /// How an attempt's outcome is labelled: as the agent itself reported it, or as the tool
 /// observed it when the agent never reported at all — a crash, a kill past the time limit, or
 /// a run left running by a killed one.
@@ -41,10 +45,14 @@ pub enum AttemptOutcome {
     /// The journal still calls the attempt running, but no run is alive to finish it: a run
     /// that was killed outright left it behind, and nothing has reconciled it yet.
     Interrupted,
-    /// A command-kind step — the health check, today — ran and exited zero. Such a step is
-    /// only ever journaled once it has already succeeded: a failing one stops the run before
-    /// an attempt even begins, so this is the only outcome one is ever shown with.
+    /// A command-kind step — the sync or the health check, say — ran and exited zero. Such a
+    /// pre-attempt step is only ever journaled once it has already succeeded: a failing one
+    /// stops the run before an attempt even begins, so this is the only outcome one is ever
+    /// shown with.
     Passed,
+    /// A command-kind step that runs inside the attempt itself — the commit step, today — did
+    /// not succeed: `reason` on its line says why.
+    Failed,
 }
 
 impl AttemptOutcome {
@@ -57,6 +65,7 @@ impl AttemptOutcome {
             Self::Unreported => TaskStatus::FailedUnknown.as_str(),
             Self::Interrupted => "interrupted",
             Self::Passed => "passed",
+            Self::Failed => TaskStatus::Failed.as_str(),
         }
     }
 }
@@ -145,10 +154,12 @@ fn ended_outcome(
 
 /// The outcome and reason shown for a step named `name` that ended at `end`: the
 /// implementation, review and test steps are judged by what the agent itself reported, when
-/// it reported anything; every other step — the sync and the health check, today — is a
-/// command-kind step, only ever journaled once it has already passed, with whatever it
-/// recorded — the health check has nothing to add, the sync step says how many commits it
-/// took in, or that there were none — shown alongside it.
+/// it reported anything; every other step — the sync, the health check and the commit step,
+/// today — is a command-kind step the tool itself ran, shown [`AttemptOutcome::Passed`] when
+/// `end.status` is `done` — the health check has nothing to add, the sync step says how many
+/// commits it took in, the commit step names its own short hash or says nothing changed — or
+/// [`AttemptOutcome::Failed`] with why, for the one such step that can still end an attempt
+/// badly: the commit step, run inside the attempt itself rather than ahead of it.
 fn step_outcome(
     name: &str,
     end: &AttemptEnd,
@@ -156,8 +167,10 @@ fn step_outcome(
 ) -> (AttemptOutcome, Option<String>) {
     if name == IMPLEMENTATION || name == REVIEW_STEP || name == TEST_STEP {
         ended_outcome(end, reported)
-    } else {
+    } else if end.status == TaskStatus::Done {
         (AttemptOutcome::Passed, end.reason.clone())
+    } else {
+        (AttemptOutcome::Failed, end.reason.clone())
     }
 }
 
@@ -595,7 +608,25 @@ mod tests {
         assert_eq!(AttemptOutcome::Unreported.as_str(), "failed-unknown");
         assert_eq!(AttemptOutcome::Interrupted.as_str(), "interrupted");
         assert_eq!(AttemptOutcome::Passed.as_str(), "passed");
+        assert_eq!(AttemptOutcome::Failed.as_str(), "failed");
         assert_eq!(AttemptOutcome::Running.to_string(), "running");
+    }
+
+    #[test]
+    fn a_command_kind_step_that_did_not_pass_is_shown_failed_with_its_reason() {
+        let end = AttemptEnd {
+            duration: Duration::from_secs(1),
+            status: TaskStatus::Failed,
+            reason: Some("git identity is not configured".to_owned()),
+            reported: None,
+        };
+        assert_eq!(
+            step_outcome(COMMIT_STEP, &end, None),
+            (
+                AttemptOutcome::Failed,
+                Some("git identity is not configured".to_owned())
+            )
+        );
     }
 
     #[test]
