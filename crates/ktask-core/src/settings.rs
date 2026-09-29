@@ -141,6 +141,179 @@ pub struct SettingView {
     pub is_default: bool,
 }
 
+/// The value [`show_settings`] shows for one setting, and whether it is the default.
+type GetSetting = Box<dyn Fn(&Settings) -> (String, bool)>;
+
+/// [`set_setting`]'s work for one setting: check a new value, apply it to [`Settings`], and
+/// answer with the value to show for it. The `&dyn Git` and `&Path` are unused except by
+/// [`TRACKED_BRANCH`].
+type SetSetting = Box<dyn Fn(&mut Settings, &str, &dyn Git, &Path) -> Result<String, SetSettingError>>;
+
+/// One setting's whole description: its name, how its current value and default are read
+/// from [`Settings`], and how a new value for it is checked and applied. [`show_settings`]
+/// and [`set_setting`] are the only two readers of [`setting_specs`] — this table is where a
+/// setting is described, once.
+struct SettingSpec {
+    name: &'static str,
+    get: GetSetting,
+    set: SetSetting,
+}
+
+/// Every setting's description, in the order [`show_settings`] lists them.
+fn setting_specs() -> Vec<SettingSpec> {
+    vec![
+        attempt_timeout_spec(),
+        health_check_spec(),
+        tracked_branch_spec(),
+        step_toggle_spec(STEP_SYNC, |s| s.sync_step, |s, on| s.sync_step = Some(on)),
+        step_toggle_spec(STEP_HEALTH_CHECK, |s| s.health_check_step, |s, on| {
+            s.health_check_step = Some(on);
+        }),
+        step_toggle_spec(STEP_REVIEW, |s| s.review_step, |s, on| {
+            s.review_step = Some(on);
+        }),
+        step_toggle_spec(STEP_TESTING, |s| s.testing_step, |s, on| {
+            s.testing_step = Some(on);
+        }),
+        commit_step_spec(),
+        push_step_spec(),
+    ]
+}
+
+/// [`ATTEMPT_TIMEOUT`]'s description.
+fn attempt_timeout_spec() -> SettingSpec {
+    SettingSpec {
+        name: ATTEMPT_TIMEOUT,
+        get: Box::new(|settings| {
+            (
+                settings
+                    .attempt_timeout_seconds
+                    .unwrap_or(DEFAULT_ATTEMPT_TIMEOUT_SECS)
+                    .to_string(),
+                settings.attempt_timeout_seconds.is_none(),
+            )
+        }),
+        set: Box::new(|settings, value, _git, _dir| {
+            let seconds = parse_attempt_timeout(value)?;
+            settings.attempt_timeout_seconds = Some(seconds);
+            Ok(seconds.to_string())
+        }),
+    }
+}
+
+/// [`HEALTH_CHECK`]'s description.
+fn health_check_spec() -> SettingSpec {
+    SettingSpec {
+        name: HEALTH_CHECK,
+        get: Box::new(|settings| {
+            (
+                settings.health_check_command.clone().unwrap_or_default(),
+                settings.health_check_command.is_none(),
+            )
+        }),
+        set: Box::new(|settings, value, _git, _dir| {
+            let command = parse_health_check(value)?;
+            settings.health_check_command = Some(command.clone());
+            Ok(command)
+        }),
+    }
+}
+
+/// [`TRACKED_BRANCH`]'s description.
+fn tracked_branch_spec() -> SettingSpec {
+    SettingSpec {
+        name: TRACKED_BRANCH,
+        get: Box::new(|settings| {
+            (
+                settings.tracked_branch.clone().unwrap_or_default(),
+                settings.tracked_branch.is_none(),
+            )
+        }),
+        set: Box::new(|settings, value, git, project_dir| {
+            let branch = parse_tracked_branch(git, project_dir, value)?;
+            settings.tracked_branch = Some(branch.clone());
+            Ok(branch)
+        }),
+    }
+}
+
+/// A plain on/off step switch's description: `field` reads its current value from
+/// [`Settings`], `apply` writes a new one back. [`STEP_COMMIT`] and [`STEP_PUSH`] are not
+/// plain switches — each is refused depending on the other's value — so they have their own
+/// descriptions instead.
+fn step_toggle_spec(
+    name: &'static str,
+    field: impl Fn(&Settings) -> Option<bool> + Copy + 'static,
+    apply: impl Fn(&mut Settings, bool) + 'static,
+) -> SettingSpec {
+    SettingSpec {
+        name,
+        get: Box::new(move |settings| {
+            (
+                toggle_value(step_enabled(field(settings))),
+                field(settings).is_none(),
+            )
+        }),
+        set: Box::new(move |settings, value, _git, _dir| {
+            let on = parse_step_toggle(name, value)?;
+            apply(settings, on);
+            Ok(toggle_value(on))
+        }),
+    }
+}
+
+/// [`STEP_COMMIT`]'s description: refused off while [`STEP_PUSH`] is on.
+fn commit_step_spec() -> SettingSpec {
+    SettingSpec {
+        name: STEP_COMMIT,
+        get: Box::new(|settings| {
+            (
+                toggle_value(step_enabled(settings.commit_step)),
+                settings.commit_step.is_none(),
+            )
+        }),
+        set: Box::new(|settings, value, _git, _dir| {
+            let on = parse_step_toggle(STEP_COMMIT, value)?;
+            if !on && step_enabled(settings.push_step) {
+                return Err(SetSettingError::InvalidValue {
+                    name: STEP_COMMIT,
+                    message: "cannot switch off while push is on: the push step needs the \
+                              commit step's commit; switch push off first"
+                        .to_owned(),
+                });
+            }
+            settings.commit_step = Some(on);
+            Ok(toggle_value(on))
+        }),
+    }
+}
+
+/// [`STEP_PUSH`]'s description: refused on while [`STEP_COMMIT`] is off.
+fn push_step_spec() -> SettingSpec {
+    SettingSpec {
+        name: STEP_PUSH,
+        get: Box::new(|settings| {
+            (
+                toggle_value(step_enabled(settings.push_step)),
+                settings.push_step.is_none(),
+            )
+        }),
+        set: Box::new(|settings, value, _git, _dir| {
+            let on = parse_step_toggle(STEP_PUSH, value)?;
+            if on && !step_enabled(settings.commit_step) {
+                return Err(SetSettingError::InvalidValue {
+                    name: STEP_PUSH,
+                    message: "cannot switch on while commit is off: the push step needs the \
+                              commit step's commit; switch commit on first"
+                        .to_owned(),
+                });
+            }
+            settings.push_step = Some(on);
+            Ok(toggle_value(on))
+        }),
+    }
+}
+
 /// Use case: every setting of the project `store` holds, with its value and whether it is
 /// the default.
 ///
@@ -149,56 +322,17 @@ pub struct SettingView {
 /// Fails when the settings cannot be read.
 pub fn show_settings(store: &impl SettingsStore) -> Result<Vec<SettingView>, SettingsError> {
     let settings = store.load()?;
-    Ok(vec![
-        SettingView {
-            name: ATTEMPT_TIMEOUT,
-            value: settings
-                .attempt_timeout_seconds
-                .unwrap_or(DEFAULT_ATTEMPT_TIMEOUT_SECS)
-                .to_string(),
-            is_default: settings.attempt_timeout_seconds.is_none(),
-        },
-        SettingView {
-            name: HEALTH_CHECK,
-            value: settings.health_check_command.clone().unwrap_or_default(),
-            is_default: settings.health_check_command.is_none(),
-        },
-        SettingView {
-            name: TRACKED_BRANCH,
-            value: settings.tracked_branch.clone().unwrap_or_default(),
-            is_default: settings.tracked_branch.is_none(),
-        },
-        SettingView {
-            name: STEP_SYNC,
-            value: toggle_value(step_enabled(settings.sync_step)),
-            is_default: settings.sync_step.is_none(),
-        },
-        SettingView {
-            name: STEP_HEALTH_CHECK,
-            value: toggle_value(step_enabled(settings.health_check_step)),
-            is_default: settings.health_check_step.is_none(),
-        },
-        SettingView {
-            name: STEP_REVIEW,
-            value: toggle_value(step_enabled(settings.review_step)),
-            is_default: settings.review_step.is_none(),
-        },
-        SettingView {
-            name: STEP_TESTING,
-            value: toggle_value(step_enabled(settings.testing_step)),
-            is_default: settings.testing_step.is_none(),
-        },
-        SettingView {
-            name: STEP_COMMIT,
-            value: toggle_value(step_enabled(settings.commit_step)),
-            is_default: settings.commit_step.is_none(),
-        },
-        SettingView {
-            name: STEP_PUSH,
-            value: toggle_value(step_enabled(settings.push_step)),
-            is_default: settings.push_step.is_none(),
-        },
-    ])
+    Ok(setting_specs()
+        .into_iter()
+        .map(|spec| {
+            let (value, is_default) = (spec.get)(&settings);
+            SettingView {
+                name: spec.name,
+                value,
+                is_default,
+            }
+        })
+        .collect())
 }
 
 /// Why [`set_setting`] changed nothing.
@@ -290,7 +424,7 @@ fn parse_step_toggle(name: &'static str, value: &str) -> Result<bool, SetSetting
 /// The tracked-branch part of [`set_setting`]: `value` trimmed and confirmed to name a real
 /// remote branch of the repository at `project_dir`, or why it was refused.
 fn parse_tracked_branch(
-    git: &impl Git,
+    git: &dyn Git,
     project_dir: &Path,
     value: &str,
 ) -> Result<String, SetSettingError> {
@@ -328,116 +462,23 @@ pub fn set_setting(
     name: &str,
     value: &str,
 ) -> Result<SettingView, SetSettingError> {
-    let mut settings = store.load().map_err(SetSettingError::Store)?;
-    let view = match name {
-        ATTEMPT_TIMEOUT => {
-            let seconds = parse_attempt_timeout(value)?;
-            settings.attempt_timeout_seconds = Some(seconds);
-            SettingView {
-                name: ATTEMPT_TIMEOUT,
-                value: seconds.to_string(),
-                is_default: false,
-            }
-        }
-        HEALTH_CHECK => {
-            let command = parse_health_check(value)?;
-            settings.health_check_command = Some(command.clone());
-            SettingView {
-                name: HEALTH_CHECK,
-                value: command,
-                is_default: false,
-            }
-        }
-        TRACKED_BRANCH => {
-            let branch = parse_tracked_branch(git, project_dir, value)?;
-            settings.tracked_branch = Some(branch.clone());
-            SettingView {
-                name: TRACKED_BRANCH,
-                value: branch,
-                is_default: false,
-            }
-        }
-        STEP_SYNC => {
-            let on = parse_step_toggle(STEP_SYNC, value)?;
-            settings.sync_step = Some(on);
-            SettingView {
-                name: STEP_SYNC,
-                value: toggle_value(on),
-                is_default: false,
-            }
-        }
-        STEP_HEALTH_CHECK => {
-            let on = parse_step_toggle(STEP_HEALTH_CHECK, value)?;
-            settings.health_check_step = Some(on);
-            SettingView {
-                name: STEP_HEALTH_CHECK,
-                value: toggle_value(on),
-                is_default: false,
-            }
-        }
-        STEP_REVIEW => {
-            let on = parse_step_toggle(STEP_REVIEW, value)?;
-            settings.review_step = Some(on);
-            SettingView {
-                name: STEP_REVIEW,
-                value: toggle_value(on),
-                is_default: false,
-            }
-        }
-        STEP_TESTING => {
-            let on = parse_step_toggle(STEP_TESTING, value)?;
-            settings.testing_step = Some(on);
-            SettingView {
-                name: STEP_TESTING,
-                value: toggle_value(on),
-                is_default: false,
-            }
-        }
-        STEP_COMMIT => {
-            let on = parse_step_toggle(STEP_COMMIT, value)?;
-            if !on && step_enabled(settings.push_step) {
-                return Err(SetSettingError::InvalidValue {
-                    name: STEP_COMMIT,
-                    message: "cannot switch off while push is on: the push step needs the \
-                              commit step's commit; switch push off first"
-                        .to_owned(),
-                });
-            }
-            settings.commit_step = Some(on);
-            SettingView {
-                name: STEP_COMMIT,
-                value: toggle_value(on),
-                is_default: false,
-            }
-        }
-        STEP_PUSH => {
-            let on = parse_step_toggle(STEP_PUSH, value)?;
-            if on && !step_enabled(settings.commit_step) {
-                return Err(SetSettingError::InvalidValue {
-                    name: STEP_PUSH,
-                    message: "cannot switch on while commit is off: the push step needs the \
-                              commit step's commit; switch commit on first"
-                        .to_owned(),
-                });
-            }
-            settings.push_step = Some(on);
-            SettingView {
-                name: STEP_PUSH,
-                value: toggle_value(on),
-                is_default: false,
-            }
-        }
-        STEP_IMPLEMENTATION => {
-            return Err(SetSettingError::InvalidValue {
-                name: STEP_IMPLEMENTATION,
-                message: "the implementation step always runs and cannot be switched off"
-                    .to_owned(),
-            });
-        }
-        _ => return Err(SetSettingError::UnknownSetting(name.to_owned())),
+    if name == STEP_IMPLEMENTATION {
+        return Err(SetSettingError::InvalidValue {
+            name: STEP_IMPLEMENTATION,
+            message: "the implementation step always runs and cannot be switched off".to_owned(),
+        });
+    }
+    let Some(spec) = setting_specs().into_iter().find(|spec| spec.name == name) else {
+        return Err(SetSettingError::UnknownSetting(name.to_owned()));
     };
+    let mut settings = store.load().map_err(SetSettingError::Store)?;
+    let value = (spec.set)(&mut settings, value, git, project_dir)?;
     store.save(&settings).map_err(SetSettingError::Store)?;
-    Ok(view)
+    Ok(SettingView {
+        name: spec.name,
+        value,
+        is_default: false,
+    })
 }
 
 /// The attempt time limit a run should use: `cli_override` when the command line gave one,
