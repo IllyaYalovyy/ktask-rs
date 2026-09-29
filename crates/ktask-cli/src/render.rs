@@ -207,7 +207,7 @@ pub(crate) fn tasks(tasks: &[Task], json: bool, out: &mut impl Write) -> Result<
 #[derive(Debug, Serialize)]
 struct AttemptJson<'a> {
     number: u32,
-    step: &'static str,
+    step: &'a str,
     provider: Option<&'a str>,
     time_spent_seconds: u64,
     outcome: &'static str,
@@ -249,7 +249,7 @@ fn status_json(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
             status: ktask_core::displayed_status(entry.status, Some(entry.attempt.outcome)),
             attempt: AttemptJson {
                 number: entry.attempt.number,
-                step: entry.attempt.step,
+                step: &entry.attempt.step,
                 provider: entry.attempt.provider.as_deref(),
                 time_spent_seconds: entry.attempt.time_spent.as_secs(),
                 outcome: entry.attempt.outcome.as_str(),

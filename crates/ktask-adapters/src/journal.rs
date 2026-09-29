@@ -87,6 +87,8 @@ const ATTEMPT_STARTED: &str = "attempt_started";
 const ATTEMPT_RUNNING: &str = "attempt_running";
 const ATTEMPT_REPORTED: &str = "attempt_reported";
 const ATTEMPT_ENDED: &str = "attempt_ended";
+const STEP_STARTED: &str = "step_started";
+const STEP_ENDED: &str = "step_ended";
 
 /// The payload [`Event::TaskAdded`] is written with: the draft's fields, and, when it was
 /// placed next to another task, which side.
@@ -179,8 +181,8 @@ fn decode_task_added(
     })
 }
 
-/// The attempt event an `attempt_started`, `attempt_running`, `attempt_reported` or
-/// `attempt_ended` row's `payload` decodes to.
+/// The attempt event an `attempt_started`, `attempt_running`, `attempt_reported`,
+/// `attempt_ended`, `step_started` or `step_ended` row's `payload` decodes to.
 fn decode_attempt_event(
     kind: &str,
     task_id: i64,
@@ -246,6 +248,53 @@ fn decode_attempt_event(
             Ok(Event::AttemptEnded {
                 id,
                 number,
+                duration: Duration::from_millis(
+                    u64::try_from(duration_ms)
+                        .map_err(|e| corrupt("duration_ms", e.to_string()))?,
+                ),
+                exit_code,
+                status,
+                reason,
+                at,
+            })
+        }
+        STEP_STARTED => {
+            let step = payload
+                .get("step")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| corrupt("step", "missing".to_owned()))?;
+            Ok(Event::StepStarted {
+                id,
+                number,
+                step,
+                at,
+            })
+        }
+        STEP_ENDED => {
+            let step = payload
+                .get("step")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| corrupt("step", "missing".to_owned()))?;
+            let duration_ms = payload
+                .get("duration_ms")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| corrupt("duration_ms", "missing".to_owned()))?;
+            let exit_code = payload
+                .get("exit_code")
+                .and_then(Value::as_i64)
+                .map(|code| i32::try_from(code).unwrap_or(i32::MAX));
+            let status = payload
+                .get("status")
+                .and_then(Value::as_str)
+                .ok_or_else(|| corrupt("status", "missing".to_owned()))?
+                .parse::<TaskStatus>()
+                .map_err(|e| corrupt("status", e))?;
+            Ok(Event::StepEnded {
+                id,
+                number,
+                step,
                 duration: Duration::from_millis(
                     u64::try_from(duration_ms)
                         .map_err(|e| corrupt("duration_ms", e.to_string()))?,
@@ -353,6 +402,40 @@ fn encode_event(event: &Event) -> (&'static str, i64, i64, String) {
             })
             .to_string(),
         ),
+        Event::StepStarted {
+            id,
+            number,
+            step,
+            at,
+        } => (
+            STEP_STARTED,
+            task_id(*id),
+            to_seconds(*at),
+            serde_json::json!({ "number": number, "step": step }).to_string(),
+        ),
+        Event::StepEnded {
+            id,
+            number,
+            step,
+            duration,
+            exit_code,
+            status,
+            reason,
+            at,
+        } => (
+            STEP_ENDED,
+            task_id(*id),
+            to_seconds(*at),
+            serde_json::json!({
+                "number": number,
+                "step": step,
+                "duration_ms": i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+                "exit_code": exit_code,
+                "status": status.as_str(),
+                "reason": reason,
+            })
+            .to_string(),
+        ),
     }
 }
 
@@ -393,7 +476,10 @@ fn mirror(transaction: &Transaction<'_>, event: &Event) -> Result<(), rusqlite::
                 (task_id(*id), TaskStatus::Running.as_str(), *number),
             )?;
         }
-        Event::AttemptRunning { .. } | Event::AttemptReported { .. } => {
+        Event::AttemptRunning { .. }
+        | Event::AttemptReported { .. }
+        | Event::StepStarted { .. }
+        | Event::StepEnded { .. } => {
             // Carries no status change of its own.
         }
         Event::AttemptEnded { id, status, .. } => {
@@ -680,6 +766,36 @@ mod tests {
             journal.events().unwrap()[1..],
             [started, running, reported, ended]
         );
+    }
+
+    #[test]
+    fn every_step_event_round_trips() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "a", Placement::End);
+        let started = append(
+            &journal,
+            Event::StepStarted {
+                id: TaskId(1),
+                number: 1,
+                step: "implementation".to_owned(),
+                at: at(10),
+            },
+        );
+        let ended = append(
+            &journal,
+            Event::StepEnded {
+                id: TaskId(1),
+                number: 1,
+                step: "implementation".to_owned(),
+                duration: Duration::from_millis(2_500),
+                exit_code: Some(0),
+                status: TaskStatus::Done,
+                reason: None,
+                at: at(11),
+            },
+        );
+        assert_eq!(journal.events().unwrap()[1..], [started, ended]);
     }
 
     #[test]

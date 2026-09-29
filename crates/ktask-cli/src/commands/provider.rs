@@ -30,6 +30,9 @@ pub(crate) enum Command {
         /// The attempt number, passed to the provider as $2
         #[arg(long)]
         attempt: u32,
+        /// The step's name, passed to the provider as $3
+        #[arg(long, default_value = "manual")]
+        step: String,
         /// How long the provider may run before it is killed, in milliseconds
         #[arg(long, value_name = "MS", default_value_t = DEFAULT_ECHO_TIMEOUT_MS)]
         timeout_ms: u64,
@@ -42,6 +45,7 @@ pub(crate) fn run(command: &Command, stdout: &mut impl Write) -> Result<ExitCode
         provider,
         token,
         attempt,
+        step,
         timeout_ms,
     } = command;
     check_known(provider)?;
@@ -51,8 +55,11 @@ pub(crate) fn run(command: &Command, stdout: &mut impl Write) -> Result<ExitCode
         &ProcessCommands,
         &echo::PROVIDER,
         &prompt,
-        token,
-        *attempt,
+        ktask_core::StepCall {
+            token,
+            attempt: *attempt,
+            step,
+        },
         &dir,
         Duration::from_millis(*timeout_ms),
     )

@@ -326,7 +326,7 @@ mod tests {
     ) -> AttemptLine {
         AttemptLine {
             number: 1,
-            step: IMPLEMENTATION,
+            step: IMPLEMENTATION.to_owned(),
             provider: Some(provider.to_owned()),
             time_spent: Duration::from_secs(time_spent_secs),
             outcome,

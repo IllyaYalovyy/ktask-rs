@@ -1,8 +1,8 @@
 //! The `echo` provider: a built-in [`Provider`] value that uses no model and no tokens. It
-//! runs the first fenced `bash` code block of a prompt with `bash`, passing the token and
-//! attempt number as positional arguments.
+//! runs the first fenced `bash` code block of a prompt with `bash`, passing the token, attempt
+//! number and step name as positional arguments.
 
-use ktask_core::{Provider, ProviderCommand};
+use ktask_core::{Provider, ProviderCommand, StepCall};
 
 /// The name the `echo` provider is known by.
 pub const NAME: &str = "echo";
@@ -14,18 +14,23 @@ pub const PROVIDER: Provider = Provider {
 };
 
 /// Turns `prompt` into the command that runs its first fenced `bash` code block with `bash`,
-/// passing `token` as `$1` and `attempt` as `$2`.
+/// passing `call.token` as `$1`, `call.attempt` as `$2` and `call.step` as `$3`.
 ///
 /// # Errors
 ///
 /// Fails when `prompt` has no fenced `bash` code block.
-fn command(prompt: &str, token: &str, attempt: u32) -> Result<ProviderCommand, String> {
+fn command(prompt: &str, call: StepCall<'_>) -> Result<ProviderCommand, String> {
     let block = first_bash_block(prompt).ok_or_else(|| {
         "the prompt has no fenced bash code block for the echo provider to run".to_owned()
     })?;
     Ok(ProviderCommand {
         program: "bash".to_owned(),
-        args: vec!["-s".to_owned(), token.to_owned(), attempt.to_string()],
+        args: vec![
+            "-s".to_owned(),
+            call.token.to_owned(),
+            call.attempt.to_string(),
+            call.step.to_owned(),
+        ],
         stdin: block.into_bytes(),
     })
 }
@@ -56,9 +61,20 @@ fn first_bash_block(prompt: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn call<'a>(token: &'a str, attempt: u32, step: &'a str) -> StepCall<'a> {
+        StepCall {
+            token,
+            attempt,
+            step,
+        }
+    }
+
     #[test]
     fn a_prompt_with_no_bash_block_is_an_error() {
-        let result = command("just some text\n```python\nprint(1)\n```\n", "tok", 1);
+        let result = command(
+            "just some text\n```python\nprint(1)\n```\n",
+            call("tok", 1, "implementation"),
+        );
         assert_eq!(
             result,
             Err("the prompt has no fenced bash code block for the echo provider to run".to_owned())
@@ -66,25 +82,25 @@ mod tests {
     }
 
     #[test]
-    fn the_first_bash_block_is_run_with_bash_and_the_token_and_attempt_as_positional_args() {
+    fn the_first_bash_block_is_run_with_bash_and_the_token_attempt_and_step_as_positional_args() {
         let prompt = "before\n```bash\necho hi\n```\nafter\n";
-        let built = command(prompt, "the-token", 3).unwrap();
+        let built = command(prompt, call("the-token", 3, "implementation")).unwrap();
         assert_eq!(built.program, "bash");
-        assert_eq!(built.args, vec!["-s", "the-token", "3"]);
+        assert_eq!(built.args, vec!["-s", "the-token", "3", "implementation"]);
         assert_eq!(built.stdin, b"echo hi\n");
     }
 
     #[test]
     fn only_the_first_of_several_bash_blocks_is_run() {
         let prompt = "```bash\nfirst\n```\n```bash\nsecond\n```\n";
-        let built = command(prompt, "t", 1).unwrap();
+        let built = command(prompt, call("t", 1, "implementation")).unwrap();
         assert_eq!(built.stdin, b"first\n");
     }
 
     #[test]
     fn a_block_with_no_closing_fence_runs_to_the_end_of_the_prompt() {
         let prompt = "```bash\necho a\necho b";
-        let built = command(prompt, "t", 1).unwrap();
+        let built = command(prompt, call("t", 1, "implementation")).unwrap();
         assert_eq!(built.stdin, b"echo a\necho b\n");
     }
 
