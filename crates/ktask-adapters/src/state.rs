@@ -51,6 +51,21 @@ pub fn run_lock_path(
     )
 }
 
+/// The settings file of the project called `project`,
+/// `<state home>/ktask-rs/<project>/settings.toml`.
+#[must_use]
+pub fn settings_path(
+    xdg_state_home: Option<OsString>,
+    home: Option<OsString>,
+    project: &str,
+) -> Option<PathBuf> {
+    Some(
+        state_directory(xdg_state_home, home)?
+            .join(project)
+            .join("settings.toml"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -109,5 +124,18 @@ mod tests {
             Some(Path::new("/home/me/.local/state/ktask-rs/my-app/run.lock").to_owned())
         );
         assert_eq!(run_lock_path(None, None, "my-app"), None);
+    }
+
+    #[test]
+    fn settings_live_next_to_their_projects_journal() {
+        assert_eq!(
+            settings_path(Some(set("/state")), None, "my-app"),
+            Some(Path::new("/state/ktask-rs/my-app/settings.toml").to_owned())
+        );
+        assert_eq!(
+            settings_path(None, Some(set("/home/me")), "my-app"),
+            Some(Path::new("/home/me/.local/state/ktask-rs/my-app/settings.toml").to_owned())
+        );
+        assert_eq!(settings_path(None, None, "my-app"), None);
     }
 }
