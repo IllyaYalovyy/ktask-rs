@@ -14,6 +14,8 @@ struct SettingsFile {
     attempt_timeout: Option<u64>,
     #[serde(rename = "health-check", skip_serializing_if = "Option::is_none")]
     health_check: Option<String>,
+    #[serde(rename = "tracked-branch", skip_serializing_if = "Option::is_none")]
+    tracked_branch: Option<String>,
 }
 
 impl From<Settings> for SettingsFile {
@@ -21,6 +23,7 @@ impl From<Settings> for SettingsFile {
         Self {
             attempt_timeout: settings.attempt_timeout_seconds,
             health_check: settings.health_check_command,
+            tracked_branch: settings.tracked_branch,
         }
     }
 }
@@ -30,6 +33,7 @@ impl From<SettingsFile> for Settings {
         Self {
             attempt_timeout_seconds: file.attempt_timeout,
             health_check_command: file.health_check,
+            tracked_branch: file.tracked_branch,
         }
     }
 }
@@ -102,6 +106,7 @@ mod tests {
         let settings = Settings {
             attempt_timeout_seconds: Some(7_200),
             health_check_command: Some("cargo test".to_owned()),
+            tracked_branch: Some("origin/main".to_owned()),
         };
         store.save(&settings).unwrap();
         assert_eq!(store.load(), Ok(settings.clone()));
@@ -117,6 +122,7 @@ mod tests {
             .save(&Settings {
                 attempt_timeout_seconds: Some(60),
                 health_check_command: None,
+                tracked_branch: None,
             })
             .unwrap();
         assert!(path.is_file());

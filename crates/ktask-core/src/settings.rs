@@ -2,7 +2,10 @@
 
 use std::error::Error;
 use std::fmt;
+use std::path::Path;
 use std::time::Duration;
+
+use crate::{Git, GitError};
 
 /// `run`'s time limit for one attempt when nothing else sets it: four hours.
 pub const DEFAULT_ATTEMPT_TIMEOUT_SECS: u64 = 14_400;
@@ -13,6 +16,9 @@ pub const ATTEMPT_TIMEOUT: &str = "attempt-timeout";
 /// The health-check command setting's name.
 pub const HEALTH_CHECK: &str = "health-check";
 
+/// The tracked-branch setting's name.
+pub const TRACKED_BRANCH: &str = "tracked-branch";
+
 /// A project's settings: only the ones it has changed from their default.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Settings {
@@ -22,6 +28,10 @@ pub struct Settings {
     /// project has set one. `None` means the health-check step is skipped: it is run for no
     /// task, and leaves no line.
     pub health_check_command: Option<String>,
+    /// The remote and branch to pull with rebase before a task's health check, as
+    /// `"<remote>/<branch>"` (for example `"origin/main"`), when the project has set one.
+    /// `None` means the sync step is skipped: it is run for no task, and leaves no line.
+    pub tracked_branch: Option<String>,
 }
 
 /// Why a project's settings could not be read or written.
@@ -101,6 +111,11 @@ pub fn show_settings(store: &impl SettingsStore) -> Result<Vec<SettingView>, Set
             value: settings.health_check_command.clone().unwrap_or_default(),
             is_default: settings.health_check_command.is_none(),
         },
+        SettingView {
+            name: TRACKED_BRANCH,
+            value: settings.tracked_branch.clone().unwrap_or_default(),
+            is_default: settings.tracked_branch.is_none(),
+        },
     ])
 }
 
@@ -109,6 +124,8 @@ pub fn show_settings(store: &impl SettingsStore) -> Result<Vec<SettingView>, Set
 pub enum SetSettingError {
     /// The settings could not be read or written.
     Store(SettingsError),
+    /// Git could not tell whether a tracked-branch value names a real remote branch.
+    Git(GitError),
     /// No setting has this name.
     UnknownSetting(String),
     /// `name`'s new value was refused: `message` says why.
@@ -124,6 +141,7 @@ impl fmt::Display for SetSettingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Store(error) => error.fmt(f),
+            Self::Git(error) => error.fmt(f),
             Self::UnknownSetting(name) => write!(f, "unknown setting {name:?}"),
             Self::InvalidValue { name, message } => write!(f, "{name}: {message}"),
         }
@@ -131,6 +149,17 @@ impl fmt::Display for SetSettingError {
 }
 
 impl Error for SetSettingError {}
+
+/// `value` split at its first `/` into a remote and a branch — [`TRACKED_BRANCH`]'s own
+/// format, `"<remote>/<branch>"` — or `None` when it has no `/`, or either side is empty.
+#[must_use]
+pub(crate) fn split_tracked_branch(value: &str) -> Option<(&str, &str)> {
+    let (remote, branch) = value.split_once('/')?;
+    if remote.is_empty() || branch.is_empty() {
+        return None;
+    }
+    Some((remote, branch))
+}
 
 /// The attempt-timeout part of [`set_setting`]: `value` parsed as a positive whole number of
 /// seconds, or why it was refused.
@@ -163,7 +192,35 @@ fn parse_health_check(value: &str) -> Result<String, SetSettingError> {
     Ok(command.to_owned())
 }
 
+/// The tracked-branch part of [`set_setting`]: `value` trimmed and confirmed to name a real
+/// remote branch of the repository at `project_dir`, or why it was refused.
+fn parse_tracked_branch(
+    git: &impl Git,
+    project_dir: &Path,
+    value: &str,
+) -> Result<String, SetSettingError> {
+    let value = value.trim();
+    let Some((remote, branch)) = split_tracked_branch(value) else {
+        return Err(SetSettingError::InvalidValue {
+            name: TRACKED_BRANCH,
+            message: format!("{value:?} must name a remote and a branch, like \"origin/main\""),
+        });
+    };
+    let exists = git
+        .remote_branch_exists(project_dir, remote, branch)
+        .map_err(SetSettingError::Git)?;
+    if !exists {
+        return Err(SetSettingError::InvalidValue {
+            name: TRACKED_BRANCH,
+            message: format!("{value:?} does not name an existing remote branch"),
+        });
+    }
+    Ok(value.to_owned())
+}
+
 /// Use case: changes the setting called `name` to `value`, or refuses and changes nothing.
+/// `git` and `project_dir` are only consulted for [`TRACKED_BRANCH`], to confirm the branch
+/// named really exists on that remote.
 ///
 /// # Errors
 ///
@@ -171,6 +228,8 @@ fn parse_health_check(value: &str) -> Result<String, SetSettingError> {
 /// settings cannot be read or written.
 pub fn set_setting(
     store: &impl SettingsStore,
+    git: &impl Git,
+    project_dir: &Path,
     name: &str,
     value: &str,
 ) -> Result<SettingView, SetSettingError> {
@@ -194,6 +253,15 @@ pub fn set_setting(
                 is_default: false,
             }
         }
+        TRACKED_BRANCH => {
+            let branch = parse_tracked_branch(git, project_dir, value)?;
+            settings.tracked_branch = Some(branch.clone());
+            SettingView {
+                name: TRACKED_BRANCH,
+                value: branch,
+                is_default: false,
+            }
+        }
         _ => return Err(SetSettingError::UnknownSetting(name.to_owned())),
     };
     store.save(&settings).map_err(SetSettingError::Store)?;
@@ -213,9 +281,29 @@ pub fn effective_attempt_timeout(settings: &Settings, cli_override: Option<u64>)
 
 #[cfg(test)]
 mod tests {
-    use crate::fakes::FakeSettingsStore;
+    use crate::fakes::{FakeGit, FakeSettingsStore};
 
     use super::*;
+
+    /// A directory no test actually reads or writes: [`set_setting`] only passes it to `git`.
+    fn dir() -> &'static Path {
+        Path::new("/work/app")
+    }
+
+    /// A git that knows no remote branches at all — enough for every setting but
+    /// [`TRACKED_BRANCH`].
+    fn no_git() -> FakeGit {
+        FakeGit::default()
+    }
+
+    /// Sets `name` to `value` against `store`, with a git that knows no remote branches.
+    fn set(
+        store: &FakeSettingsStore,
+        name: &str,
+        value: &str,
+    ) -> Result<SettingView, SetSettingError> {
+        set_setting(store, &no_git(), dir(), name, value)
+    }
 
     #[test]
     fn nothing_set_shows_every_default() {
@@ -233,6 +321,11 @@ mod tests {
                     value: String::new(),
                     is_default: true,
                 },
+                SettingView {
+                    name: TRACKED_BRANCH,
+                    value: String::new(),
+                    is_default: true,
+                },
             ])
         );
     }
@@ -242,6 +335,7 @@ mod tests {
         let store = FakeSettingsStore::with(Settings {
             attempt_timeout_seconds: Some(7_200),
             health_check_command: Some("cargo test".to_owned()),
+            tracked_branch: Some("origin/main".to_owned()),
         });
         assert_eq!(
             show_settings(&store),
@@ -254,6 +348,11 @@ mod tests {
                 SettingView {
                     name: HEALTH_CHECK,
                     value: "cargo test".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: TRACKED_BRANCH,
+                    value: "origin/main".to_owned(),
                     is_default: false,
                 },
             ])
@@ -273,7 +372,7 @@ mod tests {
     #[test]
     fn setting_a_valid_attempt_timeout_changes_it_and_persists_it() {
         let store = FakeSettingsStore::with(Settings::default());
-        let view = set_setting(&store, ATTEMPT_TIMEOUT, "7200").unwrap();
+        let view = set(&store, ATTEMPT_TIMEOUT, "7200").unwrap();
         assert_eq!(
             view,
             SettingView {
@@ -287,6 +386,7 @@ mod tests {
             Ok(Settings {
                 attempt_timeout_seconds: Some(7_200),
                 health_check_command: None,
+                tracked_branch: None,
             })
         );
     }
@@ -296,8 +396,9 @@ mod tests {
         let store = FakeSettingsStore::with(Settings {
             attempt_timeout_seconds: Some(60),
             health_check_command: None,
+            tracked_branch: None,
         });
-        let view = set_setting(&store, HEALTH_CHECK, "  cargo test  ").unwrap();
+        let view = set(&store, HEALTH_CHECK, "  cargo test  ").unwrap();
         assert_eq!(
             view,
             SettingView {
@@ -311,6 +412,7 @@ mod tests {
             Ok(Settings {
                 attempt_timeout_seconds: Some(60),
                 health_check_command: Some("cargo test".to_owned()),
+                tracked_branch: None,
             })
         );
     }
@@ -318,7 +420,7 @@ mod tests {
     #[test]
     fn an_empty_health_check_is_refused_and_nothing_changes() {
         let store = FakeSettingsStore::with(Settings::default());
-        let error = set_setting(&store, HEALTH_CHECK, "   ").unwrap_err();
+        let error = set(&store, HEALTH_CHECK, "   ").unwrap_err();
         assert_eq!(
             error,
             SetSettingError::InvalidValue {
@@ -330,9 +432,86 @@ mod tests {
     }
 
     #[test]
+    fn setting_a_valid_tracked_branch_changes_it_and_persists_it_without_touching_others() {
+        let store = FakeSettingsStore::with(Settings {
+            attempt_timeout_seconds: Some(60),
+            health_check_command: None,
+            tracked_branch: None,
+        });
+        let git = FakeGit {
+            remote_branches: vec!["origin/main".to_owned()],
+            ..FakeGit::default()
+        };
+        let view = set_setting(&store, &git, dir(), TRACKED_BRANCH, "  origin/main  ").unwrap();
+        assert_eq!(
+            view,
+            SettingView {
+                name: TRACKED_BRANCH,
+                value: "origin/main".to_owned(),
+                is_default: false,
+            }
+        );
+        assert_eq!(
+            store.load(),
+            Ok(Settings {
+                attempt_timeout_seconds: Some(60),
+                health_check_command: None,
+                tracked_branch: Some("origin/main".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn a_tracked_branch_with_no_slash_is_refused_and_nothing_changes() {
+        let store = FakeSettingsStore::with(Settings::default());
+        let git = FakeGit {
+            remote_branches: vec!["origin/main".to_owned()],
+            ..FakeGit::default()
+        };
+        let error = set_setting(&store, &git, dir(), TRACKED_BRANCH, "main").unwrap_err();
+        assert_eq!(
+            error,
+            SetSettingError::InvalidValue {
+                name: TRACKED_BRANCH,
+                message: "\"main\" must name a remote and a branch, like \"origin/main\""
+                    .to_owned(),
+            }
+        );
+        assert_eq!(store.load(), Ok(Settings::default()));
+    }
+
+    #[test]
+    fn a_tracked_branch_naming_no_existing_remote_branch_is_refused_and_nothing_changes() {
+        let store = FakeSettingsStore::with(Settings::default());
+        let error =
+            set_setting(&store, &no_git(), dir(), TRACKED_BRANCH, "origin/main").unwrap_err();
+        assert_eq!(
+            error,
+            SetSettingError::InvalidValue {
+                name: TRACKED_BRANCH,
+                message: "\"origin/main\" does not name an existing remote branch".to_owned(),
+            }
+        );
+        assert_eq!(store.load(), Ok(Settings::default()));
+    }
+
+    #[test]
+    fn a_git_failure_checking_the_tracked_branch_is_passed_on_and_nothing_changes() {
+        let store = FakeSettingsStore::with(Settings::default());
+        let failure = GitError::new("git exploded");
+        let git = FakeGit {
+            failure: Some(failure.clone()),
+            ..FakeGit::default()
+        };
+        let error = set_setting(&store, &git, dir(), TRACKED_BRANCH, "origin/main").unwrap_err();
+        assert_eq!(error, SetSettingError::Git(failure));
+        assert_eq!(store.load(), Ok(Settings::default()));
+    }
+
+    #[test]
     fn an_unknown_setting_is_refused_and_nothing_changes() {
         let store = FakeSettingsStore::with(Settings::default());
-        let error = set_setting(&store, "not-a-setting", "1").unwrap_err();
+        let error = set(&store, "not-a-setting", "1").unwrap_err();
         assert_eq!(
             error,
             SetSettingError::UnknownSetting("not-a-setting".to_owned())
@@ -344,7 +523,7 @@ mod tests {
     #[test]
     fn a_value_that_is_not_a_number_is_refused_and_nothing_changes() {
         let store = FakeSettingsStore::with(Settings::default());
-        let error = set_setting(&store, ATTEMPT_TIMEOUT, "soon").unwrap_err();
+        let error = set(&store, ATTEMPT_TIMEOUT, "soon").unwrap_err();
         assert!(
             matches!(error, SetSettingError::InvalidValue { .. }),
             "{error:?}"
@@ -356,7 +535,7 @@ mod tests {
     #[test]
     fn a_zero_value_is_refused_and_nothing_changes() {
         let store = FakeSettingsStore::with(Settings::default());
-        let error = set_setting(&store, ATTEMPT_TIMEOUT, "0").unwrap_err();
+        let error = set(&store, ATTEMPT_TIMEOUT, "0").unwrap_err();
         assert!(
             matches!(error, SetSettingError::InvalidValue { .. }),
             "{error:?}"
@@ -368,7 +547,7 @@ mod tests {
     fn a_store_failure_is_passed_on_setting_and_nothing_is_saved() {
         let failure = SettingsError::new("disk on fire");
         let store = FakeSettingsStore::failing(failure.clone());
-        let error = set_setting(&store, ATTEMPT_TIMEOUT, "60").unwrap_err();
+        let error = set(&store, ATTEMPT_TIMEOUT, "60").unwrap_err();
         assert_eq!(error, SetSettingError::Store(failure));
     }
 
@@ -386,6 +565,7 @@ mod tests {
         let project_set = Settings {
             attempt_timeout_seconds: Some(7_200),
             health_check_command: None,
+            tracked_branch: None,
         };
         assert_eq!(
             effective_attempt_timeout(&project_set, None),
