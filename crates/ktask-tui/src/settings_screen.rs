@@ -17,6 +17,7 @@ const UNFOCUSED_PREFIX: &str = "  ";
 fn label(name: &str) -> &'static str {
     match name {
         "health-check" => "Health check command",
+        "tracked-branch" => "Tracked branch (remote/branch)",
         _ => "Attempt timeout, in seconds",
     }
 }
