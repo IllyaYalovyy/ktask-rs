@@ -11,7 +11,7 @@ use crate::form_screen;
 use crate::{App, Confirming};
 
 /// Every key the queue screen answers, and what it does.
-const KEYS: [(&str, &str); 14] = [
+const KEYS: [(&str, &str); 15] = [
     ("j, Down", "select the next task"),
     ("k, Up", "select the previous task"),
     ("g", "select the first task"),
@@ -21,6 +21,10 @@ const KEYS: [(&str, &str); 14] = [
     ("o", "add a task below the selected one, written in a form"),
     ("O", "add a task above the selected one, written in a form"),
     ("d", "remove the selected task, after asking"),
+    (
+        "r",
+        "start executing the queue, exactly as `ktask-rs run` does",
+    ),
     ("y", "answer yes when asked to remove a task"),
     ("n", "answer no when asked to remove a task"),
     ("?", "show or hide this key map"),
@@ -106,6 +110,9 @@ fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
             CancelError::Running(id).to_string(),
             Style::new().add_modifier(Modifier::BOLD),
         )
+    });
+    let question = app.run_message.clone().map_or(question, |text| {
+        Line::styled(text, Style::new().add_modifier(Modifier::BOLD))
     });
     vec![
         Line::styled(
@@ -496,10 +503,10 @@ mod tests {
             loaded(vec![task(1, "Write parser", TaskKind::Agent)]),
             &[Char('?')],
         );
-        let rows = drawn(&app, 60, 17);
+        let rows = drawn(&app, 60, 18);
         let screen = rows.join("\n");
         for key in [
-            "j, Down", "k, Up", "g ", "G ", "a ", "d ", "y ", "n ", "? ", "Esc", "q ",
+            "j, Down", "k, Up", "g ", "G ", "a ", "d ", "r ", "y ", "n ", "? ", "Esc", "q ",
         ] {
             assert!(screen.contains(key), "{key:?} in\n{screen}");
         }
@@ -524,6 +531,16 @@ mod tests {
         assert_eq!(inside(&rows[5]), ">  2  #20  pending  agent  second");
         let rows = drawn(&keys(app, &[Char('n')]), 60, 8);
         assert_eq!(inside(&rows[3]), "");
+    }
+
+    #[test]
+    fn a_run_message_shows_in_place_of_the_question() {
+        let app = update(
+            loaded(vec![task(1, "first", TaskKind::Agent)]),
+            Event::RunMessage("nothing is pending".to_owned()),
+        );
+        let rows = drawn(&app, 60, 8);
+        assert_eq!(inside(&rows[3]), "nothing is pending");
     }
 
     #[test]

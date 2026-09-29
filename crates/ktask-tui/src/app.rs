@@ -28,6 +28,13 @@ pub struct App {
     /// The task the form was submitted with and where it goes: the loop adds it and answers
     /// with [`Event::Added`] or [`Event::Rejected`], and clears this.
     pub submission: Option<(TaskDraft, Placement)>,
+    /// Set when the operator asked to start executing the pending tasks: the loop starts a
+    /// run, exactly as `ktask-rs run` does, and clears this.
+    pub run_requested: Option<()>,
+    /// What starting a run from this screen last ended with, shown until the next key — the
+    /// same words `ktask-rs run` itself would print, whether it ran to completion, stopped
+    /// partway, or refused to start at all.
+    pub run_message: Option<String>,
     /// Set when the operator asked to leave.
     pub quit: bool,
 }
@@ -57,6 +64,9 @@ pub enum Event {
     Rejected(Vec<String>),
     /// The terminal changed size; the screen is drawn again at the new size.
     Resize,
+    /// The run this screen started has ended, or could not start, printing this — the same
+    /// words `ktask-rs run` itself would show.
+    RunMessage(String),
 }
 
 /// The app after `event` happened to `app`.
@@ -102,6 +112,10 @@ pub fn update(app: App, event: Event) -> App {
         },
         Event::Added(id) => added(app, id),
         Event::Rejected(problems) => in_form(app, |form| Form { problems, ..form }),
+        Event::RunMessage(text) => App {
+            run_message: Some(text),
+            ..app
+        },
         Event::Key(KeyCode::Char('q')) => App { quit: true, ..app },
         Event::Key(key) if app.confirming.is_some() => match key {
             KeyCode::Char('y') => confirm_removal(app),
@@ -116,10 +130,11 @@ pub fn update(app: App, event: Event) -> App {
             _ => app,
         },
         Event::Key(key) => {
-            // `refused` is a one-shot notice: any key past the one that raised it dismisses
-            // it, whether or not that key is `d` again.
+            // `refused` and `run_message` are one-shot notices: any key past the one that
+            // raised them dismisses it, whether or not that key is `d` or `r` again.
             let app = App {
                 refused: None,
+                run_message: None,
                 ..app
             };
             match key {
@@ -136,6 +151,10 @@ pub fn update(app: App, event: Event) -> App {
                 KeyCode::Char('o') => open_form_next_to(app, Placement::After),
                 KeyCode::Char('O') => open_form_next_to(app, Placement::Before),
                 KeyCode::Char('d') => press_d(app),
+                KeyCode::Char('r') => App {
+                    run_requested: Some(()),
+                    ..app
+                },
                 KeyCode::Char('g') => select(app, |_, _| 0),
                 KeyCode::Char('G') => select(app, |_, len| len.saturating_sub(1)),
                 _ => app,
@@ -531,6 +550,38 @@ mod tests {
         queue.tasks[0].status = TaskStatus::Done;
         let reloaded = update(refused, Event::Loaded(queue));
         assert_eq!(reloaded.refused, None);
+    }
+
+    #[test]
+    fn r_asks_the_loop_to_start_a_run_and_changes_nothing_else() {
+        let app = press(loaded(&[1, 2]), &[KeyCode::Char('j'), KeyCode::Char('r')]);
+        assert_eq!(app.run_requested, Some(()));
+        assert_eq!(on(&app), Some(2));
+        assert_eq!(app.queue, Some(queue_of(&[1, 2])));
+    }
+
+    #[test]
+    fn a_run_message_is_shown_until_the_next_key_dismisses_it() {
+        let app = update(
+            loaded(&[1]),
+            Event::RunMessage("nothing is pending".to_owned()),
+        );
+        assert_eq!(app.run_message.as_deref(), Some("nothing is pending"));
+
+        for key in [KeyCode::Char('j'), KeyCode::Char('x')] {
+            assert_eq!(press(app.clone(), &[key]).run_message, None);
+        }
+    }
+
+    #[test]
+    fn r_again_both_dismisses_a_shown_message_and_requests_a_fresh_run() {
+        let app = update(
+            loaded(&[1]),
+            Event::RunMessage("nothing is pending".to_owned()),
+        );
+        let app = press(app, &[KeyCode::Char('r')]);
+        assert_eq!(app.run_message, None);
+        assert_eq!(app.run_requested, Some(()));
     }
 
     #[test]

@@ -51,6 +51,7 @@ fn main() {
         |_draft: &TaskDraft, _placement: Placement| {
             Err(vec!["not supported in this test binary".to_owned()])
         },
+        || Err("not supported in this test binary".to_owned()),
         NeverChanges,
     );
 }
