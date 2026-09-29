@@ -35,6 +35,7 @@ pub(crate) fn run(
         ktask_core::list_tasks(&journal)
     }
     .map_err(|e| e.to_string())?;
-    render::tasks(&tasks, args.json, stdout)?;
+    let width = terminal_size::terminal_size_of(std::io::stdout()).map(|(width, _)| width.0);
+    render::tasks(&tasks, args.json, width, stdout)?;
     Ok(ExitCode::SUCCESS)
 }

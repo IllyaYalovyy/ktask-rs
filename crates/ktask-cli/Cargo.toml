@@ -28,6 +28,7 @@ ktask-tui = { path = "../ktask-tui", version = "0.1.0" }
 jiff = "0.2.24"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.151"
+terminal_size = "0.4.4"
 
 [lints]
 workspace = true
