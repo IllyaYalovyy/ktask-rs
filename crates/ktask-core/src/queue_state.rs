@@ -64,56 +64,17 @@ impl QueueState {
                 draft,
                 placement,
                 at,
-            } => {
-                let index = self.insertion_index(*placement);
-                self.tasks.insert(
-                    index,
-                    Task {
-                        id: *id,
-                        position: 0,
-                        title: draft.title.clone(),
-                        body: draft.body.clone(),
-                        criteria: draft.criteria.clone(),
-                        kind: draft.kind,
-                        links: draft.links.clone(),
-                        status: TaskStatus::Pending,
-                        created_at: *at,
-                    },
-                );
-                self.renumber();
-            }
-            Event::TaskCancelled { id, .. } => {
-                if let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id) {
-                    task.status = TaskStatus::Cancelled;
-                }
-            }
+            } => self.apply_task_added(*id, draft, *placement, *at),
+            Event::TaskCancelled { id, .. } => self.apply_task_cancelled(*id),
             Event::AttemptStarted { id, number, at } => {
-                if let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id) {
-                    task.status = TaskStatus::Running;
-                }
-                self.attempts.insert(
-                    *id,
-                    AttemptFold {
-                        number: *number,
-                        started_at: *at,
-                        provider: None,
-                        ended: None,
-                        steps: Vec::new(),
-                    },
-                );
+                self.apply_attempt_started(*id, *number, *at);
             }
             Event::AttemptRunning {
                 id,
                 number,
                 provider,
                 ..
-            } => {
-                if let Some(attempt) = self.attempts.get_mut(id)
-                    && attempt.number == *number
-                {
-                    attempt.provider = Some(provider.clone());
-                }
-            }
+            } => self.apply_attempt_running(*id, *number, provider),
             Event::AttemptReported {
                 id,
                 number,
@@ -121,14 +82,7 @@ impl QueueState {
                 reason,
                 step,
                 ..
-            } => {
-                self.reports
-                    .insert((*id, *number), (*outcome, reason.clone()));
-                if let Some(step) = step {
-                    self.step_reports
-                        .insert((*id, *number, step.clone()), (*outcome, reason.clone()));
-                }
-            }
+            } => self.apply_attempt_reported(*id, *number, *outcome, reason.as_ref(), step.as_ref()),
             Event::AttemptEnded {
                 id,
                 number,
@@ -136,21 +90,7 @@ impl QueueState {
                 status,
                 reason,
                 ..
-            } => {
-                if let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id) {
-                    task.status = *status;
-                }
-                if let Some(attempt) = self.attempts.get_mut(id)
-                    && attempt.number == *number
-                {
-                    attempt.ended = Some(AttemptEnd {
-                        duration: *duration,
-                        status: *status,
-                        reason: reason.clone(),
-                        reported: None,
-                    });
-                }
-            }
+            } => self.apply_attempt_ended(*id, *number, *duration, *status, reason.as_ref()),
             Event::StepStarted {
                 id,
                 number,
@@ -177,6 +117,111 @@ impl QueueState {
                     reported: *reported,
                 },
             ),
+        }
+    }
+
+    /// Applies a [`Event::TaskAdded`]: inserts the task `placement` names, at its number, into
+    /// queue order.
+    fn apply_task_added(
+        &mut self,
+        id: TaskId,
+        draft: &TaskDraft,
+        placement: Placement,
+        at: SystemTime,
+    ) {
+        let index = self.insertion_index(placement);
+        self.tasks.insert(
+            index,
+            Task {
+                id,
+                position: 0,
+                title: draft.title.clone(),
+                body: draft.body.clone(),
+                criteria: draft.criteria.clone(),
+                kind: draft.kind,
+                links: draft.links.clone(),
+                status: TaskStatus::Pending,
+                created_at: at,
+            },
+        );
+        self.renumber();
+    }
+
+    /// Applies a [`Event::TaskCancelled`]: marks task `id` cancelled, in place.
+    fn apply_task_cancelled(&mut self, id: TaskId) {
+        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == id) {
+            task.status = TaskStatus::Cancelled;
+        }
+    }
+
+    /// Applies a [`Event::AttemptStarted`]: marks task `id` running and starts folding a fresh
+    /// attempt `number` for it.
+    fn apply_attempt_started(&mut self, id: TaskId, number: u32, at: SystemTime) {
+        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == id) {
+            task.status = TaskStatus::Running;
+        }
+        self.attempts.insert(
+            id,
+            AttemptFold {
+                number,
+                started_at: at,
+                provider: None,
+                ended: None,
+                steps: Vec::new(),
+            },
+        );
+    }
+
+    /// Applies a [`Event::AttemptRunning`]: records `provider` on attempt `number` of task
+    /// `id`, when it is the attempt currently folded for that task.
+    fn apply_attempt_running(&mut self, id: TaskId, number: u32, provider: &str) {
+        if let Some(attempt) = self.attempts.get_mut(&id)
+            && attempt.number == number
+        {
+            attempt.provider = Some(provider.to_owned());
+        }
+    }
+
+    /// Applies a [`Event::AttemptReported`]: records the report against attempt `number` of
+    /// task `id`, and against `step` too, when it names one.
+    fn apply_attempt_reported(
+        &mut self,
+        id: TaskId,
+        number: u32,
+        outcome: Outcome,
+        reason: Option<&String>,
+        step: Option<&String>,
+    ) {
+        self.reports
+            .insert((id, number), (outcome, reason.cloned()));
+        if let Some(step) = step {
+            self.step_reports
+                .insert((id, number, step.clone()), (outcome, reason.cloned()));
+        }
+    }
+
+    /// Applies a [`Event::AttemptEnded`]: sets task `id`'s status and, when it is the attempt
+    /// currently folded for that task, ends attempt `number`.
+    fn apply_attempt_ended(
+        &mut self,
+        id: TaskId,
+        number: u32,
+        duration: std::time::Duration,
+        status: TaskStatus,
+        reason: Option<&String>,
+    ) {
+        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == id) {
+            task.status = status;
+        }
+        if let Some(attempt) = self.attempts.get_mut(&id)
+            && attempt.number == number
+        {
+            attempt.ended = Some(AttemptEnd {
+                duration,
+                status,
+                reason: reason.cloned(),
+                reported: None,
+            });
         }
     }
 
@@ -793,7 +838,7 @@ mod tests {
             let (Placement::Before(anchor) | Placement::After(anchor)) = placement else {
                 unreachable!("checked above")
             };
-            assert_eq!(result, Err(AddError::CancelledTask(anchor)));
+            assert_eq!(result, Err(vec![AddError::CancelledTask(anchor)]));
         } else {
             let added = result.unwrap();
             oracle.add(added.id, &title, placement);
