@@ -11,6 +11,7 @@ use std::os::unix::process::CommandExt as _;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
+use std::time::Duration;
 
 use ktask_core::{CommandSpec, Commands, CommandsError, Exit, Output};
 use nix::fcntl::OFlag;
@@ -223,21 +224,73 @@ fn run_spawned(
     guard: Option<OrphanGuard>,
 ) -> Result<Output, CommandsError> {
     let pgid = i32::try_from(child.id()).unwrap_or(i32::MAX);
+    let (stdin, stdout, stderr) = take_pipes(&mut child, &fail)?;
+    let (writer, stdout_reader, stderr_reader) =
+        spawn_io_threads(stdin, stdout, stderr, spec.stdin.clone());
 
-    let mut stdin = child
+    let ended = wait_for_child(child, pgid, spec.timeout, &fail)?;
+    // The command has ended, one way or another, with this process very much still able to
+    // run code of its own: its watcher, if it has one, is no longer needed to do this job in
+    // its place.
+    if let Some(guard) = guard {
+        guard.stand_down();
+    }
+
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| fail("the standard output reader panicked".to_owned()))?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| fail("the standard error reader panicked".to_owned()))?;
+    let _ = writer.join();
+
+    Ok(Output {
+        stdout,
+        stderr,
+        exit: exit_from(ended, &fail)?,
+    })
+}
+
+/// Takes `child`'s standard input, output and error out of it, so they can be handed to their
+/// own threads.
+fn take_pipes(
+    child: &mut std::process::Child,
+    fail: &impl Fn(String) -> CommandsError,
+) -> Result<
+    (
+        std::process::ChildStdin,
+        std::process::ChildStdout,
+        std::process::ChildStderr,
+    ),
+    CommandsError,
+> {
+    let stdin = child
         .stdin
         .take()
         .ok_or_else(|| fail("the child has no standard input".to_owned()))?;
-    let mut stdout = child
+    let stdout = child
         .stdout
         .take()
         .ok_or_else(|| fail("the child has no standard output".to_owned()))?;
-    let mut stderr = child
+    let stderr = child
         .stderr
         .take()
         .ok_or_else(|| fail("the child has no standard error".to_owned()))?;
+    Ok((stdin, stdout, stderr))
+}
 
-    let input = spec.stdin.clone();
+/// Starts feeding `input` to `stdin` and draining `stdout`/`stderr` on their own threads, so
+/// none of the three can block the other two, or the wait for the child to end.
+fn spawn_io_threads(
+    mut stdin: std::process::ChildStdin,
+    mut stdout: std::process::ChildStdout,
+    mut stderr: std::process::ChildStderr,
+    input: Vec<u8>,
+) -> (
+    thread::JoinHandle<()>,
+    thread::JoinHandle<Vec<u8>>,
+    thread::JoinHandle<Vec<u8>>,
+) {
     let writer = thread::spawn(move || {
         let _ = stdin.write_all(&input);
     });
@@ -251,7 +304,18 @@ fn run_spawned(
         let _ = stderr.read_to_end(&mut buf);
         buf
     });
+    (writer, stdout_reader, stderr_reader)
+}
 
+/// Waits for `child`, in process group `pgid`, to exit or run past `timeout`, or for this
+/// process to be asked to stop while it still runs — killing the whole group in either of the
+/// last two cases.
+fn wait_for_child(
+    mut child: std::process::Child,
+    pgid: i32,
+    timeout: Duration,
+    fail: &impl Fn(String) -> CommandsError,
+) -> Result<Ended, CommandsError> {
     let mut signals = Signals::new([SIGTERM, SIGINT, SIGHUP])
         .map_err(|e| fail(format!("cannot watch for a termination signal: {e}")))?;
     let handle = signals.handle();
@@ -268,7 +332,7 @@ fn run_spawned(
         }
     });
 
-    let ended = match receiver.recv_timeout(spec.timeout) {
+    let ended = match receiver.recv_timeout(timeout) {
         Ok(Awaited::Exited(status)) => Ended::Exited(status),
         Ok(Awaited::AskedToStop) => {
             // The whole group, not just the child itself, so nothing it started is left
@@ -294,25 +358,16 @@ fn run_spawned(
             return Err(fail("the wait thread stopped without a result".to_owned()));
         }
     };
-    // The command has ended, one way or another, with this process very much still able to
-    // run code of its own: its watcher, if it has one, is no longer needed to do this job in
-    // its place.
-    if let Some(guard) = guard {
-        guard.stand_down();
-    }
     handle.close();
     let _ = signal_watcher.join();
     let _ = waiter.join();
+    Ok(ended)
+}
 
-    let stdout = stdout_reader
-        .join()
-        .map_err(|_| fail("the standard output reader panicked".to_owned()))?;
-    let stderr = stderr_reader
-        .join()
-        .map_err(|_| fail("the standard error reader panicked".to_owned()))?;
-    let _ = writer.join();
-
-    let exit = match ended {
+/// The [`Exit`] `ended` means, once the child's real exit status, when it has one, has been
+/// read.
+fn exit_from(ended: Ended, fail: &impl Fn(String) -> CommandsError) -> Result<Exit, CommandsError> {
+    Ok(match ended {
         Ended::Exited(status) => {
             let status: ExitStatus =
                 status.map_err(|e| fail(format!("cannot wait for it: {e}")))?;
@@ -323,11 +378,6 @@ fn run_spawned(
         }
         Ended::TimedOut => Exit::Killed,
         Ended::Interrupted => Exit::Interrupted,
-    };
-    Ok(Output {
-        stdout,
-        stderr,
-        exit,
     })
 }
 
