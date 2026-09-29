@@ -22,11 +22,11 @@ struct Fixture {
     _keep: tempfile::TempDir,
 }
 
-/// A bash block that waits for the file at `go` to exist, then reports `done`: an attempt
-/// that stays running until the test lets it finish.
+/// A bash block that waits for the file at `go` to exist, then reports `done` (or, for the
+/// review step, `approved`): an attempt that stays running until the test lets it finish.
 fn gated_body(go: &Path) -> String {
     format!(
-        "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nktask-rs report --token \"$1\" done\n```\n",
+        "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
         go.display()
     )
 }
@@ -457,8 +457,16 @@ fn removing_the_running_task_exits_two_saying_so_and_the_run_finishes_as_if_noth
     let go = fixture.work.join("go");
     fixture.add_agent_task("gated", &gated_body(&go))?;
     let mut run = fixture.spawn_run()?;
-    wait_until("the task to start running", || {
-        fixture.task_status(1).ok().as_deref() == Some("running")
+    // Waits for the implementation step itself to have begun, not merely for the task to show
+    // `running` (set as soon as the attempt starts, a moment earlier): the journal keeps
+    // gaining events — `attempt_running`, then `step_started` — for a little while after that,
+    // and the script's own gate on `go` guarantees nothing more is appended until this test
+    // lets it go, so waiting for `step_started` is what actually makes the before/after
+    // comparison below race-free.
+    wait_until("the implementation step to have begun", || {
+        fixture
+            .events()
+            .is_ok_and(|(_, kind)| kind == "step_started")
     })?;
 
     fixture.assert_refused("1", &["task 1 is running"])?;

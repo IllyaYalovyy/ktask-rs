@@ -130,9 +130,13 @@ impl Fixture {
     }
 }
 
-/// A bash block that reports `outcome` for whatever token it is given as `$1`.
+/// A bash block that reports `outcome` for whatever token it is given as `$1` — for the
+/// implementation step; the same block, run again for the review step, approves it, so a task
+/// meant to succeed end to end still does.
 fn reporting_body(outcome: &str) -> String {
-    format!("```bash\nktask-rs report --token \"$1\" {outcome}\n```\n")
+    format!(
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" {outcome}\nfi\n```\n"
+    )
 }
 
 #[test]
@@ -144,7 +148,7 @@ fn a_passing_health_check_is_the_first_line_with_its_time_and_passed_and_the_tas
     fixture.add_agent_task(
         "a",
         &format!(
-            "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nktask-rs report --token \"$1\" done\n```\n",
+            "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
             go.display()
         ),
     )?;
@@ -165,6 +169,7 @@ fn a_passing_health_check_is_the_first_line_with_its_time_and_passed_and_the_tas
     let json = fixture.run(&["status", "--json"])?;
     let entries: serde_json::Value = serde_json::from_str(&json.stdout)?;
     let steps = entries[0]["attempt"]["steps"].as_array().unwrap();
+    // The implementation step is still gated on `go`: the review step has not begun yet.
     assert_eq!(steps.len(), 2, "{steps:?}");
     assert_eq!(steps[0]["step"], "health check");
     assert_eq!(steps[0]["outcome"], "passed");
@@ -244,7 +249,11 @@ fn no_health_check_command_set_skips_the_step_and_leaves_no_line() -> Result<()>
     let outcome = fixture.run(&["status"])?;
     assert_eq!(
         outcome.stdout.lines().collect::<Vec<_>>(),
-        ["#1\tdone\ta", "\timplementation\techo\t0s\tdone"]
+        [
+            "#1\tdone\ta",
+            "\timplementation\techo\t0s\tdone",
+            "\treview\techo\t0s\tapproved",
+        ]
     );
     Ok(())
 }

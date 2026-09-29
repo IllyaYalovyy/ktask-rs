@@ -13,21 +13,27 @@ use super::support::{Result, Sandbox};
 const ROWS: u16 = 24;
 const COLS: u16 = 110;
 
-/// A bash block that reports `outcome` for whatever token it is given as `$1`.
+/// A bash block that reports `outcome` for whatever token it is given as `$1`, for the
+/// implementation step; the review step, when reached, approves.
 fn reporting_body(outcome: &str) -> String {
-    format!("```bash\nktask-rs report --token \"$1\" {outcome}\n```\n")
+    format!(
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" {outcome}\nfi\n```\n"
+    )
 }
 
-/// A bash block that reports `outcome` with `--reason` for whatever token it is given.
+/// A bash block that reports `outcome` with `--reason` for whatever token it is given, for the
+/// implementation step; the review step, when reached, approves.
 fn reporting_body_with_reason(outcome: &str, reason: &str) -> String {
-    format!("```bash\nktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\n```\n")
+    format!(
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nfi\n```\n"
+    )
 }
 
-/// A bash block that waits for the file at `go` to exist, then reports `done`: an attempt
-/// that stays running until the test lets it finish.
+/// A bash block that waits for the file at `go` to exist, then reports `done` (or, for the
+/// review step, `approved`): an attempt that stays running until the test lets it finish.
 fn gated_body(go: &Path) -> String {
     format!(
-        "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nktask-rs report --token \"$1\" done\n```\n",
+        "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
         go.display()
     )
 }

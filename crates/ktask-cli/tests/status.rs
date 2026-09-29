@@ -18,14 +18,20 @@ use nix::unistd::Pid;
 use repo::{git_repository, scratch};
 use support::{Outcome, Result, Sandbox};
 
-/// A bash block that reports `outcome` for whatever token it is given as `$1`.
+/// A bash block that reports `outcome` for whatever token it is given as `$1`, for the
+/// implementation step; the review step, when reached, approves.
 fn reporting_body(outcome: &str) -> String {
-    format!("```bash\nktask-rs report --token \"$1\" {outcome}\n```\n")
+    format!(
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" {outcome}\nfi\n```\n"
+    )
 }
 
-/// A bash block that reports `outcome` with `--reason` for whatever token it is given.
+/// A bash block that reports `outcome` with `--reason` for whatever token it is given, for the
+/// implementation step; the review step, when reached, approves.
 fn reporting_body_with_reason(outcome: &str, reason: &str) -> String {
-    format!("```bash\nktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\n```\n")
+    format!(
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nfi\n```\n"
+    )
 }
 
 /// Puts the directory of the `ktask-rs` under test on `command`'s `PATH`, so a task's own
@@ -215,7 +221,11 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     assert_eq!(
         outcome.stdout.lines().collect::<Vec<_>>(),
-        ["#1\tdone\ta", "\timplementation\techo\t0s\tdone"]
+        [
+            "#1\tdone\ta",
+            "\timplementation\techo\t0s\tdone",
+            "\treview\techo\t0s\tapproved",
+        ]
     );
 
     let fixture = failed_fixture()?;
@@ -226,6 +236,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
         [
             "#1\tdone\tx",
             "\timplementation\techo\t0s\tdone",
+            "\treview\techo\t0s\tapproved",
             "#2\tfailed\tb",
             "\timplementation\techo\t0s\tfailed\tit broke",
         ]
@@ -239,6 +250,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
         [
             "#1\tdone\tx",
             "\timplementation\techo\t0s\tdone",
+            "\treview\techo\t0s\tapproved",
             "#2\tfailed\tc",
             "\timplementation\techo\t0s\ttoo-large\tsplit me",
         ]
@@ -252,6 +264,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
         [
             "#1\tdone\tx",
             "\timplementation\techo\t0s\tdone",
+            "\treview\techo\t0s\tapproved",
             "#2\tblocked\td",
             "\timplementation\techo\t0s\tneeds-input\twhich path?",
         ]
@@ -261,16 +274,17 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
     let outcome = fixture.run(&["status"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     let lines: Vec<&str> = outcome.stdout.lines().collect();
-    assert_eq!(lines.len(), 4, "{lines:#?}");
+    assert_eq!(lines.len(), 5, "{lines:#?}");
     assert_eq!(lines[0], "#1\tdone\tx");
     assert_eq!(lines[1], "\timplementation\techo\t0s\tdone");
-    assert_eq!(lines[2], "#2\tfailed-unknown\te");
+    assert_eq!(lines[2], "\treview\techo\t0s\tapproved");
+    assert_eq!(lines[3], "#2\tfailed-unknown\te");
     assert!(
-        lines[3].starts_with("\timplementation\techo\t0s\tfailed-unknown\t"),
+        lines[4].starts_with("\timplementation\techo\t0s\tfailed-unknown\t"),
         "{}",
-        lines[3]
+        lines[4]
     );
-    assert!(lines[3].contains("reported nothing"), "{}", lines[3]);
+    assert!(lines[4].contains("reported nothing"), "{}", lines[4]);
     Ok(())
 }
 
@@ -305,7 +319,7 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     assert_eq!(
         shown(&outcome.stdout)?,
-        vec![(1, "done".into(), "a".into(), "done".into(), None)]
+        vec![(1, "done".into(), "a".into(), "approved".into(), None)]
     );
 
     let fixture = failed_fixture()?;
@@ -314,7 +328,7 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
     assert_eq!(
         shown(&outcome.stdout)?,
         vec![
-            (1, "done".into(), "x".into(), "done".into(), None),
+            (1, "done".into(), "x".into(), "approved".into(), None),
             (
                 2,
                 "failed".into(),
@@ -331,7 +345,7 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
     assert_eq!(
         shown(&outcome.stdout)?,
         vec![
-            (1, "done".into(), "x".into(), "done".into(), None),
+            (1, "done".into(), "x".into(), "approved".into(), None),
             (
                 2,
                 "failed".into(),
@@ -348,7 +362,7 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
     assert_eq!(
         shown(&outcome.stdout)?,
         vec![
-            (1, "done".into(), "x".into(), "done".into(), None),
+            (1, "done".into(), "x".into(), "approved".into(), None),
             (
                 2,
                 "blocked".into(),
@@ -365,7 +379,7 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
     let shown_entries = shown(&outcome.stdout)?;
     assert_eq!(
         shown_entries[0],
-        (1, "done".into(), "x".into(), "done".into(), None)
+        (1, "done".into(), "x".into(), "approved".into(), None)
     );
     assert_eq!(shown_entries[1].0, 2);
     assert_eq!(shown_entries[1].1, "failed-unknown");
@@ -385,13 +399,22 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
 
     let entries: serde_json::Value = serde_json::from_str(&outcome.stdout)?;
     for entry in entries.as_array().unwrap() {
-        assert_eq!(entry["attempt"]["step"], "implementation");
         assert_eq!(entry["attempt"]["provider"], "echo");
         assert_eq!(entry["attempt"]["number"], 1);
         assert!(entry["attempt"]["time_spent_seconds"].as_u64().is_some());
         let steps = entry["attempt"]["steps"].as_array().unwrap();
-        assert_eq!(steps.len(), 1, "{steps:?}");
         assert_eq!(steps[0]["step"], "implementation");
+        if entry["status"] == "done" {
+            // `x`, the filler task: both steps ran and passed, so the review step is current.
+            assert_eq!(entry["attempt"]["step"], "review");
+            assert_eq!(steps.len(), 2, "{steps:?}");
+            assert_eq!(steps[1]["step"], "review");
+        } else {
+            // `e`: the implementation step itself never reported, so it is the only one, and
+            // stays current.
+            assert_eq!(entry["attempt"]["step"], "implementation");
+            assert_eq!(steps.len(), 1, "{steps:?}");
+        }
     }
     Ok(())
 }
@@ -409,7 +432,7 @@ fn a_pending_task_never_attempted_does_not_appear() -> Result<()> {
 
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     assert!(!outcome.stdout.contains("\tc"), "{}", outcome.stdout);
-    assert_eq!(outcome.stdout.lines().count(), 4);
+    assert_eq!(outcome.stdout.lines().count(), 6);
     Ok(())
 }
 
@@ -420,7 +443,7 @@ fn while_a_run_is_in_progress_the_running_task_shows_its_elapsed_time_so_far() -
     fixture.add_agent_task(
         "a",
         &format!(
-            "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nktask-rs report --token \"$1\" done\n```\n",
+            "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
             go.display()
         ),
     )?;

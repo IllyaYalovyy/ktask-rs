@@ -360,11 +360,11 @@ fn d_on_a_cancelled_task_asks_nothing() -> Result<()> {
     quit(terminal)
 }
 
-/// A bash block that waits for the file at `go` to exist, then reports `done`: an attempt
-/// that stays running until the test lets it finish.
+/// A bash block that waits for the file at `go` to exist, then reports `done` (or, for the
+/// review step, `approved`): an attempt that stays running until the test lets it finish.
 fn gated_body(go: &Path) -> String {
     format!(
-        "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nktask-rs report --token \"$1\" done\n```\n",
+        "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
         go.display()
     )
 }

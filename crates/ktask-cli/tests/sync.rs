@@ -159,9 +159,12 @@ impl Fixture {
     }
 }
 
-/// A bash block that reports `outcome` for whatever token it is given as `$1`.
+/// A bash block that reports `outcome` for whatever token it is given as `$1`, for the
+/// implementation step; the review step, when reached, approves.
 fn reporting_body(outcome: &str) -> String {
-    format!("```bash\nktask-rs report --token \"$1\" {outcome}\n```\n")
+    format!(
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" {outcome}\nfi\n```\n"
+    )
 }
 
 #[test]
@@ -173,7 +176,7 @@ fn new_commits_are_taken_in_and_held_in_the_directory_before_anything_else_runs(
     fixture.add_agent_task(
         "a",
         &format!(
-            "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nktask-rs report --token \"$1\" done\n```\n",
+            "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
             go.display()
         ),
     )?;
@@ -217,6 +220,8 @@ fn several_new_commits_are_counted_and_pluralised() -> Result<()> {
             "\tsync\techo\t0s\tpassed\ttook in 2 commits from origin/main",
         ]
     );
+    assert_eq!(lines[2], "\timplementation\techo\t0s\tdone");
+    assert_eq!(lines[3], "\treview\techo\t0s\tapproved");
     assert!(fixture.repository.join("one.txt").is_file());
     assert!(fixture.repository.join("two.txt").is_file());
     Ok(())
@@ -238,6 +243,7 @@ fn nothing_new_says_so_and_the_task_carries_on() -> Result<()> {
             "#1\tdone\ta",
             "\tsync\techo\t0s\tpassed\tnothing new",
             "\timplementation\techo\t0s\tdone",
+            "\treview\techo\t0s\tapproved",
         ]
     );
     Ok(())
@@ -270,7 +276,11 @@ fn no_tracked_branch_set_skips_the_step_and_leaves_no_line() -> Result<()> {
     let status = sandbox.run(&repository, &["status"])?;
     assert_eq!(
         status.stdout.lines().collect::<Vec<_>>(),
-        ["#1\tdone\ta", "\timplementation\techo\t0s\tdone"]
+        [
+            "#1\tdone\ta",
+            "\timplementation\techo\t0s\tdone",
+            "\treview\techo\t0s\tapproved",
+        ]
     );
     Ok(())
 }
