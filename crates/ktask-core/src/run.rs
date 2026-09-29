@@ -6,12 +6,14 @@ use std::fmt::{self, Write as _};
 use std::path::Path;
 use std::time::Duration;
 
+use crate::git::PushError as GitPushError;
 use crate::settings::split_tracked_branch;
 use crate::{
     AttemptRun, AttemptToken, BeginAttemptError, COMMIT_STEP, Clock, CommandSpec, Commands,
-    CommandsError, Exit, HEALTH_CHECK_STEP, IMPLEMENTATION, Journal, JournalError, Outcome, Output,
-    PUSH_STEP, Provider, ProviderRunError, REVIEW_STEP, RecordReportError, RunLock, RunLockError,
-    SYNC_STEP, StepCall, TEST_STEP, Task, TaskId, TaskKind, TaskStatus, list_tasks, run_provider,
+    CommandsError, CommitAllError, Exit, Git, HEALTH_CHECK_STEP, IMPLEMENTATION, Journal,
+    JournalError, Outcome, Output, PUSH_STEP, Provider, ProviderRunError, PullRebase,
+    PullRebaseError, REVIEW_STEP, RecordReportError, RunLock, RunLockError, SYNC_STEP, StepCall,
+    TEST_STEP, Task, TaskId, TaskKind, TaskStatus, list_tasks, run_provider,
 };
 
 /// Why a run could not proceed at all — never for how an attempt itself ended, which is a
@@ -544,51 +546,6 @@ fn record_passed_step(
     Ok(())
 }
 
-/// Runs `args` as `git`, in `context.project_dir`, subject to `context.attempt_timeout`.
-fn run_git(
-    commands: &impl Commands,
-    context: RunContext<'_>,
-    args: &[&str],
-) -> Result<Output, CommandsError> {
-    commands.run(&CommandSpec {
-        program: "git".to_owned(),
-        args: args.iter().map(|arg| (*arg).to_owned()).collect(),
-        dir: context.project_dir.to_owned(),
-        stdin: Vec::new(),
-        timeout: context.attempt_timeout,
-    })
-}
-
-/// Runs `args` as `git`, turning anything other than a clean exit into an error built by
-/// `problem` from a description of what went wrong.
-fn require_git<E>(
-    commands: &impl Commands,
-    context: RunContext<'_>,
-    args: &[&str],
-    problem: impl Fn(String) -> E,
-) -> Result<Output, E> {
-    let description = || format!("`git {}`", args.join(" "));
-    match run_git(commands, context, args) {
-        Ok(output) => match output.exit {
-            Exit::Code(0) => Ok(output),
-            Exit::Code(code) => Err(problem(format!(
-                "{} exited with code {code}: {}",
-                description(),
-                output_tail(&output)
-            ))),
-            Exit::Killed => Err(problem(format!(
-                "{} ran past its time limit and was killed",
-                description()
-            ))),
-            Exit::Interrupted => Err(problem(INTERRUPTED.to_owned())),
-        },
-        Err(error) => Err(problem(format!(
-            "{} could not be run: {error}",
-            description()
-        ))),
-    }
-}
-
 /// Why the commit step refuses when the project directory has changes but git has not been
 /// told whose they are, and what is expected of the operator because of it.
 const IDENTITY_NOT_CONFIGURED: &str = "git identity is not configured: set it with `git config \
@@ -604,29 +561,6 @@ enum CommitOutcome {
     /// It could not commit: why, and — since this ends the task `failed` — what is expected of
     /// the operator.
     Refused(String),
-}
-
-/// `git config --get key`'s value in `context`'s project directory, trimmed. `None` when it is
-/// unset, blank, or git could not answer — never the identity git might otherwise guess from
-/// the machine's own account, which does not count as configured for this step's purposes.
-fn git_config_value(
-    commands: &impl Commands,
-    context: RunContext<'_>,
-    key: &str,
-) -> Option<String> {
-    match run_git(commands, context, &["config", "--get", key]) {
-        Ok(output) if matches!(output.exit, Exit::Code(0)) => {
-            let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-            (!value.is_empty()).then_some(value)
-        }
-        _ => None,
-    }
-}
-
-/// Whether `context`'s project directory has both `user.name` and `user.email` configured.
-fn git_identity_configured(commands: &impl Commands, context: RunContext<'_>) -> bool {
-    git_config_value(commands, context, "user.name").is_some()
-        && git_config_value(commands, context, "user.email").is_some()
 }
 
 /// The message the commit step gives its commit: `task`'s title as the subject, then its ID
@@ -650,42 +584,18 @@ fn build_commit_message(task: &Task) -> String {
 /// overridden. Makes no commit, refusing nothing, when nothing had changed. Refuses, changing
 /// nothing, when the identity is not configured or git itself refuses the commit.
 fn commit_everything_changed(
-    commands: &impl Commands,
+    git: &impl Git,
     context: RunContext<'_>,
     task: &Task,
 ) -> CommitOutcome {
-    let dirty = match require_git(commands, context, &["status", "--porcelain"], |s: String| s) {
-        Ok(output) => !String::from_utf8_lossy(&output.stdout).trim().is_empty(),
-        Err(reason) => return CommitOutcome::Refused(reason),
-    };
-    if !dirty {
-        return CommitOutcome::NothingChanged;
-    }
-    if !git_identity_configured(commands, context) {
-        return CommitOutcome::Refused(IDENTITY_NOT_CONFIGURED.to_owned());
-    }
-    if let Err(reason) = require_git(commands, context, &["add", "-A"], |s: String| s) {
-        return CommitOutcome::Refused(reason);
-    }
     let message = build_commit_message(task);
-    if let Err(reason) = require_git(
-        commands,
-        context,
-        &["commit", "-m", &message],
-        |s: String| s,
-    ) {
-        return CommitOutcome::Refused(reason);
-    }
-    match require_git(
-        commands,
-        context,
-        &["rev-parse", "--short", "HEAD"],
-        |s: String| s,
-    ) {
-        Ok(output) => {
-            CommitOutcome::Committed(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    match git.commit_all(context.project_dir, &message) {
+        Ok(Some(hash)) => CommitOutcome::Committed(hash),
+        Ok(None) => CommitOutcome::NothingChanged,
+        Err(CommitAllError::IdentityNotConfigured) => {
+            CommitOutcome::Refused(IDENTITY_NOT_CONFIGURED.to_owned())
         }
-        Err(reason) => CommitOutcome::Refused(reason),
+        Err(CommitAllError::Failed(reason)) => CommitOutcome::Refused(reason),
     }
 }
 
@@ -734,13 +644,13 @@ fn record_commit_step(
 fn run_commit_step(
     journal: &impl Journal,
     clock: &impl Clock,
-    commands: &impl Commands,
+    git: &impl Git,
     context: RunContext<'_>,
     task: &Task,
     token: &AttemptToken,
 ) -> Result<(Duration, CommitOutcome), RunError> {
     let started = clock.now();
-    let outcome = commit_everything_changed(commands, context, task);
+    let outcome = commit_everything_changed(git, context, task);
     let duration = clock.now().duration_since(started).unwrap_or_default();
     let (status, reason) = match &outcome {
         CommitOutcome::NothingChanged => (TaskStatus::Done, Some("nothing was changed".to_owned())),
@@ -809,74 +719,17 @@ fn record_push_step(
 /// zero is not itself proof the ref actually moved. Refuses, naming why and what is expected of
 /// the operator, when the push itself is rejected or cannot be run, or when the remote's tip
 /// does not turn out to match afterwards.
-fn push_commit(
-    commands: &impl Commands,
-    context: RunContext<'_>,
-    tracked_branch: &str,
-) -> PushOutcome {
+fn push_commit(git: &impl Git, context: RunContext<'_>, tracked_branch: &str) -> PushOutcome {
     let Some((remote, branch)) = split_tracked_branch(tracked_branch) else {
         unreachable!("a saved tracked-branch setting always names a remote and a branch");
     };
-    let local = match require_git(commands, context, &["rev-parse", "HEAD"], |s: String| s) {
-        Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_owned(),
-        Err(reason) => return PushOutcome::Refused(reason),
-    };
-    let refspec = format!("HEAD:refs/heads/{branch}");
-    let description = format!("`git push {remote} {refspec}`");
-    let output = match run_git(commands, context, &["push", remote, &refspec]) {
-        Ok(output) => output,
-        Err(error) => {
-            return PushOutcome::Refused(format!("{description} could not be run: {error}"));
-        }
-    };
-    match output.exit {
-        Exit::Code(0) => {}
-        Exit::Code(code) => {
-            let tail = output_tail(&output);
-            let rejected = tail.contains("[rejected]") || tail.contains("non-fast-forward");
-            return PushOutcome::Refused(if rejected {
-                format!(
-                    "{description} was rejected: {tracked_branch} has moved on since this \
-                     task's commit was made; bring in the new commits and push it yourself, \
-                     then run again"
-                )
-            } else {
-                format!("{description} exited with code {code}: {tail}")
-            });
-        }
-        Exit::Killed => {
-            return PushOutcome::Refused(format!(
-                "{description} ran past its time limit and was killed"
-            ));
-        }
-        Exit::Interrupted => return PushOutcome::Refused(INTERRUPTED.to_owned()),
-    }
-    match require_git(
-        commands,
-        context,
-        &["ls-remote", remote, &format!("refs/heads/{branch}")],
-        |s: String| s,
-    ) {
-        Ok(output) => {
-            let tip = String::from_utf8_lossy(&output.stdout)
-                .split_whitespace()
-                .next()
-                .map(str::to_owned);
-            match tip {
-                Some(tip) if tip == local => {
-                    PushOutcome::Pushed(local[..local.len().min(7)].to_owned())
-                }
-                Some(tip) => PushOutcome::Refused(format!(
-                    "{description} exited zero but {tracked_branch}'s tip is now {tip}, not \
-                     {local}: confirm manually before running again"
-                )),
-                None => PushOutcome::Refused(format!(
-                    "{description} exited zero but {tracked_branch} could not be found \
-                     afterwards: confirm manually before running again"
-                )),
-            }
-        }
-        Err(reason) => PushOutcome::Refused(reason),
+    match git.push_and_confirm(context.project_dir, remote, branch) {
+        Ok(hash) => PushOutcome::Pushed(hash),
+        Err(GitPushError::Rejected) => PushOutcome::Refused(format!(
+            "{tracked_branch} has moved on since this task's commit was made; bring in the \
+             new commits and push it yourself, then run again"
+        )),
+        Err(GitPushError::Failed(reason)) => PushOutcome::Refused(reason),
     }
 }
 
@@ -892,14 +745,14 @@ fn push_commit(
 fn run_push_step(
     journal: &impl Journal,
     clock: &impl Clock,
-    commands: &impl Commands,
+    git: &impl Git,
     context: RunContext<'_>,
     task_id: TaskId,
     token: &AttemptToken,
     tracked_branch: &str,
 ) -> Result<(Duration, TaskStatus, Option<String>), RunError> {
     let started = clock.now();
-    let outcome = push_commit(commands, context, tracked_branch);
+    let outcome = push_commit(git, context, tracked_branch);
     let duration = clock.now().duration_since(started).unwrap_or_default();
     let (status, reason) = match outcome {
         PushOutcome::Pushed(hash) => (
@@ -923,51 +776,18 @@ fn run_push_step(
 /// The commit `HEAD` names in `context`'s project directory, right now — the baseline the
 /// review step's diff is taken against, captured before the implementation step runs so that
 /// diff shows only what the task's own attempt changed. `None` when git could not answer.
-fn current_commit(commands: &impl Commands, context: RunContext<'_>) -> Option<String> {
-    match run_git(commands, context, &["rev-parse", "HEAD"]) {
-        Ok(output) if matches!(output.exit, Exit::Code(0)) => {
-            Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-        }
-        _ => None,
-    }
+fn current_commit(git: &impl Git, context: RunContext<'_>) -> Option<String> {
+    git.head(context.project_dir)
 }
 
 /// Everything changed in `context`'s project directory since `start_commit`, committed or
 /// still sitting uncommitted in the working tree — what the review step's prompt shows as the
 /// task's own diff. Empty when `start_commit` is `None`, or git could not produce one.
-fn diff_since(
-    commands: &impl Commands,
-    context: RunContext<'_>,
-    start_commit: Option<&str>,
-) -> String {
+fn diff_since(git: &impl Git, context: RunContext<'_>, start_commit: Option<&str>) -> String {
     let Some(start_commit) = start_commit else {
         return String::new();
     };
-    match run_git(commands, context, &["diff", start_commit]) {
-        Ok(output) if matches!(output.exit, Exit::Code(0)) => {
-            String::from_utf8_lossy(&output.stdout).into_owned()
-        }
-        _ => String::new(),
-    }
-}
-
-/// Every path `git diff --name-only --diff-filter=U` named as conflicting, in `context`'s
-/// project directory — read while a rebase there is still stopped on the conflict, before it
-/// is undone.
-fn conflicted_files(commands: &impl Commands, context: RunContext<'_>) -> Vec<String> {
-    require_git(
-        commands,
-        context,
-        &["diff", "--name-only", "--diff-filter=U"],
-        SyncProblem::GitFailed,
-    )
-    .map(|output| {
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(str::to_owned)
-            .collect()
-    })
-    .unwrap_or_default()
+    git.diff_since(context.project_dir, start_commit)
 }
 
 /// Pulls `tracked_branch` (`"<remote>/<branch>"`) with rebase into `context.project_dir`: is
@@ -976,61 +796,27 @@ fn conflicted_files(commands: &impl Commands, context: RunContext<'_>) -> Vec<St
 /// naming every file it conflicted in when it did. Returns a message for `status` to show —
 /// how many commits were taken in, or that there were none — once it succeeded.
 fn sync_with_tracked_branch(
-    commands: &impl Commands,
+    git: &impl Git,
     tracked_branch: &str,
     context: RunContext<'_>,
 ) -> Result<String, SyncProblem> {
-    let status_output = require_git(
-        commands,
-        context,
-        &["status", "--porcelain"],
-        SyncProblem::GitFailed,
-    )?;
-    let dirty = String::from_utf8_lossy(&status_output.stdout)
-        .trim()
-        .to_owned();
-    if !dirty.is_empty() {
-        return Err(SyncProblem::UncommittedChanges(dirty));
-    }
-
     let Some((remote, branch)) = split_tracked_branch(tracked_branch) else {
         unreachable!("a saved tracked-branch setting always names a remote and a branch");
     };
-    require_git(
-        commands,
-        context,
-        &["fetch", remote],
-        SyncProblem::RemoteUnreachable,
-    )?;
-
-    let remote_ref = format!("{remote}/{branch}");
-    let count_output = require_git(
-        commands,
-        context,
-        &["rev-list", "--count", &format!("HEAD..{remote_ref}")],
-        SyncProblem::GitFailed,
-    )?;
-    let count: u64 = String::from_utf8_lossy(&count_output.stdout)
-        .trim()
-        .parse()
-        .unwrap_or(0);
-    if count == 0 {
-        return Ok("nothing new".to_owned());
-    }
-
-    match run_git(commands, context, &["rebase", &remote_ref]) {
-        Ok(output) if matches!(output.exit, Exit::Code(0)) => Ok(format!(
+    match git.pull_rebase(context.project_dir, remote, branch) {
+        Ok(PullRebase::UpToDate) => Ok("nothing new".to_owned()),
+        Ok(PullRebase::TookIn(count)) => Ok(format!(
             "took in {count} commit{} from {tracked_branch}",
             if count == 1 { "" } else { "s" }
         )),
-        Ok(_) => {
-            let files = conflicted_files(commands, context);
-            let _ = run_git(commands, context, &["rebase", "--abort"]);
-            Err(SyncProblem::Conflict(files))
+        Err(PullRebaseError::UncommittedChanges(status)) => {
+            Err(SyncProblem::UncommittedChanges(status))
         }
-        Err(error) => Err(SyncProblem::GitFailed(format!(
-            "`git rebase {remote_ref}` could not be run: {error}"
-        ))),
+        Err(PullRebaseError::RemoteUnreachable(reason)) => {
+            Err(SyncProblem::RemoteUnreachable(reason))
+        }
+        Err(PullRebaseError::Conflict(files)) => Err(SyncProblem::Conflict(files)),
+        Err(PullRebaseError::Failed(reason)) => Err(SyncProblem::GitFailed(reason)),
     }
 }
 
@@ -1045,13 +831,13 @@ enum Sync {
 
 /// Times [`sync_with_tracked_branch`] with `clock`.
 fn run_sync(
-    commands: &impl Commands,
+    git: &impl Git,
     clock: &impl Clock,
     tracked_branch: &str,
     context: RunContext<'_>,
 ) -> Sync {
     let started = clock.now();
-    match sync_with_tracked_branch(commands, tracked_branch, context) {
+    match sync_with_tracked_branch(git, tracked_branch, context) {
         Ok(message) => Sync::Passed {
             duration: clock.now().duration_since(started).unwrap_or_default(),
             message,
@@ -1101,20 +887,37 @@ struct RunTarget<'a> {
     start_commit: Option<&'a str>,
 }
 
+/// The two ports an attempt's steps reach the outside world through: running a process, and
+/// asking git. Bundled so a step that needs both takes one argument for them rather than two.
+struct Ports<'a, C, G> {
+    commands: &'a C,
+    git: &'a G,
+}
+
+// A manual, bound-free impl: `Ports` holds only references, which are always `Copy`,
+// whatever `C` and `G` themselves are.
+impl<C, G> Clone for Ports<'_, C, G> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<C, G> Copy for Ports<'_, C, G> {}
+
 /// The prompt step `step` of `target`'s attempt runs the provider on: `target`'s own, built
 /// once for the implementation step, or a freshly built reviewer's or tester's prompt — the
 /// task and the diff since `target.start_commit` — for the review or test step.
 fn prompt_for_step(
-    commands: &impl Commands,
+    git: &impl Git,
     context: RunContext<'_>,
     target: &RunTarget<'_>,
     step: &str,
 ) -> String {
     if step == REVIEW_STEP {
-        let diff = diff_since(commands, context, target.start_commit);
+        let diff = diff_since(git, context, target.start_commit);
         build_review_prompt(target.task, target.token, context.binary_path, &diff)
     } else if step == TEST_STEP {
-        let diff = diff_since(commands, context, target.start_commit);
+        let diff = diff_since(git, context, target.start_commit);
         build_test_prompt(target.task, target.token, context.binary_path, &diff)
     } else {
         target.prompt.to_owned()
@@ -1133,7 +936,7 @@ fn prompt_for_step(
 fn run_steps(
     journal: &impl Journal,
     clock: &impl Clock,
-    commands: &impl Commands,
+    ports: Ports<'_, impl Commands, impl Git>,
     provider: &Provider,
     context: RunContext<'_>,
     target: &RunTarget<'_>,
@@ -1145,9 +948,16 @@ fn run_steps(
     let mut reason = None;
     for &step in steps {
         crate::attempt::begin_step(journal, clock, target.task.id, target.token.number, step)?;
-        let prompt = prompt_for_step(commands, context, target, step);
-        let (duration, result) =
-            timed_provider_run(commands, provider, clock, target, step, &prompt, context);
+        let prompt = prompt_for_step(ports.git, context, target, step);
+        let (duration, result) = timed_provider_run(
+            ports.commands,
+            provider,
+            clock,
+            target,
+            step,
+            &prompt,
+            context,
+        );
         let outcome = attempt_outcome(journal, target.task, target.token, step, result)?;
         exit_code = outcome.exit_code;
         status = outcome.status;
@@ -1197,7 +1007,7 @@ struct PreStep {
 fn run_one_attempt(
     journal: &impl Journal,
     clock: &impl Clock,
-    commands: &impl Commands,
+    ports: Ports<'_, impl Commands, impl Git>,
     provider: &Provider,
     context: RunContext<'_>,
     task: &Task,
@@ -1217,7 +1027,7 @@ fn run_one_attempt(
         )?;
         pre_duration += pre_step.duration;
     }
-    let start_commit = current_commit(commands, context);
+    let start_commit = current_commit(ports.git, context);
     let token = AttemptToken::new(context.project_name, task.id, number);
     let prompt = build_prompt(task, &token, context.binary_path);
     let target = RunTarget {
@@ -1229,12 +1039,12 @@ fn run_one_attempt(
 
     let steps = active_steps(context);
     let (steps_duration, exit_code, steps_status, steps_reason) =
-        run_steps(journal, clock, commands, provider, context, &target, &steps)?;
+        run_steps(journal, clock, ports, provider, context, &target, &steps)?;
 
     let (post_duration, status, reason) =
         if steps_status == TaskStatus::Done && context.step_enabled(COMMIT_STEP) {
             let (commit_duration, commit_outcome) =
-                run_commit_step(journal, clock, commands, context, task, &token)?;
+                run_commit_step(journal, clock, ports.git, context, task, &token)?;
             match commit_outcome {
                 CommitOutcome::Committed(_) => {
                     if let Some(tracked_branch) = context.tracked_branch
@@ -1243,7 +1053,7 @@ fn run_one_attempt(
                         let (push_duration, push_status, push_reason) = run_push_step(
                             journal,
                             clock,
-                            commands,
+                            ports.git,
                             context,
                             task.id,
                             &token,
@@ -1299,6 +1109,7 @@ fn attempt_loop(
     journal: &impl Journal,
     clock: &impl Clock,
     commands: &impl Commands,
+    git: &impl Git,
     provider: &Provider,
     context: RunContext<'_>,
 ) -> Result<RunReport, RunError> {
@@ -1310,7 +1121,7 @@ fn attempt_loop(
                 if let Some(tracked_branch) = context.tracked_branch
                     && context.step_enabled(SYNC_STEP)
                 {
-                    match run_sync(commands, clock, tracked_branch, context) {
+                    match run_sync(git, clock, tracked_branch, context) {
                         Sync::Passed { duration, message } => pre_steps.push(PreStep {
                             name: SYNC_STEP,
                             duration,
@@ -1350,7 +1161,13 @@ fn attempt_loop(
                     }
                 }
                 let result = run_one_attempt(
-                    journal, clock, commands, provider, context, &task, &pre_steps,
+                    journal,
+                    clock,
+                    Ports { commands, git },
+                    provider,
+                    context,
+                    &task,
+                    &pre_steps,
                 )?;
                 let status = result.status;
                 attempted.push(result);
@@ -1398,6 +1215,7 @@ pub fn run_queue(
     journal: &impl Journal,
     clock: &impl Clock,
     commands: &impl Commands,
+    git: &impl Git,
     provider: &Provider,
     lock: &impl RunLock,
     context: RunContext<'_>,
@@ -1413,7 +1231,7 @@ pub fn run_queue(
             end,
         });
     }
-    attempt_loop(journal, clock, commands, provider, context)
+    attempt_loop(journal, clock, commands, git, provider, context)
 }
 
 /// What a step ended at: its exit code (`None` when the provider could not be run at all, or
@@ -1499,7 +1317,7 @@ mod tests {
     use std::path::Path;
     use std::time::SystemTime;
 
-    use crate::fakes::{FakeClock, FakeCommands, FakeJournal, FakeRunLock, at, draft};
+    use crate::fakes::{FakeClock, FakeCommands, FakeGit, FakeJournal, FakeRunLock, at, draft};
     use crate::{
         Event, Exit, Outcome, Placement, ProviderCommand, TaskDraft, TaskKind, TaskStatus,
         add_task, report,
@@ -1563,6 +1381,7 @@ mod tests {
             journal,
             &clock(),
             commands,
+            &FakeGit::default(),
             provider,
             &FakeRunLock::free(),
             context(timeout),
@@ -1750,10 +1569,7 @@ mod tests {
 
     /// A fake commands port that, once run, reports `outcome` for whatever token it finds
     /// among its args, then exits with `exit` — except for the review step, which it always
-    /// approves, the test step, which it always accepts, and a `git` call, which it answers
-    /// with nothing rather than trying to read a token out of git's own arguments: `run` now
-    /// runs one of these ahead of every attempt, to capture the commit the review and test
-    /// steps' diff is taken against.
+    /// approves, and the test step, which it always accepts.
     struct ReportingCommands<'a> {
         journal: &'a FakeJournal,
         outcome: Outcome,
@@ -1762,13 +1578,6 @@ mod tests {
 
     impl Commands for ReportingCommands<'_> {
         fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
-            if spec.program == "git" {
-                return Ok(Output {
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                    exit: Exit::Code(0),
-                });
-            }
             let token: AttemptToken = spec
                 .args
                 .iter()
@@ -1845,6 +1654,7 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &FakeGit::default(),
             &test_provider(),
             &FakeRunLock::free(),
             ctx,
@@ -1895,6 +1705,7 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &FakeGit::default(),
             &test_provider(),
             &FakeRunLock::free(),
             ctx,
@@ -1937,6 +1748,7 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &FakeGit::default(),
             &test_provider(),
             &FakeRunLock::free(),
             ctx,
@@ -1964,6 +1776,7 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &FakeGit::default(),
             &test_provider(),
             &FakeRunLock::free(),
             ctx,
@@ -2017,6 +1830,7 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &FakeGit::default(),
             &test_provider(),
             &FakeRunLock::free(),
             ctx,
@@ -2054,6 +1868,7 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &FakeGit::default(),
             &test_provider(),
             &FakeRunLock::free(),
             ctx,
@@ -2085,6 +1900,7 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &FakeGit::default(),
             &test_provider(),
             &FakeRunLock::free(),
             ctx,
@@ -2116,6 +1932,7 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &FakeGit::default(),
             &test_provider(),
             &FakeRunLock::free(),
             ctx,
@@ -2147,6 +1964,7 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &FakeGit::default(),
             &test_provider(),
             &FakeRunLock::free(),
             ctx,
@@ -2164,48 +1982,6 @@ mod tests {
         assert_eq!(names, [IMPLEMENTATION, COMMIT_STEP]);
     }
 
-    /// A ready-to-return, always-successful [`Output`] carrying `stdout`.
-    fn git_ok(stdout: &[u8]) -> Output {
-        Output {
-            stdout: stdout.to_vec(),
-            stderr: Vec::new(),
-            exit: Exit::Code(0),
-        }
-    }
-
-    /// An [`Output`] that failed with `code`, saying `stderr`.
-    fn git_failed(code: i32, stderr: &[u8]) -> Output {
-        Output {
-            stdout: Vec::new(),
-            stderr: stderr.to_vec(),
-            exit: Exit::Code(code),
-        }
-    }
-
-    /// A commands port that answers `git` invocations by their exact arguments — every other
-    /// `git` call it is asked for, not just the ones a test cares about (`rebase --abort`,
-    /// say), succeeds with nothing — and passes anything that is not `git` on to `other`.
-    /// Records every `git` call it received, in order, so a test can tell what ran.
-    struct GitScript<'a> {
-        responses: Vec<(&'static [&'static str], Output)>,
-        calls: RefCell<Vec<Vec<String>>>,
-        other: &'a dyn Commands,
-    }
-
-    impl Commands for GitScript<'_> {
-        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
-            if spec.program != "git" {
-                return self.other.run(spec);
-            }
-            self.calls.borrow_mut().push(spec.args.clone());
-            Ok(self
-                .responses
-                .iter()
-                .find(|(args, _)| spec.args == *args)
-                .map_or_else(|| git_ok(b""), |(_, output)| output.clone()))
-        }
-    }
-
     /// [`RunContext`] tracking `origin/main`, on top of `context`.
     fn context_tracking(timeout: Duration) -> RunContext<'static> {
         let mut ctx = context(timeout);
@@ -2216,28 +1992,20 @@ mod tests {
     #[test]
     fn new_commits_on_the_tracked_branch_are_rebased_in_and_recorded_first() {
         let journal = journal_of_abc();
-        let reporting = ReportingCommands {
+        let commands = ReportingCommands {
             journal: &journal,
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let commands = GitScript {
-            responses: vec![
-                (&["status", "--porcelain"], git_ok(b"")),
-                (&["fetch", "origin"], git_ok(b"")),
-                (
-                    &["rev-list", "--count", "HEAD..origin/main"],
-                    git_ok(b"3\n"),
-                ),
-                (&["rebase", "origin/main"], git_ok(b"")),
-            ],
-            calls: RefCell::default(),
-            other: &reporting,
+        let git = FakeGit {
+            pull_rebase: Some(Ok(PullRebase::TookIn(3))),
+            ..FakeGit::default()
         };
         let report = run_queue(
             &journal,
             &clock(),
             &commands,
+            &git,
             &test_provider(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
@@ -2264,28 +2032,20 @@ mod tests {
     #[test]
     fn one_new_commit_is_singular_in_the_message() {
         let journal = journal_of_abc();
-        let reporting = ReportingCommands {
+        let commands = ReportingCommands {
             journal: &journal,
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let commands = GitScript {
-            responses: vec![
-                (&["status", "--porcelain"], git_ok(b"")),
-                (&["fetch", "origin"], git_ok(b"")),
-                (
-                    &["rev-list", "--count", "HEAD..origin/main"],
-                    git_ok(b"1\n"),
-                ),
-                (&["rebase", "origin/main"], git_ok(b"")),
-            ],
-            calls: RefCell::default(),
-            other: &reporting,
+        let git = FakeGit {
+            pull_rebase: Some(Ok(PullRebase::TookIn(1))),
+            ..FakeGit::default()
         };
         run_queue(
             &journal,
             &clock(),
             &commands,
+            &git,
             &test_provider(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
@@ -2303,27 +2063,20 @@ mod tests {
     #[test]
     fn nothing_new_says_so_and_never_rebases() {
         let journal = journal_of_abc();
-        let reporting = ReportingCommands {
+        let commands = ReportingCommands {
             journal: &journal,
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let commands = GitScript {
-            responses: vec![
-                (&["status", "--porcelain"], git_ok(b"")),
-                (&["fetch", "origin"], git_ok(b"")),
-                (
-                    &["rev-list", "--count", "HEAD..origin/main"],
-                    git_ok(b"0\n"),
-                ),
-            ],
-            calls: RefCell::default(),
-            other: &reporting,
+        let git = FakeGit {
+            pull_rebase: Some(Ok(PullRebase::UpToDate)),
+            ..FakeGit::default()
         };
         run_queue(
             &journal,
             &clock(),
             &commands,
+            &git,
             &test_provider(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
@@ -2337,29 +2090,23 @@ mod tests {
             attempt.steps[0].ended.as_ref().unwrap().reason.as_deref(),
             Some("nothing new")
         );
-        assert!(
-            !commands
-                .calls
-                .borrow()
-                .iter()
-                .any(|args| args.first().map(String::as_str) == Some("rebase")),
-            "{:?}",
-            commands.calls.borrow()
-        );
+        assert!(*git.pull_rebase_calls.borrow() >= 1);
     }
 
     #[test]
     fn uncommitted_changes_stop_the_sync_before_anything_else_runs_and_the_task_stays_pending() {
         let journal = journal_of_abc();
-        let commands = GitScript {
-            responses: vec![(&["status", "--porcelain"], git_ok(b" M file.txt\n"))],
-            calls: RefCell::default(),
-            other: &NeverRun,
+        let git = FakeGit {
+            pull_rebase: Some(Err(PullRebaseError::UncommittedChanges(
+                "M file.txt".to_owned(),
+            ))),
+            ..FakeGit::default()
         };
         let report = run_queue(
             &journal,
             &clock(),
-            &commands,
+            &NeverRun,
+            &git,
             &test_provider(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
@@ -2380,35 +2127,22 @@ mod tests {
             crate::list_all_tasks(&journal).unwrap()[0].status,
             TaskStatus::Pending
         );
-        assert!(
-            !commands
-                .calls
-                .borrow()
-                .iter()
-                .any(|args| args.first().map(String::as_str) == Some("fetch")),
-            "{:?}",
-            commands.calls.borrow()
-        );
     }
 
     #[test]
     fn an_unreachable_remote_stops_the_sync_and_the_task_stays_pending() {
         let journal = journal_of_abc();
-        let commands = GitScript {
-            responses: vec![
-                (&["status", "--porcelain"], git_ok(b"")),
-                (
-                    &["fetch", "origin"],
-                    git_failed(128, b"fatal: could not read from remote repository"),
-                ),
-            ],
-            calls: RefCell::default(),
-            other: &NeverRun,
+        let git = FakeGit {
+            pull_rebase: Some(Err(PullRebaseError::RemoteUnreachable(
+                "fatal: could not read from remote repository".to_owned(),
+            ))),
+            ..FakeGit::default()
         };
         let report = run_queue(
             &journal,
             &clock(),
-            &commands,
+            &NeverRun,
+            &git,
             &test_provider(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
@@ -2435,31 +2169,18 @@ mod tests {
     #[test]
     fn a_rebase_conflict_is_undone_and_names_every_conflicting_file() {
         let journal = journal_of_abc();
-        let commands = GitScript {
-            responses: vec![
-                (&["status", "--porcelain"], git_ok(b"")),
-                (&["fetch", "origin"], git_ok(b"")),
-                (
-                    &["rev-list", "--count", "HEAD..origin/main"],
-                    git_ok(b"1\n"),
-                ),
-                (
-                    &["rebase", "origin/main"],
-                    git_failed(1, b"CONFLICT (content): Merge conflict in file.txt"),
-                ),
-                (
-                    &["diff", "--name-only", "--diff-filter=U"],
-                    git_ok(b"file.txt\nother.txt\n"),
-                ),
-                (&["rebase", "--abort"], git_ok(b"")),
-            ],
-            calls: RefCell::default(),
-            other: &NeverRun,
+        let git = FakeGit {
+            pull_rebase: Some(Err(PullRebaseError::Conflict(vec![
+                "file.txt".to_owned(),
+                "other.txt".to_owned(),
+            ]))),
+            ..FakeGit::default()
         };
         let report = run_queue(
             &journal,
             &clock(),
-            &commands,
+            &NeverRun,
+            &git,
             &test_provider(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
@@ -2482,15 +2203,6 @@ mod tests {
         assert_eq!(
             crate::list_all_tasks(&journal).unwrap()[0].status,
             TaskStatus::Pending
-        );
-        assert!(
-            commands
-                .calls
-                .borrow()
-                .iter()
-                .any(|args| args.as_slice() == ["rebase", "--abort"]),
-            "{:?}",
-            commands.calls.borrow()
         );
     }
 
@@ -2528,24 +2240,17 @@ mod tests {
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let commands = GitScript {
-            responses: vec![
-                (&["status", "--porcelain"], git_ok(b"")),
-                (&["fetch", "origin"], git_ok(b"")),
-                (
-                    &["rev-list", "--count", "HEAD..origin/main"],
-                    git_ok(b"0\n"),
-                ),
-            ],
-            calls: RefCell::default(),
-            other: &HealthCheckAnd {
-                health_check: Ok(Output {
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                    exit: Exit::Code(0),
-                }),
-                other: &reporting,
-            },
+        let commands = HealthCheckAnd {
+            health_check: Ok(Output {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit: Exit::Code(0),
+            }),
+            other: &reporting,
+        };
+        let git = FakeGit {
+            pull_rebase: Some(Ok(PullRebase::UpToDate)),
+            ..FakeGit::default()
         };
         let mut ctx = context_tracking(Duration::from_secs(60));
         ctx.health_check_command = Some("make check");
@@ -2553,6 +2258,7 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &git,
             &test_provider(),
             &FakeRunLock::free(),
             ctx,
@@ -2748,13 +2454,6 @@ mod tests {
 
     impl Commands for ReviewCommands<'_> {
         fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
-            if spec.program == "git" {
-                return Ok(Output {
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                    exit: Exit::Code(0),
-                });
-            }
             let token: AttemptToken = spec
                 .args
                 .iter()
@@ -2839,13 +2538,6 @@ mod tests {
 
     impl Commands for SilentReview<'_> {
         fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
-            if spec.program == "git" {
-                return Ok(Output {
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                    exit: Exit::Code(0),
-                });
-            }
             let token: AttemptToken = spec
                 .args
                 .iter()
@@ -2902,31 +2594,18 @@ mod tests {
         assert_eq!(attempt.steps[1].ended.as_ref().unwrap().reported, None);
     }
 
-    /// A commands port that reports `Outcome::Done` for the implementation step and captures
-    /// the prompt (its standard input) it is run with for the review step, in `captured`,
-    /// before reporting `Outcome::Approved` for it too. Answers `git rev-parse HEAD` and
-    /// `git diff <sha>` as `GitScript` would, from `responses`.
     /// A commands port that reports `Outcome::Done` for the implementation step,
     /// `Outcome::Approved` for the review step and `Outcome::Accepted` for the test step,
     /// capturing the prompt (its standard input) it is run with for whichever step is named
-    /// `capture_step`, in `captured`. Answers `git rev-parse HEAD` and `git diff <sha>` as
-    /// `GitScript` would, from `responses`.
+    /// `capture_step`, in `captured`.
     struct CapturingStep<'a> {
         journal: &'a FakeJournal,
         capture_step: &'static str,
-        responses: Vec<(&'static [&'static str], Output)>,
         captured: &'a RefCell<Option<Vec<u8>>>,
     }
 
     impl Commands for CapturingStep<'_> {
         fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
-            if spec.program == "git" {
-                return Ok(self
-                    .responses
-                    .iter()
-                    .find(|(args, _)| spec.args == *args)
-                    .map_or_else(|| git_ok(b""), |(_, output)| output.clone()));
-            }
             let token: AttemptToken = spec
                 .args
                 .iter()
@@ -2957,28 +2636,35 @@ mod tests {
         }
     }
 
+    /// [`FakeGit`] with `head` and `diff` configured to a baseline commit and the diff since
+    /// it, as `the_review_step_runs_on_the_diff...` and `the_test_step_runs_on_the_diff...`
+    /// need.
+    fn git_with_diff() -> FakeGit {
+        FakeGit {
+            head: Some("abc123".to_owned()),
+            diff: "--- a/file\n+++ b/file\n+added line\n".to_owned(),
+            ..FakeGit::default()
+        }
+    }
+
     #[test]
-    fn the_review_step_runs_on_the_diff_git_reports_since_the_attempt_began() {
+    fn the_review_step_runs_on_the_diff_the_git_port_reports_since_the_attempt_began() {
         let journal = FakeJournal::default();
         add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
         let captured = RefCell::default();
         let commands = CapturingStep {
             journal: &journal,
             capture_step: REVIEW_STEP,
-            responses: vec![
-                (&["rev-parse", "HEAD"], git_ok(b"abc123\n")),
-                (
-                    &["diff", "abc123"],
-                    git_ok(b"--- a/file\n+++ b/file\n+added line\n"),
-                ),
-            ],
             captured: &captured,
         };
-        run(
+        run_queue(
             &journal,
+            &clock(),
             &commands,
+            &git_with_diff(),
             &test_provider(),
-            Duration::from_secs(60),
+            &FakeRunLock::free(),
+            context(Duration::from_secs(60)),
         )
         .unwrap();
         let prompt = String::from_utf8(captured.borrow().clone().expect("review step ran"))
@@ -2992,27 +2678,23 @@ mod tests {
     }
 
     #[test]
-    fn the_test_step_runs_on_the_diff_git_reports_since_the_attempt_began() {
+    fn the_test_step_runs_on_the_diff_the_git_port_reports_since_the_attempt_began() {
         let journal = FakeJournal::default();
         add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
         let captured = RefCell::default();
         let commands = CapturingStep {
             journal: &journal,
             capture_step: TEST_STEP,
-            responses: vec![
-                (&["rev-parse", "HEAD"], git_ok(b"abc123\n")),
-                (
-                    &["diff", "abc123"],
-                    git_ok(b"--- a/file\n+++ b/file\n+added line\n"),
-                ),
-            ],
             captured: &captured,
         };
-        run(
+        run_queue(
             &journal,
+            &clock(),
             &commands,
+            &git_with_diff(),
             &test_provider(),
-            Duration::from_secs(60),
+            &FakeRunLock::free(),
+            context(Duration::from_secs(60)),
         )
         .unwrap();
         let prompt = String::from_utf8(captured.borrow().clone().expect("test step ran"))
@@ -3157,12 +2839,8 @@ mod tests {
             "{:?}",
             report.attempted[0].reason
         );
-        // The provider itself is never run: the one command that did run is `run`'s own git
-        // call, capturing the commit the review step's diff would be taken against.
-        assert_eq!(
-            commands.last.borrow().as_ref().map(|spec| &spec.program),
-            Some(&"git".to_owned())
-        );
+        // The provider itself is never run: it fails before ever calling `commands.run`.
+        assert!(commands.last.borrow().is_none());
     }
 
     #[test]
@@ -3174,6 +2852,7 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &FakeGit::default(),
             &test_provider(),
             &FakeRunLock::free(),
             context(Duration::from_secs(42)),
@@ -3264,7 +2943,10 @@ mod tests {
         let (_, _, status, reason) = run_steps(
             &journal,
             &clock(),
-            &commands,
+            Ports {
+                commands: &commands,
+                git: &FakeGit::default(),
+            },
             &test_provider(),
             context(Duration::from_secs(60)),
             &target,
@@ -3311,6 +2993,7 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &FakeGit::default(),
             &test_provider(),
             &lock,
             context(Duration::from_secs(60)),
@@ -3574,71 +3257,26 @@ mod tests {
         assert!(!lower.contains("generated"), "{message}");
     }
 
-    /// A commands port that answers every `git` call the commit step could make, driven by
-    /// `dirty` (whether `status --porcelain` reports changes), `identity` (whether
-    /// `config --get` finds `user.name` and `user.email`) and `commit_exit` (what `commit`
-    /// itself exits with) — and passes anything that is not `git` on to `other`. Records every
-    /// `git` call it received, in order.
-    struct CommitScript<'a> {
-        dirty: bool,
-        identity: bool,
-        commit_exit: Exit,
-        hash: &'static str,
-        calls: RefCell<Vec<Vec<String>>>,
-        other: &'a dyn Commands,
-    }
-
-    impl Commands for CommitScript<'_> {
-        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
-            if spec.program != "git" {
-                return self.other.run(spec);
-            }
-            self.calls.borrow_mut().push(spec.args.clone());
-            match spec.args.first().map(String::as_str) {
-                Some("status") => Ok(git_ok(if self.dirty { b"M file.txt\n" } else { b"" })),
-                Some("config") => {
-                    if self.identity {
-                        Ok(git_ok(b"configured\n"))
-                    } else {
-                        Ok(Output {
-                            stdout: Vec::new(),
-                            stderr: Vec::new(),
-                            exit: Exit::Code(1),
-                        })
-                    }
-                }
-                Some("commit") => Ok(Output {
-                    stdout: Vec::new(),
-                    stderr: b"the pre-commit hook refused it\n".to_vec(),
-                    exit: self.commit_exit,
-                }),
-                Some("rev-parse") => Ok(git_ok(self.hash.as_bytes())),
-                _ => Ok(git_ok(b"")),
-            }
-        }
-    }
-
     #[test]
     fn a_dirty_tree_with_a_configured_identity_is_committed_and_the_step_shows_its_short_hash() {
         let journal = journal_of_abc();
-        let reporting = ReportingCommands {
+        let commands = ReportingCommands {
             journal: &journal,
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let commands = CommitScript {
-            dirty: true,
-            identity: true,
-            commit_exit: Exit::Code(0),
-            hash: "abc1234",
-            calls: RefCell::default(),
-            other: &reporting,
+        let git = FakeGit {
+            commit_all: Some(Ok(Some("abc1234".to_owned()))),
+            ..FakeGit::default()
         };
-        let report = run(
+        let report = run_queue(
             &journal,
+            &clock(),
             &commands,
+            &git,
             &test_provider(),
-            Duration::from_secs(60),
+            &FakeRunLock::free(),
+            context(Duration::from_secs(60)),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -3657,42 +3295,29 @@ mod tests {
         // The attempt's own reason — as opposed to the commit step's own line — is untouched:
         // it means why the attempt is not `done`, and it is.
         assert_eq!(report.attempted[0].reason, None);
-        let calls = commands.calls.borrow();
-        assert!(
-            calls
-                .iter()
-                .any(|call| call.first().map(String::as_str) == Some("add")),
-            "{calls:?}"
-        );
-        assert!(
-            calls
-                .iter()
-                .any(|call| call.first().map(String::as_str) == Some("commit")),
-            "{calls:?}"
-        );
+        assert!(*git.commit_all_calls.borrow() >= 1);
     }
 
     #[test]
     fn a_clean_tree_makes_no_commit_and_the_step_says_so() {
         let journal = journal_of_abc();
-        let reporting = ReportingCommands {
+        let commands = ReportingCommands {
             journal: &journal,
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let commands = CommitScript {
-            dirty: false,
-            identity: true,
-            commit_exit: Exit::Code(0),
-            hash: "abc1234",
-            calls: RefCell::default(),
-            other: &reporting,
+        let git = FakeGit {
+            commit_all: Some(Ok(None)),
+            ..FakeGit::default()
         };
-        let report = run(
+        let report = run_queue(
             &journal,
+            &clock(),
             &commands,
+            &git,
             &test_provider(),
-            Duration::from_secs(60),
+            &FakeRunLock::free(),
+            context(Duration::from_secs(60)),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -3708,42 +3333,28 @@ mod tests {
         let end = commit.ended.as_ref().expect("the step ended");
         assert_eq!(end.status, TaskStatus::Done);
         assert_eq!(end.reason.as_deref(), Some("nothing was changed"));
-        let calls = commands.calls.borrow();
-        assert!(
-            !calls
-                .iter()
-                .any(|call| call.first().map(String::as_str) == Some("add")),
-            "no staging should happen when nothing changed: {calls:?}"
-        );
-        assert!(
-            !calls
-                .iter()
-                .any(|call| call.first().map(String::as_str) == Some("commit")),
-            "no commit should happen when nothing changed: {calls:?}"
-        );
     }
 
     #[test]
     fn an_unconfigured_git_identity_refuses_the_commit_and_ends_the_task_failed() {
         let journal = journal_of_abc();
-        let reporting = ReportingCommands {
+        let commands = ReportingCommands {
             journal: &journal,
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let commands = CommitScript {
-            dirty: true,
-            identity: false,
-            commit_exit: Exit::Code(0),
-            hash: "abc1234",
-            calls: RefCell::default(),
-            other: &reporting,
+        let git = FakeGit {
+            commit_all: Some(Err(CommitAllError::IdentityNotConfigured)),
+            ..FakeGit::default()
         };
-        let report = run(
+        let report = run_queue(
             &journal,
+            &clock(),
             &commands,
+            &git,
             &test_provider(),
-            Duration::from_secs(60),
+            &FakeRunLock::free(),
+            context(Duration::from_secs(60)),
         )
         .unwrap();
         assert_eq!(
@@ -3764,36 +3375,30 @@ mod tests {
         );
         assert!(reason.contains("user.name"), "{reason}");
         assert!(reason.contains("user.email"), "{reason}");
-        let calls = commands.calls.borrow();
-        assert!(
-            !calls
-                .iter()
-                .any(|call| call.first().map(String::as_str) == Some("add")),
-            "nothing should be staged once the identity check refuses: {calls:?}"
-        );
     }
 
     #[test]
-    fn a_commit_git_itself_refuses_ends_the_task_failed_with_what_git_said() {
+    fn a_commit_the_git_port_refuses_ends_the_task_failed_with_its_reason() {
         let journal = journal_of_abc();
-        let reporting = ReportingCommands {
+        let commands = ReportingCommands {
             journal: &journal,
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let commands = CommitScript {
-            dirty: true,
-            identity: true,
-            commit_exit: Exit::Code(1),
-            hash: "abc1234",
-            calls: RefCell::default(),
-            other: &reporting,
+        let git = FakeGit {
+            commit_all: Some(Err(CommitAllError::Failed(
+                "`git commit` exited with code 1: the pre-commit hook refused it".to_owned(),
+            ))),
+            ..FakeGit::default()
         };
-        let report = run(
+        let report = run_queue(
             &journal,
+            &clock(),
             &commands,
+            &git,
             &test_provider(),
-            Duration::from_secs(60),
+            &FakeRunLock::free(),
+            context(Duration::from_secs(60)),
         )
         .unwrap();
         assert_eq!(
@@ -3816,87 +3421,24 @@ mod tests {
         );
     }
 
-    /// A commands port that answers every `git` call the sync, commit and push steps could
-    /// make: a tracked branch with nothing new (so the sync passes at once), a dirty tree, a
-    /// configured identity and a clean commit (so the commit step always succeeds) — then
-    /// `push_exit`, `push_stdout` and `push_stderr` for the push itself, and `remote_tip` for
-    /// what `git ls-remote` reports afterwards. `status --porcelain` runs once for the sync
-    /// step, ahead of the attempt, and once for the commit step, inside it: the first call
-    /// must answer clean or the sync itself would refuse to run, so only calls after the first
-    /// are shown dirty. Records every `git` call it received, in order.
-    struct PushScript<'a> {
-        local_hash: &'static str,
-        push_exit: Exit,
-        push_stdout: &'static [u8],
-        push_stderr: &'static [u8],
-        remote_tip: Option<&'static str>,
-        status_calls: RefCell<u32>,
-        calls: RefCell<Vec<Vec<String>>>,
-        other: &'a dyn Commands,
-    }
-
-    impl Commands for PushScript<'_> {
-        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
-            if spec.program != "git" {
-                return self.other.run(spec);
-            }
-            self.calls.borrow_mut().push(spec.args.clone());
-            match spec.args.first().map(String::as_str) {
-                Some("status") => {
-                    let mut count = self.status_calls.borrow_mut();
-                    *count += 1;
-                    // Each task's attempt makes exactly two `status --porcelain` calls: the
-                    // sync step's, ahead of it, then the commit step's, inside it — so the
-                    // odd ones (sync) must answer clean, or the sync itself would refuse to
-                    // run, and the even ones (commit) are shown dirty.
-                    Ok(git_ok(if *count % 2 == 1 {
-                        b""
-                    } else {
-                        b"M file.txt\n"
-                    }))
-                }
-                Some("rev-list") => Ok(git_ok(b"0\n")),
-                Some("config") => Ok(git_ok(b"configured\n")),
-                Some("rev-parse") => Ok(git_ok(self.local_hash.as_bytes())),
-                Some("push") => Ok(Output {
-                    stdout: self.push_stdout.to_vec(),
-                    stderr: self.push_stderr.to_vec(),
-                    exit: self.push_exit,
-                }),
-                Some("ls-remote") => Ok(git_ok(
-                    self.remote_tip
-                        .map(|tip| format!("{tip}\trefs/heads/main\n"))
-                        .unwrap_or_default()
-                        .as_bytes(),
-                )),
-                _ => Ok(git_ok(b"")),
-            }
-        }
-    }
-
     #[test]
     fn a_push_confirmed_on_the_remote_ends_the_task_done_with_its_own_line() {
         let journal = journal_of_abc();
-        let reporting = ReportingCommands {
+        let commands = ReportingCommands {
             journal: &journal,
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let hash = "abcdef1234567890abcdef1234567890abcdef12";
-        let commands = PushScript {
-            local_hash: hash,
-            push_exit: Exit::Code(0),
-            push_stdout: b"",
-            push_stderr: b"",
-            remote_tip: Some(hash),
-            status_calls: RefCell::default(),
-            calls: RefCell::default(),
-            other: &reporting,
+        let git = FakeGit {
+            commit_all: Some(Ok(Some("abcdef1".to_owned()))),
+            push: Some(Ok("abcdef1".to_owned())),
+            ..FakeGit::default()
         };
         let report = run_queue(
             &journal,
             &clock(),
             &commands,
+            &git,
             &test_provider(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
@@ -3915,43 +3457,27 @@ mod tests {
         let end = push.ended.as_ref().expect("the step ended");
         assert_eq!(end.status, TaskStatus::Done);
         assert_eq!(end.reason.as_deref(), Some("pushed abcdef1 to origin/main"));
-        let calls = commands.calls.borrow();
-        assert!(
-            calls
-                .iter()
-                .any(|call| call.first().map(String::as_str) == Some("push")),
-            "{calls:?}"
-        );
-        assert!(
-            calls
-                .iter()
-                .any(|call| call.first().map(String::as_str) == Some("ls-remote")),
-            "{calls:?}"
-        );
+        assert!(*git.push_calls.borrow() >= 1);
     }
 
     #[test]
     fn a_push_rejected_because_the_remote_moved_on_ends_the_task_failed_and_says_so() {
         let journal = journal_of_abc();
-        let reporting = ReportingCommands {
+        let commands = ReportingCommands {
             journal: &journal,
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let commands = PushScript {
-            local_hash: "abcdef1234567890abcdef1234567890abcdef12",
-            push_exit: Exit::Code(1),
-            push_stdout: b"",
-            push_stderr: b" ! [rejected]        HEAD -> main (fetch first)\n",
-            remote_tip: None,
-            status_calls: RefCell::default(),
-            calls: RefCell::default(),
-            other: &reporting,
+        let git = FakeGit {
+            commit_all: Some(Ok(Some("abc1234".to_owned()))),
+            push: Some(Err(GitPushError::Rejected)),
+            ..FakeGit::default()
         };
         let report = run_queue(
             &journal,
             &clock(),
             &commands,
+            &git,
             &test_provider(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
@@ -3971,38 +3497,30 @@ mod tests {
         let reason = report.attempted[0].reason.as_deref().unwrap();
         assert!(reason.contains("has moved on"), "{reason}");
         assert!(reason.contains("run again"), "{reason}");
-        assert!(
-            !commands
-                .calls
-                .borrow()
-                .iter()
-                .any(|call| call.first().map(String::as_str) == Some("ls-remote")),
-            "a rejected push is never confirmed against the remote"
-        );
     }
 
     #[test]
-    fn a_push_that_cannot_reach_the_remote_ends_the_task_failed_with_what_git_said() {
+    fn a_push_the_git_port_refuses_ends_the_task_failed_with_its_reason() {
         let journal = journal_of_abc();
-        let reporting = ReportingCommands {
+        let commands = ReportingCommands {
             journal: &journal,
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let commands = PushScript {
-            local_hash: "abcdef1234567890abcdef1234567890abcdef12",
-            push_exit: Exit::Code(128),
-            push_stdout: b"",
-            push_stderr: b"fatal: could not read from remote repository\n",
-            remote_tip: None,
-            status_calls: RefCell::default(),
-            calls: RefCell::default(),
-            other: &reporting,
+        let git = FakeGit {
+            commit_all: Some(Ok(Some("abc1234".to_owned()))),
+            push: Some(Err(GitPushError::Failed(
+                "`git push origin HEAD:refs/heads/main` exited with code 128: fatal: could not \
+                 read from remote repository"
+                    .to_owned(),
+            ))),
+            ..FakeGit::default()
         };
         let report = run_queue(
             &journal,
             &clock(),
             &commands,
+            &git,
             &test_provider(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
@@ -4022,64 +3540,22 @@ mod tests {
     }
 
     #[test]
-    fn a_push_that_exits_zero_but_leaves_the_remote_tip_mismatched_is_refused() {
-        let journal = journal_of_abc();
-        let reporting = ReportingCommands {
-            journal: &journal,
-            outcome: Outcome::Done,
-            exit: Exit::Code(0),
-        };
-        let commands = PushScript {
-            local_hash: "abcdef1234567890abcdef1234567890abcdef12",
-            push_exit: Exit::Code(0),
-            push_stdout: b"",
-            push_stderr: b"",
-            remote_tip: Some("0000000000000000000000000000000000000"),
-            status_calls: RefCell::default(),
-            calls: RefCell::default(),
-            other: &reporting,
-        };
-        let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &test_provider(),
-            &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
-        )
-        .unwrap();
-        assert_eq!(
-            report.end,
-            RunEnd::Stopped {
-                id: TaskId(1),
-                status: TaskStatus::Failed,
-            }
-        );
-        let reason = report.attempted[0].reason.as_deref().unwrap();
-        assert!(reason.contains("exited zero but"), "{reason}");
-        assert!(reason.contains("tip is now"), "{reason}");
-    }
-
-    #[test]
     fn no_commit_made_leaves_no_push_line_even_with_a_tracked_branch() {
         let journal = journal_of_abc();
-        let reporting = ReportingCommands {
+        let commands = ReportingCommands {
             journal: &journal,
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let commands = CommitScript {
-            dirty: false,
-            identity: true,
-            commit_exit: Exit::Code(0),
-            hash: "abc1234",
-            calls: RefCell::default(),
-            other: &reporting,
+        let git = FakeGit {
+            commit_all: Some(Ok(None)),
+            ..FakeGit::default()
         };
         let report = run_queue(
             &journal,
             &clock(),
             &commands,
+            &git,
             &test_provider(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
@@ -4098,32 +3574,20 @@ mod tests {
             "{:?}",
             attempt.steps
         );
-        assert!(
-            !commands
-                .calls
-                .borrow()
-                .iter()
-                .any(|call| call.first().map(String::as_str) == Some("push")),
-            "{:?}",
-            commands.calls.borrow()
-        );
+        assert_eq!(*git.push_calls.borrow(), 0);
     }
 
     #[test]
     fn switching_commit_off_skips_it_and_leaves_no_line_even_though_there_is_something_to_commit() {
         let journal = journal_of_abc();
-        let reporting = ReportingCommands {
+        let commands = ReportingCommands {
             journal: &journal,
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let commands = CommitScript {
-            dirty: true,
-            identity: true,
-            commit_exit: Exit::Code(0),
-            hash: "abc1234",
-            calls: RefCell::default(),
-            other: &reporting,
+        let git = FakeGit {
+            commit_all: Some(Ok(Some("abc1234".to_owned()))),
+            ..FakeGit::default()
         };
         let mut ctx = context(Duration::from_secs(60));
         ctx.disabled_steps = &[COMMIT_STEP];
@@ -4131,6 +3595,7 @@ mod tests {
             &journal,
             &clock(),
             &commands,
+            &git,
             &test_provider(),
             &FakeRunLock::free(),
             ctx,
@@ -4150,41 +3615,29 @@ mod tests {
             .map(|step| step.name.as_str())
             .collect();
         assert_eq!(names, [IMPLEMENTATION, REVIEW_STEP, TEST_STEP]);
-        assert!(
-            !commands
-                .calls
-                .borrow()
-                .iter()
-                .any(|call| call.first().map(String::as_str) == Some("commit")),
-            "{:?}",
-            commands.calls.borrow()
-        );
+        assert_eq!(*git.commit_all_calls.borrow(), 0);
     }
 
     #[test]
     fn switching_push_off_skips_it_even_with_a_tracked_branch_and_a_commit_made() {
         let journal = journal_of_abc();
-        let reporting = ReportingCommands {
+        let commands = ReportingCommands {
             journal: &journal,
             outcome: Outcome::Done,
             exit: Exit::Code(0),
         };
-        let commands = CommitScript {
-            dirty: true,
-            identity: true,
-            commit_exit: Exit::Code(0),
-            hash: "abc1234",
-            calls: RefCell::default(),
-            other: &reporting,
+        let git = FakeGit {
+            commit_all: Some(Ok(Some("abc1234".to_owned()))),
+            ..FakeGit::default()
         };
-        // Sync is switched off so the commit step's own (always-dirty) `status --porcelain`
-        // response cannot also be read by a sync step ahead of it and refuse the run.
+        // Sync is switched off so it never touches the commit step's own git state.
         let mut ctx = context_tracking(Duration::from_secs(60));
         ctx.disabled_steps = &[SYNC_STEP, PUSH_STEP];
         let report = run_queue(
             &journal,
             &clock(),
             &commands,
+            &git,
             &test_provider(),
             &FakeRunLock::free(),
             ctx,
@@ -4205,14 +3658,6 @@ mod tests {
             "{:?}",
             attempt.steps
         );
-        assert!(
-            !commands
-                .calls
-                .borrow()
-                .iter()
-                .any(|call| call.first().map(String::as_str) == Some("push")),
-            "{:?}",
-            commands.calls.borrow()
-        );
+        assert_eq!(*git.push_calls.borrow(), 0);
     }
 }
