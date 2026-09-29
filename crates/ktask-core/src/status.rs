@@ -11,6 +11,10 @@ use crate::{
 /// The step kind that runs an agent on the task's whole prompt.
 pub const IMPLEMENTATION: &str = "implementation";
 
+/// The step kind that runs an agent in the reviewer role on the implementation step's diff,
+/// after it.
+pub const REVIEW_STEP: &str = "review";
+
 /// The step kind that pulls the project's tracked branch with rebase before the health
 /// check.
 pub const SYNC_STEP: &str = "sync";
@@ -136,17 +140,17 @@ fn ended_outcome(
 }
 
 /// The outcome and reason shown for a step named `name` that ended at `end`: the implementation
-/// step is judged by what the agent itself reported, when it reported anything; every other
-/// step — the sync and the health check, today — is a command-kind step, only ever journaled
-/// once it has already passed, with whatever it recorded — the health check has nothing to
-/// add, the sync step says how many commits it took in, or that there were none — shown
-/// alongside it.
+/// and review steps are judged by what the agent itself reported, when it reported anything;
+/// every other step — the sync and the health check, today — is a command-kind step, only ever
+/// journaled once it has already passed, with whatever it recorded — the health check has
+/// nothing to add, the sync step says how many commits it took in, or that there were none —
+/// shown alongside it.
 fn step_outcome(
     name: &str,
     end: &AttemptEnd,
     reported: Option<(Outcome, Option<String>)>,
 ) -> (AttemptOutcome, Option<String>) {
-    if name == IMPLEMENTATION {
+    if name == IMPLEMENTATION || name == REVIEW_STEP {
         ended_outcome(end, reported)
     } else {
         (AttemptOutcome::Passed, end.reason.clone())
@@ -195,7 +199,11 @@ fn entry_for(
         .iter()
         .map(|step| match &step.ended {
             Some(end) => {
-                let (outcome, reason) = step_outcome(&step.name, end, reported.clone());
+                // Each step carries its own reported outcome, captured when it ended — not the
+                // whole attempt's most recent one, which a later report-driven step (review,
+                // after implementation) would otherwise overwrite here.
+                let own_report = end.reported.map(|outcome| (outcome, end.reason.clone()));
+                let (outcome, reason) = step_outcome(&step.name, end, own_report);
                 StepLine {
                     step: step.name.clone(),
                     time_spent: end.duration,
@@ -622,6 +630,7 @@ mod tests {
                 status: TaskStatus::Done,
                 reason: None,
             },
+            None,
         )
         .unwrap();
         crate::attempt::begin_step(&journal, &clock(104), TaskId(1), 1, IMPLEMENTATION).unwrap();

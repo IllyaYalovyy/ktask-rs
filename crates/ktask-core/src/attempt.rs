@@ -126,7 +126,12 @@ pub(crate) fn begin_step(
     })
 }
 
-/// Use case: ends step `step` of attempt `number` of task `id` with `run`.
+/// Use case: ends step `step` of attempt `number` of task `id` with `run`. `reported` is the
+/// fine-grained outcome the agent itself reported for this step — distinct from `run.status`,
+/// which collapses several outcomes (`failed` and `too-large`, say) into one
+/// [`crate::TaskStatus`] — so the step's own display can tell them apart later; `None` for a
+/// step the tool records as already passed (the sync and health-check steps), which no agent
+/// ever reports an outcome for.
 ///
 /// # Errors
 ///
@@ -139,11 +144,12 @@ pub(crate) fn end_step(
     number: u32,
     step: &str,
     run: AttemptRun<'_>,
+    reported: Option<Outcome>,
 ) -> Result<(), RecordReportError> {
     let at = clock.now();
     decide_and_append(journal, |state| {
         state
-            .decide_end_step(id, number, step, run, at)
+            .decide_end_step(id, number, step, run, reported, at)
             .map(|event| (vec![event], ()))
     })
 }
@@ -182,4 +188,33 @@ pub(crate) fn last_report(
     number: u32,
 ) -> Result<Option<(Outcome, Option<String>)>, JournalError> {
     read_and_query(journal, |state| state.report_of(id, number))
+}
+
+/// The outcome and reason reported while step `step` of attempt `number` of task `id` was
+/// open, with [`crate::report`]. `None` when nothing was reported during that step.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub(crate) fn report_of_step(
+    journal: &impl Journal,
+    id: TaskId,
+    number: u32,
+    step: &str,
+) -> Result<Option<(Outcome, Option<String>)>, JournalError> {
+    read_and_query(journal, |state| state.report_of_step(id, number, step))
+}
+
+/// The name of the step currently open — begun, not yet ended — for task `id`'s current
+/// attempt. `None` when the attempt has no open step: it was never begun through
+/// [`begin_step`], or its last step has already ended.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub(crate) fn current_step(
+    journal: &impl Journal,
+    id: TaskId,
+) -> Result<Option<String>, JournalError> {
+    read_and_query(journal, |state| state.current_step(id))
 }

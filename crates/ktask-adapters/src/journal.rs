@@ -181,6 +181,32 @@ fn decode_task_added(
     })
 }
 
+/// The `duration`, `exit_code` and `status` an `attempt_ended` or `step_ended` row's `payload`
+/// carries — the fields the two kinds decode identically.
+fn decode_duration_exit_status(
+    payload: &Value,
+    corrupt: impl Fn(&str, String) -> JournalError,
+) -> Result<(Duration, Option<i32>, TaskStatus), JournalError> {
+    let duration_ms = payload
+        .get("duration_ms")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| corrupt("duration_ms", "missing".to_owned()))?;
+    let exit_code = payload
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .map(|code| i32::try_from(code).unwrap_or(i32::MAX));
+    let status = payload
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or_else(|| corrupt("status", "missing".to_owned()))?
+        .parse::<TaskStatus>()
+        .map_err(|e| corrupt("status", e))?;
+    let duration = Duration::from_millis(
+        u64::try_from(duration_ms).map_err(|e| corrupt("duration_ms", e.to_string()))?,
+    );
+    Ok((duration, exit_code, status))
+}
+
 /// The attempt event an `attempt_started`, `attempt_running`, `attempt_reported`,
 /// `attempt_ended`, `step_started` or `step_ended` row's `payload` decodes to.
 fn decode_attempt_event(
@@ -222,36 +248,25 @@ fn decode_attempt_event(
                 .ok_or_else(|| corrupt("outcome", "missing".to_owned()))?
                 .parse::<Outcome>()
                 .map_err(|e| corrupt("outcome", e))?;
+            let step = payload
+                .get("step")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             Ok(Event::AttemptReported {
                 id,
                 number,
                 outcome,
                 reason,
+                step,
                 at,
             })
         }
         ATTEMPT_ENDED => {
-            let duration_ms = payload
-                .get("duration_ms")
-                .and_then(Value::as_i64)
-                .ok_or_else(|| corrupt("duration_ms", "missing".to_owned()))?;
-            let exit_code = payload
-                .get("exit_code")
-                .and_then(Value::as_i64)
-                .map(|code| i32::try_from(code).unwrap_or(i32::MAX));
-            let status = payload
-                .get("status")
-                .and_then(Value::as_str)
-                .ok_or_else(|| corrupt("status", "missing".to_owned()))?
-                .parse::<TaskStatus>()
-                .map_err(|e| corrupt("status", e))?;
+            let (duration, exit_code, status) = decode_duration_exit_status(payload, corrupt)?;
             Ok(Event::AttemptEnded {
                 id,
                 number,
-                duration: Duration::from_millis(
-                    u64::try_from(duration_ms)
-                        .map_err(|e| corrupt("duration_ms", e.to_string()))?,
-                ),
+                duration,
                 exit_code,
                 status,
                 reason,
@@ -277,31 +292,22 @@ fn decode_attempt_event(
                 .and_then(Value::as_str)
                 .map(str::to_owned)
                 .ok_or_else(|| corrupt("step", "missing".to_owned()))?;
-            let duration_ms = payload
-                .get("duration_ms")
-                .and_then(Value::as_i64)
-                .ok_or_else(|| corrupt("duration_ms", "missing".to_owned()))?;
-            let exit_code = payload
-                .get("exit_code")
-                .and_then(Value::as_i64)
-                .map(|code| i32::try_from(code).unwrap_or(i32::MAX));
-            let status = payload
-                .get("status")
+            let (duration, exit_code, status) = decode_duration_exit_status(payload, corrupt)?;
+            let reported = payload
+                .get("reported")
                 .and_then(Value::as_str)
-                .ok_or_else(|| corrupt("status", "missing".to_owned()))?
-                .parse::<TaskStatus>()
-                .map_err(|e| corrupt("status", e))?;
+                .map(str::parse::<Outcome>)
+                .transpose()
+                .map_err(|e| corrupt("reported", e))?;
             Ok(Event::StepEnded {
                 id,
                 number,
                 step,
-                duration: Duration::from_millis(
-                    u64::try_from(duration_ms)
-                        .map_err(|e| corrupt("duration_ms", e.to_string()))?,
-                ),
+                duration,
                 exit_code,
                 status,
                 reason,
+                reported,
                 at,
             })
         }
@@ -369,6 +375,7 @@ fn encode_event(event: &Event) -> (&'static str, i64, i64, String) {
             number,
             outcome,
             reason,
+            step,
             at,
         } => (
             ATTEMPT_REPORTED,
@@ -378,6 +385,7 @@ fn encode_event(event: &Event) -> (&'static str, i64, i64, String) {
                 "number": number,
                 "outcome": outcome.as_str(),
                 "reason": reason,
+                "step": step,
             })
             .to_string(),
         ),
@@ -421,6 +429,7 @@ fn encode_event(event: &Event) -> (&'static str, i64, i64, String) {
             exit_code,
             status,
             reason,
+            reported,
             at,
         } => (
             STEP_ENDED,
@@ -433,6 +442,7 @@ fn encode_event(event: &Event) -> (&'static str, i64, i64, String) {
                 "exit_code": exit_code,
                 "status": status.as_str(),
                 "reason": reason,
+                "reported": reported.map(Outcome::as_str),
             })
             .to_string(),
         ),
@@ -747,6 +757,7 @@ mod tests {
                 number: 1,
                 outcome: Outcome::Failed,
                 reason: Some("it broke".to_owned()),
+                step: None,
                 at: at(12),
             },
         );
@@ -792,6 +803,7 @@ mod tests {
                 exit_code: Some(0),
                 status: TaskStatus::Done,
                 reason: None,
+                reported: Some(Outcome::Done),
                 at: at(11),
             },
         );
@@ -810,6 +822,7 @@ mod tests {
                 number: 1,
                 outcome: Outcome::Done,
                 reason: None,
+                step: Some("implementation".to_owned()),
                 at: at(2),
             },
         );
@@ -994,6 +1007,7 @@ mod tests {
                 number: 1,
                 outcome: Outcome::Done,
                 reason: None,
+                step: None,
                 at: at(4),
             },
         );

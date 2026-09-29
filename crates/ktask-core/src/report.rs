@@ -17,6 +17,10 @@ pub enum Outcome {
     NeedsInput,
     /// The task is too big to do in one attempt.
     TooLarge,
+    /// The reviewer accepted the task's implementation.
+    Approved,
+    /// The reviewer found something to fix: its findings are the reason.
+    ChangesRequested,
 }
 
 impl Outcome {
@@ -28,13 +32,15 @@ impl Outcome {
             Self::Failed => "failed",
             Self::NeedsInput => "needs-input",
             Self::TooLarge => "too-large",
+            Self::Approved => "approved",
+            Self::ChangesRequested => "changes-requested",
         }
     }
 
     /// Whether this outcome must be reported with a reason.
     #[must_use]
     pub fn needs_reason(self) -> bool {
-        !matches!(self, Self::Done)
+        !matches!(self, Self::Done | Self::Approved)
     }
 }
 
@@ -48,12 +54,42 @@ impl FromStr for Outcome {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        [Self::Done, Self::Failed, Self::NeedsInput, Self::TooLarge]
-            .into_iter()
-            .find(|outcome| outcome.as_str() == text)
-            .ok_or_else(|| {
-                format!("unknown outcome {text:?}: expected done, failed, needs-input or too-large")
-            })
+        [
+            Self::Done,
+            Self::Failed,
+            Self::NeedsInput,
+            Self::TooLarge,
+            Self::Approved,
+            Self::ChangesRequested,
+        ]
+        .into_iter()
+        .find(|outcome| outcome.as_str() == text)
+        .ok_or_else(|| {
+            format!(
+                "unknown outcome {text:?}: expected done, failed, needs-input, too-large, \
+                 approved or changes-requested"
+            )
+        })
+    }
+}
+
+/// The outcomes that belong to step `step`, in the order they should be named when one that
+/// does not belong is refused. `None` when `step` is not one an agent reports an outcome for
+/// itself — the sync and health-check steps, which the tool records as already having passed —
+/// so any outcome is accepted rather than refused against an empty list.
+#[must_use]
+fn outcomes_for_step(step: &str) -> Option<&'static [Outcome]> {
+    if step == crate::IMPLEMENTATION {
+        Some(&[
+            Outcome::Done,
+            Outcome::Failed,
+            Outcome::NeedsInput,
+            Outcome::TooLarge,
+        ])
+    } else if step == crate::REVIEW_STEP {
+        Some(&[Outcome::Approved, Outcome::ChangesRequested])
+    } else {
+        None
     }
 }
 
@@ -116,6 +152,16 @@ impl FromStr for AttemptToken {
 pub enum ReportError {
     /// `outcome` needs a reason, and none, or only a blank one, was given.
     ReasonRequired(Outcome),
+    /// `outcome` does not belong to the step that is currently running: `step` is the one
+    /// running, `expected` names every outcome that does belong to it.
+    WrongStep {
+        /// The outcome that was refused.
+        outcome: Outcome,
+        /// The step that is running.
+        step: String,
+        /// The outcomes that do belong to `step`.
+        expected: Vec<Outcome>,
+    },
     /// The attempt the token names is unknown or has ended.
     Record(RecordReportError),
 }
@@ -125,6 +171,21 @@ impl fmt::Display for ReportError {
         match self {
             Self::ReasonRequired(outcome) => {
                 write!(f, "outcome {outcome} needs a reason: pass --reason")
+            }
+            Self::WrongStep {
+                outcome,
+                step,
+                expected,
+            } => {
+                let expected = expected
+                    .iter()
+                    .map(|outcome| outcome.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" or ");
+                write!(
+                    f,
+                    "outcome {outcome} does not belong to the {step} step: expected {expected}"
+                )
             }
             Self::Record(error) => error.fmt(f),
         }
@@ -162,7 +223,8 @@ pub fn start_attempt(
 /// # Errors
 ///
 /// Fails, recording nothing, when `outcome` needs a reason and none, or only a blank one, was
-/// given, or when the journal reports the attempt is unknown or has ended.
+/// given; when `outcome` does not belong to the step currently running for this attempt; or
+/// when the journal reports the attempt is unknown or has ended.
 pub fn report(
     journal: &impl Journal,
     clock: &impl Clock,
@@ -173,6 +235,17 @@ pub fn report(
     let blank = reason.is_none_or(|reason| reason.trim().is_empty());
     if outcome.needs_reason() && blank {
         return Err(ReportError::ReasonRequired(outcome));
+    }
+    if let Some(step) =
+        crate::attempt::current_step(journal, token.task).map_err(RecordReportError::from)?
+        && let Some(expected) = outcomes_for_step(&step)
+        && !expected.contains(&outcome)
+    {
+        return Err(ReportError::WrongStep {
+            outcome,
+            step,
+            expected: expected.to_vec(),
+        });
     }
     crate::attempt::record_report(journal, clock, token.task, token.number, outcome, reason)?;
     Ok(())
@@ -353,6 +426,90 @@ mod tests {
             })
         );
         assert!(error.to_string().contains("attempt 1 of task 1 has ended"));
+    }
+
+    /// `journal_with_a_pending_task`, with task 1's attempt begun, running, and its step named
+    /// `step` begun but not yet ended — the state `report` sees while an agent is mid-step.
+    fn journal_with_a_running_step(step: &str) -> FakeJournal {
+        let journal = journal_with_a_pending_task();
+        crate::attempt::begin_attempt_running(&journal, &clock(), TaskId(1), "test").unwrap();
+        crate::attempt::begin_step(&journal, &clock(), TaskId(1), 1, step).unwrap();
+        journal
+    }
+
+    #[test]
+    fn an_outcome_that_does_not_belong_to_the_running_step_is_refused_naming_the_ones_that_do() {
+        let journal = journal_with_a_running_step(crate::REVIEW_STEP);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+
+        let error = report(&journal, &clock(), &token, Outcome::Done, None).unwrap_err();
+        assert_eq!(
+            error,
+            ReportError::WrongStep {
+                outcome: Outcome::Done,
+                step: crate::REVIEW_STEP.to_owned(),
+                expected: vec![Outcome::Approved, Outcome::ChangesRequested],
+            }
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains("does not belong to the review step")
+                && message.contains("approved")
+                && message.contains("changes-requested"),
+            "{message}"
+        );
+        // Nothing was recorded: the outcome that does belong still works afterwards.
+        assert_eq!(
+            report(&journal, &clock(), &token, Outcome::Approved, None),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_review_only_outcome_is_refused_during_the_implementation_step_naming_its_own() {
+        let journal = journal_with_a_running_step(crate::IMPLEMENTATION);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+
+        let error = report(&journal, &clock(), &token, Outcome::Approved, None).unwrap_err();
+        assert_eq!(
+            error,
+            ReportError::WrongStep {
+                outcome: Outcome::Approved,
+                step: crate::IMPLEMENTATION.to_owned(),
+                expected: vec![
+                    Outcome::Done,
+                    Outcome::Failed,
+                    Outcome::NeedsInput,
+                    Outcome::TooLarge
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn approved_needs_no_reason_but_changes_requested_does() {
+        let journal = journal_with_a_running_step(crate::REVIEW_STEP);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+        for blank in [None, Some(""), Some("   ")] {
+            assert_eq!(
+                report(&journal, &clock(), &token, Outcome::ChangesRequested, blank),
+                Err(ReportError::ReasonRequired(Outcome::ChangesRequested))
+            );
+        }
+        assert_eq!(
+            report(
+                &journal,
+                &clock(),
+                &token,
+                Outcome::ChangesRequested,
+                Some("fix this")
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            report(&journal, &clock(), &token, Outcome::Approved, None),
+            Ok(())
+        );
     }
 
     #[test]

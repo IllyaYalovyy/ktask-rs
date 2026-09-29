@@ -7,7 +7,7 @@
 //! module decides.
 
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use crate::journal::{AttemptRun, Event};
 use crate::{
@@ -42,6 +42,7 @@ pub(crate) struct QueueState {
     tasks: Vec<Task>,
     attempts: HashMap<TaskId, AttemptFold>,
     reports: HashMap<(TaskId, u32), (Outcome, Option<String>)>,
+    step_reports: HashMap<(TaskId, u32, String), (Outcome, Option<String>)>,
 }
 
 impl QueueState {
@@ -118,10 +119,15 @@ impl QueueState {
                 number,
                 outcome,
                 reason,
+                step,
                 ..
             } => {
                 self.reports
                     .insert((*id, *number), (*outcome, reason.clone()));
+                if let Some(step) = step {
+                    self.step_reports
+                        .insert((*id, *number, step.clone()), (*outcome, reason.clone()));
+                }
             }
             Event::AttemptEnded {
                 id,
@@ -141,6 +147,7 @@ impl QueueState {
                         duration: *duration,
                         status: *status,
                         reason: reason.clone(),
+                        reported: None,
                     });
                 }
             }
@@ -157,8 +164,19 @@ impl QueueState {
                 duration,
                 status,
                 reason,
+                reported,
                 ..
-            } => self.apply_step_ended(*id, *number, step, *duration, *status, reason.clone()),
+            } => self.apply_step_ended(
+                *id,
+                *number,
+                step,
+                AttemptEnd {
+                    duration: *duration,
+                    status: *status,
+                    reason: reason.clone(),
+                    reported: *reported,
+                },
+            ),
         }
     }
 
@@ -177,16 +195,8 @@ impl QueueState {
     }
 
     /// Applies a [`Event::StepEnded`]: ends the most recent unended step named `step` of
-    /// attempt `number` of task `id`, when there is one.
-    fn apply_step_ended(
-        &mut self,
-        id: TaskId,
-        number: u32,
-        step: &str,
-        duration: Duration,
-        status: TaskStatus,
-        reason: Option<String>,
-    ) {
+    /// attempt `number` of task `id`, when there is one, with `end`.
+    fn apply_step_ended(&mut self, id: TaskId, number: u32, step: &str, end: AttemptEnd) {
         if let Some(attempt) = self.attempts.get_mut(&id)
             && attempt.number == number
             && let Some(current) = attempt
@@ -195,11 +205,7 @@ impl QueueState {
                 .rev()
                 .find(|fold| fold.name == step && fold.ended.is_none())
         {
-            current.ended = Some(AttemptEnd {
-                duration,
-                status,
-                reason,
-            });
+            current.ended = Some(end);
         }
     }
 
@@ -377,6 +383,7 @@ impl QueueState {
             number,
             outcome,
             reason: reason.map(str::to_owned),
+            step: self.current_step(id),
             at,
         })
     }
@@ -428,8 +435,8 @@ impl QueueState {
         })
     }
 
-    /// The command "end step `step` of attempt `number` of task `id` with `run`": the event it
-    /// produces, or the reason it cannot end.
+    /// The command "end step `step` of attempt `number` of task `id` with `run`, having
+    /// reported `reported`": the event it produces, or the reason it cannot end.
     ///
     /// # Errors
     ///
@@ -440,6 +447,7 @@ impl QueueState {
         number: u32,
         step: &str,
         run: AttemptRun<'_>,
+        reported: Option<Outcome>,
         at: SystemTime,
     ) -> Result<Event, RecordReportError> {
         self.check_attempt_running(id, number)?;
@@ -451,7 +459,21 @@ impl QueueState {
             exit_code: run.exit_code,
             status: run.status,
             reason: run.reason.map(str::to_owned),
+            reported,
             at,
+        })
+    }
+
+    /// The name of the step currently open — begun, not yet ended — for task `id`'s current
+    /// attempt. `None` when it has no open step.
+    pub(crate) fn current_step(&self, id: TaskId) -> Option<String> {
+        self.attempts.get(&id).and_then(|attempt| {
+            attempt
+                .steps
+                .iter()
+                .rev()
+                .find(|step| step.ended.is_none())
+                .map(|step| step.name.clone())
         })
     }
 
@@ -487,6 +509,21 @@ impl QueueState {
     /// task `id`. `None` when it reported nothing.
     pub(crate) fn report_of(&self, id: TaskId, number: u32) -> Option<(Outcome, Option<String>)> {
         self.reports.get(&(id, number)).cloned()
+    }
+
+    /// The outcome and reason reported while step `step` of attempt `number` of task `id` was
+    /// open. `None` when nothing was reported during that step — including when a later step
+    /// of the same attempt has since reported something of its own, which this never returns
+    /// for an earlier one's query.
+    pub(crate) fn report_of_step(
+        &self,
+        id: TaskId,
+        number: u32,
+        step: &str,
+    ) -> Option<(Outcome, Option<String>)> {
+        self.step_reports
+            .get(&(id, number, step.to_owned()))
+            .cloned()
     }
 }
 

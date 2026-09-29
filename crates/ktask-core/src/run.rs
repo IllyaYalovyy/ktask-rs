@@ -10,8 +10,8 @@ use crate::settings::split_tracked_branch;
 use crate::{
     AttemptRun, AttemptToken, BeginAttemptError, Clock, CommandSpec, Commands, CommandsError, Exit,
     HEALTH_CHECK_STEP, IMPLEMENTATION, Journal, JournalError, Outcome, Output, Provider,
-    ProviderRunError, RecordReportError, RunLock, RunLockError, SYNC_STEP, StepCall, Task, TaskId,
-    TaskKind, TaskStatus, list_tasks, run_provider,
+    ProviderRunError, REVIEW_STEP, RecordReportError, RunLock, RunLockError, SYNC_STEP, StepCall,
+    Task, TaskId, TaskKind, TaskStatus, list_tasks, run_provider,
 };
 
 /// Why a run could not proceed at all — never for how an attempt itself ended, which is a
@@ -206,6 +206,47 @@ pub fn build_prompt(task: &Task, token: &AttemptToken, binary_path: &Path) -> St
     prompt
 }
 
+/// The prompt for the review step of attempt `token` of `task`: its title, body and
+/// acceptance criteria, the diff the implementation step made — `diff`, empty when there was
+/// nothing to compare against or git could not produce one — and the exact `report` command,
+/// run through `binary_path`, to run for each possible outcome.
+#[must_use]
+pub fn build_review_prompt(
+    task: &Task,
+    token: &AttemptToken,
+    binary_path: &Path,
+    diff: &str,
+) -> String {
+    let mut prompt = format!("# Review: {}\n", task.title);
+    if !task.body.is_empty() {
+        prompt.push('\n');
+        prompt.push_str(&task.body);
+        prompt.push('\n');
+    }
+    prompt.push_str("\n## Acceptance criteria\n\n");
+    for criterion in &task.criteria {
+        prompt.push_str("- ");
+        prompt.push_str(criterion);
+        prompt.push('\n');
+    }
+    prompt.push_str("\n## What the task changed\n\n```diff\n");
+    prompt.push_str(diff);
+    if !diff.is_empty() && !diff.ends_with('\n') {
+        prompt.push('\n');
+    }
+    prompt.push_str("```\n");
+    let binary = binary_path.display();
+    let _ = write!(
+        prompt,
+        "\n## Reporting\n\n\
+         Review the diff above against the task and its acceptance criteria. When you are \
+         done, run exactly one of these, with the outcome that fits:\n\n\
+         \x20\x20\x20\x20{binary} report --token {token} approved\n\
+         \x20\x20\x20\x20{binary} report --token {token} changes-requested --reason \"<findings>\"\n"
+    );
+    prompt
+}
+
 /// Takes `lock` for the whole run, so that two runs of the same project never overlap.
 ///
 /// # Errors
@@ -322,11 +363,11 @@ fn end_when_nothing_left(attempted: &[Attempted], queue_is_empty: bool) -> RunEn
 }
 
 /// The steps every task's attempt runs through, in order, stopping at the first that ends
-/// badly: for now, just the one that always existed — running the provider on the task's whole
-/// prompt. Later tasks each add one more name here, and one more way of running it. The
-/// health-check step, when the project has configured one, runs ahead of an attempt even
-/// being begun, so it is not one of these.
-const STEPS: &[&str] = &[IMPLEMENTATION];
+/// badly: the provider runs on the task's whole prompt, then again in the reviewer role, on
+/// the diff that step made. Later tasks each add one more name here, and one more way of
+/// running it. The health-check step, when the project has configured one, runs ahead of an
+/// attempt even being begun, so it is not one of these.
+const STEPS: &[&str] = &[IMPLEMENTATION, REVIEW_STEP];
 
 /// How many lines of a failing health check's combined output are shown to the operator.
 const HEALTH_CHECK_OUTPUT_TAIL_LINES: usize = 20;
@@ -431,6 +472,7 @@ fn record_passed_step(
             status: TaskStatus::Done,
             reason,
         },
+        None,
     )?;
     Ok(())
 }
@@ -477,6 +519,37 @@ fn require_git(
             "{} could not be run: {error}",
             description()
         ))),
+    }
+}
+
+/// The commit `HEAD` names in `context`'s project directory, right now — the baseline the
+/// review step's diff is taken against, captured before the implementation step runs so that
+/// diff shows only what the task's own attempt changed. `None` when git could not answer.
+fn current_commit(commands: &impl Commands, context: RunContext<'_>) -> Option<String> {
+    match run_git(commands, context, &["rev-parse", "HEAD"]) {
+        Ok(output) if matches!(output.exit, Exit::Code(0)) => {
+            Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        }
+        _ => None,
+    }
+}
+
+/// Everything changed in `context`'s project directory since `start_commit`, committed or
+/// still sitting uncommitted in the working tree — what the review step's prompt shows as the
+/// task's own diff. Empty when `start_commit` is `None`, or git could not produce one.
+fn diff_since(
+    commands: &impl Commands,
+    context: RunContext<'_>,
+    start_commit: Option<&str>,
+) -> String {
+    let Some(start_commit) = start_commit else {
+        return String::new();
+    };
+    match run_git(commands, context, &["diff", start_commit]) {
+        Ok(output) if matches!(output.exit, Exit::Code(0)) => {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        }
+        _ => String::new(),
     }
 }
 
@@ -589,20 +662,21 @@ fn run_sync(
     }
 }
 
-/// Runs `provider` on `target.prompt` for `target.token`'s step `step`, timing it from `clock`.
+/// Runs `provider` on `prompt` for `target.token`'s step `step`, timing it from `clock`.
 fn timed_provider_run(
     commands: &impl Commands,
     provider: &Provider,
     clock: &impl Clock,
     target: &RunTarget<'_>,
     step: &str,
+    prompt: &str,
     context: RunContext<'_>,
 ) -> (Duration, Result<Output, ProviderRunError>) {
     let started = clock.now();
     let result = run_provider(
         commands,
         provider,
-        target.prompt,
+        prompt,
         StepCall {
             token: &target.token.to_string(),
             attempt: target.token.number,
@@ -617,12 +691,33 @@ fn timed_provider_run(
     )
 }
 
-/// The task an attempt runs, the token identifying that attempt, and the whole prompt built
-/// for it — everything [`run_steps`] needs about what it is running, as opposed to how.
+/// The task an attempt runs, the token identifying that attempt, the whole prompt built for
+/// its implementation step, and the commit `HEAD` named before that step ran — everything
+/// [`run_steps`] needs about what it is running, as opposed to how. `start_commit` is `None`
+/// when it could not be captured; the review step's diff is then empty rather than the run
+/// failing over it.
 struct RunTarget<'a> {
     task: &'a Task,
     token: &'a AttemptToken,
     prompt: &'a str,
+    start_commit: Option<&'a str>,
+}
+
+/// The prompt step `step` of `target`'s attempt runs the provider on: `target`'s own, built
+/// once for the implementation step, or a freshly built reviewer's prompt — the task and the
+/// diff since `target.start_commit` — for the review step.
+fn prompt_for_step(
+    commands: &impl Commands,
+    context: RunContext<'_>,
+    target: &RunTarget<'_>,
+    step: &str,
+) -> String {
+    if step == REVIEW_STEP {
+        let diff = diff_since(commands, context, target.start_commit);
+        build_review_prompt(target.task, target.token, context.binary_path, &diff)
+    } else {
+        target.prompt.to_owned()
+    }
 }
 
 /// Runs `target`'s attempt through `steps`, in order: begins each step, runs the provider on
@@ -649,9 +744,13 @@ fn run_steps(
     let mut reason = None;
     for &step in steps {
         crate::attempt::begin_step(journal, clock, target.task.id, target.token.number, step)?;
+        let prompt = prompt_for_step(commands, context, target, step);
         let (duration, result) =
-            timed_provider_run(commands, provider, clock, target, step, context);
-        (exit_code, status, reason) = attempt_outcome(journal, target.task, target.token, result)?;
+            timed_provider_run(commands, provider, clock, target, step, &prompt, context);
+        let outcome = attempt_outcome(journal, target.task, target.token, step, result)?;
+        exit_code = outcome.exit_code;
+        status = outcome.status;
+        reason = outcome.reason;
         total += duration;
         crate::attempt::end_step(
             journal,
@@ -665,6 +764,7 @@ fn run_steps(
                 status,
                 reason: reason.as_deref(),
             },
+            outcome.reported,
         )?;
         if status != TaskStatus::Done {
             break;
@@ -716,12 +816,14 @@ fn run_one_attempt(
         )?;
         pre_duration += pre_step.duration;
     }
+    let start_commit = current_commit(commands, context);
     let token = AttemptToken::new(context.project_name, task.id, number);
     let prompt = build_prompt(task, &token, context.binary_path);
     let target = RunTarget {
         task,
         token: &token,
         prompt: &prompt,
+        start_commit: start_commit.as_deref(),
     };
 
     let (duration, exit_code, status, reason) =
@@ -870,46 +972,64 @@ pub fn run_queue(
     attempt_loop(journal, clock, commands, provider, context)
 }
 
-/// What attempt `token` of `task` ended at, given what running the provider produced: its
-/// exit code (`None` when the provider could not be run at all, or was killed), the
-/// resulting status, and the reason when it is not `done`.
+/// What a step ended at: its exit code (`None` when the provider could not be run at all, or
+/// was killed), the resulting status, the reason when it is not `done`, and the fine-grained
+/// outcome the agent itself reported, when it reported anything.
+struct StepOutcome {
+    exit_code: Option<i32>,
+    status: TaskStatus,
+    reason: Option<String>,
+    reported: Option<Outcome>,
+}
+
+impl StepOutcome {
+    /// No report could ever have been read for this step: the provider itself never ran to
+    /// completion, so there is nothing to distinguish beyond `reason`.
+    fn unreported(reason: String) -> Self {
+        Self {
+            exit_code: None,
+            status: TaskStatus::FailedUnknown,
+            reason: Some(reason),
+            reported: None,
+        }
+    }
+}
+
+/// What attempt `token` of `task`'s step `step` ended at, given what running the provider
+/// produced for it.
 fn attempt_outcome(
     journal: &impl Journal,
     task: &Task,
     token: &AttemptToken,
+    step: &str,
     result: Result<Output, ProviderRunError>,
-) -> Result<(Option<i32>, TaskStatus, Option<String>), RunError> {
+) -> Result<StepOutcome, RunError> {
     let output = match result {
         Ok(output) => output,
         Err(error) => {
-            return Ok((
-                None,
-                TaskStatus::FailedUnknown,
-                Some(format!("the provider could not run: {error}")),
-            ));
+            return Ok(StepOutcome::unreported(format!(
+                "the provider could not run: {error}"
+            )));
         }
     };
     let exit_code = match output.exit {
         Exit::Code(code) => code,
         Exit::Killed => {
-            return Ok((
-                None,
-                TaskStatus::FailedUnknown,
-                Some("the provider ran past its time limit and was killed".to_owned()),
+            return Ok(StepOutcome::unreported(
+                "the provider ran past its time limit and was killed".to_owned(),
             ));
         }
         Exit::Interrupted => {
-            return Ok((
-                None,
-                TaskStatus::FailedUnknown,
-                Some(INTERRUPTED.to_owned()),
-            ));
+            return Ok(StepOutcome::unreported(INTERRUPTED.to_owned()));
         }
     };
-    let report = crate::attempt::last_report(journal, task.id, token.number)?;
+    let report = crate::attempt::report_of_step(journal, task.id, token.number, step)?;
+    let reported = report.as_ref().map(|(outcome, _)| *outcome);
     let (status, reason) = match report {
-        Some((Outcome::Done, _)) => (TaskStatus::Done, None),
-        Some((Outcome::Failed | Outcome::TooLarge, reason)) => (TaskStatus::Failed, reason),
+        Some((Outcome::Done | Outcome::Approved, _)) => (TaskStatus::Done, None),
+        Some((Outcome::Failed | Outcome::TooLarge | Outcome::ChangesRequested, reason)) => {
+            (TaskStatus::Failed, reason)
+        }
         Some((Outcome::NeedsInput, reason)) => (TaskStatus::Blocked, reason),
         None => (
             TaskStatus::FailedUnknown,
@@ -918,7 +1038,12 @@ fn attempt_outcome(
             )),
         ),
     };
-    Ok((Some(exit_code), status, reason))
+    Ok(StepOutcome {
+        exit_code: Some(exit_code),
+        status,
+        reason,
+        reported,
+    })
 }
 
 #[cfg(test)]
@@ -1041,6 +1166,40 @@ mod tests {
     }
 
     #[test]
+    fn build_review_prompt_carries_the_title_criteria_the_diff_and_the_exact_report_commands() {
+        let task = Task {
+            id: TaskId(7),
+            position: 1,
+            title: "Do the thing".to_owned(),
+            body: "Some body text.".to_owned(),
+            criteria: vec!["first thing".to_owned()],
+            kind: TaskKind::Agent,
+            links: vec![],
+            status: TaskStatus::Running,
+            created_at: at(1),
+        };
+        let token = AttemptToken::new("proj", TaskId(7), 3);
+        let binary_path = Path::new("/opt/ktask-rs/bin/ktask-rs");
+        let diff = "--- a/file\n+++ b/file\n+added line\n";
+        let prompt = build_review_prompt(&task, &token, binary_path, diff);
+        assert!(prompt.contains("Do the thing"), "{prompt}");
+        assert!(prompt.contains("Some body text."), "{prompt}");
+        assert!(prompt.contains("- first thing"), "{prompt}");
+        assert!(prompt.contains("+added line"), "{prompt}");
+        assert!(
+            prompt.contains("/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 approved"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains(
+                "/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 changes-requested --reason"
+            ),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("\n    ktask-rs report"), "{prompt}");
+    }
+
+    #[test]
     fn an_empty_queue_ends_the_run_at_once() {
         let journal = FakeJournal::default();
         let commands = commands_ok(Exit::Code(0));
@@ -1142,7 +1301,10 @@ mod tests {
     }
 
     /// A fake commands port that, once run, reports `outcome` for whatever token it finds
-    /// among its args, then exits with `exit`.
+    /// among its args, then exits with `exit` — except for the review step, which it always
+    /// approves, and a `git` call, which it answers with nothing rather than trying to read a
+    /// token out of git's own arguments: `run` now runs one of these ahead of every attempt, to
+    /// capture the commit the review step's diff is taken against.
     struct ReportingCommands<'a> {
         journal: &'a FakeJournal,
         outcome: Outcome,
@@ -1151,16 +1313,32 @@ mod tests {
 
     impl Commands for ReportingCommands<'_> {
         fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+            if spec.program == "git" {
+                return Ok(Output {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    exit: Exit::Code(0),
+                });
+            }
             let token: AttemptToken = spec
                 .args
                 .iter()
                 .find_map(|arg| arg.parse().ok())
                 .expect("one arg is the attempt token");
+            let is_review = crate::attempt::current_step(self.journal, token.task)
+                .unwrap()
+                .as_deref()
+                == Some(REVIEW_STEP);
+            let outcome = if is_review {
+                Outcome::Approved
+            } else {
+                self.outcome
+            };
             report(
                 self.journal,
                 &FakeClock(SystemTime::UNIX_EPOCH),
                 &token,
-                self.outcome,
+                outcome,
                 Some("because"),
             )
             .unwrap();
@@ -1230,13 +1408,18 @@ mod tests {
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt.steps.len(), 2, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps.len(), 3, "{:?}", attempt.steps);
         assert_eq!(attempt.steps[0].name, HEALTH_CHECK_STEP);
         assert_eq!(
             attempt.steps[0].ended.as_ref().unwrap().status,
             TaskStatus::Done
         );
         assert_eq!(attempt.steps[1].name, IMPLEMENTATION);
+        assert_eq!(attempt.steps[2].name, REVIEW_STEP);
+        assert_eq!(
+            attempt.steps[2].ended.as_ref().unwrap().reported,
+            Some(Outcome::Approved)
+        );
     }
 
     #[test]
@@ -1356,8 +1539,9 @@ mod tests {
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt.steps.len(), 1, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps.len(), 2, "{:?}", attempt.steps);
         assert_eq!(attempt.steps[0].name, IMPLEMENTATION);
+        assert_eq!(attempt.steps[1].name, REVIEW_STEP);
     }
 
     /// A ready-to-return, always-successful [`Output`] carrying `stdout`.
@@ -1443,7 +1627,7 @@ mod tests {
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt.steps.len(), 2, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps.len(), 3, "{:?}", attempt.steps);
         assert_eq!(attempt.steps[0].name, SYNC_STEP);
         let synced = attempt.steps[0].ended.as_ref().unwrap();
         assert_eq!(synced.status, TaskStatus::Done);
@@ -1452,6 +1636,7 @@ mod tests {
             Some("took in 3 commits from origin/main")
         );
         assert_eq!(attempt.steps[1].name, IMPLEMENTATION);
+        assert_eq!(attempt.steps[2].name, REVIEW_STEP);
     }
 
     #[test]
@@ -1706,8 +1891,9 @@ mod tests {
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt.steps.len(), 1, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps.len(), 2, "{:?}", attempt.steps);
         assert_eq!(attempt.steps[0].name, IMPLEMENTATION);
+        assert_eq!(attempt.steps[1].name, REVIEW_STEP);
     }
 
     #[test]
@@ -1751,10 +1937,11 @@ mod tests {
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt.steps.len(), 3, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps.len(), 4, "{:?}", attempt.steps);
         assert_eq!(attempt.steps[0].name, SYNC_STEP);
         assert_eq!(attempt.steps[1].name, HEALTH_CHECK_STEP);
         assert_eq!(attempt.steps[2].name, IMPLEMENTATION);
+        assert_eq!(attempt.steps[3].name, REVIEW_STEP);
     }
 
     #[test]
@@ -1924,6 +2111,254 @@ mod tests {
         assert_eq!(tasks[1].status, TaskStatus::Pending);
     }
 
+    /// A commands port that reports `Outcome::Done` for the implementation step and `review`
+    /// (outcome and reason) for the review step, then exits with `exit` — proving what the
+    /// review step's own outcome does to the task, once it is reached.
+    struct ReviewCommands<'a> {
+        journal: &'a FakeJournal,
+        review: (Outcome, &'static str),
+        exit: Exit,
+    }
+
+    impl Commands for ReviewCommands<'_> {
+        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+            if spec.program == "git" {
+                return Ok(Output {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    exit: Exit::Code(0),
+                });
+            }
+            let token: AttemptToken = spec
+                .args
+                .iter()
+                .find_map(|arg| arg.parse().ok())
+                .expect("one arg is the attempt token");
+            let is_review = crate::attempt::current_step(self.journal, token.task)
+                .unwrap()
+                .as_deref()
+                == Some(REVIEW_STEP);
+            let (outcome, reason) = if is_review {
+                self.review
+            } else {
+                (Outcome::Done, "because")
+            };
+            report(
+                self.journal,
+                &FakeClock(SystemTime::UNIX_EPOCH),
+                &token,
+                outcome,
+                Some(reason),
+            )
+            .unwrap();
+            Ok(Output {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit: self.exit,
+            })
+        }
+    }
+
+    #[test]
+    fn changes_requested_ends_the_task_failed_with_the_findings_as_the_reason_and_stops_the_run() {
+        let journal = journal_of_abc();
+        let commands = ReviewCommands {
+            journal: &journal,
+            review: (Outcome::ChangesRequested, "fix the thing"),
+            exit: Exit::Code(0),
+        };
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        assert_eq!(
+            report,
+            RunReport {
+                attempted: vec![Attempted {
+                    id: TaskId(1),
+                    status: TaskStatus::Failed,
+                    reason: Some("fix the thing".to_owned()),
+                }],
+                end: RunEnd::Stopped {
+                    id: TaskId(1),
+                    status: TaskStatus::Failed,
+                },
+            }
+        );
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt.steps.len(), 2, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps[0].name, IMPLEMENTATION);
+        assert_eq!(attempt.steps[1].name, REVIEW_STEP);
+        let end = attempt.steps[1].ended.as_ref().unwrap();
+        assert_eq!(end.status, TaskStatus::Failed);
+        assert_eq!(end.reported, Some(Outcome::ChangesRequested));
+        assert_eq!(end.reason.as_deref(), Some("fix the thing"));
+        // The task's own status is `failed`, and the next task never started.
+        let tasks = crate::list_all_tasks(&journal).unwrap();
+        assert_eq!(tasks[0].status, TaskStatus::Failed);
+        assert_eq!(tasks[1].status, TaskStatus::Pending);
+    }
+
+    /// A commands port that reports `Outcome::Done` for the implementation step, then exits
+    /// cleanly for the review step without ever calling `report` at all — a reviewer that ran
+    /// and said nothing.
+    struct SilentReview<'a> {
+        journal: &'a FakeJournal,
+    }
+
+    impl Commands for SilentReview<'_> {
+        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+            if spec.program == "git" {
+                return Ok(Output {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    exit: Exit::Code(0),
+                });
+            }
+            let token: AttemptToken = spec
+                .args
+                .iter()
+                .find_map(|arg| arg.parse().ok())
+                .expect("one arg is the attempt token");
+            let is_review = crate::attempt::current_step(self.journal, token.task)
+                .unwrap()
+                .as_deref()
+                == Some(REVIEW_STEP);
+            if !is_review {
+                report(
+                    self.journal,
+                    &FakeClock(SystemTime::UNIX_EPOCH),
+                    &token,
+                    Outcome::Done,
+                    None,
+                )
+                .unwrap();
+            }
+            Ok(Output {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit: Exit::Code(0),
+            })
+        }
+    }
+
+    #[test]
+    fn a_reviewer_that_reports_nothing_ends_the_task_failed_unknown_as_implementation_would() {
+        let journal = journal_of_abc();
+        let commands = SilentReview { journal: &journal };
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        assert_eq!(report.attempted.len(), 1);
+        assert_eq!(report.attempted[0].status, TaskStatus::FailedUnknown);
+        assert!(
+            report.attempted[0]
+                .reason
+                .as_deref()
+                .unwrap()
+                .contains("reported nothing"),
+            "{:?}",
+            report.attempted[0].reason
+        );
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt.steps[1].name, REVIEW_STEP);
+        assert_eq!(attempt.steps[1].ended.as_ref().unwrap().reported, None);
+    }
+
+    /// A commands port that reports `Outcome::Done` for the implementation step and captures
+    /// the prompt (its standard input) it is run with for the review step, in `captured`,
+    /// before reporting `Outcome::Approved` for it too. Answers `git rev-parse HEAD` and
+    /// `git diff <sha>` as `GitScript` would, from `responses`.
+    struct CapturingReview<'a> {
+        journal: &'a FakeJournal,
+        responses: Vec<(&'static [&'static str], Output)>,
+        captured: &'a RefCell<Option<Vec<u8>>>,
+    }
+
+    impl Commands for CapturingReview<'_> {
+        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+            if spec.program == "git" {
+                return Ok(self
+                    .responses
+                    .iter()
+                    .find(|(args, _)| spec.args == *args)
+                    .map_or_else(|| git_ok(b""), |(_, output)| output.clone()));
+            }
+            let token: AttemptToken = spec
+                .args
+                .iter()
+                .find_map(|arg| arg.parse().ok())
+                .expect("one arg is the attempt token");
+            let is_review = crate::attempt::current_step(self.journal, token.task)
+                .unwrap()
+                .as_deref()
+                == Some(REVIEW_STEP);
+            let outcome = if is_review {
+                *self.captured.borrow_mut() = Some(spec.stdin.clone());
+                Outcome::Approved
+            } else {
+                Outcome::Done
+            };
+            report(
+                self.journal,
+                &FakeClock(SystemTime::UNIX_EPOCH),
+                &token,
+                outcome,
+                None,
+            )
+            .unwrap();
+            Ok(Output {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit: Exit::Code(0),
+            })
+        }
+    }
+
+    #[test]
+    fn the_review_step_runs_on_the_diff_git_reports_since_the_attempt_began() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        let captured = RefCell::default();
+        let commands = CapturingReview {
+            journal: &journal,
+            responses: vec![
+                (&["rev-parse", "HEAD"], git_ok(b"abc123\n")),
+                (
+                    &["diff", "abc123"],
+                    git_ok(b"--- a/file\n+++ b/file\n+added line\n"),
+                ),
+            ],
+            captured: &captured,
+        };
+        run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        let prompt = String::from_utf8(captured.borrow().clone().expect("review step ran"))
+            .expect("the prompt is text");
+        assert!(prompt.contains("+added line"), "{prompt}");
+        assert!(prompt.contains("proj/1/1 approved"), "{prompt}");
+        assert!(
+            prompt.contains("proj/1/1 changes-requested --reason"),
+            "{prompt}"
+        );
+    }
+
     #[test]
     fn no_report_at_all_ends_the_task_failed_unknown_and_stops_the_run() {
         let journal = journal_of_abc();
@@ -2059,7 +2494,12 @@ mod tests {
             "{:?}",
             report.attempted[0].reason
         );
-        assert!(commands.last.borrow().is_none());
+        // The provider itself is never run: the one command that did run is `run`'s own git
+        // call, capturing the commit the review step's diff would be taken against.
+        assert_eq!(
+            commands.last.borrow().as_ref().map(|spec| &spec.program),
+            Some(&"git".to_owned())
+        );
     }
 
     #[test]
@@ -2084,7 +2524,7 @@ mod tests {
     }
 
     #[test]
-    fn every_step_run_begins_and_ends_with_one_journal_event_each() {
+    fn the_implementation_and_review_steps_each_begin_and_end_with_one_journal_event() {
         let journal = FakeJournal::default();
         add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
         let commands = ReportingCommands {
@@ -2103,11 +2543,17 @@ mod tests {
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt.steps.len(), 1, "{:?}", attempt.steps);
-        let step = &attempt.steps[0];
-        assert_eq!(step.name, IMPLEMENTATION);
-        let end = step.ended.as_ref().expect("the step ended");
+        assert_eq!(attempt.steps.len(), 2, "{:?}", attempt.steps);
+        let implementation = &attempt.steps[0];
+        assert_eq!(implementation.name, IMPLEMENTATION);
+        let end = implementation.ended.as_ref().expect("the step ended");
         assert_eq!(end.status, TaskStatus::Done);
+        assert_eq!(end.reported, Some(Outcome::Done));
+        let review = &attempt.steps[1];
+        assert_eq!(review.name, REVIEW_STEP);
+        let end = review.ended.as_ref().expect("the step ended");
+        assert_eq!(end.status, TaskStatus::Done);
+        assert_eq!(end.reported, Some(Outcome::Approved));
 
         let started = journal
             .events()
@@ -2121,7 +2567,7 @@ mod tests {
             .iter()
             .filter(|event| matches!(event, Event::StepEnded { .. }))
             .count();
-        assert_eq!((started, ended), (1, 1));
+        assert_eq!((started, ended), (2, 2));
     }
 
     #[test]
@@ -2141,6 +2587,7 @@ mod tests {
             task: &task,
             token: &token,
             prompt: "prompt",
+            start_commit: None,
         };
         let (_, _, status, reason) = run_steps(
             &journal,

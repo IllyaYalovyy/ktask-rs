@@ -59,6 +59,10 @@ pub enum Event {
         outcome: Outcome,
         /// Why, when the outcome needs a reason.
         reason: Option<String>,
+        /// The step that was open when this was reported — so a later step's own report of
+        /// the same attempt never reads back as this one's. `None` when no step was open,
+        /// which only happens ahead of the pipeline itself ever beginning one.
+        step: Option<String>,
         /// When.
         at: SystemTime,
     },
@@ -106,6 +110,10 @@ pub enum Event {
         status: TaskStatus,
         /// Why, when `status` is not `done`.
         reason: Option<String>,
+        /// The fine-grained outcome the agent itself reported for this step, distinct from
+        /// `status` which collapses several outcomes into one; `None` for a step the tool
+        /// records as already passed, which no agent ever reports an outcome for.
+        reported: Option<Outcome>,
         /// When.
         at: SystemTime,
     },
@@ -308,6 +316,11 @@ pub struct AttemptEnd {
     pub status: TaskStatus,
     /// Why, when `status` is not `done`.
     pub reason: Option<String>,
+    /// The fine-grained outcome the agent itself reported for this step, when this is a step's
+    /// own ending: `None` for the attempt's own ending, and for a step — the sync and
+    /// health-check steps — that the tool records as already passed, which no agent ever
+    /// reports an outcome for.
+    pub reported: Option<Outcome>,
 }
 
 /// One step of an attempt, as [`crate::attempt::last_attempt`] reports it: the pipeline every
