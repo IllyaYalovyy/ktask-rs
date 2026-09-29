@@ -314,6 +314,57 @@ fn uncommitted_changes_stop_the_run_before_the_task_starts_and_say_what_is_expec
         outcome.stdout
     );
     assert_eq!(fixture.task_status(1)?, "pending");
+
+    // The stop is not lost once the run's own terminal is gone: `status` shows the same
+    // words, against the task's still-pending status.
+    let status = fixture.run(&["status"])?;
+    let lines: Vec<_> = status.stdout.lines().collect();
+    assert_eq!(lines[0], "#1\tpending\ta");
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(
+        lines[1].starts_with("\tsync\t-\t0s\tfailed\t"),
+        "{}",
+        lines[1]
+    );
+    assert!(lines[1].contains("uncommitted changes"), "{}", lines[1]);
+    assert!(lines[1].contains("README"), "{}", lines[1]);
+    assert!(lines[1].contains("commit or stash"), "{}", lines[1]);
+    Ok(())
+}
+
+#[test]
+fn once_a_later_run_gets_past_the_sync_the_earlier_stop_is_no_longer_current() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.track_origin_main()?;
+    std::fs::write(fixture.repository.join("README"), "changed locally\n")?;
+    fixture.add_agent_task("a", &reporting_body("done"))?;
+
+    let outcome = fixture.run_the_queue(&["run"])?;
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stderr);
+    let status = fixture.run(&["status"])?;
+    assert!(status.stdout.contains("sync"), "{}", status.stdout);
+
+    // The uncommitted change is committed: the sync now has nothing to refuse over.
+    git(&fixture.sandbox, &fixture.repository, &["add", "."])?;
+    git(
+        &fixture.sandbox,
+        &fixture.repository,
+        &["commit", "--quiet", "-m", "local change"],
+    )?;
+    let outcome = fixture.run_the_queue(&["run"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(fixture.task_status(1)?, "done");
+
+    // The earlier stop is no longer shown as current: the passing sync step replaces it.
+    let status = fixture.run(&["status"])?;
+    assert!(!status.stdout.contains("failed"), "{}", status.stdout);
+    let lines: Vec<_> = status.stdout.lines().collect();
+    assert_eq!(lines[0], "#1\tdone\ta");
+    assert!(
+        lines[1].starts_with("\tsync\techo\t") && lines[1].ends_with("\tpassed\tnothing new"),
+        "{}",
+        lines[1]
+    );
     Ok(())
 }
 
@@ -353,6 +404,21 @@ fn an_unreachable_remote_stops_the_run_and_says_what_is_expected() -> Result<()>
         outcome.stdout
     );
     assert_eq!(fixture.task_status(1)?, "pending");
+
+    let status = fixture.run(&["status"])?;
+    let lines: Vec<_> = status.stdout.lines().collect();
+    assert_eq!(lines[0], "#1\tpending\ta");
+    assert!(
+        lines[1].starts_with("\tsync\t-\t0s\tfailed\t"),
+        "{}",
+        lines[1]
+    );
+    assert!(lines[1].contains("could not be reached"), "{}", lines[1]);
+    assert!(
+        lines[1].contains("make the remote reachable"),
+        "{}",
+        lines[1]
+    );
     Ok(())
 }
 
@@ -399,6 +465,22 @@ fn a_rebase_conflict_is_undone_leaving_the_directory_exactly_as_it_was() -> Resu
         outcome.stdout
     );
     assert_eq!(fixture.task_status(1)?, "pending");
+
+    let ktask_status = fixture.run(&["status"])?;
+    let lines: Vec<_> = ktask_status.stdout.lines().collect();
+    assert_eq!(lines[0], "#1\tpending\ta");
+    assert!(
+        lines[1].starts_with("\tsync\t-\t0s\tfailed\t"),
+        "{}",
+        lines[1]
+    );
+    assert!(lines[1].contains("conflicted in"), "{}", lines[1]);
+    assert!(lines[1].contains("README"), "{}", lines[1]);
+    assert!(
+        lines[1].contains("resolve the conflict yourself"),
+        "{}",
+        lines[1]
+    );
 
     // The directory is exactly as the local commit left it: no rebase left in progress, no
     // conflict markers, and the same content and history as before the run was attempted.

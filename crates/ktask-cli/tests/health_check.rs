@@ -212,9 +212,50 @@ fn a_failing_health_check_stops_the_run_before_any_attempt_and_the_task_stays_pe
         outcome.stdout
     );
     assert_eq!(fixture.task_status(1)?, "pending");
-    // No attempt was ever begun: `status` shows nothing for a task never attempted.
+    // No attempt was ever begun, but the stop itself is not lost: `status` shows why the task
+    // did not start, in the run's own words, and the task is still pending.
     let status = fixture.run(&["status"])?;
-    assert_eq!(status.stdout, "");
+    let lines: Vec<_> = status.stdout.lines().collect();
+    assert_eq!(lines[0], "#1\tpending\ta");
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(
+        lines[1].starts_with("\thealth check\t-\t0s\tfailed\t"),
+        "{}",
+        lines[1]
+    );
+    assert!(lines[1].contains("exited with code 1"), "{}", lines[1]);
+    assert!(lines[1].contains("fix the health check"), "{}", lines[1]);
+    Ok(())
+}
+
+#[test]
+fn once_a_later_run_gets_past_the_health_check_the_earlier_stop_is_no_longer_current() -> Result<()>
+{
+    let fixture = Fixture::new()?;
+    fixture.set_health_check("exit 1")?;
+    fixture.add_agent_task("a", &reporting_body("done"))?;
+    let outcome = fixture.run_the_queue(&["run"])?;
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stderr);
+    let status = fixture.run(&["status"])?;
+    assert!(status.stdout.contains("health check"), "{}", status.stdout);
+
+    // The health check now passes: a second run gets past it and the task finishes.
+    fixture.set_health_check("true")?;
+    let outcome = fixture.run_the_queue(&["run"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(fixture.task_status(1)?, "done");
+
+    // The earlier gate stop is no longer shown as current: `status` now shows the real
+    // attempt's own steps, with no trace of the health check ever having failed.
+    let status = fixture.run(&["status"])?;
+    assert!(!status.stdout.contains("failed"), "{}", status.stdout);
+    let lines: Vec<_> = status.stdout.lines().collect();
+    assert_eq!(lines[0], "#1\tdone\ta");
+    assert!(
+        lines[1].starts_with("\thealth check\techo\t") && lines[1].ends_with("\tpassed"),
+        "{}",
+        lines[1]
+    );
     Ok(())
 }
 

@@ -886,6 +886,54 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
 }
 
 #[test]
+fn a_failing_health_check_gate_shows_on_the_queue_screen_pending_and_clears_once_a_later_run_gets_past_it()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.set_health_check("exit 1")?;
+    fixture.add_agent_task("a", &reporting_body("done"))?;
+    fixture.run_the_queue()?;
+
+    let mut terminal = fixture.open()?;
+    let screen = terminal.wait_for("the gate stop shown against the pending task", |screen| {
+        screen.contents().contains("health check")
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[4], ">  1  #1  pending  agent  a");
+    assert!(
+        lines[5].contains("health check · -") && lines[5].contains("failed"),
+        "{}",
+        lines[5]
+    );
+    assert!(lines[5].contains("exited with code 1"), "{}", lines[5]);
+    assert!(lines[5].contains("fix the health check"), "{}", lines[5]);
+
+    // The health check now passes: a run made from outside the TUI gets past it, and the
+    // dashboard — watching the same journal — drops the earlier stop on its own.
+    fixture.set_health_check("true")?;
+    fixture.run_the_queue()?;
+    let screen = terminal.wait_for(
+        "the task done with no trace of the earlier stop",
+        |screen| {
+            let contents = screen.contents();
+            lines_inside_frame(&contents)
+                .get(4)
+                .is_some_and(|line| line.starts_with(">  1  #1  done"))
+        },
+    )?;
+    assert!(!screen.contains("exited with code 1"), "{screen}");
+    let lines = lines_inside_frame(&screen);
+    assert!(
+        lines[5].contains("health check · echo") && lines[5].ends_with("passed"),
+        "{}",
+        lines[5]
+    );
+
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
 fn steps_taller_than_the_screen_scroll_behind_an_ellipsis_until_there_is_room_for_all() -> Result<()>
 {
     let sandbox = Sandbox::new()?;
