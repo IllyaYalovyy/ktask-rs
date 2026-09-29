@@ -36,4 +36,19 @@ pub trait Git {
     ///
     /// Fails when git cannot be run or cannot tell.
     fn work_tree_root(&self, dir: &Path) -> Result<Option<PathBuf>, GitError>;
+
+    /// Whether `branch` exists on `remote`, checked live against the remote itself — never
+    /// merely a locally cached remote-tracking ref, so this tells the truth even before
+    /// anything has ever been fetched. `false` for any reason `remote`/`branch` cannot be
+    /// confirmed: no such remote, no such branch on it, or the remote could not be reached.
+    ///
+    /// # Errors
+    ///
+    /// Fails only when git itself could not be run at all.
+    fn remote_branch_exists(
+        &self,
+        dir: &Path,
+        remote: &str,
+        branch: &str,
+    ) -> Result<bool, GitError>;
 }

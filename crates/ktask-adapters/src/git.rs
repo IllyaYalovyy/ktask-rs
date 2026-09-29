@@ -36,6 +36,25 @@ impl Git for GitCli {
             Err(fail(stderr.trim().to_owned()))
         }
     }
+
+    fn remote_branch_exists(
+        &self,
+        dir: &Path,
+        remote: &str,
+        branch: &str,
+    ) -> Result<bool, GitError> {
+        let output = Command::new("git")
+            .args(["ls-remote", "--exit-code", "--heads", remote, branch])
+            .current_dir(dir)
+            .env("LC_ALL", "C")
+            .output()
+            .map_err(|e| {
+                GitError::new(format!(
+                    "cannot check whether {remote}/{branch} exists: cannot run git: {e}"
+                ))
+            })?;
+        Ok(output.status.success())
+    }
 }
 
 #[cfg(test)]
@@ -76,5 +95,69 @@ mod tests {
         let missing = dir.path().join("missing");
         let error = GitCli.work_tree_root(&missing).unwrap_err().to_string();
         assert!(error.contains(&missing.display().to_string()), "{error}");
+    }
+
+    /// A repository at a canonical path, on branch `branch`, with one commit.
+    fn repo_with_branch(branch: &str) -> PathBuf {
+        let dir = TempDir::new().unwrap().keep();
+        let root = std::fs::canonicalize(&dir).unwrap();
+        run(
+            &root,
+            &["init", "--quiet", &format!("--initial-branch={branch}")],
+        );
+        std::fs::write(root.join("f"), "x").unwrap();
+        run(&root, &["add", "."]);
+        run(
+            &root,
+            &[
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "user.name=T",
+                "commit",
+                "--quiet",
+                "-m",
+                "first",
+            ],
+        );
+        root
+    }
+
+    fn run(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} in {}", dir.display());
+    }
+
+    #[test]
+    fn an_existing_branch_on_the_remote_is_found() {
+        let remote = repo_with_branch("main");
+        let cwd = TempDir::new().unwrap();
+        assert_eq!(
+            GitCli.remote_branch_exists(cwd.path(), remote.to_str().unwrap(), "main"),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn a_missing_branch_on_the_remote_is_not_found() {
+        let remote = repo_with_branch("main");
+        let cwd = TempDir::new().unwrap();
+        assert_eq!(
+            GitCli.remote_branch_exists(cwd.path(), remote.to_str().unwrap(), "other"),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn an_unknown_remote_is_not_found_rather_than_an_error() {
+        let cwd = TempDir::new().unwrap();
+        assert_eq!(
+            GitCli.remote_branch_exists(cwd.path(), "not-a-remote-at-all", "main"),
+            Ok(false)
+        );
     }
 }

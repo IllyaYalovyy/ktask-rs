@@ -50,10 +50,12 @@ impl ProjectRegistry for FakeRegistry {
     }
 }
 
-/// A git that knows the work trees it was given.
+/// A git that knows the work trees it was given, and which `"<remote>/<branch>"` values it
+/// considers to exist.
 #[derive(Debug, Default)]
 pub(crate) struct FakeGit {
     pub(crate) roots: Vec<PathBuf>,
+    pub(crate) remote_branches: Vec<String>,
     pub(crate) failure: Option<GitError>,
 }
 
@@ -68,6 +70,21 @@ impl Git for FakeGit {
             .filter(|root| dir.starts_with(root))
             .max_by_key(|root| root.components().count())
             .cloned())
+    }
+
+    fn remote_branch_exists(
+        &self,
+        _dir: &Path,
+        remote: &str,
+        branch: &str,
+    ) -> Result<bool, GitError> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone());
+        }
+        Ok(self
+            .remote_branches
+            .iter()
+            .any(|value| value == &format!("{remote}/{branch}")))
     }
 }
 
