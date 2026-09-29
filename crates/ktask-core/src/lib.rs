@@ -17,6 +17,7 @@ mod register;
 mod report;
 mod resolve;
 mod run;
+mod settings;
 mod status;
 mod task;
 
@@ -36,6 +37,10 @@ pub use register::{RegisterError, register_project};
 pub use report::{AttemptToken, Outcome, ReportError, report, start_attempt};
 pub use resolve::{Resolution, ResolveError, resolve_project};
 pub use run::{Attempted, RunContext, RunEnd, RunError, RunReport, build_prompt, run_queue};
+pub use settings::{
+    ATTEMPT_TIMEOUT, DEFAULT_ATTEMPT_TIMEOUT_SECS, SetSettingError, SettingView, Settings,
+    SettingsError, SettingsStore, effective_attempt_timeout, set_setting, show_settings,
+};
 pub use status::{
     AttemptLine, AttemptOutcome, IMPLEMENTATION, StatusEntry, displayed_status, status,
 };

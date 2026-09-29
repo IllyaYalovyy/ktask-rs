@@ -6,8 +6,8 @@ use std::time::{Duration, SystemTime};
 
 use crate::{
     AppendConflict, Clock, CommandSpec, Commands, CommandsError, Event, Git, GitError, Journal,
-    JournalError, Output, Project, ProjectRegistry, RegistryError, RunLock, RunLockError,
-    TaskDraft, TaskKind,
+    JournalError, Output, Project, ProjectRegistry, RegistryError, RunLock, RunLockError, Settings,
+    SettingsError, SettingsStore, TaskDraft, TaskKind,
 };
 
 /// An in-memory registry that can be told to fail.
@@ -186,6 +186,46 @@ impl RunLock for FakeRunLock {
 
     fn in_progress(&self) -> Result<bool, RunLockError> {
         Ok(self.failure.is_some())
+    }
+}
+
+/// An in-memory settings store that can be told to fail.
+#[derive(Debug, Default)]
+pub(crate) struct FakeSettingsStore {
+    pub(crate) settings: RefCell<Settings>,
+    pub(crate) failure: Option<SettingsError>,
+}
+
+impl FakeSettingsStore {
+    pub(crate) fn with(settings: Settings) -> Self {
+        Self {
+            settings: RefCell::new(settings),
+            failure: None,
+        }
+    }
+
+    pub(crate) fn failing(failure: SettingsError) -> Self {
+        Self {
+            settings: RefCell::default(),
+            failure: Some(failure),
+        }
+    }
+}
+
+impl SettingsStore for FakeSettingsStore {
+    fn load(&self) -> Result<Settings, SettingsError> {
+        match &self.failure {
+            Some(failure) => Err(failure.clone()),
+            None => Ok(*self.settings.borrow()),
+        }
+    }
+
+    fn save(&self, settings: &Settings) -> Result<(), SettingsError> {
+        if let Some(failure) = &self.failure {
+            return Err(failure.clone());
+        }
+        *self.settings.borrow_mut() = *settings;
+        Ok(())
     }
 }
 
