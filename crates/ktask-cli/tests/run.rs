@@ -62,6 +62,20 @@ fn wait_until(what: &str, mut condition: impl FnMut() -> bool) -> Result<()> {
     Ok(())
 }
 
+/// Like [`wait_until`], for a `probe` that also produces the value being waited for.
+fn wait_until_some<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> Result<T> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(value) = probe() {
+            return Ok(value);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("timed out waiting for {what}").into());
+        }
+        std::thread::park_timeout(Duration::from_millis(20));
+    }
+}
+
 /// Whether process `pid` is still running. A killed process's entry under `/proc` can briefly
 /// outlive the signal that ended it, as a zombie waiting for its new parent to reap it once it
 /// is orphaned, so that alone does not count as still running.
@@ -723,6 +737,74 @@ fn a_run_killed_outright_does_not_leave_its_provider_running_and_status_shows_it
     assert_eq!(exit_code, None);
     assert_eq!(status, "failed-unknown");
     assert_eq!(reason.as_deref(), Some("the run was interrupted"));
+    Ok(())
+}
+
+#[test]
+fn a_run_killed_outright_leaves_nothing_its_script_started_alive_foreground_or_background()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    let script_pid_file = fixture.work.join("script.pid");
+    let bg_pid_file = fixture.work.join("bg.pid");
+    // `PR_SET_PDEATHSIG` alone only ties the provider's own process (the top-level `bash`
+    // `EXEC_TIED_TO_PARENT_MARKER` execs into, recorded here as `$$`) to this process's
+    // death. Both pids checked below are processes *that script itself starts* — a plain
+    // foreground `sleep`, which `bash` forks and waits on rather than `exec`ing into since it
+    // is not alone in the script, and a `sleep` explicitly backgrounded with `&` — and
+    // neither is the pid `PR_SET_PDEATHSIG` is ever set on.
+    fixture.add_agent_task(
+        "a",
+        &format!(
+            "```bash\necho $$ > \"{}\"\nsleep 30 &\necho $! > \"{}\"\nsleep 30\n```\n",
+            script_pid_file.display(),
+            bg_pid_file.display()
+        ),
+    )?;
+
+    let mut first = fixture.spawn_the_queue(&["run"])?;
+    let first_pid = i32::try_from(first.id())?;
+
+    wait_until("the background sleep to record its pid", || {
+        bg_pid_file.exists()
+    })?;
+    let script_pid: u32 = std::fs::read_to_string(&script_pid_file)?.trim().parse()?;
+    let bg_pid: u32 = std::fs::read_to_string(&bg_pid_file)?.trim().parse()?;
+    // The foreground `sleep 30` is the script's other child, forked once it moves past the
+    // line above — not `exec`ed into in its own process, since it is not the script's last
+    // command.
+    let fg_pid = wait_until_some(
+        "the foreground sleep to be forked as the script's other child",
+        || {
+            std::fs::read_to_string(format!("/proc/{script_pid}/task/{script_pid}/children"))
+                .ok()?
+                .split_whitespace()
+                .filter_map(|pid| pid.parse::<u32>().ok())
+                .find(|&pid| pid != bg_pid)
+        },
+    )?;
+    assert!(
+        is_running(bg_pid),
+        "background {bg_pid} not running before kill"
+    );
+    assert!(
+        is_running(fg_pid),
+        "foreground {fg_pid} not running before kill"
+    );
+
+    // `SIGKILL` cannot be caught: `run` gets no chance to run any code of its own — the
+    // whole point of the scenario.
+    signal::kill(Pid::from_raw(first_pid), Signal::SIGKILL)?;
+    let status = first.wait()?;
+    assert!(!status.success(), "{status:?}");
+
+    wait_until(
+        "the background sleep to end once run is killed outright",
+        || !is_running(bg_pid),
+    )?;
+    wait_until(
+        "the foreground sleep to end once run is killed outright",
+        || !is_running(fg_pid),
+    )?;
     Ok(())
 }
 

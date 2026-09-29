@@ -20,7 +20,10 @@ pub use git::GitCli;
 pub use input::read_text;
 pub use journal::SqliteJournal;
 pub use lock::FileRunLock;
-pub use process::{EXEC_TIED_TO_PARENT_MARKER, ProcessCommands, exec_tied_to_parent};
+pub use process::{
+    EXEC_TIED_TO_PARENT_MARKER, KILL_GROUP_IF_ORPHANED_MARKER, ProcessCommands,
+    exec_tied_to_parent, kill_group_if_orphaned,
+};
 pub use registry::SqliteRegistry;
 pub use state::{journal_path, registry_path, run_lock_path};
 pub use watch::FileJournalWatch;

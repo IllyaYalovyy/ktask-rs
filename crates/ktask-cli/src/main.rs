@@ -6,6 +6,7 @@ mod commands;
 mod context;
 mod error;
 mod exec_tied_to_parent;
+mod kill_group_if_orphaned;
 mod render;
 
 use std::io::{self, Write};
@@ -61,6 +62,9 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some(exec_tied_to_parent::MARKER) {
         return exec_tied_to_parent::run(args.get(2..).unwrap_or_default());
+    }
+    if args.get(1).map(String::as_str) == Some(kill_group_if_orphaned::MARKER) {
+        return kill_group_if_orphaned::run(args.get(2..).unwrap_or_default());
     }
     let cli = Cli::parse();
     let mut stdout = io::stdout().lock();

@@ -2,9 +2,10 @@
 //! every process it started when it runs past its time limit, when this process is asked to
 //! stop (`SIGINT`, `SIGTERM`, `SIGHUP`) while one is running, or — even when this process is
 //! killed outright, with no chance to run any code of its own — the moment the kernel notices
-//! it is gone, through [`exec_tied_to_parent`].
+//! it is gone, through [`exec_tied_to_parent`] and [`kill_group_if_orphaned`].
 
 use std::ffi::OsString;
+use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, ExitStatus, Stdio};
@@ -12,9 +13,10 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 
 use ktask_core::{CommandSpec, Commands, CommandsError, Exit, Output};
+use nix::fcntl::OFlag;
 use nix::sys::prctl;
 use nix::sys::signal::{Signal, kill};
-use nix::unistd::{Pid, getppid};
+use nix::unistd::{Pid, getppid, pipe2};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
@@ -58,6 +60,76 @@ pub fn exec_tied_to_parent(parent_pid: u32, program: &str, args: &[String]) -> i
         );
     }
     Command::new(program).args(args).exec()
+}
+
+/// The `argv[1]` that tells the `ktask-rs` binary to become [`kill_group_if_orphaned`]:
+/// `ktask-rs <MARKER> <pgid>`. [`EXEC_TIED_TO_PARENT_MARKER`] only ties the single process a
+/// command starts to [`ProcessCommands`]'s own death — whatever that process goes on to
+/// start of its own, in the foreground or the background, is never tied to anything and
+/// survives it. This is [`ProcessCommands`]'s guard against that: never typed by a person,
+/// for the same reason [`EXEC_TIED_TO_PARENT_MARKER`] is not.
+pub const KILL_GROUP_IF_ORPHANED_MARKER: &str = "__ktask-rs-kill-group-if-orphaned__";
+
+/// Blocks until every process holding the write end of the pipe behind its own standard
+/// input has closed its copy, then kills process group `pgid` — the far side of
+/// [`KILL_GROUP_IF_ORPHANED_MARKER`], run by `ktask-cli`'s `main`. [`ProcessCommands`] keeps
+/// one such copy open for as long as it is around to kill `pgid` itself when the command it
+/// started ends; if it stops for any reason before that — even a `SIGKILL` it never had a
+/// chance to react to — the kernel closes its copy the same as any other file descriptor,
+/// this notices, and `pgid` — everything the command started, however deep — goes with it.
+pub fn kill_group_if_orphaned(pgid: i32) {
+    let _ = io::copy(&mut io::stdin(), &mut io::sink());
+    let _ = kill(Pid::from_raw(-pgid), Signal::SIGKILL);
+}
+
+/// Keeps a command's whole process group from outliving [`ProcessCommands::run`], even when
+/// it is killed outright: the write end of a pipe, held open here for as long as `run_spawned`
+/// is still around to end the command itself, and the [`KILL_GROUP_IF_ORPHANED_MARKER`]
+/// process watching its read end.
+struct OrphanGuard {
+    write_end: File,
+    watcher: std::process::Child,
+}
+
+impl OrphanGuard {
+    /// Spawns the watcher for `pgid`. `exe` must be the real `ktask-rs` binary — the one
+    /// [`ProcessCommands::run`] already found for its own command — so it recognises
+    /// [`KILL_GROUP_IF_ORPHANED_MARKER`].
+    fn spawn(
+        exe: &std::path::Path,
+        pgid: u32,
+        fail: &impl Fn(String) -> CommandsError,
+    ) -> Result<Self, CommandsError> {
+        // `O_CLOEXEC` on both ends: neither must ever reach the command's own process tree,
+        // or a copy it holds would keep the write end open no matter what becomes of this
+        // one, and the watcher would then wait forever for a close that never comes.
+        let (read_end, write_end) = pipe2(OFlag::O_CLOEXEC).map_err(|e| {
+            fail(format!(
+                "cannot open a pipe to guard its process group: {e}"
+            ))
+        })?;
+        let watcher = Command::new(exe)
+            .arg(KILL_GROUP_IF_ORPHANED_MARKER)
+            .arg(pgid.to_string())
+            .stdin(Stdio::from(File::from(read_end)))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| fail(format!("cannot start its process group's guard: {e}")))?;
+        Ok(Self {
+            write_end: File::from(write_end),
+            watcher,
+        })
+    }
+
+    /// Tells the watcher its job is over — [`run_spawned`] has already ended the command's
+    /// process group itself, or never needed to — and waits for it to go, so it never
+    /// outlives its one command as a zombie through a long `run`'s many attempts.
+    fn stand_down(mut self) {
+        let _ = self.watcher.kill();
+        let _ = self.watcher.wait();
+        drop(self.write_end);
+    }
 }
 
 /// The current process's `PATH`, with the directory of the running binary put first.
@@ -125,20 +197,30 @@ impl Commands for ProcessCommands {
             .process_group(0)
             .spawn()
             .map_err(|e| fail(e.to_string()))?;
-        run_spawned(child, spec, fail)
+        // Guards against everything `child` itself goes on to start — `EXEC_TIED_TO_PARENT_MARKER`
+        // alone only ties `child` to this process; a background job or a later command in its
+        // own script is tied to nothing and would survive this process being killed outright.
+        let guard = OrphanGuard::spawn(&exe, child.id(), &fail)?;
+        run_spawned(child, spec, fail, Some(guard))
     }
 }
 
 /// Waits for `child` (already spawned as the leader of its own process group) to finish or
 /// run past `spec.timeout`, feeding `spec.stdin` and capturing its output; kills the whole
 /// process group on a timeout, or when this process is asked to stop while `child` is still
-/// running. Shared by [`ProcessCommands::run`] and this module's own tests, which spawn
-/// `child` directly against `bash` rather than through [`EXEC_TIED_TO_PARENT_MARKER`], since
-/// none of what this function does depends on how `child` came to exist.
+/// running. `guard`, when given, is stood down the moment that outcome is known, its own
+/// watcher process now the last line of defence against this process itself being killed
+/// outright before it gets here. Shared by [`ProcessCommands::run`] and this module's own
+/// tests, which spawn `child` directly against `bash` rather than through
+/// [`EXEC_TIED_TO_PARENT_MARKER`] and pass no `guard`, since neither depends on how `child`
+/// came to exist — only [`ProcessCommands::run`] itself needs the real, marker-aware
+/// `ktask-rs` binary both rely on, and that is proven through the real binary instead, in
+/// `ktask-cli`'s own end-to-end tests.
 fn run_spawned(
     mut child: std::process::Child,
     spec: &CommandSpec,
     fail: impl Fn(String) -> CommandsError,
+    guard: Option<OrphanGuard>,
 ) -> Result<Output, CommandsError> {
     let pgid = i32::try_from(child.id()).unwrap_or(i32::MAX);
 
@@ -212,6 +294,12 @@ fn run_spawned(
             return Err(fail("the wait thread stopped without a result".to_owned()));
         }
     };
+    // The command has ended, one way or another, with this process very much still able to
+    // run code of its own: its watcher, if it has one, is no longer needed to do this job in
+    // its place.
+    if let Some(guard) = guard {
+        guard.stand_down();
+    }
     handle.close();
     let _ = signal_watcher.join();
     let _ = waiter.join();
@@ -283,7 +371,7 @@ mod tests {
             .process_group(0)
             .spawn()
             .map_err(|e| fail(e.to_string()))?;
-        run_spawned(child, spec, fail)
+        run_spawned(child, spec, fail, None)
     }
 
     #[test]
