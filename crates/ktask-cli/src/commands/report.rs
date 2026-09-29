@@ -17,8 +17,9 @@ pub(crate) struct Args {
     #[arg(long)]
     token: String,
     /// What the attempt ended with: done, failed, needs-input or too-large for the
-    /// implementation step; approved or changes-requested for the review step — an outcome
-    /// that does not belong to the step currently running is refused
+    /// implementation step; approved or changes-requested for the review step; accepted or
+    /// rejected for the test step — an outcome that does not belong to the step currently
+    /// running is refused
     #[arg(value_name = "OUTCOME")]
     outcome: String,
     /// Why it ended that way; required unless the outcome is done
