@@ -25,6 +25,17 @@ impl TextArea {
         }
     }
 
+    /// An area holding `text` already, the cursor at its end.
+    pub(crate) fn with_text(multiline: bool, text: &str) -> Self {
+        text.chars().fold(Self::new(multiline), |area, c| {
+            area.press(if c == '\n' {
+                KeyCode::Enter
+            } else {
+                KeyCode::Char(c)
+            })
+        })
+    }
+
     /// The lines of the text.
     pub(crate) fn lines(&self) -> &[String] {
         &self.lines
@@ -276,6 +287,12 @@ mod tests {
     fn a_single_line_ignores_enter_up_and_down() {
         let area = area(false, "ab", &[KeyCode::Enter, KeyCode::Up, KeyCode::Down]);
         assert_eq!((area.text().as_str(), area.cursor()), ("ab", (0, 2)));
+    }
+
+    #[test]
+    fn with_text_starts_with_the_cursor_at_the_end() {
+        let area = TextArea::with_text(false, "7200");
+        assert_eq!((area.text().as_str(), area.cursor()), ("7200", (0, 4)));
     }
 
     #[test]

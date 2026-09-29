@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
 
-use ktask_core::{JournalWatch, Placement, QueueView, TaskDraft, TaskId};
+use ktask_core::{JournalWatch, Placement, QueueView, SettingView, TaskDraft, TaskId};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, KeyModifiers};
 use signal_hook::consts::{SIGHUP, SIGTERM};
@@ -33,6 +33,22 @@ enum Wake {
     /// The run this screen started has ended, or could not start at all, printing this — the
     /// same words `ktask-rs run` itself would show.
     RunMessage(String),
+}
+
+/// Every callback the loop uses to read or change state outside the terminal, bundled into
+/// one value so [`drive`] takes few enough arguments for Clippy's limit on them.
+struct Actions<Load, Remove, Add, LoadSettings, SaveSetting> {
+    /// Fetches the queue to show, with the cancelled tasks when told to.
+    load: Load,
+    /// Removes a task the operator confirmed removing.
+    remove: Remove,
+    /// Adds the task the operator wrote in the form, where the form says.
+    add: Add,
+    /// The project's settings, for the settings screen to open on.
+    load_settings: LoadSettings,
+    /// Changes the attempt-timeout setting to the value the settings screen was submitted
+    /// with; the new setting, or why it was refused.
+    save_setting: SaveSetting,
 }
 
 /// How often the loop wakes on its own to refresh a running task's elapsed time, while one is
@@ -72,9 +88,13 @@ fn draw(terminal: &mut DefaultTerminal, app: &App) -> Result<(), String> {
 /// called on a thread of its own each time the operator asks for it, so the screen stays
 /// responsive for however long the run takes; it blocks until the run it starts ends, or
 /// refuses to start at all, and returns what it printed either way — the same words
-/// `ktask-rs run` itself would show, shown on the screen once it returns. `watch` blocks until
-/// the journal changes; it is polled from a dedicated thread, so a task added, inserted or
-/// removed by another process — a run included — shows in the next frame without the loop
+/// `ktask-rs run` itself would show, shown on the screen once it returns. `load_settings`
+/// fetches the project's settings, called each time the operator opens the settings screen.
+/// `save_setting` changes the attempt-timeout setting to the value the settings screen was
+/// submitted with, giving the new setting, or the reasons it was refused — an unknown
+/// setting or an invalid value — shown on the screen instead of closing it. `watch` blocks
+/// until the journal changes; it is polled from a dedicated thread, so a task added, inserted
+/// or removed by another process — a run included — shows in the next frame without the loop
 /// itself ever waking on a timer — except while a task is running, when the queue is loaded
 /// again on a short timer too, so the running task's elapsed time keeps moving even though
 /// nothing else changed; the loop goes back to waiting with no timer once nothing is running.
@@ -84,28 +104,28 @@ fn draw(terminal: &mut DefaultTerminal, app: &App) -> Result<(), String> {
 ///
 /// # Errors
 ///
-/// Fails when the queue cannot be loaded, a task cannot be removed or the terminal cannot be
-/// used.
+/// Fails when the queue or the settings cannot be loaded, a task cannot be removed or the
+/// terminal cannot be used.
 pub fn run(
     load: impl FnMut(bool) -> Result<QueueView, String>,
     remove: impl FnMut(TaskId) -> Result<(), String>,
     add: impl FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
     start_run: impl Fn() -> Result<String, String> + Send + Sync + 'static,
+    load_settings: impl FnMut() -> Result<SettingView, String>,
+    save_setting: impl FnMut(&str) -> Result<SettingView, String>,
     watch: impl JournalWatch + Send + 'static,
 ) -> Result<(), String> {
     let mut terminal = ratatui::try_init().map_err(|e| format!("cannot use the terminal: {e}"))?;
     let start_run = Arc::new(start_run);
-    let result = spawn_wakes(watch).and_then(|(sender, wakes)| {
-        drive(
-            &mut terminal,
-            load,
-            remove,
-            add,
-            &start_run,
-            &sender,
-            &wakes,
-        )
-    });
+    let actions = Actions {
+        load,
+        remove,
+        add,
+        load_settings,
+        save_setting,
+    };
+    let result = spawn_wakes(watch)
+        .and_then(|(sender, wakes)| drive(&mut terminal, actions, &start_run, &sender, &wakes));
     ratatui::restore();
     result
 }
@@ -151,14 +171,18 @@ fn spawn_wakes(
 
 fn drive(
     terminal: &mut DefaultTerminal,
-    mut load: impl FnMut(bool) -> Result<QueueView, String>,
-    mut remove: impl FnMut(TaskId) -> Result<(), String>,
-    mut add: impl FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
+    mut actions: Actions<
+        impl FnMut(bool) -> Result<QueueView, String>,
+        impl FnMut(TaskId) -> Result<(), String>,
+        impl FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
+        impl FnMut() -> Result<SettingView, String>,
+        impl FnMut(&str) -> Result<SettingView, String>,
+    >,
     start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,
     sender: &Sender<Wake>,
     wakes: &Receiver<Wake>,
 ) -> Result<(), String> {
-    let mut app = update(App::default(), Event::Loaded(load(false)?));
+    let mut app = update(App::default(), Event::Loaded((actions.load)(false)?));
     loop {
         draw(terminal, &app)?;
         if app.quit {
@@ -193,13 +217,22 @@ fn drive(
                     app = update(app, event);
                 }
                 if let Some(id) = app.removal.take() {
-                    remove(id)?;
+                    (actions.remove)(id)?;
                 } else if let Some((draft, placement)) = app.submission.take() {
-                    let added = match add(&draft, placement) {
+                    let added = match (actions.add)(&draft, placement) {
                         Ok(id) => Event::Added(id),
                         Err(problems) => Event::Rejected(problems),
                     };
                     app = update(app, added);
+                } else if app.settings_requested.take().is_some() {
+                    let view = (actions.load_settings)()?;
+                    app = update(app, Event::SettingsLoaded(view));
+                } else if let Some(value) = app.setting_submission.take() {
+                    let event = match (actions.save_setting)(&value) {
+                        Ok(_) => Event::SettingSaved,
+                        Err(message) => Event::SettingRejected(message),
+                    };
+                    app = update(app, event);
                 } else if app.run_requested.take().is_some() {
                     spawn_run(Arc::clone(start_run), sender.clone());
                 } else if app.show_cancelled == asked {
@@ -207,7 +240,7 @@ fn drive(
                 }
             }
         }
-        let queue = load(app.show_cancelled)?;
+        let queue = (actions.load)(app.show_cancelled)?;
         app = update(app, Event::Loaded(queue));
     }
 }

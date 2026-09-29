@@ -8,6 +8,8 @@ mod form;
 mod form_screen;
 mod render;
 mod run;
+mod settings_form;
+mod settings_screen;
 mod text;
 
 pub use app::{App, Confirming, Event, update};

@@ -1,9 +1,10 @@
 //! The state of the terminal interface and how events change it.
 
-use ktask_core::{Placement, QueueView, TaskDraft, TaskId, TaskStatus};
+use ktask_core::{Placement, QueueView, SettingView, TaskDraft, TaskId, TaskStatus};
 use ratatui::crossterm::event::KeyCode;
 
 use crate::form::Form;
+use crate::settings_form::SettingsForm;
 
 /// Everything the screen shows and remembers.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -35,6 +36,14 @@ pub struct App {
     /// same words `ktask-rs run` itself would print, whether it ran to completion, stopped
     /// partway, or refused to start at all.
     pub run_message: Option<String>,
+    /// The settings screen, while it is open; it covers the queue like the task form does.
+    pub(crate) settings: Option<SettingsForm>,
+    /// Set when the operator asked to open the settings screen: the loop loads the
+    /// project's settings and opens it with [`Event::SettingsLoaded`], and clears this.
+    pub settings_requested: Option<()>,
+    /// The settings screen's field, submitted as typed for the loop to save, and clears
+    /// this.
+    pub setting_submission: Option<String>,
     /// Set when the operator asked to leave.
     pub quit: bool,
 }
@@ -67,6 +76,13 @@ pub enum Event {
     /// The run this screen started has ended, or could not start, printing this — the same
     /// words `ktask-rs run` itself would show.
     RunMessage(String),
+    /// The project's settings were loaded: the settings screen opens on this value.
+    SettingsLoaded(SettingView),
+    /// The settings screen's submission was saved: it closes.
+    SettingSaved,
+    /// The settings screen's submission was refused, for this reason: it stays open and
+    /// shows it.
+    SettingRejected(String),
 }
 
 /// The app after `event` happened to `app`.
@@ -89,6 +105,29 @@ pub fn update(app: App, event: Event) -> App {
             }
         }
         Event::Ctrl('c') => ctrl_c(app),
+        Event::Key(key) if app.settings.is_some() => match key {
+            KeyCode::Esc => App {
+                settings: None,
+                ..app
+            },
+            _ => in_settings(app, |form| form.press(key)),
+        },
+        Event::Ctrl(letter) if app.settings.is_some() => match letter {
+            's' => submit_setting(app),
+            _ => app,
+        },
+        Event::SettingsLoaded(view) => App {
+            settings: Some(SettingsForm::new(&view)),
+            ..app
+        },
+        Event::SettingSaved => App {
+            settings: None,
+            ..app
+        },
+        Event::SettingRejected(message) => in_settings(app, |form| SettingsForm {
+            problem: Some(message),
+            ..form
+        }),
         Event::Key(key) if app.confirming == Some(Confirming::Discard) => match key {
             KeyCode::Char('y') => App { quit: true, ..app },
             KeyCode::Char('n') | KeyCode::Esc => App {
@@ -155,6 +194,10 @@ pub fn update(app: App, event: Event) -> App {
                     run_requested: Some(()),
                     ..app
                 },
+                KeyCode::Char('s') => App {
+                    settings_requested: Some(()),
+                    ..app
+                },
                 KeyCode::Char('g') => select(app, |_, _| 0),
                 KeyCode::Char('G') => select(app, |_, len| len.saturating_sub(1)),
                 _ => app,
@@ -181,6 +224,22 @@ fn ctrl_c(app: App) -> App {
 fn in_form(app: App, change: impl FnOnce(Form) -> Form) -> App {
     App {
         form: app.form.map(change),
+        ..app
+    }
+}
+
+/// The app with `change` made to the settings screen, if it is open.
+fn in_settings(app: App, change: impl FnOnce(SettingsForm) -> SettingsForm) -> App {
+    App {
+        settings: app.settings.map(change),
+        ..app
+    }
+}
+
+/// The app with the settings screen's field left for the loop to save, if it is open.
+fn submit_setting(app: App) -> App {
+    App {
+        setting_submission: app.settings.as_ref().map(SettingsForm::value),
         ..app
     }
 }
@@ -839,6 +898,112 @@ mod tests {
         let app = typed(press(loaded(&[1]), &[KeyCode::Char('n')]), "Ti");
         let app = update(app, Event::Loaded(queue_of(&[1, 2])));
         assert_eq!(form_of(&app).draft().title, "Ti");
+    }
+
+    fn setting_view(value: u64, is_default: bool) -> SettingView {
+        SettingView {
+            name: "attempt-timeout",
+            value,
+            is_default,
+        }
+    }
+
+    #[test]
+    fn s_asks_the_loop_to_load_the_settings_and_changes_nothing_else() {
+        let app = press(loaded(&[1, 2]), &[KeyCode::Char('j'), KeyCode::Char('s')]);
+        assert_eq!(app.settings_requested, Some(()));
+        assert_eq!(on(&app), Some(2));
+        assert_eq!(app.settings, None);
+    }
+
+    #[test]
+    fn settings_loaded_opens_the_screen_on_the_given_value() {
+        let app = update(
+            loaded(&[1]),
+            Event::SettingsLoaded(setting_view(14_400, true)),
+        );
+        let settings = app.settings.as_ref().expect("the settings screen is open");
+        assert_eq!(settings.value(), "14400");
+        assert!(settings.is_default);
+    }
+
+    #[test]
+    fn esc_closes_the_settings_screen_without_submitting_anything() {
+        let app = update(
+            loaded(&[1]),
+            Event::SettingsLoaded(setting_view(14_400, true)),
+        );
+        let app = press(app, &[KeyCode::Esc]);
+        assert_eq!(app.settings, None);
+        assert_eq!(app.setting_submission, None);
+    }
+
+    #[test]
+    fn typing_in_the_settings_screen_edits_the_field_and_no_queue_key_acts() {
+        let app = update(
+            loaded(&[1, 2]),
+            Event::SettingsLoaded(setting_view(14_400, true)),
+        );
+        let app = press(
+            app,
+            &[
+                KeyCode::Backspace,
+                KeyCode::Backspace,
+                KeyCode::Backspace,
+                KeyCode::Backspace,
+                KeyCode::Backspace,
+                KeyCode::Char('6'),
+                KeyCode::Char('0'),
+                KeyCode::Char('q'),
+                KeyCode::Char('d'),
+            ],
+        );
+        assert_eq!(app.settings.as_ref().expect("still open").value(), "60qd");
+        assert!(!app.quit);
+        assert_eq!(app.confirming, None);
+    }
+
+    #[test]
+    fn ctrl_s_submits_the_typed_value_and_leaves_the_screen_open() {
+        let app = update(
+            loaded(&[1]),
+            Event::SettingsLoaded(setting_view(14_400, true)),
+        );
+        let app = update(app, Event::Ctrl('s'));
+        assert_eq!(app.setting_submission.as_deref(), Some("14400"));
+        assert!(app.settings.is_some());
+    }
+
+    #[test]
+    fn setting_saved_closes_the_screen() {
+        let app = update(
+            loaded(&[1]),
+            Event::SettingsLoaded(setting_view(14_400, true)),
+        );
+        let app = update(app, Event::SettingSaved);
+        assert_eq!(app.settings, None);
+    }
+
+    #[test]
+    fn setting_rejected_keeps_the_screen_open_with_its_value_and_shows_why() {
+        let app = update(
+            loaded(&[1]),
+            Event::SettingsLoaded(setting_view(14_400, true)),
+        );
+        let app = press(app, &[KeyCode::Char('x')]);
+        let app = update(app, Event::SettingRejected("not a number".to_owned()));
+        let settings = app.settings.as_ref().expect("still open");
+        assert_eq!(settings.problem.as_deref(), Some("not a number"));
+        assert_eq!(settings.value(), "14400x");
+    }
+
+    #[test]
+    fn ctrl_c_quits_from_the_settings_screen() {
+        let app = update(
+            loaded(&[1]),
+            Event::SettingsLoaded(setting_view(14_400, true)),
+        );
+        assert!(update(app, Event::Ctrl('c')).quit);
     }
 
     #[test]

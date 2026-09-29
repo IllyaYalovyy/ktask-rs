@@ -8,10 +8,11 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph, Widget};
 
 use crate::form_screen;
+use crate::settings_screen;
 use crate::{App, Confirming};
 
 /// Every key the queue screen answers, and what it does.
-const KEYS: [(&str, &str); 15] = [
+const KEYS: [(&str, &str); 16] = [
     ("j, Down", "select the next task"),
     ("k, Up", "select the previous task"),
     ("g", "select the first task"),
@@ -25,6 +26,7 @@ const KEYS: [(&str, &str); 15] = [
         "r",
         "start executing the queue, exactly as `ktask-rs run` does",
     ),
+    ("s", "open the project's settings"),
     ("y", "answer yes when asked to remove a task"),
     ("n", "answer no when asked to remove a task"),
     ("?", "show or hide this key map"),
@@ -39,6 +41,9 @@ const FORM_KEYS: &str =
 /// What the form's frame says at the bottom while it asks to discard the task.
 const DISCARD_KEYS: &str = " y discard · n, Esc keep writing ";
 
+/// What the settings screen's frame says at the bottom.
+const SETTINGS_KEYS: &str = " Ctrl-S save · Esc cancel ";
+
 /// Draws `app` over the whole of `area`, and returns where the cursor goes when it is shown.
 pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     let discarding = app.confirming == Some(Confirming::Discard);
@@ -46,6 +51,8 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
         .title(" ktask-rs ")
         .title_bottom(if discarding {
             DISCARD_KEYS
+        } else if app.settings.is_some() {
+            SETTINGS_KEYS
         } else if app.form.is_some() {
             FORM_KEYS
         } else {
@@ -53,6 +60,9 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
         });
     let inner = block.inner(area);
     block.render(area, buf);
+    if let Some(settings) = &app.settings {
+        return Some(settings_screen::draw(settings, inner, buf));
+    }
     if let Some(form) = &app.form {
         return form_screen::draw(form, discarding, inner, buf);
     }
@@ -244,8 +254,8 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use ktask_core::{
-        AttemptLine, AttemptOutcome, IMPLEMENTATION, Outcome, Project, QueueView, StatusSummary,
-        Task, TaskId, TaskKind, TaskStatus,
+        AttemptLine, AttemptOutcome, IMPLEMENTATION, Outcome, Project, QueueView, SettingView,
+        StatusSummary, Task, TaskId, TaskKind, TaskStatus,
     };
 
     use crate::{Event, update};
@@ -503,10 +513,10 @@ mod tests {
             loaded(vec![task(1, "Write parser", TaskKind::Agent)]),
             &[Char('?')],
         );
-        let rows = drawn(&app, 60, 18);
+        let rows = drawn(&app, 60, 19);
         let screen = rows.join("\n");
         for key in [
-            "j, Down", "k, Up", "g ", "G ", "a ", "d ", "r ", "y ", "n ", "? ", "Esc", "q ",
+            "j, Down", "k, Up", "g ", "G ", "a ", "d ", "r ", "s ", "y ", "n ", "? ", "Esc", "q ",
         ] {
             assert!(screen.contains(key), "{key:?} in\n{screen}");
         }
@@ -617,6 +627,45 @@ mod tests {
             "{rows:?}"
         );
         assert!(inside(&rows[4]).ends_with("Title"), "{rows:?}");
+    }
+
+    #[test]
+    fn the_settings_screen_shows_the_value_default_tag_and_footer() {
+        let app = update(
+            loaded(vec![task(1, "first", TaskKind::Agent)]),
+            Event::SettingsLoaded(SettingView {
+                name: "attempt-timeout",
+                value: 14_400,
+                is_default: true,
+            }),
+        );
+        let (rows, cursor) = draw_form(&app, 8);
+        assert_eq!(inside(&rows[1]), "Settings");
+        assert_eq!(inside(&rows[3]), "Attempt timeout, in seconds (default):");
+        assert_eq!(inside(&rows[4]), "> 14400");
+        assert!(
+            rows[7].starts_with("└ Ctrl-S save · Esc cancel"),
+            "{rows:?}"
+        );
+        assert!(!rows.join("\n").contains("first"));
+        assert_eq!(cursor, Some(Position::new(8, 4)));
+    }
+
+    #[test]
+    fn a_refused_setting_shows_the_reason_above_the_field() {
+        let app = update(
+            loaded(vec![]),
+            Event::SettingsLoaded(SettingView {
+                name: "attempt-timeout",
+                value: 60,
+                is_default: false,
+            }),
+        );
+        let app = update(app, Event::SettingRejected("not a number".to_owned()));
+        let (rows, _) = draw_form(&app, 8);
+        assert_eq!(inside(&rows[2]), "! not a number");
+        assert_eq!(inside(&rows[4]), "Attempt timeout, in seconds (custom):");
+        assert_eq!(inside(&rows[5]), "> 60");
     }
 
     #[test]
