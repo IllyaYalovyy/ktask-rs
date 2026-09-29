@@ -43,6 +43,9 @@ pub(crate) struct QueueState {
     attempts: HashMap<TaskId, AttemptFold>,
     reports: HashMap<(TaskId, u32), (Outcome, Option<String>)>,
     step_reports: HashMap<(TaskId, u32, String), (Outcome, Option<String>)>,
+    /// The most recent gate stop recorded for each task, cleared once a later attempt for it
+    /// actually begins: [`QueueState::gate_stop_of`].
+    gate_stops: HashMap<TaskId, (String, String)>,
 }
 
 impl QueueState {
@@ -67,6 +70,7 @@ impl QueueState {
             Event::AttemptEnded { .. } => self.apply_attempt_ended(event),
             Event::StepStarted { .. } => self.apply_step_started(event),
             Event::StepEnded { .. } => self.apply_step_ended(event),
+            Event::GateFailed { .. } => self.apply_gate_failed(event),
         }
     }
 
@@ -129,6 +133,21 @@ impl QueueState {
                 steps: Vec::new(),
             },
         );
+        // A later run got past every gate ahead of this task's attempt, sync and health check
+        // alike, or it would not have begun one: any gate stop recorded for it is history now.
+        self.gate_stops.remove(id);
+    }
+
+    /// Applies a [`Event::GateFailed`]: records it as the task's current gate stop, replacing
+    /// whatever it held before.
+    fn apply_gate_failed(&mut self, event: &Event) {
+        let Event::GateFailed {
+            id, step, reason, ..
+        } = event
+        else {
+            return;
+        };
+        self.gate_stops.insert(*id, (step.clone(), reason.clone()));
     }
 
     /// Applies a [`Event::AttemptRunning`]: records its provider, when it is the attempt
@@ -573,6 +592,13 @@ impl QueueState {
             .get(&(id, number, step.to_owned()))
             .cloned()
     }
+
+    /// The step name and reason of the most recent gate stop recorded for task `id`, not yet
+    /// superseded by a later attempt actually beginning. `None` when it was never stopped by a
+    /// gate, or a later attempt has since begun.
+    pub(crate) fn gate_stop_of(&self, id: TaskId) -> Option<(String, String)> {
+        self.gate_stops.get(&id).cloned()
+    }
 }
 
 /// Reads the queue's events, decides `build`'s events against the state they fold to, and
@@ -917,5 +943,61 @@ mod tests {
         let folded = QueueState::fold(&events).into_tasks();
         let expected = crate::list_all_tasks(&journal).unwrap();
         assert_eq!(folded, expected);
+    }
+
+    #[test]
+    fn a_gate_failure_folds_to_the_tasks_current_gate_stop() {
+        let journal = FakeJournal::default();
+        let clock = FakeClock(at(0));
+        add_task(&journal, &clock, &draft("a"), Placement::End).unwrap();
+        journal
+            .append_events(
+                &[Event::GateFailed {
+                    id: TaskId(1),
+                    step: "sync".to_owned(),
+                    reason: "uncommitted changes".to_owned(),
+                    at: at(1),
+                }],
+                journal.events().unwrap().len(),
+            )
+            .unwrap();
+
+        let state = QueueState::fold(&journal.events().unwrap());
+        assert_eq!(
+            state.gate_stop_of(TaskId(1)),
+            Some(("sync".to_owned(), "uncommitted changes".to_owned()))
+        );
+        // The task itself stays pending: a gate stop is not an attempt.
+        assert_eq!(state.into_tasks()[0].status, TaskStatus::Pending);
+    }
+
+    #[test]
+    fn a_later_attempt_beginning_clears_the_tasks_gate_stop() {
+        let journal = FakeJournal::default();
+        let clock = FakeClock(at(0));
+        add_task(&journal, &clock, &draft("a"), Placement::End).unwrap();
+        journal
+            .append_events(
+                &[Event::GateFailed {
+                    id: TaskId(1),
+                    step: "health check".to_owned(),
+                    reason: "exited with code 1".to_owned(),
+                    at: at(1),
+                }],
+                journal.events().unwrap().len(),
+            )
+            .unwrap();
+        crate::attempt::begin_attempt(&journal, &clock, TaskId(1)).unwrap();
+
+        let state = QueueState::fold(&journal.events().unwrap());
+        assert_eq!(state.gate_stop_of(TaskId(1)), None);
+    }
+
+    #[test]
+    fn a_task_never_stopped_by_a_gate_has_none() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &FakeClock(at(0)), &draft("a"), Placement::End).unwrap();
+        let state = QueueState::fold(&journal.events().unwrap());
+        assert_eq!(state.gate_stop_of(TaskId(1)), None);
     }
 }

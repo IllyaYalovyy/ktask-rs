@@ -5,8 +5,11 @@
 
 use std::time::Duration;
 
+use crate::run::RunEnd;
 use crate::settings::split_tracked_branch;
-use crate::{Clock, Git, PullRebase, PullRebaseError, RunContext, SYNC_STEP};
+use crate::{
+    Clock, Git, Journal, PullRebase, PullRebaseError, RunContext, RunError, SYNC_STEP, TaskId,
+};
 
 /// Why the sync ahead of a task's health check refused to run it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +24,34 @@ pub enum SyncProblem {
     Conflict(Vec<String>),
     /// Git itself could not do the work asked of it, for some other reason.
     GitFailed(String),
+}
+
+impl SyncProblem {
+    /// What failed and what is expected of the operator, condensed to one line so it fits a
+    /// status step's own line — the same words `ktask-rs run` prints for it.
+    pub(crate) fn message(&self, tracked_branch: &str) -> String {
+        match self {
+            Self::UncommittedChanges(status) => format!(
+                "the project's directory has uncommitted changes: {}; commit or stash your \
+                 changes, then run again",
+                status.replace('\n', ", ")
+            ),
+            Self::RemoteUnreachable(reason) => format!(
+                "{tracked_branch}'s remote could not be reached: {}; make the remote \
+                 reachable, then run again",
+                reason.replace('\n', " / ")
+            ),
+            Self::Conflict(files) => format!(
+                "rebasing onto {tracked_branch} conflicted in: {}; the rebase was undone; \
+                 resolve the conflict yourself (pull --rebase, fix, push), then run again",
+                files.join(", ")
+            ),
+            Self::GitFailed(reason) => format!(
+                "{}; fix the problem, then run again",
+                reason.replace('\n', " / ")
+            ),
+        }
+    }
 }
 
 /// What running the sync gate produced.
@@ -82,6 +113,50 @@ pub(crate) fn run(
             message,
         },
         Err(problem) => Sync::Failed(problem),
+    }
+}
+
+/// Runs the sync gate ahead of `task_id`'s attempt: the pre-step to record when it passes,
+/// `None` when the gate is switched off, or the [`RunEnd`] that stops the run when it refuses —
+/// recording why in the journal first, so a later `status` can show it even though the task
+/// stays `pending`.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read or written.
+pub(crate) fn run_gate(
+    journal: &dyn Journal,
+    git: &dyn Git,
+    clock: &dyn Clock,
+    context: RunContext<'_>,
+    task_id: TaskId,
+) -> Result<Result<Option<super::PreStep>, RunEnd>, RunError> {
+    if !enabled(context) {
+        return Ok(Ok(None));
+    }
+    let Some(tracked_branch) = context.tracked_branch else {
+        unreachable!("sync::enabled only returns true when a branch is tracked");
+    };
+    match run(git, clock, tracked_branch, context) {
+        Sync::Passed { duration, message } => Ok(Ok(Some(super::PreStep {
+            name: SYNC_STEP,
+            duration,
+            reason: Some(message),
+        }))),
+        Sync::Failed(problem) => {
+            crate::attempt::record_gate_failure(
+                journal,
+                clock,
+                task_id,
+                SYNC_STEP,
+                &problem.message(tracked_branch),
+            )?;
+            Ok(Err(RunEnd::SyncFailed {
+                id: task_id,
+                tracked_branch: tracked_branch.to_owned(),
+                problem,
+            }))
+        }
     }
 }
 
@@ -201,5 +276,39 @@ mod tests {
             }
             other => panic!("expected Conflict, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn every_problems_message_fits_on_one_line_even_when_git_answers_with_several() {
+        let cases = [
+            SyncProblem::UncommittedChanges("M a.txt\nM b.txt".to_owned()),
+            SyncProblem::RemoteUnreachable("fatal: one\nfatal: two".to_owned()),
+            SyncProblem::Conflict(vec!["a.txt".to_owned(), "b.txt".to_owned()]),
+            SyncProblem::GitFailed("fatal: one\nfatal: two".to_owned()),
+        ];
+        for problem in cases {
+            let message = problem.message("origin/main");
+            assert_eq!(message.lines().count(), 1, "{message:?}");
+        }
+        assert!(
+            SyncProblem::UncommittedChanges("M a.txt".to_owned())
+                .message("origin/main")
+                .contains("commit or stash")
+        );
+        assert!(
+            SyncProblem::RemoteUnreachable("nope".to_owned())
+                .message("origin/main")
+                .contains("make the remote reachable")
+        );
+        assert!(
+            SyncProblem::Conflict(vec!["a.txt".to_owned()])
+                .message("origin/main")
+                .contains("resolve the conflict yourself")
+        );
+        assert!(
+            SyncProblem::GitFailed("nope".to_owned())
+                .message("origin/main")
+                .contains("fix the problem")
+        );
     }
 }

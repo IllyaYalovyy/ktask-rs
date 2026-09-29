@@ -89,6 +89,7 @@ const ATTEMPT_REPORTED: &str = "attempt_reported";
 const ATTEMPT_ENDED: &str = "attempt_ended";
 const STEP_STARTED: &str = "step_started";
 const STEP_ENDED: &str = "step_ended";
+const GATE_FAILED: &str = "gate_failed";
 
 /// The payload [`Event::TaskAdded`] is written with: the draft's fields, and, when it was
 /// placed next to another task, which side.
@@ -345,6 +346,30 @@ fn decode_step_ended(
     })
 }
 
+/// The [`Event::GateFailed`] a `gate_failed` row's `payload` decodes to.
+fn decode_gate_failed(
+    kind: &str,
+    task_id: i64,
+    id: TaskId,
+    at: SystemTime,
+    payload: &Value,
+) -> Result<Event, JournalError> {
+    let corrupt = |what: &str, cause: String| corrupt_event(kind, task_id, what, cause);
+    let field = |name: &str| -> Result<String, JournalError> {
+        payload
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| corrupt(name, "missing".to_owned()))
+    };
+    Ok(Event::GateFailed {
+        id,
+        step: field("step")?,
+        reason: field("reason")?,
+        at,
+    })
+}
+
 /// The attempt event an `attempt_started`, `attempt_running`, `attempt_reported`,
 /// `attempt_ended`, `step_started` or `step_ended` row's `payload` decodes to.
 fn decode_attempt_event(
@@ -387,6 +412,8 @@ fn decode_event(kind: &str, task_id: i64, at: i64, payload: &str) -> Result<Even
         serde_json::from_str(payload).map_err(|e| corrupt_event(kind, task_id, "payload", e))?;
     if kind == TASK_ADDED {
         decode_task_added(kind, task_id, id, at, &payload)
+    } else if kind == GATE_FAILED {
+        decode_gate_failed(kind, task_id, id, at, &payload)
     } else {
         decode_attempt_event(kind, task_id, id, at, &payload)
     }
@@ -490,6 +517,14 @@ fn step_ended_payload(event: &Event) -> String {
     .to_string()
 }
 
+/// The payload a `gate_failed` row is written with.
+fn gate_failed_payload(event: &Event) -> String {
+    let Event::GateFailed { step, reason, .. } = event else {
+        unreachable!("only called for Event::GateFailed")
+    };
+    serde_json::json!({ "step": step, "reason": reason }).to_string()
+}
+
 /// The task any `event` carries — every kind of event names one.
 fn event_task_id(event: &Event) -> TaskId {
     match event {
@@ -500,7 +535,8 @@ fn event_task_id(event: &Event) -> TaskId {
         | Event::AttemptReported { id, .. }
         | Event::AttemptEnded { id, .. }
         | Event::StepStarted { id, .. }
-        | Event::StepEnded { id, .. } => *id,
+        | Event::StepEnded { id, .. }
+        | Event::GateFailed { id, .. } => *id,
     }
 }
 
@@ -514,7 +550,8 @@ fn event_at(event: &Event) -> SystemTime {
         | Event::AttemptReported { at, .. }
         | Event::AttemptEnded { at, .. }
         | Event::StepStarted { at, .. }
-        | Event::StepEnded { at, .. } => *at,
+        | Event::StepEnded { at, .. }
+        | Event::GateFailed { at, .. } => *at,
     }
 }
 
@@ -532,6 +569,7 @@ fn event_kind_and_payload(event: &Event) -> (&'static str, String) {
         Event::AttemptEnded { .. } => (ATTEMPT_ENDED, attempt_ended_payload(event)),
         Event::StepStarted { .. } => (STEP_STARTED, step_started_payload(event)),
         Event::StepEnded { .. } => (STEP_ENDED, step_ended_payload(event)),
+        Event::GateFailed { .. } => (GATE_FAILED, gate_failed_payload(event)),
     }
 }
 
@@ -593,8 +631,9 @@ fn mirror(transaction: &Transaction<'_>, event: &Event) -> Result<(), rusqlite::
         Event::AttemptRunning { .. }
         | Event::AttemptReported { .. }
         | Event::StepStarted { .. }
-        | Event::StepEnded { .. } => {
-            // Carries no status change of its own.
+        | Event::StepEnded { .. }
+        | Event::GateFailed { .. } => {
+            // Carries no status change of its own: a gate stop leaves the task pending.
         }
         Event::AttemptEnded { id, status, .. } => {
             transaction.execute(
@@ -912,6 +951,24 @@ mod tests {
             },
         );
         assert_eq!(journal.events().unwrap()[1..], [started, ended]);
+    }
+
+    #[test]
+    fn a_gate_failed_event_round_trips_and_leaves_the_task_pending() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "a", Placement::End);
+        let failed = append(
+            &journal,
+            Event::GateFailed {
+                id: TaskId(1),
+                step: "sync".to_owned(),
+                reason: "uncommitted changes; commit or stash, then run again".to_owned(),
+                at: at(10),
+            },
+        );
+        assert_eq!(journal.events().unwrap()[1], failed);
+        assert_eq!(cached(&journal, 1), (TaskStatus::Pending, 0));
     }
 
     #[test]

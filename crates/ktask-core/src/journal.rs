@@ -117,6 +117,17 @@ pub enum Event {
         /// When.
         at: SystemTime,
     },
+    /// The sync or health-check gate ahead of a task's attempt refused it, leaving it `pending`.
+    GateFailed {
+        /// The task the gate was ahead of.
+        id: TaskId,
+        /// [`crate::SYNC_STEP`] or [`crate::HEALTH_CHECK_STEP`].
+        step: String,
+        /// What failed and what is expected, in the run's own words.
+        reason: String,
+        /// When.
+        at: SystemTime,
+    },
 }
 
 /// Why the journal could not be read or written.
@@ -344,11 +355,9 @@ pub struct Attempt {
     pub number: u32,
     /// When it started.
     pub started_at: SystemTime,
-    /// The provider it ran with, once [`crate::attempt::begin_attempt_running`] has recorded
-    /// it.
+    /// The provider it ran with, once [`crate::attempt::begin_attempt_running`] has recorded it.
     pub provider: Option<String>,
-    /// How it ended, once [`crate::attempt::end_attempt`] has recorded it; `None` while it
-    /// runs.
+    /// How it ended, once [`crate::attempt::end_attempt`] has recorded it; `None` while it runs.
     pub ended: Option<AttemptEnd>,
     /// Every step run so far, in the order they were started.
     pub steps: Vec<Step>,

@@ -14,6 +14,49 @@ use crate::{
     TaskId,
 };
 
+/// Use case: records that the gate named `step` refused to let task `id`'s attempt begin, with
+/// `reason` — the run's own words for what failed and what is expected. The task is left
+/// `pending`; no attempt is begun for it.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read or written.
+pub(crate) fn record_gate_failure(
+    journal: &dyn Journal,
+    clock: &dyn Clock,
+    id: TaskId,
+    step: &str,
+    reason: &str,
+) -> Result<(), JournalError> {
+    let at = clock.now();
+    let step = step.to_owned();
+    let reason = reason.to_owned();
+    decide_and_append(journal, move |_state| {
+        Ok::<(Vec<Event>, ()), JournalError>((
+            vec![Event::GateFailed {
+                id,
+                step: step.clone(),
+                reason: reason.clone(),
+                at,
+            }],
+            (),
+        ))
+    })
+}
+
+/// The step name and reason of the most recent gate stop recorded for task `id`. `None` when
+/// it was never stopped by a gate, or a later attempt has since begun for it.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub(crate) fn gate_stop_of(
+    journal: &dyn Journal,
+    id: TaskId,
+) -> Result<Option<(String, String)>, JournalError> {
+    read_and_query(journal, |state| state.gate_stop_of(id))
+}
+
 /// Use case: starts the next attempt at the pending task numbered `id`, marking it running.
 /// Returns the attempt's number, starting at 1 and never reused for this task.
 ///

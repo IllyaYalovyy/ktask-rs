@@ -222,69 +222,11 @@ fn account_for_interrupted_run(
     }))
 }
 
-/// Runs the sync gate ahead of `task_id`'s attempt: the pre-step to record when it passes,
-/// `None` when not enabled, or the [`RunEnd`] that stops the run when it refuses.
-fn run_sync_gate(
-    git: &dyn Git,
-    clock: &dyn Clock,
-    context: RunContext<'_>,
-    task_id: TaskId,
-) -> Result<Option<steps::PreStep>, RunEnd> {
-    if !steps::sync::enabled(context) {
-        return Ok(None);
-    }
-    let Some(tracked_branch) = context.tracked_branch else {
-        unreachable!("sync::enabled only returns true when a branch is tracked");
-    };
-    match steps::sync::run(git, clock, tracked_branch, context) {
-        steps::sync::Sync::Passed { duration, message } => Ok(Some(steps::PreStep {
-            name: crate::SYNC_STEP,
-            duration,
-            reason: Some(message),
-        })),
-        steps::sync::Sync::Failed(problem) => Err(RunEnd::SyncFailed {
-            id: task_id,
-            tracked_branch: tracked_branch.to_owned(),
-            problem,
-        }),
-    }
-}
-
-/// Runs the health-check gate ahead of `task_id`'s attempt: the pre-step to record when it
-/// passes, `None` when not enabled, or the [`RunEnd`] that stops the run when it fails.
-fn run_health_check_gate(
-    commands: &dyn Commands,
-    clock: &dyn Clock,
-    context: RunContext<'_>,
-    task_id: TaskId,
-) -> Result<Option<steps::PreStep>, RunEnd> {
-    if !steps::health_check::enabled(context) {
-        return Ok(None);
-    }
-    let Some(command) = context.health_check_command else {
-        unreachable!("health_check::enabled only returns true when a command is configured");
-    };
-    match steps::health_check::run(commands, clock, command, context) {
-        steps::health_check::HealthCheck::Passed(duration) => Ok(Some(steps::PreStep {
-            name: crate::HEALTH_CHECK_STEP,
-            duration,
-            reason: None,
-        })),
-        steps::health_check::HealthCheck::Failed {
-            reason,
-            output_tail,
-        } => Err(RunEnd::HealthCheckFailed {
-            id: task_id,
-            command: command.to_owned(),
-            reason,
-            output_tail,
-        }),
-    }
-}
-
 /// Runs `task`'s sync and health-check gates, then its one attempt, appending its result to
 /// `attempted`. `Ok(Some(end))` when the run stops here — a gate refused, or the attempt did
-/// not report `done` — `Ok(None)` to carry on to the next task.
+/// not report `done` — `Ok(None)` to carry on to the next task. A gate that refuses records why
+/// in the journal itself, [`steps::sync::run_gate`] and [`steps::health_check::run_gate`]'s own
+/// job, so a later `status` can show it even though the task stays `pending`.
 fn attempt_task(
     deps: steps::Deps<'_>,
     context: RunContext<'_>,
@@ -292,11 +234,12 @@ fn attempt_task(
     attempted: &mut Vec<Attempted>,
 ) -> Result<Option<RunEnd>, RunError> {
     let mut pre_steps = Vec::new();
-    match run_sync_gate(deps.git, deps.clock, context, task.id) {
+    match steps::sync::run_gate(deps.journal, deps.git, deps.clock, context, task.id)? {
         Ok(step) => pre_steps.extend(step),
         Err(end) => return Ok(Some(end)),
     }
-    match run_health_check_gate(deps.commands, deps.clock, context, task.id) {
+    match steps::health_check::run_gate(deps.journal, deps.commands, deps.clock, context, task.id)?
+    {
         Ok(step) => pre_steps.extend(step),
         Err(end) => return Ok(Some(end)),
     }
@@ -739,6 +682,128 @@ mod tests {
         assert_eq!(
             crate::attempt::last_attempt(&journal, TaskId(1)).unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn a_failing_health_check_is_recorded_as_a_gate_stop_status_shows_afterwards() {
+        let journal = journal_of_abc();
+        let commands = HealthCheckAnd {
+            health_check: Ok(Output {
+                stdout: b"building...\n".to_vec(),
+                stderr: b"ERROR: nope\n".to_vec(),
+                exit: Exit::Code(1),
+            }),
+            other: &NeverRun,
+        };
+        let mut ctx = context(Duration::from_secs(60));
+        ctx.health_check_command = Some("make check");
+        run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &FakeGit::default(),
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+
+        let (step, reason) = crate::attempt::gate_stop_of(&journal, TaskId(1))
+            .unwrap()
+            .expect("a gate stop was recorded");
+        assert_eq!(step, HEALTH_CHECK_STEP);
+        assert!(reason.contains("exited with code 1"), "{reason}");
+        assert!(reason.contains("fix the health check"), "{reason}");
+
+        // `status`, from the same use case the queue screen reads, shows it even though the
+        // task itself is still pending, with no attempt to hang it off.
+        let entries = crate::status(&journal, &clock(), &FakeRunLock::free()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].task, TaskId(1));
+        assert_eq!(entries[0].status, TaskStatus::Pending);
+        assert_eq!(entries[0].attempt.step, HEALTH_CHECK_STEP);
+        assert_eq!(entries[0].attempt.outcome, crate::AttemptOutcome::Failed);
+        assert_eq!(entries[0].attempt.steps.len(), 1);
+        assert!(
+            entries[0]
+                .attempt
+                .reason
+                .as_deref()
+                .unwrap()
+                .contains("exited with code 1")
+        );
+    }
+
+    #[test]
+    fn a_later_run_that_gets_past_a_failing_health_check_clears_the_earlier_gate_stop() {
+        let journal = journal_of_abc();
+        let failing = HealthCheckAnd {
+            health_check: Ok(Output {
+                stdout: Vec::new(),
+                stderr: b"nope\n".to_vec(),
+                exit: Exit::Code(1),
+            }),
+            other: &NeverRun,
+        };
+        let mut ctx = context(Duration::from_secs(60));
+        ctx.health_check_command = Some("make check");
+        run_queue(
+            &journal,
+            &clock(),
+            &failing,
+            &FakeGit::default(),
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        assert!(
+            crate::attempt::gate_stop_of(&journal, TaskId(1))
+                .unwrap()
+                .is_some()
+        );
+
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let passing = HealthCheckAnd {
+            health_check: Ok(Output {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit: Exit::Code(0),
+            }),
+            other: &reporting,
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &passing,
+            &FakeGit::default(),
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+
+        // The earlier gate stop is no longer current, though the journal still holds the event
+        // that recorded it.
+        assert_eq!(
+            crate::attempt::gate_stop_of(&journal, TaskId(1)).unwrap(),
+            None
+        );
+        let entries = crate::status(&journal, &clock(), &FakeRunLock::free()).unwrap();
+        assert_eq!(entries[0].status, TaskStatus::Done);
+        assert!(
+            journal
+                .events()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, Event::GateFailed { .. })),
+            "the earlier gate-failed event is still in the journal"
         );
     }
 
@@ -1214,6 +1279,92 @@ mod tests {
         assert_eq!(
             crate::list_all_tasks(&journal).unwrap()[0].status,
             TaskStatus::Pending
+        );
+    }
+
+    #[test]
+    fn a_sync_failure_is_recorded_as_a_gate_stop_status_shows_afterwards() {
+        let journal = journal_of_abc();
+        let git = FakeGit {
+            pull_rebase: Some(Err(PullRebaseError::UncommittedChanges(
+                "M file.txt".to_owned(),
+            ))),
+            ..FakeGit::default()
+        };
+        run_queue(
+            &journal,
+            &clock(),
+            &NeverRun,
+            &git,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+
+        let (step, reason) = crate::attempt::gate_stop_of(&journal, TaskId(1))
+            .unwrap()
+            .expect("a gate stop was recorded");
+        assert_eq!(step, SYNC_STEP);
+        assert!(reason.contains("uncommitted changes"), "{reason}");
+        assert!(reason.contains("M file.txt"), "{reason}");
+        assert!(reason.contains("commit or stash"), "{reason}");
+
+        let entries = crate::status(&journal, &clock(), &FakeRunLock::free()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, TaskStatus::Pending);
+        assert_eq!(entries[0].attempt.step, SYNC_STEP);
+        assert_eq!(entries[0].attempt.outcome, crate::AttemptOutcome::Failed);
+    }
+
+    #[test]
+    fn a_later_run_that_gets_past_a_failing_sync_clears_the_earlier_gate_stop() {
+        let journal = journal_of_abc();
+        let failing_git = FakeGit {
+            pull_rebase: Some(Err(PullRebaseError::RemoteUnreachable(
+                "fatal: could not read from remote repository".to_owned(),
+            ))),
+            ..FakeGit::default()
+        };
+        run_queue(
+            &journal,
+            &clock(),
+            &NeverRun,
+            &failing_git,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+        assert!(
+            crate::attempt::gate_stop_of(&journal, TaskId(1))
+                .unwrap()
+                .is_some()
+        );
+
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let passing_git = FakeGit {
+            pull_rebase: Some(Ok(PullRebase::UpToDate)),
+            ..FakeGit::default()
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &reporting,
+            &passing_git,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        assert_eq!(
+            crate::attempt::gate_stop_of(&journal, TaskId(1)).unwrap(),
+            None
         );
     }
 

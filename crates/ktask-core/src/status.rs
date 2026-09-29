@@ -287,9 +287,38 @@ fn entry_for(
     }
 }
 
+/// The [`StatusEntry`] for `task`, given the step and reason a gate recorded stopping it before
+/// any attempt began: one [`StepLine`] shown [`AttemptOutcome::Failed`], the same way a
+/// command-kind step that fails inside an attempt is shown — `task.status` is untouched, still
+/// `pending`.
+fn gate_stop_entry(task: Task, step: String, reason: String) -> StatusEntry {
+    let line = StepLine {
+        step,
+        time_spent: Duration::ZERO,
+        outcome: AttemptOutcome::Failed,
+        reason: Some(reason),
+    };
+    StatusEntry {
+        task: task.id,
+        title: task.title,
+        status: task.status,
+        attempt: AttemptLine {
+            number: 0,
+            step: line.step.clone(),
+            provider: None,
+            time_spent: Duration::ZERO,
+            outcome: line.outcome,
+            reason: line.reason.clone(),
+            steps: vec![line],
+        },
+    }
+}
+
 /// Use case: what ran and how it ended, in queue order — one [`StatusEntry`] for every task
-/// that was attempted at least once, cancelled tasks included when they were. A task never
-/// attempted, pending or cancelled before it ever ran, is left out.
+/// that was attempted at least once, cancelled tasks included when they were, plus every
+/// pending task a sync or health-check gate most recently stopped before its attempt began.
+/// A task never attempted, never stopped by a gate, pending or cancelled before it ever ran, is
+/// left out.
 ///
 /// A task the journal still calls `running` is shown `running` only while `lock` says a run is
 /// actually alive; otherwise — a run that was killed outright left it behind — it is shown
@@ -312,6 +341,11 @@ pub fn status(
     let mut entries = Vec::new();
     for task in list_all_tasks(journal)? {
         let Some(attempt) = crate::attempt::last_attempt(journal, task.id)? else {
+            if task.status == TaskStatus::Pending
+                && let Some((step, reason)) = crate::attempt::gate_stop_of(journal, task.id)?
+            {
+                entries.push(gate_stop_entry(task, step, reason));
+            }
             continue;
         };
         let reported = crate::attempt::last_report(journal, task.id, attempt.number)?;
@@ -711,5 +745,71 @@ mod tests {
             ]
         );
         assert_eq!(entries[0].attempt.step, IMPLEMENTATION);
+    }
+
+    /// Appends a [`crate::Event::GateFailed`] for task `id`, naming `step` and `reason`, at
+    /// second 5.
+    fn fail_gate(journal: &FakeJournal, id: TaskId, step: &str, reason: &str) {
+        let read = journal.events().unwrap().len();
+        journal
+            .append_events(
+                &[crate::Event::GateFailed {
+                    id,
+                    step: step.to_owned(),
+                    reason: reason.to_owned(),
+                    at: at(5),
+                }],
+                read,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn a_gate_stop_shows_for_a_pending_task_with_no_attempt() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(0), &draft("a"), Placement::End).unwrap();
+        fail_gate(
+            &journal,
+            TaskId(1),
+            SYNC_STEP,
+            "uncommitted changes; commit or stash",
+        );
+
+        let entries = status(&journal, &clock(10), &no_run()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].task, TaskId(1));
+        // The task itself is still pending: a gate stop is not an attempt.
+        assert_eq!(entries[0].status, TaskStatus::Pending);
+        assert_eq!(
+            displayed_status(entries[0].status, Some(entries[0].attempt.outcome)),
+            "pending"
+        );
+        assert_eq!(entries[0].attempt.number, 0);
+        assert_eq!(entries[0].attempt.step, SYNC_STEP);
+        assert_eq!(entries[0].attempt.provider, None);
+        assert_eq!(entries[0].attempt.outcome, AttemptOutcome::Failed);
+        assert_eq!(
+            entries[0].attempt.reason.as_deref(),
+            Some("uncommitted changes; commit or stash")
+        );
+        assert_eq!(
+            entries[0].attempt.steps,
+            vec![StepLine {
+                step: SYNC_STEP.to_owned(),
+                time_spent: Duration::ZERO,
+                outcome: AttemptOutcome::Failed,
+                reason: Some("uncommitted changes; commit or stash".to_owned()),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_gate_stop_is_left_out_once_the_task_it_stopped_is_cancelled() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(0), &draft("a"), Placement::End).unwrap();
+        fail_gate(&journal, TaskId(1), HEALTH_CHECK_STEP, "exited with code 1");
+        crate::remove_task(&journal, &clock(10), TaskId(1)).unwrap();
+
+        assert_eq!(status(&journal, &clock(20), &no_run()).unwrap(), vec![]);
     }
 }

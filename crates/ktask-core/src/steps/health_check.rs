@@ -6,9 +6,11 @@
 
 use std::time::Duration;
 
+use crate::run::RunEnd;
 use crate::steps::INTERRUPTED;
 use crate::{
-    Clock, CommandSpec, Commands, CommandsError, Exit, HEALTH_CHECK_STEP, Output, RunContext,
+    Clock, CommandSpec, Commands, CommandsError, Exit, HEALTH_CHECK_STEP, Journal, Output,
+    RunContext, RunError, TaskId,
 };
 
 /// How many lines of a failing health check's combined output are shown to the operator.
@@ -93,6 +95,66 @@ pub(crate) fn run(
     let result = commands.run(&spec);
     let duration = clock.now().duration_since(started).unwrap_or_default();
     health_check_outcome(result, duration)
+}
+
+/// What failed and what is expected of the operator, condensed to one line so it fits a status
+/// step's own line — the same words `ktask-rs run` prints for it.
+fn gate_message(command: &str, reason: &str, output_tail: &str) -> String {
+    let mut message = format!("{command}: {reason}");
+    if !output_tail.is_empty() {
+        message.push_str(": ");
+        message.push_str(&output_tail.replace('\n', " / "));
+    }
+    message.push_str("; fix the health check, then run again");
+    message
+}
+
+/// Runs the health-check gate ahead of `task_id`'s attempt: the pre-step to record when it
+/// passes, `None` when the gate is switched off, or the [`RunEnd`] that stops the run when it
+/// fails — recording why in the journal first, so a later `status` can show it even though the
+/// task stays `pending`.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read or written.
+pub(crate) fn run_gate(
+    journal: &dyn Journal,
+    commands: &dyn Commands,
+    clock: &dyn Clock,
+    context: RunContext<'_>,
+    task_id: TaskId,
+) -> Result<Result<Option<super::PreStep>, RunEnd>, RunError> {
+    if !enabled(context) {
+        return Ok(Ok(None));
+    }
+    let Some(command) = context.health_check_command else {
+        unreachable!("health_check::enabled only returns true when a command is configured");
+    };
+    match run(commands, clock, command, context) {
+        HealthCheck::Passed(duration) => Ok(Ok(Some(super::PreStep {
+            name: HEALTH_CHECK_STEP,
+            duration,
+            reason: None,
+        }))),
+        HealthCheck::Failed {
+            reason,
+            output_tail,
+        } => {
+            crate::attempt::record_gate_failure(
+                journal,
+                clock,
+                task_id,
+                HEALTH_CHECK_STEP,
+                &gate_message(command, &reason, &output_tail),
+            )?;
+            Ok(Err(RunEnd::HealthCheckFailed {
+                id: task_id,
+                command: command.to_owned(),
+                reason,
+                output_tail,
+            }))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -202,5 +264,31 @@ mod tests {
             }
             passed @ HealthCheck::Passed(_) => panic!("expected Failed, got {passed:?}"),
         }
+    }
+
+    #[test]
+    fn the_gate_message_fits_on_one_line_even_with_several_lines_of_output_and_says_what_is_expected()
+     {
+        let message = gate_message(
+            "make check",
+            "the health check exited with code 1",
+            "building...\nERROR: nope",
+        );
+        assert_eq!(message.lines().count(), 1, "{message:?}");
+        assert!(message.contains("make check"), "{message}");
+        assert!(message.contains("exited with code 1"), "{message}");
+        assert!(message.contains("building..."), "{message}");
+        assert!(message.contains("ERROR: nope"), "{message}");
+        assert!(message.contains("fix the health check"), "{message}");
+    }
+
+    #[test]
+    fn the_gate_message_needs_no_separator_when_there_is_no_output() {
+        let message = gate_message("make check", "the health check exited with code 1", "");
+        assert_eq!(
+            message,
+            "make check: the health check exited with code 1; fix the health check, then run \
+             again"
+        );
     }
 }
