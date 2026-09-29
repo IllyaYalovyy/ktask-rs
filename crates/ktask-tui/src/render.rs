@@ -12,8 +12,11 @@ use crate::import_form::ImportForm;
 use crate::settings_screen;
 use crate::{App, Confirming};
 
-/// Every key the queue screen answers, and what it does.
-const KEYS: [(&str, &str); 17] = [
+/// Every key the queue screen itself answers, and what it does. Keys that only work while a
+/// question, a form or another screen is up are that context's own — shown there, in its own
+/// question line or footer — and left out of the queue's key map, so no key map here shows a
+/// key that does not work in the context it is shown in, and no key is listed twice.
+const KEYS: [(&str, &str); 15] = [
     ("j, Down", "select the next task"),
     ("k, Up", "select the previous task"),
     ("g", "select the first task"),
@@ -32,10 +35,8 @@ const KEYS: [(&str, &str); 17] = [
         "import the tasks of a JSON file, asked for by its path",
     ),
     ("s", "open the project's settings"),
-    ("y", "answer yes when asked to remove a task"),
-    ("n", "answer no when asked to remove a task"),
     ("?", "show or hide this key map"),
-    ("Esc", "close this key map, or answer no"),
+    ("Esc", "close this key map"),
     ("q", "quit"),
 ];
 
@@ -891,7 +892,7 @@ mod tests {
     }
 
     #[test]
-    fn the_key_map_lists_every_key_of_the_screen_instead_of_the_queue() {
+    fn the_key_map_lists_every_key_of_the_queue_screen_instead_of_the_queue() {
         use ratatui::crossterm::event::KeyCode::Char;
         let app = keys(
             loaded(vec![task(1, "Write parser", TaskKind::Agent)]),
@@ -900,12 +901,26 @@ mod tests {
         let rows = drawn(&app, 60, 20);
         let screen = rows.join("\n");
         for key in [
-            "j, Down", "k, Up", "g ", "G ", "a ", "d ", "r ", "i ", "s ", "y ", "n ", "? ", "Esc",
-            "q ",
+            "j, Down", "k, Up", "g ", "G ", "a ", "d ", "r ", "i ", "s ", "? ", "Esc", "q ",
         ] {
             assert!(screen.contains(key), "{key:?} in\n{screen}");
         }
         assert!(!screen.contains("Write parser"), "{screen}");
+    }
+
+    #[test]
+    fn the_queues_key_map_names_no_key_twice_and_none_that_only_works_while_a_question_is_open() {
+        let mut seen = std::collections::HashSet::new();
+        for (key, _) in KEYS {
+            assert!(seen.insert(key), "{key:?} listed twice in {KEYS:?}");
+        }
+        // `y` only answers a removal question, which the queue's key map is never shown
+        // alongside — `d` cannot be pressed while the key map or a question is open, and `?`
+        // cannot be pressed while a question is open — so it has no place in this key map.
+        assert!(
+            KEYS.iter().all(|(key, _)| *key != "y"),
+            "{KEYS:?} lists `y`, which only answers a question the key map is never open under"
+        );
     }
 
     #[test]

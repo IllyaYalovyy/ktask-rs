@@ -304,15 +304,18 @@ fn question_mark_shows_the_key_map_and_esc_closes_it_back_to_the_queue() -> Resu
         "g        select the first task",
         "G        select the last task",
         "a        show or hide cancelled tasks",
+        "n        add a task at the end, written in a form",
         "d        remove the selected task, after asking",
-        "y        answer yes when asked to remove a task",
-        "n        answer no when asked to remove a task",
         "?        show or hide this key map",
-        "Esc      close this key map, or answer no",
+        "Esc      close this key map",
         "q        quit",
     ] {
         assert!(lines.contains(&key.to_owned()), "{key:?} in\n{screen}");
     }
+    // `y` and a second `n` only answer the removal question — a context this key map is
+    // never open alongside — so this key map does not list them, and `n` names only one key.
+    assert_eq!(lines.iter().filter(|line| line.starts_with('n')).count(), 1);
+    assert!(!lines.iter().any(|line| line.starts_with('y')), "{screen}");
     assert!(!screen.contains("alpha"), "{screen}");
     assert!(!screen.contains("pending"), "{screen}");
 
