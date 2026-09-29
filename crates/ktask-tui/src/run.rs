@@ -36,19 +36,33 @@ enum Wake {
 }
 
 /// Every callback the loop uses to read or change state outside the terminal, bundled into
-/// one value so [`drive`] takes few enough arguments for Clippy's limit on them.
-struct Actions<Load, Remove, Add, LoadSettings, SaveSetting> {
+/// one value so [`run`] and [`drive`] take few enough arguments for Clippy's limit on them.
+pub struct Actions<Load, Remove, Add, LoadSettings, SaveSetting, Import> {
     /// Fetches the queue to show, with the cancelled tasks when told to.
-    load: Load,
+    pub load: Load,
     /// Removes a task the operator confirmed removing.
-    remove: Remove,
+    pub remove: Remove,
     /// Adds the task the operator wrote in the form, where the form says.
-    add: Add,
+    pub add: Add,
     /// The project's settings, for the settings screen to open on.
-    load_settings: LoadSettings,
+    pub load_settings: LoadSettings,
     /// Changes the setting named by the settings screen's focused field to the value it was
     /// submitted with; the new setting, or why it was refused.
-    save_setting: SaveSetting,
+    pub save_setting: SaveSetting,
+    /// Imports the tasks of the file whose path the operator wrote in the import form,
+    /// giving what to show for it — the same words `ktask-rs import` itself would print,
+    /// whether it succeeded or was refused.
+    pub import: Import,
+}
+
+/// Closures carry no useful debug representation of their own; this names the type without
+/// them, which is all `#[derive(Debug)]` could offer here in any case.
+impl<Load, Remove, Add, LoadSettings, SaveSetting, Import> std::fmt::Debug
+    for Actions<Load, Remove, Add, LoadSettings, SaveSetting, Import>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Actions").finish_non_exhaustive()
+    }
 }
 
 /// How often the loop wakes on its own to refresh a running task's elapsed time, while one is
@@ -79,52 +93,51 @@ fn draw(terminal: &mut DefaultTerminal, app: &App) -> Result<(), String> {
 
 /// Runs the terminal interface until the operator quits.
 ///
-/// `load` fetches the queue to show, with the cancelled tasks when it is told to. It is called
-/// at the start, again whenever `watch` reports the journal changed, and when the operator asks
-/// for cancelled tasks or stops asking. `remove` removes a task the operator confirmed removing,
-/// after which the queue is loaded again. `add` adds the task the operator wrote in the form
-/// where the form says, and gives its number, or the reasons it was not added when it was not.
+/// `actions.load` fetches the queue to show, with the cancelled tasks when it is told to. It
+/// is called at the start, again whenever `watch` reports the journal changed, and when the
+/// operator asks for cancelled tasks or stops asking. `actions.remove` removes a task the
+/// operator confirmed removing, after which the queue is loaded again. `actions.add` adds the
+/// task the operator wrote in the form where the form says, and gives its number, or the
+/// reasons it was not added when it was not. `actions.import` imports the tasks of the file
+/// whose path the operator wrote in the import form, giving what to show for it — the same
+/// words `ktask-rs import` itself would print — shown on the screen once it returns.
 /// `start_run` starts executing the pending tasks, exactly as `ktask-rs run` does, and is
 /// called on a thread of its own each time the operator asks for it, so the screen stays
 /// responsive for however long the run takes; it blocks until the run it starts ends, or
 /// refuses to start at all, and returns what it printed either way — the same words
 /// `ktask-rs run` itself would show — shown on the screen once it returns, one line per line
-/// it wrote. `load_settings`
+/// it wrote. `actions.load_settings`
 /// fetches every project setting, called each time the operator opens the settings screen.
-/// `save_setting` changes the setting named by the settings screen's focused field to the
-/// value it was submitted with, giving the new setting, or the reasons it was refused — an
-/// unknown setting or an invalid value — shown on the screen instead of closing it. `watch` blocks
-/// until the journal changes; it is polled from a dedicated thread, so a task added, inserted
-/// or removed by another process — a run included — shows in the next frame without the loop
-/// itself ever waking on a timer — except while a task is running, when the queue is loaded
-/// again on a short timer too, so the running task's elapsed time keeps moving even though
-/// nothing else changed; the loop goes back to waiting with no timer once nothing is running.
-/// The terminal is put back as it was on every way out: the operator quitting, SIGTERM or
-/// SIGHUP (its terminal going away sends this), or an error — a run `start_run` started keeps
-/// going regardless, since it does not depend on this process to finish.
+/// `actions.save_setting` changes the setting named by the settings screen's focused field to
+/// the value it was submitted with, giving the new setting, or the reasons it was refused —
+/// an unknown setting or an invalid value — shown on the screen instead of closing it. `watch`
+/// blocks until the journal changes; it is polled from a dedicated thread, so a task added,
+/// inserted or removed by another process — a run included — shows in the next frame without
+/// the loop itself ever waking on a timer — except while a task is running, when the queue is
+/// loaded again on a short timer too, so the running task's elapsed time keeps moving even
+/// though nothing else changed; the loop goes back to waiting with no timer once nothing is
+/// running. The terminal is put back as it was on every way out: the operator quitting,
+/// SIGTERM or SIGHUP (its terminal going away sends this), or an error — a run `start_run`
+/// started keeps going regardless, since it does not depend on this process to finish.
 ///
 /// # Errors
 ///
 /// Fails when the queue or the settings cannot be loaded, a task cannot be removed or the
 /// terminal cannot be used.
 pub fn run(
-    load: impl FnMut(bool) -> Result<QueueView, String>,
-    remove: impl FnMut(TaskId) -> Result<(), String>,
-    add: impl FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
+    actions: Actions<
+        impl FnMut(bool) -> Result<QueueView, String>,
+        impl FnMut(TaskId) -> Result<(), String>,
+        impl FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
+        impl FnMut() -> Result<Vec<SettingView>, String>,
+        impl FnMut(&str, &str) -> Result<SettingView, String>,
+        impl FnMut(&str) -> Result<String, String>,
+    >,
     start_run: impl Fn() -> Result<String, String> + Send + Sync + 'static,
-    load_settings: impl FnMut() -> Result<Vec<SettingView>, String>,
-    save_setting: impl FnMut(&str, &str) -> Result<SettingView, String>,
     watch: impl JournalWatch + Send + 'static,
 ) -> Result<(), String> {
     let mut terminal = ratatui::try_init().map_err(|e| format!("cannot use the terminal: {e}"))?;
     let start_run = Arc::new(start_run);
-    let actions = Actions {
-        load,
-        remove,
-        add,
-        load_settings,
-        save_setting,
-    };
     let result = spawn_wakes(watch)
         .and_then(|(sender, wakes)| drive(&mut terminal, actions, &start_run, &sender, &wakes));
     ratatui::restore();
@@ -243,9 +256,25 @@ where
     Ok((app, false))
 }
 
-fn handle_input<Load, Remove, Add, LoadSettings, SaveSetting>(
+/// Imports the file `app` has pending, if any: `(app, true)` when one was, `(app, false)`,
+/// unchanged, otherwise. Shows the same result, or the same refusal, `ktask-rs import` itself
+/// would print, one line per line of it.
+fn handle_import_action<Import>(mut app: App, import: &mut Import) -> (App, bool)
+where
+    Import: FnMut(&str) -> Result<String, String>,
+{
+    let Some(path) = app.import_submission.take() else {
+        return (app, false);
+    };
+    let text = match import(&path) {
+        Ok(text) | Err(text) => text,
+    };
+    (update(app, Event::ImportMessage(text)), true)
+}
+
+fn handle_input<Load, Remove, Add, LoadSettings, SaveSetting, Import>(
     mut app: App,
-    actions: &mut Actions<Load, Remove, Add, LoadSettings, SaveSetting>,
+    actions: &mut Actions<Load, Remove, Add, LoadSettings, SaveSetting, Import>,
     input: &Input,
     start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,
     sender: &Sender<Wake>,
@@ -255,6 +284,7 @@ where
     Add: FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
     LoadSettings: FnMut() -> Result<Vec<SettingView>, String>,
     SaveSetting: FnMut(&str, &str) -> Result<SettingView, String>,
+    Import: FnMut(&str) -> Result<String, String>,
 {
     let asked = app.show_cancelled;
     if let Some(event) = translate(input) {
@@ -264,8 +294,12 @@ where
     if handled {
         return Ok((app, true));
     }
-    let (mut app, handled) =
+    let (app, handled) =
         handle_settings_action(app, &mut actions.load_settings, &mut actions.save_setting)?;
+    if handled {
+        return Ok((app, true));
+    }
+    let (mut app, handled) = handle_import_action(app, &mut actions.import);
     if handled {
         return Ok((app, true));
     }
@@ -292,6 +326,7 @@ fn drive(
         impl FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
         impl FnMut() -> Result<Vec<SettingView>, String>,
         impl FnMut(&str, &str) -> Result<SettingView, String>,
+        impl FnMut(&str) -> Result<String, String>,
     >,
     start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,
     sender: &Sender<Wake>,

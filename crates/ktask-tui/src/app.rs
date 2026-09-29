@@ -6,6 +6,7 @@ use ktask_core::{
 use ratatui::crossterm::event::KeyCode;
 
 use crate::form::Form;
+use crate::import_form::ImportForm;
 use crate::settings_form::SettingsForm;
 
 /// Everything the screen shows and remembers.
@@ -34,14 +35,20 @@ pub struct App {
     /// Set when the operator asked to start executing the pending tasks: the loop starts a
     /// run, exactly as `ktask-rs run` does, and clears this.
     pub run_requested: Option<()>,
-    /// What starting a run from this screen last ended with — the same words `ktask-rs run`
-    /// itself would print, one per line, whether it ran to completion, stopped partway, or
-    /// refused to start at all — shown in place of the task list until a key that is not one
-    /// of the ones that scroll it dismisses it.
-    pub run_message: Option<Vec<String>>,
-    /// The first of `run_message`'s lines shown, when there are more than fit; reset to `0`
+    /// The path a file of tasks is imported from, while it is being written; it covers the
+    /// queue like the task form does.
+    pub(crate) import: Option<ImportForm>,
+    /// The path the import form was submitted with, for the loop to import, and clears this.
+    pub import_submission: Option<String>,
+    /// The result of the last thing this screen started that prints its own report — a run,
+    /// or an import — the same words `ktask-rs run` or `ktask-rs import` itself would print,
+    /// one per line, whether it succeeded, was refused, or (for a run) stopped partway —
+    /// shown in place of the task list until a key that is not one of the ones that scroll it
+    /// dismisses it.
+    pub message: Option<Vec<String>>,
+    /// The first of `message`'s lines shown, when there are more than fit; reset to `0`
     /// whenever a fresh message arrives.
-    pub run_message_offset: usize,
+    pub message_offset: usize,
     /// The settings screen, while it is open; it covers the queue like the task form does.
     pub(crate) settings: Option<SettingsForm>,
     /// Set when the operator asked to open the settings screen: the loop loads the
@@ -108,6 +115,9 @@ pub enum Event {
     /// The run this screen started has ended, or could not start, printing this — the same
     /// words `ktask-rs run` itself would show.
     RunMessage(String),
+    /// The import this screen started has finished, printing this — the same words
+    /// `ktask-rs import` itself would show, whether it succeeded or was refused.
+    ImportMessage(String),
     /// The project's settings were loaded: the settings screen opens on these values.
     SettingsLoaded(Vec<SettingView>),
     /// The settings screen's submission was saved: it closes.
@@ -143,15 +153,13 @@ pub fn update(app: App, event: Event) -> App {
         Event::Ctrl(_) if app.confirming == Some(Confirming::Discard) => app,
         Event::Key(key) if app.form.is_some() => update_form_key(app, key),
         Event::Ctrl(letter) if app.form.is_some() => update_form_ctrl(app, letter),
+        Event::Key(key) if app.import.is_some() => update_import_key(app, key),
+        Event::Ctrl(letter) if app.import.is_some() => update_import_ctrl(app, letter),
         Event::Added(id) => added(app, id),
         Event::Rejected(problems) => in_form(app, |form| Form { problems, ..form }),
-        Event::RunMessage(text) => App {
-            run_message: Some(text.lines().map(str::to_owned).collect()),
-            run_message_offset: 0,
-            ..app
-        },
+        Event::RunMessage(text) | Event::ImportMessage(text) => shown_message(app, &text),
         Event::Key(KeyCode::Char('q')) => App { quit: true, ..app },
-        Event::Key(key) if app.run_message.is_some() => update_run_message_key(app, key),
+        Event::Key(key) if app.message.is_some() => update_message_key(app, key),
         Event::Key(key) if app.confirming.is_some() => update_removal_confirm_key(app, key),
         Event::Key(key) if app.help => update_help_key(app, key),
         Event::Key(key) => update_queue_key(app, key),
@@ -233,6 +241,25 @@ fn update_form_ctrl(app: App, letter: char) -> App {
     }
 }
 
+/// A key while the import form is open.
+fn update_import_key(app: App, key: KeyCode) -> App {
+    match key {
+        KeyCode::Esc => App {
+            import: None,
+            ..app
+        },
+        _ => in_import(app, |form| form.press(key)),
+    }
+}
+
+/// A Ctrl-letter while the import form is open.
+fn update_import_ctrl(app: App, letter: char) -> App {
+    match letter {
+        's' => submit_import(app),
+        _ => app,
+    }
+}
+
 /// A key while removing the selected task is being confirmed.
 fn update_removal_confirm_key(app: App, key: KeyCode) -> App {
     match key {
@@ -253,26 +280,37 @@ fn update_help_key(app: App, key: KeyCode) -> App {
     }
 }
 
-/// A key while the last run's results are shown in place of the task list: `j`/`Down` and
-/// `k`/`Up` scroll one line, `g`/`G` jump to the first or last line, and any other key
-/// dismisses the results, then is handled as it would be on the plain queue screen — so, for
-/// example, `r` both dismisses a shown message and starts a fresh run.
-fn update_run_message_key(app: App, key: KeyCode) -> App {
+/// The app once a run or an import this screen started has finished, showing `text` — its own
+/// report, the same words `ktask-rs run` or `ktask-rs import` itself would print — in place
+/// of the task list.
+fn shown_message(app: App, text: &str) -> App {
+    App {
+        message: Some(text.lines().map(str::to_owned).collect()),
+        message_offset: 0,
+        ..app
+    }
+}
+
+/// A key while the last run's or import's results are shown in place of the task list:
+/// `j`/`Down` and `k`/`Up` scroll one line, `g`/`G` jump to the first or last line, and any
+/// other key dismisses the results, then is handled as it would be on the plain queue screen
+/// — so, for example, `r` both dismisses a shown message and starts a fresh run.
+fn update_message_key(app: App, key: KeyCode) -> App {
     match key {
-        KeyCode::Char('j') | KeyCode::Down => scroll_run_message(app, 1),
-        KeyCode::Char('k') | KeyCode::Up => scroll_run_message(app, -1),
+        KeyCode::Char('j') | KeyCode::Down => scroll_message(app, 1),
+        KeyCode::Char('k') | KeyCode::Up => scroll_message(app, -1),
         KeyCode::Char('g') => App {
-            run_message_offset: 0,
+            message_offset: 0,
             ..app
         },
         KeyCode::Char('G') => App {
-            run_message_offset: last_run_message_line(&app),
+            message_offset: last_message_line(&app),
             ..app
         },
         _ => update_queue_key(
             App {
-                run_message: None,
-                run_message_offset: 0,
+                message: None,
+                message_offset: 0,
                 ..app
             },
             key,
@@ -280,27 +318,27 @@ fn update_run_message_key(app: App, key: KeyCode) -> App {
     }
 }
 
-/// The index of `app.run_message`'s last line, or `0` when there is none.
-fn last_run_message_line(app: &App) -> usize {
-    app.run_message
+/// The index of `app.message`'s last line, or `0` when there is none.
+fn last_message_line(app: &App) -> usize {
+    app.message
         .as_ref()
         .map_or(0, |lines| lines.len().saturating_sub(1))
 }
 
-/// `app.run_message_offset` moved by `delta`, clamped to stay within the message's lines.
-fn scroll_run_message(app: App, delta: isize) -> App {
+/// `app.message_offset` moved by `delta`, clamped to stay within the message's lines.
+fn scroll_message(app: App, delta: isize) -> App {
     let offset = app
-        .run_message_offset
+        .message_offset
         .saturating_add_signed(delta)
-        .min(last_run_message_line(&app));
+        .min(last_message_line(&app));
     App {
-        run_message_offset: offset,
+        message_offset: offset,
         ..app
     }
 }
 
-/// A key on the plain queue screen: no form, settings, confirmation, help or run message in
-/// the way.
+/// A key on the plain queue screen: no form, import form, settings, confirmation, help or
+/// message in the way.
 fn update_queue_key(app: App, key: KeyCode) -> App {
     // `refused` is a one-shot notice: any key past the one that raised it dismisses it,
     // whether or not that key is `d` again.
@@ -322,6 +360,10 @@ fn update_queue_key(app: App, key: KeyCode) -> App {
         KeyCode::Char('d') => press_d(app),
         KeyCode::Char('r') => App {
             run_requested: Some(()),
+            ..app
+        },
+        KeyCode::Char('i') => App {
+            import: Some(ImportForm::new()),
             ..app
         },
         KeyCode::Char('s') => App {
@@ -351,6 +393,28 @@ fn ctrl_c(app: App) -> App {
 fn in_form(app: App, change: impl FnOnce(Form) -> Form) -> App {
     App {
         form: app.form.map(change),
+        ..app
+    }
+}
+
+/// The app with `change` made to the import form, if it is open.
+fn in_import(app: App, change: impl FnOnce(ImportForm) -> ImportForm) -> App {
+    App {
+        import: app.import.map(change),
+        ..app
+    }
+}
+
+/// The app with the import form's path left for the loop to import, and the form closed.
+fn submit_import(app: App) -> App {
+    let path = app
+        .import
+        .as_ref()
+        .map(|form| form.path.text())
+        .unwrap_or_default();
+    App {
+        import: None,
+        import_submission: Some(path),
         ..app
     }
 }
@@ -803,13 +867,58 @@ mod tests {
     }
 
     #[test]
+    fn i_opens_the_import_form_on_an_empty_path_and_esc_closes_it_changing_nothing_else() {
+        let before = loaded(&[1, 2]);
+        let open = press(before.clone(), &[KeyCode::Char('i')]);
+        assert_eq!(
+            open.import.as_ref().map(|form| form.path.text()),
+            Some(String::new())
+        );
+        assert_eq!(open.queue, before.queue);
+        assert_eq!(press(open, &[KeyCode::Esc]), before);
+    }
+
+    #[test]
+    fn while_the_import_form_is_open_letters_are_typed_and_no_queue_key_acts() {
+        let open = press(loaded(&[1, 2]), &[KeyCode::Char('i')]);
+        let app = typed(open, "qjdna?");
+        assert!(!app.quit && !app.help && app.confirming.is_none() && app.import.is_some());
+        assert_eq!(
+            app.import.as_ref().map(|form| form.path.text()),
+            Some("qjdna?".to_owned())
+        );
+        assert_eq!(on(&app), Some(1));
+    }
+
+    #[test]
+    fn ctrl_s_submits_the_typed_path_and_closes_the_import_form() {
+        let app = typed(
+            press(loaded(&[1]), &[KeyCode::Char('i')]),
+            "/tmp/tasks.json",
+        );
+        let app = update(app, Event::Ctrl('s'));
+        assert_eq!(app.import, None);
+        assert_eq!(app.import_submission, Some("/tmp/tasks.json".to_owned()));
+    }
+
+    #[test]
+    fn an_import_message_is_shown_until_a_key_that_does_not_scroll_it_dismisses_it() {
+        let app = update(loaded(&[1]), Event::ImportMessage("1\n2\n".to_owned()));
+        assert_eq!(
+            app.message.as_deref(),
+            Some(["1".to_owned(), "2".to_owned()].as_slice())
+        );
+        assert_eq!(press(app.clone(), &[KeyCode::Char('x')]).message, None);
+    }
+
+    #[test]
     fn a_run_message_is_shown_until_a_key_that_does_not_scroll_it_dismisses_it() {
         let app = update(
             loaded(&[1]),
             Event::RunMessage("nothing is pending".to_owned()),
         );
         assert_eq!(
-            app.run_message.as_deref(),
+            app.message.as_deref(),
             Some(["nothing is pending".to_owned()].as_slice())
         );
 
@@ -823,13 +932,13 @@ mod tests {
             KeyCode::Char('G'),
         ] {
             assert_eq!(
-                press(app.clone(), &[key]).run_message,
-                app.run_message,
+                press(app.clone(), &[key]).message,
+                app.message,
                 "{key:?} should scroll, not dismiss"
             );
         }
 
-        assert_eq!(press(app.clone(), &[KeyCode::Char('x')]).run_message, None);
+        assert_eq!(press(app.clone(), &[KeyCode::Char('x')]).message, None);
     }
 
     #[test]
@@ -839,26 +948,26 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let app = update(loaded(&[1]), Event::RunMessage(text));
-        assert_eq!(app.run_message_offset, 0);
+        assert_eq!(app.message_offset, 0);
 
         let scrolled = press(app.clone(), &[KeyCode::Char('j'), KeyCode::Char('j')]);
-        assert_eq!(scrolled.run_message_offset, 2);
-        assert_eq!(scrolled.run_message, app.run_message);
+        assert_eq!(scrolled.message_offset, 2);
+        assert_eq!(scrolled.message, app.message);
 
         let back = press(scrolled.clone(), &[KeyCode::Char('k')]);
-        assert_eq!(back.run_message_offset, 1);
+        assert_eq!(back.message_offset, 1);
 
         let bottom = press(app.clone(), &[KeyCode::Char('G')]);
-        assert_eq!(bottom.run_message_offset, 4);
+        assert_eq!(bottom.message_offset, 4);
 
         // Scrolling past either end holds at it rather than wrapping or panicking.
         let held = press(app.clone(), &[KeyCode::Char('k')]);
-        assert_eq!(held.run_message_offset, 0);
+        assert_eq!(held.message_offset, 0);
         let past_bottom = press(bottom, &[KeyCode::Char('j')]);
-        assert_eq!(past_bottom.run_message_offset, 4);
+        assert_eq!(past_bottom.message_offset, 4);
 
         let top = press(scrolled, &[KeyCode::Char('g')]);
-        assert_eq!(top.run_message_offset, 0);
+        assert_eq!(top.message_offset, 0);
     }
 
     #[test]
@@ -868,7 +977,7 @@ mod tests {
             Event::RunMessage("nothing is pending".to_owned()),
         );
         let app = press(app, &[KeyCode::Char('r')]);
-        assert_eq!(app.run_message, None);
+        assert_eq!(app.message, None);
         assert_eq!(app.run_requested, Some(()));
     }
 

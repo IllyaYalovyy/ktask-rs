@@ -8,11 +8,12 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph, Widget};
 
 use crate::form_screen;
+use crate::import_form::ImportForm;
 use crate::settings_screen;
 use crate::{App, Confirming};
 
 /// Every key the queue screen answers, and what it does.
-const KEYS: [(&str, &str); 16] = [
+const KEYS: [(&str, &str); 17] = [
     ("j, Down", "select the next task"),
     ("k, Up", "select the previous task"),
     ("g", "select the first task"),
@@ -25,6 +26,10 @@ const KEYS: [(&str, &str); 16] = [
     (
         "r",
         "start executing the queue, exactly as `ktask-rs run` does",
+    ),
+    (
+        "i",
+        "import the tasks of a JSON file, asked for by its path",
     ),
     ("s", "open the project's settings"),
     ("y", "answer yes when asked to remove a task"),
@@ -44,6 +49,9 @@ const DISCARD_KEYS: &str = " y discard · n, Esc keep writing ";
 /// What the settings screen's frame says at the bottom.
 const SETTINGS_KEYS: &str = " Tab, Shift-Tab field · Ctrl-S save · Esc cancel ";
 
+/// What the import form's frame says at the bottom.
+const IMPORT_KEYS: &str = " Ctrl-S import · Esc cancel ";
+
 /// Draws `app` over the whole of `area`, and returns where the cursor goes when it is shown.
 pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     let discarding = app.confirming == Some(Confirming::Discard);
@@ -55,6 +63,8 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
             SETTINGS_KEYS
         } else if app.form.is_some() {
             FORM_KEYS
+        } else if app.import.is_some() {
+            IMPORT_KEYS
         } else {
             " q quit · ? keys "
         });
@@ -66,6 +76,9 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     if let Some(form) = &app.form {
         return form_screen::draw(form, discarding, inner, buf);
     }
+    if let Some(import) = &app.import {
+        return Some(import_screen(import, inner, buf));
+    }
     match &app.queue {
         None => Paragraph::new("Loading the queue…").render(inner, buf),
         Some(_) if app.help => key_map(inner, buf),
@@ -75,16 +88,34 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
 }
 
 /// Draws the header — the project, the counts and the question line — over `area`'s first
-/// three rows, then, under it, either the last run's results, one per line, when there are
-/// any, or the task list otherwise.
+/// three rows, then, under it, either the last run's or import's results, one per line, when
+/// there are any, or the task list otherwise.
 fn draw_queue(app: &App, queue: &QueueView, area: Rect, buf: &mut Buffer) {
     let [header, list] = Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(area);
     Paragraph::new(header_lines(app, queue)).render(header, buf);
     let height = usize::from(list.height);
-    match &app.run_message {
-        Some(message) => Paragraph::new(run_message_lines(app, message, height)).render(list, buf),
+    match &app.message {
+        Some(message) => Paragraph::new(message_lines(app, message, height)).render(list, buf),
         None => Paragraph::new(task_lines(app, queue, height)).render(list, buf),
     }
+}
+
+/// Draws the import form over the whole of `area`: a prompt and the path field, and returns
+/// where the cursor goes, in the path.
+fn import_screen(form: &ImportForm, area: Rect, buf: &mut Buffer) -> Position {
+    let lines = vec![
+        Line::styled("Import tasks", Style::new().add_modifier(Modifier::BOLD)),
+        Line::default(),
+        Line::from("File path:"),
+        Line::from(format!("> {}", form.path.text())),
+    ];
+    let cursor = Position::new(
+        (area.x + 2 + u16::try_from(form.path.cursor().1).unwrap_or(u16::MAX))
+            .min(area.x + area.width.saturating_sub(1)),
+        area.y + 3,
+    );
+    Paragraph::new(lines).render(area, buf);
+    cursor
 }
 
 fn key_map(area: Rect, buf: &mut Buffer) {
@@ -108,8 +139,8 @@ fn key_map(area: Rect, buf: &mut Buffer) {
 /// while there is either.
 /// The one-line question or notice shown under the summary — a removal confirmation or a
 /// refusal, whichever was raised most recently — or an empty line when neither applies. The
-/// last run this screen started's own results are shown in the list area below instead, by
-/// [`run_message_lines`], since there can be more than one line of them.
+/// last run's or import's own results are shown in the list area below instead, by
+/// [`message_lines`], since there can be more than one line of them.
 fn question_line(app: &App, queue: &QueueView) -> Line<'static> {
     let question = app
         .confirming
@@ -131,16 +162,15 @@ fn question_line(app: &App, queue: &QueueView) -> Line<'static> {
     })
 }
 
-/// `message` — the last run this screen started's own results, one per line, the same words
-/// `ktask-rs run` itself printed — windowed to the `height` lines that fit, scrolled to
-/// `app.run_message_offset`, clamped so the window never runs past the last line.
-fn run_message_lines(app: &App, message: &[String], height: usize) -> Vec<Line<'static>> {
+/// `message` — the last run's or import's own results, one per line, the same words
+/// `ktask-rs run` or `ktask-rs import` itself printed — windowed to the `height` lines that
+/// fit, scrolled to `app.message_offset`, clamped so the window never runs past the last
+/// line.
+fn message_lines(app: &App, message: &[String], height: usize) -> Vec<Line<'static>> {
     if message.is_empty() || height == 0 {
         return Vec::new();
     }
-    let first = app
-        .run_message_offset
-        .min(message.len().saturating_sub(height));
+    let first = app.message_offset.min(message.len().saturating_sub(height));
     message
         .iter()
         .skip(first)
@@ -746,10 +776,11 @@ mod tests {
             loaded(vec![task(1, "Write parser", TaskKind::Agent)]),
             &[Char('?')],
         );
-        let rows = drawn(&app, 60, 19);
+        let rows = drawn(&app, 60, 20);
         let screen = rows.join("\n");
         for key in [
-            "j, Down", "k, Up", "g ", "G ", "a ", "d ", "r ", "s ", "y ", "n ", "? ", "Esc", "q ",
+            "j, Down", "k, Up", "g ", "G ", "a ", "d ", "r ", "i ", "s ", "y ", "n ", "? ", "Esc",
+            "q ",
         ] {
             assert!(screen.contains(key), "{key:?} in\n{screen}");
         }
@@ -792,7 +823,7 @@ mod tests {
     }
 
     #[test]
-    fn more_run_message_lines_than_fit_are_reached_by_scrolling() {
+    fn more_message_lines_than_fit_are_reached_by_scrolling() {
         use ratatui::crossterm::event::KeyCode::Char;
         let text = (1..=5)
             .map(|n| format!("task {n}: done"))
@@ -902,6 +933,35 @@ mod tests {
             "{rows:?}"
         );
         assert!(inside(&rows[4]).ends_with("Title"), "{rows:?}");
+    }
+
+    #[test]
+    fn the_import_form_covers_the_queue_with_the_path_field_and_puts_the_cursor_in_it() {
+        use ratatui::crossterm::event::KeyCode::Char;
+        let app = keys(
+            loaded(vec![task(1, "first", TaskKind::Agent)]),
+            &[Char('i')],
+        );
+        let (rows, cursor) = draw_form(&app, 8);
+        assert_eq!(inside(&rows[1]), "Import tasks");
+        assert_eq!(inside(&rows[3]), "File path:");
+        assert_eq!(inside(&rows[4]), ">");
+        assert!(
+            rows[7].starts_with("└ Ctrl-S import · Esc cancel"),
+            "{rows:?}"
+        );
+        assert!(!rows.join("\n").contains("first"));
+        assert_eq!(cursor, Some(Position::new(3, 4)));
+    }
+
+    #[test]
+    fn typing_a_path_shows_it_with_the_cursor_after_it() {
+        use ratatui::crossterm::event::KeyCode::Char;
+        let app = keys(loaded(vec![]), &[Char('i')]);
+        let app = keys(app, &"/tmp/x".chars().map(Char).collect::<Vec<_>>());
+        let (rows, cursor) = draw_form(&app, 8);
+        assert_eq!(inside(&rows[4]), "> /tmp/x");
+        assert_eq!(cursor, Some(Position::new(9, 4)));
     }
 
     /// The two settings, as `show_settings` would give them: attempt-timeout at `value`,
