@@ -40,6 +40,66 @@ fn identity_configured(dir: &Path) -> bool {
     config_value(dir, "user.name").is_some() && config_value(dir, "user.email").is_some()
 }
 
+/// Runs `git` with `args` in `dir`, named `description` in the error it builds with `fail`
+/// when it could not be run at all, or exited non-zero — with its exit code and the tail of
+/// its standard error.
+fn run_git_checked<E>(
+    dir: &Path,
+    args: &[&str],
+    description: &str,
+    fail: impl Fn(String) -> E,
+) -> Result<Output, E> {
+    let output =
+        run_git(dir, args).map_err(|e| fail(format!("{description} could not be run: {e}")))?;
+    if !output.status.success() {
+        return Err(fail(format!(
+            "{description} exited with code {}: {}",
+            output.status.code().unwrap_or(-1),
+            stderr_of(&output)
+        )));
+    }
+    Ok(output)
+}
+
+/// How many commits `remote_ref` has that `HEAD` in `dir` does not, or why it could not be
+/// counted.
+fn commits_ahead(dir: &Path, remote_ref: &str) -> Result<u64, PullRebaseError> {
+    let range = format!("HEAD..{remote_ref}");
+    let count_output = run_git_checked(
+        dir,
+        &["rev-list", "--count", &range],
+        &format!("`git rev-list --count {range}`"),
+        PullRebaseError::Failed,
+    )?;
+    Ok(String::from_utf8_lossy(&count_output.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(0))
+}
+
+/// Rebases `dir` onto `remote_ref`, `count` commits ahead: [`PullRebase::TookIn`] when it
+/// goes cleanly, or every file it conflicted in, with the rebase already undone, when it does
+/// not.
+fn rebase_onto(dir: &Path, remote_ref: &str, count: u64) -> Result<PullRebase, PullRebaseError> {
+    let rebase = run_git(dir, &["rebase", remote_ref]).map_err(|e| {
+        PullRebaseError::Failed(format!("`git rebase {remote_ref}` could not be run: {e}"))
+    })?;
+    if rebase.status.success() {
+        return Ok(PullRebase::TookIn(count));
+    }
+    let conflicted = run_git(dir, &["diff", "--name-only", "--diff-filter=U"])
+        .ok()
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let _ = run_git(dir, &["rebase", "--abort"]);
+    Err(PullRebaseError::Conflict(conflicted))
+}
+
 impl Git for GitCli {
     fn work_tree_root(&self, dir: &Path) -> Result<Option<PathBuf>, GitError> {
         let fail = |cause: String| {
@@ -93,16 +153,12 @@ impl Git for GitCli {
         remote: &str,
         branch: &str,
     ) -> Result<PullRebase, PullRebaseError> {
-        let status = run_git(dir, &["status", "--porcelain"]).map_err(|e| {
-            PullRebaseError::Failed(format!("`git status --porcelain` could not be run: {e}"))
-        })?;
-        if !status.status.success() {
-            return Err(PullRebaseError::Failed(format!(
-                "`git status --porcelain` exited with code {}: {}",
-                status.status.code().unwrap_or(-1),
-                stderr_of(&status)
-            )));
-        }
+        let status = run_git_checked(
+            dir,
+            &["status", "--porcelain"],
+            "`git status --porcelain`",
+            PullRebaseError::Failed,
+        )?;
         let dirty = String::from_utf8_lossy(&status.stdout).trim().to_owned();
         if !dirty.is_empty() {
             return Err(PullRebaseError::UncommittedChanges(dirty));
@@ -115,44 +171,11 @@ impl Git for GitCli {
         }
 
         let remote_ref = format!("{remote}/{branch}");
-        let range = format!("HEAD..{remote_ref}");
-        let count_output = run_git(dir, &["rev-list", "--count", &range]).map_err(|e| {
-            PullRebaseError::Failed(format!(
-                "`git rev-list --count {range}` could not be run: {e}"
-            ))
-        })?;
-        if !count_output.status.success() {
-            return Err(PullRebaseError::Failed(format!(
-                "`git rev-list --count {range}` exited with code {}: {}",
-                count_output.status.code().unwrap_or(-1),
-                stderr_of(&count_output)
-            )));
-        }
-        let count: u64 = String::from_utf8_lossy(&count_output.stdout)
-            .trim()
-            .parse()
-            .unwrap_or(0);
+        let count = commits_ahead(dir, &remote_ref)?;
         if count == 0 {
             return Ok(PullRebase::UpToDate);
         }
-
-        let rebase = run_git(dir, &["rebase", &remote_ref]).map_err(|e| {
-            PullRebaseError::Failed(format!("`git rebase {remote_ref}` could not be run: {e}"))
-        })?;
-        if rebase.status.success() {
-            return Ok(PullRebase::TookIn(count));
-        }
-        let conflicted = run_git(dir, &["diff", "--name-only", "--diff-filter=U"])
-            .ok()
-            .map(|output| {
-                String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default();
-        let _ = run_git(dir, &["rebase", "--abort"]);
-        Err(PullRebaseError::Conflict(conflicted))
+        rebase_onto(dir, &remote_ref, count)
     }
 
     fn head(&self, dir: &Path) -> Option<String> {
@@ -174,56 +197,32 @@ impl Git for GitCli {
     }
 
     fn commit_all(&self, dir: &Path, message: &str) -> Result<Option<String>, CommitAllError> {
-        let status = run_git(dir, &["status", "--porcelain"]).map_err(|e| {
-            CommitAllError::Failed(format!("`git status --porcelain` could not be run: {e}"))
-        })?;
-        if !status.status.success() {
-            return Err(CommitAllError::Failed(format!(
-                "`git status --porcelain` exited with code {}: {}",
-                status.status.code().unwrap_or(-1),
-                stderr_of(&status)
-            )));
-        }
+        let status = run_git_checked(
+            dir,
+            &["status", "--porcelain"],
+            "`git status --porcelain`",
+            CommitAllError::Failed,
+        )?;
         if String::from_utf8_lossy(&status.stdout).trim().is_empty() {
             return Ok(None);
         }
-
         if !identity_configured(dir) {
             return Err(CommitAllError::IdentityNotConfigured);
         }
 
-        let add = run_git(dir, &["add", "-A"])
-            .map_err(|e| CommitAllError::Failed(format!("`git add -A` could not be run: {e}")))?;
-        if !add.status.success() {
-            return Err(CommitAllError::Failed(format!(
-                "`git add -A` exited with code {}: {}",
-                add.status.code().unwrap_or(-1),
-                stderr_of(&add)
-            )));
-        }
-
-        let commit = run_git(dir, &["commit", "-m", message])
-            .map_err(|e| CommitAllError::Failed(format!("`git commit` could not be run: {e}")))?;
-        if !commit.status.success() {
-            return Err(CommitAllError::Failed(format!(
-                "`git commit` exited with code {}: {}",
-                commit.status.code().unwrap_or(-1),
-                stderr_of(&commit)
-            )));
-        }
-
-        let hash = run_git(dir, &["rev-parse", "--short", "HEAD"]).map_err(|e| {
-            CommitAllError::Failed(format!(
-                "`git rev-parse --short HEAD` could not be run: {e}"
-            ))
-        })?;
-        if !hash.status.success() {
-            return Err(CommitAllError::Failed(format!(
-                "`git rev-parse --short HEAD` exited with code {}: {}",
-                hash.status.code().unwrap_or(-1),
-                stderr_of(&hash)
-            )));
-        }
+        run_git_checked(dir, &["add", "-A"], "`git add -A`", CommitAllError::Failed)?;
+        run_git_checked(
+            dir,
+            &["commit", "-m", message],
+            "`git commit`",
+            CommitAllError::Failed,
+        )?;
+        let hash = run_git_checked(
+            dir,
+            &["rev-parse", "--short", "HEAD"],
+            "`git rev-parse --short HEAD`",
+            CommitAllError::Failed,
+        )?;
         Ok(Some(
             String::from_utf8_lossy(&hash.stdout).trim().to_owned(),
         ))
@@ -235,64 +234,78 @@ impl Git for GitCli {
         remote: &str,
         branch: &str,
     ) -> Result<String, PushError> {
-        let local = run_git(dir, &["rev-parse", "HEAD"]).map_err(|e| {
-            PushError::Failed(format!("`git rev-parse HEAD` could not be run: {e}"))
-        })?;
-        if !local.status.success() {
-            return Err(PushError::Failed(format!(
-                "`git rev-parse HEAD` exited with code {}: {}",
-                local.status.code().unwrap_or(-1),
-                stderr_of(&local)
-            )));
-        }
+        let local = run_git_checked(
+            dir,
+            &["rev-parse", "HEAD"],
+            "`git rev-parse HEAD`",
+            PushError::Failed,
+        )?;
         let local_hash = String::from_utf8_lossy(&local.stdout).trim().to_owned();
-
         let refspec = format!("HEAD:refs/heads/{branch}");
         let description = format!("`git push {remote} {refspec}`");
-        let push = run_git(dir, &["push", remote, &refspec])
-            .map_err(|e| PushError::Failed(format!("{description} could not be run: {e}")))?;
-        if !push.status.success() {
-            let tail = stderr_of(&push);
-            let rejected = tail.contains("[rejected]") || tail.contains("non-fast-forward");
-            return Err(if rejected {
-                PushError::Rejected
-            } else {
-                PushError::Failed(format!(
-                    "{description} exited with code {}: {tail}",
-                    push.status.code().unwrap_or(-1)
-                ))
-            });
-        }
+        push_ref(dir, remote, &refspec, &description)?;
+        confirm_pushed(dir, remote, branch, &local_hash, &description)
+    }
+}
 
-        let confirm = run_git(dir, &["ls-remote", remote, &format!("refs/heads/{branch}")])
-            .map_err(|e| {
-                PushError::Failed(format!(
-                    "{description} exited zero but confirming it against the remote failed: {e}"
-                ))
-            })?;
-        if !confirm.status.success() {
-            return Err(PushError::Failed(format!(
-                "{description} exited zero but confirming it against the remote exited with \
-                 code {}: {}",
-                confirm.status.code().unwrap_or(-1),
-                stderr_of(&confirm)
-            )));
-        }
-        let tip = String::from_utf8_lossy(&confirm.stdout)
-            .split_whitespace()
-            .next()
-            .map(str::to_owned);
-        match tip {
-            Some(tip) if tip == local_hash => Ok(local_hash[..local_hash.len().min(7)].to_owned()),
-            Some(tip) => Err(PushError::Failed(format!(
-                "{description} exited zero but {remote}/{branch}'s tip is now {tip}, not \
-                 {local_hash}: confirm manually before running again"
-            ))),
-            None => Err(PushError::Failed(format!(
-                "{description} exited zero but {remote}/{branch} could not be found \
-                 afterwards: confirm manually before running again"
-            ))),
-        }
+/// Pushes `dir`'s `HEAD` to `refspec` on `remote`, named `description` in its error:
+/// [`PushError::Rejected`] when git's own words say the branch moved on since, or
+/// [`PushError::Failed`] for any other reason it could not be run or exited non-zero.
+fn push_ref(dir: &Path, remote: &str, refspec: &str, description: &str) -> Result<(), PushError> {
+    let push = run_git(dir, &["push", remote, refspec])
+        .map_err(|e| PushError::Failed(format!("{description} could not be run: {e}")))?;
+    if push.status.success() {
+        return Ok(());
+    }
+    let tail = stderr_of(&push);
+    let rejected = tail.contains("[rejected]") || tail.contains("non-fast-forward");
+    Err(if rejected {
+        PushError::Rejected
+    } else {
+        PushError::Failed(format!(
+            "{description} exited with code {}: {tail}",
+            push.status.code().unwrap_or(-1)
+        ))
+    })
+}
+
+/// Confirms, live against `remote`, that `branch`'s tip there is now `local_hash` — just
+/// pushed by `description` — answering with its short form, or why it could not be confirmed.
+fn confirm_pushed(
+    dir: &Path,
+    remote: &str,
+    branch: &str,
+    local_hash: &str,
+    description: &str,
+) -> Result<String, PushError> {
+    let confirm =
+        run_git(dir, &["ls-remote", remote, &format!("refs/heads/{branch}")]).map_err(|e| {
+            PushError::Failed(format!(
+                "{description} exited zero but confirming it against the remote failed: {e}"
+            ))
+        })?;
+    if !confirm.status.success() {
+        return Err(PushError::Failed(format!(
+            "{description} exited zero but confirming it against the remote exited with code \
+             {}: {}",
+            confirm.status.code().unwrap_or(-1),
+            stderr_of(&confirm)
+        )));
+    }
+    let tip = String::from_utf8_lossy(&confirm.stdout)
+        .split_whitespace()
+        .next()
+        .map(str::to_owned);
+    match tip {
+        Some(tip) if tip == local_hash => Ok(local_hash[..local_hash.len().min(7)].to_owned()),
+        Some(tip) => Err(PushError::Failed(format!(
+            "{description} exited zero but {remote}/{branch}'s tip is now {tip}, not \
+             {local_hash}: confirm manually before running again"
+        ))),
+        None => Err(PushError::Failed(format!(
+            "{description} exited zero but {remote}/{branch} could not be found afterwards: \
+             confirm manually before running again"
+        ))),
     }
 }
 
