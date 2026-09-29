@@ -20,6 +20,8 @@ mod pty;
 mod remove;
 #[path = "support/repo.rs"]
 mod repo;
+#[path = "tui/run.rs"]
+mod run;
 mod support;
 
 use std::path::Path;
