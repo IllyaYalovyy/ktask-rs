@@ -7,9 +7,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::{
-    AttemptRun, AttemptToken, BeginAttemptError, Clock, Commands, Journal, JournalError, Outcome,
-    Provider, ProviderRunError, RecordReportError, RunLock, RunLockError, Task, TaskId, TaskKind,
-    TaskStatus, list_tasks, run_provider,
+    AttemptRun, AttemptToken, BeginAttemptError, Clock, Commands, IMPLEMENTATION, Journal,
+    JournalError, Outcome, Provider, ProviderRunError, RecordReportError, RunLock, RunLockError,
+    StepCall, Task, TaskId, TaskKind, TaskStatus, list_tasks, run_provider,
 };
 
 /// Why a run could not proceed at all — never for how an attempt itself ended, which is a
@@ -274,22 +274,30 @@ fn end_when_nothing_left(attempted: &[Attempted], queue_is_empty: bool) -> RunEn
     }
 }
 
-/// Runs `provider` on `prompt` for attempt `token`, timing it from `clock`.
+/// The steps every task's attempt runs through, in order, stopping at the first that ends
+/// badly: for now, just the one that always existed — running the provider on the task's whole
+/// prompt. Later tasks each add one more name here, and one more way of running it.
+const STEPS: &[&str] = &[IMPLEMENTATION];
+
+/// Runs `provider` on `target.prompt` for `target.token`'s step `step`, timing it from `clock`.
 fn timed_provider_run(
     commands: &impl Commands,
     provider: &Provider,
     clock: &impl Clock,
-    prompt: &str,
-    token: &AttemptToken,
+    target: &RunTarget<'_>,
+    step: &str,
     context: RunContext<'_>,
 ) -> (Duration, Result<crate::Output, ProviderRunError>) {
     let started = clock.now();
     let result = run_provider(
         commands,
         provider,
-        prompt,
-        &token.to_string(),
-        token.number,
+        target.prompt,
+        StepCall {
+            token: &target.token.to_string(),
+            attempt: target.token.number,
+            step,
+        },
         context.project_dir,
         context.attempt_timeout,
     );
@@ -299,8 +307,64 @@ fn timed_provider_run(
     )
 }
 
-/// Runs one attempt at `task` with `provider`: begins it, builds its prompt, runs the
-/// provider, decides the outcome, and ends the attempt with it.
+/// The task an attempt runs, the token identifying that attempt, and the whole prompt built
+/// for it — everything [`run_steps`] needs about what it is running, as opposed to how.
+struct RunTarget<'a> {
+    task: &'a Task,
+    token: &'a AttemptToken,
+    prompt: &'a str,
+}
+
+/// Runs `target`'s attempt through `steps`, in order: begins each step, runs the provider on
+/// its prompt for it, decides its outcome, and ends it with that outcome — stopping at the
+/// first step that does not end `done`, so a step after it is never begun and leaves no event
+/// in the journal. Returns the steps' combined duration and the outcome of the last one run,
+/// which becomes the whole attempt's.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read or written.
+fn run_steps(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    commands: &impl Commands,
+    provider: &Provider,
+    context: RunContext<'_>,
+    target: &RunTarget<'_>,
+    steps: &[&str],
+) -> Result<(Duration, Option<i32>, TaskStatus, Option<String>), RunError> {
+    let mut total = Duration::ZERO;
+    let mut exit_code = None;
+    let mut status = TaskStatus::Done;
+    let mut reason = None;
+    for &step in steps {
+        crate::attempt::begin_step(journal, clock, target.task.id, target.token.number, step)?;
+        let (duration, result) =
+            timed_provider_run(commands, provider, clock, target, step, context);
+        (exit_code, status, reason) = attempt_outcome(journal, target.task, target.token, result)?;
+        total += duration;
+        crate::attempt::end_step(
+            journal,
+            clock,
+            target.task.id,
+            target.token.number,
+            step,
+            AttemptRun {
+                duration,
+                exit_code,
+                status,
+                reason: reason.as_deref(),
+            },
+        )?;
+        if status != TaskStatus::Done {
+            break;
+        }
+    }
+    Ok((total, exit_code, status, reason))
+}
+
+/// Runs one attempt at `task` with `provider`: begins it, builds its prompt, runs it through
+/// the pipeline's steps, and ends the attempt with the outcome they left it at.
 ///
 /// # Errors
 ///
@@ -316,11 +380,15 @@ fn run_one_attempt(
     let number = crate::attempt::begin_attempt_running(journal, clock, task.id, provider.name)?;
     let token = AttemptToken::new(context.project_name, task.id, number);
     let prompt = build_prompt(task, &token, context.binary_path);
+    let target = RunTarget {
+        task,
+        token: &token,
+        prompt: &prompt,
+    };
 
-    let (duration, result) =
-        timed_provider_run(commands, provider, clock, &prompt, &token, context);
+    let (duration, exit_code, status, reason) =
+        run_steps(journal, clock, commands, provider, context, &target, STEPS)?;
 
-    let (exit_code, status, reason) = attempt_outcome(journal, task, &token, result)?;
     crate::attempt::end_attempt(
         journal,
         task.id,
@@ -481,8 +549,8 @@ mod tests {
 
     use crate::fakes::{FakeClock, FakeCommands, FakeJournal, FakeRunLock, at, draft};
     use crate::{
-        Exit, Outcome, Placement, ProviderCommand, TaskDraft, TaskKind, TaskStatus, add_task,
-        report,
+        Event, Exit, Outcome, Placement, ProviderCommand, TaskDraft, TaskKind, TaskStatus,
+        add_task, report,
     };
 
     use super::*;
@@ -492,16 +560,21 @@ mod tests {
     }
 
     /// A provider whose command carries the token as `args[1]` (after a placeholder at
-    /// `args[0]`, mirroring what a real provider's own flags might occupy) and the attempt as
-    /// `args[2]`, and the prompt as its standard input — enough for tests to see what `run`
-    /// passed it, without this being any particular real provider.
+    /// `args[0]`, mirroring what a real provider's own flags might occupy), the attempt as
+    /// `args[2]`, and the step as `args[3]`, and the prompt as its standard input — enough for
+    /// tests to see what `run` passed it, without this being any particular real provider.
     fn test_provider() -> Provider {
         Provider {
             name: "test",
-            command: |prompt, token, attempt| {
+            command: |prompt, call| {
                 Ok(ProviderCommand {
                     program: "run-it".to_owned(),
-                    args: vec!["-s".to_owned(), token.to_owned(), attempt.to_string()],
+                    args: vec![
+                        "-s".to_owned(),
+                        call.token.to_owned(),
+                        call.attempt.to_string(),
+                        call.step.to_owned(),
+                    ],
                     stdin: prompt.as_bytes().to_vec(),
                 })
             },
@@ -768,10 +841,10 @@ mod tests {
         // `run` works with any [`Provider`] value, not one it recognizes by name.
         let other = Provider {
             name: "other",
-            command: |_prompt, token, attempt| {
+            command: |_prompt, call| {
                 Ok(ProviderCommand {
                     program: "printf".to_owned(),
-                    args: vec![token.to_owned(), format!("attempt={attempt}")],
+                    args: vec![call.token.to_owned(), format!("attempt={}", call.attempt)],
                     stdin: Vec::new(),
                 })
             },
@@ -1004,7 +1077,7 @@ mod tests {
         let journal = journal_of_abc();
         let refusing = Provider {
             name: "refusing",
-            command: |_, _, _| Err("cannot build it".to_owned()),
+            command: |_, _| Err("cannot build it".to_owned()),
         };
         let commands = commands_ok(Exit::Code(0));
         let report = run(&journal, &commands, &refusing, Duration::from_secs(60)).unwrap();
@@ -1040,6 +1113,92 @@ mod tests {
         assert_eq!(spec.dir, Path::new("/work/proj"));
         assert_eq!(spec.timeout, Duration::from_secs(42));
         assert_eq!(spec.args[1], "proj/1/1");
+        assert_eq!(spec.args[3], IMPLEMENTATION);
+    }
+
+    #[test]
+    fn every_step_run_begins_and_ends_with_one_journal_event_each() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        let commands = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt.steps.len(), 1, "{:?}", attempt.steps);
+        let step = &attempt.steps[0];
+        assert_eq!(step.name, IMPLEMENTATION);
+        let end = step.ended.as_ref().expect("the step ended");
+        assert_eq!(end.status, TaskStatus::Done);
+
+        let started = journal
+            .events()
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event, Event::StepStarted { .. }))
+            .count();
+        let ended = journal
+            .events()
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event, Event::StepEnded { .. }))
+            .count();
+        assert_eq!((started, ended), (1, 1));
+    }
+
+    #[test]
+    fn a_step_that_ends_badly_stops_the_sequence_and_later_steps_leave_no_event() {
+        let journal = journal_of_abc();
+        let number =
+            crate::attempt::begin_attempt_running(&journal, &clock(), TaskId(1), "test").unwrap();
+        let token = AttemptToken::new("proj", TaskId(1), number);
+        let task = crate::list_all_tasks(&journal).unwrap().remove(0);
+        let commands = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Failed,
+            exit: Exit::Code(0),
+        };
+
+        let target = RunTarget {
+            task: &task,
+            token: &token,
+            prompt: "prompt",
+        };
+        let (_, _, status, reason) = run_steps(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            context(Duration::from_secs(60)),
+            &target,
+            &["one", "two"],
+        )
+        .unwrap();
+
+        assert_eq!(status, TaskStatus::Failed);
+        assert_eq!(reason, Some("because".to_owned()));
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        // Only the first, failing step ran: the second is never begun, so it leaves no event
+        // and no line of its own.
+        assert_eq!(attempt.steps.len(), 1, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps[0].name, "one");
+        assert_eq!(
+            attempt.steps[0].ended.as_ref().unwrap().status,
+            TaskStatus::Failed
+        );
     }
 
     #[test]

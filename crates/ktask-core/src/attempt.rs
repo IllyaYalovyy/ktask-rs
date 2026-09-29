@@ -103,6 +103,51 @@ pub(crate) fn end_attempt(
     })
 }
 
+/// Use case: begins step `step` of attempt `number` of task `id` — one of the ordered steps a
+/// task's attempt runs through, run in order and stopping at the first that ends badly.
+///
+/// # Errors
+///
+/// Fails, recording nothing, when no attempt numbered `number` is running for this task, or
+/// when the journal cannot be read or written.
+pub(crate) fn begin_step(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    id: TaskId,
+    number: u32,
+    step: &str,
+) -> Result<(), RecordReportError> {
+    let at = clock.now();
+    let step = step.to_owned();
+    decide_and_append(journal, move |state| {
+        state
+            .decide_begin_step(id, number, step.clone(), at)
+            .map(|event| (vec![event], ()))
+    })
+}
+
+/// Use case: ends step `step` of attempt `number` of task `id` with `run`.
+///
+/// # Errors
+///
+/// Fails, recording nothing, when no attempt numbered `number` is running for this task, or
+/// when the journal cannot be read or written.
+pub(crate) fn end_step(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    id: TaskId,
+    number: u32,
+    step: &str,
+    run: AttemptRun<'_>,
+) -> Result<(), RecordReportError> {
+    let at = clock.now();
+    decide_and_append(journal, |state| {
+        state
+            .decide_end_step(id, number, step, run, at)
+            .map(|event| (vec![event], ()))
+    })
+}
+
 /// The task currently running, and its current attempt's number — a project has at most one at
 /// a time. `None` when none is running.
 ///

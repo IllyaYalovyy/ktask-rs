@@ -4,7 +4,8 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::{
-    Clock, Journal, JournalError, Outcome, RunLock, Task, TaskId, TaskStatus, list_all_tasks,
+    AttemptEnd, Clock, Journal, JournalError, Outcome, RunLock, Task, TaskId, TaskStatus,
+    list_all_tasks,
 };
 
 /// The one step kind that exists so far: an agent implementing the task.
@@ -50,8 +51,9 @@ impl fmt::Display for AttemptOutcome {
 pub struct AttemptLine {
     /// The attempt's number.
     pub number: u32,
-    /// The step it ran: always [`IMPLEMENTATION`], the only step kind that exists so far.
-    pub step: &'static str,
+    /// The name of its most recent step: always [`IMPLEMENTATION`] today, the only step in the
+    /// pipeline — later steps each add one more name this can carry.
+    pub step: String,
     /// The provider it ran with, once that is known.
     pub provider: Option<String>,
     /// How long it has run: the recorded duration once it has ended, elapsed time so far
@@ -90,9 +92,27 @@ pub fn displayed_status(status: TaskStatus, outcome: Option<AttemptOutcome>) -> 
     }
 }
 
+/// The outcome and reason shown for a step or attempt that ended at `end`, given what the
+/// agent itself reported for it, when it reported anything at all.
+fn ended_outcome(
+    end: &AttemptEnd,
+    reported: Option<(Outcome, Option<String>)>,
+) -> (AttemptOutcome, Option<String>) {
+    match reported {
+        Some((outcome, reason)) => (AttemptOutcome::Reported(outcome), reason),
+        None => (AttemptOutcome::Unreported, end.reason.clone()),
+    }
+}
+
 /// The [`StatusEntry`] for `task`, given its most recent attempt and the agent's own report of
 /// it, when there was one; `run_alive` says whether a live run currently holds the project's
 /// run lock, which only matters when the attempt has not ended.
+///
+/// The line shown is the attempt's most recent step — the one line-per-step `status` and the
+/// queue screen build up from, one at a time, as later tasks add more steps to the pipeline.
+/// When no step has been recorded at all — the attempt itself was ended directly, as a run
+/// killed outright and never reconciled leaves it, before ever starting one — the attempt's own
+/// record is shown instead, under the pipeline's first step name.
 fn entry_for(
     task: Task,
     attempt: crate::Attempt,
@@ -100,23 +120,28 @@ fn entry_for(
     clock: &impl Clock,
     run_alive: bool,
 ) -> StatusEntry {
-    let (outcome, reason, time_spent) = match (&attempt.ended, reported) {
-        (Some(end), Some((outcome, reason))) => {
-            (AttemptOutcome::Reported(outcome), reason, end.duration)
-        }
-        (Some(end), None) => (AttemptOutcome::Unreported, end.reason.clone(), end.duration),
-        (None, _) => {
-            let elapsed = clock
-                .now()
-                .duration_since(attempt.started_at)
-                .unwrap_or_default();
-            let outcome = if run_alive {
-                AttemptOutcome::Running
-            } else {
-                AttemptOutcome::Interrupted
-            };
-            (outcome, None, elapsed)
-        }
+    let last_step = attempt.steps.last();
+    let (step, outcome, reason, time_spent) = if let Some((step, end)) =
+        last_step.and_then(|step| step.ended.as_ref().map(|end| (step, end)))
+    {
+        let (outcome, reason) = ended_outcome(end, reported);
+        (step.name.clone(), outcome, reason, end.duration)
+    } else if let Some(end) = &attempt.ended {
+        let name = last_step.map_or_else(|| IMPLEMENTATION.to_owned(), |step| step.name.clone());
+        let (outcome, reason) = ended_outcome(end, reported);
+        (name, outcome, reason, end.duration)
+    } else {
+        let (name, started_at) = last_step.map_or_else(
+            || (IMPLEMENTATION.to_owned(), attempt.started_at),
+            |step| (step.name.clone(), step.started_at),
+        );
+        let elapsed = clock.now().duration_since(started_at).unwrap_or_default();
+        let outcome = if run_alive {
+            AttemptOutcome::Running
+        } else {
+            AttemptOutcome::Interrupted
+        };
+        (name, outcome, None, elapsed)
     };
     StatusEntry {
         task: task.id,
@@ -124,7 +149,7 @@ fn entry_for(
         status: task.status,
         attempt: AttemptLine {
             number: attempt.number,
-            step: IMPLEMENTATION,
+            step,
             provider: attempt.provider,
             time_spent,
             outcome,
@@ -233,7 +258,7 @@ mod tests {
                 status: TaskStatus::Running,
                 attempt: AttemptLine {
                     number: 1,
-                    step: IMPLEMENTATION,
+                    step: IMPLEMENTATION.to_owned(),
                     provider: Some("echo".to_owned()),
                     time_spent: Duration::from_secs(30),
                     outcome: AttemptOutcome::Running,
@@ -258,7 +283,7 @@ mod tests {
                 status: TaskStatus::Running,
                 attempt: AttemptLine {
                     number: 1,
-                    step: IMPLEMENTATION,
+                    step: IMPLEMENTATION.to_owned(),
                     provider: Some("echo".to_owned()),
                     time_spent: Duration::from_secs(30),
                     outcome: AttemptOutcome::Interrupted,

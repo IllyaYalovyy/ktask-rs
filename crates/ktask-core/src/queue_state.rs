@@ -7,13 +7,21 @@
 //! module decides.
 
 use std::collections::HashMap;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::journal::{AttemptRun, Event};
 use crate::{
     AppendConflict, AppendError, Attempt, AttemptEnd, BeginAttemptError, CancelError, Journal,
-    JournalError, Outcome, Placement, RecordReportError, Task, TaskDraft, TaskId, TaskStatus,
+    JournalError, Outcome, Placement, RecordReportError, Step, Task, TaskDraft, TaskId, TaskStatus,
 };
+
+/// One step of an attempt, as folded from its events: [`AttemptFold::steps`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StepFold {
+    name: String,
+    started_at: SystemTime,
+    ended: Option<AttemptEnd>,
+}
 
 /// One task's attempt, as folded from its events: the state [`QueueState::attempt_of`] and
 /// [`QueueState::running`] read from, keyed by task in [`QueueState::attempts`].
@@ -23,6 +31,7 @@ struct AttemptFold {
     started_at: SystemTime,
     provider: Option<String>,
     ended: Option<AttemptEnd>,
+    steps: Vec<StepFold>,
 }
 
 /// The queue's state: every task ever added, in queue order, with the cancelled ones marked
@@ -88,6 +97,7 @@ impl QueueState {
                         started_at: *at,
                         provider: None,
                         ended: None,
+                        steps: Vec::new(),
                     },
                 );
             }
@@ -134,6 +144,62 @@ impl QueueState {
                     });
                 }
             }
+            Event::StepStarted {
+                id,
+                number,
+                step,
+                at,
+            } => self.apply_step_started(*id, *number, step, *at),
+            Event::StepEnded {
+                id,
+                number,
+                step,
+                duration,
+                status,
+                reason,
+                ..
+            } => self.apply_step_ended(*id, *number, step, *duration, *status, reason.clone()),
+        }
+    }
+
+    /// Applies a [`Event::StepStarted`]: pushes a fresh, unended step onto attempt `number` of
+    /// task `id`'s steps, when it is the attempt currently folded for that task.
+    fn apply_step_started(&mut self, id: TaskId, number: u32, step: &str, at: SystemTime) {
+        if let Some(attempt) = self.attempts.get_mut(&id)
+            && attempt.number == number
+        {
+            attempt.steps.push(StepFold {
+                name: step.to_owned(),
+                started_at: at,
+                ended: None,
+            });
+        }
+    }
+
+    /// Applies a [`Event::StepEnded`]: ends the most recent unended step named `step` of
+    /// attempt `number` of task `id`, when there is one.
+    fn apply_step_ended(
+        &mut self,
+        id: TaskId,
+        number: u32,
+        step: &str,
+        duration: Duration,
+        status: TaskStatus,
+        reason: Option<String>,
+    ) {
+        if let Some(attempt) = self.attempts.get_mut(&id)
+            && attempt.number == number
+            && let Some(current) = attempt
+                .steps
+                .iter_mut()
+                .rev()
+                .find(|fold| fold.name == step && fold.ended.is_none())
+        {
+            current.ended = Some(AttemptEnd {
+                duration,
+                status,
+                reason,
+            });
         }
     }
 
@@ -340,6 +406,55 @@ impl QueueState {
         })
     }
 
+    /// The command "begin step `step` of attempt `number` of task `id`": the event it
+    /// produces, or the reason it cannot begin.
+    ///
+    /// # Errors
+    ///
+    /// Fails, deciding nothing, when no attempt numbered `number` is running for this task.
+    pub(crate) fn decide_begin_step(
+        &self,
+        id: TaskId,
+        number: u32,
+        step: String,
+        at: SystemTime,
+    ) -> Result<Event, RecordReportError> {
+        self.check_attempt_running(id, number)?;
+        Ok(Event::StepStarted {
+            id,
+            number,
+            step,
+            at,
+        })
+    }
+
+    /// The command "end step `step` of attempt `number` of task `id` with `run`": the event it
+    /// produces, or the reason it cannot end.
+    ///
+    /// # Errors
+    ///
+    /// Fails, deciding nothing, when no attempt numbered `number` is running for this task.
+    pub(crate) fn decide_end_step(
+        &self,
+        id: TaskId,
+        number: u32,
+        step: &str,
+        run: AttemptRun<'_>,
+        at: SystemTime,
+    ) -> Result<Event, RecordReportError> {
+        self.check_attempt_running(id, number)?;
+        Ok(Event::StepEnded {
+            id,
+            number,
+            step: step.to_owned(),
+            duration: run.duration,
+            exit_code: run.exit_code,
+            status: run.status,
+            reason: run.reason.map(str::to_owned),
+            at,
+        })
+    }
+
     /// The task currently running, and its current attempt's number — a project has at most
     /// one at a time. `None` when none is running.
     pub(crate) fn running(&self) -> Option<(TaskId, u32)> {
@@ -356,6 +471,15 @@ impl QueueState {
             started_at: attempt.started_at,
             provider: attempt.provider.clone(),
             ended: attempt.ended.clone(),
+            steps: attempt
+                .steps
+                .iter()
+                .map(|fold| Step {
+                    name: fold.name.clone(),
+                    started_at: fold.started_at,
+                    ended: fold.ended.clone(),
+                })
+                .collect(),
         })
     }
 

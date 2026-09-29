@@ -79,6 +79,36 @@ pub enum Event {
         /// When.
         at: SystemTime,
     },
+    /// A step of an attempt began.
+    StepStarted {
+        /// The task attempted.
+        id: TaskId,
+        /// The attempt's number.
+        number: u32,
+        /// The step's name.
+        step: String,
+        /// When.
+        at: SystemTime,
+    },
+    /// A step of an attempt ended.
+    StepEnded {
+        /// The task attempted.
+        id: TaskId,
+        /// The attempt's number.
+        number: u32,
+        /// The step's name.
+        step: String,
+        /// How long the step ran.
+        duration: Duration,
+        /// The provider's exit code, or `None` when it was killed past its time limit.
+        exit_code: Option<i32>,
+        /// What the step, and so — when it is the last one run — the attempt, ends at.
+        status: TaskStatus,
+        /// Why, when `status` is not `done`.
+        reason: Option<String>,
+        /// When.
+        at: SystemTime,
+    },
 }
 
 /// Why the journal could not be read or written.
@@ -280,6 +310,20 @@ pub struct AttemptEnd {
     pub reason: Option<String>,
 }
 
+/// One step of an attempt, as [`crate::attempt::last_attempt`] reports it: the pipeline every
+/// task's attempt runs through is an ordered list of these, one per name in it, run in order
+/// and stopping at the first that ends badly — so a step later in the list has none of these at
+/// all when an earlier one stopped the attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Step {
+    /// The step's name.
+    pub name: String,
+    /// When it started.
+    pub started_at: SystemTime,
+    /// How it ended, once [`crate::attempt::end_step`] has recorded it; `None` while it runs.
+    pub ended: Option<AttemptEnd>,
+}
+
 /// A task's most recent attempt, as [`crate::attempt::last_attempt`] returns it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attempt {
@@ -293,6 +337,8 @@ pub struct Attempt {
     /// How it ended, once [`crate::attempt::end_attempt`] has recorded it; `None` while it
     /// runs.
     pub ended: Option<AttemptEnd>,
+    /// Every step run so far, in the order they were started.
+    pub steps: Vec<Step>,
 }
 
 /// Port: one project's journal. Every change is an event appended to it, and the queue's

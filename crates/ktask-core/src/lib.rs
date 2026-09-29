@@ -27,11 +27,11 @@ pub use git::{Git, GitError};
 pub use import::{ImportError, InvalidTask, import_tasks};
 pub use journal::{
     AppendConflict, AppendError, Attempt, AttemptEnd, AttemptRun, BeginAttemptError, CancelError,
-    Event, Journal, JournalError, JournalWatch, RecordReportError,
+    Event, Journal, JournalError, JournalWatch, RecordReportError, Step,
 };
 pub use lock::{RunLock, RunLockError};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
-pub use provider::{Provider, ProviderCommand, ProviderRunError, run_provider};
+pub use provider::{Provider, ProviderCommand, ProviderRunError, StepCall, run_provider};
 pub use queue::{QueueView, StatusSummary, queue_view};
 pub use register::{RegisterError, register_project};
 pub use report::{AttemptToken, Outcome, ReportError, report, start_attempt};

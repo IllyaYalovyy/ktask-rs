@@ -22,18 +22,32 @@ pub struct ProviderCommand {
     pub stdin: Vec<u8>,
 }
 
-/// A provider: a name it is known by, and a pure function from a prompt, a token and an
-/// attempt number to the [`ProviderCommand`] that runs it.
+/// Which step of which attempt a provider command runs for: the token that names the attempt,
+/// its number, and the step's name — passed to a real provider's script or command line as
+/// positional arguments, so it can call back into `ktask-rs report` and tell which step it is
+/// running as.
+#[derive(Debug, Clone, Copy)]
+pub struct StepCall<'a> {
+    /// The attempt's token.
+    pub token: &'a str,
+    /// The attempt's number.
+    pub attempt: u32,
+    /// The step's name.
+    pub step: &'a str,
+}
+
+/// A provider: a name it is known by, and a pure function from a prompt and a [`StepCall`] to
+/// the [`ProviderCommand`] that runs it.
 #[derive(Debug, Clone, Copy)]
 pub struct Provider {
     /// The name the provider is known by.
     pub name: &'static str,
-    /// Turns a prompt, a token and an attempt number into the command that runs it.
+    /// Turns a prompt and a [`StepCall`] into the command that runs it.
     ///
     /// # Errors
     ///
     /// Fails when the prompt cannot be turned into a command to run.
-    pub command: fn(prompt: &str, token: &str, attempt: u32) -> Result<ProviderCommand, String>,
+    pub command: fn(prompt: &str, call: StepCall<'_>) -> Result<ProviderCommand, String>,
 }
 
 /// Why running a provider failed — never for the command's own exit code, which is a normal
@@ -63,8 +77,8 @@ impl From<CommandsError> for ProviderRunError {
     }
 }
 
-/// Use case: turns `prompt` into `provider`'s command for `token` and `attempt`, and runs it
-/// in `dir`, killing it, and everything it started, if it runs past `timeout`.
+/// Use case: turns `prompt` into `provider`'s command for `call`, and runs it in `dir`, killing
+/// it, and everything it started, if it runs past `timeout`.
 ///
 /// # Errors
 ///
@@ -74,12 +88,11 @@ pub fn run_provider(
     commands: &impl Commands,
     provider: &Provider,
     prompt: &str,
-    token: &str,
-    attempt: u32,
+    call: StepCall<'_>,
     dir: &Path,
     timeout: Duration,
 ) -> Result<Output, ProviderRunError> {
-    let built = (provider.command)(prompt, token, attempt).map_err(ProviderRunError::Build)?;
+    let built = (provider.command)(prompt, call).map_err(ProviderRunError::Build)?;
     let spec = CommandSpec {
         program: built.program,
         args: built.args,
@@ -102,7 +115,7 @@ mod tests {
     const TIMEOUT: Duration = Duration::from_secs(30);
 
     fn provider_that_builds(
-        command: fn(&str, &str, u32) -> Result<ProviderCommand, String>,
+        command: fn(&str, StepCall<'_>) -> Result<ProviderCommand, String>,
     ) -> Provider {
         Provider {
             name: "test",
@@ -110,12 +123,24 @@ mod tests {
         }
     }
 
+    fn call<'a>(token: &'a str, attempt: u32, step: &'a str) -> StepCall<'a> {
+        StepCall {
+            token,
+            attempt,
+            step,
+        }
+    }
+
     #[test]
     fn the_built_command_is_run_in_the_given_directory_with_the_given_timeout() {
-        let provider = provider_that_builds(|prompt, token, attempt| {
+        let provider = provider_that_builds(|prompt, call| {
             Ok(ProviderCommand {
                 program: "run-it".to_owned(),
-                args: vec![token.to_owned(), attempt.to_string()],
+                args: vec![
+                    call.token.to_owned(),
+                    call.attempt.to_string(),
+                    call.step.to_owned(),
+                ],
                 stdin: prompt.as_bytes().to_vec(),
             })
         });
@@ -128,15 +153,14 @@ mod tests {
             &commands,
             &provider,
             "the prompt",
-            "the-token",
-            3,
+            call("the-token", 3, "implementation"),
             Path::new(DIR),
             TIMEOUT,
         )
         .unwrap();
         let spec = commands.last.borrow().clone().unwrap();
         assert_eq!(spec.program, "run-it");
-        assert_eq!(spec.args, vec!["the-token", "3"]);
+        assert_eq!(spec.args, vec!["the-token", "3", "implementation"]);
         assert_eq!(spec.stdin, b"the prompt");
         assert_eq!(spec.dir, Path::new(DIR));
         assert_eq!(spec.timeout, TIMEOUT);
@@ -144,7 +168,7 @@ mod tests {
 
     #[test]
     fn a_provider_that_cannot_build_a_command_runs_nothing_and_fails() {
-        let provider = provider_that_builds(|_, _, _| Err("no can do".to_owned()));
+        let provider = provider_that_builds(|_, _| Err("no can do".to_owned()));
         let commands = FakeCommands::returning(Ok(Output {
             stdout: Vec::new(),
             stderr: Vec::new(),
@@ -154,8 +178,7 @@ mod tests {
             &commands,
             &provider,
             "the prompt",
-            "t",
-            1,
+            call("t", 1, "implementation"),
             Path::new(DIR),
             TIMEOUT,
         )
@@ -166,10 +189,10 @@ mod tests {
 
     #[test]
     fn a_commands_failure_is_passed_on() {
-        let provider = provider_that_builds(|_, token, attempt| {
+        let provider = provider_that_builds(|_, call| {
             Ok(ProviderCommand {
                 program: "run-it".to_owned(),
-                args: vec![token.to_owned(), attempt.to_string()],
+                args: vec![call.token.to_owned(), call.attempt.to_string()],
                 stdin: Vec::new(),
             })
         });
@@ -179,8 +202,7 @@ mod tests {
             &commands,
             &provider,
             "the prompt",
-            "t",
-            1,
+            call("t", 1, "implementation"),
             Path::new(DIR),
             TIMEOUT,
         )
