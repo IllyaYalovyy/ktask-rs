@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use ktask_adapters::{SystemClock, read_text};
 
-use crate::context::{open_queue, placement};
+use crate::context::{merge_project, open_queue, placement};
 use crate::error::Failure;
 use crate::render;
 
@@ -30,11 +30,16 @@ pub(crate) struct Args {
 }
 
 /// Adds every task of the JSON array `args.file` names and prints their IDs.
-pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
+pub(crate) fn run(
+    args: &Args,
+    project: Option<&str>,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
     // Read before anything is registered or opened, so that a missing file changes
     // nothing.
     let json = read_text(&args.file).map_err(|message| Failure { message, code: 2 })?;
-    let journal = open_queue(args.project.as_deref())?;
+    let project = merge_project(project, args.project.as_deref())?;
+    let journal = open_queue(project.as_deref())?;
     let tasks = ktask_core::import_tasks(
         &journal,
         &SystemClock,

@@ -102,6 +102,36 @@ pub(crate) fn open_settings_store(project: &Project) -> Result<TomlSettingsStore
     Ok(TomlSettingsStore::new(settings_file(project)?))
 }
 
+/// Combines the project named before the subcommand with the one named after it — either
+/// position means the same thing, so a command works whichever way round `--project` is
+/// typed. Refuses when both were given and disagree.
+pub(crate) fn merge_project(
+    before: Option<&str>,
+    after: Option<&str>,
+) -> Result<Option<String>, Failure> {
+    match (before, after) {
+        (Some(before), Some(after)) if before != after => Err(Failure {
+            message: format!("the project was named twice, as {before:?} and {after:?}"),
+            code: 2,
+        }),
+        (Some(value), _) | (None, Some(value)) => Ok(Some(value.to_owned())),
+        (None, None) => Ok(None),
+    }
+}
+
+/// Refuses a project named before a command that does not work on one — the same refusal
+/// clap gives when `--project` is named after such a command, where it is not a declared
+/// option.
+pub(crate) fn reject_project(project: Option<&str>) -> Result<(), Failure> {
+    match project {
+        None => Ok(()),
+        Some(_) => Err(Failure {
+            message: "unexpected argument '--project' found".to_owned(),
+            code: 2,
+        }),
+    }
+}
+
 pub(crate) fn current_dir() -> Result<PathBuf, String> {
     std::env::current_dir().map_err(|e| format!("cannot find the current directory: {e}"))
 }

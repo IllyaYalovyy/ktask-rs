@@ -32,6 +32,7 @@ fn help_shows_usage_and_exits_zero() -> Result<()> {
     );
     assert!(outcome.stdout.contains("--version"), "{}", outcome.stdout);
     assert!(outcome.stdout.contains("tui"), "{}", outcome.stdout);
+    assert!(outcome.stdout.contains("--project"), "{}", outcome.stdout);
     assert_eq!(outcome.stderr, "");
     assert_eq!(outcome.code, Some(0));
     Ok(())

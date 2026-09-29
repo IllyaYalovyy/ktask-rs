@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use clap::Subcommand;
 use ktask_adapters::{GitCli, SystemClock};
 
-use crate::context::{current_dir, open_registry, resolve};
+use crate::context::{current_dir, merge_project, open_registry, reject_project, resolve};
 use crate::error::Failure;
 use crate::render;
 
@@ -40,11 +40,27 @@ pub(crate) enum Command {
 }
 
 /// Runs the `project` subcommand `command` names.
-pub(crate) fn run(command: &Command, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
+pub(crate) fn run(
+    command: &Command,
+    project: Option<&str>,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
     match command {
-        Command::List { json } => list(*json, stdout),
-        Command::Show { project, json } => show(project.as_deref(), *json, stdout),
-        Command::Register { name, json } => register(name, *json, stdout),
+        Command::List { json } => {
+            reject_project(project)?;
+            list(*json, stdout)
+        }
+        Command::Show {
+            project: local,
+            json,
+        } => {
+            let project = merge_project(project, local.as_deref())?;
+            show(project.as_deref(), *json, stdout)
+        }
+        Command::Register { name, json } => {
+            reject_project(project)?;
+            register(name, *json, stdout)
+        }
     }
 }
 

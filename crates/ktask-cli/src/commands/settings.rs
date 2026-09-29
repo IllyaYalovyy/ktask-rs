@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use clap::Subcommand;
 use ktask_adapters::GitCli;
 
-use crate::context::{open_registry, open_settings_store, resolve};
+use crate::context::{merge_project, open_registry, open_settings_store, resolve};
 use crate::error::Failure;
 use crate::render;
 
@@ -45,15 +45,25 @@ pub(crate) enum Command {
 }
 
 /// Shows every setting, or changes one when `args.command` is `Set`.
-pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
+pub(crate) fn run(
+    args: &Args,
+    project: Option<&str>,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
     match &args.command {
-        None => show(args.project.as_deref(), args.json, stdout),
+        None => {
+            let project = merge_project(project, args.project.as_deref())?;
+            show(project.as_deref(), args.json, stdout)
+        }
         Some(Command::Set {
             name,
             value,
-            project,
+            project: local,
             json,
-        }) => set(name, value, project.as_deref(), *json, stdout),
+        }) => {
+            let project = merge_project(project, local.as_deref())?;
+            set(name, value, project.as_deref(), *json, stdout)
+        }
     }
 }
 

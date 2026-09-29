@@ -10,7 +10,9 @@ use ktask_core::{
     TEST_STEP,
 };
 
-use crate::context::{current_exe, open_journal, open_registry, resolve, run_lock_file};
+use crate::context::{
+    current_exe, merge_project, open_journal, open_registry, resolve, run_lock_file,
+};
 use crate::error::Failure;
 use crate::render;
 
@@ -44,9 +46,14 @@ pub(crate) struct Args {
 
 /// Runs the pending tasks of the resolved project in queue order, one attempt each with the
 /// `echo` provider, until one stops it; renders what happened and maps it to an exit code.
-pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
+pub(crate) fn run(
+    args: &Args,
+    project: Option<&str>,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
     let registry = open_registry()?;
-    let (project, settings) = resolve(&registry, args.project.as_deref())?;
+    let project = merge_project(project, args.project.as_deref())?;
+    let (project, settings) = resolve(&registry, project.as_deref())?;
     let journal = open_journal(&project)?;
     let lock = FileRunLock::new(run_lock_file(&project)?);
     let binary_path = current_exe()?;

@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use ktask_adapters::SystemClock;
 use ktask_core::{TaskDraft, TaskKind};
 
-use crate::context::{open_queue, placement};
+use crate::context::{merge_project, open_queue, placement};
 use crate::error::{Failure, failure_from_add_problems};
 use crate::render;
 
@@ -41,7 +41,11 @@ pub(crate) struct Args {
 }
 
 /// Adds the task `args` describes and prints its ID.
-pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
+pub(crate) fn run(
+    args: &Args,
+    project: Option<&str>,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
     let draft = TaskDraft {
         title: args.title.clone(),
         body: args.body.clone().unwrap_or_default(),
@@ -49,7 +53,8 @@ pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Fail
         kind: args.kind.unwrap_or_default(),
         links: args.link.clone(),
     };
-    let journal = open_queue(args.project.as_deref())?;
+    let project = merge_project(project, args.project.as_deref())?;
+    let journal = open_queue(project.as_deref())?;
     let placement = placement(args.before, args.after);
     let task = ktask_core::add_task(&journal, &SystemClock, &draft, placement)
         .map_err(failure_from_add_problems)?;

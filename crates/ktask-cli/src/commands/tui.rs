@@ -12,7 +12,8 @@ use ktask_adapters::{
 use ktask_core::{Project, SettingView};
 
 use crate::context::{
-    current_exe, journal_file, open_registry, open_settings_store, resolve, run_lock_file,
+    current_exe, journal_file, merge_project, open_registry, open_settings_store, resolve,
+    run_lock_file,
 };
 use crate::error::Failure;
 
@@ -25,10 +26,11 @@ pub(crate) struct Args {
 }
 
 /// Opens the terminal interface on the queue of the project selected, or the current one.
-pub(crate) fn run(args: &Args) -> Result<(), Failure> {
+pub(crate) fn run(args: &Args, project: Option<&str>) -> Result<(), Failure> {
     ensure_terminal()?;
     let registry = open_registry()?;
-    let (project, _settings) = resolve(&registry, args.project.as_deref())?;
+    let project = merge_project(project, args.project.as_deref())?;
+    let (project, _settings) = resolve(&registry, project.as_deref())?;
     let path = journal_file(&project)?;
     let journal = SqliteJournal::open(&path).map_err(|e| e.to_string())?;
     let watch = FileJournalWatch::open(&path).map_err(|e| e.to_string())?;

@@ -8,7 +8,7 @@ use clap::Subcommand;
 use ktask_adapters::{ProcessCommands, echo};
 use ktask_core::ProviderRunError;
 
-use crate::context::current_dir;
+use crate::context::{current_dir, reject_project};
 use crate::error::Failure;
 use crate::render;
 
@@ -39,8 +39,14 @@ pub(crate) enum Command {
     },
 }
 
-/// Runs the `provider` subcommand `command` names.
-pub(crate) fn run(command: &Command, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
+/// Runs the `provider` subcommand `command` names. `provider run` works on no project, so a
+/// `--project` named before it is refused, the same as one named after it.
+pub(crate) fn run(
+    command: &Command,
+    project: Option<&str>,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
+    reject_project(project)?;
     let Command::Run {
         provider,
         token,

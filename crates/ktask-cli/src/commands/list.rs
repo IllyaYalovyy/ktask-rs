@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use crate::context::open_queue;
+use crate::context::{merge_project, open_queue};
 use crate::error::Failure;
 use crate::render;
 
@@ -22,8 +22,13 @@ pub(crate) struct Args {
 }
 
 /// Lists the tasks of the resolved project's queue.
-pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
-    let journal = open_queue(args.project.as_deref())?;
+pub(crate) fn run(
+    args: &Args,
+    project: Option<&str>,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
+    let project = merge_project(project, args.project.as_deref())?;
+    let journal = open_queue(project.as_deref())?;
     let tasks = if args.all {
         ktask_core::list_all_tasks(&journal)
     } else {

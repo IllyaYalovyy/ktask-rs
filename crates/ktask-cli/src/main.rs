@@ -19,6 +19,9 @@ use error::Failure;
 #[derive(Debug, Parser)]
 #[command(name = "ktask-rs", version)]
 struct Cli {
+    /// Work on this registered project instead of the one the current directory is in
+    #[arg(long, value_name = "NAME")]
+    project: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -71,7 +74,7 @@ fn main() -> ExitCode {
     }
     let cli = Cli::parse();
     let mut stdout = io::stdout().lock();
-    match dispatch(&cli.command, &mut stdout) {
+    match dispatch(&cli.command, cli.project.as_deref(), &mut stdout) {
         Ok(code) => code,
         Err(failure) => {
             // Nowhere left to report a failure to write to standard error.
@@ -82,22 +85,27 @@ fn main() -> ExitCode {
 }
 
 /// Sends each command to the module that reads its arguments, calls the use case and
-/// renders the result.
-fn dispatch(command: &Command, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
+/// renders the result. `project` is what `--project` named before the subcommand, if
+/// anything; each command combines it with what `--project` named after the subcommand.
+fn dispatch(
+    command: &Command,
+    project: Option<&str>,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
     match command {
-        Command::Project { command } => commands::project::run(command, stdout),
-        Command::Add(args) => commands::add::run(args, stdout),
-        Command::Import(args) => commands::import::run(args, stdout),
-        Command::Remove(args) => commands::remove::run(args, stdout),
-        Command::List(args) => commands::list::run(args, stdout),
+        Command::Project { command } => commands::project::run(command, project, stdout),
+        Command::Add(args) => commands::add::run(args, project, stdout),
+        Command::Import(args) => commands::import::run(args, project, stdout),
+        Command::Remove(args) => commands::remove::run(args, project, stdout),
+        Command::List(args) => commands::list::run(args, project, stdout),
         Command::Tui(args) => {
-            commands::tui::run(args)?;
+            commands::tui::run(args, project)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Run(args) => commands::run::run(args, stdout),
-        Command::Provider { command } => commands::provider::run(command, stdout),
-        Command::Settings(args) => commands::settings::run(args, stdout),
-        Command::Status(args) => commands::status::run(args, stdout),
-        Command::Report(args) => commands::report::run(args, stdout),
+        Command::Run(args) => commands::run::run(args, project, stdout),
+        Command::Provider { command } => commands::provider::run(command, project, stdout),
+        Command::Settings(args) => commands::settings::run(args, project, stdout),
+        Command::Status(args) => commands::status::run(args, project, stdout),
+        Command::Report(args) => commands::report::run(args, project, stdout),
     }
 }

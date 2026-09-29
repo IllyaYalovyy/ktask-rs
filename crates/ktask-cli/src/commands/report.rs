@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use ktask_adapters::SystemClock;
 use ktask_core::{AttemptToken, Outcome};
 
-use crate::context::{open_journal, open_registry, resolve};
+use crate::context::{open_journal, open_registry, reject_project, resolve};
 use crate::error::Failure;
 use crate::render;
 
@@ -29,8 +29,13 @@ pub(crate) struct Args {
 
 /// Records `args.outcome` (and `args.reason`) for the attempt `args.token` names, in the
 /// journal of the project it names — resolved from the token alone, so this needs no
-/// `--project` and works from any directory.
-pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
+/// `--project` and works from any directory; one named before it is refused.
+pub(crate) fn run(
+    args: &Args,
+    project: Option<&str>,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
+    reject_project(project)?;
     let outcome: Outcome = args
         .outcome
         .parse()

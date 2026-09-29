@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use ktask_adapters::SystemClock;
 use ktask_core::TaskId;
 
-use crate::context::open_queue;
+use crate::context::{merge_project, open_queue};
 use crate::error::Failure;
 use crate::render;
 
@@ -23,8 +23,13 @@ pub(crate) struct Args {
 }
 
 /// Cancels the task `args.id` names and prints that it was removed.
-pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
-    let journal = open_queue(args.project.as_deref())?;
+pub(crate) fn run(
+    args: &Args,
+    project: Option<&str>,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
+    let project = merge_project(project, args.project.as_deref())?;
+    let journal = open_queue(project.as_deref())?;
     ktask_core::remove_task(&journal, &SystemClock, TaskId(args.id))?;
     render::removed(TaskId(args.id), stdout)?;
     Ok(ExitCode::SUCCESS)

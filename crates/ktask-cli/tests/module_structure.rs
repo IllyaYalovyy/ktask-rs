@@ -19,10 +19,7 @@ fn main_rs_holds_only_the_parser_and_the_dispatch() -> std::io::Result<()> {
         .collect();
     assert_eq!(
         top_level_fns,
-        [
-            "fn main() -> ExitCode {",
-            "fn dispatch(command: &Command, stdout: &mut impl Write) -> Result<ExitCode, Failure> {"
-        ],
+        ["fn main() -> ExitCode {", "fn dispatch("],
         "main.rs should define only `main` and `dispatch`; every other function belongs in \
          its command's own module under src/commands/"
     );
