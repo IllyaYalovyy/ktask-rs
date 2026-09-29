@@ -50,7 +50,7 @@ pub(crate) fn run(args: &Args) -> Result<(), Failure> {
         },
         |id| ktask_core::remove_task(&journal, &SystemClock, id).map_err(|e| e.to_string()),
         |draft, placement| {
-            ktask_core::add_task_listing_problems(&journal, &SystemClock, draft, placement)
+            ktask_core::add_task(&journal, &SystemClock, draft, placement)
                 .map(|task| task.id)
                 .map_err(|problems| problems.iter().map(ToString::to_string).collect())
         },

@@ -53,8 +53,8 @@ pub use status::{
     REVIEW_STEP, SYNC_STEP, StatusEntry, StepLine, TEST_STEP, displayed_status, status,
 };
 pub use task::{
-    AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, add_task,
-    add_task_listing_problems, list_all_tasks, list_tasks, remove_task,
+    AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, add_task, list_all_tasks,
+    list_tasks, remove_task,
 };
 
 #[cfg(test)]

@@ -51,7 +51,7 @@ pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Fail
     };
     let journal = open_queue(args.project.as_deref())?;
     let placement = placement(args.before, args.after);
-    let task = ktask_core::add_task_listing_problems(&journal, &SystemClock, &draft, placement)
+    let task = ktask_core::add_task(&journal, &SystemClock, &draft, placement)
         .map_err(failure_from_add_problems)?;
     render::added(&task, stdout)?;
     Ok(ExitCode::SUCCESS)
