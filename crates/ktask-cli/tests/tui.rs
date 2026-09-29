@@ -22,6 +22,8 @@ mod remove;
 mod repo;
 #[path = "tui/run.rs"]
 mod run;
+#[path = "tui/settings.rs"]
+mod settings;
 mod support;
 
 use std::path::Path;

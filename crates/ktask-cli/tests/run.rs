@@ -378,6 +378,50 @@ fn a_provider_killed_past_its_time_limit_ends_that_task_failed_unknown_and_stops
 }
 
 #[test]
+fn run_uses_the_projects_attempt_timeout_setting_when_the_command_line_gives_none() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let set = fixture.run(&["settings", "set", "attempt-timeout", "1"])?;
+    assert_eq!(set.code, Some(0), "{}", set.stderr);
+    fixture.add_agent_task("a", "```bash\nsleep 30\n```\n")?;
+
+    let started = Instant::now();
+    let outcome = fixture.run_the_queue(&["run"])?;
+
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stderr);
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(fixture.task_status(1)?, "failed-unknown");
+    let (_, exit_code, status, reason) = fixture.attempt_ended(1)?;
+    assert_eq!(exit_code, None);
+    assert_eq!(status, "failed-unknown");
+    assert!(
+        reason.as_deref().unwrap().contains("time limit"),
+        "{reason:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_command_lines_attempt_timeout_still_overrides_the_projects_setting() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let set = fixture.run(&["settings", "set", "attempt-timeout", "1"])?;
+    assert_eq!(set.code, Some(0), "{}", set.stderr);
+    fixture.add_agent_task(
+        "a",
+        "```bash\nsleep 2\nktask-rs report --token \"$1\" done\n```\n",
+    )?;
+
+    let outcome = fixture.run_the_queue(&["run", "--attempt-timeout", "30"])?;
+
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(fixture.task_status(1)?, "done");
+    Ok(())
+}
+
+#[test]
 fn a_human_task_stops_the_run_before_attempting_it_and_exits_zero() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add_agent_task("a", &reporting_body("done"))?;
