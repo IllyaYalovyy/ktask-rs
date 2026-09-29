@@ -173,6 +173,20 @@ pub struct RunContext<'a> {
     /// in `project_dir` ahead of the health check. `None` when the project has not set one:
     /// the step is skipped, and leaves no line.
     pub tracked_branch: Option<&'a str>,
+    /// The steps the project has switched off, named as [`SYNC_STEP`], [`HEALTH_CHECK_STEP`],
+    /// [`REVIEW_STEP`], [`TEST_STEP`], [`COMMIT_STEP`] or [`PUSH_STEP`] — never
+    /// [`IMPLEMENTATION`], which cannot be switched off. A step named here does not run and
+    /// leaves no line, whatever else is configured for it; the sync and health-check steps
+    /// still only actually run when `tracked_branch`, respectively `health_check_command`, is
+    /// also set, and the push step only when the commit step made a commit.
+    pub disabled_steps: &'a [&'static str],
+}
+
+impl RunContext<'_> {
+    /// Whether the step named `step` is switched on: named in `disabled_steps` or not.
+    fn step_enabled(&self, step: &str) -> bool {
+        !self.disabled_steps.contains(&step)
+    }
 }
 
 /// The prompt for attempt `token` of `task`: its title, body and acceptance criteria, and
@@ -403,14 +417,24 @@ fn end_when_nothing_left(attempted: &[Attempted], queue_is_empty: bool) -> RunEn
     }
 }
 
-/// The steps every task's attempt runs through, in order, stopping at the first that ends
-/// badly: the provider runs on the task's whole prompt, then again in the reviewer role, then
-/// again in the tester role — both on the diff the implementation step made. The health-check
-/// step, when the project has configured one, runs ahead of an attempt even being begun; the
-/// commit step, and then the push step when the project tracks a branch and the commit step
-/// made a commit, run after these, once they have all passed. None of the three spends a
-/// token, so none is one of these.
-const STEPS: &[&str] = &[IMPLEMENTATION, REVIEW_STEP, TEST_STEP];
+/// The steps `context`'s attempts run through, in order, stopping at the first that ends
+/// badly: the provider runs on the task's whole prompt, then, when switched on, again in the
+/// reviewer role, then, when switched on, again in the tester role — both on the diff the
+/// implementation step made. Implementation is always included: it cannot be switched off.
+/// The health-check step, when the project has configured and switched one on, runs ahead of
+/// an attempt even being begun; the commit step, and then the push step when the project
+/// tracks a branch and the commit step made a commit, run after these, once they have all
+/// passed, each when switched on. None of the three spends a token, so none is one of these.
+fn active_steps(context: RunContext<'_>) -> Vec<&'static str> {
+    let mut steps = vec![IMPLEMENTATION];
+    if context.step_enabled(REVIEW_STEP) {
+        steps.push(REVIEW_STEP);
+    }
+    if context.step_enabled(TEST_STEP) {
+        steps.push(TEST_STEP);
+    }
+    steps
+}
 
 /// How many lines of a failing health check's combined output are shown to the operator.
 const HEALTH_CHECK_OUTPUT_TAIL_LINES: usize = 20;
@@ -1203,43 +1227,47 @@ fn run_one_attempt(
         start_commit: start_commit.as_deref(),
     };
 
+    let steps = active_steps(context);
     let (steps_duration, exit_code, steps_status, steps_reason) =
-        run_steps(journal, clock, commands, provider, context, &target, STEPS)?;
+        run_steps(journal, clock, commands, provider, context, &target, &steps)?;
 
-    let (post_duration, status, reason) = if steps_status == TaskStatus::Done {
-        let (commit_duration, commit_outcome) =
-            run_commit_step(journal, clock, commands, context, task, &token)?;
-        match commit_outcome {
-            CommitOutcome::Committed(_) => {
-                if let Some(tracked_branch) = context.tracked_branch {
-                    let (push_duration, push_status, push_reason) = run_push_step(
-                        journal,
-                        clock,
-                        commands,
-                        context,
-                        task.id,
-                        &token,
-                        tracked_branch,
-                    )?;
-                    let duration = commit_duration + push_duration;
-                    if push_status == TaskStatus::Done {
-                        // Neither the commit nor the push step's own reason — hash, branch,
-                        // "nothing to commit" — belongs on the whole attempt's, whose `reason`
-                        // means why it is not `done`.
-                        (duration, steps_status, steps_reason)
+    let (post_duration, status, reason) =
+        if steps_status == TaskStatus::Done && context.step_enabled(COMMIT_STEP) {
+            let (commit_duration, commit_outcome) =
+                run_commit_step(journal, clock, commands, context, task, &token)?;
+            match commit_outcome {
+                CommitOutcome::Committed(_) => {
+                    if let Some(tracked_branch) = context.tracked_branch
+                        && context.step_enabled(PUSH_STEP)
+                    {
+                        let (push_duration, push_status, push_reason) = run_push_step(
+                            journal,
+                            clock,
+                            commands,
+                            context,
+                            task.id,
+                            &token,
+                            tracked_branch,
+                        )?;
+                        let duration = commit_duration + push_duration;
+                        if push_status == TaskStatus::Done {
+                            // Neither the commit nor the push step's own reason — hash, branch,
+                            // "nothing to commit" — belongs on the whole attempt's, whose
+                            // `reason` means why it is not `done`.
+                            (duration, steps_status, steps_reason)
+                        } else {
+                            (duration, push_status, push_reason)
+                        }
                     } else {
-                        (duration, push_status, push_reason)
+                        (commit_duration, steps_status, steps_reason)
                     }
-                } else {
-                    (commit_duration, steps_status, steps_reason)
                 }
+                CommitOutcome::NothingChanged => (commit_duration, steps_status, steps_reason),
+                CommitOutcome::Refused(why) => (commit_duration, TaskStatus::Failed, Some(why)),
             }
-            CommitOutcome::NothingChanged => (commit_duration, steps_status, steps_reason),
-            CommitOutcome::Refused(why) => (commit_duration, TaskStatus::Failed, Some(why)),
-        }
-    } else {
-        (Duration::ZERO, steps_status, steps_reason)
-    };
+        } else {
+            (Duration::ZERO, steps_status, steps_reason)
+        };
 
     crate::attempt::end_attempt(
         journal,
@@ -1279,7 +1307,9 @@ fn attempt_loop(
         match pick_next_task(journal)? {
             Pick::Task(task) => {
                 let mut pre_steps = Vec::new();
-                if let Some(tracked_branch) = context.tracked_branch {
+                if let Some(tracked_branch) = context.tracked_branch
+                    && context.step_enabled(SYNC_STEP)
+                {
                     match run_sync(commands, clock, tracked_branch, context) {
                         Sync::Passed { duration, message } => pre_steps.push(PreStep {
                             name: SYNC_STEP,
@@ -1296,7 +1326,9 @@ fn attempt_loop(
                         }
                     }
                 }
-                if let Some(command) = context.health_check_command {
+                if let Some(command) = context.health_check_command
+                    && context.step_enabled(HEALTH_CHECK_STEP)
+                {
                     match run_health_check(commands, clock, command, context) {
                         HealthCheck::Passed(duration) => pre_steps.push(PreStep {
                             name: HEALTH_CHECK_STEP,
@@ -1517,6 +1549,7 @@ mod tests {
             attempt_timeout: timeout,
             health_check_command: None,
             tracked_branch: None,
+            disabled_steps: &[],
         }
     }
 
@@ -1967,6 +2000,168 @@ mod tests {
         assert_eq!(attempt.steps[1].name, REVIEW_STEP);
         assert_eq!(attempt.steps[2].name, TEST_STEP);
         assert_eq!(attempt.steps[3].name, COMMIT_STEP);
+    }
+
+    #[test]
+    fn switching_the_health_check_off_skips_it_even_though_one_is_configured() {
+        let journal = journal_of_abc();
+        let commands = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let mut ctx = context(Duration::from_secs(60));
+        ctx.health_check_command = Some("make check");
+        ctx.disabled_steps = &[HEALTH_CHECK_STEP];
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert!(
+            !attempt
+                .steps
+                .iter()
+                .any(|step| step.name == HEALTH_CHECK_STEP),
+            "{:?}",
+            attempt.steps
+        );
+        assert_eq!(attempt.steps[0].name, IMPLEMENTATION);
+        assert_eq!(attempt.steps[1].name, REVIEW_STEP);
+        assert_eq!(attempt.steps[2].name, TEST_STEP);
+        assert_eq!(attempt.steps[3].name, COMMIT_STEP);
+    }
+
+    #[test]
+    fn switching_sync_off_skips_it_even_though_a_branch_is_tracked() {
+        let journal = journal_of_abc();
+        let commands = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let mut ctx = context_tracking(Duration::from_secs(60));
+        ctx.disabled_steps = &[SYNC_STEP];
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert!(
+            !attempt.steps.iter().any(|step| step.name == SYNC_STEP),
+            "{:?}",
+            attempt.steps
+        );
+        assert_eq!(attempt.steps[0].name, IMPLEMENTATION);
+    }
+
+    #[test]
+    fn switching_review_off_skips_it_and_the_others_still_run_in_order() {
+        let journal = journal_of_abc();
+        let commands = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let mut ctx = context(Duration::from_secs(60));
+        ctx.disabled_steps = &[REVIEW_STEP];
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        let names: Vec<_> = attempt
+            .steps
+            .iter()
+            .map(|step| step.name.as_str())
+            .collect();
+        assert_eq!(names, [IMPLEMENTATION, TEST_STEP, COMMIT_STEP]);
+    }
+
+    #[test]
+    fn switching_testing_off_skips_it_and_the_others_still_run_in_order() {
+        let journal = journal_of_abc();
+        let commands = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let mut ctx = context(Duration::from_secs(60));
+        ctx.disabled_steps = &[TEST_STEP];
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        let names: Vec<_> = attempt
+            .steps
+            .iter()
+            .map(|step| step.name.as_str())
+            .collect();
+        assert_eq!(names, [IMPLEMENTATION, REVIEW_STEP, COMMIT_STEP]);
+    }
+
+    #[test]
+    fn switching_review_and_testing_off_leaves_only_implementation_and_commit() {
+        let journal = journal_of_abc();
+        let commands = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let mut ctx = context(Duration::from_secs(60));
+        ctx.disabled_steps = &[REVIEW_STEP, TEST_STEP];
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        let names: Vec<_> = attempt
+            .steps
+            .iter()
+            .map(|step| step.name.as_str())
+            .collect();
+        assert_eq!(names, [IMPLEMENTATION, COMMIT_STEP]);
     }
 
     /// A ready-to-return, always-successful [`Output`] carrying `stdout`.
@@ -3898,6 +4093,113 @@ mod tests {
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
             .unwrap()
             .unwrap();
+        assert!(
+            !attempt.steps.iter().any(|step| step.name == PUSH_STEP),
+            "{:?}",
+            attempt.steps
+        );
+        assert!(
+            !commands
+                .calls
+                .borrow()
+                .iter()
+                .any(|call| call.first().map(String::as_str) == Some("push")),
+            "{:?}",
+            commands.calls.borrow()
+        );
+    }
+
+    #[test]
+    fn switching_commit_off_skips_it_and_leaves_no_line_even_though_there_is_something_to_commit() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = CommitScript {
+            dirty: true,
+            identity: true,
+            commit_exit: Exit::Code(0),
+            hash: "abc1234",
+            calls: RefCell::default(),
+            other: &reporting,
+        };
+        let mut ctx = context(Duration::from_secs(60));
+        ctx.disabled_steps = &[COMMIT_STEP];
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Done
+        );
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        let names: Vec<_> = attempt
+            .steps
+            .iter()
+            .map(|step| step.name.as_str())
+            .collect();
+        assert_eq!(names, [IMPLEMENTATION, REVIEW_STEP, TEST_STEP]);
+        assert!(
+            !commands
+                .calls
+                .borrow()
+                .iter()
+                .any(|call| call.first().map(String::as_str) == Some("commit")),
+            "{:?}",
+            commands.calls.borrow()
+        );
+    }
+
+    #[test]
+    fn switching_push_off_skips_it_even_with_a_tracked_branch_and_a_commit_made() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = CommitScript {
+            dirty: true,
+            identity: true,
+            commit_exit: Exit::Code(0),
+            hash: "abc1234",
+            calls: RefCell::default(),
+            other: &reporting,
+        };
+        // Sync is switched off so the commit step's own (always-dirty) `status --porcelain`
+        // response cannot also be read by a sync step ahead of it and refuse the run.
+        let mut ctx = context_tracking(Duration::from_secs(60));
+        ctx.disabled_steps = &[SYNC_STEP, PUSH_STEP];
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Done
+        );
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        let commit = attempt.steps.last().expect("the commit step ran");
+        assert_eq!(commit.name, COMMIT_STEP);
         assert!(
             !attempt.steps.iter().any(|step| step.name == PUSH_STEP),
             "{:?}",
