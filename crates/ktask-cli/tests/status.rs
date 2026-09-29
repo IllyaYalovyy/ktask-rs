@@ -226,6 +226,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
+            "\tcommit\techo\t0s\tpassed\tnothing was changed",
         ]
     );
 
@@ -239,6 +240,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
+            "\tcommit\techo\t0s\tpassed\tnothing was changed",
             "#2\tfailed\tb",
             "\timplementation\techo\t0s\tfailed\tit broke",
         ]
@@ -254,6 +256,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
+            "\tcommit\techo\t0s\tpassed\tnothing was changed",
             "#2\tfailed\tc",
             "\timplementation\techo\t0s\ttoo-large\tsplit me",
         ]
@@ -269,6 +272,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
+            "\tcommit\techo\t0s\tpassed\tnothing was changed",
             "#2\tblocked\td",
             "\timplementation\techo\t0s\tneeds-input\twhich path?",
         ]
@@ -278,18 +282,19 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
     let outcome = fixture.run(&["status"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     let lines: Vec<&str> = outcome.stdout.lines().collect();
-    assert_eq!(lines.len(), 6, "{lines:#?}");
+    assert_eq!(lines.len(), 7, "{lines:#?}");
     assert_eq!(lines[0], "#1\tdone\tx");
     assert_eq!(lines[1], "\timplementation\techo\t0s\tdone");
     assert_eq!(lines[2], "\treview\techo\t0s\tapproved");
     assert_eq!(lines[3], "\ttesting\techo\t0s\taccepted");
-    assert_eq!(lines[4], "#2\tfailed-unknown\te");
+    assert_eq!(lines[4], "\tcommit\techo\t0s\tpassed\tnothing was changed");
+    assert_eq!(lines[5], "#2\tfailed-unknown\te");
     assert!(
-        lines[5].starts_with("\timplementation\techo\t0s\tfailed-unknown\t"),
+        lines[6].starts_with("\timplementation\techo\t0s\tfailed-unknown\t"),
         "{}",
-        lines[5]
+        lines[6]
     );
-    assert!(lines[5].contains("reported nothing"), "{}", lines[5]);
+    assert!(lines[6].contains("reported nothing"), "{}", lines[6]);
     Ok(())
 }
 
@@ -319,13 +324,21 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
             .collect())
     }
 
+    /// The entry a `done` filler task shows, once its commit step found nothing to commit.
+    fn done_row(id: u64, title: &str) -> ShownEntry {
+        (
+            id,
+            "done".into(),
+            title.into(),
+            "passed".into(),
+            Some("nothing was changed".into()),
+        )
+    }
+
     let fixture = done_fixture()?;
     let outcome = fixture.run(&["status", "--json"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
-    assert_eq!(
-        shown(&outcome.stdout)?,
-        vec![(1, "done".into(), "a".into(), "accepted".into(), None)]
-    );
+    assert_eq!(shown(&outcome.stdout)?, vec![done_row(1, "a")]);
 
     let fixture = failed_fixture()?;
     let outcome = fixture.run(&["status", "--json"])?;
@@ -333,7 +346,7 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
     assert_eq!(
         shown(&outcome.stdout)?,
         vec![
-            (1, "done".into(), "x".into(), "accepted".into(), None),
+            done_row(1, "x"),
             (
                 2,
                 "failed".into(),
@@ -350,7 +363,7 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
     assert_eq!(
         shown(&outcome.stdout)?,
         vec![
-            (1, "done".into(), "x".into(), "accepted".into(), None),
+            done_row(1, "x"),
             (
                 2,
                 "failed".into(),
@@ -367,7 +380,7 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
     assert_eq!(
         shown(&outcome.stdout)?,
         vec![
-            (1, "done".into(), "x".into(), "accepted".into(), None),
+            done_row(1, "x"),
             (
                 2,
                 "blocked".into(),
@@ -382,10 +395,7 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
     let outcome = fixture.run(&["status", "--json"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     let shown_entries = shown(&outcome.stdout)?;
-    assert_eq!(
-        shown_entries[0],
-        (1, "done".into(), "x".into(), "accepted".into(), None)
-    );
+    assert_eq!(shown_entries[0], done_row(1, "x"));
     assert_eq!(shown_entries[1].0, 2);
     assert_eq!(shown_entries[1].1, "failed-unknown");
     assert_eq!(shown_entries[1].2, "e");
@@ -410,12 +420,13 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
         let steps = entry["attempt"]["steps"].as_array().unwrap();
         assert_eq!(steps[0]["step"], "implementation");
         if entry["status"] == "done" {
-            // `x`, the filler task: all three steps ran and passed, so the test step is
-            // current.
-            assert_eq!(entry["attempt"]["step"], "testing");
-            assert_eq!(steps.len(), 3, "{steps:?}");
+            // `x`, the filler task: all four steps ran and passed, so the commit step —
+            // which found nothing to commit — is current.
+            assert_eq!(entry["attempt"]["step"], "commit");
+            assert_eq!(steps.len(), 4, "{steps:?}");
             assert_eq!(steps[1]["step"], "review");
             assert_eq!(steps[2]["step"], "testing");
+            assert_eq!(steps[3]["step"], "commit");
         } else {
             // `e`: the implementation step itself never reported, so it is the only one, and
             // stays current.
@@ -438,8 +449,12 @@ fn a_pending_task_never_attempted_does_not_appear() -> Result<()> {
     let outcome = fixture.run(&["status"])?;
 
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
-    assert!(!outcome.stdout.contains("\tc"), "{}", outcome.stdout);
-    assert_eq!(outcome.stdout.lines().count(), 8);
+    assert!(
+        !outcome.stdout.lines().any(|line| line.ends_with("\tc")),
+        "{}",
+        outcome.stdout
+    );
+    assert_eq!(outcome.stdout.lines().count(), 10);
     Ok(())
 }
 

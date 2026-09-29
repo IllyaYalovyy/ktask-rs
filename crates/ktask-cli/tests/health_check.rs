@@ -254,6 +254,7 @@ fn no_health_check_command_set_skips_the_step_and_leaves_no_line() -> Result<()>
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
+            "\tcommit\techo\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())

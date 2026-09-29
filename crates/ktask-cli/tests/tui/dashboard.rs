@@ -142,6 +142,36 @@ impl Fixture {
         })?;
         Ok(terminal)
     }
+
+    /// Sets `user.name` and `user.email` on the repository, so the commit step's attempts to
+    /// commit are not refused for want of a configured identity.
+    fn configure_git_identity(&self) -> Result<()> {
+        for args in [
+            ["config", "user.email", "test@example.com"],
+            ["config", "user.name", "Test"],
+        ] {
+            let mut command = Command::new("git");
+            command.args(args);
+            let status = self
+                .sandbox
+                .isolate(&mut command, &self.repository)
+                .status()?;
+            assert!(status.success(), "git {args:?}");
+        }
+        Ok(())
+    }
+
+    /// The repository's `HEAD`, short form.
+    fn head(&self) -> Result<String> {
+        let mut command = Command::new("git");
+        command.args(["rev-parse", "--short", "HEAD"]);
+        let output = self
+            .sandbox
+            .isolate(&mut command, &self.repository)
+            .output()?;
+        assert!(output.status.success(), "{output:?}");
+        Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+    }
 }
 
 /// The number of seconds an attempt line built by [`ktask_tui::render`] reports it has run:
@@ -220,13 +250,48 @@ fn a_run_started_elsewhere_shows_pending_then_running_with_elapsed_time_increasi
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">  1  #1  done  agent  a");
     assert!(
-        lines[5].contains("testing · echo") && lines[5].ends_with("accepted"),
+        lines[5].contains("commit · echo") && lines[5].ends_with("nothing was changed"),
         "{}",
         lines[5]
     );
     assert!(
         screen.contains("pending 0") && screen.contains("running 0") && screen.contains("done 1"),
         "{screen}"
+    );
+
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
+fn a_task_that_changes_a_file_gets_a_real_commit_and_the_dashboard_shows_its_short_hash()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.configure_git_identity()?;
+    fixture.add_agent_task(
+        "a",
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  echo hello > new.txt\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+    )?;
+
+    let mut terminal = fixture.open()?;
+    let mut run = fixture.spawn_run()?;
+    let screen = terminal.wait_for("a's commit line with the task shown done", |screen| {
+        let contents = screen.contents();
+        contents.contains("committed as")
+            && lines_inside_frame(&contents)
+                .get(4)
+                .is_some_and(|line| line.starts_with(">  1  #1  done"))
+    })?;
+    assert!(run.wait()?.success());
+
+    let hash = fixture.head()?;
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[4], ">  1  #1  done  agent  a");
+    assert!(
+        lines[5].contains("commit · echo") && lines[5].ends_with(&format!("committed as {hash}")),
+        "{} (expected hash {hash})",
+        lines[5]
     );
 
     terminal.send("q")?;
@@ -343,12 +408,12 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     done.run_the_queue_to_completion()?;
     let terminal = done.open()?;
     let screen = terminal.wait_for("a's attempt line", |screen| {
-        screen.contents().contains("testing") && screen.contents().ends_with('┘')
+        screen.contents().contains("commit") && screen.contents().ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">  1  #1  done  agent  a");
     assert!(
-        lines[5].contains("testing · echo") && lines[5].ends_with("accepted"),
+        lines[5].contains("commit · echo") && lines[5].ends_with("nothing was changed"),
         "{}",
         lines[5]
     );
@@ -491,11 +556,11 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
     let mut terminal = fixture.open()?;
     let screen = terminal.wait_for("the queue with a's attempt line", |screen| {
         let contents = screen.contents();
-        contents.contains("testing") && contents.ends_with('┘')
+        contents.contains("commit") && contents.ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">  1  #1  done  agent  a");
-    assert!(lines[5].contains("testing"), "{}", lines[5]);
+    assert!(lines[5].contains("commit"), "{}", lines[5]);
     assert_eq!(lines[6], "   2  #2  pending  agent  b");
 
     // Down moves past the two-line block of the attempted task onto the very next task.
@@ -507,7 +572,7 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
     })?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[6], ">  2  #2  pending  agent  b");
-    assert!(lines[5].contains("testing"), "{}", lines[5]);
+    assert!(lines[5].contains("commit"), "{}", lines[5]);
 
     terminal.send("k")?;
     terminal.wait_for("the selection back on a", |screen| {
@@ -532,16 +597,16 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
     // The key map replaces the queue, attempt lines included, and comes back unchanged.
     terminal.send("?")?;
     let screen = terminal.wait_for("the key map", |screen| screen.contents().contains("Keys"))?;
-    assert!(!screen.contains("testing"), "{screen}");
+    assert!(!screen.contains("commit"), "{screen}");
     assert!(!screen.contains("pending"), "{screen}");
     terminal.send("?")?;
     let screen = terminal.wait_for("the queue back with a's attempt line", |screen| {
         let contents = screen.contents();
-        !contents.contains("Keys") && contents.contains("testing")
+        !contents.contains("Keys") && contents.contains("commit")
     })?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">  1  #1  done  agent  a");
-    assert!(lines[5].contains("testing"), "{}", lines[5]);
+    assert!(lines[5].contains("commit"), "{}", lines[5]);
 
     // The cancelled task, never attempted, appears in its place with no attempt line of its
     // own, and the attempted task's block is unaffected.
@@ -551,7 +616,7 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
     })?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">  1  #1  done  agent  a");
-    assert!(lines[5].contains("testing"), "{}", lines[5]);
+    assert!(lines[5].contains("commit"), "{}", lines[5]);
     assert_eq!(lines[6], "   2  #2  pending  agent  b");
     assert_eq!(lines[7], "   3  #3  cancelled  agent  c");
 

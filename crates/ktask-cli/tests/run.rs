@@ -892,7 +892,7 @@ fn the_scripts_third_argument_is_the_steps_name() -> Result<()> {
 }
 
 #[test]
-fn the_implementation_review_and_test_steps_each_record_exactly_one_start_and_one_end_event()
+fn the_implementation_review_test_and_commit_steps_each_record_exactly_one_start_and_one_end_event()
 -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add_agent_task("a", &reporting_body("done"))?;
@@ -908,8 +908,8 @@ fn the_implementation_review_and_test_steps_each_record_exactly_one_start_and_on
             |row| row.get(0),
         )
     };
-    assert_eq!(count("step_started")?, 3);
-    assert_eq!(count("step_ended")?, 3);
+    assert_eq!(count("step_started")?, 4);
+    assert_eq!(count("step_ended")?, 4);
     Ok(())
 }
 
@@ -1027,6 +1027,7 @@ fn an_approving_review_carries_the_task_on_as_done_and_the_review_line_shows_it(
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
+            "\tcommit\techo\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
@@ -1183,6 +1184,7 @@ fn an_accepting_tester_carries_the_task_on_as_done_and_the_testing_line_shows_it
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
+            "\tcommit\techo\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())

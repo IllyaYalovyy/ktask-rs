@@ -223,6 +223,7 @@ fn several_new_commits_are_counted_and_pluralised() -> Result<()> {
     assert_eq!(lines[2], "\timplementation\techo\t0s\tdone");
     assert_eq!(lines[3], "\treview\techo\t0s\tapproved");
     assert_eq!(lines[4], "\ttesting\techo\t0s\taccepted");
+    assert_eq!(lines[5], "\tcommit\techo\t0s\tpassed\tnothing was changed");
     assert!(fixture.repository.join("one.txt").is_file());
     assert!(fixture.repository.join("two.txt").is_file());
     Ok(())
@@ -246,6 +247,7 @@ fn nothing_new_says_so_and_the_task_carries_on() -> Result<()> {
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
+            "\tcommit\techo\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
@@ -283,6 +285,7 @@ fn no_tracked_branch_set_skips_the_step_and_leaves_no_line() -> Result<()> {
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
+            "\tcommit\techo\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
