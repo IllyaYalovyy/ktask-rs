@@ -89,35 +89,10 @@ pub enum Event {
 #[must_use]
 pub fn update(app: App, event: Event) -> App {
     match event {
-        Event::Loaded(queue) => {
-            let selected = reselect(&app, &queue);
-            let confirming = app.confirming.filter(|confirm| match confirm {
-                Confirming::Removal(id) => removable(&queue, *id),
-                Confirming::Discard => true,
-            });
-            let refused = app.refused.filter(|id| is_running(&queue, *id));
-            App {
-                queue: Some(queue),
-                selected,
-                confirming,
-                refused,
-                ..app
-            }
-        }
+        Event::Loaded(queue) => update_loaded(app, queue),
         Event::Ctrl('c') => ctrl_c(app),
-        Event::Key(key) if app.settings.is_some() => match key {
-            KeyCode::Esc => App {
-                settings: None,
-                ..app
-            },
-            KeyCode::Tab => in_settings(app, |form| form.moved(true)),
-            KeyCode::BackTab => in_settings(app, |form| form.moved(false)),
-            _ => in_settings(app, |form| form.press(key)),
-        },
-        Event::Ctrl(letter) if app.settings.is_some() => match letter {
-            's' => submit_setting(app),
-            _ => app,
-        },
+        Event::Key(key) if app.settings.is_some() => update_settings_key(app, key),
+        Event::Ctrl(letter) if app.settings.is_some() => update_settings_ctrl(app, letter),
         Event::SettingsLoaded(views) => App {
             settings: Some(SettingsForm::new(&views)),
             ..app
@@ -130,27 +105,12 @@ pub fn update(app: App, event: Event) -> App {
             problem: Some(message),
             ..form
         }),
-        Event::Key(key) if app.confirming == Some(Confirming::Discard) => match key {
-            KeyCode::Char('y') => App { quit: true, ..app },
-            KeyCode::Char('n') | KeyCode::Esc => App {
-                confirming: None,
-                ..app
-            },
-            _ => app,
-        },
+        Event::Key(key) if app.confirming == Some(Confirming::Discard) => {
+            update_discard_key(app, key)
+        }
         Event::Ctrl(_) if app.confirming == Some(Confirming::Discard) => app,
-        Event::Key(key) if app.form.is_some() => match key {
-            KeyCode::Esc => App { form: None, ..app },
-            KeyCode::Tab => in_form(app, |form| form.moved(true)),
-            KeyCode::BackTab => in_form(app, |form| form.moved(false)),
-            _ => in_form(app, |form| form.press(key)),
-        },
-        Event::Ctrl(letter) if app.form.is_some() => match letter {
-            's' => submit(app),
-            'n' => in_form(app, Form::with_criterion),
-            'd' => in_form(app, Form::without_criterion),
-            _ => app,
-        },
+        Event::Key(key) if app.form.is_some() => update_form_key(app, key),
+        Event::Ctrl(letter) if app.form.is_some() => update_form_ctrl(app, letter),
         Event::Added(id) => added(app, id),
         Event::Rejected(problems) => in_form(app, |form| Form { problems, ..form }),
         Event::RunMessage(text) => App {
@@ -158,54 +118,136 @@ pub fn update(app: App, event: Event) -> App {
             ..app
         },
         Event::Key(KeyCode::Char('q')) => App { quit: true, ..app },
-        Event::Key(key) if app.confirming.is_some() => match key {
-            KeyCode::Char('y') => confirm_removal(app),
-            KeyCode::Char('n') | KeyCode::Esc => App {
-                confirming: None,
-                ..app
-            },
-            _ => app,
-        },
-        Event::Key(key) if app.help => match key {
-            KeyCode::Esc | KeyCode::Char('?') => App { help: false, ..app },
-            _ => app,
-        },
-        Event::Key(key) => {
-            // `refused` and `run_message` are one-shot notices: any key past the one that
-            // raised them dismisses it, whether or not that key is `d` or `r` again.
-            let app = App {
-                refused: None,
-                run_message: None,
-                ..app
-            };
-            match key {
-                KeyCode::Char('?') => App { help: true, ..app },
-                KeyCode::Char('a') => App {
-                    show_cancelled: !app.show_cancelled,
-                    ..app
-                },
-                KeyCode::Char('j') | KeyCode::Down => {
-                    select(app, |index, _| index.saturating_add(1))
-                }
-                KeyCode::Char('k') | KeyCode::Up => select(app, |index, _| index.saturating_sub(1)),
-                KeyCode::Char('n') => open_form(app, Placement::End),
-                KeyCode::Char('o') => open_form_next_to(app, Placement::After),
-                KeyCode::Char('O') => open_form_next_to(app, Placement::Before),
-                KeyCode::Char('d') => press_d(app),
-                KeyCode::Char('r') => App {
-                    run_requested: Some(()),
-                    ..app
-                },
-                KeyCode::Char('s') => App {
-                    settings_requested: Some(()),
-                    ..app
-                },
-                KeyCode::Char('g') => select(app, |_, _| 0),
-                KeyCode::Char('G') => select(app, |_, len| len.saturating_sub(1)),
-                _ => app,
-            }
-        }
+        Event::Key(key) if app.confirming.is_some() => update_removal_confirm_key(app, key),
+        Event::Key(key) if app.help => update_help_key(app, key),
+        Event::Key(key) => update_queue_key(app, key),
         Event::Ctrl(_) | Event::Resize => app,
+    }
+}
+
+/// The app after the queue is (re)loaded: keeps the selection, a pending removal confirmation
+/// and a running-task refusal only as long as they still make sense against the fresh queue.
+fn update_loaded(app: App, queue: QueueView) -> App {
+    let selected = reselect(&app, &queue);
+    let confirming = app.confirming.filter(|confirm| match confirm {
+        Confirming::Removal(id) => removable(&queue, *id),
+        Confirming::Discard => true,
+    });
+    let refused = app.refused.filter(|id| is_running(&queue, *id));
+    App {
+        queue: Some(queue),
+        selected,
+        confirming,
+        refused,
+        ..app
+    }
+}
+
+/// A key while the settings screen is open.
+fn update_settings_key(app: App, key: KeyCode) -> App {
+    match key {
+        KeyCode::Esc => App {
+            settings: None,
+            ..app
+        },
+        KeyCode::Tab => in_settings(app, |form| form.moved(true)),
+        KeyCode::BackTab => in_settings(app, |form| form.moved(false)),
+        _ => in_settings(app, |form| form.press(key)),
+    }
+}
+
+/// A Ctrl-letter while the settings screen is open.
+fn update_settings_ctrl(app: App, letter: char) -> App {
+    match letter {
+        's' => submit_setting(app),
+        _ => app,
+    }
+}
+
+/// A key while a first Ctrl-C is asking whether to discard the open form.
+fn update_discard_key(app: App, key: KeyCode) -> App {
+    match key {
+        KeyCode::Char('y') => App { quit: true, ..app },
+        KeyCode::Char('n') | KeyCode::Esc => App {
+            confirming: None,
+            ..app
+        },
+        _ => app,
+    }
+}
+
+/// A key while the task form is open.
+fn update_form_key(app: App, key: KeyCode) -> App {
+    match key {
+        KeyCode::Esc => App { form: None, ..app },
+        KeyCode::Tab => in_form(app, |form| form.moved(true)),
+        KeyCode::BackTab => in_form(app, |form| form.moved(false)),
+        _ => in_form(app, |form| form.press(key)),
+    }
+}
+
+/// A Ctrl-letter while the task form is open.
+fn update_form_ctrl(app: App, letter: char) -> App {
+    match letter {
+        's' => submit(app),
+        'n' => in_form(app, Form::with_criterion),
+        'd' => in_form(app, Form::without_criterion),
+        _ => app,
+    }
+}
+
+/// A key while removing the selected task is being confirmed.
+fn update_removal_confirm_key(app: App, key: KeyCode) -> App {
+    match key {
+        KeyCode::Char('y') => confirm_removal(app),
+        KeyCode::Char('n') | KeyCode::Esc => App {
+            confirming: None,
+            ..app
+        },
+        _ => app,
+    }
+}
+
+/// A key while the help screen is open.
+fn update_help_key(app: App, key: KeyCode) -> App {
+    match key {
+        KeyCode::Esc | KeyCode::Char('?') => App { help: false, ..app },
+        _ => app,
+    }
+}
+
+/// A key on the plain queue screen: no form, settings, confirmation or help in the way.
+fn update_queue_key(app: App, key: KeyCode) -> App {
+    // `refused` and `run_message` are one-shot notices: any key past the one that raised
+    // them dismisses it, whether or not that key is `d` or `r` again.
+    let app = App {
+        refused: None,
+        run_message: None,
+        ..app
+    };
+    match key {
+        KeyCode::Char('?') => App { help: true, ..app },
+        KeyCode::Char('a') => App {
+            show_cancelled: !app.show_cancelled,
+            ..app
+        },
+        KeyCode::Char('j') | KeyCode::Down => select(app, |index, _| index.saturating_add(1)),
+        KeyCode::Char('k') | KeyCode::Up => select(app, |index, _| index.saturating_sub(1)),
+        KeyCode::Char('n') => open_form(app, Placement::End),
+        KeyCode::Char('o') => open_form_next_to(app, Placement::After),
+        KeyCode::Char('O') => open_form_next_to(app, Placement::Before),
+        KeyCode::Char('d') => press_d(app),
+        KeyCode::Char('r') => App {
+            run_requested: Some(()),
+            ..app
+        },
+        KeyCode::Char('s') => App {
+            settings_requested: Some(()),
+            ..app
+        },
+        KeyCode::Char('g') => select(app, |_, _| 0),
+        KeyCode::Char('G') => select(app, |_, len| len.saturating_sub(1)),
+        _ => app,
     }
 }
 
