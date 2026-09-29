@@ -10,8 +10,8 @@ use crate::settings::split_tracked_branch;
 use crate::{
     AttemptRun, AttemptToken, BeginAttemptError, COMMIT_STEP, Clock, CommandSpec, Commands,
     CommandsError, Exit, HEALTH_CHECK_STEP, IMPLEMENTATION, Journal, JournalError, Outcome, Output,
-    Provider, ProviderRunError, REVIEW_STEP, RecordReportError, RunLock, RunLockError, SYNC_STEP,
-    StepCall, TEST_STEP, Task, TaskId, TaskKind, TaskStatus, list_tasks, run_provider,
+    PUSH_STEP, Provider, ProviderRunError, REVIEW_STEP, RecordReportError, RunLock, RunLockError,
+    SYNC_STEP, StepCall, TEST_STEP, Task, TaskId, TaskKind, TaskStatus, list_tasks, run_provider,
 };
 
 /// Why a run could not proceed at all — never for how an attempt itself ended, which is a
@@ -407,8 +407,9 @@ fn end_when_nothing_left(attempted: &[Attempted], queue_is_empty: bool) -> RunEn
 /// badly: the provider runs on the task's whole prompt, then again in the reviewer role, then
 /// again in the tester role — both on the diff the implementation step made. The health-check
 /// step, when the project has configured one, runs ahead of an attempt even being begun; the
-/// commit step runs after these, once they have all passed. Neither spends a token, so neither
-/// is one of these.
+/// commit step, and then the push step when the project tracks a branch and the commit step
+/// made a commit, run after these, once they have all passed. None of the three spends a
+/// token, so none is one of these.
 const STEPS: &[&str] = &[IMPLEMENTATION, REVIEW_STEP, TEST_STEP];
 
 /// How many lines of a failing health check's combined output are shown to the operator.
@@ -700,8 +701,8 @@ fn record_commit_step(
 
 /// Runs the commit step for `task`'s attempt `token`, once its test step has passed: times
 /// [`commit_everything_changed`], records it as the attempt's next step, and returns how long
-/// it took together with what it leaves the attempt at — `done`, whether or not it made a
-/// commit, or `failed` with why and what is expected of the operator.
+/// it took together with what it found and did — whether or not it made a commit, or that it
+/// was refused, with why and what is expected of the operator.
 ///
 /// # Errors
 ///
@@ -713,19 +714,180 @@ fn run_commit_step(
     context: RunContext<'_>,
     task: &Task,
     token: &AttemptToken,
-) -> Result<(Duration, TaskStatus, Option<String>), RunError> {
+) -> Result<(Duration, CommitOutcome), RunError> {
     let started = clock.now();
     let outcome = commit_everything_changed(commands, context, task);
     let duration = clock.now().duration_since(started).unwrap_or_default();
-    let (status, reason) = match outcome {
+    let (status, reason) = match &outcome {
         CommitOutcome::NothingChanged => (TaskStatus::Done, Some("nothing was changed".to_owned())),
         CommitOutcome::Committed(hash) => (TaskStatus::Done, Some(format!("committed as {hash}"))),
-        CommitOutcome::Refused(why) => (TaskStatus::Failed, Some(why)),
+        CommitOutcome::Refused(why) => (TaskStatus::Failed, Some(why.clone())),
     };
     record_commit_step(
         journal,
         clock,
         task.id,
+        token.number,
+        duration,
+        status,
+        reason.as_deref(),
+    )?;
+    Ok((duration, outcome))
+}
+
+/// What pushing the commit step's commit to the project's tracked branch, and confirming the
+/// remote holds it, found and did.
+enum PushOutcome {
+    /// The remote branch's tip is now the commit that was pushed: its short hash.
+    Pushed(String),
+    /// It could not push, or could not confirm the push landed on the remote: why, and — since
+    /// this ends the task `failed` — what is expected of the operator.
+    Refused(String),
+}
+
+/// Records the push step as one of attempt `number` of task `id`'s own steps, begun and ended
+/// in the same call since — like [`record_commit_step`]'s step — nothing streams while it
+/// runs.
+fn record_push_step(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    id: TaskId,
+    number: u32,
+    duration: Duration,
+    status: TaskStatus,
+    reason: Option<&str>,
+) -> Result<(), RunError> {
+    crate::attempt::begin_step(journal, clock, id, number, PUSH_STEP)?;
+    crate::attempt::end_step(
+        journal,
+        clock,
+        id,
+        number,
+        PUSH_STEP,
+        AttemptRun {
+            duration,
+            exit_code: if status == TaskStatus::Done {
+                Some(0)
+            } else {
+                None
+            },
+            status,
+            reason,
+        },
+        None,
+    )?;
+    Ok(())
+}
+
+/// Pushes `context`'s project directory's `HEAD` to `tracked_branch` (`"<remote>/<branch>"`),
+/// then confirms — with `git ls-remote`, checked live against the remote rather than any
+/// locally cached ref — that the branch's tip on the remote is now that commit: a push exiting
+/// zero is not itself proof the ref actually moved. Refuses, naming why and what is expected of
+/// the operator, when the push itself is rejected or cannot be run, or when the remote's tip
+/// does not turn out to match afterwards.
+fn push_commit(
+    commands: &impl Commands,
+    context: RunContext<'_>,
+    tracked_branch: &str,
+) -> PushOutcome {
+    let Some((remote, branch)) = split_tracked_branch(tracked_branch) else {
+        unreachable!("a saved tracked-branch setting always names a remote and a branch");
+    };
+    let local = match require_git(commands, context, &["rev-parse", "HEAD"], |s: String| s) {
+        Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        Err(reason) => return PushOutcome::Refused(reason),
+    };
+    let refspec = format!("HEAD:refs/heads/{branch}");
+    let description = format!("`git push {remote} {refspec}`");
+    let output = match run_git(commands, context, &["push", remote, &refspec]) {
+        Ok(output) => output,
+        Err(error) => {
+            return PushOutcome::Refused(format!("{description} could not be run: {error}"));
+        }
+    };
+    match output.exit {
+        Exit::Code(0) => {}
+        Exit::Code(code) => {
+            let tail = output_tail(&output);
+            let rejected = tail.contains("[rejected]") || tail.contains("non-fast-forward");
+            return PushOutcome::Refused(if rejected {
+                format!(
+                    "{description} was rejected: {tracked_branch} has moved on since this \
+                     task's commit was made; bring in the new commits and push it yourself, \
+                     then run again"
+                )
+            } else {
+                format!("{description} exited with code {code}: {tail}")
+            });
+        }
+        Exit::Killed => {
+            return PushOutcome::Refused(format!(
+                "{description} ran past its time limit and was killed"
+            ));
+        }
+        Exit::Interrupted => return PushOutcome::Refused(INTERRUPTED.to_owned()),
+    }
+    match require_git(
+        commands,
+        context,
+        &["ls-remote", remote, &format!("refs/heads/{branch}")],
+        |s: String| s,
+    ) {
+        Ok(output) => {
+            let tip = String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .next()
+                .map(str::to_owned);
+            match tip {
+                Some(tip) if tip == local => {
+                    PushOutcome::Pushed(local[..local.len().min(7)].to_owned())
+                }
+                Some(tip) => PushOutcome::Refused(format!(
+                    "{description} exited zero but {tracked_branch}'s tip is now {tip}, not \
+                     {local}: confirm manually before running again"
+                )),
+                None => PushOutcome::Refused(format!(
+                    "{description} exited zero but {tracked_branch} could not be found \
+                     afterwards: confirm manually before running again"
+                )),
+            }
+        }
+        Err(reason) => PushOutcome::Refused(reason),
+    }
+}
+
+/// Runs the push step for `task_id`'s attempt `token`, once the commit step has made a commit
+/// and the project tracks `tracked_branch`: times [`push_commit`], records it as the attempt's
+/// next step, and returns how long it took together with what it leaves the attempt at —
+/// `done`, with the remote branch confirmed to hold the commit, or `failed` with why and what
+/// is expected of the operator.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be written.
+fn run_push_step(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    commands: &impl Commands,
+    context: RunContext<'_>,
+    task_id: TaskId,
+    token: &AttemptToken,
+    tracked_branch: &str,
+) -> Result<(Duration, TaskStatus, Option<String>), RunError> {
+    let started = clock.now();
+    let outcome = push_commit(commands, context, tracked_branch);
+    let duration = clock.now().duration_since(started).unwrap_or_default();
+    let (status, reason) = match outcome {
+        PushOutcome::Pushed(hash) => (
+            TaskStatus::Done,
+            Some(format!("pushed {hash} to {tracked_branch}")),
+        ),
+        PushOutcome::Refused(why) => (TaskStatus::Failed, Some(why)),
+    };
+    record_push_step(
+        journal,
+        clock,
+        task_id,
         token.number,
         duration,
         status,
@@ -1044,16 +1206,36 @@ fn run_one_attempt(
     let (steps_duration, exit_code, steps_status, steps_reason) =
         run_steps(journal, clock, commands, provider, context, &target, STEPS)?;
 
-    let (commit_duration, status, reason) = if steps_status == TaskStatus::Done {
-        let (duration, commit_status, commit_reason) =
+    let (post_duration, status, reason) = if steps_status == TaskStatus::Done {
+        let (commit_duration, commit_outcome) =
             run_commit_step(journal, clock, commands, context, task, &token)?;
-        if commit_status == TaskStatus::Done {
-            // The commit step's own reason — that it made a commit, naming its hash, or that
-            // there was nothing to commit — belongs on its own step line, not on the whole
-            // attempt's, whose `reason` means why it is not `done`.
-            (duration, steps_status, steps_reason)
-        } else {
-            (duration, commit_status, commit_reason)
+        match commit_outcome {
+            CommitOutcome::Committed(_) => {
+                if let Some(tracked_branch) = context.tracked_branch {
+                    let (push_duration, push_status, push_reason) = run_push_step(
+                        journal,
+                        clock,
+                        commands,
+                        context,
+                        task.id,
+                        &token,
+                        tracked_branch,
+                    )?;
+                    let duration = commit_duration + push_duration;
+                    if push_status == TaskStatus::Done {
+                        // Neither the commit nor the push step's own reason — hash, branch,
+                        // "nothing to commit" — belongs on the whole attempt's, whose `reason`
+                        // means why it is not `done`.
+                        (duration, steps_status, steps_reason)
+                    } else {
+                        (duration, push_status, push_reason)
+                    }
+                } else {
+                    (commit_duration, steps_status, steps_reason)
+                }
+            }
+            CommitOutcome::NothingChanged => (commit_duration, steps_status, steps_reason),
+            CommitOutcome::Refused(why) => (commit_duration, TaskStatus::Failed, Some(why)),
         }
     } else {
         (Duration::ZERO, steps_status, steps_reason)
@@ -1064,7 +1246,7 @@ fn run_one_attempt(
         task.id,
         token.number,
         AttemptRun {
-            duration: pre_duration + steps_duration + commit_duration,
+            duration: pre_duration + steps_duration + post_duration,
             exit_code,
             status,
             reason: reason.as_deref(),
@@ -3436,6 +3618,299 @@ mod tests {
         assert!(
             reason.contains("the pre-commit hook refused it"),
             "{reason}"
+        );
+    }
+
+    /// A commands port that answers every `git` call the sync, commit and push steps could
+    /// make: a tracked branch with nothing new (so the sync passes at once), a dirty tree, a
+    /// configured identity and a clean commit (so the commit step always succeeds) — then
+    /// `push_exit`, `push_stdout` and `push_stderr` for the push itself, and `remote_tip` for
+    /// what `git ls-remote` reports afterwards. `status --porcelain` runs once for the sync
+    /// step, ahead of the attempt, and once for the commit step, inside it: the first call
+    /// must answer clean or the sync itself would refuse to run, so only calls after the first
+    /// are shown dirty. Records every `git` call it received, in order.
+    struct PushScript<'a> {
+        local_hash: &'static str,
+        push_exit: Exit,
+        push_stdout: &'static [u8],
+        push_stderr: &'static [u8],
+        remote_tip: Option<&'static str>,
+        status_calls: RefCell<u32>,
+        calls: RefCell<Vec<Vec<String>>>,
+        other: &'a dyn Commands,
+    }
+
+    impl Commands for PushScript<'_> {
+        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+            if spec.program != "git" {
+                return self.other.run(spec);
+            }
+            self.calls.borrow_mut().push(spec.args.clone());
+            match spec.args.first().map(String::as_str) {
+                Some("status") => {
+                    let mut count = self.status_calls.borrow_mut();
+                    *count += 1;
+                    // Each task's attempt makes exactly two `status --porcelain` calls: the
+                    // sync step's, ahead of it, then the commit step's, inside it — so the
+                    // odd ones (sync) must answer clean, or the sync itself would refuse to
+                    // run, and the even ones (commit) are shown dirty.
+                    Ok(git_ok(if *count % 2 == 1 {
+                        b""
+                    } else {
+                        b"M file.txt\n"
+                    }))
+                }
+                Some("rev-list") => Ok(git_ok(b"0\n")),
+                Some("config") => Ok(git_ok(b"configured\n")),
+                Some("rev-parse") => Ok(git_ok(self.local_hash.as_bytes())),
+                Some("push") => Ok(Output {
+                    stdout: self.push_stdout.to_vec(),
+                    stderr: self.push_stderr.to_vec(),
+                    exit: self.push_exit,
+                }),
+                Some("ls-remote") => Ok(git_ok(
+                    self.remote_tip
+                        .map(|tip| format!("{tip}\trefs/heads/main\n"))
+                        .unwrap_or_default()
+                        .as_bytes(),
+                )),
+                _ => Ok(git_ok(b"")),
+            }
+        }
+    }
+
+    #[test]
+    fn a_push_confirmed_on_the_remote_ends_the_task_done_with_its_own_line() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let hash = "abcdef1234567890abcdef1234567890abcdef12";
+        let commands = PushScript {
+            local_hash: hash,
+            push_exit: Exit::Code(0),
+            push_stdout: b"",
+            push_stderr: b"",
+            remote_tip: Some(hash),
+            status_calls: RefCell::default(),
+            calls: RefCell::default(),
+            other: &reporting,
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Done
+        );
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        let push = attempt.steps.last().expect("the push step ran");
+        assert_eq!(push.name, PUSH_STEP);
+        let end = push.ended.as_ref().expect("the step ended");
+        assert_eq!(end.status, TaskStatus::Done);
+        assert_eq!(end.reason.as_deref(), Some("pushed abcdef1 to origin/main"));
+        let calls = commands.calls.borrow();
+        assert!(
+            calls
+                .iter()
+                .any(|call| call.first().map(String::as_str) == Some("push")),
+            "{calls:?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|call| call.first().map(String::as_str) == Some("ls-remote")),
+            "{calls:?}"
+        );
+    }
+
+    #[test]
+    fn a_push_rejected_because_the_remote_moved_on_ends_the_task_failed_and_says_so() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = PushScript {
+            local_hash: "abcdef1234567890abcdef1234567890abcdef12",
+            push_exit: Exit::Code(1),
+            push_stdout: b"",
+            push_stderr: b" ! [rejected]        HEAD -> main (fetch first)\n",
+            remote_tip: None,
+            status_calls: RefCell::default(),
+            calls: RefCell::default(),
+            other: &reporting,
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+        assert_eq!(
+            report.end,
+            RunEnd::Stopped {
+                id: TaskId(1),
+                status: TaskStatus::Failed,
+            }
+        );
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Failed
+        );
+        let reason = report.attempted[0].reason.as_deref().unwrap();
+        assert!(reason.contains("has moved on"), "{reason}");
+        assert!(reason.contains("run again"), "{reason}");
+        assert!(
+            !commands
+                .calls
+                .borrow()
+                .iter()
+                .any(|call| call.first().map(String::as_str) == Some("ls-remote")),
+            "a rejected push is never confirmed against the remote"
+        );
+    }
+
+    #[test]
+    fn a_push_that_cannot_reach_the_remote_ends_the_task_failed_with_what_git_said() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = PushScript {
+            local_hash: "abcdef1234567890abcdef1234567890abcdef12",
+            push_exit: Exit::Code(128),
+            push_stdout: b"",
+            push_stderr: b"fatal: could not read from remote repository\n",
+            remote_tip: None,
+            status_calls: RefCell::default(),
+            calls: RefCell::default(),
+            other: &reporting,
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+        assert_eq!(
+            report.end,
+            RunEnd::Stopped {
+                id: TaskId(1),
+                status: TaskStatus::Failed,
+            }
+        );
+        let reason = report.attempted[0].reason.as_deref().unwrap();
+        assert!(reason.contains("git push"), "{reason}");
+        assert!(reason.contains("exited with code 128"), "{reason}");
+        assert!(reason.contains("could not read from remote"), "{reason}");
+    }
+
+    #[test]
+    fn a_push_that_exits_zero_but_leaves_the_remote_tip_mismatched_is_refused() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = PushScript {
+            local_hash: "abcdef1234567890abcdef1234567890abcdef12",
+            push_exit: Exit::Code(0),
+            push_stdout: b"",
+            push_stderr: b"",
+            remote_tip: Some("0000000000000000000000000000000000000"),
+            status_calls: RefCell::default(),
+            calls: RefCell::default(),
+            other: &reporting,
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+        assert_eq!(
+            report.end,
+            RunEnd::Stopped {
+                id: TaskId(1),
+                status: TaskStatus::Failed,
+            }
+        );
+        let reason = report.attempted[0].reason.as_deref().unwrap();
+        assert!(reason.contains("exited zero but"), "{reason}");
+        assert!(reason.contains("tip is now"), "{reason}");
+    }
+
+    #[test]
+    fn no_commit_made_leaves_no_push_line_even_with_a_tracked_branch() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = CommitScript {
+            dirty: false,
+            identity: true,
+            commit_exit: Exit::Code(0),
+            hash: "abc1234",
+            calls: RefCell::default(),
+            other: &reporting,
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Done
+        );
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert!(
+            !attempt.steps.iter().any(|step| step.name == PUSH_STEP),
+            "{:?}",
+            attempt.steps
+        );
+        assert!(
+            !commands
+                .calls
+                .borrow()
+                .iter()
+                .any(|call| call.first().map(String::as_str) == Some("push")),
+            "{:?}",
+            commands.calls.borrow()
         );
     }
 }

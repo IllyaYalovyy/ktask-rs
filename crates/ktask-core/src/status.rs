@@ -31,6 +31,10 @@ pub const HEALTH_CHECK_STEP: &str = "health check";
 /// passed.
 pub const COMMIT_STEP: &str = "commit";
 
+/// The step kind that pushes the commit step's commit to the project's tracked branch, once it
+/// has made one, and confirms the remote branch's tip is that commit.
+pub const PUSH_STEP: &str = "push";
+
 /// How an attempt's outcome is labelled: as the agent itself reported it, or as the tool
 /// observed it when the agent never reported at all — a crash, a kill past the time limit, or
 /// a run left running by a killed one.
@@ -154,12 +158,14 @@ fn ended_outcome(
 
 /// The outcome and reason shown for a step named `name` that ended at `end`: the
 /// implementation, review and test steps are judged by what the agent itself reported, when
-/// it reported anything; every other step — the sync, the health check and the commit step,
-/// today — is a command-kind step the tool itself ran, shown [`AttemptOutcome::Passed`] when
-/// `end.status` is `done` — the health check has nothing to add, the sync step says how many
-/// commits it took in, the commit step names its own short hash or says nothing changed — or
-/// [`AttemptOutcome::Failed`] with why, for the one such step that can still end an attempt
-/// badly: the commit step, run inside the attempt itself rather than ahead of it.
+/// it reported anything; every other step — the sync, the health check, the commit step and
+/// the push step, today — is a command-kind step the tool itself ran, shown
+/// [`AttemptOutcome::Passed`] when `end.status` is `done` — the health check has nothing to
+/// add, the sync step says how many commits it took in, the commit step names its own short
+/// hash or says nothing changed, the push step names the branch it landed on — or
+/// [`AttemptOutcome::Failed`] with why, for the steps that can still end an attempt badly
+/// because they run inside the attempt itself rather than ahead of it: the commit step and the
+/// push step.
 fn step_outcome(
     name: &str,
     end: &AttemptEnd,
