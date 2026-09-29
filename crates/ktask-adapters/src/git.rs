@@ -1,13 +1,44 @@
 //! The git command line.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
-use ktask_core::{Git, GitError};
+use ktask_core::{CommitAllError, Git, GitError, PullRebase, PullRebaseError, PushError};
 
 /// Git, by running the `git` executable found on `PATH`.
 #[derive(Debug, Clone, Copy)]
 pub struct GitCli;
+
+/// Runs `git` with `args` in `dir`, in the `C` locale so its own words for things are stable.
+fn run_git(dir: &Path, args: &[&str]) -> std::io::Result<Output> {
+    Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("LC_ALL", "C")
+        .output()
+}
+
+/// The last line of `output`'s standard error, trimmed — enough of what git said to explain a
+/// failure without dumping a whole traceback.
+fn stderr_of(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).trim().to_owned()
+}
+
+/// `git config --get key`'s value in `dir`, trimmed. `None` when it is unset, blank, or git
+/// could not answer.
+fn config_value(dir: &Path, key: &str) -> Option<String> {
+    let output = run_git(dir, &["config", "--get", key]).ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!value.is_empty()).then_some(value)
+}
+
+/// Whether `dir` has both `user.name` and `user.email` configured.
+fn identity_configured(dir: &Path) -> bool {
+    config_value(dir, "user.name").is_some() && config_value(dir, "user.email").is_some()
+}
 
 impl Git for GitCli {
     fn work_tree_root(&self, dir: &Path) -> Result<Option<PathBuf>, GitError> {
@@ -55,6 +86,214 @@ impl Git for GitCli {
             })?;
         Ok(output.status.success())
     }
+
+    fn pull_rebase(
+        &self,
+        dir: &Path,
+        remote: &str,
+        branch: &str,
+    ) -> Result<PullRebase, PullRebaseError> {
+        let status = run_git(dir, &["status", "--porcelain"]).map_err(|e| {
+            PullRebaseError::Failed(format!("`git status --porcelain` could not be run: {e}"))
+        })?;
+        if !status.status.success() {
+            return Err(PullRebaseError::Failed(format!(
+                "`git status --porcelain` exited with code {}: {}",
+                status.status.code().unwrap_or(-1),
+                stderr_of(&status)
+            )));
+        }
+        let dirty = String::from_utf8_lossy(&status.stdout).trim().to_owned();
+        if !dirty.is_empty() {
+            return Err(PullRebaseError::UncommittedChanges(dirty));
+        }
+
+        let fetch = run_git(dir, &["fetch", remote])
+            .map_err(|e| PullRebaseError::RemoteUnreachable(format!("cannot run git: {e}")))?;
+        if !fetch.status.success() {
+            return Err(PullRebaseError::RemoteUnreachable(stderr_of(&fetch)));
+        }
+
+        let remote_ref = format!("{remote}/{branch}");
+        let range = format!("HEAD..{remote_ref}");
+        let count_output = run_git(dir, &["rev-list", "--count", &range]).map_err(|e| {
+            PullRebaseError::Failed(format!(
+                "`git rev-list --count {range}` could not be run: {e}"
+            ))
+        })?;
+        if !count_output.status.success() {
+            return Err(PullRebaseError::Failed(format!(
+                "`git rev-list --count {range}` exited with code {}: {}",
+                count_output.status.code().unwrap_or(-1),
+                stderr_of(&count_output)
+            )));
+        }
+        let count: u64 = String::from_utf8_lossy(&count_output.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(0);
+        if count == 0 {
+            return Ok(PullRebase::UpToDate);
+        }
+
+        let rebase = run_git(dir, &["rebase", &remote_ref]).map_err(|e| {
+            PullRebaseError::Failed(format!("`git rebase {remote_ref}` could not be run: {e}"))
+        })?;
+        if rebase.status.success() {
+            return Ok(PullRebase::TookIn(count));
+        }
+        let conflicted = run_git(dir, &["diff", "--name-only", "--diff-filter=U"])
+            .ok()
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let _ = run_git(dir, &["rebase", "--abort"]);
+        Err(PullRebaseError::Conflict(conflicted))
+    }
+
+    fn head(&self, dir: &Path) -> Option<String> {
+        let output = run_git(dir, &["rev-parse", "HEAD"]).ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let head = String::from_utf8(output.stdout).ok()?.trim().to_owned();
+        (!head.is_empty()).then_some(head)
+    }
+
+    fn diff_since(&self, dir: &Path, start_commit: &str) -> String {
+        match run_git(dir, &["diff", start_commit]) {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).into_owned()
+            }
+            _ => String::new(),
+        }
+    }
+
+    fn commit_all(&self, dir: &Path, message: &str) -> Result<Option<String>, CommitAllError> {
+        let status = run_git(dir, &["status", "--porcelain"]).map_err(|e| {
+            CommitAllError::Failed(format!("`git status --porcelain` could not be run: {e}"))
+        })?;
+        if !status.status.success() {
+            return Err(CommitAllError::Failed(format!(
+                "`git status --porcelain` exited with code {}: {}",
+                status.status.code().unwrap_or(-1),
+                stderr_of(&status)
+            )));
+        }
+        if String::from_utf8_lossy(&status.stdout).trim().is_empty() {
+            return Ok(None);
+        }
+
+        if !identity_configured(dir) {
+            return Err(CommitAllError::IdentityNotConfigured);
+        }
+
+        let add = run_git(dir, &["add", "-A"])
+            .map_err(|e| CommitAllError::Failed(format!("`git add -A` could not be run: {e}")))?;
+        if !add.status.success() {
+            return Err(CommitAllError::Failed(format!(
+                "`git add -A` exited with code {}: {}",
+                add.status.code().unwrap_or(-1),
+                stderr_of(&add)
+            )));
+        }
+
+        let commit = run_git(dir, &["commit", "-m", message])
+            .map_err(|e| CommitAllError::Failed(format!("`git commit` could not be run: {e}")))?;
+        if !commit.status.success() {
+            return Err(CommitAllError::Failed(format!(
+                "`git commit` exited with code {}: {}",
+                commit.status.code().unwrap_or(-1),
+                stderr_of(&commit)
+            )));
+        }
+
+        let hash = run_git(dir, &["rev-parse", "--short", "HEAD"]).map_err(|e| {
+            CommitAllError::Failed(format!(
+                "`git rev-parse --short HEAD` could not be run: {e}"
+            ))
+        })?;
+        if !hash.status.success() {
+            return Err(CommitAllError::Failed(format!(
+                "`git rev-parse --short HEAD` exited with code {}: {}",
+                hash.status.code().unwrap_or(-1),
+                stderr_of(&hash)
+            )));
+        }
+        Ok(Some(
+            String::from_utf8_lossy(&hash.stdout).trim().to_owned(),
+        ))
+    }
+
+    fn push_and_confirm(
+        &self,
+        dir: &Path,
+        remote: &str,
+        branch: &str,
+    ) -> Result<String, PushError> {
+        let local = run_git(dir, &["rev-parse", "HEAD"]).map_err(|e| {
+            PushError::Failed(format!("`git rev-parse HEAD` could not be run: {e}"))
+        })?;
+        if !local.status.success() {
+            return Err(PushError::Failed(format!(
+                "`git rev-parse HEAD` exited with code {}: {}",
+                local.status.code().unwrap_or(-1),
+                stderr_of(&local)
+            )));
+        }
+        let local_hash = String::from_utf8_lossy(&local.stdout).trim().to_owned();
+
+        let refspec = format!("HEAD:refs/heads/{branch}");
+        let description = format!("`git push {remote} {refspec}`");
+        let push = run_git(dir, &["push", remote, &refspec])
+            .map_err(|e| PushError::Failed(format!("{description} could not be run: {e}")))?;
+        if !push.status.success() {
+            let tail = stderr_of(&push);
+            let rejected = tail.contains("[rejected]") || tail.contains("non-fast-forward");
+            return Err(if rejected {
+                PushError::Rejected
+            } else {
+                PushError::Failed(format!(
+                    "{description} exited with code {}: {tail}",
+                    push.status.code().unwrap_or(-1)
+                ))
+            });
+        }
+
+        let confirm = run_git(dir, &["ls-remote", remote, &format!("refs/heads/{branch}")])
+            .map_err(|e| {
+                PushError::Failed(format!(
+                    "{description} exited zero but confirming it against the remote failed: {e}"
+                ))
+            })?;
+        if !confirm.status.success() {
+            return Err(PushError::Failed(format!(
+                "{description} exited zero but confirming it against the remote exited with \
+                 code {}: {}",
+                confirm.status.code().unwrap_or(-1),
+                stderr_of(&confirm)
+            )));
+        }
+        let tip = String::from_utf8_lossy(&confirm.stdout)
+            .split_whitespace()
+            .next()
+            .map(str::to_owned);
+        match tip {
+            Some(tip) if tip == local_hash => Ok(local_hash[..local_hash.len().min(7)].to_owned()),
+            Some(tip) => Err(PushError::Failed(format!(
+                "{description} exited zero but {remote}/{branch}'s tip is now {tip}, not \
+                 {local_hash}: confirm manually before running again"
+            ))),
+            None => Err(PushError::Failed(format!(
+                "{description} exited zero but {remote}/{branch} could not be found \
+                 afterwards: confirm manually before running again"
+            ))),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -97,7 +336,8 @@ mod tests {
         assert!(error.contains(&missing.display().to_string()), "{error}");
     }
 
-    /// A repository at a canonical path, on branch `branch`, with one commit.
+    /// A repository at a canonical path, on branch `branch`, with one commit, with `user.name`
+    /// and `user.email` configured.
     fn repo_with_branch(branch: &str) -> PathBuf {
         let dir = TempDir::new().unwrap().keep();
         let root = std::fs::canonicalize(&dir).unwrap();
@@ -105,22 +345,36 @@ mod tests {
             &root,
             &["init", "--quiet", &format!("--initial-branch={branch}")],
         );
+        configure_identity(&root);
         std::fs::write(root.join("f"), "x").unwrap();
         run(&root, &["add", "."]);
+        run(&root, &["commit", "--quiet", "-m", "first"]);
+        root
+    }
+
+    /// A repository cloned from `remote`, at a canonical path, on branch `branch`, tracking
+    /// `remote` as `origin`, with `user.name` and `user.email` configured.
+    fn clone_of(remote: &Path, branch: &str) -> PathBuf {
+        let dir = TempDir::new().unwrap().keep();
+        let root = std::fs::canonicalize(&dir).unwrap();
         run(
-            &root,
+            dir.parent().unwrap_or(Path::new(".")),
             &[
-                "-c",
-                "user.email=t@example.com",
-                "-c",
-                "user.name=T",
-                "commit",
+                "clone",
                 "--quiet",
-                "-m",
-                "first",
+                "--branch",
+                branch,
+                remote.to_str().unwrap(),
+                root.to_str().unwrap(),
             ],
         );
+        configure_identity(&root);
         root
+    }
+
+    fn configure_identity(dir: &Path) {
+        run(dir, &["config", "user.email", "t@example.com"]);
+        run(dir, &["config", "user.name", "T"]);
     }
 
     fn run(dir: &Path, args: &[&str]) {
@@ -130,6 +384,13 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success(), "git {args:?} in {}", dir.display());
+    }
+
+    /// Commits `name` with `content` in `dir`, under whatever identity is configured there.
+    fn commit_file(dir: &Path, name: &str, content: &str) {
+        std::fs::write(dir.join(name), content).unwrap();
+        run(dir, &["add", name]);
+        run(dir, &["commit", "--quiet", "-m", name]);
     }
 
     #[test]
@@ -159,5 +420,277 @@ mod tests {
             GitCli.remote_branch_exists(cwd.path(), "not-a-remote-at-all", "main"),
             Ok(false)
         );
+    }
+
+    #[test]
+    fn pull_rebase_brings_in_new_commits_from_the_remote() {
+        let remote = repo_with_branch("main");
+        let local = clone_of(&remote, "main");
+        commit_file(&remote, "new.txt", "from the remote\n");
+
+        let outcome = GitCli.pull_rebase(&local, "origin", "main");
+
+        assert_eq!(outcome, Ok(PullRebase::TookIn(1)));
+        assert!(local.join("new.txt").is_file());
+    }
+
+    #[test]
+    fn pull_rebase_says_up_to_date_when_there_is_nothing_new() {
+        let remote = repo_with_branch("main");
+        let local = clone_of(&remote, "main");
+
+        assert_eq!(
+            GitCli.pull_rebase(&local, "origin", "main"),
+            Ok(PullRebase::UpToDate)
+        );
+    }
+
+    #[test]
+    fn pull_rebase_refuses_when_the_directory_has_uncommitted_changes() {
+        let remote = repo_with_branch("main");
+        let local = clone_of(&remote, "main");
+        std::fs::write(local.join("f"), "changed locally\n").unwrap();
+
+        let error = GitCli.pull_rebase(&local, "origin", "main").unwrap_err();
+
+        match error {
+            PullRebaseError::UncommittedChanges(status) => {
+                assert!(status.contains('f'), "{status}");
+            }
+            other => panic!("expected UncommittedChanges, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pull_rebase_reports_an_unreachable_remote() {
+        let local = repo_with_branch("main");
+        run(
+            &local,
+            &["remote", "add", "origin", "/no/such/remote/at/all"],
+        );
+
+        let error = GitCli.pull_rebase(&local, "origin", "main").unwrap_err();
+
+        match error {
+            PullRebaseError::RemoteUnreachable(_) => {}
+            other => panic!("expected RemoteUnreachable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pull_rebase_undoes_a_conflicting_rebase_and_names_the_conflicting_files() {
+        let remote = repo_with_branch("main");
+        let local = clone_of(&remote, "main");
+        commit_file(&local, "f", "local change\n");
+        commit_file(&remote, "f", "remote change\n");
+
+        let error = GitCli.pull_rebase(&local, "origin", "main").unwrap_err();
+
+        match error {
+            PullRebaseError::Conflict(files) => {
+                assert_eq!(files, vec!["f".to_owned()]);
+            }
+            other => panic!("expected Conflict, got {other:?}"),
+        }
+        // The rebase was undone: no rebase left in progress, and the local content is exactly
+        // as the local commit left it.
+        let status = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&local)
+            .output()
+            .unwrap();
+        assert!(status.stdout.is_empty(), "{:?}", status.stdout);
+        assert_eq!(
+            std::fs::read_to_string(local.join("f")).unwrap(),
+            "local change\n"
+        );
+    }
+
+    #[test]
+    fn head_is_the_current_commit() {
+        let repo = repo_with_branch("main");
+        let head = GitCli.head(&repo).unwrap();
+        let expected = run_output(&repo, &["rev-parse", "HEAD"]);
+        assert_eq!(head, expected.trim());
+    }
+
+    #[test]
+    fn head_is_none_for_a_repository_with_no_commits_yet() {
+        let dir = TempDir::new().unwrap();
+        init(dir.path());
+        assert_eq!(GitCli.head(dir.path()), None);
+    }
+
+    fn run_output(dir: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    #[test]
+    fn diff_since_shows_what_changed_since_the_given_commit() {
+        let repo = repo_with_branch("main");
+        let start = GitCli.head(&repo).unwrap();
+        std::fs::write(repo.join("f"), "changed\n").unwrap();
+
+        let diff = GitCli.diff_since(&repo, &start);
+
+        assert!(diff.contains("-x"), "{diff}");
+        assert!(diff.contains("+changed"), "{diff}");
+    }
+
+    #[test]
+    fn diff_since_is_empty_for_an_unknown_commit() {
+        let repo = repo_with_branch("main");
+        assert_eq!(
+            GitCli.diff_since(&repo, "0000000000000000000000000000000000000"),
+            ""
+        );
+    }
+
+    #[test]
+    fn commit_all_commits_everything_changed_under_the_configured_identity() {
+        let repo = repo_with_branch("main");
+        std::fs::write(repo.join("new.txt"), "fresh\n").unwrap();
+
+        let hash = GitCli.commit_all(&repo, "a message").unwrap().unwrap();
+
+        let logged = run_output(&repo, &["log", "-1", "--format=%h|%an|%ae|%s"]);
+        assert!(
+            logged.starts_with(&format!("{hash}|T|t@example.com|a message")),
+            "{logged}"
+        );
+        assert!(repo.join("new.txt").is_file());
+    }
+
+    #[test]
+    fn commit_all_makes_no_commit_when_nothing_changed() {
+        let repo = repo_with_branch("main");
+        let before = GitCli.head(&repo);
+
+        let outcome = GitCli.commit_all(&repo, "a message").unwrap();
+
+        assert_eq!(outcome, None);
+        assert_eq!(GitCli.head(&repo), before);
+    }
+
+    #[test]
+    fn commit_all_refuses_when_no_identity_is_configured() {
+        let dir = TempDir::new().unwrap().keep();
+        let repo = std::fs::canonicalize(&dir).unwrap();
+        run(&repo, &["init", "--quiet"]);
+        // Overrides to empty at the repository level, so the test is hermetic regardless of
+        // whatever identity the machine running it has configured globally: local config
+        // always wins, and an empty value counts as unset.
+        run(&repo, &["config", "user.name", ""]);
+        run(&repo, &["config", "user.email", ""]);
+        std::fs::write(repo.join("new.txt"), "fresh\n").unwrap();
+
+        let error = GitCli.commit_all(&repo, "a message").unwrap_err();
+
+        assert_eq!(error, CommitAllError::IdentityNotConfigured);
+    }
+
+    #[test]
+    fn commit_all_reports_what_git_itself_says_when_it_refuses_the_commit() {
+        let repo = repo_with_branch("main");
+        let hooks = repo.join(".git").join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\necho 'no thanks' >&2\nexit 1\n").unwrap();
+        let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(&hook, permissions).unwrap();
+        std::fs::write(repo.join("new.txt"), "fresh\n").unwrap();
+
+        let error = GitCli.commit_all(&repo, "a message").unwrap_err();
+
+        match error {
+            CommitAllError::Failed(message) => {
+                assert!(message.contains("git commit"), "{message}");
+                assert!(message.contains("exited with code 1"), "{message}");
+                assert!(message.contains("no thanks"), "{message}");
+            }
+            CommitAllError::IdentityNotConfigured => {
+                panic!("expected Failed, got IdentityNotConfigured")
+            }
+        }
+    }
+
+    /// A bare repository at a canonical path, seeded with one commit on `branch`, that a
+    /// working repository can be cloned from and pushed to as a stand-in for a real remote.
+    fn bare_remote(branch: &str) -> PathBuf {
+        let dir = TempDir::new().unwrap().keep();
+        let bare = std::fs::canonicalize(&dir).unwrap();
+        run(
+            dir.parent().unwrap_or(Path::new(".")),
+            &[
+                "init",
+                "--quiet",
+                "--bare",
+                &format!("--initial-branch={branch}"),
+                bare.to_str().unwrap(),
+            ],
+        );
+        let seed = repo_with_branch(branch);
+        run(&seed, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        run(&seed, &["push", "--quiet", "origin", branch]);
+        bare
+    }
+
+    #[test]
+    fn push_and_confirm_pushes_and_the_remotes_tip_matches() {
+        let bare = bare_remote("main");
+        let local = clone_of(&bare, "main");
+        commit_file(&local, "new.txt", "fresh\n");
+        let head = GitCli.head(&local).unwrap();
+
+        let hash = GitCli.push_and_confirm(&local, "origin", "main").unwrap();
+
+        assert_eq!(hash, head[..7]);
+        let tip = run_output(&bare, &["rev-parse", "refs/heads/main"]);
+        assert_eq!(tip.trim(), head);
+    }
+
+    #[test]
+    fn push_and_confirm_is_rejected_when_the_branch_has_moved_on() {
+        let bare = bare_remote("main");
+        let local = clone_of(&bare, "main");
+        commit_file(&local, "local.txt", "from local\n");
+
+        // Someone else lands a commit on the remote first.
+        let other = clone_of(&bare, "main");
+        commit_file(&other, "other.txt", "from someone else\n");
+        run(&other, &["push", "--quiet", "origin", "main"]);
+
+        let error = GitCli
+            .push_and_confirm(&local, "origin", "main")
+            .unwrap_err();
+
+        assert_eq!(error, PushError::Rejected);
+    }
+
+    #[test]
+    fn push_and_confirm_reports_what_git_said_when_the_remote_cannot_be_reached() {
+        let local = repo_with_branch("main");
+        run(
+            &local,
+            &["remote", "add", "origin", "/no/such/remote/at/all"],
+        );
+
+        let error = GitCli
+            .push_and_confirm(&local, "origin", "main")
+            .unwrap_err();
+
+        match error {
+            PushError::Failed(message) => {
+                assert!(message.contains("git push"), "{message}");
+            }
+            PushError::Rejected => panic!("expected Failed, got Rejected"),
+        }
     }
 }

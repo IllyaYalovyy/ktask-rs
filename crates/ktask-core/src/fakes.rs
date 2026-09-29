@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::{
-    AppendConflict, Clock, CommandSpec, Commands, CommandsError, Event, Git, GitError, Journal,
-    JournalError, Output, Project, ProjectRegistry, RegistryError, RunLock, RunLockError, Settings,
-    SettingsError, SettingsStore, TaskDraft, TaskKind,
+    AppendConflict, Clock, CommandSpec, Commands, CommandsError, CommitAllError, Event, Git,
+    GitError, Journal, JournalError, Output, Project, ProjectRegistry, PullRebase, PullRebaseError,
+    PushError, RegistryError, RunLock, RunLockError, Settings, SettingsError, SettingsStore,
+    TaskDraft, TaskKind,
 };
 
 /// An in-memory registry that can be told to fail.
@@ -51,12 +52,26 @@ impl ProjectRegistry for FakeRegistry {
 }
 
 /// A git that knows the work trees it was given, and which `"<remote>/<branch>"` values it
-/// considers to exist.
+/// considers to exist — and, for [`crate::run_queue`]'s own tests, answers the operations a
+/// run's steps ask of it with whatever each test configured, defaulting to values a passing
+/// attempt would see: nothing new to bring in, no baseline commit, an empty diff, and nothing
+/// to commit. Counts how many times `pull_rebase`, `commit_all` and `push_and_confirm` were
+/// each called, so a test can prove one of them never ran.
 #[derive(Debug, Default)]
 pub(crate) struct FakeGit {
     pub(crate) roots: Vec<PathBuf>,
     pub(crate) remote_branches: Vec<String>,
     pub(crate) failure: Option<GitError>,
+
+    pub(crate) pull_rebase: Option<Result<PullRebase, PullRebaseError>>,
+    pub(crate) head: Option<String>,
+    pub(crate) diff: String,
+    pub(crate) commit_all: Option<Result<Option<String>, CommitAllError>>,
+    pub(crate) push: Option<Result<String, PushError>>,
+
+    pub(crate) pull_rebase_calls: RefCell<u32>,
+    pub(crate) commit_all_calls: RefCell<u32>,
+    pub(crate) push_calls: RefCell<u32>,
 }
 
 impl Git for FakeGit {
@@ -85,6 +100,41 @@ impl Git for FakeGit {
             .remote_branches
             .iter()
             .any(|value| value == &format!("{remote}/{branch}")))
+    }
+
+    fn pull_rebase(
+        &self,
+        _dir: &Path,
+        _remote: &str,
+        _branch: &str,
+    ) -> Result<PullRebase, PullRebaseError> {
+        *self.pull_rebase_calls.borrow_mut() += 1;
+        self.pull_rebase.clone().unwrap_or(Ok(PullRebase::UpToDate))
+    }
+
+    fn head(&self, _dir: &Path) -> Option<String> {
+        self.head.clone()
+    }
+
+    fn diff_since(&self, _dir: &Path, _start_commit: &str) -> String {
+        self.diff.clone()
+    }
+
+    fn commit_all(&self, _dir: &Path, _message: &str) -> Result<Option<String>, CommitAllError> {
+        *self.commit_all_calls.borrow_mut() += 1;
+        self.commit_all.clone().unwrap_or(Ok(None))
+    }
+
+    fn push_and_confirm(
+        &self,
+        _dir: &Path,
+        _remote: &str,
+        _branch: &str,
+    ) -> Result<String, PushError> {
+        *self.push_calls.borrow_mut() += 1;
+        self.push
+            .clone()
+            .unwrap_or_else(|| Ok("0000000".to_owned()))
     }
 }
 

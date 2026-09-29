@@ -23,7 +23,7 @@ mod task;
 
 pub use clock::Clock;
 pub use commands::{CommandSpec, Commands, CommandsError, Exit, Output};
-pub use git::{Git, GitError};
+pub use git::{CommitAllError, Git, GitError, PullRebase, PullRebaseError, PushError};
 pub use import::{ImportError, InvalidTask, import_tasks};
 pub use journal::{
     AppendConflict, AppendError, Attempt, AttemptEnd, AttemptRun, BeginAttemptError, CancelError,

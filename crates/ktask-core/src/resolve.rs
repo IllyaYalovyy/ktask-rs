@@ -151,8 +151,7 @@ mod tests {
     fn git_with(roots: &[&str]) -> FakeGit {
         FakeGit {
             roots: roots.iter().map(PathBuf::from).collect(),
-            remote_branches: Vec::new(),
-            failure: None,
+            ..FakeGit::default()
         }
     }
 
