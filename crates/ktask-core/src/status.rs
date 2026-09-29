@@ -210,21 +210,15 @@ fn running_step(
 /// recorded at all — the attempt itself was ended directly, as a run killed outright and never
 /// reconciled leaves it, before ever starting one — the attempt's own record is shown instead,
 /// under the pipeline's first step name.
-fn entry_for(
-    task: Task,
-    attempt: crate::Attempt,
-    reported: Option<(Outcome, Option<String>)>,
-    clock: &impl Clock,
-    run_alive: bool,
-) -> StatusEntry {
-    let mut steps: Vec<StepLine> = attempt
+/// One line per step of `attempt`, folded from its own recorded outcome — never the whole
+/// attempt's most recent one, which a later report-driven step (review, after implementation)
+/// would otherwise overwrite here.
+fn step_lines(attempt: &crate::Attempt, clock: &impl Clock, run_alive: bool) -> Vec<StepLine> {
+    attempt
         .steps
         .iter()
         .map(|step| match &step.ended {
             Some(end) => {
-                // Each step carries its own reported outcome, captured when it ended — not the
-                // whole attempt's most recent one, which a later report-driven step (review,
-                // after implementation) would otherwise overwrite here.
                 let own_report = end.reported.map(|outcome| (outcome, end.reason.clone()));
                 let (outcome, reason) = step_outcome(&step.name, end, own_report);
                 StepLine {
@@ -236,25 +230,47 @@ fn entry_for(
             }
             None => running_step(&step.name, step.started_at, clock, run_alive),
         })
-        .collect();
-    let current = if let Some(last) = steps.last() {
-        last.clone()
-    } else {
-        let fallback = match &attempt.ended {
-            Some(end) => {
-                let (outcome, reason) = step_outcome(IMPLEMENTATION, end, reported);
-                StepLine {
-                    step: IMPLEMENTATION.to_owned(),
-                    time_spent: end.duration,
-                    outcome,
-                    reason,
-                }
+        .collect()
+}
+
+/// The current step line: the last of `steps` when there is one, else a fallback for the
+/// implementation step itself — pushed onto `steps` too, so it is never missing from what
+/// [`entry_for`] records.
+fn current_step_line(
+    steps: &mut Vec<StepLine>,
+    attempt: &crate::Attempt,
+    reported: Option<(Outcome, Option<String>)>,
+    clock: &impl Clock,
+    run_alive: bool,
+) -> StepLine {
+    if let Some(last) = steps.last() {
+        return last.clone();
+    }
+    let fallback = match &attempt.ended {
+        Some(end) => {
+            let (outcome, reason) = step_outcome(IMPLEMENTATION, end, reported);
+            StepLine {
+                step: IMPLEMENTATION.to_owned(),
+                time_spent: end.duration,
+                outcome,
+                reason,
             }
-            None => running_step(IMPLEMENTATION, attempt.started_at, clock, run_alive),
-        };
-        steps.push(fallback.clone());
-        fallback
+        }
+        None => running_step(IMPLEMENTATION, attempt.started_at, clock, run_alive),
     };
+    steps.push(fallback.clone());
+    fallback
+}
+
+fn entry_for(
+    task: Task,
+    attempt: crate::Attempt,
+    reported: Option<(Outcome, Option<String>)>,
+    clock: &impl Clock,
+    run_alive: bool,
+) -> StatusEntry {
+    let mut steps = step_lines(&attempt, clock, run_alive);
+    let current = current_step_line(&mut steps, &attempt, reported, clock, run_alive);
     StatusEntry {
         task: task.id,
         title: task.title,

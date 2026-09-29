@@ -196,10 +196,76 @@ fn record_passed_step(
     Ok(())
 }
 
-/// Walks `steps`, in order: skips a disabled one entirely, otherwise begins it, runs it, and
-/// ends it with what it recorded — stopping at the first that does not pass, so a step after it
-/// is never begun and leaves no event in the journal. Returns the steps' combined duration and
-/// the outcome of the last one run, which becomes the whole attempt's; a step that only passes
+/// `outcome`'s duration, exit code, status (`done` for [`StepOutcome::Passed`]), reason and
+/// reported outcome, whichever of the two it is.
+fn outcome_fields(
+    outcome: StepOutcome,
+) -> (
+    Duration,
+    Option<i32>,
+    TaskStatus,
+    Option<String>,
+    Option<Outcome>,
+) {
+    match outcome {
+        StepOutcome::Passed {
+            duration,
+            exit_code,
+            reason,
+            reported,
+        } => (duration, exit_code, TaskStatus::Done, reason, reported),
+        StepOutcome::Ended {
+            duration,
+            exit_code,
+            status,
+            reason,
+            reported,
+        } => (duration, exit_code, status, reason, reported),
+    }
+}
+
+/// Begins, runs and ends one `step`, already known enabled: its duration, the status it ended
+/// at, and, when that is not `done`, why.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read or written.
+fn run_one_step(
+    deps: &Deps<'_>,
+    context: RunContext<'_>,
+    state: &mut PipelineState<'_>,
+    step: &dyn Step,
+) -> Result<(Duration, TaskStatus, Option<String>), RunError> {
+    crate::attempt::begin_step(
+        deps.journal,
+        deps.clock,
+        state.task.id,
+        state.token.number,
+        step.name(),
+    )?;
+    let (duration, exit_code, status, reason, reported) =
+        outcome_fields(step.run(deps, context, state)?);
+    crate::attempt::end_step(
+        deps.journal,
+        deps.clock,
+        state.task.id,
+        state.token.number,
+        step.name(),
+        AttemptRun {
+            duration,
+            exit_code,
+            status,
+            reason: reason.as_deref(),
+        },
+        reported,
+    )?;
+    Ok((duration, status, reason))
+}
+
+/// Walks `steps`, in order: skips a disabled one entirely, otherwise runs it via
+/// [`run_one_step`] — stopping at the first that does not pass, so a step after it is never
+/// begun and leaves no event in the journal. Returns the steps' combined duration and the
+/// outcome of the last one run, which becomes the whole attempt's; a step that only passes
 /// never changes either, whatever it recorded for its own step line.
 ///
 /// # Errors
@@ -218,44 +284,9 @@ pub(crate) fn run_attempt_steps(
         if !step.enabled(context, state) {
             continue;
         }
-        crate::attempt::begin_step(
-            deps.journal,
-            deps.clock,
-            state.task.id,
-            state.token.number,
-            step.name(),
-        )?;
-        let outcome = step.run(deps, context, state)?;
-        let (duration, exit_code, step_status, step_reason, reported) = match outcome {
-            StepOutcome::Passed {
-                duration,
-                exit_code,
-                reason,
-                reported,
-            } => (duration, exit_code, TaskStatus::Done, reason, reported),
-            StepOutcome::Ended {
-                duration,
-                exit_code,
-                status,
-                reason,
-                reported,
-            } => (duration, exit_code, status, reason, reported),
-        };
+        let (duration, step_status, step_reason) =
+            run_one_step(deps, context, state, step.as_ref())?;
         total += duration;
-        crate::attempt::end_step(
-            deps.journal,
-            deps.clock,
-            state.task.id,
-            state.token.number,
-            step.name(),
-            AttemptRun {
-                duration,
-                exit_code,
-                status: step_status,
-                reason: step_reason.as_deref(),
-            },
-            reported,
-        )?;
         if step_status != TaskStatus::Done {
             status = step_status;
             reason = step_reason;
@@ -265,6 +296,35 @@ pub(crate) fn run_attempt_steps(
     Ok((total, status, reason))
 }
 
+/// Records every one of `pre_steps` as attempt `number` of task `id`'s own first steps, in
+/// order, via [`record_passed_step`]; their combined duration.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read or written.
+fn record_pre_steps(
+    journal: &dyn Journal,
+    clock: &dyn Clock,
+    id: TaskId,
+    number: u32,
+    pre_steps: &[PreStep],
+) -> Result<Duration, RunError> {
+    let mut total = Duration::ZERO;
+    for pre_step in pre_steps {
+        record_passed_step(
+            journal,
+            clock,
+            id,
+            number,
+            pre_step.name,
+            pre_step.duration,
+            pre_step.reason.as_deref(),
+        )?;
+        total += pre_step.duration;
+    }
+    Ok(total)
+}
+
 /// Runs one attempt at `task` with `deps.provider`: begins it, records `pre_steps` as the
 /// attempt's own first steps in order, then walks `steps`, and ends the attempt with the
 /// outcome they left it at.
@@ -272,32 +332,20 @@ pub(crate) fn run_attempt_steps(
 /// # Errors
 ///
 /// Fails when the journal cannot be read or written.
-pub(crate) fn run_one_attempt(
+/// Builds the pipeline state for attempt `number`, walks `steps` through it, and ends the
+/// attempt with the outcome they left it at, `pre_duration` already spent on its pre-steps.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read or written.
+fn finish_attempt(
     deps: Deps<'_>,
     context: RunContext<'_>,
     task: &Task,
-    pre_steps: &[PreStep],
+    number: u32,
+    pre_duration: Duration,
     steps: &[Box<dyn Step>],
 ) -> Result<Attempted, RunError> {
-    let number = crate::attempt::begin_attempt_running(
-        deps.journal,
-        deps.clock,
-        task.id,
-        deps.provider.name,
-    )?;
-    let mut pre_duration = Duration::ZERO;
-    for pre_step in pre_steps {
-        record_passed_step(
-            deps.journal,
-            deps.clock,
-            task.id,
-            number,
-            pre_step.name,
-            pre_step.duration,
-            pre_step.reason.as_deref(),
-        )?;
-        pre_duration += pre_step.duration;
-    }
     let start_commit = current_commit(deps.git, context);
     let token = AttemptToken::new(context.project_name, task.id, number);
     let mut state = PipelineState {
@@ -325,6 +373,23 @@ pub(crate) fn run_one_attempt(
         status,
         reason,
     })
+}
+
+pub(crate) fn run_one_attempt(
+    deps: Deps<'_>,
+    context: RunContext<'_>,
+    task: &Task,
+    pre_steps: &[PreStep],
+    steps: &[Box<dyn Step>],
+) -> Result<Attempted, RunError> {
+    let number = crate::attempt::begin_attempt_running(
+        deps.journal,
+        deps.clock,
+        task.id,
+        deps.provider.name,
+    )?;
+    let pre_duration = record_pre_steps(deps.journal, deps.clock, task.id, number, pre_steps)?;
+    finish_attempt(deps, context, task, number, pre_duration, steps)
 }
 
 #[cfg(test)]

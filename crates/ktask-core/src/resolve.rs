@@ -72,41 +72,26 @@ impl From<GitError> for ResolveError {
     }
 }
 
-/// Use case: the project a command works on.
-///
-/// The registered project called `selected` when one is given. Otherwise the project at the
-/// git root of `cwd`, or at `cwd` itself outside any git repository; a directory not yet
-/// registered is registered under its folder name.
-///
-/// # Errors
-///
-/// Fails when `selected` is not registered, when the directory cannot be registered, or when
-/// the registry or git cannot be used.
-pub fn resolve_project(
-    registry: &impl ProjectRegistry,
-    git: &impl Git,
-    clock: &impl Clock,
-    cwd: &Path,
-    selected: Option<&str>,
-) -> Result<Resolution, ResolveError> {
-    let known = registry.list()?;
-    if let Some(name) = selected {
-        return known
-            .into_iter()
-            .find(|project| project.name == name)
-            .map(|project| Resolution {
-                project,
-                registered: false,
-            })
-            .ok_or_else(|| ResolveError::UnknownProject(name.to_owned()));
-    }
-    let root = git.work_tree_root(cwd)?.unwrap_or_else(|| cwd.to_owned());
-    if let Some(project) = known.iter().find(|project| project.path == root) {
-        return Ok(Resolution {
-            project: project.clone(),
+/// The registered project named `name`, when `known` has one.
+fn resolve_selected(known: Vec<Project>, name: &str) -> Result<Resolution, ResolveError> {
+    known
+        .into_iter()
+        .find(|project| project.name == name)
+        .map(|project| Resolution {
+            project,
             registered: false,
-        });
-    }
+        })
+        .ok_or_else(|| ResolveError::UnknownProject(name.to_owned()))
+}
+
+/// Registers `root` as a new project, under its folder name — refused when `known` already
+/// uses that name for a different path, or `root` has no usable folder name.
+fn register_new(
+    registry: &impl ProjectRegistry,
+    clock: &impl Clock,
+    known: &[Project],
+    root: PathBuf,
+) -> Result<Resolution, ResolveError> {
     let name = root
         .file_name()
         .and_then(|name| name.to_str())
@@ -129,6 +114,37 @@ pub fn resolve_project(
         project,
         registered: true,
     })
+}
+
+/// Use case: the project a command works on.
+///
+/// The registered project called `selected` when one is given. Otherwise the project at the
+/// git root of `cwd`, or at `cwd` itself outside any git repository; a directory not yet
+/// registered is registered under its folder name.
+///
+/// # Errors
+///
+/// Fails when `selected` is not registered, when the directory cannot be registered, or when
+/// the registry or git cannot be used.
+pub fn resolve_project(
+    registry: &impl ProjectRegistry,
+    git: &impl Git,
+    clock: &impl Clock,
+    cwd: &Path,
+    selected: Option<&str>,
+) -> Result<Resolution, ResolveError> {
+    let known = registry.list()?;
+    if let Some(name) = selected {
+        return resolve_selected(known, name);
+    }
+    let root = git.work_tree_root(cwd)?.unwrap_or_else(|| cwd.to_owned());
+    if let Some(project) = known.iter().find(|project| project.path == root) {
+        return Ok(Resolution {
+            project: project.clone(),
+            registered: false,
+        });
+    }
+    register_new(registry, clock, &known, root)
 }
 
 #[cfg(test)]

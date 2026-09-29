@@ -30,6 +30,42 @@ impl AgentOutcome {
     }
 }
 
+/// `output`'s own exit code, or the [`AgentOutcome`] to end the step with when it never
+/// produced one: the provider was killed past its time limit, or interrupted.
+fn exit_code_or_unreported(output: &Output) -> Result<i32, AgentOutcome> {
+    match output.exit {
+        Exit::Code(code) => Ok(code),
+        Exit::Killed => Err(AgentOutcome::unreported(
+            "the provider ran past its time limit and was killed".to_owned(),
+        )),
+        Exit::Interrupted => Err(AgentOutcome::unreported(INTERRUPTED.to_owned())),
+    }
+}
+
+/// The status and reason a step's own `report`, when it made one, ends at; `exit_code` names
+/// what the provider itself exited at, for the one case there is no report at all.
+fn status_and_reason(
+    report: Option<(Outcome, Option<String>)>,
+    exit_code: i32,
+) -> (TaskStatus, Option<String>) {
+    match report {
+        Some((Outcome::Done | Outcome::Approved | Outcome::Accepted, _)) => {
+            (TaskStatus::Done, None)
+        }
+        Some((
+            Outcome::Failed | Outcome::TooLarge | Outcome::ChangesRequested | Outcome::Rejected,
+            reason,
+        )) => (TaskStatus::Failed, reason),
+        Some((Outcome::NeedsInput, reason)) => (TaskStatus::Blocked, reason),
+        None => (
+            TaskStatus::FailedUnknown,
+            Some(format!(
+                "the provider exited with code {exit_code} and reported nothing"
+            )),
+        ),
+    }
+}
+
 /// What running a provider for step `step` of attempt `token` of `task` ended at, given what
 /// running it produced.
 fn agent_outcome(
@@ -47,35 +83,13 @@ fn agent_outcome(
             )));
         }
     };
-    let exit_code = match output.exit {
-        Exit::Code(code) => code,
-        Exit::Killed => {
-            return Ok(AgentOutcome::unreported(
-                "the provider ran past its time limit and was killed".to_owned(),
-            ));
-        }
-        Exit::Interrupted => {
-            return Ok(AgentOutcome::unreported(INTERRUPTED.to_owned()));
-        }
+    let exit_code = match exit_code_or_unreported(&output) {
+        Ok(code) => code,
+        Err(outcome) => return Ok(outcome),
     };
     let report = crate::attempt::report_of_step(journal, task.id, token.number, step)?;
     let reported = report.as_ref().map(|(outcome, _)| *outcome);
-    let (status, reason) = match report {
-        Some((Outcome::Done | Outcome::Approved | Outcome::Accepted, _)) => {
-            (TaskStatus::Done, None)
-        }
-        Some((
-            Outcome::Failed | Outcome::TooLarge | Outcome::ChangesRequested | Outcome::Rejected,
-            reason,
-        )) => (TaskStatus::Failed, reason),
-        Some((Outcome::NeedsInput, reason)) => (TaskStatus::Blocked, reason),
-        None => (
-            TaskStatus::FailedUnknown,
-            Some(format!(
-                "the provider exited with code {exit_code} and reported nothing"
-            )),
-        ),
-    };
+    let (status, reason) = status_and_reason(report, exit_code);
     Ok(AgentOutcome {
         exit_code: Some(exit_code),
         status,
