@@ -58,10 +58,21 @@ impl Fixture {
     }
 }
 
+/// Every step switch at its default: on — the tail of `settings`' output, whatever the
+/// first three settings show.
+const STEP_DEFAULTS: &str = "step-sync\ton\tdefault\n\
+     step-health-check\ton\tdefault\n\
+     step-review\ton\tdefault\n\
+     step-testing\ton\tdefault\n\
+     step-commit\ton\tdefault\n\
+     step-push\ton\tdefault\n";
+
 /// The default `settings` output: attempt-timeout at its built-in default, health-check and
-/// tracked-branch unset.
-const DEFAULTS: &str =
-    "attempt-timeout\t14400\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n";
+/// tracked-branch unset, every step switch on.
+const DEFAULTS: &str = "attempt-timeout\t14400\tdefault\nhealth-check\t\tdefault\n\
+     tracked-branch\t\tdefault\nstep-sync\ton\tdefault\nstep-health-check\ton\tdefault\n\
+     step-review\ton\tdefault\nstep-testing\ton\tdefault\nstep-commit\ton\tdefault\n\
+     step-push\ton\tdefault\n";
 
 #[test]
 fn a_fresh_project_shows_every_default() -> Result<()> {
@@ -85,7 +96,13 @@ fn json_carries_the_same() -> Result<()> {
         outcome.stdout,
         "[{\"name\":\"attempt-timeout\",\"value\":\"14400\",\"default\":true},\
          {\"name\":\"health-check\",\"value\":\"\",\"default\":true},\
-         {\"name\":\"tracked-branch\",\"value\":\"\",\"default\":true}]\n"
+         {\"name\":\"tracked-branch\",\"value\":\"\",\"default\":true},\
+         {\"name\":\"step-sync\",\"value\":\"on\",\"default\":true},\
+         {\"name\":\"step-health-check\",\"value\":\"on\",\"default\":true},\
+         {\"name\":\"step-review\",\"value\":\"on\",\"default\":true},\
+         {\"name\":\"step-testing\",\"value\":\"on\",\"default\":true},\
+         {\"name\":\"step-commit\",\"value\":\"on\",\"default\":true},\
+         {\"name\":\"step-push\",\"value\":\"on\",\"default\":true}]\n"
     );
     Ok(())
 }
@@ -101,7 +118,9 @@ fn set_changes_the_value_and_it_shows_as_no_longer_the_default() -> Result<()> {
     let shown = fixture.run(&["settings"])?;
     assert_eq!(
         shown.stdout,
-        "attempt-timeout\t3600\tcustom\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n"
+        format!(
+            "attempt-timeout\t3600\tcustom\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
+        )
     );
     assert!(fixture.settings_file().is_file());
     Ok(())
@@ -132,7 +151,9 @@ fn setting_health_check_changes_it_and_it_shows_as_no_longer_the_default() -> Re
     let shown = fixture.run(&["settings"])?;
     assert_eq!(
         shown.stdout,
-        "attempt-timeout\t14400\tdefault\nhealth-check\tcargo test\tcustom\ntracked-branch\t\tdefault\n"
+        format!(
+            "attempt-timeout\t14400\tdefault\nhealth-check\tcargo test\tcustom\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
+        )
     );
     Ok(())
 }
@@ -148,7 +169,9 @@ fn a_tracked_branch_naming_an_existing_remote_branch_is_accepted() -> Result<()>
     let shown = fixture.run(&["settings"])?;
     assert_eq!(
         shown.stdout,
-        "attempt-timeout\t14400\tdefault\nhealth-check\t\tdefault\ntracked-branch\torigin/main\tcustom\n"
+        format!(
+            "attempt-timeout\t14400\tdefault\nhealth-check\t\tdefault\ntracked-branch\torigin/main\tcustom\n{STEP_DEFAULTS}"
+        )
     );
     Ok(())
 }
@@ -242,7 +265,9 @@ fn the_setting_persists_across_commands() -> Result<()> {
 
     assert_eq!(
         shown.stdout,
-        "attempt-timeout\t600\tcustom\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n"
+        format!(
+            "attempt-timeout\t600\tcustom\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
+        )
     );
     Ok(())
 }
@@ -335,5 +360,140 @@ fn a_settings_file_that_cannot_be_parsed_stops_every_command_naming_the_file_and
             outcome.stderr
         );
     }
+    Ok(())
+}
+
+#[test]
+fn switching_a_step_off_and_back_on_changes_it_and_it_shows_as_no_longer_the_default() -> Result<()>
+{
+    let fixture = Fixture::new()?;
+
+    let off = fixture.run(&["settings", "set", "step-review", "off"])?;
+    assert_eq!(off.code, Some(0), "{}", off.stderr);
+    assert_eq!(off.stdout, "step-review\toff\n");
+    let shown = fixture.run(&["settings"])?;
+    assert!(
+        shown.stdout.contains("step-review\toff\tcustom\n"),
+        "{}",
+        shown.stdout
+    );
+
+    let on = fixture.run(&["settings", "set", "step-review", "on"])?;
+    assert_eq!(on.code, Some(0), "{}", on.stderr);
+    assert_eq!(on.stdout, "step-review\ton\n");
+    let shown = fixture.run(&["settings"])?;
+    assert!(
+        shown.stdout.contains("step-review\ton\tcustom\n"),
+        "{}",
+        shown.stdout
+    );
+    Ok(())
+}
+
+#[test]
+fn a_step_switch_that_is_not_on_or_off_exits_two_naming_the_problem_and_changes_nothing()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let outcome = fixture.run(&["settings", "set", "step-review", "nope"])?;
+
+    assert_eq!(outcome.code, Some(2));
+    assert!(
+        outcome.stderr.contains("must be \"on\" or \"off\""),
+        "{}",
+        outcome.stderr
+    );
+    let shown = fixture.run(&["settings"])?;
+    assert_eq!(shown.stdout, DEFAULTS);
+    Ok(())
+}
+
+#[test]
+fn switching_commit_off_while_push_is_on_by_default_exits_two_naming_why_and_changes_nothing()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let outcome = fixture.run(&["settings", "set", "step-commit", "off"])?;
+
+    assert_eq!(outcome.code, Some(2));
+    assert!(
+        outcome
+            .stderr
+            .contains("cannot switch off while push is on"),
+        "{}",
+        outcome.stderr
+    );
+    let shown = fixture.run(&["settings"])?;
+    assert_eq!(shown.stdout, DEFAULTS);
+    Ok(())
+}
+
+#[test]
+fn switching_commit_off_is_accepted_once_push_is_already_off() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let push_off = fixture.run(&["settings", "set", "step-push", "off"])?;
+    assert_eq!(push_off.code, Some(0), "{}", push_off.stderr);
+
+    let commit_off = fixture.run(&["settings", "set", "step-commit", "off"])?;
+
+    assert_eq!(commit_off.code, Some(0), "{}", commit_off.stderr);
+    assert_eq!(commit_off.stdout, "step-commit\toff\n");
+    Ok(())
+}
+
+#[test]
+fn switching_push_on_while_commit_is_off_exits_two_naming_why_and_changes_nothing() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let push_off = fixture.run(&["settings", "set", "step-push", "off"])?;
+    assert_eq!(push_off.code, Some(0), "{}", push_off.stderr);
+    let commit_off = fixture.run(&["settings", "set", "step-commit", "off"])?;
+    assert_eq!(commit_off.code, Some(0), "{}", commit_off.stderr);
+
+    let outcome = fixture.run(&["settings", "set", "step-push", "on"])?;
+
+    assert_eq!(outcome.code, Some(2));
+    assert!(
+        outcome
+            .stderr
+            .contains("cannot switch on while commit is off"),
+        "{}",
+        outcome.stderr
+    );
+    let shown = fixture.run(&["settings"])?;
+    assert!(
+        shown.stdout.contains("step-push\toff\tcustom\n"),
+        "{}",
+        shown.stdout
+    );
+    assert!(
+        shown.stdout.contains("step-commit\toff\tcustom\n"),
+        "{}",
+        shown.stdout
+    );
+    Ok(())
+}
+
+#[test]
+fn switching_implementation_off_exits_two_naming_why_and_it_is_not_one_of_the_settings_shown()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let outcome = fixture.run(&["settings", "set", "step-implementation", "off"])?;
+
+    assert_eq!(outcome.code, Some(2));
+    assert!(
+        outcome
+            .stderr
+            .contains("the implementation step always runs and cannot be switched off"),
+        "{}",
+        outcome.stderr
+    );
+    let shown = fixture.run(&["settings"])?;
+    assert_eq!(shown.stdout, DEFAULTS);
+    assert!(
+        !shown.stdout.contains("step-implementation"),
+        "{}",
+        shown.stdout
+    );
     Ok(())
 }

@@ -15,6 +15,15 @@ const BACKSPACE: &str = "\x7f";
 const SUBMIT: &str = "\x13";
 const TAB: &str = "\t";
 
+/// Every step switch at its default: on — the tail of `settings`' output, whatever the first
+/// three settings show.
+const STEP_DEFAULTS: &str = "step-sync\ton\tdefault\n\
+     step-health-check\ton\tdefault\n\
+     step-review\ton\tdefault\n\
+     step-testing\ton\tdefault\n\
+     step-commit\ton\tdefault\n\
+     step-push\ton\tdefault\n";
+
 /// Opens the queue screen and the settings screen over it.
 fn open_settings(fixture: &Fixture) -> Result<Terminal> {
     enter_settings(fixture.open(ROWS)?)
@@ -146,7 +155,9 @@ fn editing_and_ctrl_s_saves_through_the_same_use_case_settings_set_runs() -> Res
     })?;
     assert_eq!(
         cli_settings(&fixture)?,
-        "attempt-timeout\t7200\tcustom\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n"
+        format!(
+            "attempt-timeout\t7200\tcustom\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
+        )
     );
     quit(terminal)
 }
@@ -174,7 +185,9 @@ fn tab_moves_to_the_health_check_field_and_ctrl_s_saves_it_leaving_the_timeout_u
     })?;
     assert_eq!(
         cli_settings(&fixture)?,
-        "attempt-timeout\t14400\tdefault\nhealth-check\tcargo test\tcustom\ntracked-branch\t\tdefault\n"
+        format!(
+            "attempt-timeout\t14400\tdefault\nhealth-check\tcargo test\tcustom\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
+        )
     );
     quit(terminal)
 }
@@ -201,7 +214,9 @@ fn tab_tab_moves_to_the_tracked_branch_field_and_ctrl_s_saves_a_valid_value() ->
     })?;
     assert_eq!(
         fixture.cli_settings()?,
-        "attempt-timeout\t14400\tdefault\nhealth-check\t\tdefault\ntracked-branch\torigin/main\tcustom\n"
+        format!(
+            "attempt-timeout\t14400\tdefault\nhealth-check\t\tdefault\ntracked-branch\torigin/main\tcustom\n{STEP_DEFAULTS}"
+        )
     );
     quit(terminal)
 }
@@ -264,6 +279,89 @@ fn an_invalid_value_shows_the_same_refusal_the_cli_would_and_saves_nothing() -> 
         "{lines:?}"
     );
     assert!(lines.iter().any(|line| line == "> soon"), "{lines:?}");
+    assert_eq!(cli_settings(&fixture)?, before);
+    quit_from_settings(terminal)
+}
+
+/// Tall enough that every one of the nine settings — three values plus six step switches —
+/// fits on screen at once.
+const TALL: u16 = 36;
+
+#[test]
+fn every_step_switch_is_shown_with_its_label_and_default_value() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let terminal = enter_settings(fixture.open(TALL)?)?;
+
+    let screen = terminal.wait_for("the cursor shown in the field", |screen| {
+        !screen.hide_cursor()
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[12], "Sync step (on/off) (default):");
+    assert_eq!(lines[13], "  on");
+    assert_eq!(lines[15], "Health check step (on/off) (default):");
+    assert_eq!(lines[16], "  on");
+    assert_eq!(lines[18], "Review step (on/off) (default):");
+    assert_eq!(lines[19], "  on");
+    assert_eq!(lines[21], "Testing step (on/off) (default):");
+    assert_eq!(lines[22], "  on");
+    assert_eq!(lines[24], "Commit step (on/off) (default):");
+    assert_eq!(lines[25], "  on");
+    assert_eq!(lines[27], "Push step (on/off) (default):");
+    assert_eq!(lines[28], "  on");
+    quit_from_settings(terminal)
+}
+
+#[test]
+fn tabbing_to_the_review_step_and_switching_it_off_saves_through_the_same_use_case_settings_set_runs()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    let mut terminal = enter_settings(fixture.open(TALL)?)?;
+
+    terminal.send(&TAB.repeat(5))?;
+    terminal.wait_for("the focus on the review-step field", |screen| {
+        let lines = lines_inside_frame(&screen.contents());
+        lines.get(19).is_some_and(|line| line == "> on")
+    })?;
+    terminal.send(&format!("{BACKSPACE}{BACKSPACE}off"))?;
+    terminal.wait_for("the edited value", |screen| {
+        screen.contents().contains("> off")
+    })?;
+
+    terminal.send(SUBMIT)?;
+
+    terminal.wait_for("the queue back", |screen| {
+        !screen.contents().contains("Settings")
+    })?;
+    let shown = cli_settings(&fixture)?;
+    assert!(shown.contains("step-review\toff\tcustom\n"), "{shown}");
+    quit(terminal)
+}
+
+#[test]
+fn switching_commit_off_from_the_settings_screen_shows_the_same_refusal_the_cli_would_and_saves_nothing()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    let before = cli_settings(&fixture)?;
+    let mut terminal = enter_settings(fixture.open(TALL)?)?;
+
+    terminal.send(&TAB.repeat(7))?;
+    terminal.wait_for("the focus on the commit-step field", |screen| {
+        let lines = lines_inside_frame(&screen.contents());
+        lines.get(25).is_some_and(|line| line == "> on")
+    })?;
+    terminal.send(&format!("{BACKSPACE}{BACKSPACE}off"))?;
+    terminal.wait_for("the edited value", |screen| {
+        screen.contents().contains("> off")
+    })?;
+
+    terminal.send(SUBMIT)?;
+
+    let screen = terminal.wait_for("the refusal", |screen| screen.contents().contains("! "))?;
+    let lines = lines_inside_frame(&screen);
+    assert!(
+        lines[2].contains("cannot switch off while push is on"),
+        "{lines:?}"
+    );
     assert_eq!(cli_settings(&fixture)?, before);
     quit_from_settings(terminal)
 }
