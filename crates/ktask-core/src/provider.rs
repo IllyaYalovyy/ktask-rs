@@ -85,7 +85,7 @@ impl From<CommandsError> for ProviderRunError {
 /// Fails, running nothing, when `provider` cannot turn `prompt` into a command. Fails when the
 /// command cannot be started at all.
 pub fn run_provider(
-    commands: &impl Commands,
+    commands: &dyn Commands,
     provider: &Provider,
     prompt: &str,
     call: StepCall<'_>,

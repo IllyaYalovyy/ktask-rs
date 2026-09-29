@@ -22,8 +22,8 @@ use crate::{
 /// Fails, recording nothing, when there is no such task, when it is not pending, or when the
 /// journal cannot be read or written.
 pub(crate) fn begin_attempt(
-    journal: &impl Journal,
-    clock: &impl Clock,
+    journal: &dyn Journal,
+    clock: &dyn Clock,
     id: TaskId,
 ) -> Result<u32, BeginAttemptError> {
     let at = clock.now();
@@ -39,8 +39,8 @@ pub(crate) fn begin_attempt(
 /// Fails, recording nothing, when no attempt numbered `number` was started for this task, when
 /// it was but has since ended, or when the journal cannot be read or written.
 pub(crate) fn record_report(
-    journal: &impl Journal,
-    clock: &impl Clock,
+    journal: &dyn Journal,
+    clock: &dyn Clock,
     id: TaskId,
     number: u32,
     outcome: Outcome,
@@ -64,8 +64,8 @@ pub(crate) fn record_report(
 /// Fails, recording nothing, when there is no such task, when it is not pending, or when the
 /// journal cannot be read or written.
 pub(crate) fn begin_attempt_running(
-    journal: &impl Journal,
-    clock: &impl Clock,
+    journal: &dyn Journal,
+    clock: &dyn Clock,
     id: TaskId,
     provider: &str,
 ) -> Result<u32, BeginAttemptError> {
@@ -90,7 +90,7 @@ pub(crate) fn begin_attempt_running(
 /// Fails, changing nothing, when no attempt numbered `number` is running for this task, or when
 /// the journal cannot be read or written.
 pub(crate) fn end_attempt(
-    journal: &impl Journal,
+    journal: &dyn Journal,
     id: TaskId,
     number: u32,
     run: AttemptRun<'_>,
@@ -111,8 +111,8 @@ pub(crate) fn end_attempt(
 /// Fails, recording nothing, when no attempt numbered `number` is running for this task, or
 /// when the journal cannot be read or written.
 pub(crate) fn begin_step(
-    journal: &impl Journal,
-    clock: &impl Clock,
+    journal: &dyn Journal,
+    clock: &dyn Clock,
     id: TaskId,
     number: u32,
     step: &str,
@@ -138,8 +138,8 @@ pub(crate) fn begin_step(
 /// Fails, recording nothing, when no attempt numbered `number` is running for this task, or
 /// when the journal cannot be read or written.
 pub(crate) fn end_step(
-    journal: &impl Journal,
-    clock: &impl Clock,
+    journal: &dyn Journal,
+    clock: &dyn Clock,
     id: TaskId,
     number: u32,
     step: &str,
@@ -160,7 +160,7 @@ pub(crate) fn end_step(
 /// # Errors
 ///
 /// Fails when the journal cannot be read.
-pub(crate) fn running(journal: &impl Journal) -> Result<Option<(TaskId, u32)>, JournalError> {
+pub(crate) fn running(journal: &dyn Journal) -> Result<Option<(TaskId, u32)>, JournalError> {
     read_and_query(journal, crate::queue_state::QueueState::running)
 }
 
@@ -170,7 +170,7 @@ pub(crate) fn running(journal: &impl Journal) -> Result<Option<(TaskId, u32)>, J
 ///
 /// Fails when the journal cannot be read.
 pub(crate) fn last_attempt(
-    journal: &impl Journal,
+    journal: &dyn Journal,
     id: TaskId,
 ) -> Result<Option<Attempt>, JournalError> {
     read_and_query(journal, |state| state.attempt_of(id))
@@ -183,7 +183,7 @@ pub(crate) fn last_attempt(
 ///
 /// Fails when the journal cannot be read.
 pub(crate) fn last_report(
-    journal: &impl Journal,
+    journal: &dyn Journal,
     id: TaskId,
     number: u32,
 ) -> Result<Option<(Outcome, Option<String>)>, JournalError> {
@@ -197,7 +197,7 @@ pub(crate) fn last_report(
 ///
 /// Fails when the journal cannot be read.
 pub(crate) fn report_of_step(
-    journal: &impl Journal,
+    journal: &dyn Journal,
     id: TaskId,
     number: u32,
     step: &str,
@@ -213,7 +213,7 @@ pub(crate) fn report_of_step(
 ///
 /// Fails when the journal cannot be read.
 pub(crate) fn current_step(
-    journal: &impl Journal,
+    journal: &dyn Journal,
     id: TaskId,
 ) -> Result<Option<String>, JournalError> {
     read_and_query(journal, |state| state.current_step(id))

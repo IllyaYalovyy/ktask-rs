@@ -538,7 +538,7 @@ impl QueueState {
 /// Fails, appending nothing, with whatever `build` itself refuses with, or when the journal
 /// cannot be read or written.
 pub(crate) fn decide_and_append<T, E>(
-    journal: &impl Journal,
+    journal: &dyn Journal,
     build: impl Fn(&QueueState) -> Result<(Vec<Event>, T), E>,
 ) -> Result<T, E>
 where
@@ -562,7 +562,7 @@ where
 ///
 /// Fails when the journal cannot be read.
 pub(crate) fn read_and_query<T>(
-    journal: &impl Journal,
+    journal: &dyn Journal,
     query: impl FnOnce(&QueueState) -> T,
 ) -> Result<T, JournalError> {
     let events = journal.events()?;
