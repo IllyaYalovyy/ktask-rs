@@ -129,15 +129,23 @@ fn corrupt_event(
     )
 }
 
-/// The [`Event::TaskAdded`] a `task_added` row's `payload` decodes to.
-fn decode_task_added(
-    kind: &str,
-    task_id: i64,
-    id: TaskId,
-    at: SystemTime,
+/// The [`Placement`] a `task_added` row's `payload` carries: next to a task when it has a
+/// `before` or an `after`, at the end otherwise.
+fn decode_placement(payload: &Value) -> Placement {
+    if let Some(before) = payload.get("before").and_then(Value::as_u64) {
+        Placement::Before(TaskId(before))
+    } else if let Some(after) = payload.get("after").and_then(Value::as_u64) {
+        Placement::After(TaskId(after))
+    } else {
+        Placement::End
+    }
+}
+
+/// The [`TaskDraft`] a `task_added` row's `payload` decodes to.
+fn decode_task_draft(
     payload: &Value,
-) -> Result<Event, JournalError> {
-    let corrupt = |what: &str, cause: String| corrupt_event(kind, task_id, what, cause);
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<TaskDraft, JournalError> {
     let field = |name: &str| -> Result<String, JournalError> {
         payload
             .get(name)
@@ -157,7 +165,7 @@ fn decode_task_added(
             })
             .ok_or_else(|| corrupt(name, "missing".to_owned()))
     };
-    let draft = TaskDraft {
+    Ok(TaskDraft {
         title: field("title")?,
         body: field("body")?,
         criteria: strings("criteria")?,
@@ -165,18 +173,22 @@ fn decode_task_added(
             .parse::<TaskKind>()
             .map_err(|e| corrupt("kind", e))?,
         links: strings("links")?,
-    };
-    let placement = if let Some(before) = payload.get("before").and_then(Value::as_u64) {
-        Placement::Before(TaskId(before))
-    } else if let Some(after) = payload.get("after").and_then(Value::as_u64) {
-        Placement::After(TaskId(after))
-    } else {
-        Placement::End
-    };
+    })
+}
+
+/// The [`Event::TaskAdded`] a `task_added` row's `payload` decodes to.
+fn decode_task_added(
+    kind: &str,
+    task_id: i64,
+    id: TaskId,
+    at: SystemTime,
+    payload: &Value,
+) -> Result<Event, JournalError> {
+    let corrupt = |what: &str, cause: String| corrupt_event(kind, task_id, what, cause);
     Ok(Event::TaskAdded {
         id,
-        draft,
-        placement,
+        draft: decode_task_draft(payload, &corrupt)?,
+        placement: decode_placement(payload),
         at,
     })
 }
