@@ -335,6 +335,7 @@ pub(crate) fn tasks(tasks: &[Task], json: bool, out: &mut impl Write) -> Result<
 #[derive(Debug, Serialize)]
 struct StepJson<'a> {
     step: &'a str,
+    provider: Option<&'a str>,
     time_spent_seconds: u64,
     outcome: &'static str,
     reason: Option<&'a str>,
@@ -367,6 +368,7 @@ struct StatusJson<'a> {
 fn step_json(line: &ktask_core::StepLine) -> StepJson<'_> {
     StepJson {
         step: &line.step,
+        provider: line.provider.as_deref(),
         time_spent_seconds: line.time_spent.as_secs(),
         outcome: line.outcome.as_str(),
         reason: line.reason.as_deref(),
@@ -467,16 +469,17 @@ pub(crate) fn setting_set(
 }
 
 /// Writes `entries`: for every task, one `#ID<TAB>status<TAB>title` line, followed by one
-/// indented line per step its attempt has run so far, in order — step, provider, time spent,
-/// outcome, and the reason when it did not succeed.
+/// indented line per step its attempt has run so far, in order — step, provider (`-` for a
+/// step the tool ran itself, which names none), time spent, outcome, and the reason when it
+/// did not succeed.
 fn status_text(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), String> {
     entries
         .iter()
         .try_for_each(|entry| {
             let status = ktask_core::displayed_status(entry.status, Some(entry.attempt.outcome));
             writeln!(out, "#{}\t{}\t{}", entry.task, status, entry.title)?;
-            let provider = entry.attempt.provider.as_deref().unwrap_or("-");
             entry.attempt.steps.iter().try_for_each(|step| {
+                let provider = step.provider.as_deref().unwrap_or("-");
                 let seconds = step.time_spent.as_secs();
                 match &step.reason {
                     Some(reason) => writeln!(

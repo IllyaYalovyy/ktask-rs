@@ -199,7 +199,7 @@ fn a_task_that_changes_and_adds_files_gets_one_commit_holding_them_and_the_line_
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
-            &format!("\tcommit\techo\t0s\tpassed\tcommitted as {hash}"),
+            &format!("\tcommit\t-\t0s\tpassed\tcommitted as {hash}"),
         ]
     );
 
@@ -247,7 +247,7 @@ fn a_task_that_changes_nothing_makes_no_commit_the_line_says_so_and_the_task_car
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
-            "\tcommit\techo\t0s\tpassed\tnothing was changed",
+            "\tcommit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
@@ -277,7 +277,7 @@ fn an_unconfigured_git_identity_refuses_the_commit_ends_the_task_failed_and_tell
     let lines: Vec<&str> = status.stdout.lines().collect();
     assert_eq!(lines[0], "#1\tfailed\ta");
     assert!(
-        lines[4].starts_with("\tcommit\techo\t0s\tfailed\t"),
+        lines[4].starts_with("\tcommit\t-\t0s\tfailed\t"),
         "{}",
         lines[4]
     );
@@ -317,7 +317,7 @@ fn a_commit_git_itself_refuses_ends_the_task_failed_with_what_git_said() -> Resu
     let lines: Vec<&str> = status.stdout.lines().collect();
     assert_eq!(lines[0], "#1\tfailed\ta");
     assert!(
-        lines[4].starts_with("\tcommit\techo\t0s\tfailed\t"),
+        lines[4].starts_with("\tcommit\t-\t0s\tfailed\t"),
         "{}",
         lines[4]
     );

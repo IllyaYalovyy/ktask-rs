@@ -1028,7 +1028,7 @@ fn an_approving_review_carries_the_task_on_as_done_and_the_review_line_shows_it(
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
-            "\tcommit\techo\t0s\tpassed\tnothing was changed",
+            "\tcommit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
@@ -1185,7 +1185,7 @@ fn an_accepting_tester_carries_the_task_on_as_done_and_the_testing_line_shows_it
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
-            "\tcommit\techo\t0s\tpassed\tnothing was changed",
+            "\tcommit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())

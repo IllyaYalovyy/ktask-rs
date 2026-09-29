@@ -240,7 +240,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
-            "\tcommit\techo\t0s\tpassed\tnothing was changed",
+            "\tcommit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
 
@@ -254,7 +254,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
-            "\tcommit\techo\t0s\tpassed\tnothing was changed",
+            "\tcommit\t-\t0s\tpassed\tnothing was changed",
             "#2\tfailed\tb",
             "\timplementation\techo\t0s\tfailed\tit broke",
         ]
@@ -270,7 +270,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
-            "\tcommit\techo\t0s\tpassed\tnothing was changed",
+            "\tcommit\t-\t0s\tpassed\tnothing was changed",
             "#2\tfailed\tc",
             "\timplementation\techo\t0s\ttoo-large\tsplit me",
         ]
@@ -286,7 +286,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\timplementation\techo\t0s\tdone",
             "\treview\techo\t0s\tapproved",
             "\ttesting\techo\t0s\taccepted",
-            "\tcommit\techo\t0s\tpassed\tnothing was changed",
+            "\tcommit\t-\t0s\tpassed\tnothing was changed",
             "#2\tblocked\td",
             "\timplementation\techo\t0s\tneeds-input\twhich path?",
         ]
@@ -301,7 +301,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
     assert_eq!(lines[1], "\timplementation\techo\t0s\tdone");
     assert_eq!(lines[2], "\treview\techo\t0s\tapproved");
     assert_eq!(lines[3], "\ttesting\techo\t0s\taccepted");
-    assert_eq!(lines[4], "\tcommit\techo\t0s\tpassed\tnothing was changed");
+    assert_eq!(lines[4], "\tcommit\t-\t0s\tpassed\tnothing was changed");
     assert_eq!(lines[5], "#2\tfailed-unknown\te");
     assert!(
         lines[6].starts_with("\timplementation\techo\t0s\tfailed-unknown\t"),
@@ -428,23 +428,30 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
 
     let entries: serde_json::Value = serde_json::from_str(&outcome.stdout)?;
     for entry in entries.as_array().unwrap() {
-        assert_eq!(entry["attempt"]["provider"], "echo");
         assert_eq!(entry["attempt"]["number"], 1);
         assert!(entry["attempt"]["time_spent_seconds"].as_u64().is_some());
         let steps = entry["attempt"]["steps"].as_array().unwrap();
         assert_eq!(steps[0]["step"], "implementation");
+        // Steps an agent runs name the provider it ran with; steps the tool runs itself name
+        // none.
+        assert_eq!(steps[0]["provider"], "echo");
         if entry["status"] == "done" {
             // `x`, the filler task: all four steps ran and passed, so the commit step —
             // which found nothing to commit — is current.
             assert_eq!(entry["attempt"]["step"], "commit");
+            assert!(entry["attempt"]["provider"].is_null());
             assert_eq!(steps.len(), 4, "{steps:?}");
             assert_eq!(steps[1]["step"], "review");
+            assert_eq!(steps[1]["provider"], "echo");
             assert_eq!(steps[2]["step"], "testing");
+            assert_eq!(steps[2]["provider"], "echo");
             assert_eq!(steps[3]["step"], "commit");
+            assert!(steps[3]["provider"].is_null());
         } else {
             // `e`: the implementation step itself never reported, so it is the only one, and
             // stays current.
             assert_eq!(entry["attempt"]["step"], "implementation");
+            assert_eq!(entry["attempt"]["provider"], "echo");
             assert_eq!(steps.len(), 1, "{steps:?}");
         }
     }
