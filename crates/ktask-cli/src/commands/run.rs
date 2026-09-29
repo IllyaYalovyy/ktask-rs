@@ -4,7 +4,7 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use ktask_adapters::{FileRunLock, ProcessCommands, SystemClock, echo};
+use ktask_adapters::{FileRunLock, GitCli, ProcessCommands, SystemClock, echo};
 use ktask_core::{
     COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, SYNC_STEP, Settings,
     TEST_STEP,
@@ -56,6 +56,7 @@ pub(crate) fn run(args: &Args, stdout: &mut impl Write) -> Result<ExitCode, Fail
         &journal,
         &SystemClock,
         &ProcessCommands,
+        &GitCli,
         &echo::PROVIDER,
         &lock,
         RunContext {
