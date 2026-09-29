@@ -389,6 +389,9 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
         assert_eq!(entry["attempt"]["provider"], "echo");
         assert_eq!(entry["attempt"]["number"], 1);
         assert!(entry["attempt"]["time_spent_seconds"].as_u64().is_some());
+        let steps = entry["attempt"]["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 1, "{steps:?}");
+        assert_eq!(steps[0]["step"], "implementation");
     }
     Ok(())
 }

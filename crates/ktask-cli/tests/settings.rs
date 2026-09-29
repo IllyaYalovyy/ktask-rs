@@ -43,14 +43,17 @@ impl Fixture {
     }
 }
 
+/// The default `settings` output: attempt-timeout at its built-in default, health-check unset.
+const DEFAULTS: &str = "attempt-timeout\t14400\tdefault\nhealth-check\t\tdefault\n";
+
 #[test]
-fn a_fresh_project_shows_the_attempt_timeout_default() -> Result<()> {
+fn a_fresh_project_shows_every_default() -> Result<()> {
     let fixture = Fixture::new()?;
 
     let outcome = fixture.run(&["settings"])?;
 
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
-    assert_eq!(outcome.stdout, "attempt-timeout\t14400\tdefault\n");
+    assert_eq!(outcome.stdout, DEFAULTS);
     Ok(())
 }
 
@@ -63,7 +66,8 @@ fn json_carries_the_same() -> Result<()> {
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     assert_eq!(
         outcome.stdout,
-        "[{\"name\":\"attempt-timeout\",\"value\":14400,\"default\":true}]\n"
+        "[{\"name\":\"attempt-timeout\",\"value\":\"14400\",\"default\":true},\
+         {\"name\":\"health-check\",\"value\":\"\",\"default\":true}]\n"
     );
     Ok(())
 }
@@ -77,7 +81,10 @@ fn set_changes_the_value_and_it_shows_as_no_longer_the_default() -> Result<()> {
     assert_eq!(set.code, Some(0), "{}", set.stderr);
     assert_eq!(set.stdout, "attempt-timeout\t3600\n");
     let shown = fixture.run(&["settings"])?;
-    assert_eq!(shown.stdout, "attempt-timeout\t3600\tcustom\n");
+    assert_eq!(
+        shown.stdout,
+        "attempt-timeout\t3600\tcustom\nhealth-check\t\tdefault\n"
+    );
     assert!(fixture.settings_file().is_file());
     Ok(())
 }
@@ -91,8 +98,46 @@ fn set_json_carries_the_same() -> Result<()> {
     assert_eq!(set.code, Some(0), "{}", set.stderr);
     assert_eq!(
         set.stdout,
-        "{\"name\":\"attempt-timeout\",\"value\":60,\"default\":false}\n"
+        "{\"name\":\"attempt-timeout\",\"value\":\"60\",\"default\":false}\n"
     );
+    Ok(())
+}
+
+#[test]
+fn setting_health_check_changes_it_and_it_shows_as_no_longer_the_default() -> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let set = fixture.run(&["settings", "set", "health-check", "cargo test"])?;
+
+    assert_eq!(set.code, Some(0), "{}", set.stderr);
+    assert_eq!(set.stdout, "health-check\tcargo test\n");
+    let shown = fixture.run(&["settings"])?;
+    assert_eq!(
+        shown.stdout,
+        "attempt-timeout\t14400\tdefault\nhealth-check\tcargo test\tcustom\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_empty_health_check_exits_two_naming_the_problem_and_changes_nothing() -> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let outcome = fixture.run(&["settings", "set", "health-check", "   "])?;
+
+    assert_eq!(outcome.code, Some(2));
+    assert!(
+        outcome.stderr.contains("health-check"),
+        "{}",
+        outcome.stderr
+    );
+    assert!(
+        outcome.stderr.contains("must not be empty"),
+        "{}",
+        outcome.stderr
+    );
+    let shown = fixture.run(&["settings"])?;
+    assert_eq!(shown.stdout, DEFAULTS);
     Ok(())
 }
 
@@ -104,7 +149,10 @@ fn the_setting_persists_across_commands() -> Result<()> {
 
     let shown = fixture.run(&["settings"])?;
 
-    assert_eq!(shown.stdout, "attempt-timeout\t600\tcustom\n");
+    assert_eq!(
+        shown.stdout,
+        "attempt-timeout\t600\tcustom\nhealth-check\t\tdefault\n"
+    );
     Ok(())
 }
 
@@ -127,7 +175,7 @@ fn a_value_that_is_not_a_number_exits_two_naming_the_problem_and_changes_nothing
         outcome.stderr
     );
     let shown = fixture.run(&["settings"])?;
-    assert_eq!(shown.stdout, "attempt-timeout\t14400\tdefault\n");
+    assert_eq!(shown.stdout, DEFAULTS);
     Ok(())
 }
 
@@ -139,7 +187,7 @@ fn a_zero_value_exits_two_naming_the_problem_and_changes_nothing() -> Result<()>
 
     assert_eq!(outcome.code, Some(2));
     let shown = fixture.run(&["settings"])?;
-    assert_eq!(shown.stdout, "attempt-timeout\t14400\tdefault\n");
+    assert_eq!(shown.stdout, DEFAULTS);
     Ok(())
 }
 
@@ -161,7 +209,7 @@ fn an_unknown_setting_exits_two_naming_it_and_changes_nothing() -> Result<()> {
         outcome.stderr
     );
     let shown = fixture.run(&["settings"])?;
-    assert_eq!(shown.stdout, "attempt-timeout\t14400\tdefault\n");
+    assert_eq!(shown.stdout, DEFAULTS);
     assert!(!fixture.settings_file().is_file());
     Ok(())
 }
