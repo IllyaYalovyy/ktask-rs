@@ -870,6 +870,41 @@ fn a_different_ktask_rs_earlier_on_the_callers_path_does_not_stop_the_real_one_b
     Ok(())
 }
 
+#[test]
+fn the_scripts_third_argument_is_the_steps_name() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", &reporting_body_with_reason("failed", "step=$3"))?;
+
+    let run = fixture.run_the_queue(&["run"])?;
+
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    let (_, _, status, reason) = fixture.attempt_ended(1)?;
+    assert_eq!(status, "failed");
+    assert_eq!(reason.as_deref(), Some("step=implementation"));
+    Ok(())
+}
+
+#[test]
+fn the_one_implementation_step_records_exactly_one_start_and_one_end_event() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", &reporting_body("done"))?;
+
+    let run = fixture.run_the_queue(&["run"])?;
+
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let database = rusqlite::Connection::open(fixture.journal())?;
+    let count = |kind: &str| -> rusqlite::Result<i64> {
+        database.query_row(
+            "SELECT COUNT(*) FROM events WHERE kind = ?1 AND task_id = 1",
+            [kind],
+            |row| row.get(0),
+        )
+    };
+    assert_eq!(count("step_started")?, 1);
+    assert_eq!(count("step_ended")?, 1);
+    Ok(())
+}
+
 /// A prediction: the first task added to a fresh project, run once, gets this token — good
 /// enough to build the exact prompt `ktask-rs run` will build for it, ahead of adding it.
 fn first_attempt_token() -> AttemptToken {
