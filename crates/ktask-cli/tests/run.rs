@@ -616,6 +616,46 @@ fn run_works_from_a_subdirectory_and_with_project_from_any_directory() -> Result
 }
 
 #[test]
+fn project_named_before_run_works_the_same_as_after() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", &reporting_body("done"))?;
+    let elsewhere = git_repository(&fixture.sandbox, &fixture.work, "elsewhere")?;
+
+    let outcome = fixture.run_the_queue_in(&elsewhere, &["--project", "my-app", "run"])?;
+
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(fixture.task_status(1)?, "done");
+    Ok(())
+}
+
+#[test]
+fn project_named_twice_with_different_values_on_run_exits_two_and_runs_nothing() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", &reporting_body("done"))?;
+    let elsewhere = git_repository(&fixture.sandbox, &fixture.work, "elsewhere")?;
+    assert_eq!(
+        fixture.sandbox.run(&elsewhere, &["project", "show"])?.code,
+        Some(0)
+    );
+
+    let outcome = fixture.run_the_queue_in(
+        &elsewhere,
+        &["--project", "my-app", "run", "--project", "elsewhere"],
+    )?;
+
+    assert_eq!(outcome.stdout, "");
+    assert!(outcome.stderr.contains("\"my-app\""), "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("\"elsewhere\""),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(outcome.code, Some(2));
+    assert_eq!(fixture.task_status(1)?, "pending");
+    Ok(())
+}
+
+#[test]
 fn a_second_run_while_one_is_in_progress_exits_two_naming_the_running_process() -> Result<()> {
     let fixture = Fixture::new()?;
     let go = fixture.work.join("go");

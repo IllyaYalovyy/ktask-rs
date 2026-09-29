@@ -620,3 +620,53 @@ fn status_works_from_a_subdirectory_and_with_project_from_any_directory() -> Res
     assert!(outcome.stdout.contains("#1\tdone\ta"), "{}", outcome.stdout);
     Ok(())
 }
+
+#[test]
+fn project_named_before_or_after_status_gives_the_same_result() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", &reporting_body("done"))?;
+    let run = fixture.run_the_queue(&["run"])?;
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let elsewhere = git_repository(&fixture.sandbox, &fixture.work, "elsewhere")?;
+
+    let before = fixture
+        .sandbox
+        .run(&elsewhere, &["--project", "my-app", "status"])?;
+    let after = fixture
+        .sandbox
+        .run(&elsewhere, &["status", "--project", "my-app"])?;
+
+    assert_eq!(before.stdout, after.stdout);
+    assert_eq!(before.stderr, after.stderr);
+    assert_eq!(before.code, after.code);
+    assert!(before.stdout.contains("#1\tdone\ta"), "{}", before.stdout);
+    Ok(())
+}
+
+#[test]
+fn project_named_twice_with_different_values_on_status_exits_two() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", &reporting_body("done"))?;
+    let run = fixture.run_the_queue(&["run"])?;
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let elsewhere = git_repository(&fixture.sandbox, &fixture.work, "elsewhere")?;
+    assert_eq!(
+        fixture.sandbox.run(&elsewhere, &["project", "show"])?.code,
+        Some(0)
+    );
+
+    let outcome = fixture.sandbox.run(
+        &elsewhere,
+        &["--project", "my-app", "status", "--project", "elsewhere"],
+    )?;
+
+    assert_eq!(outcome.stdout, "");
+    assert!(outcome.stderr.contains("\"my-app\""), "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("\"elsewhere\""),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(outcome.code, Some(2));
+    Ok(())
+}

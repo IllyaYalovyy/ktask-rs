@@ -157,6 +157,118 @@ fn project_selects_a_registered_project_from_any_directory() -> Result<()> {
 }
 
 #[test]
+fn project_named_before_or_after_show_gives_the_same_result() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, work) = scratch()?;
+    let first = git_repository(&sandbox, &work, "first")?;
+    let second = git_repository(&sandbox, &work, "second")?;
+    for repository in [&first, &second] {
+        assert_eq!(sandbox.run(repository, &["project", "show"])?.code, Some(0));
+    }
+
+    let before = sandbox.run(&first, &["--project", "second", "project", "show"])?;
+    let after = sandbox.run(&first, &["project", "show", "--project", "second"])?;
+
+    assert_eq!(before.stdout, shown("second", &second));
+    assert_eq!(before.stdout, after.stdout);
+    assert_eq!(before.stderr, after.stderr);
+    assert_eq!(before.code, after.code);
+    Ok(())
+}
+
+#[test]
+fn project_named_twice_with_the_same_value_is_not_a_conflict() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, work) = scratch()?;
+    let repository = git_repository(&sandbox, &work, "my-app")?;
+    assert_eq!(
+        sandbox.run(&repository, &["project", "show"])?.code,
+        Some(0)
+    );
+
+    let outcome = sandbox.run(
+        &sandbox.home(),
+        &[
+            "--project",
+            "my-app",
+            "project",
+            "show",
+            "--project",
+            "my-app",
+        ],
+    )?;
+
+    assert_eq!(outcome.stdout, shown("my-app", &repository));
+    assert_eq!(outcome.stderr, "");
+    assert_eq!(outcome.code, Some(0));
+    Ok(())
+}
+
+#[test]
+fn project_named_twice_with_different_values_exits_two_and_touches_nothing() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, work) = scratch()?;
+    let first = git_repository(&sandbox, &work, "first")?;
+    let second = git_repository(&sandbox, &work, "second")?;
+    for repository in [&first, &second] {
+        assert_eq!(sandbox.run(repository, &["project", "show"])?.code, Some(0));
+    }
+    let before = listed(&sandbox)?;
+
+    let outcome = sandbox.run(
+        &sandbox.home(),
+        &[
+            "--project",
+            "first",
+            "project",
+            "show",
+            "--project",
+            "second",
+        ],
+    )?;
+
+    assert_eq!(outcome.stdout, "");
+    assert!(outcome.stderr.contains("\"first\""), "{}", outcome.stderr);
+    assert!(outcome.stderr.contains("\"second\""), "{}", outcome.stderr);
+    assert_eq!(outcome.code, Some(2));
+    assert_eq!(listed(&sandbox)?, before);
+    Ok(())
+}
+
+#[test]
+fn project_named_twice_before_the_subcommand_is_already_a_usage_error() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let outcome = sandbox.run(
+        &sandbox.home(),
+        &["--project", "a", "--project", "b", "project", "list"],
+    )?;
+    assert_eq!(outcome.stdout, "");
+    assert!(
+        outcome.stderr.contains("cannot be used multiple times"),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(outcome.code, Some(2));
+    Ok(())
+}
+
+#[test]
+fn project_before_a_command_that_works_on_no_project_is_refused_the_same_as_after() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    for args in [
+        &["--project", "x", "project", "list"][..],
+        &["--project", "x", "project", "register", "--name", "y"][..],
+    ] {
+        let outcome = sandbox.run(&sandbox.home(), args)?;
+        assert_eq!(outcome.stdout, "");
+        assert!(outcome.stderr.contains("--project"), "{}", outcome.stderr);
+        assert_eq!(outcome.code, Some(2));
+    }
+    assert_eq!(listed(&sandbox)?, "");
+    Ok(())
+}
+
+#[test]
 fn an_unknown_project_exits_two_naming_it_and_pointing_at_project_list() -> Result<()> {
     let sandbox = Sandbox::new()?;
     let (_keep, work) = scratch()?;

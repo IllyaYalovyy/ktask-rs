@@ -595,6 +595,78 @@ fn project_selects_the_queue_the_tasks_are_imported_into() -> Result<()> {
 }
 
 #[test]
+fn project_named_before_or_after_import_gives_the_same_result() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let other = git_repository(&fixture.sandbox, &fixture.work, "other-app")?;
+    for repository in [&fixture.repository, &other] {
+        assert_eq!(
+            fixture.sandbox.run(repository, &["project", "show"])?.code,
+            Some(0)
+        );
+    }
+    let before_file = fixture.file("before.json", &json!([task("Before")]).to_string())?;
+    let after_file = fixture.file("after.json", &json!([task("After")]).to_string())?;
+
+    let before = fixture
+        .sandbox
+        .run(&other, &["--project", "my-app", "import", &before_file])?;
+    assert_eq!(before.stdout, "1\n", "{}", before.stderr);
+    let after = fixture
+        .sandbox
+        .run(&other, &["import", &after_file, "--project", "my-app"])?;
+    assert_eq!(after.stdout, "2\n", "{}", after.stderr);
+
+    let listed = fixture
+        .sandbox
+        .run(&other, &["list", "--project", "my-app"])?;
+    assert_eq!(
+        listed.stdout,
+        "1\t#1\tpending\tagent\tBefore\n2\t#2\tpending\tagent\tAfter\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn project_named_twice_with_different_values_on_import_exits_two_and_imports_nothing() -> Result<()>
+{
+    let fixture = Fixture::new()?;
+    let other = git_repository(&fixture.sandbox, &fixture.work, "other-app")?;
+    assert_eq!(
+        fixture.sandbox.run(&other, &["project", "show"])?.code,
+        Some(0)
+    );
+    let file = fixture.file("tasks.json", &json!([task("Nope")]).to_string())?;
+
+    let outcome = fixture.sandbox.run(
+        &other,
+        &[
+            "--project",
+            "my-app",
+            "import",
+            &file,
+            "--project",
+            "other-app",
+        ],
+    )?;
+
+    assert_eq!(outcome.stdout, "");
+    assert!(outcome.stderr.contains("\"my-app\""), "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("\"other-app\""),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(outcome.code, Some(2));
+    let mine = fixture
+        .sandbox
+        .run(&other, &["list", "--project", "my-app"])?;
+    assert_eq!(mine.stdout, "");
+    let theirs = fixture.sandbox.run(&other, &["list"])?;
+    assert_eq!(theirs.stdout, "");
+    Ok(())
+}
+
+#[test]
 fn the_import_help_describes_the_file_the_placement_and_the_fields() -> Result<()> {
     let fixture = Fixture::new()?;
     let help = fixture.run(&["import", "--help"])?;

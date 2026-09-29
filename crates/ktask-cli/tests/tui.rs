@@ -244,6 +244,60 @@ fn an_unknown_project_exits_two_pointing_at_project_list() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn project_named_before_tui_selects_the_same_project_as_after() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, work) = scratch()?;
+    let first = git_repository(&sandbox, &work, "first-app")?;
+    let second = git_repository(&sandbox, &work, "second-app")?;
+    for repository in [&first, &second] {
+        let shown = sandbox.run(repository, &["project", "show"])?;
+        assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    }
+
+    let mut terminal = Terminal::launch(
+        &sandbox,
+        &second,
+        &["--project", "first-app", "tui"],
+        ROWS,
+        COLS,
+    )?;
+    let screen = terminal.wait_for_text("The queue is empty.")?;
+
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[1], "first-app");
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
+fn project_named_twice_with_different_values_on_tui_exits_two_and_opens_nothing() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, work) = scratch()?;
+    let first = git_repository(&sandbox, &work, "first-app")?;
+    let second = git_repository(&sandbox, &work, "second-app")?;
+    for repository in [&first, &second] {
+        let shown = sandbox.run(repository, &["project", "show"])?;
+        assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    }
+
+    let terminal = Terminal::launch(
+        &sandbox,
+        &first,
+        &["--project", "first-app", "tui", "--project", "second-app"],
+        ROWS,
+        200,
+    )?;
+
+    assert_eq!(terminal.wait_for_exit()?, 2);
+    let screen = terminal.screen();
+    assert!(screen.contains("\"first-app\""), "{screen}");
+    assert!(screen.contains("\"second-app\""), "{screen}");
+    assert!(!screen.contains("The queue is empty."), "{screen}");
+    Ok(())
+}
+
 /// Adds a task of `kind` titled `title` from the command line.
 fn add_task(sandbox: &Sandbox, repository: &Path, title: &str, kind: &str) -> Result<()> {
     let outcome = sandbox.run(

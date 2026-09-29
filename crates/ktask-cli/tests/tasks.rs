@@ -558,6 +558,98 @@ fn project_selects_the_queue_from_any_directory_and_queues_are_separate() -> Res
 }
 
 #[test]
+fn project_named_before_or_after_add_or_list_gives_the_same_result() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let other = git_repository(&fixture.sandbox, &fixture.work, "other-app")?;
+    for repository in [&fixture.repository, &other] {
+        assert_eq!(
+            fixture.sandbox.run(repository, &["project", "show"])?.code,
+            Some(0)
+        );
+    }
+
+    let before = fixture.sandbox.run(
+        &other,
+        &[
+            "--project",
+            "my-app",
+            "add",
+            "--title",
+            "t1",
+            "--criterion",
+            "c",
+        ],
+    )?;
+    assert_eq!(before.stdout, "1\n", "{}", before.stderr);
+    let after = fixture.sandbox.run(
+        &other,
+        &[
+            "add",
+            "--title",
+            "t2",
+            "--criterion",
+            "c",
+            "--project",
+            "my-app",
+        ],
+    )?;
+    assert_eq!(after.stdout, "2\n", "{}", after.stderr);
+
+    let listed_before = fixture
+        .sandbox
+        .run(&other, &["--project", "my-app", "list"])?;
+    let listed_after = fixture
+        .sandbox
+        .run(&other, &["list", "--project", "my-app"])?;
+    assert_eq!(listed_before.stdout, listed_after.stdout);
+    assert_eq!(listed_before.stderr, listed_after.stderr);
+    assert_eq!(listed_before.code, listed_after.code);
+    assert_eq!(
+        listed_before.stdout,
+        "1\t#1\tpending\tagent\tt1\n2\t#2\tpending\tagent\tt2\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn project_named_twice_with_different_values_on_add_exits_two_and_adds_nothing() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let other = git_repository(&fixture.sandbox, &fixture.work, "other-app")?;
+    assert_eq!(
+        fixture.sandbox.run(&other, &["project", "show"])?.code,
+        Some(0)
+    );
+
+    let outcome = fixture.sandbox.run(
+        &other,
+        &[
+            "--project",
+            "my-app",
+            "add",
+            "--title",
+            "t",
+            "--criterion",
+            "c",
+            "--project",
+            "other-app",
+        ],
+    )?;
+
+    assert_eq!(outcome.stdout, "");
+    assert!(outcome.stderr.contains("\"my-app\""), "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("\"other-app\""),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(outcome.code, Some(2));
+    fixture.assert_nothing_added()?;
+    let theirs = fixture.sandbox.run(&other, &["list"])?;
+    assert_eq!(theirs.stdout, "");
+    Ok(())
+}
+
+#[test]
 fn a_journal_that_is_not_a_database_exits_one_naming_the_file() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add("first")?;

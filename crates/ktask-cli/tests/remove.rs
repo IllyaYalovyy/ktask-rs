@@ -414,6 +414,61 @@ fn project_works_on_another_project_from_any_directory() -> Result<()> {
 }
 
 #[test]
+fn project_named_before_or_after_remove_gives_the_same_result() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let other = git_repository(&fixture.sandbox, &fixture.work, "other-app")?;
+    let shown = fixture.sandbox.run(&other, &["project", "show"])?;
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+
+    let before = fixture
+        .sandbox
+        .run(&other, &["--project", "my-app", "remove", "1"])?;
+    assert_eq!(before.code, Some(0), "{}", before.stderr);
+    let after = fixture
+        .sandbox
+        .run(&other, &["remove", "2", "--project", "my-app"])?;
+    assert_eq!(after.code, Some(0), "{}", after.stderr);
+
+    assert_eq!(lines(&fixture, false)?, ["1:#3:pending:c"]);
+    Ok(())
+}
+
+#[test]
+fn project_named_twice_with_different_values_on_remove_exits_two_and_removes_nothing() -> Result<()>
+{
+    let fixture = Fixture::new()?;
+    let other = git_repository(&fixture.sandbox, &fixture.work, "other-app")?;
+    let shown = fixture.sandbox.run(&other, &["project", "show"])?;
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+
+    let outcome = fixture.sandbox.run(
+        &other,
+        &[
+            "--project",
+            "my-app",
+            "remove",
+            "1",
+            "--project",
+            "other-app",
+        ],
+    )?;
+
+    assert_eq!(outcome.stdout, "");
+    assert!(outcome.stderr.contains("\"my-app\""), "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("\"other-app\""),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(outcome.code, Some(2));
+    assert_eq!(
+        lines(&fixture, false)?,
+        ["1:#1:pending:a", "2:#2:pending:b", "3:#3:pending:c"]
+    );
+    Ok(())
+}
+
+#[test]
 fn a_journal_that_is_not_a_database_exits_one_naming_the_file() -> Result<()> {
     let fixture = Fixture::new()?;
     let path = fixture.journal();
