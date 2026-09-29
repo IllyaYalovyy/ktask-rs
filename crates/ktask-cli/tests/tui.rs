@@ -16,6 +16,8 @@ mod import;
 mod insert;
 #[path = "tui/navigate.rs"]
 mod navigate;
+#[path = "tui/projects.rs"]
+mod projects;
 #[path = "support/pty.rs"]
 mod pty;
 #[path = "tui/remove.rs"]

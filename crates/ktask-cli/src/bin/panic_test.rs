@@ -60,6 +60,10 @@ fn main() {
                 Err("not supported in this test binary".to_owned())
             },
             import: |_path: &str| Err("not supported in this test binary".to_owned()),
+            load_projects: || -> Result<Vec<Project>, String> {
+                Err("not supported in this test binary".to_owned())
+            },
+            switch_project: |_name: &str| Err("not supported in this test binary".to_owned()),
         },
         || Err("not supported in this test binary".to_owned()),
         NeverChanges,

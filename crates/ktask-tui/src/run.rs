@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
 
-use ktask_core::{JournalWatch, Placement, QueueView, SettingView, TaskDraft, TaskId};
+use ktask_core::{JournalWatch, Placement, Project, QueueView, SettingView, TaskDraft, TaskId};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, KeyModifiers};
 use signal_hook::consts::{SIGHUP, SIGTERM};
@@ -37,7 +37,16 @@ enum Wake {
 
 /// Every callback the loop uses to read or change state outside the terminal, bundled into
 /// one value so [`run`] and [`drive`] take few enough arguments for Clippy's limit on them.
-pub struct Actions<Load, Remove, Add, LoadSettings, SaveSetting, Import> {
+pub struct Actions<
+    Load,
+    Remove,
+    Add,
+    LoadSettings,
+    SaveSetting,
+    Import,
+    LoadProjects,
+    SwitchProject,
+> {
     /// Fetches the queue to show, with the cancelled tasks when told to.
     pub load: Load,
     /// Removes a task the operator confirmed removing.
@@ -53,12 +62,19 @@ pub struct Actions<Load, Remove, Add, LoadSettings, SaveSetting, Import> {
     /// giving what to show for it — the same words `ktask-rs import` itself would print,
     /// whether it succeeded or was refused.
     pub import: Import,
+    /// The registered projects, for the project picker to open on — the same list
+    /// `ktask-rs project list` prints.
+    pub load_projects: LoadProjects,
+    /// Switches to the project the picker was submitted with, so every action from here on
+    /// applies to it, giving its fresh queue, or why the switch did not happen.
+    pub switch_project: SwitchProject,
 }
 
 /// Closures carry no useful debug representation of their own; this names the type without
 /// them, which is all `#[derive(Debug)]` could offer here in any case.
-impl<Load, Remove, Add, LoadSettings, SaveSetting, Import> std::fmt::Debug
-    for Actions<Load, Remove, Add, LoadSettings, SaveSetting, Import>
+impl<Load, Remove, Add, LoadSettings, SaveSetting, Import, LoadProjects, SwitchProject>
+    std::fmt::Debug
+    for Actions<Load, Remove, Add, LoadSettings, SaveSetting, Import, LoadProjects, SwitchProject>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Actions").finish_non_exhaustive()
@@ -68,6 +84,12 @@ impl<Load, Remove, Add, LoadSettings, SaveSetting, Import> std::fmt::Debug
 /// How often the loop wakes on its own to refresh a running task's elapsed time, while one is
 /// running. Nothing wakes it on a timer otherwise.
 const TICK: Duration = Duration::from_secs(1);
+
+/// How long a burst of [`Wake::Changed`] is given to settle before it is read: a task's
+/// attempt appends several events close together — its status, then each step's own outcome —
+/// so reading right on the first of them risks a reload caught between two of a related
+/// group, showing one without the other. Short enough that a human never notices the delay.
+const SETTLE: Duration = Duration::from_millis(20);
 
 /// Starts a terminal synchronized update: a reader that stops at the matching end marker never
 /// sees a frame half drawn.
@@ -110,7 +132,11 @@ fn draw(terminal: &mut DefaultTerminal, app: &App) -> Result<(), String> {
 /// fetches every project setting, called each time the operator opens the settings screen.
 /// `actions.save_setting` changes the setting named by the settings screen's focused field to
 /// the value it was submitted with, giving the new setting, or the reasons it was refused —
-/// an unknown setting or an invalid value — shown on the screen instead of closing it. `watch`
+/// an unknown setting or an invalid value — shown on the screen instead of closing it.
+/// `actions.load_projects` fetches the registered projects, called each time the operator
+/// opens the project picker. `actions.switch_project` switches to the project the picker was
+/// submitted with, so every action from here on applies to it, giving its fresh queue, or why
+/// the switch did not happen — shown on the screen instead of closing it. `watch`
 /// blocks until the journal changes; it is polled from a dedicated thread, so a task added,
 /// inserted or removed by another process — a run included — shows in the next frame without
 /// the loop itself ever waking on a timer — except while a task is running, when the queue is
@@ -132,6 +158,8 @@ pub fn run(
         impl FnMut() -> Result<Vec<SettingView>, String>,
         impl FnMut(&str, &str) -> Result<SettingView, String>,
         impl FnMut(&str) -> Result<String, String>,
+        impl FnMut() -> Result<Vec<Project>, String>,
+        impl FnMut(&str) -> Result<QueueView, String>,
     >,
     start_run: impl Fn() -> Result<String, String> + Send + Sync + 'static,
     watch: impl JournalWatch + Send + 'static,
@@ -201,6 +229,31 @@ fn next_wake(wakes: &Receiver<Wake>, running: bool) -> Result<Wake, String> {
     }
 }
 
+/// The wake `drive`'s loop acts on next: one already drained ahead of its turn while
+/// collapsing the previous burst, taken from `pending`, or [`next_wake`] otherwise.
+fn next(pending: &mut Option<Wake>, wakes: &Receiver<Wake>, running: bool) -> Result<Wake, String> {
+    match pending.take() {
+        Some(wake) => Ok(wake),
+        None => next_wake(wakes, running),
+    }
+}
+
+/// Waits out [`SETTLE`] for a burst of [`Wake::Changed`] to finish landing, then drains every
+/// one of it and every [`Wake::Tick`] queued alongside it, so the burst collapses into the one
+/// reload it warrants, read whole rather than caught between two commits of a group appended
+/// close together. Returns the first wake of a different kind found while draining, for the
+/// next iteration to handle in its turn — never dropped, just deferred.
+fn drain_changes(wakes: &Receiver<Wake>) -> Option<Wake> {
+    thread::sleep(SETTLE);
+    loop {
+        match wakes.try_recv() {
+            Ok(Wake::Changed | Wake::Tick) => {}
+            Ok(other) => return Some(other),
+            Err(_) => return None,
+        }
+    }
+}
+
 /// The app after `input`, carrying out whatever it left pending for the loop — removing a
 /// task, adding one, loading or saving a setting, or starting a run — and whether the queue
 /// is worth loading again afterward: not, only, when nothing pending was found and the
@@ -256,6 +309,31 @@ where
     Ok((app, false))
 }
 
+/// Loads the project picker or switches to the project `app` has pending, if either: `(app,
+/// true)` when one was, `(app, false)`, unchanged, otherwise.
+fn handle_projects_action<LoadProjects, SwitchProject>(
+    mut app: App,
+    load_projects: &mut LoadProjects,
+    switch_project: &mut SwitchProject,
+) -> Result<(App, bool), String>
+where
+    LoadProjects: FnMut() -> Result<Vec<Project>, String>,
+    SwitchProject: FnMut(&str) -> Result<QueueView, String>,
+{
+    if app.projects_requested.take().is_some() {
+        let projects = load_projects()?;
+        return Ok((update(app, Event::ProjectsLoaded(projects)), true));
+    }
+    if let Some(name) = app.project_switch.take() {
+        let event = match switch_project(&name) {
+            Ok(queue) => Event::ProjectSwitched(queue),
+            Err(message) => Event::ProjectSwitchFailed(message),
+        };
+        return Ok((update(app, event), true));
+    }
+    Ok((app, false))
+}
+
 /// Imports the file `app` has pending, if any: `(app, true)` when one was, `(app, false)`,
 /// unchanged, otherwise. Shows the same result, or the same refusal, `ktask-rs import` itself
 /// would print, one line per line of it.
@@ -272,37 +350,74 @@ where
     (update(app, Event::ImportMessage(text)), true)
 }
 
-fn handle_input<Load, Remove, Add, LoadSettings, SaveSetting, Import>(
+/// Evaluates to the app a `(App, bool)` pair carries once its `bool` is read, returning at
+/// once with `Ok((app, true))` when it was `true` — the shared shape of trying one background
+/// action after another in [`handle_input`], in the order the first one pending wins.
+macro_rules! or_return_handled {
+    ($pair:expr) => {{
+        let (app, handled) = $pair;
+        if handled {
+            return Ok((app, true));
+        }
+        app
+    }};
+}
+
+/// Tries removing or adding a task, loading or saving a setting, and loading or switching the
+/// active project, in that order: the first one `app` has pending wins. `(app, true)` when one
+/// did, `(app, false)` otherwise.
+fn try_background_actions<R, A, LS, SS, LP, SP>(
+    app: App,
+    remove: &mut R,
+    add: &mut A,
+    load_settings: &mut LS,
+    save_setting: &mut SS,
+    load_projects: &mut LP,
+    switch_project: &mut SP,
+) -> Result<(App, bool), String>
+where
+    R: FnMut(TaskId) -> Result<(), String>,
+    A: FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
+    LS: FnMut() -> Result<Vec<SettingView>, String>,
+    SS: FnMut(&str, &str) -> Result<SettingView, String>,
+    LP: FnMut() -> Result<Vec<Project>, String>,
+    SP: FnMut(&str) -> Result<QueueView, String>,
+{
+    let app = or_return_handled!(handle_task_action(app, remove, add)?);
+    let app = or_return_handled!(handle_settings_action(app, load_settings, save_setting)?);
+    handle_projects_action(app, load_projects, switch_project)
+}
+
+fn handle_input<L, R, A, LS, SS, I, LP, SP>(
     mut app: App,
-    actions: &mut Actions<Load, Remove, Add, LoadSettings, SaveSetting, Import>,
+    actions: &mut Actions<L, R, A, LS, SS, I, LP, SP>,
     input: &Input,
     start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,
     sender: &Sender<Wake>,
 ) -> Result<(App, bool), String>
 where
-    Remove: FnMut(TaskId) -> Result<(), String>,
-    Add: FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
-    LoadSettings: FnMut() -> Result<Vec<SettingView>, String>,
-    SaveSetting: FnMut(&str, &str) -> Result<SettingView, String>,
-    Import: FnMut(&str) -> Result<String, String>,
+    R: FnMut(TaskId) -> Result<(), String>,
+    A: FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
+    LS: FnMut() -> Result<Vec<SettingView>, String>,
+    SS: FnMut(&str, &str) -> Result<SettingView, String>,
+    I: FnMut(&str) -> Result<String, String>,
+    LP: FnMut() -> Result<Vec<Project>, String>,
+    SP: FnMut(&str) -> Result<QueueView, String>,
 {
     let asked = app.show_cancelled;
     if let Some(event) = translate(input) {
         app = update(app, event);
     }
-    let (app, handled) = handle_task_action(app, &mut actions.remove, &mut actions.add)?;
-    if handled {
-        return Ok((app, true));
-    }
-    let (app, handled) =
-        handle_settings_action(app, &mut actions.load_settings, &mut actions.save_setting)?;
-    if handled {
-        return Ok((app, true));
-    }
-    let (mut app, handled) = handle_import_action(app, &mut actions.import);
-    if handled {
-        return Ok((app, true));
-    }
+    let app = or_return_handled!(try_background_actions(
+        app,
+        &mut actions.remove,
+        &mut actions.add,
+        &mut actions.load_settings,
+        &mut actions.save_setting,
+        &mut actions.load_projects,
+        &mut actions.switch_project,
+    )?);
+    let mut app = or_return_handled!(handle_import_action(app, &mut actions.import));
     if app.run_requested.take().is_some() {
         spawn_run(Arc::clone(start_run), sender.clone());
         return Ok((app, true));
@@ -318,6 +433,45 @@ fn task_running(app: &App) -> bool {
         .is_some_and(|queue| queue.summary.running > 0)
 }
 
+/// What handling one `wake` produces: `None` when the loop should stop; otherwise `app` to
+/// carry on with, a wake drained ahead of its turn while collapsing a burst of
+/// [`Wake::Changed`] for the next call to receive first, and whether the queue is worth
+/// loading again before the next frame.
+fn step<L, R, A, LS, SS, I, LP, SP>(
+    app: App,
+    wake: Wake,
+    wakes: &Receiver<Wake>,
+    actions: &mut Actions<L, R, A, LS, SS, I, LP, SP>,
+    start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,
+    sender: &Sender<Wake>,
+) -> Result<Option<(App, Option<Wake>, bool)>, String>
+where
+    R: FnMut(TaskId) -> Result<(), String>,
+    A: FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
+    LS: FnMut() -> Result<Vec<SettingView>, String>,
+    SS: FnMut(&str, &str) -> Result<SettingView, String>,
+    I: FnMut(&str) -> Result<String, String>,
+    LP: FnMut() -> Result<Vec<Project>, String>,
+    SP: FnMut(&str) -> Result<QueueView, String>,
+{
+    match wake {
+        Wake::Stop => Ok(None),
+        // A single underlying change can be reported as a burst of several — a recursive
+        // watch sees a project's own rollback-journal file appear and disappear around each
+        // commit, on top of the change itself. Collapsing a burst into the one reload it
+        // warrants keeps a run from being slowed down by a reload racing every one of its own
+        // writes for the journal's lock. Anything drained that is not itself part of the
+        // burst is kept, not lost, for the next call.
+        Wake::Changed => Ok(Some((app, drain_changes(wakes), true))),
+        Wake::Tick => Ok(Some((app, None, true))),
+        Wake::RunMessage(text) => Ok(Some((update(app, Event::RunMessage(text)), None, true))),
+        Wake::Input(input) => {
+            let (app, reload) = handle_input(app, actions, &input, start_run, sender)?;
+            Ok(Some((app, None, reload)))
+        }
+    }
+}
+
 fn drive(
     terminal: &mut DefaultTerminal,
     mut actions: Actions<
@@ -327,34 +481,35 @@ fn drive(
         impl FnMut() -> Result<Vec<SettingView>, String>,
         impl FnMut(&str, &str) -> Result<SettingView, String>,
         impl FnMut(&str) -> Result<String, String>,
+        impl FnMut() -> Result<Vec<Project>, String>,
+        impl FnMut(&str) -> Result<QueueView, String>,
     >,
     start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,
     sender: &Sender<Wake>,
     wakes: &Receiver<Wake>,
 ) -> Result<(), String> {
     let mut app = update(App::default(), Event::Loaded((actions.load)(false)?));
+    // A wake drained ahead of its turn while collapsing a burst of `Wake::Changed`, carried
+    // over so the next iteration handles it rather than losing it.
+    let mut pending: Option<Wake> = None;
     loop {
         draw(terminal, &app)?;
         if app.quit {
             return Ok(());
         }
-        match next_wake(wakes, task_running(&app))? {
-            Wake::Stop => return Ok(()),
-            Wake::Changed | Wake::Tick => {}
-            Wake::RunMessage(text) => {
-                app = update(app, Event::RunMessage(text));
-            }
-            Wake::Input(input) => {
-                let (new_app, should_reload) =
-                    handle_input(app, &mut actions, &input, start_run, sender)?;
-                app = new_app;
-                if !should_reload {
-                    continue;
-                }
-            }
-        }
-        let queue = (actions.load)(app.show_cancelled)?;
-        app = update(app, Event::Loaded(queue));
+        let wake = next(&mut pending, wakes, task_running(&app))?;
+        let Some((new_app, new_pending, reload)) =
+            step(app, wake, wakes, &mut actions, start_run, sender)?
+        else {
+            return Ok(());
+        };
+        pending = new_pending;
+        app = if reload {
+            let queue = (actions.load)(new_app.show_cancelled)?;
+            update(new_app, Event::Loaded(queue))
+        } else {
+            new_app
+        };
     }
 }
 

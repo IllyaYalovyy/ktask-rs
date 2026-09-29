@@ -1,19 +1,22 @@
 //! `ktask-rs tui`: open the terminal interface on the project's queue.
 
+use std::cell::RefCell;
 use std::io::{self, IsTerminal, Read};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use ktask_adapters::{
-    FileJournalWatch, FileRunLock, GitCli, SqliteJournal, SystemClock, TomlSettingsStore,
+    FileJournalWatch, FileRunLock, GitCli, SqliteJournal, SqliteRegistry, SystemClock,
+    TomlSettingsStore,
 };
-use ktask_core::{Placement, Project, SettingView, TaskDraft};
+use ktask_core::{Placement, Project, QueueView, SettingView, TaskDraft, TaskId};
 
 use crate::context::{
     current_exe, journal_file, merge_project, open_registry, open_settings_store, resolve,
-    run_lock_file,
+    run_lock_file, state_root,
 };
 use crate::error::Failure;
 use crate::render;
@@ -32,57 +35,149 @@ pub(crate) fn run(args: &Args, project: Option<&str>) -> Result<(), Failure> {
     let registry = open_registry()?;
     let project = merge_project(project, args.project.as_deref())?;
     let (project, _settings) = resolve(&registry, project.as_deref())?;
-    let path = journal_file(&project)?;
-    let journal = SqliteJournal::open(&path).map_err(|e| e.to_string())?;
-    let watch = FileJournalWatch::open(&path).map_err(|e| e.to_string())?;
-    let lock = FileRunLock::new(run_lock_file(&project)?);
     let binary_path = current_exe()?;
-    let settings_store = open_settings_store(&project)?;
-    Ok(drive(
-        &project,
-        &journal,
-        &lock,
-        &settings_store,
-        binary_path,
-        watch,
-    )?)
+    Ok(drive(&registry, project, binary_path)?)
 }
 
-/// Wires every action the screen can take to `project`'s journal, run lock and settings, and
-/// runs the terminal interface with them until the operator quits.
-fn drive(
-    project: &Project,
-    journal: &SqliteJournal,
-    lock: &FileRunLock,
-    settings_store: &TomlSettingsStore,
-    binary_path: PathBuf,
-    watch: FileJournalWatch,
-) -> Result<(), String> {
-    let run_project = project.clone();
-    let settings_project_dir = project.path.clone();
+/// Everything wired to whichever project is active: its journal, run lock and settings —
+/// reopened fresh each time the operator switches to another one, so every action from then on
+/// applies to it.
+struct ProjectContext {
+    project: Project,
+    journal: SqliteJournal,
+    lock: FileRunLock,
+    settings_store: TomlSettingsStore,
+}
+
+impl ProjectContext {
+    fn open(project: Project) -> Result<Self, String> {
+        let journal = SqliteJournal::open(&journal_file(&project)?).map_err(|e| e.to_string())?;
+        let lock = FileRunLock::new(run_lock_file(&project)?);
+        let settings_store = open_settings_store(&project)?;
+        Ok(Self {
+            project,
+            journal,
+            lock,
+            settings_store,
+        })
+    }
+}
+
+/// Wires every action the screen can take to the active project's journal, run lock and
+/// settings, starting on `project`, and runs the terminal interface with them until the
+/// operator quits. The journal watch covers every registered project's state, not just
+/// `project`'s, so a project switched to after the screen opened is covered too.
+fn drive(registry: &SqliteRegistry, project: Project, binary_path: PathBuf) -> Result<(), String> {
+    let context = RefCell::new(ProjectContext::open(project.clone())?);
+    let watch = FileJournalWatch::open(&state_root()?, true).map_err(|e| e.to_string())?;
+    let active_project = Arc::new(Mutex::new(project));
+    let run_project = Arc::clone(&active_project);
     ktask_tui::run(
-        ktask_tui::Actions {
-            load: |show_cancelled| {
-                ktask_core::queue_view(project.clone(), journal, &SystemClock, lock, show_cancelled)
-                    .map_err(|e| e.to_string())
-            },
-            remove: |id| {
-                ktask_core::remove_task(journal, &SystemClock, id).map_err(|e| e.to_string())
-            },
-            add: |draft: &TaskDraft, placement: Placement| {
-                ktask_core::add_task(journal, &SystemClock, draft, placement)
-                    .map(|task| task.id)
-                    .map_err(|problems| problems.iter().map(ToString::to_string).collect())
-            },
-            load_settings: || load_settings(settings_store),
-            save_setting: |name: &str, value: &str| {
-                save_setting(settings_store, &settings_project_dir, name, value)
-            },
-            import: |path: &str| import_into(journal, path),
+        actions(&context, &active_project, registry),
+        move || {
+            let project = run_project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            start_run(&binary_path, &project)
         },
-        move || start_run(&binary_path, &run_project),
         watch,
     )
+}
+
+/// Every action the screen can take, wired to whichever project `context` and
+/// `active_project` currently hold — switching either is `switch_project`'s job, not this
+/// function's.
+#[allow(clippy::type_complexity)]
+fn actions<'a>(
+    context: &'a RefCell<ProjectContext>,
+    active_project: &'a Mutex<Project>,
+    registry: &'a SqliteRegistry,
+) -> ktask_tui::Actions<
+    impl FnMut(bool) -> Result<QueueView, String> + 'a,
+    impl FnMut(TaskId) -> Result<(), String> + 'a,
+    impl FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>> + 'a,
+    impl FnMut() -> Result<Vec<SettingView>, String> + 'a,
+    impl FnMut(&str, &str) -> Result<SettingView, String> + 'a,
+    impl FnMut(&str) -> Result<String, String> + 'a,
+    impl FnMut() -> Result<Vec<Project>, String> + 'a,
+    impl FnMut(&str) -> Result<QueueView, String> + 'a,
+> {
+    ktask_tui::Actions {
+        load: |show_cancelled| load_queue(context, show_cancelled),
+        remove: |id| {
+            ktask_core::remove_task(&context.borrow().journal, &SystemClock, id)
+                .map_err(|e| e.to_string())
+        },
+        add: |draft: &TaskDraft, placement: Placement| {
+            ktask_core::add_task(&context.borrow().journal, &SystemClock, draft, placement)
+                .map(|task| task.id)
+                .map_err(|problems| problems.iter().map(ToString::to_string).collect())
+        },
+        load_settings: || load_settings(&context.borrow().settings_store),
+        save_setting: |name: &str, value: &str| save_setting_for(context, name, value),
+        import: |path: &str| import_into(&context.borrow().journal, path),
+        load_projects: || ktask_core::list_projects(registry).map_err(|e| e.to_string()),
+        switch_project: |name: &str| switch_project(context, active_project, registry, name),
+    }
+}
+
+/// The active project's queue, with the cancelled tasks when `show_cancelled`.
+fn load_queue(
+    context: &RefCell<ProjectContext>,
+    show_cancelled: bool,
+) -> Result<QueueView, String> {
+    let ctx = context.borrow();
+    ktask_core::queue_view(
+        ctx.project.clone(),
+        &ctx.journal,
+        &SystemClock,
+        &ctx.lock,
+        show_cancelled,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Changes the active project's setting `name` to `value`, as the settings screen was
+/// submitted.
+fn save_setting_for(
+    context: &RefCell<ProjectContext>,
+    name: &str,
+    value: &str,
+) -> Result<SettingView, String> {
+    let ctx = context.borrow();
+    save_setting(&ctx.settings_store, &ctx.project.path, name, value)
+}
+
+/// Switches the active project to the registered one called `name`: reopens its journal, run
+/// lock and settings fresh, replacing whichever project's they were, and gives its queue —
+/// every action after this applies to the new project. Fails, changing nothing, when `name` is
+/// not a registered project or its state cannot be opened.
+fn switch_project(
+    context: &RefCell<ProjectContext>,
+    active_project: &Mutex<Project>,
+    registry: &SqliteRegistry,
+    name: &str,
+) -> Result<QueueView, String> {
+    let projects = ktask_core::list_projects(registry).map_err(|e| e.to_string())?;
+    let project = projects
+        .into_iter()
+        .find(|project| project.name == name)
+        .ok_or_else(|| format!("unknown project {name:?}"))?;
+    let fresh = ProjectContext::open(project.clone())?;
+    let view = ktask_core::queue_view(
+        project.clone(),
+        &fresh.journal,
+        &SystemClock,
+        &fresh.lock,
+        false,
+    )
+    .map_err(|e| e.to_string())?;
+    *context.borrow_mut() = fresh;
+    *active_project
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = project;
+    Ok(view)
 }
 
 /// Reads the file `path` names as text, refusing with the same wording `ktask-rs import`

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use ktask_adapters::{
     GitCli, SqliteJournal, SqliteRegistry, SystemClock, TomlSettingsStore, journal_path,
-    registry_path, run_lock_path, settings_path,
+    registry_path, run_lock_path, settings_path, state_root_path,
 };
 use ktask_core::{Placement, Project, Settings, SettingsStore, TaskId};
 
@@ -52,6 +52,15 @@ pub(crate) fn open_registry() -> Result<SqliteRegistry, String> {
         "cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path",
     )?;
     SqliteRegistry::open(&path).map_err(|e| e.to_string())
+}
+
+/// The directory every registered project's own state lives under, for watching every one's
+/// journal at once.
+pub(crate) fn state_root() -> Result<PathBuf, String> {
+    state_root_path(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME")).ok_or_else(|| {
+        "cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path"
+            .to_owned()
+    })
 }
 
 /// Where the journal of `project` lives.

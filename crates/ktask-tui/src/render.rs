@@ -1,6 +1,6 @@
 //! Draws an [`App`] into a buffer.
 
-use ktask_core::{AttemptLine, QueueView, StepLine, Task, TaskStatus, displayed_status};
+use ktask_core::{AttemptLine, Project, QueueView, StepLine, Task, TaskStatus, displayed_status};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -16,7 +16,7 @@ use crate::{App, Confirming};
 /// question, a form or another screen is up are that context's own — shown there, in its own
 /// question line or footer — and left out of the queue's key map, so no key map here shows a
 /// key that does not work in the context it is shown in, and no key is listed twice.
-const KEYS: [(&str, &str); 15] = [
+const KEYS: [(&str, &str); 16] = [
     ("j, Down", "select the next task"),
     ("k, Up", "select the previous task"),
     ("g", "select the first task"),
@@ -35,6 +35,7 @@ const KEYS: [(&str, &str); 15] = [
         "import the tasks of a JSON file, asked for by its path",
     ),
     ("s", "open the project's settings"),
+    ("p", "work on another registered project's queue"),
     ("?", "show or hide this key map"),
     ("Esc", "close this key map"),
     ("q", "quit"),
@@ -53,6 +54,9 @@ const SETTINGS_KEYS: &str = " Tab, Shift-Tab field · Ctrl-S save · Esc cancel 
 /// What the import form's frame says at the bottom.
 const IMPORT_KEYS: &str = " Ctrl-S import · Esc cancel ";
 
+/// What the project picker's frame says at the bottom.
+const PROJECTS_KEYS: &str = " j, k select · Enter switch · Esc cancel ";
+
 /// Draws `app` over the whole of `area`, and returns where the cursor goes when it is shown.
 pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     let discarding = app.confirming == Some(Confirming::Discard);
@@ -66,6 +70,8 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
             FORM_KEYS
         } else if app.import.is_some() {
             IMPORT_KEYS
+        } else if app.projects.is_some() {
+            PROJECTS_KEYS
         } else {
             " q quit · ? keys "
         });
@@ -79,6 +85,10 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     }
     if let Some(import) = &app.import {
         return Some(import_screen(import, inner, buf));
+    }
+    if let Some(projects) = &app.projects {
+        projects_screen(app, projects, inner, buf);
+        return None;
     }
     match &app.queue {
         None => Paragraph::new("Loading the queue…").render(inner, buf),
@@ -118,6 +128,49 @@ fn import_screen(form: &ImportForm, area: Rect, buf: &mut Buffer) -> Position {
     );
     Paragraph::new(lines).render(area, buf);
     cursor
+}
+
+/// Draws the registered-projects picker over the whole of `area`: name and path per project —
+/// the same list `ktask-rs project list` prints, from the same use case — the one whose queue
+/// is on show marked, and the selection marked and shown reversed.
+fn projects_screen(app: &App, projects: &[Project], area: Rect, buf: &mut Buffer) {
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let mut lines = vec![Line::styled("Projects", bold)];
+    if let Some(problem) = &app.project_problem {
+        lines.push(Line::styled(format!("! {problem}"), bold));
+    }
+    lines.push(Line::default());
+    if projects.is_empty() {
+        lines.push(Line::from("No projects are registered."));
+    }
+    let name_width = projects
+        .iter()
+        .map(|project| project.name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let current = app.queue.as_ref().map(|queue| queue.project.name.as_str());
+    for (index, project) in projects.iter().enumerate() {
+        let selected = index == app.project_selection;
+        let marker = if selected { '>' } else { ' ' };
+        let mut style = Style::new();
+        if selected {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        let current_mark = if Some(project.name.as_str()) == current {
+            " (current)"
+        } else {
+            ""
+        };
+        lines.push(Line::styled(
+            format!(
+                "{marker} {:<name_width$}  {}{current_mark}",
+                project.name,
+                project.path.display(),
+            ),
+            style,
+        ));
+    }
+    Paragraph::new(lines).render(area, buf);
 }
 
 fn key_map(area: Rect, buf: &mut Buffer) {
@@ -1098,6 +1151,56 @@ mod tests {
         let (rows, cursor) = draw_form(&app, 8);
         assert_eq!(inside(&rows[4]), "> /tmp/x");
         assert_eq!(cursor, Some(Position::new(9, 4)));
+    }
+
+    fn other_project(name: &str) -> Project {
+        Project {
+            name: name.to_owned(),
+            path: PathBuf::from(format!("/work/{name}")),
+            registered_at: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn the_project_picker_shows_name_and_path_with_the_current_one_marked() {
+        let app = update(
+            loaded(vec![task(1, "first", TaskKind::Agent)]),
+            Event::ProjectsLoaded(vec![other_project("app"), other_project("other")]),
+        );
+        let (rows, cursor) = draw_form(&app, 8);
+        assert_eq!(inside(&rows[1]), "Projects");
+        assert_eq!(inside(&rows[3]), "> app    /work/app (current)");
+        assert_eq!(inside(&rows[4]), "  other  /work/other");
+        assert!(
+            rows[7].starts_with("└ j, k select · Enter switch · Esc cancel"),
+            "{rows:?}"
+        );
+        assert!(!rows.join("\n").contains("first"));
+        assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn moving_the_selection_in_the_picker_marks_the_row_it_lands_on() {
+        use ratatui::crossterm::event::KeyCode::Char;
+        let app = update(
+            loaded(vec![]),
+            Event::ProjectsLoaded(vec![other_project("app"), other_project("other")]),
+        );
+        let app = keys(app, &[Char('j')]);
+        let (rows, _) = draw_form(&app, 8);
+        assert_eq!(inside(&rows[3]), "  app    /work/app (current)");
+        assert_eq!(inside(&rows[4]), "> other  /work/other");
+    }
+
+    #[test]
+    fn a_failed_switch_shows_the_reason_above_the_list() {
+        let app = update(
+            loaded(vec![]),
+            Event::ProjectsLoaded(vec![other_project("app")]),
+        );
+        let app = update(app, Event::ProjectSwitchFailed("cannot open it".to_owned()));
+        let (rows, _) = draw_form(&app, 8);
+        assert_eq!(inside(&rows[2]), "! cannot open it");
     }
 
     /// The two settings, as `show_settings` would give them: attempt-timeout at `value`,

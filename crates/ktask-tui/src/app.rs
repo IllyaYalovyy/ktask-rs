@@ -1,7 +1,8 @@
 //! The state of the terminal interface and how events change it.
 
 use ktask_core::{
-    AppendError, CancelError, Placement, QueueView, SettingView, TaskDraft, TaskId, TaskStatus,
+    AppendError, CancelError, Placement, Project, QueueView, SettingView, TaskDraft, TaskId,
+    TaskStatus,
 };
 use ratatui::crossterm::event::KeyCode;
 
@@ -57,6 +58,20 @@ pub struct App {
     /// The settings screen's focused field, submitted as its setting's name and its value
     /// typed, for the loop to save, and clears this.
     pub setting_submission: Option<(&'static str, String)>,
+    /// The registered projects, while the picker that lets the operator work on another
+    /// one's queue is open; it covers the queue like the task form does — the same list
+    /// `ktask-rs project list` prints, from the same use case.
+    pub(crate) projects: Option<Vec<Project>>,
+    /// The index into `projects` the picker's selection is on.
+    pub(crate) project_selection: usize,
+    /// Why the picker's last submission switched nothing; shown until the next one.
+    pub(crate) project_problem: Option<String>,
+    /// Set when the operator asked to open the project picker: the loop loads the registered
+    /// projects and opens it with [`Event::ProjectsLoaded`], and clears this.
+    pub projects_requested: Option<()>,
+    /// The name of the project the picker was submitted with, for the loop to switch to, and
+    /// clears this.
+    pub project_switch: Option<String>,
     /// Set when the operator asked to leave.
     pub quit: bool,
 }
@@ -125,28 +140,82 @@ pub enum Event {
     /// The settings screen's submission was refused, for this reason: it stays open and
     /// shows it.
     SettingRejected(String),
+    /// The registered projects were loaded: the picker opens on them, the one whose queue is
+    /// on show already focused.
+    ProjectsLoaded(Vec<Project>),
+    /// The loop switched to the project the picker was submitted with: its queue replaces the
+    /// one on show, exactly as if it had been loaded from the start, and the picker closes.
+    ProjectSwitched(QueueView),
+    /// The picker's submission did not switch the project, for this reason: it stays open and
+    /// shows it.
+    ProjectSwitchFailed(String),
 }
 
-/// The app after `event` happened to `app`.
+/// The app after `event` happened to `app`. `Loaded` and a first Ctrl-C are handled here,
+/// unconditionally, ahead of everything else that depends on which screen is open.
 #[must_use]
 pub fn update(app: App, event: Event) -> App {
     match event {
-        Event::Loaded(queue) => update_loaded(app, queue),
-        Event::Ctrl('c') => ctrl_c(app),
-        Event::Key(key) if app.settings.is_some() => update_settings_key(app, key),
-        Event::Ctrl(letter) if app.settings.is_some() => update_settings_ctrl(app, letter),
-        Event::SettingsLoaded(views) => App {
+        Event::Loaded(queue) => return update_loaded(app, queue),
+        Event::Ctrl('c') => return ctrl_c(app),
+        _ => {}
+    }
+    match update_overlay_event(app, event) {
+        Overlay::Handled(app) => app,
+        Overlay::Unhandled(app, event) => update_rest(app, event),
+    }
+}
+
+/// What [`update_overlay_event`] made of an event: the app it produced, or, when the event was
+/// not one the settings screen or the project picker owns, the app and the event handed back
+/// unhandled for [`update_rest`] to try in its turn.
+enum Overlay {
+    Handled(App),
+    Unhandled(App, Event),
+}
+
+/// The app after `event`, when it belongs to the settings screen or the project picker —
+/// opening either, a key pressed while one is open, or how either's submission came back.
+fn update_overlay_event(app: App, event: Event) -> Overlay {
+    match event {
+        Event::Key(key) if app.settings.is_some() => {
+            Overlay::Handled(update_settings_key(app, key))
+        }
+        Event::Ctrl(letter) if app.settings.is_some() => {
+            Overlay::Handled(update_settings_ctrl(app, letter))
+        }
+        Event::SettingsLoaded(views) => Overlay::Handled(App {
             settings: Some(SettingsForm::new(&views)),
             ..app
-        },
-        Event::SettingSaved => App {
+        }),
+        Event::SettingSaved => Overlay::Handled(App {
             settings: None,
             ..app
-        },
-        Event::SettingRejected(message) => in_settings(app, |form| SettingsForm {
-            problem: Some(message),
-            ..form
         }),
+        Event::SettingRejected(message) => {
+            Overlay::Handled(in_settings(app, |form| SettingsForm {
+                problem: Some(message),
+                ..form
+            }))
+        }
+        Event::Key(key) if app.projects.is_some() => {
+            Overlay::Handled(update_projects_key(app, key))
+        }
+        Event::ProjectsLoaded(projects) => Overlay::Handled(open_projects(app, projects)),
+        Event::ProjectSwitched(queue) => Overlay::Handled(project_switched(app, queue)),
+        Event::ProjectSwitchFailed(message) => Overlay::Handled(App {
+            project_problem: Some(message),
+            ..app
+        }),
+        other => Overlay::Unhandled(app, other),
+    }
+}
+
+/// The app after `event`, once it is known to be neither `Loaded`, a first Ctrl-C, nor one
+/// [`update_overlay_event`] owns: a discard question's answer, a form's own keys, a
+/// background action's result, or a plain key on the queue itself.
+fn update_rest(app: App, event: Event) -> App {
+    match event {
         Event::Key(key) if app.confirming == Some(Confirming::Discard) => {
             update_discard_key(app, key)
         }
@@ -163,7 +232,7 @@ pub fn update(app: App, event: Event) -> App {
         Event::Key(key) if app.confirming.is_some() => update_removal_confirm_key(app, key),
         Event::Key(key) if app.help => update_help_key(app, key),
         Event::Key(key) => update_queue_key(app, key),
-        Event::Ctrl(_) | Event::Resize => app,
+        _ => app,
     }
 }
 
@@ -207,6 +276,83 @@ fn update_settings_ctrl(app: App, letter: char) -> App {
         's' => submit_setting(app),
         _ => app,
     }
+}
+
+/// A key while the project picker is open.
+fn update_projects_key(app: App, key: KeyCode) -> App {
+    match key {
+        KeyCode::Esc => App {
+            projects: None,
+            project_problem: None,
+            ..app
+        },
+        KeyCode::Char('j') | KeyCode::Down => move_project_selection(app, 1),
+        KeyCode::Char('k') | KeyCode::Up => move_project_selection(app, -1),
+        KeyCode::Enter => submit_project_switch(app),
+        _ => app,
+    }
+}
+
+/// The picker's selection moved by `delta`, staying inside the list.
+fn move_project_selection(app: App, delta: isize) -> App {
+    let Some(last) = app.projects.as_ref().and_then(|p| p.len().checked_sub(1)) else {
+        return app;
+    };
+    App {
+        project_selection: app.project_selection.saturating_add_signed(delta).min(last),
+        ..app
+    }
+}
+
+/// The app with the picker's selected project's name left for the loop to switch to.
+fn submit_project_switch(app: App) -> App {
+    let Some(name) = app
+        .projects
+        .as_ref()
+        .and_then(|projects| projects.get(app.project_selection))
+        .map(|project| project.name.clone())
+    else {
+        return app;
+    };
+    App {
+        project_switch: Some(name),
+        ..app
+    }
+}
+
+/// The app with the project picker open on `projects`, the selection on the one whose queue
+/// is currently shown, or the first when none matches.
+fn open_projects(app: App, projects: Vec<Project>) -> App {
+    let current = app.queue.as_ref().map(|queue| queue.project.name.as_str());
+    let selection = projects
+        .iter()
+        .position(|project| Some(project.name.as_str()) == current)
+        .unwrap_or(0);
+    App {
+        projects: Some(projects),
+        project_selection: selection,
+        project_problem: None,
+        ..app
+    }
+}
+
+/// The app once the picker's submission switched the project: its queue replaces the one on
+/// show — with nothing carried over from the old project's screen, since a task ID there means
+/// nothing in this one — and the picker closes.
+fn project_switched(app: App, queue: QueueView) -> App {
+    update_loaded(
+        App {
+            projects: None,
+            project_problem: None,
+            queue: None,
+            selected: None,
+            show_cancelled: false,
+            confirming: None,
+            refused: None,
+            ..app
+        },
+        queue,
+    )
 }
 
 /// A key while a first Ctrl-C is asking whether to discard the open form.
@@ -368,6 +514,10 @@ fn update_queue_key(app: App, key: KeyCode) -> App {
         },
         KeyCode::Char('s') => App {
             settings_requested: Some(()),
+            ..app
+        },
+        KeyCode::Char('p') => App {
+            projects_requested: Some(()),
             ..app
         },
         KeyCode::Char('g') => select(app, |_, _| 0),
@@ -1410,6 +1560,103 @@ mod tests {
             Event::SettingsLoaded(settings_views("14400", true)),
         );
         assert!(update(app, Event::Ctrl('c')).quit);
+    }
+
+    fn other_project(name: &str) -> Project {
+        Project {
+            name: name.to_owned(),
+            path: PathBuf::from(format!("/work/{name}")),
+            registered_at: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    fn projects() -> Vec<Project> {
+        vec![other_project("app"), other_project("other")]
+    }
+
+    fn other_queue_of(name: &str, ids: &[u64]) -> QueueView {
+        QueueView {
+            project: other_project(name),
+            summary: StatusSummary::default(),
+            tasks: ids.iter().map(|id| task(*id)).collect(),
+            attempts: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn p_asks_the_loop_to_load_the_registered_projects_and_changes_nothing_else() {
+        let app = press(loaded(&[1, 2]), &[KeyCode::Char('j'), KeyCode::Char('p')]);
+        assert_eq!(app.projects_requested, Some(()));
+        assert_eq!(on(&app), Some(2));
+        assert_eq!(app.projects, None);
+    }
+
+    #[test]
+    fn projects_loaded_opens_the_picker_with_the_current_project_selected() {
+        let app = update(loaded(&[1]), Event::ProjectsLoaded(projects()));
+        assert_eq!(app.projects, Some(projects()));
+        assert_eq!(app.project_selection, 0);
+    }
+
+    #[test]
+    fn esc_closes_the_picker_without_switching_anything() {
+        let app = update(loaded(&[1]), Event::ProjectsLoaded(projects()));
+        let app = press(app, &[KeyCode::Esc]);
+        assert_eq!(app.projects, None);
+        assert_eq!(app.project_switch, None);
+    }
+
+    #[test]
+    fn j_and_k_move_the_selection_and_stay_inside_the_list() {
+        let app = update(loaded(&[1]), Event::ProjectsLoaded(projects()));
+        let app = press(app, &[KeyCode::Char('j'), KeyCode::Char('j')]);
+        assert_eq!(app.project_selection, 1);
+        let app = press(app, &[KeyCode::Char('k'), KeyCode::Char('k')]);
+        assert_eq!(app.project_selection, 0);
+    }
+
+    #[test]
+    fn while_the_picker_is_open_only_its_own_keys_and_ctrl_c_are_heard() {
+        let open = update(loaded(&[1]), Event::ProjectsLoaded(projects()));
+        for key in [
+            KeyCode::Char('q'),
+            KeyCode::Char('a'),
+            KeyCode::Char('d'),
+            KeyCode::Char('?'),
+        ] {
+            assert_eq!(press(open.clone(), &[key]), open);
+        }
+        assert!(update(open, Event::Ctrl('c')).quit);
+    }
+
+    #[test]
+    fn enter_submits_the_selected_projects_name_and_leaves_the_picker_open() {
+        let app = update(loaded(&[1]), Event::ProjectsLoaded(projects()));
+        let app = press(app, &[KeyCode::Char('j'), KeyCode::Enter]);
+        assert_eq!(app.project_switch, Some("other".to_owned()));
+        assert!(app.projects.is_some());
+    }
+
+    #[test]
+    fn project_switched_replaces_the_queue_and_closes_the_picker_selecting_the_first_task() {
+        let app = press(loaded(&[7, 8]), &[KeyCode::Char('G'), KeyCode::Char('p')]);
+        let app = press(app, &[KeyCode::Enter]);
+        let app = update(
+            app,
+            Event::ProjectSwitched(other_queue_of("other", &[1, 2])),
+        );
+        assert_eq!(app.projects, None);
+        assert_eq!(app.queue, Some(other_queue_of("other", &[1, 2])));
+        assert_eq!(on(&app), Some(1));
+        assert!(!app.show_cancelled);
+    }
+
+    #[test]
+    fn project_switch_failed_keeps_the_picker_open_and_shows_why() {
+        let app = update(loaded(&[1]), Event::ProjectsLoaded(projects()));
+        let app = update(app, Event::ProjectSwitchFailed("cannot open it".to_owned()));
+        assert_eq!(app.project_problem.as_deref(), Some("cannot open it"));
+        assert!(app.projects.is_some());
     }
 
     #[test]
