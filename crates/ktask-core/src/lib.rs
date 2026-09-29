@@ -38,7 +38,7 @@ pub use report::{AttemptToken, Outcome, ReportError, report, start_attempt};
 pub use resolve::{Resolution, ResolveError, resolve_project};
 pub use run::{
     Attempted, RunContext, RunEnd, RunError, RunReport, SyncProblem, build_prompt,
-    build_review_prompt, run_queue,
+    build_review_prompt, build_test_prompt, run_queue,
 };
 pub use settings::{
     ATTEMPT_TIMEOUT, DEFAULT_ATTEMPT_TIMEOUT_SECS, HEALTH_CHECK, SetSettingError, SettingView,
@@ -47,7 +47,7 @@ pub use settings::{
 };
 pub use status::{
     AttemptLine, AttemptOutcome, HEALTH_CHECK_STEP, IMPLEMENTATION, REVIEW_STEP, SYNC_STEP,
-    StatusEntry, StepLine, displayed_status, status,
+    StatusEntry, StepLine, TEST_STEP, displayed_status, status,
 };
 pub use task::{
     AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, add_task,

@@ -21,6 +21,10 @@ pub enum Outcome {
     Approved,
     /// The reviewer found something to fix: its findings are the reason.
     ChangesRequested,
+    /// The tester accepted the task's implementation.
+    Accepted,
+    /// The tester found something that failed: what failed is the reason.
+    Rejected,
 }
 
 impl Outcome {
@@ -34,13 +38,15 @@ impl Outcome {
             Self::TooLarge => "too-large",
             Self::Approved => "approved",
             Self::ChangesRequested => "changes-requested",
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
         }
     }
 
     /// Whether this outcome must be reported with a reason.
     #[must_use]
     pub fn needs_reason(self) -> bool {
-        !matches!(self, Self::Done | Self::Approved)
+        !matches!(self, Self::Done | Self::Approved | Self::Accepted)
     }
 }
 
@@ -61,13 +67,15 @@ impl FromStr for Outcome {
             Self::TooLarge,
             Self::Approved,
             Self::ChangesRequested,
+            Self::Accepted,
+            Self::Rejected,
         ]
         .into_iter()
         .find(|outcome| outcome.as_str() == text)
         .ok_or_else(|| {
             format!(
                 "unknown outcome {text:?}: expected done, failed, needs-input, too-large, \
-                 approved or changes-requested"
+                 approved, changes-requested, accepted or rejected"
             )
         })
     }
@@ -88,6 +96,8 @@ fn outcomes_for_step(step: &str) -> Option<&'static [Outcome]> {
         ])
     } else if step == crate::REVIEW_STEP {
         Some(&[Outcome::Approved, Outcome::ChangesRequested])
+    } else if step == crate::TEST_STEP {
+        Some(&[Outcome::Accepted, Outcome::Rejected])
     } else {
         None
     }
@@ -508,6 +518,71 @@ mod tests {
         );
         assert_eq!(
             report(&journal, &clock(), &token, Outcome::Approved, None),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_test_only_outcome_is_refused_during_the_review_step_naming_its_own() {
+        let journal = journal_with_a_running_step(crate::REVIEW_STEP);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+
+        let error = report(&journal, &clock(), &token, Outcome::Accepted, None).unwrap_err();
+        assert_eq!(
+            error,
+            ReportError::WrongStep {
+                outcome: Outcome::Accepted,
+                step: crate::REVIEW_STEP.to_owned(),
+                expected: vec![Outcome::Approved, Outcome::ChangesRequested],
+            }
+        );
+    }
+
+    #[test]
+    fn a_review_only_outcome_is_refused_during_the_test_step_naming_its_own() {
+        let journal = journal_with_a_running_step(crate::TEST_STEP);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+
+        let error = report(&journal, &clock(), &token, Outcome::Approved, None).unwrap_err();
+        assert_eq!(
+            error,
+            ReportError::WrongStep {
+                outcome: Outcome::Approved,
+                step: crate::TEST_STEP.to_owned(),
+                expected: vec![Outcome::Accepted, Outcome::Rejected],
+            }
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains("does not belong to the testing step")
+                && message.contains("accepted")
+                && message.contains("rejected"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn accepted_needs_no_reason_but_rejected_does() {
+        let journal = journal_with_a_running_step(crate::TEST_STEP);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+        for blank in [None, Some(""), Some("   ")] {
+            assert_eq!(
+                report(&journal, &clock(), &token, Outcome::Rejected, blank),
+                Err(ReportError::ReasonRequired(Outcome::Rejected))
+            );
+        }
+        assert_eq!(
+            report(
+                &journal,
+                &clock(),
+                &token,
+                Outcome::Rejected,
+                Some("crashes on startup")
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            report(&journal, &clock(), &token, Outcome::Accepted, None),
             Ok(())
         );
     }

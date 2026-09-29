@@ -15,6 +15,10 @@ pub const IMPLEMENTATION: &str = "implementation";
 /// after it.
 pub const REVIEW_STEP: &str = "review";
 
+/// The step kind that runs an agent in the tester role on the implementation step's diff,
+/// after the review step.
+pub const TEST_STEP: &str = "testing";
+
 /// The step kind that pulls the project's tracked branch with rebase before the health
 /// check.
 pub const SYNC_STEP: &str = "sync";
@@ -139,18 +143,18 @@ fn ended_outcome(
     }
 }
 
-/// The outcome and reason shown for a step named `name` that ended at `end`: the implementation
-/// and review steps are judged by what the agent itself reported, when it reported anything;
-/// every other step — the sync and the health check, today — is a command-kind step, only ever
-/// journaled once it has already passed, with whatever it recorded — the health check has
-/// nothing to add, the sync step says how many commits it took in, or that there were none —
-/// shown alongside it.
+/// The outcome and reason shown for a step named `name` that ended at `end`: the
+/// implementation, review and test steps are judged by what the agent itself reported, when
+/// it reported anything; every other step — the sync and the health check, today — is a
+/// command-kind step, only ever journaled once it has already passed, with whatever it
+/// recorded — the health check has nothing to add, the sync step says how many commits it
+/// took in, or that there were none — shown alongside it.
 fn step_outcome(
     name: &str,
     end: &AttemptEnd,
     reported: Option<(Outcome, Option<String>)>,
 ) -> (AttemptOutcome, Option<String>) {
-    if name == IMPLEMENTATION || name == REVIEW_STEP {
+    if name == IMPLEMENTATION || name == REVIEW_STEP || name == TEST_STEP {
         ended_outcome(end, reported)
     } else {
         (AttemptOutcome::Passed, end.reason.clone())
