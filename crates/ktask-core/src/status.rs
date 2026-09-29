@@ -8,8 +8,12 @@ use crate::{
     list_all_tasks,
 };
 
-/// The one step kind that exists so far: an agent implementing the task.
+/// The step kind that runs an agent on the task's whole prompt.
 pub const IMPLEMENTATION: &str = "implementation";
+
+/// The step kind that runs the project's configured health-check command before the
+/// implementation step.
+pub const HEALTH_CHECK_STEP: &str = "health check";
 
 /// How an attempt's outcome is labelled: as the agent itself reported it, or as the tool
 /// observed it when the agent never reported at all — a crash, a kill past the time limit, or
@@ -25,6 +29,10 @@ pub enum AttemptOutcome {
     /// The journal still calls the attempt running, but no run is alive to finish it: a run
     /// that was killed outright left it behind, and nothing has reconciled it yet.
     Interrupted,
+    /// A command-kind step — the health check, today — ran and exited zero. Such a step is
+    /// only ever journaled once it has already succeeded: a failing one stops the run before
+    /// an attempt even begins, so this is the only outcome one is ever shown with.
+    Passed,
 }
 
 impl AttemptOutcome {
@@ -36,6 +44,7 @@ impl AttemptOutcome {
             Self::Reported(outcome) => outcome.as_str(),
             Self::Unreported => TaskStatus::FailedUnknown.as_str(),
             Self::Interrupted => "interrupted",
+            Self::Passed => "passed",
         }
     }
 }
@@ -46,16 +55,11 @@ impl fmt::Display for AttemptOutcome {
     }
 }
 
-/// One task's attempt, as `status` shows it.
+/// One step of an attempt, as `status` shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttemptLine {
-    /// The attempt's number.
-    pub number: u32,
-    /// The name of its most recent step: always [`IMPLEMENTATION`] today, the only step in the
-    /// pipeline — later steps each add one more name this can carry.
+pub struct StepLine {
+    /// The step's name.
     pub step: String,
-    /// The provider it ran with, once that is known.
-    pub provider: Option<String>,
     /// How long it has run: the recorded duration once it has ended, elapsed time so far
     /// while it is running.
     pub time_spent: Duration,
@@ -63,6 +67,29 @@ pub struct AttemptLine {
     pub outcome: AttemptOutcome,
     /// Why, when the outcome is not a success.
     pub reason: Option<String>,
+}
+
+/// One task's attempt, as `status` shows it. `step`, `time_spent`, `outcome` and `reason`
+/// carry the most recently started or ended step — the same single line `status` and the
+/// queue screen showed before an attempt could run more than one — and `steps` carries every
+/// step run so far, in order, for a caller that wants the full history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttemptLine {
+    /// The attempt's number.
+    pub number: u32,
+    /// The name of its most recent step.
+    pub step: String,
+    /// The provider it ran with, once that is known.
+    pub provider: Option<String>,
+    /// How long the most recent step has run: the recorded duration once it has ended,
+    /// elapsed time so far while it is running.
+    pub time_spent: Duration,
+    /// What the most recent step ended at, or that it is still running.
+    pub outcome: AttemptOutcome,
+    /// Why, when the most recent step's outcome is not a success.
+    pub reason: Option<String>,
+    /// Every step run so far, in the order they were started.
+    pub steps: Vec<StepLine>,
 }
 
 /// One task as `status` shows it: not pending, with its most recent attempt.
@@ -92,7 +119,7 @@ pub fn displayed_status(status: TaskStatus, outcome: Option<AttemptOutcome>) -> 
     }
 }
 
-/// The outcome and reason shown for a step or attempt that ended at `end`, given what the
+/// The outcome and reason shown for the implementation step ended at `end`, given what the
 /// agent itself reported for it, when it reported anything at all.
 fn ended_outcome(
     end: &AttemptEnd,
@@ -104,15 +131,52 @@ fn ended_outcome(
     }
 }
 
+/// The outcome and reason shown for a step named `name` that ended at `end`: the implementation
+/// step is judged by what the agent itself reported, when it reported anything; every other
+/// step — the health check, today — is a command-kind step, only ever journaled once it has
+/// already passed.
+fn step_outcome(
+    name: &str,
+    end: &AttemptEnd,
+    reported: Option<(Outcome, Option<String>)>,
+) -> (AttemptOutcome, Option<String>) {
+    if name == IMPLEMENTATION {
+        ended_outcome(end, reported)
+    } else {
+        (AttemptOutcome::Passed, None)
+    }
+}
+
+/// The still-running step line for a step named `name`, started at `started_at`: its elapsed
+/// time so far, and whether it shows `running` or `interrupted` depending on `run_alive`.
+fn running_step(
+    name: &str,
+    started_at: std::time::SystemTime,
+    clock: &impl Clock,
+    run_alive: bool,
+) -> StepLine {
+    let elapsed = clock.now().duration_since(started_at).unwrap_or_default();
+    let outcome = if run_alive {
+        AttemptOutcome::Running
+    } else {
+        AttemptOutcome::Interrupted
+    };
+    StepLine {
+        step: name.to_owned(),
+        time_spent: elapsed,
+        outcome,
+        reason: None,
+    }
+}
+
 /// The [`StatusEntry`] for `task`, given its most recent attempt and the agent's own report of
 /// it, when there was one; `run_alive` says whether a live run currently holds the project's
-/// run lock, which only matters when the attempt has not ended.
+/// run lock, which only matters when the attempt's last step has not ended.
 ///
-/// The line shown is the attempt's most recent step — the one line-per-step `status` and the
-/// queue screen build up from, one at a time, as later tasks add more steps to the pipeline.
-/// When no step has been recorded at all — the attempt itself was ended directly, as a run
-/// killed outright and never reconciled leaves it, before ever starting one — the attempt's own
-/// record is shown instead, under the pipeline's first step name.
+/// One [`StepLine`] is built per step the journal recorded, in order. When no step has been
+/// recorded at all — the attempt itself was ended directly, as a run killed outright and never
+/// reconciled leaves it, before ever starting one — the attempt's own record is shown instead,
+/// under the pipeline's first step name.
 fn entry_for(
     task: Task,
     attempt: crate::Attempt,
@@ -120,28 +184,39 @@ fn entry_for(
     clock: &impl Clock,
     run_alive: bool,
 ) -> StatusEntry {
-    let last_step = attempt.steps.last();
-    let (step, outcome, reason, time_spent) = if let Some((step, end)) =
-        last_step.and_then(|step| step.ended.as_ref().map(|end| (step, end)))
-    {
-        let (outcome, reason) = ended_outcome(end, reported);
-        (step.name.clone(), outcome, reason, end.duration)
-    } else if let Some(end) = &attempt.ended {
-        let name = last_step.map_or_else(|| IMPLEMENTATION.to_owned(), |step| step.name.clone());
-        let (outcome, reason) = ended_outcome(end, reported);
-        (name, outcome, reason, end.duration)
+    let mut steps: Vec<StepLine> = attempt
+        .steps
+        .iter()
+        .map(|step| match &step.ended {
+            Some(end) => {
+                let (outcome, reason) = step_outcome(&step.name, end, reported.clone());
+                StepLine {
+                    step: step.name.clone(),
+                    time_spent: end.duration,
+                    outcome,
+                    reason,
+                }
+            }
+            None => running_step(&step.name, step.started_at, clock, run_alive),
+        })
+        .collect();
+    let current = if let Some(last) = steps.last() {
+        last.clone()
     } else {
-        let (name, started_at) = last_step.map_or_else(
-            || (IMPLEMENTATION.to_owned(), attempt.started_at),
-            |step| (step.name.clone(), step.started_at),
-        );
-        let elapsed = clock.now().duration_since(started_at).unwrap_or_default();
-        let outcome = if run_alive {
-            AttemptOutcome::Running
-        } else {
-            AttemptOutcome::Interrupted
+        let fallback = match &attempt.ended {
+            Some(end) => {
+                let (outcome, reason) = step_outcome(IMPLEMENTATION, end, reported);
+                StepLine {
+                    step: IMPLEMENTATION.to_owned(),
+                    time_spent: end.duration,
+                    outcome,
+                    reason,
+                }
+            }
+            None => running_step(IMPLEMENTATION, attempt.started_at, clock, run_alive),
         };
-        (name, outcome, None, elapsed)
+        steps.push(fallback.clone());
+        fallback
     };
     StatusEntry {
         task: task.id,
@@ -149,11 +224,12 @@ fn entry_for(
         status: task.status,
         attempt: AttemptLine {
             number: attempt.number,
-            step,
+            step: current.step,
             provider: attempt.provider,
-            time_spent,
-            outcome,
-            reason,
+            time_spent: current.time_spent,
+            outcome: current.outcome,
+            reason: current.reason,
+            steps,
         },
     }
 }
@@ -263,6 +339,12 @@ mod tests {
                     time_spent: Duration::from_secs(30),
                     outcome: AttemptOutcome::Running,
                     reason: None,
+                    steps: vec![StepLine {
+                        step: IMPLEMENTATION.to_owned(),
+                        time_spent: Duration::from_secs(30),
+                        outcome: AttemptOutcome::Running,
+                        reason: None,
+                    }],
                 },
             }]
         );
@@ -288,6 +370,12 @@ mod tests {
                     time_spent: Duration::from_secs(30),
                     outcome: AttemptOutcome::Interrupted,
                     reason: None,
+                    steps: vec![StepLine {
+                        step: IMPLEMENTATION.to_owned(),
+                        time_spent: Duration::from_secs(30),
+                        outcome: AttemptOutcome::Interrupted,
+                        reason: None,
+                    }],
                 },
             }]
         );
@@ -488,6 +576,7 @@ mod tests {
         assert_eq!(AttemptOutcome::Reported(Outcome::Done).as_str(), "done");
         assert_eq!(AttemptOutcome::Unreported.as_str(), "failed-unknown");
         assert_eq!(AttemptOutcome::Interrupted.as_str(), "interrupted");
+        assert_eq!(AttemptOutcome::Passed.as_str(), "passed");
         assert_eq!(AttemptOutcome::Running.to_string(), "running");
     }
 
@@ -509,5 +598,46 @@ mod tests {
             ),
             "failed"
         );
+    }
+
+    #[test]
+    fn a_health_check_step_that_already_passed_is_its_own_line_ahead_of_the_current_one() {
+        let journal = journal_with_a_started_attempt();
+        crate::attempt::begin_step(&journal, &clock(100), TaskId(1), 1, HEALTH_CHECK_STEP).unwrap();
+        crate::attempt::end_step(
+            &journal,
+            &clock(104),
+            TaskId(1),
+            1,
+            HEALTH_CHECK_STEP,
+            AttemptRun {
+                duration: Duration::from_secs(4),
+                exit_code: Some(0),
+                status: TaskStatus::Done,
+                reason: None,
+            },
+        )
+        .unwrap();
+        crate::attempt::begin_step(&journal, &clock(104), TaskId(1), 1, IMPLEMENTATION).unwrap();
+
+        let entries = status(&journal, &clock(110), &a_live_run()).unwrap();
+        assert_eq!(
+            entries[0].attempt.steps,
+            vec![
+                StepLine {
+                    step: HEALTH_CHECK_STEP.to_owned(),
+                    time_spent: Duration::from_secs(4),
+                    outcome: AttemptOutcome::Passed,
+                    reason: None,
+                },
+                StepLine {
+                    step: IMPLEMENTATION.to_owned(),
+                    time_spent: Duration::from_secs(6),
+                    outcome: AttemptOutcome::Running,
+                    reason: None,
+                },
+            ]
+        );
+        assert_eq!(entries[0].attempt.step, IMPLEMENTATION);
     }
 }

@@ -7,9 +7,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::{
-    AttemptRun, AttemptToken, BeginAttemptError, Clock, Commands, IMPLEMENTATION, Journal,
-    JournalError, Outcome, Provider, ProviderRunError, RecordReportError, RunLock, RunLockError,
-    StepCall, Task, TaskId, TaskKind, TaskStatus, list_tasks, run_provider,
+    AttemptRun, AttemptToken, BeginAttemptError, Clock, CommandSpec, Commands, CommandsError, Exit,
+    HEALTH_CHECK_STEP, IMPLEMENTATION, Journal, JournalError, Outcome, Output, Provider,
+    ProviderRunError, RecordReportError, RunLock, RunLockError, StepCall, Task, TaskId, TaskKind,
+    TaskStatus, list_tasks, run_provider,
 };
 
 /// Why a run could not proceed at all — never for how an attempt itself ended, which is a
@@ -101,6 +102,18 @@ pub enum RunEnd {
         /// Why, from its last attempt.
         reason: Option<String>,
     },
+    /// The next task's health check failed, so no attempt was begun for it: it stays
+    /// `pending`.
+    HealthCheckFailed {
+        /// The task the health check ran ahead of.
+        id: TaskId,
+        /// The command that was run.
+        command: String,
+        /// Why it failed.
+        reason: String,
+        /// The end of its combined standard output and standard error.
+        output_tail: String,
+    },
 }
 
 /// What a run did.
@@ -126,6 +139,10 @@ pub struct RunContext<'a> {
     pub binary_path: &'a Path,
     /// How long one attempt may run before it, and everything it started, is killed.
     pub attempt_timeout: Duration,
+    /// The project's configured health-check command, run in `project_dir` before a task's
+    /// implementation step, subject to `attempt_timeout` the same way. `None` when the
+    /// project has not set one: the step is skipped, and leaves no line.
+    pub health_check_command: Option<&'a str>,
 }
 
 /// The prompt for attempt `token` of `task`: its title, body and acceptance criteria, and
@@ -276,8 +293,114 @@ fn end_when_nothing_left(attempted: &[Attempted], queue_is_empty: bool) -> RunEn
 
 /// The steps every task's attempt runs through, in order, stopping at the first that ends
 /// badly: for now, just the one that always existed — running the provider on the task's whole
-/// prompt. Later tasks each add one more name here, and one more way of running it.
+/// prompt. Later tasks each add one more name here, and one more way of running it. The
+/// health-check step, when the project has configured one, runs ahead of an attempt even
+/// being begun, so it is not one of these.
 const STEPS: &[&str] = &[IMPLEMENTATION];
+
+/// How many lines of a failing health check's combined output are shown to the operator.
+const HEALTH_CHECK_OUTPUT_TAIL_LINES: usize = 20;
+
+/// What running the project's health check produced.
+enum HealthCheck {
+    /// It exited zero: `duration` is how long it took.
+    Passed(Duration),
+    /// It did not: `reason` says how, `output_tail` is the end of what it printed.
+    Failed { reason: String, output_tail: String },
+}
+
+/// The last [`HEALTH_CHECK_OUTPUT_TAIL_LINES`] lines of `output`'s combined standard output
+/// and standard error.
+fn output_tail(output: &Output) -> String {
+    let mut combined = output.stdout.clone();
+    combined.extend_from_slice(&output.stderr);
+    let text = String::from_utf8_lossy(&combined);
+    let lines: Vec<&str> = text.lines().collect();
+    let tail: Vec<&str> = lines
+        .iter()
+        .rev()
+        .take(HEALTH_CHECK_OUTPUT_TAIL_LINES)
+        .rev()
+        .copied()
+        .collect();
+    tail.join("\n")
+}
+
+/// Runs `command` with `bash -c` in `context.project_dir`, subject to `context.attempt_timeout`
+/// the same way an attempt's own steps are.
+fn run_health_check(
+    commands: &impl Commands,
+    clock: &impl Clock,
+    command: &str,
+    context: RunContext<'_>,
+) -> HealthCheck {
+    let started = clock.now();
+    let spec = CommandSpec {
+        program: "bash".to_owned(),
+        args: vec!["-c".to_owned(), command.to_owned()],
+        dir: context.project_dir.to_owned(),
+        stdin: Vec::new(),
+        timeout: context.attempt_timeout,
+    };
+    let result = commands.run(&spec);
+    let duration = clock.now().duration_since(started).unwrap_or_default();
+    health_check_outcome(result, duration)
+}
+
+/// What `run_health_check` found, turned into a [`HealthCheck`].
+fn health_check_outcome(result: Result<Output, CommandsError>, duration: Duration) -> HealthCheck {
+    let output = match result {
+        Ok(output) => output,
+        Err(error) => {
+            return HealthCheck::Failed {
+                reason: format!("the health check could not be run: {error}"),
+                output_tail: String::new(),
+            };
+        }
+    };
+    match output.exit {
+        Exit::Code(0) => HealthCheck::Passed(duration),
+        Exit::Code(code) => HealthCheck::Failed {
+            reason: format!("the health check exited with code {code}"),
+            output_tail: output_tail(&output),
+        },
+        Exit::Killed => HealthCheck::Failed {
+            reason: "the health check ran past its time limit and was killed".to_owned(),
+            output_tail: output_tail(&output),
+        },
+        Exit::Interrupted => HealthCheck::Failed {
+            reason: INTERRUPTED.to_owned(),
+            output_tail: output_tail(&output),
+        },
+    }
+}
+
+/// Records the health check that already ran, in `duration`, as the first step of attempt
+/// `number` of task `id` — begun and ended in the same call, since it ran before the attempt
+/// itself was begun.
+fn record_health_check_step(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    id: TaskId,
+    number: u32,
+    duration: Duration,
+) -> Result<(), RunError> {
+    crate::attempt::begin_step(journal, clock, id, number, HEALTH_CHECK_STEP)?;
+    crate::attempt::end_step(
+        journal,
+        clock,
+        id,
+        number,
+        HEALTH_CHECK_STEP,
+        AttemptRun {
+            duration,
+            exit_code: Some(0),
+            status: TaskStatus::Done,
+            reason: None,
+        },
+    )?;
+    Ok(())
+}
 
 /// Runs `provider` on `target.prompt` for `target.token`'s step `step`, timing it from `clock`.
 fn timed_provider_run(
@@ -287,7 +410,7 @@ fn timed_provider_run(
     target: &RunTarget<'_>,
     step: &str,
     context: RunContext<'_>,
-) -> (Duration, Result<crate::Output, ProviderRunError>) {
+) -> (Duration, Result<Output, ProviderRunError>) {
     let started = clock.now();
     let result = run_provider(
         commands,
@@ -363,8 +486,9 @@ fn run_steps(
     Ok((total, exit_code, status, reason))
 }
 
-/// Runs one attempt at `task` with `provider`: begins it, builds its prompt, runs it through
-/// the pipeline's steps, and ends the attempt with the outcome they left it at.
+/// Runs one attempt at `task` with `provider`: begins it, records `health_check_duration` as
+/// the attempt's first step when the health check ran ahead of it, builds the prompt, runs it
+/// through the pipeline's steps, and ends the attempt with the outcome they left it at.
 ///
 /// # Errors
 ///
@@ -376,8 +500,12 @@ fn run_one_attempt(
     provider: &Provider,
     context: RunContext<'_>,
     task: &Task,
+    health_check_duration: Option<Duration>,
 ) -> Result<Attempted, RunError> {
     let number = crate::attempt::begin_attempt_running(journal, clock, task.id, provider.name)?;
+    if let Some(duration) = health_check_duration {
+        record_health_check_step(journal, clock, task.id, number, duration)?;
+    }
     let token = AttemptToken::new(context.project_name, task.id, number);
     let prompt = build_prompt(task, &token, context.binary_path);
     let target = RunTarget {
@@ -394,7 +522,7 @@ fn run_one_attempt(
         task.id,
         token.number,
         AttemptRun {
-            duration,
+            duration: health_check_duration.unwrap_or_default() + duration,
             exit_code,
             status,
             reason: reason.as_deref(),
@@ -426,7 +554,33 @@ fn attempt_loop(
     loop {
         match pick_next_task(journal)? {
             Pick::Task(task) => {
-                let result = run_one_attempt(journal, clock, commands, provider, context, &task)?;
+                let health_check_duration = match context.health_check_command {
+                    Some(command) => match run_health_check(commands, clock, command, context) {
+                        HealthCheck::Passed(duration) => Some(duration),
+                        HealthCheck::Failed {
+                            reason,
+                            output_tail,
+                        } => {
+                            let end = RunEnd::HealthCheckFailed {
+                                id: task.id,
+                                command: command.to_owned(),
+                                reason,
+                                output_tail,
+                            };
+                            return Ok(RunReport { attempted, end });
+                        }
+                    },
+                    None => None,
+                };
+                let result = run_one_attempt(
+                    journal,
+                    clock,
+                    commands,
+                    provider,
+                    context,
+                    &task,
+                    health_check_duration,
+                )?;
                 let status = result.status;
                 attempted.push(result);
                 if status != TaskStatus::Done {
@@ -498,7 +652,7 @@ fn attempt_outcome(
     journal: &impl Journal,
     task: &Task,
     token: &AttemptToken,
-    result: Result<crate::Output, ProviderRunError>,
+    result: Result<Output, ProviderRunError>,
 ) -> Result<(Option<i32>, TaskStatus, Option<String>), RunError> {
     let output = match result {
         Ok(output) => output,
@@ -511,15 +665,15 @@ fn attempt_outcome(
         }
     };
     let exit_code = match output.exit {
-        crate::Exit::Code(code) => code,
-        crate::Exit::Killed => {
+        Exit::Code(code) => code,
+        Exit::Killed => {
             return Ok((
                 None,
                 TaskStatus::FailedUnknown,
                 Some("the provider ran past its time limit and was killed".to_owned()),
             ));
         }
-        crate::Exit::Interrupted => {
+        Exit::Interrupted => {
             return Ok((
                 None,
                 TaskStatus::FailedUnknown,
@@ -582,7 +736,7 @@ mod tests {
     }
 
     fn commands_ok(exit: Exit) -> FakeCommands {
-        FakeCommands::returning(Ok(crate::Output {
+        FakeCommands::returning(Ok(Output {
             stdout: Vec::new(),
             stderr: Vec::new(),
             exit,
@@ -595,6 +749,7 @@ mod tests {
             project_dir: Path::new("/work/proj"),
             binary_path: Path::new("/opt/ktask-rs/bin/ktask-rs"),
             attempt_timeout: timeout,
+            health_check_command: None,
         }
     }
 
@@ -768,7 +923,7 @@ mod tests {
     }
 
     impl Commands for ReportingCommands<'_> {
-        fn run(&self, spec: &crate::CommandSpec) -> Result<crate::Output, crate::CommandsError> {
+        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
             let token: AttemptToken = spec
                 .args
                 .iter()
@@ -782,12 +937,200 @@ mod tests {
                 Some("because"),
             )
             .unwrap();
-            Ok(crate::Output {
+            Ok(Output {
                 stdout: Vec::new(),
                 stderr: Vec::new(),
                 exit: self.exit,
             })
         }
+    }
+
+    /// A commands port that answers the health check's own `bash -c` call with
+    /// `health_check`, and everything else — the provider's own command — with `other`.
+    struct HealthCheckAnd<'a> {
+        health_check: Result<Output, CommandsError>,
+        other: &'a dyn Commands,
+    }
+
+    impl Commands for HealthCheckAnd<'_> {
+        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+            if spec.program == "bash" && spec.args.first().map(String::as_str) == Some("-c") {
+                self.health_check.clone()
+            } else {
+                self.other.run(spec)
+            }
+        }
+    }
+
+    /// A commands port that panics if it is ever asked to run anything — proves the provider
+    /// is never started once the health check has failed.
+    struct NeverRun;
+
+    impl Commands for NeverRun {
+        fn run(&self, _: &CommandSpec) -> Result<Output, CommandsError> {
+            panic!("no command should have run once the health check failed");
+        }
+    }
+
+    #[test]
+    fn a_passing_health_check_is_recorded_as_the_attempts_first_step_and_it_carries_on() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = HealthCheckAnd {
+            health_check: Ok(Output {
+                stdout: b"all good\n".to_vec(),
+                stderr: Vec::new(),
+                exit: Exit::Code(0),
+            }),
+            other: &reporting,
+        };
+        let mut ctx = context(Duration::from_secs(60));
+        ctx.health_check_command = Some("make check");
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt.steps.len(), 2, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps[0].name, HEALTH_CHECK_STEP);
+        assert_eq!(
+            attempt.steps[0].ended.as_ref().unwrap().status,
+            TaskStatus::Done
+        );
+        assert_eq!(attempt.steps[1].name, IMPLEMENTATION);
+    }
+
+    #[test]
+    fn a_failing_health_check_stops_before_any_attempt_and_leaves_the_task_pending() {
+        let journal = journal_of_abc();
+        let commands = HealthCheckAnd {
+            health_check: Ok(Output {
+                stdout: b"building...\n".to_vec(),
+                stderr: b"ERROR: nope\n".to_vec(),
+                exit: Exit::Code(1),
+            }),
+            other: &NeverRun,
+        };
+        let mut ctx = context(Duration::from_secs(60));
+        ctx.health_check_command = Some("make check");
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(
+            report,
+            RunReport {
+                attempted: vec![],
+                end: RunEnd::HealthCheckFailed {
+                    id: TaskId(1),
+                    command: "make check".to_owned(),
+                    reason: "the health check exited with code 1".to_owned(),
+                    output_tail: "building...\nERROR: nope".to_owned(),
+                },
+            }
+        );
+        let tasks = crate::list_all_tasks(&journal).unwrap();
+        assert_eq!(tasks[0].status, TaskStatus::Pending);
+        assert_eq!(
+            crate::attempt::last_attempt(&journal, TaskId(1)).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_health_check_past_its_time_limit_is_killed_and_counts_as_failing() {
+        let journal = journal_of_abc();
+        let commands = HealthCheckAnd {
+            health_check: Ok(Output {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit: Exit::Killed,
+            }),
+            other: &NeverRun,
+        };
+        let mut ctx = context(Duration::from_secs(60));
+        ctx.health_check_command = Some("sleep 999");
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        match report.end {
+            RunEnd::HealthCheckFailed { reason, .. } => {
+                assert!(reason.contains("time limit"), "{reason}");
+            }
+            other => panic!("expected HealthCheckFailed, got {other:?}"),
+        }
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Pending
+        );
+    }
+
+    #[test]
+    fn the_health_check_runs_in_the_projects_directory_with_the_attempts_timeout() {
+        let journal = journal_of_abc();
+        let commands = commands_ok(Exit::Code(1));
+        let mut ctx = context(Duration::from_secs(42));
+        ctx.health_check_command = Some("make check");
+        run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        let spec = commands.last.borrow().clone().unwrap();
+        assert_eq!(spec.program, "bash");
+        assert_eq!(spec.args, vec!["-c".to_owned(), "make check".to_owned()]);
+        assert_eq!(spec.dir, Path::new("/work/proj"));
+        assert_eq!(spec.timeout, Duration::from_secs(42));
+    }
+
+    #[test]
+    fn no_health_check_command_set_skips_the_step() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        let commands = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt.steps.len(), 1, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps[0].name, IMPLEMENTATION);
     }
 
     #[test]
@@ -1051,7 +1394,7 @@ mod tests {
     #[test]
     fn a_provider_that_cannot_be_started_ends_the_task_failed_unknown() {
         let journal = journal_of_abc();
-        let commands = FakeCommands::returning(Err(crate::CommandsError::new("bash not found")));
+        let commands = FakeCommands::returning(Err(CommandsError::new("bash not found")));
         let report = run(
             &journal,
             &commands,
