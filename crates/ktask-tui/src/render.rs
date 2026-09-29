@@ -185,9 +185,7 @@ fn task_lines(app: &App, queue: &QueueView, height: usize) -> Vec<Line<'static>>
             break;
         }
         let attempt = queue.attempts.get(&task.id);
-        let steps = attempt.map_or_else(Vec::new, |attempt| {
-            step_lines(&attempt.steps, attempt.provider.as_deref().unwrap_or("-"))
-        });
+        let steps = attempt.map_or_else(Vec::new, |attempt| step_lines(&attempt.steps));
         if !steps.is_empty() && remaining < 2 {
             break;
         }
@@ -220,12 +218,13 @@ fn first_shown(block_heights: &[usize], selected: Option<usize>, height: usize) 
 }
 
 /// One line per step of `steps`, in order — the same lines `status` prints for the same
-/// attempt, from the same use case: step, provider, time spent, outcome, and the reason when
-/// there is one.
-fn step_lines(steps: &[StepLine], provider: &str) -> Vec<Line<'static>> {
+/// attempt, from the same use case: step, provider (`-` for a step the tool ran itself, which
+/// names none), time spent, outcome, and the reason when there is one.
+fn step_lines(steps: &[StepLine]) -> Vec<Line<'static>> {
     steps
         .iter()
         .map(|step| {
+            let provider = step.provider.as_deref().unwrap_or("-");
             let mut text = format!(
                 "      {} · {provider} · {}s · {}",
                 step.step,
@@ -350,6 +349,20 @@ mod tests {
         )
     }
 
+    /// The provider named for a step called `name`, run with `provider`: `IMPLEMENTATION`,
+    /// `REVIEW_STEP` and `TEST_STEP` are run by an agent and name it; every other step is run
+    /// by the tool itself and names none — the same split `ktask_core::status` makes.
+    fn step_provider(name: &str, provider: &str) -> Option<String> {
+        if name == IMPLEMENTATION
+            || name == ktask_core::REVIEW_STEP
+            || name == ktask_core::TEST_STEP
+        {
+            Some(provider.to_owned())
+        } else {
+            None
+        }
+    }
+
     /// An attempt line as `status` would build it: step [`IMPLEMENTATION`], `provider`, having
     /// run for `time_spent_secs`, ending at `outcome` with `reason`.
     fn attempt(
@@ -367,6 +380,7 @@ mod tests {
             reason: reason.map(str::to_owned),
             steps: vec![StepLine {
                 step: IMPLEMENTATION.to_owned(),
+                provider: Some(provider.to_owned()),
                 time_spent: Duration::from_secs(time_spent_secs),
                 outcome,
                 reason: reason.map(str::to_owned),
@@ -384,6 +398,7 @@ mod tests {
             .iter()
             .map(|&(step, seconds, outcome, reason)| StepLine {
                 step: step.to_owned(),
+                provider: step_provider(step, provider),
                 time_spent: Duration::from_secs(seconds),
                 outcome,
                 reason: reason.map(str::to_owned),
@@ -393,7 +408,7 @@ mod tests {
         AttemptLine {
             number: 1,
             step: last.step,
-            provider: Some(provider.to_owned()),
+            provider: last.provider,
             time_spent: last.time_spent,
             outcome: last.outcome,
             reason: last.reason,
@@ -566,15 +581,14 @@ mod tests {
         let app = loaded_with_attempts(vec![done], attempts);
         let rows = drawn(&app, 80, 10);
         assert_eq!(inside(&rows[4]), ">  1  #10  done  agent  first");
-        assert_eq!(
-            inside(&rows[5]),
-            "      sync · echo · 2s · passed: 2 commits"
-        );
+        // The sync and commit steps are run by the tool itself, not the agent: their lines
+        // name no provider.
+        assert_eq!(inside(&rows[5]), "      sync · - · 2s · passed: 2 commits");
         assert_eq!(inside(&rows[6]), "      implementation · echo · 5s · done");
         assert_eq!(inside(&rows[7]), "      review · echo · 1s · approved");
         assert_eq!(
             inside(&rows[8]),
-            "      commit · echo · 1s · passed: committed as abc123"
+            "      commit · - · 1s · passed: committed as abc123"
         );
     }
 
@@ -649,7 +663,9 @@ mod tests {
         let app = loaded_with_attempts(vec![running], attempts);
         let rows = drawn(&app, 80, 10);
         assert_eq!(inside(&rows[4]), ">  1  #10  running  agent  first");
-        assert_eq!(inside(&rows[5]), "      health check · echo · 4s · passed");
+        // The health check is run by the tool itself, not the agent: its line names no
+        // provider.
+        assert_eq!(inside(&rows[5]), "      health check · - · 4s · passed");
         assert_eq!(
             inside(&rows[6]),
             "      implementation · echo · 9s · running"

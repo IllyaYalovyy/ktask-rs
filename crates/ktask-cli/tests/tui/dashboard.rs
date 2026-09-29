@@ -277,7 +277,7 @@ fn a_run_started_elsewhere_shows_pending_then_running_with_elapsed_time_increasi
         lines[7]
     );
     assert!(
-        lines[8].contains("commit · echo") && lines[8].ends_with("nothing was changed"),
+        lines[8].contains("commit · -") && lines[8].ends_with("nothing was changed"),
         "{}",
         lines[8]
     );
@@ -332,7 +332,7 @@ fn a_task_that_changes_a_file_gets_a_real_commit_and_the_dashboard_shows_its_sho
         lines[7]
     );
     assert!(
-        lines[8].contains("commit · echo") && lines[8].ends_with(&format!("committed as {hash}")),
+        lines[8].contains("commit · -") && lines[8].ends_with(&format!("committed as {hash}")),
         "{} (expected hash {hash})",
         lines[8]
     );
@@ -771,7 +771,7 @@ fn a_task_that_commits_and_pushes_shows_the_dashboard_its_push_line() -> Result<
     assert_eq!(lines[4], ">  1  #1  done  agent  a");
     // Every step of the attempt shows, in order: sync, implementation, review, testing,
     // commit, then push last.
-    assert!(lines[5].contains("sync · echo"), "{}", lines[5]);
+    assert!(lines[5].contains("sync · -"), "{}", lines[5]);
     assert!(
         lines[6].contains("implementation · echo") && lines[6].ends_with("done"),
         "{}",
@@ -787,9 +787,9 @@ fn a_task_that_commits_and_pushes_shows_the_dashboard_its_push_line() -> Result<
         "{}",
         lines[8]
     );
-    assert!(lines[9].contains("commit · echo"), "{}", lines[9]);
+    assert!(lines[9].contains("commit · -"), "{}", lines[9]);
     assert!(
-        lines[10].contains("push · echo")
+        lines[10].contains("push · -")
             && lines[10].ends_with(&format!("pushed {hash} to origin/main")),
         "{} (expected hash {hash})",
         lines[10]
@@ -845,7 +845,7 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">  1  #1  running  agent  a");
     assert!(
-        lines[5].contains("health check · echo") && lines[5].ends_with("passed"),
+        lines[5].contains("health check · -") && lines[5].ends_with("passed"),
         "{}",
         lines[5]
     );
@@ -870,7 +870,7 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
     })?;
     let lines = lines_inside_frame(&screen);
     assert!(
-        lines[5].contains("health check · echo") && lines[5].ends_with("passed"),
+        lines[5].contains("health check · -") && lines[5].ends_with("passed"),
         "{}",
         lines[5]
     );
@@ -923,7 +923,7 @@ fn a_failing_health_check_gate_shows_on_the_queue_screen_pending_and_clears_once
     assert!(!screen.contains("exited with code 1"), "{screen}");
     let lines = lines_inside_frame(&screen);
     assert!(
-        lines[5].contains("health check · echo") && lines[5].ends_with("passed"),
+        lines[5].contains("health check · -") && lines[5].ends_with("passed"),
         "{}",
         lines[5]
     );
@@ -975,8 +975,8 @@ fn steps_taller_than_the_screen_scroll_behind_an_ellipsis_until_there_is_room_fo
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">  1  #1  done  agent  a");
     assert_eq!(lines[5], "      …");
-    assert!(lines[6].contains("commit · echo"), "{}", lines[6]);
-    assert!(lines[7].contains("push · echo"), "{}", lines[7]);
+    assert!(lines[6].contains("commit · -"), "{}", lines[6]);
+    assert!(lines[7].contains("push · -"), "{}", lines[7]);
     assert!(!screen.contains("sync"), "{screen}");
     assert!(!screen.contains("health check"), "{screen}");
     assert!(!screen.contains("implementation"), "{screen}");
@@ -992,13 +992,13 @@ fn steps_taller_than_the_screen_scroll_behind_an_ellipsis_until_there_is_room_fo
     })?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">  1  #1  done  agent  a");
-    assert!(lines[5].contains("sync · echo"), "{}", lines[5]);
-    assert!(lines[6].contains("health check · echo"), "{}", lines[6]);
+    assert!(lines[5].contains("sync · -"), "{}", lines[5]);
+    assert!(lines[6].contains("health check · -"), "{}", lines[6]);
     assert!(lines[7].contains("implementation · echo"), "{}", lines[7]);
     assert!(lines[8].contains("review · echo"), "{}", lines[8]);
     assert!(lines[9].contains("testing · echo"), "{}", lines[9]);
-    assert!(lines[10].contains("commit · echo"), "{}", lines[10]);
-    assert!(lines[11].contains("push · echo"), "{}", lines[11]);
+    assert!(lines[10].contains("commit · -"), "{}", lines[10]);
+    assert!(lines[11].contains("push · -"), "{}", lines[11]);
 
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
