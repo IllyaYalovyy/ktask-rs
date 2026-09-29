@@ -92,8 +92,8 @@ fn save_setting(
 /// Starts `binary_path run --project <project.name>`, detached from this process — its own
 /// process group, so neither this process quitting nor its terminal going away stops it —
 /// and waits for it to end, which, when it refuses to start at all, is at once. Returns what
-/// it printed either way, the same words `ktask-rs run` itself would show, folded onto one
-/// line so it fits the screen's one line for it.
+/// it printed either way, the same words `ktask-rs run` itself would show, one line per line
+/// it wrote — not folded together — so the queue screen can show each on its own line.
 fn start_run(binary_path: &Path, project: &Project) -> Result<String, String> {
     let mut child = Command::new(binary_path)
         .arg("run")
@@ -119,7 +119,7 @@ fn start_run(binary_path: &Path, project: &Project) -> Result<String, String> {
     child
         .wait()
         .map_err(|e| format!("cannot wait for ktask-rs run: {e}"))?;
-    Ok(one_line(out, err))
+    Ok(merged_output(out, err))
 }
 
 /// Reads `reader` to its end, giving up whatever came through even when it failed partway.
@@ -130,18 +130,14 @@ fn read_all(reader: &mut impl Read) -> Vec<u8> {
 }
 
 /// What `out` and `err` — a spawned command's captured standard output and standard error —
-/// printed, each folded onto one line, both together when both said something.
-fn one_line(out: JoinHandle<Vec<u8>>, err: JoinHandle<Vec<u8>>) -> String {
-    let fold = |bytes: Vec<u8>| {
-        String::from_utf8_lossy(&bytes)
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    let stdout = fold(out.join().unwrap_or_default());
-    let stderr = fold(err.join().unwrap_or_default());
+/// printed, kept exactly as the lines they were written on, stdout's lines first, then
+/// stderr's when both said something.
+fn merged_output(out: JoinHandle<Vec<u8>>, err: JoinHandle<Vec<u8>>) -> String {
+    let text = |bytes: Vec<u8>| String::from_utf8_lossy(&bytes).trim_end().to_owned();
+    let stdout = text(out.join().unwrap_or_default());
+    let stderr = text(err.join().unwrap_or_default());
     match (stdout.is_empty(), stderr.is_empty()) {
-        (false, false) => format!("{stdout} {stderr}"),
+        (false, false) => format!("{stdout}\n{stderr}"),
         (false, true) => stdout,
         (true, false) => stderr,
         (true, true) => String::new(),

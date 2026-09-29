@@ -31,7 +31,7 @@ enum Wake {
     /// loaded again so the running task's elapsed time moves even though nothing else changed.
     Tick,
     /// The run this screen started has ended, or could not start at all, printing this — the
-    /// same words `ktask-rs run` itself would show.
+    /// same words `ktask-rs run` itself would show, one line per line it wrote.
     RunMessage(String),
 }
 
@@ -88,7 +88,8 @@ fn draw(terminal: &mut DefaultTerminal, app: &App) -> Result<(), String> {
 /// called on a thread of its own each time the operator asks for it, so the screen stays
 /// responsive for however long the run takes; it blocks until the run it starts ends, or
 /// refuses to start at all, and returns what it printed either way — the same words
-/// `ktask-rs run` itself would show, shown on the screen once it returns. `load_settings`
+/// `ktask-rs run` itself would show — shown on the screen once it returns, one line per line
+/// it wrote. `load_settings`
 /// fetches every project setting, called each time the operator opens the settings screen.
 /// `save_setting` changes the setting named by the settings screen's focused field to the
 /// value it was submitted with, giving the new setting, or the reasons it was refused — an
