@@ -6,11 +6,15 @@ use std::fmt;
 use serde::Deserialize;
 
 use crate::task::{add_tasks, draft_problems};
-use crate::{AddError, Clock, Journal, Placement, Task, TaskDraft, TaskKind};
+use crate::{AddError, Clock, Journal, Placement, Task, TaskDraft, TaskKind, TaskStatus};
 
-/// A task as the JSON array writes it: the authored fields of `list --json`. Every field may
-/// be left out; what a task needs is checked afterwards, and reported in the same words as
-/// for a task added any other way.
+/// A task as the JSON array writes it: the authored fields of `list --json`, plus the
+/// tool-managed fields it also prints — `id`, `position`, `status` and `created_at` — read
+/// only so a list exported from one project imports into another unchanged; their values are
+/// otherwise ignored, except that `status` tells a cancelled task apart from the rest. Every
+/// field may be left out; what a task needs is checked afterwards, and reported in the same
+/// words as for a task added any other way. A field that is neither of these is refused,
+/// naming it, by `deny_unknown_fields`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Item {
@@ -19,6 +23,41 @@ struct Item {
     criteria: Vec<String>,
     kind: Option<String>,
     links: Vec<String>,
+    id: Option<serde_json::Value>,
+    position: Option<serde_json::Value>,
+    status: Option<serde_json::Value>,
+    created_at: Option<serde_json::Value>,
+}
+
+/// What one element of the JSON array describes.
+enum Parsed {
+    /// A task to add.
+    Draft(TaskDraft),
+    /// A task left out because it was cancelled where it came from.
+    Cancelled,
+}
+
+/// The result of a successful import: the tasks added, in order, and how many cancelled
+/// tasks were left out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Import {
+    /// The tasks added, in order.
+    pub tasks: Vec<Task>,
+    /// How many cancelled tasks were left out.
+    pub skipped_cancelled: usize,
+}
+
+impl Import {
+    /// The message naming how many cancelled tasks were skipped, or `None` when there were
+    /// none.
+    #[must_use]
+    pub fn skipped_message(&self) -> Option<String> {
+        match self.skipped_cancelled {
+            0 => None,
+            1 => Some("1 cancelled task was skipped".to_owned()),
+            n => Some(format!("{n} cancelled tasks were skipped")),
+        }
+    }
 }
 
 /// One task of the imported array that cannot be added.
@@ -70,9 +109,14 @@ impl fmt::Display for ImportError {
 
 impl Error for ImportError {}
 
-/// The draft `value` describes, or everything wrong with it.
-fn read_item(value: serde_json::Value) -> Result<TaskDraft, Vec<String>> {
+/// What `value` describes — a task to add, or one to leave out because it is cancelled — or
+/// everything wrong with it.
+fn read_item(value: serde_json::Value) -> Result<Parsed, Vec<String>> {
     let item: Item = serde_json::from_value(value).map_err(|e| vec![e.to_string()])?;
+    if matches!(&item.status, Some(serde_json::Value::String(s)) if s == TaskStatus::Cancelled.as_str())
+    {
+        return Ok(Parsed::Cancelled);
+    }
     let mut problems = Vec::new();
     let kind = match item.kind.as_deref() {
         None => TaskKind::default(),
@@ -90,29 +134,34 @@ fn read_item(value: serde_json::Value) -> Result<TaskDraft, Vec<String>> {
     };
     problems.extend(draft_problems(&draft).iter().map(ToString::to_string));
     if problems.is_empty() {
-        Ok(draft)
+        Ok(Parsed::Draft(draft))
     } else {
         Err(problems)
     }
 }
 
 /// Use case: adds every task of the JSON array `json` to the queue, in order and together, at
-/// `placement`.
+/// `placement`, so that what one project's `list --json` or `list --all --json` prints
+/// imports into another as it is.
 ///
 /// Each element has the authored fields `list --json` prints — `title`, `body`, `criteria`,
-/// `kind`, `links` — and no others.
+/// `kind`, `links` — plus, when present, the tool-managed ones it also prints — `id`,
+/// `position`, `status`, `created_at` — which are ignored, except that a task whose `status`
+/// is `cancelled` is left out rather than added; [`Import::skipped_message`] says how many
+/// were.
 ///
 /// # Errors
 ///
-/// Fails, adding nothing, when `json` is not a JSON array, when any task breaks a rule — all
-/// of them are listed, by their place in the array — when `placement` names a task that does
-/// not exist or was cancelled, or when the journal cannot be written.
+/// Fails, adding nothing, when `json` is not a JSON array, when any task breaks a rule or
+/// carries a field that is neither authored nor tool-managed — all of them are listed, by
+/// their place in the array — when `placement` names a task that does not exist or was
+/// cancelled, or when the journal cannot be written.
 pub fn import_tasks(
     journal: &impl Journal,
     clock: &impl Clock,
     json: &str,
     placement: Placement,
-) -> Result<Vec<Task>, ImportError> {
+) -> Result<Import, ImportError> {
     let serde_json::Value::Array(values) =
         serde_json::from_str(json).map_err(|e| ImportError::Malformed(e.to_string()))?
     else {
@@ -120,9 +169,11 @@ pub fn import_tasks(
     };
     let mut drafts = Vec::new();
     let mut invalid = Vec::new();
+    let mut skipped_cancelled = 0usize;
     for (index, value) in values.into_iter().enumerate() {
         match read_item(value) {
-            Ok(draft) => drafts.push(draft),
+            Ok(Parsed::Draft(draft)) => drafts.push(draft),
+            Ok(Parsed::Cancelled) => skipped_cancelled += 1,
             Err(problems) => invalid.push(InvalidTask {
                 index: index + 1,
                 problems,
@@ -132,7 +183,11 @@ pub fn import_tasks(
     if !invalid.is_empty() {
         return Err(ImportError::Invalid(invalid));
     }
-    add_tasks(journal, clock, &drafts, placement).map_err(ImportError::Add)
+    let tasks = add_tasks(journal, clock, &drafts, placement).map_err(ImportError::Add)?;
+    Ok(Import {
+        tasks,
+        skipped_cancelled,
+    })
 }
 
 #[cfg(test)]
@@ -172,7 +227,9 @@ mod tests {
     #[test]
     fn every_task_is_added_in_order_as_written_with_defaults_for_what_is_left_out() {
         let journal = FakeJournal::default();
-        let tasks = import_tasks(&journal, &clock(), THREE, Placement::End).unwrap();
+        let import = import_tasks(&journal, &clock(), THREE, Placement::End).unwrap();
+        let tasks = import.tasks;
+        assert_eq!(import.skipped_cancelled, 0);
         assert_eq!(
             tasks.iter().map(|t| (t.id, t.position)).collect::<Vec<_>>(),
             [(TaskId(1), 1), (TaskId(2), 2), (TaskId(3), 3)]
@@ -208,7 +265,10 @@ mod tests {
         let journal = queue_of(&["a"]);
         assert_eq!(
             import_tasks(&journal, &clock(), " [ ] ", Placement::End),
-            Ok(vec![])
+            Ok(Import {
+                tasks: vec![],
+                skipped_cancelled: 0
+            })
         );
         assert_eq!(titles(&journal), ["a"]);
     }
@@ -220,7 +280,7 @@ mod tests {
             {"title": "fine", "criteria": ["c"]},
             {"title": " ", "criteria": []},
             {"title": "kind", "criteria": ["c"], "kind": "robot", "links": ["nonsense"]},
-            {"title": "extra", "criteria": ["c"], "status": "done"},
+            {"title": "extra", "criteria": ["c"], "assignee": "bob"},
             {"title": 5, "criteria": ["c"]},
             "text"
         ]"#;
@@ -238,9 +298,69 @@ mod tests {
         assert!(invalid[0].problems[1].contains("criterion"));
         assert!(invalid[1].problems[0].contains("robot"));
         assert!(invalid[1].problems[1].contains("nonsense"));
-        assert!(invalid[2].problems[0].contains("status"));
+        assert!(invalid[2].problems[0].contains("assignee"));
         assert!(invalid[3].problems[0].contains("string"));
         assert_eq!(titles(&journal), ["a"]);
+    }
+
+    #[test]
+    fn tool_managed_fields_are_read_and_ignored_so_a_full_listing_imports_unchanged() {
+        let journal = FakeJournal::default();
+        let json = r#"[
+            {"id": 7, "position": 1, "title": "one", "body": "", "criteria": ["a"],
+             "kind": "agent", "links": [], "status": "done", "created_at": "2024-01-01T00:00:00Z"},
+            {"id": 8, "position": 2, "title": "two", "body": "", "criteria": ["b"],
+             "kind": "human", "links": [], "status": "pending", "created_at": "2024-01-02T00:00:00Z"}
+        ]"#;
+        let import = import_tasks(&journal, &clock(), json, Placement::End).unwrap();
+        assert_eq!(import.skipped_cancelled, 0);
+        assert_eq!(
+            import.tasks.iter().map(|t| t.id).collect::<Vec<_>>(),
+            [TaskId(1), TaskId(2)]
+        );
+        assert_eq!(titles(&journal), ["one", "two"]);
+    }
+
+    #[test]
+    fn a_cancelled_task_is_skipped_and_the_others_are_added() {
+        let journal = FakeJournal::default();
+        let json = r#"[
+            {"title": "kept one", "criteria": ["c"]},
+            {"title": "gone", "criteria": ["c"], "status": "cancelled"},
+            {"title": "kept two", "criteria": ["c"]}
+        ]"#;
+        let import = import_tasks(&journal, &clock(), json, Placement::End).unwrap();
+        assert_eq!(import.skipped_cancelled, 1);
+        assert_eq!(
+            import.skipped_message().as_deref(),
+            Some("1 cancelled task was skipped")
+        );
+        assert_eq!(titles(&journal), ["kept one", "kept two"]);
+    }
+
+    #[test]
+    fn skipped_message_says_how_many_were_skipped_or_says_nothing() {
+        let none = Import {
+            tasks: vec![],
+            skipped_cancelled: 0,
+        };
+        assert_eq!(none.skipped_message(), None);
+        let one = Import {
+            tasks: vec![],
+            skipped_cancelled: 1,
+        };
+        assert_eq!(
+            one.skipped_message().as_deref(),
+            Some("1 cancelled task was skipped")
+        );
+        let many = Import {
+            tasks: vec![],
+            skipped_cancelled: 3,
+        };
+        assert_eq!(
+            many.skipped_message().as_deref(),
+            Some("3 cancelled tasks were skipped")
+        );
     }
 
     #[test]
