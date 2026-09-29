@@ -94,16 +94,9 @@ fn heading(placement: Placement) -> String {
     }
 }
 
-/// Draws `form` over the whole of `area`, asking to discard it when `discard` says so, and
-/// returns where the cursor goes.
-pub(crate) fn draw(form: &Form, discard: bool, area: Rect, buf: &mut Buffer) -> Option<Position> {
-    let bold = Style::new().add_modifier(Modifier::BOLD);
-    let mut sheet = Sheet {
-        width: usize::from(area.width),
-        rows: vec![Line::styled(heading(form.placement), bold)],
-        focus_row: 0,
-        cursor_x: None,
-    };
+/// Pushes the discard notice, when `discard` asks for it, then every problem the form's last
+/// submission found, each wrapped to `sheet`'s width.
+fn push_problems(sheet: &mut Sheet, form: &Form, discard: bool, bold: Style) {
     if discard {
         sheet.rows.push(Line::styled(
             "Discard this task? y to discard · n or Esc to keep writing",
@@ -119,15 +112,11 @@ pub(crate) fn draw(form: &Form, discard: bool, area: Rect, buf: &mut Buffer) -> 
             sheet.rows.push(Line::styled(format!("{lead}{row}"), bold));
         }
     }
-    sheet.push(String::new());
+}
 
-    let mark = |field| marker(form, field);
-    sheet.text(
-        &format!("{} Title:     ", mark(Focus::Title)),
-        "",
-        &form.title,
-        form.focus == Focus::Title,
-    );
+/// Pushes the kind field: its value between angle brackets, with a hint on how to change it
+/// while the focus is on it.
+fn push_kind(sheet: &mut Sheet, form: &Form) {
     if form.focus == Focus::Kind {
         sheet.focus_row = sheet.rows.len();
     }
@@ -138,9 +127,39 @@ pub(crate) fn draw(form: &Form, discard: bool, area: Rect, buf: &mut Buffer) -> 
     };
     sheet.push(format!(
         "{} Kind:      < {} >{hint}",
-        mark(Focus::Kind),
+        marker(form, Focus::Kind),
         form.kind
     ));
+}
+
+/// Pushes the criteria field: one row per criterion, or a hint when there are none yet.
+fn push_criteria(sheet: &mut Sheet, form: &Form) {
+    sheet.push("  Criteria:".to_owned());
+    if form.criteria.is_empty() {
+        sheet.push("    none: Ctrl-N adds one".to_owned());
+    }
+    for (index, criterion) in form.criteria.iter().enumerate() {
+        let focus = Focus::Criterion(index);
+        sheet.text(
+            &format!("{}{:>3}. ", marker(form, focus), index + 1),
+            "      ",
+            criterion,
+            form.focus == focus,
+        );
+    }
+}
+
+/// Pushes `form`'s own fields — title, kind, links, body and criteria — each marked with the
+/// focus when it is on that field.
+fn push_fields(sheet: &mut Sheet, form: &Form) {
+    let mark = |field| marker(form, field);
+    sheet.text(
+        &format!("{} Title:     ", mark(Focus::Title)),
+        "",
+        &form.title,
+        form.focus == Focus::Title,
+    );
+    push_kind(sheet, form);
     sheet.text(
         &format!("{} Links:     ", mark(Focus::Links)),
         "",
@@ -149,19 +168,22 @@ pub(crate) fn draw(form: &Form, discard: bool, area: Rect, buf: &mut Buffer) -> 
     );
     sheet.push(format!("{} Body:", mark(Focus::Body)));
     sheet.text("    ", "    ", &form.body, form.focus == Focus::Body);
-    sheet.push("  Criteria:".to_owned());
-    if form.criteria.is_empty() {
-        sheet.push("    none: Ctrl-N adds one".to_owned());
-    }
-    for (index, criterion) in form.criteria.iter().enumerate() {
-        let focus = Focus::Criterion(index);
-        sheet.text(
-            &format!("{}{:>3}. ", mark(focus), index + 1),
-            "      ",
-            criterion,
-            form.focus == focus,
-        );
-    }
+    push_criteria(sheet, form);
+}
+
+/// Draws `form` over the whole of `area`, asking to discard it when `discard` says so, and
+/// returns where the cursor goes.
+pub(crate) fn draw(form: &Form, discard: bool, area: Rect, buf: &mut Buffer) -> Option<Position> {
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let mut sheet = Sheet {
+        width: usize::from(area.width),
+        rows: vec![Line::styled(heading(form.placement), bold)],
+        focus_row: 0,
+        cursor_x: None,
+    };
+    push_problems(&mut sheet, form, discard, bold);
+    sheet.push(String::new());
+    push_fields(&mut sheet, form);
 
     let height = usize::from(area.height);
     let first = (sheet.focus_row + 1).saturating_sub(height);

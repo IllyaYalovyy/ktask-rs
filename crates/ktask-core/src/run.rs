@@ -222,9 +222,8 @@ fn account_for_interrupted_run(
     }))
 }
 
-/// Runs the sync gate ahead of `task_id`'s attempt, when the project has it configured and
-/// switched on: the pre-step to record when it passes, `None` when it is not enabled, or the
-/// [`RunEnd`] that stops the run — before an attempt is even begun — when it refuses.
+/// Runs the sync gate ahead of `task_id`'s attempt: the pre-step to record when it passes,
+/// `None` when not enabled, or the [`RunEnd`] that stops the run when it refuses.
 fn run_sync_gate(
     git: &dyn Git,
     clock: &dyn Clock,
@@ -251,10 +250,8 @@ fn run_sync_gate(
     }
 }
 
-/// Runs the health-check gate ahead of `task_id`'s attempt, when the project has it
-/// configured and switched on: the pre-step to record when it passes, `None` when it is not
-/// enabled, or the [`RunEnd`] that stops the run — before an attempt is even begun — when it
-/// fails.
+/// Runs the health-check gate ahead of `task_id`'s attempt: the pre-step to record when it
+/// passes, `None` when not enabled, or the [`RunEnd`] that stops the run when it fails.
 fn run_health_check_gate(
     commands: &dyn Commands,
     clock: &dyn Clock,

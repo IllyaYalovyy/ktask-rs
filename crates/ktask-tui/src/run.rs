@@ -169,6 +169,120 @@ fn spawn_wakes(
     Ok((sender, receiver))
 }
 
+/// The next [`Wake`] to act on: waits at most [`TICK`] while a task is running, so its
+/// elapsed time keeps moving even when nothing else wakes the loop, or indefinitely
+/// otherwise.
+fn next_wake(wakes: &Receiver<Wake>, running: bool) -> Result<Wake, String> {
+    if !running {
+        return wakes
+            .recv()
+            .map_err(|_| "the keyboard and journal-watch threads both stopped".to_owned());
+    }
+    match wakes.recv_timeout(TICK) {
+        Ok(wake) => Ok(wake),
+        Err(RecvTimeoutError::Timeout) => Ok(Wake::Tick),
+        Err(RecvTimeoutError::Disconnected) => {
+            Err("the keyboard and journal-watch threads both stopped".to_owned())
+        }
+    }
+}
+
+/// The app after `input`, carrying out whatever it left pending for the loop — removing a
+/// task, adding one, loading or saving a setting, or starting a run — and whether the queue
+/// is worth loading again afterward: not, only, when nothing pending was found and the
+/// cancelled-tasks switch did not change either, since a plain cursor move changes nothing
+/// the journal knows about.
+/// Removes or adds the task `app` has pending, if either: `(app, true)` when one was, `(app,
+/// false)`, unchanged, otherwise.
+fn handle_task_action<Remove, Add>(
+    mut app: App,
+    remove: &mut Remove,
+    add: &mut Add,
+) -> Result<(App, bool), String>
+where
+    Remove: FnMut(TaskId) -> Result<(), String>,
+    Add: FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
+{
+    if let Some(id) = app.removal.take() {
+        remove(id)?;
+        return Ok((app, true));
+    }
+    if let Some((draft, placement)) = app.submission.take() {
+        let added = match add(&draft, placement) {
+            Ok(id) => Event::Added(id),
+            Err(problems) => Event::Rejected(problems),
+        };
+        return Ok((update(app, added), true));
+    }
+    Ok((app, false))
+}
+
+/// Loads the settings screen or saves the setting `app` has pending, if either: `(app, true)`
+/// when one was, `(app, false)`, unchanged, otherwise.
+fn handle_settings_action<LoadSettings, SaveSetting>(
+    mut app: App,
+    load_settings: &mut LoadSettings,
+    save_setting: &mut SaveSetting,
+) -> Result<(App, bool), String>
+where
+    LoadSettings: FnMut() -> Result<Vec<SettingView>, String>,
+    SaveSetting: FnMut(&str, &str) -> Result<SettingView, String>,
+{
+    if app.settings_requested.take().is_some() {
+        let views = load_settings()?;
+        return Ok((update(app, Event::SettingsLoaded(views)), true));
+    }
+    if let Some((name, value)) = app.setting_submission.take() {
+        let event = match save_setting(name, &value) {
+            Ok(_) => Event::SettingSaved,
+            Err(message) => Event::SettingRejected(message),
+        };
+        return Ok((update(app, event), true));
+    }
+    Ok((app, false))
+}
+
+fn handle_input<Load, Remove, Add, LoadSettings, SaveSetting>(
+    mut app: App,
+    actions: &mut Actions<Load, Remove, Add, LoadSettings, SaveSetting>,
+    input: &Input,
+    start_run: &Arc<impl Fn() -> Result<String, String> + Send + Sync + 'static>,
+    sender: &Sender<Wake>,
+) -> Result<(App, bool), String>
+where
+    Remove: FnMut(TaskId) -> Result<(), String>,
+    Add: FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>>,
+    LoadSettings: FnMut() -> Result<Vec<SettingView>, String>,
+    SaveSetting: FnMut(&str, &str) -> Result<SettingView, String>,
+{
+    let asked = app.show_cancelled;
+    if let Some(event) = translate(input) {
+        app = update(app, event);
+    }
+    let (app, handled) = handle_task_action(app, &mut actions.remove, &mut actions.add)?;
+    if handled {
+        return Ok((app, true));
+    }
+    let (mut app, handled) =
+        handle_settings_action(app, &mut actions.load_settings, &mut actions.save_setting)?;
+    if handled {
+        return Ok((app, true));
+    }
+    if app.run_requested.take().is_some() {
+        spawn_run(Arc::clone(start_run), sender.clone());
+        return Ok((app, true));
+    }
+    let should_reload = app.show_cancelled != asked;
+    Ok((app, should_reload))
+}
+
+/// Whether `app`'s queue shows a task currently running.
+fn task_running(app: &App) -> bool {
+    app.queue
+        .as_ref()
+        .is_some_and(|queue| queue.summary.running > 0)
+}
+
 fn drive(
     terminal: &mut DefaultTerminal,
     mut actions: Actions<
@@ -188,54 +302,17 @@ fn drive(
         if app.quit {
             return Ok(());
         }
-        let running = app
-            .queue
-            .as_ref()
-            .is_some_and(|queue| queue.summary.running > 0);
-        let wake = if running {
-            match wakes.recv_timeout(TICK) {
-                Ok(wake) => wake,
-                Err(RecvTimeoutError::Timeout) => Wake::Tick,
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err("the keyboard and journal-watch threads both stopped".to_owned());
-                }
-            }
-        } else {
-            wakes
-                .recv()
-                .map_err(|_| "the keyboard and journal-watch threads both stopped".to_owned())?
-        };
-        match wake {
+        match next_wake(wakes, task_running(&app))? {
             Wake::Stop => return Ok(()),
             Wake::Changed | Wake::Tick => {}
             Wake::RunMessage(text) => {
                 app = update(app, Event::RunMessage(text));
             }
             Wake::Input(input) => {
-                let asked = app.show_cancelled;
-                if let Some(event) = translate(&input) {
-                    app = update(app, event);
-                }
-                if let Some(id) = app.removal.take() {
-                    (actions.remove)(id)?;
-                } else if let Some((draft, placement)) = app.submission.take() {
-                    let added = match (actions.add)(&draft, placement) {
-                        Ok(id) => Event::Added(id),
-                        Err(problems) => Event::Rejected(problems),
-                    };
-                    app = update(app, added);
-                } else if app.settings_requested.take().is_some() {
-                    let views = (actions.load_settings)()?;
-                    app = update(app, Event::SettingsLoaded(views));
-                } else if let Some((name, value)) = app.setting_submission.take() {
-                    let event = match (actions.save_setting)(name, &value) {
-                        Ok(_) => Event::SettingSaved,
-                        Err(message) => Event::SettingRejected(message),
-                    };
-                    app = update(app, event);
-                } else if app.run_requested.take().is_some() {
-                    spawn_run(Arc::clone(start_run), sender.clone());
-                } else if app.show_cancelled == asked {
+                let (new_app, should_reload) =
+                    handle_input(app, &mut actions, &input, start_run, sender)?;
+                app = new_app;
+                if !should_reload {
                     continue;
                 }
             }
