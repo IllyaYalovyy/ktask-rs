@@ -1,6 +1,8 @@
 //! Draws an [`App`] into a buffer.
 
-use ktask_core::{AttemptLine, CancelError, QueueView, Task, TaskStatus, displayed_status};
+use ktask_core::{
+    AttemptLine, CancelError, QueueView, StepLine, Task, TaskStatus, displayed_status,
+};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -152,8 +154,11 @@ fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
 /// The rows of the task list that fit in `height` lines, scrolled so that the selected task's
 /// block is the last one in view when it would not be otherwise. The selected task is marked
 /// with `>` and shown reversed; a cancelled one is dimmed and says so in its status. A task
-/// that has an attempt carries a second, dimmed line under it: the same line `status` shows
-/// for it, from the same use case.
+/// that has an attempt carries one dimmed line per step run so far, in the same order
+/// `status` prints them, from the same use case. When a task's own steps do not all fit, the
+/// earliest are replaced by a single `…` line so the block still fits, keeping the most
+/// recently finished steps, and the one still running, visible — never a line cut with no
+/// sign of it.
 fn task_lines(app: &App, queue: &QueueView, height: usize) -> Vec<Line<'static>> {
     if queue.tasks.is_empty() {
         return vec![Line::from("The queue is empty.")];
@@ -166,27 +171,28 @@ fn task_lines(app: &App, queue: &QueueView, height: usize) -> Vec<Line<'static>>
         .tasks
         .iter()
         .map(|task| {
-            if queue.attempts.contains_key(&task.id) {
-                2
-            } else {
-                1
-            }
+            1 + queue
+                .attempts
+                .get(&task.id)
+                .map_or(0, |attempt| attempt.steps.len())
         })
         .collect();
     let first = first_shown(&block_heights, selected, height);
     let mut lines = Vec::new();
     for (index, task) in queue.tasks.iter().enumerate().skip(first) {
-        if lines.len() >= height {
+        let remaining = height.saturating_sub(lines.len());
+        if remaining == 0 {
             break;
         }
         let attempt = queue.attempts.get(&task.id);
-        lines.push(task_line(task, attempt, Some(index) == selected));
-        if let Some(attempt) = attempt {
-            if lines.len() >= height {
-                break;
-            }
-            lines.push(attempt_line(attempt));
+        let steps = attempt.map_or_else(Vec::new, |attempt| {
+            step_lines(&attempt.steps, attempt.provider.as_deref().unwrap_or("-"))
+        });
+        if !steps.is_empty() && remaining < 2 {
+            break;
         }
+        lines.push(task_line(task, attempt, Some(index) == selected));
+        lines.extend(windowed(steps, remaining - 1));
     }
     lines
 }
@@ -213,22 +219,44 @@ fn first_shown(block_heights: &[usize], selected: Option<usize>, height: usize) 
     first
 }
 
-/// The attempt line under a task: the same line `status` shows for it, from the same use
-/// case — step, provider, time spent, outcome, and the reason when there is one.
-fn attempt_line(attempt: &AttemptLine) -> Line<'static> {
-    let provider = attempt.provider.as_deref().unwrap_or("-");
-    let mut text = format!(
-        "      {} · {} · {}s · {}",
-        attempt.step,
-        provider,
-        attempt.time_spent.as_secs(),
-        attempt.outcome
-    );
-    if let Some(reason) = &attempt.reason {
-        text.push_str(": ");
-        text.push_str(reason);
+/// One line per step of `steps`, in order — the same lines `status` prints for the same
+/// attempt, from the same use case: step, provider, time spent, outcome, and the reason when
+/// there is one.
+fn step_lines(steps: &[StepLine], provider: &str) -> Vec<Line<'static>> {
+    steps
+        .iter()
+        .map(|step| {
+            let mut text = format!(
+                "      {} · {provider} · {}s · {}",
+                step.step,
+                step.time_spent.as_secs(),
+                step.outcome
+            );
+            if let Some(reason) = &step.reason {
+                text.push_str(": ");
+                text.push_str(reason);
+            }
+            Line::styled(text, Style::new().add_modifier(Modifier::DIM))
+        })
+        .collect()
+}
+
+/// `lines`, kept to at most `budget`: shown in full when they already fit; otherwise the
+/// earliest are dropped in favour of one leading `…` line, so the tail — the most recently
+/// finished steps, and the one still running — stays visible, and the cut is never silent.
+/// The caller never asks for `budget` `0` when `lines` is not itself empty, so that case is
+/// not one this needs to make room for.
+fn windowed(lines: Vec<Line<'static>>, budget: usize) -> Vec<Line<'static>> {
+    if lines.len() <= budget {
+        return lines;
     }
-    Line::styled(text, Style::new().add_modifier(Modifier::DIM))
+    let skip = lines.len() + 1 - budget;
+    let mut shown = vec![Line::styled(
+        "      …",
+        Style::new().add_modifier(Modifier::DIM),
+    )];
+    shown.extend(lines.into_iter().skip(skip));
+    shown
 }
 
 /// `task`'s row: its position, ID, status, kind and title. `attempt` — the same line
@@ -337,12 +365,39 @@ mod tests {
             time_spent: Duration::from_secs(time_spent_secs),
             outcome,
             reason: reason.map(str::to_owned),
-            steps: vec![ktask_core::StepLine {
+            steps: vec![StepLine {
                 step: IMPLEMENTATION.to_owned(),
                 time_spent: Duration::from_secs(time_spent_secs),
                 outcome,
                 reason: reason.map(str::to_owned),
             }],
+        }
+    }
+
+    /// An attempt line whose `steps` are built from `(step, seconds, outcome, reason)` tuples,
+    /// in order; its own top-level fields carry the last one, as `status` builds it.
+    fn attempt_with_steps(
+        provider: &str,
+        steps: &[(&str, u64, AttemptOutcome, Option<&str>)],
+    ) -> AttemptLine {
+        let lines: Vec<StepLine> = steps
+            .iter()
+            .map(|&(step, seconds, outcome, reason)| StepLine {
+                step: step.to_owned(),
+                time_spent: Duration::from_secs(seconds),
+                outcome,
+                reason: reason.map(str::to_owned),
+            })
+            .collect();
+        let last = lines.last().cloned().expect("at least one step");
+        AttemptLine {
+            number: 1,
+            step: last.step,
+            provider: Some(provider.to_owned()),
+            time_spent: last.time_spent,
+            outcome: last.outcome,
+            reason: last.reason,
+            steps: lines,
         }
     }
 
@@ -469,6 +524,136 @@ mod tests {
             let rows = drawn(&app, 80, 8);
             assert_eq!(inside(&rows[5]), expected, "{status:?}");
         }
+    }
+
+    #[test]
+    fn every_step_of_the_attempt_shows_under_the_task_in_order() {
+        let mut attempts = HashMap::new();
+        attempts.insert(
+            TaskId(10),
+            attempt_with_steps(
+                "echo",
+                &[
+                    (
+                        ktask_core::SYNC_STEP,
+                        2,
+                        AttemptOutcome::Passed,
+                        Some("2 commits"),
+                    ),
+                    (
+                        IMPLEMENTATION,
+                        5,
+                        AttemptOutcome::Reported(Outcome::Done),
+                        None,
+                    ),
+                    (
+                        ktask_core::REVIEW_STEP,
+                        1,
+                        AttemptOutcome::Reported(Outcome::Approved),
+                        None,
+                    ),
+                    (
+                        ktask_core::COMMIT_STEP,
+                        1,
+                        AttemptOutcome::Passed,
+                        Some("committed as abc123"),
+                    ),
+                ],
+            ),
+        );
+        let mut done = task(1, "first", TaskKind::Agent);
+        done.status = TaskStatus::Done;
+        let app = loaded_with_attempts(vec![done], attempts);
+        let rows = drawn(&app, 80, 10);
+        assert_eq!(inside(&rows[4]), ">  1  #10  done  agent  first");
+        assert_eq!(
+            inside(&rows[5]),
+            "      sync · echo · 2s · passed: 2 commits"
+        );
+        assert_eq!(inside(&rows[6]), "      implementation · echo · 5s · done");
+        assert_eq!(inside(&rows[7]), "      review · echo · 1s · approved");
+        assert_eq!(
+            inside(&rows[8]),
+            "      commit · echo · 1s · passed: committed as abc123"
+        );
+    }
+
+    #[test]
+    fn steps_taller_than_the_list_scroll_behind_an_ellipsis_keeping_the_tail_visible() {
+        let mut attempts = HashMap::new();
+        attempts.insert(
+            TaskId(10),
+            attempt_with_steps(
+                "echo",
+                &[
+                    (ktask_core::SYNC_STEP, 1, AttemptOutcome::Passed, None),
+                    (
+                        ktask_core::HEALTH_CHECK_STEP,
+                        1,
+                        AttemptOutcome::Passed,
+                        None,
+                    ),
+                    (
+                        IMPLEMENTATION,
+                        1,
+                        AttemptOutcome::Reported(Outcome::Done),
+                        None,
+                    ),
+                    (
+                        ktask_core::REVIEW_STEP,
+                        1,
+                        AttemptOutcome::Reported(Outcome::Approved),
+                        None,
+                    ),
+                    (ktask_core::TEST_STEP, 3, AttemptOutcome::Running, None),
+                ],
+            ),
+        );
+        let mut running = task(1, "first", TaskKind::Agent);
+        running.status = TaskStatus::Running;
+        let app = loaded_with_attempts(vec![running], attempts);
+        // The frame and header take 5 rows; 4 are left for the list — one for the task line,
+        // three for its steps: an ellipsis for the ones it has no room for, then the tail —
+        // the still-running step and the one finished right before it.
+        let rows = drawn(&app, 80, 9);
+        assert_eq!(inside(&rows[4]), ">  1  #10  running  agent  first");
+        assert_eq!(inside(&rows[5]), "      …");
+        assert_eq!(inside(&rows[6]), "      review · echo · 1s · approved");
+        assert_eq!(inside(&rows[7]), "      testing · echo · 3s · running");
+        let screen = rows.join("\n");
+        assert!(!screen.contains("sync"), "{screen}");
+        assert!(!screen.contains("health check"), "{screen}");
+        assert!(!screen.contains("implementation"), "{screen}");
+    }
+
+    #[test]
+    fn while_running_earlier_finished_steps_of_the_same_attempt_stay_visible_above_it() {
+        let mut attempts = HashMap::new();
+        attempts.insert(
+            TaskId(10),
+            attempt_with_steps(
+                "echo",
+                &[
+                    (
+                        ktask_core::HEALTH_CHECK_STEP,
+                        4,
+                        AttemptOutcome::Passed,
+                        None,
+                    ),
+                    (IMPLEMENTATION, 9, AttemptOutcome::Running, None),
+                ],
+            ),
+        );
+        let mut running = task(1, "first", TaskKind::Agent);
+        running.status = TaskStatus::Running;
+        let app = loaded_with_attempts(vec![running], attempts);
+        let rows = drawn(&app, 80, 10);
+        assert_eq!(inside(&rows[4]), ">  1  #10  running  agent  first");
+        assert_eq!(inside(&rows[5]), "      health check · echo · 4s · passed");
+        assert_eq!(
+            inside(&rows[6]),
+            "      implementation · echo · 9s · running"
+        );
     }
 
     #[test]
