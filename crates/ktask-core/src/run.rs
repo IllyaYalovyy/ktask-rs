@@ -1,20 +1,25 @@
 //! `run`: takes the pending tasks in queue order and attempts each one, once, with the
-//! [`Provider`] it is given.
+//! [`Provider`] it is given. Takes the run lock, accounts for a run an earlier kill left an
+//! attempt running in, picks the next task, and walks it through the steps of
+//! [`crate::steps`] — the sync and health-check gates ahead of an attempt, then the list an
+//! attempt walks.
 
 use std::error::Error;
-use std::fmt::{self, Write as _};
+use std::fmt;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::git::PushError as GitPushError;
-use crate::settings::split_tracked_branch;
+use crate::pick::{Pick, end_when_nothing_left, pick_next_task};
+use crate::steps::{self, INTERRUPTED};
 use crate::{
-    AttemptRun, AttemptToken, BeginAttemptError, COMMIT_STEP, Clock, CommandSpec, Commands,
-    CommandsError, CommitAllError, Exit, Git, HEALTH_CHECK_STEP, IMPLEMENTATION, Journal,
-    JournalError, Outcome, Output, PUSH_STEP, Provider, ProviderRunError, PullRebase,
-    PullRebaseError, REVIEW_STEP, RecordReportError, RunLock, RunLockError, SYNC_STEP, StepCall,
-    TEST_STEP, Task, TaskId, TaskKind, TaskStatus, list_tasks, run_provider,
+    BeginAttemptError, Clock, Commands, Git, Journal, JournalError, Provider, RecordReportError,
+    RunLock, RunLockError, TaskId, TaskStatus,
 };
+
+pub use crate::steps::implementation::build_prompt;
+pub use crate::steps::review::build_review_prompt;
+pub use crate::steps::sync::SyncProblem;
+pub use crate::steps::test_step::build_test_prompt;
 
 /// Why a run could not proceed at all — never for how an attempt itself ended, which is a
 /// normal [`RunReport`].
@@ -60,10 +65,6 @@ impl From<RunLockError> for RunError {
         Self::Locked(error)
     }
 }
-
-/// The reason recorded for the task a killed run left running, found still running when the
-/// next run starts.
-const INTERRUPTED: &str = "the run was interrupted";
 
 /// One task the run attempted, and how its one attempt ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,21 +130,6 @@ pub enum RunEnd {
     },
 }
 
-/// Why the sync ahead of a task's health check refused to run it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SyncProblem {
-    /// The project's directory holds changes git has not committed: the listing is
-    /// `git status --porcelain`'s own output, read before anything else was touched.
-    UncommittedChanges(String),
-    /// The tracked branch's remote could not be reached.
-    RemoteUnreachable(String),
-    /// Rebasing onto the tracked branch conflicted in these files. The rebase was undone
-    /// before this was returned: the directory is exactly as it was.
-    Conflict(Vec<String>),
-    /// Git itself could not do the work asked of it, for some other reason.
-    GitFailed(String),
-}
-
 /// What a run did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunReport {
@@ -175,133 +161,21 @@ pub struct RunContext<'a> {
     /// in `project_dir` ahead of the health check. `None` when the project has not set one:
     /// the step is skipped, and leaves no line.
     pub tracked_branch: Option<&'a str>,
-    /// The steps the project has switched off, named as [`SYNC_STEP`], [`HEALTH_CHECK_STEP`],
-    /// [`REVIEW_STEP`], [`TEST_STEP`], [`COMMIT_STEP`] or [`PUSH_STEP`] — never
-    /// [`IMPLEMENTATION`], which cannot be switched off. A step named here does not run and
-    /// leaves no line, whatever else is configured for it; the sync and health-check steps
-    /// still only actually run when `tracked_branch`, respectively `health_check_command`, is
-    /// also set, and the push step only when the commit step made a commit.
+    /// The steps the project has switched off, named as [`crate::SYNC_STEP`],
+    /// [`crate::HEALTH_CHECK_STEP`], [`crate::REVIEW_STEP`], [`crate::TEST_STEP`],
+    /// [`crate::COMMIT_STEP`] or [`crate::PUSH_STEP`] — never [`crate::IMPLEMENTATION`], which
+    /// cannot be switched off. A step named here does not run and leaves no line, whatever
+    /// else is configured for it; the sync and health-check steps still only actually run when
+    /// `tracked_branch`, respectively `health_check_command`, is also set, and the push step
+    /// only when the commit step made a commit.
     pub disabled_steps: &'a [&'static str],
 }
 
 impl RunContext<'_> {
     /// Whether the step named `step` is switched on: named in `disabled_steps` or not.
-    fn step_enabled(&self, step: &str) -> bool {
+    pub(crate) fn step_enabled(&self, step: &str) -> bool {
         !self.disabled_steps.contains(&step)
     }
-}
-
-/// The prompt for attempt `token` of `task`: its title, body and acceptance criteria, and
-/// the exact `report` command, run through `binary_path`, to run for each possible outcome.
-/// The full path is used, rather than the name `ktask-rs`, so the command works whether or
-/// not the binary that is running is on the agent's `PATH`.
-#[must_use]
-pub fn build_prompt(task: &Task, token: &AttemptToken, binary_path: &Path) -> String {
-    let mut prompt = format!("# {}\n", task.title);
-    if !task.body.is_empty() {
-        prompt.push('\n');
-        prompt.push_str(&task.body);
-        prompt.push('\n');
-    }
-    prompt.push_str("\n## Acceptance criteria\n\n");
-    for criterion in &task.criteria {
-        prompt.push_str("- ");
-        prompt.push_str(criterion);
-        prompt.push('\n');
-    }
-    let binary = binary_path.display();
-    let _ = write!(
-        prompt,
-        "\n## Reporting\n\n\
-         When you are done, run exactly one of these, with the outcome that fits:\n\n\
-         \x20\x20\x20\x20{binary} report --token {token} done\n\
-         \x20\x20\x20\x20{binary} report --token {token} failed --reason \"<why>\"\n\
-         \x20\x20\x20\x20{binary} report --token {token} needs-input --reason \"<why>\"\n\
-         \x20\x20\x20\x20{binary} report --token {token} too-large --reason \"<why>\"\n"
-    );
-    prompt
-}
-
-/// The prompt for the review step of attempt `token` of `task`: its title, body and
-/// acceptance criteria, the diff the implementation step made — `diff`, empty when there was
-/// nothing to compare against or git could not produce one — and the exact `report` command,
-/// run through `binary_path`, to run for each possible outcome.
-#[must_use]
-pub fn build_review_prompt(
-    task: &Task,
-    token: &AttemptToken,
-    binary_path: &Path,
-    diff: &str,
-) -> String {
-    let mut prompt = format!("# Review: {}\n", task.title);
-    if !task.body.is_empty() {
-        prompt.push('\n');
-        prompt.push_str(&task.body);
-        prompt.push('\n');
-    }
-    prompt.push_str("\n## Acceptance criteria\n\n");
-    for criterion in &task.criteria {
-        prompt.push_str("- ");
-        prompt.push_str(criterion);
-        prompt.push('\n');
-    }
-    prompt.push_str("\n## What the task changed\n\n```diff\n");
-    prompt.push_str(diff);
-    if !diff.is_empty() && !diff.ends_with('\n') {
-        prompt.push('\n');
-    }
-    prompt.push_str("```\n");
-    let binary = binary_path.display();
-    let _ = write!(
-        prompt,
-        "\n## Reporting\n\n\
-         Review the diff above against the task and its acceptance criteria. When you are \
-         done, run exactly one of these, with the outcome that fits:\n\n\
-         \x20\x20\x20\x20{binary} report --token {token} approved\n\
-         \x20\x20\x20\x20{binary} report --token {token} changes-requested --reason \"<findings>\"\n"
-    );
-    prompt
-}
-
-/// The prompt for the test step of attempt `token` of `task`: its title, body and acceptance
-/// criteria, the diff the implementation step made — `diff`, empty when there was nothing to
-/// compare against or git could not produce one — and the exact `report` command, run through
-/// `binary_path`, to run for each possible outcome.
-#[must_use]
-pub fn build_test_prompt(
-    task: &Task,
-    token: &AttemptToken,
-    binary_path: &Path,
-    diff: &str,
-) -> String {
-    let mut prompt = format!("# Test: {}\n", task.title);
-    if !task.body.is_empty() {
-        prompt.push('\n');
-        prompt.push_str(&task.body);
-        prompt.push('\n');
-    }
-    prompt.push_str("\n## Acceptance criteria\n\n");
-    for criterion in &task.criteria {
-        prompt.push_str("- ");
-        prompt.push_str(criterion);
-        prompt.push('\n');
-    }
-    prompt.push_str("\n## What the task changed\n\n```diff\n");
-    prompt.push_str(diff);
-    if !diff.is_empty() && !diff.ends_with('\n') {
-        prompt.push('\n');
-    }
-    prompt.push_str("```\n");
-    let binary = binary_path.display();
-    let _ = write!(
-        prompt,
-        "\n## Reporting\n\n\
-         Try out the change above against the task and its acceptance criteria. When you are \
-         done, run exactly one of these, with the outcome that fits:\n\n\
-         \x20\x20\x20\x20{binary} report --token {token} accepted\n\
-         \x20\x20\x20\x20{binary} report --token {token} rejected --reason \"<what failed>\"\n"
-    );
-    prompt
 }
 
 /// Takes `lock` for the whole run, so that two runs of the same project never overlap.
@@ -333,7 +207,7 @@ fn account_for_interrupted_run(
         journal,
         id,
         number,
-        AttemptRun {
+        crate::AttemptRun {
             duration: Duration::ZERO,
             exit_code: None,
             status: TaskStatus::FailedUnknown,
@@ -348,759 +222,12 @@ fn account_for_interrupted_run(
     }))
 }
 
-/// What [`pick_next_task`] found the run should do next.
-enum Pick {
-    /// Attempt this pending task.
-    Task(Task),
-    /// Stop: the next pending task is kind `human`.
-    Human(TaskId),
-    /// Stop: the first task in queue order that is not `done` already ended `failed`,
-    /// `blocked` or `failed-unknown` — the run refuses to skip past it.
-    Blocked {
-        /// The task the run refuses to skip past.
-        id: TaskId,
-        /// What it ended at.
-        status: TaskStatus,
-        /// Why, from its last attempt.
-        reason: Option<String>,
-    },
-    /// Stop: nothing is pending — `queue_is_empty` says whether the queue holds no tasks at
-    /// all, or holds tasks that are all already decided.
-    NothingLeft { queue_is_empty: bool },
-}
-
-/// Looks at the queue in order and decides what the run does next: the first task not
-/// already `done`. A `pending` task is attempted (or stops the run, when it is kind
-/// `human`); a task that already ended `failed`, `blocked` or `failed-unknown` stops the run
-/// without attempting anything, since the queue runs in order and nothing after it may run
-/// ahead of it.
-///
-/// # Errors
-///
-/// Fails when the journal cannot be read.
-fn pick_next_task(journal: &impl Journal) -> Result<Pick, RunError> {
-    let tasks = list_tasks(journal)?;
-    let Some(next) = tasks.iter().find(|task| task.status != TaskStatus::Done) else {
-        return Ok(Pick::NothingLeft {
-            queue_is_empty: tasks.is_empty(),
-        });
-    };
-    match next.status {
-        TaskStatus::Pending => Ok(if next.kind == TaskKind::Human {
-            Pick::Human(next.id)
-        } else {
-            Pick::Task(next.clone())
-        }),
-        TaskStatus::Failed | TaskStatus::Blocked | TaskStatus::FailedUnknown => {
-            let reason = crate::attempt::last_attempt(journal, next.id)?
-                .and_then(|attempt| attempt.ended)
-                .and_then(|ended| ended.reason);
-            Ok(Pick::Blocked {
-                id: next.id,
-                status: next.status,
-                reason,
-            })
-        }
-        TaskStatus::Running | TaskStatus::Cancelled | TaskStatus::Done => unreachable!(
-            "a task left running is resolved before this loop runs; cancelled and done are filtered out above"
-        ),
-    }
-}
-
-/// Why the run ends when nothing is left pending: `Completed` when this run attempted
-/// something first, otherwise `EmptyQueue` or `NothingPending` depending on `queue_is_empty`.
-fn end_when_nothing_left(attempted: &[Attempted], queue_is_empty: bool) -> RunEnd {
-    if !attempted.is_empty() {
-        RunEnd::Completed
-    } else if queue_is_empty {
-        RunEnd::EmptyQueue
-    } else {
-        RunEnd::NothingPending
-    }
-}
-
-/// The steps `context`'s attempts run through, in order, stopping at the first that ends
-/// badly: the provider runs on the task's whole prompt, then, when switched on, again in the
-/// reviewer role, then, when switched on, again in the tester role — both on the diff the
-/// implementation step made. Implementation is always included: it cannot be switched off.
-/// The health-check step, when the project has configured and switched one on, runs ahead of
-/// an attempt even being begun; the commit step, and then the push step when the project
-/// tracks a branch and the commit step made a commit, run after these, once they have all
-/// passed, each when switched on. None of the three spends a token, so none is one of these.
-fn active_steps(context: RunContext<'_>) -> Vec<&'static str> {
-    let mut steps = vec![IMPLEMENTATION];
-    if context.step_enabled(REVIEW_STEP) {
-        steps.push(REVIEW_STEP);
-    }
-    if context.step_enabled(TEST_STEP) {
-        steps.push(TEST_STEP);
-    }
-    steps
-}
-
-/// How many lines of a failing health check's combined output are shown to the operator.
-const HEALTH_CHECK_OUTPUT_TAIL_LINES: usize = 20;
-
-/// What running the project's health check produced.
-enum HealthCheck {
-    /// It exited zero: `duration` is how long it took.
-    Passed(Duration),
-    /// It did not: `reason` says how, `output_tail` is the end of what it printed.
-    Failed { reason: String, output_tail: String },
-}
-
-/// The last [`HEALTH_CHECK_OUTPUT_TAIL_LINES`] lines of `output`'s combined standard output
-/// and standard error.
-fn output_tail(output: &Output) -> String {
-    let mut combined = output.stdout.clone();
-    combined.extend_from_slice(&output.stderr);
-    let text = String::from_utf8_lossy(&combined);
-    let lines: Vec<&str> = text.lines().collect();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(HEALTH_CHECK_OUTPUT_TAIL_LINES)
-        .rev()
-        .copied()
-        .collect();
-    tail.join("\n")
-}
-
-/// Runs `command` with `bash -c` in `context.project_dir`, subject to `context.attempt_timeout`
-/// the same way an attempt's own steps are.
-fn run_health_check(
-    commands: &impl Commands,
-    clock: &impl Clock,
-    command: &str,
-    context: RunContext<'_>,
-) -> HealthCheck {
-    let started = clock.now();
-    let spec = CommandSpec {
-        program: "bash".to_owned(),
-        args: vec!["-c".to_owned(), command.to_owned()],
-        dir: context.project_dir.to_owned(),
-        stdin: Vec::new(),
-        timeout: context.attempt_timeout,
-    };
-    let result = commands.run(&spec);
-    let duration = clock.now().duration_since(started).unwrap_or_default();
-    health_check_outcome(result, duration)
-}
-
-/// What `run_health_check` found, turned into a [`HealthCheck`].
-fn health_check_outcome(result: Result<Output, CommandsError>, duration: Duration) -> HealthCheck {
-    let output = match result {
-        Ok(output) => output,
-        Err(error) => {
-            return HealthCheck::Failed {
-                reason: format!("the health check could not be run: {error}"),
-                output_tail: String::new(),
-            };
-        }
-    };
-    match output.exit {
-        Exit::Code(0) => HealthCheck::Passed(duration),
-        Exit::Code(code) => HealthCheck::Failed {
-            reason: format!("the health check exited with code {code}"),
-            output_tail: output_tail(&output),
-        },
-        Exit::Killed => HealthCheck::Failed {
-            reason: "the health check ran past its time limit and was killed".to_owned(),
-            output_tail: output_tail(&output),
-        },
-        Exit::Interrupted => HealthCheck::Failed {
-            reason: INTERRUPTED.to_owned(),
-            output_tail: output_tail(&output),
-        },
-    }
-}
-
-/// Records a step, named `step`, that already ran and passed, in `duration`, with `reason` —
-/// `Some` when it has something to say even though it passed, as the sync step does — as one
-/// of the steps of attempt `number` of task `id` ahead of the pipeline's own: begun and ended
-/// in the same call, since it ran before the attempt itself was begun.
-fn record_passed_step(
-    journal: &impl Journal,
-    clock: &impl Clock,
-    id: TaskId,
-    number: u32,
-    step: &str,
-    duration: Duration,
-    reason: Option<&str>,
-) -> Result<(), RunError> {
-    crate::attempt::begin_step(journal, clock, id, number, step)?;
-    crate::attempt::end_step(
-        journal,
-        clock,
-        id,
-        number,
-        step,
-        AttemptRun {
-            duration,
-            exit_code: Some(0),
-            status: TaskStatus::Done,
-            reason,
-        },
-        None,
-    )?;
-    Ok(())
-}
-
-/// Why the commit step refuses when the project directory has changes but git has not been
-/// told whose they are, and what is expected of the operator because of it.
-const IDENTITY_NOT_CONFIGURED: &str = "git identity is not configured: set it with `git config \
-    user.name \"Your Name\"` and `git config user.email you@example.com`, then run again";
-
-/// What committing everything the attempt changed, once its test step has passed, found and
-/// did.
-enum CommitOutcome {
-    /// Nothing in the project directory had changed: no commit was made.
-    NothingChanged,
-    /// A commit was made: its short hash.
-    Committed(String),
-    /// It could not commit: why, and — since this ends the task `failed` — what is expected of
-    /// the operator.
-    Refused(String),
-}
-
-/// The message the commit step gives its commit: `task`'s title as the subject, then its ID
-/// and acceptance criteria as the body. Carries no trailer of any kind — no co-author line, no
-/// tool or model named — so the commit reads as the user's own.
-fn build_commit_message(task: &Task) -> String {
-    let mut message = format!("{}\n\nTask #{}\n", task.title, task.id);
-    if !task.criteria.is_empty() {
-        message.push_str("\nAcceptance criteria:\n");
-        for criterion in &task.criteria {
-            message.push_str("- ");
-            message.push_str(criterion);
-            message.push('\n');
-        }
-    }
-    message
-}
-
-/// Commits everything changed in `context`'s project directory, for `task`, under whatever
-/// identity git is configured with there — author and committer both, since neither is ever
-/// overridden. Makes no commit, refusing nothing, when nothing had changed. Refuses, changing
-/// nothing, when the identity is not configured or git itself refuses the commit.
-fn commit_everything_changed(
-    git: &impl Git,
-    context: RunContext<'_>,
-    task: &Task,
-) -> CommitOutcome {
-    let message = build_commit_message(task);
-    match git.commit_all(context.project_dir, &message) {
-        Ok(Some(hash)) => CommitOutcome::Committed(hash),
-        Ok(None) => CommitOutcome::NothingChanged,
-        Err(CommitAllError::IdentityNotConfigured) => {
-            CommitOutcome::Refused(IDENTITY_NOT_CONFIGURED.to_owned())
-        }
-        Err(CommitAllError::Failed(reason)) => CommitOutcome::Refused(reason),
-    }
-}
-
-/// Records the commit step as one of attempt `number` of task `id`'s own steps, begun and
-/// ended in the same call since — like [`record_passed_step`]'s steps — nothing streams while
-/// it runs.
-fn record_commit_step(
-    journal: &impl Journal,
-    clock: &impl Clock,
-    id: TaskId,
-    number: u32,
-    duration: Duration,
-    status: TaskStatus,
-    reason: Option<&str>,
-) -> Result<(), RunError> {
-    crate::attempt::begin_step(journal, clock, id, number, COMMIT_STEP)?;
-    crate::attempt::end_step(
-        journal,
-        clock,
-        id,
-        number,
-        COMMIT_STEP,
-        AttemptRun {
-            duration,
-            exit_code: if status == TaskStatus::Done {
-                Some(0)
-            } else {
-                None
-            },
-            status,
-            reason,
-        },
-        None,
-    )?;
-    Ok(())
-}
-
-/// Runs the commit step for `task`'s attempt `token`, once its test step has passed: times
-/// [`commit_everything_changed`], records it as the attempt's next step, and returns how long
-/// it took together with what it found and did — whether or not it made a commit, or that it
-/// was refused, with why and what is expected of the operator.
-///
-/// # Errors
-///
-/// Fails when the journal cannot be written.
-fn run_commit_step(
-    journal: &impl Journal,
-    clock: &impl Clock,
-    git: &impl Git,
-    context: RunContext<'_>,
-    task: &Task,
-    token: &AttemptToken,
-) -> Result<(Duration, CommitOutcome), RunError> {
-    let started = clock.now();
-    let outcome = commit_everything_changed(git, context, task);
-    let duration = clock.now().duration_since(started).unwrap_or_default();
-    let (status, reason) = match &outcome {
-        CommitOutcome::NothingChanged => (TaskStatus::Done, Some("nothing was changed".to_owned())),
-        CommitOutcome::Committed(hash) => (TaskStatus::Done, Some(format!("committed as {hash}"))),
-        CommitOutcome::Refused(why) => (TaskStatus::Failed, Some(why.clone())),
-    };
-    record_commit_step(
-        journal,
-        clock,
-        task.id,
-        token.number,
-        duration,
-        status,
-        reason.as_deref(),
-    )?;
-    Ok((duration, outcome))
-}
-
-/// What pushing the commit step's commit to the project's tracked branch, and confirming the
-/// remote holds it, found and did.
-enum PushOutcome {
-    /// The remote branch's tip is now the commit that was pushed: its short hash.
-    Pushed(String),
-    /// It could not push, or could not confirm the push landed on the remote: why, and — since
-    /// this ends the task `failed` — what is expected of the operator.
-    Refused(String),
-}
-
-/// Records the push step as one of attempt `number` of task `id`'s own steps, begun and ended
-/// in the same call since — like [`record_commit_step`]'s step — nothing streams while it
-/// runs.
-fn record_push_step(
-    journal: &impl Journal,
-    clock: &impl Clock,
-    id: TaskId,
-    number: u32,
-    duration: Duration,
-    status: TaskStatus,
-    reason: Option<&str>,
-) -> Result<(), RunError> {
-    crate::attempt::begin_step(journal, clock, id, number, PUSH_STEP)?;
-    crate::attempt::end_step(
-        journal,
-        clock,
-        id,
-        number,
-        PUSH_STEP,
-        AttemptRun {
-            duration,
-            exit_code: if status == TaskStatus::Done {
-                Some(0)
-            } else {
-                None
-            },
-            status,
-            reason,
-        },
-        None,
-    )?;
-    Ok(())
-}
-
-/// Pushes `context`'s project directory's `HEAD` to `tracked_branch` (`"<remote>/<branch>"`),
-/// then confirms — with `git ls-remote`, checked live against the remote rather than any
-/// locally cached ref — that the branch's tip on the remote is now that commit: a push exiting
-/// zero is not itself proof the ref actually moved. Refuses, naming why and what is expected of
-/// the operator, when the push itself is rejected or cannot be run, or when the remote's tip
-/// does not turn out to match afterwards.
-fn push_commit(git: &impl Git, context: RunContext<'_>, tracked_branch: &str) -> PushOutcome {
-    let Some((remote, branch)) = split_tracked_branch(tracked_branch) else {
-        unreachable!("a saved tracked-branch setting always names a remote and a branch");
-    };
-    match git.push_and_confirm(context.project_dir, remote, branch) {
-        Ok(hash) => PushOutcome::Pushed(hash),
-        Err(GitPushError::Rejected) => PushOutcome::Refused(format!(
-            "{tracked_branch} has moved on since this task's commit was made; bring in the \
-             new commits and push it yourself, then run again"
-        )),
-        Err(GitPushError::Failed(reason)) => PushOutcome::Refused(reason),
-    }
-}
-
-/// Runs the push step for `task_id`'s attempt `token`, once the commit step has made a commit
-/// and the project tracks `tracked_branch`: times [`push_commit`], records it as the attempt's
-/// next step, and returns how long it took together with what it leaves the attempt at —
-/// `done`, with the remote branch confirmed to hold the commit, or `failed` with why and what
-/// is expected of the operator.
-///
-/// # Errors
-///
-/// Fails when the journal cannot be written.
-fn run_push_step(
-    journal: &impl Journal,
-    clock: &impl Clock,
-    git: &impl Git,
-    context: RunContext<'_>,
-    task_id: TaskId,
-    token: &AttemptToken,
-    tracked_branch: &str,
-) -> Result<(Duration, TaskStatus, Option<String>), RunError> {
-    let started = clock.now();
-    let outcome = push_commit(git, context, tracked_branch);
-    let duration = clock.now().duration_since(started).unwrap_or_default();
-    let (status, reason) = match outcome {
-        PushOutcome::Pushed(hash) => (
-            TaskStatus::Done,
-            Some(format!("pushed {hash} to {tracked_branch}")),
-        ),
-        PushOutcome::Refused(why) => (TaskStatus::Failed, Some(why)),
-    };
-    record_push_step(
-        journal,
-        clock,
-        task_id,
-        token.number,
-        duration,
-        status,
-        reason.as_deref(),
-    )?;
-    Ok((duration, status, reason))
-}
-
-/// The commit `HEAD` names in `context`'s project directory, right now — the baseline the
-/// review step's diff is taken against, captured before the implementation step runs so that
-/// diff shows only what the task's own attempt changed. `None` when git could not answer.
-fn current_commit(git: &impl Git, context: RunContext<'_>) -> Option<String> {
-    git.head(context.project_dir)
-}
-
-/// Everything changed in `context`'s project directory since `start_commit`, committed or
-/// still sitting uncommitted in the working tree — what the review step's prompt shows as the
-/// task's own diff. Empty when `start_commit` is `None`, or git could not produce one.
-fn diff_since(git: &impl Git, context: RunContext<'_>, start_commit: Option<&str>) -> String {
-    let Some(start_commit) = start_commit else {
-        return String::new();
-    };
-    git.diff_since(context.project_dir, start_commit)
-}
-
-/// Pulls `tracked_branch` (`"<remote>/<branch>"`) with rebase into `context.project_dir`: is
-/// refused when the directory holds uncommitted changes or the remote cannot be reached;
-/// rebases onto the tracked branch when it fetched anything new, undoing the rebase and
-/// naming every file it conflicted in when it did. Returns a message for `status` to show —
-/// how many commits were taken in, or that there were none — once it succeeded.
-fn sync_with_tracked_branch(
-    git: &impl Git,
-    tracked_branch: &str,
-    context: RunContext<'_>,
-) -> Result<String, SyncProblem> {
-    let Some((remote, branch)) = split_tracked_branch(tracked_branch) else {
-        unreachable!("a saved tracked-branch setting always names a remote and a branch");
-    };
-    match git.pull_rebase(context.project_dir, remote, branch) {
-        Ok(PullRebase::UpToDate) => Ok("nothing new".to_owned()),
-        Ok(PullRebase::TookIn(count)) => Ok(format!(
-            "took in {count} commit{} from {tracked_branch}",
-            if count == 1 { "" } else { "s" }
-        )),
-        Err(PullRebaseError::UncommittedChanges(status)) => {
-            Err(SyncProblem::UncommittedChanges(status))
-        }
-        Err(PullRebaseError::RemoteUnreachable(reason)) => {
-            Err(SyncProblem::RemoteUnreachable(reason))
-        }
-        Err(PullRebaseError::Conflict(files)) => Err(SyncProblem::Conflict(files)),
-        Err(PullRebaseError::Failed(reason)) => Err(SyncProblem::GitFailed(reason)),
-    }
-}
-
-/// What the sync ahead of a task's health check produced.
-enum Sync {
-    /// It found and, when there was anything to bring in, rebased in `message`'s worth of
-    /// commits, taking `duration`.
-    Passed { duration: Duration, message: String },
-    /// It refused to run.
-    Failed(SyncProblem),
-}
-
-/// Times [`sync_with_tracked_branch`] with `clock`.
-fn run_sync(
-    git: &impl Git,
-    clock: &impl Clock,
-    tracked_branch: &str,
-    context: RunContext<'_>,
-) -> Sync {
-    let started = clock.now();
-    match sync_with_tracked_branch(git, tracked_branch, context) {
-        Ok(message) => Sync::Passed {
-            duration: clock.now().duration_since(started).unwrap_or_default(),
-            message,
-        },
-        Err(problem) => Sync::Failed(problem),
-    }
-}
-
-/// Runs `provider` on `prompt` for `target.token`'s step `step`, timing it from `clock`.
-fn timed_provider_run(
-    commands: &impl Commands,
-    provider: &Provider,
-    clock: &impl Clock,
-    target: &RunTarget<'_>,
-    step: &str,
-    prompt: &str,
-    context: RunContext<'_>,
-) -> (Duration, Result<Output, ProviderRunError>) {
-    let started = clock.now();
-    let result = run_provider(
-        commands,
-        provider,
-        prompt,
-        StepCall {
-            token: &target.token.to_string(),
-            attempt: target.token.number,
-            step,
-        },
-        context.project_dir,
-        context.attempt_timeout,
-    );
-    (
-        clock.now().duration_since(started).unwrap_or_default(),
-        result,
-    )
-}
-
-/// The task an attempt runs, the token identifying that attempt, the whole prompt built for
-/// its implementation step, and the commit `HEAD` named before that step ran — everything
-/// [`run_steps`] needs about what it is running, as opposed to how. `start_commit` is `None`
-/// when it could not be captured; the review step's diff is then empty rather than the run
-/// failing over it.
-struct RunTarget<'a> {
-    task: &'a Task,
-    token: &'a AttemptToken,
-    prompt: &'a str,
-    start_commit: Option<&'a str>,
-}
-
-/// The two ports an attempt's steps reach the outside world through: running a process, and
-/// asking git. Bundled so a step that needs both takes one argument for them rather than two.
-struct Ports<'a, C, G> {
-    commands: &'a C,
-    git: &'a G,
-}
-
-// A manual, bound-free impl: `Ports` holds only references, which are always `Copy`,
-// whatever `C` and `G` themselves are.
-impl<C, G> Clone for Ports<'_, C, G> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<C, G> Copy for Ports<'_, C, G> {}
-
-/// The prompt step `step` of `target`'s attempt runs the provider on: `target`'s own, built
-/// once for the implementation step, or a freshly built reviewer's or tester's prompt — the
-/// task and the diff since `target.start_commit` — for the review or test step.
-fn prompt_for_step(
-    git: &impl Git,
-    context: RunContext<'_>,
-    target: &RunTarget<'_>,
-    step: &str,
-) -> String {
-    if step == REVIEW_STEP {
-        let diff = diff_since(git, context, target.start_commit);
-        build_review_prompt(target.task, target.token, context.binary_path, &diff)
-    } else if step == TEST_STEP {
-        let diff = diff_since(git, context, target.start_commit);
-        build_test_prompt(target.task, target.token, context.binary_path, &diff)
-    } else {
-        target.prompt.to_owned()
-    }
-}
-
-/// Runs `target`'s attempt through `steps`, in order: begins each step, runs the provider on
-/// its prompt for it, decides its outcome, and ends it with that outcome — stopping at the
-/// first step that does not end `done`, so a step after it is never begun and leaves no event
-/// in the journal. Returns the steps' combined duration and the outcome of the last one run,
-/// which becomes the whole attempt's.
-///
-/// # Errors
-///
-/// Fails when the journal cannot be read or written.
-fn run_steps(
-    journal: &impl Journal,
-    clock: &impl Clock,
-    ports: Ports<'_, impl Commands, impl Git>,
-    provider: &Provider,
-    context: RunContext<'_>,
-    target: &RunTarget<'_>,
-    steps: &[&str],
-) -> Result<(Duration, Option<i32>, TaskStatus, Option<String>), RunError> {
-    let mut total = Duration::ZERO;
-    let mut exit_code = None;
-    let mut status = TaskStatus::Done;
-    let mut reason = None;
-    for &step in steps {
-        crate::attempt::begin_step(journal, clock, target.task.id, target.token.number, step)?;
-        let prompt = prompt_for_step(ports.git, context, target, step);
-        let (duration, result) = timed_provider_run(
-            ports.commands,
-            provider,
-            clock,
-            target,
-            step,
-            &prompt,
-            context,
-        );
-        let outcome = attempt_outcome(journal, target.task, target.token, step, result)?;
-        exit_code = outcome.exit_code;
-        status = outcome.status;
-        reason = outcome.reason;
-        total += duration;
-        crate::attempt::end_step(
-            journal,
-            clock,
-            target.task.id,
-            target.token.number,
-            step,
-            AttemptRun {
-                duration,
-                exit_code,
-                status,
-                reason: reason.as_deref(),
-            },
-            outcome.reported,
-        )?;
-        if status != TaskStatus::Done {
-            break;
-        }
-    }
-    Ok((total, exit_code, status, reason))
-}
-
-/// One step that already ran and passed before the attempt it belongs to was even begun — the
-/// sync and the health check, when the project has configured them — recorded as the
-/// attempt's own first steps, in the order they ran.
-struct PreStep {
-    /// The step's name: [`SYNC_STEP`] or [`HEALTH_CHECK_STEP`].
-    name: &'static str,
-    /// How long it took.
-    duration: Duration,
-    /// What it has to say even though it passed — the sync step's own message, or `None` for
-    /// the health check, which has nothing to add.
-    reason: Option<String>,
-}
-
-/// Runs one attempt at `task` with `provider`: begins it, records `pre_steps` as the attempt's
-/// own first steps in order, builds the prompt, runs it through the pipeline's steps, and ends
-/// the attempt with the outcome they left it at.
-///
-/// # Errors
-///
-/// Fails when the journal cannot be read or written.
-fn run_one_attempt(
-    journal: &impl Journal,
-    clock: &impl Clock,
-    ports: Ports<'_, impl Commands, impl Git>,
-    provider: &Provider,
-    context: RunContext<'_>,
-    task: &Task,
-    pre_steps: &[PreStep],
-) -> Result<Attempted, RunError> {
-    let number = crate::attempt::begin_attempt_running(journal, clock, task.id, provider.name)?;
-    let mut pre_duration = Duration::ZERO;
-    for pre_step in pre_steps {
-        record_passed_step(
-            journal,
-            clock,
-            task.id,
-            number,
-            pre_step.name,
-            pre_step.duration,
-            pre_step.reason.as_deref(),
-        )?;
-        pre_duration += pre_step.duration;
-    }
-    let start_commit = current_commit(ports.git, context);
-    let token = AttemptToken::new(context.project_name, task.id, number);
-    let prompt = build_prompt(task, &token, context.binary_path);
-    let target = RunTarget {
-        task,
-        token: &token,
-        prompt: &prompt,
-        start_commit: start_commit.as_deref(),
-    };
-
-    let steps = active_steps(context);
-    let (steps_duration, exit_code, steps_status, steps_reason) =
-        run_steps(journal, clock, ports, provider, context, &target, &steps)?;
-
-    let (post_duration, status, reason) =
-        if steps_status == TaskStatus::Done && context.step_enabled(COMMIT_STEP) {
-            let (commit_duration, commit_outcome) =
-                run_commit_step(journal, clock, ports.git, context, task, &token)?;
-            match commit_outcome {
-                CommitOutcome::Committed(_) => {
-                    if let Some(tracked_branch) = context.tracked_branch
-                        && context.step_enabled(PUSH_STEP)
-                    {
-                        let (push_duration, push_status, push_reason) = run_push_step(
-                            journal,
-                            clock,
-                            ports.git,
-                            context,
-                            task.id,
-                            &token,
-                            tracked_branch,
-                        )?;
-                        let duration = commit_duration + push_duration;
-                        if push_status == TaskStatus::Done {
-                            // Neither the commit nor the push step's own reason — hash, branch,
-                            // "nothing to commit" — belongs on the whole attempt's, whose
-                            // `reason` means why it is not `done`.
-                            (duration, steps_status, steps_reason)
-                        } else {
-                            (duration, push_status, push_reason)
-                        }
-                    } else {
-                        (commit_duration, steps_status, steps_reason)
-                    }
-                }
-                CommitOutcome::NothingChanged => (commit_duration, steps_status, steps_reason),
-                CommitOutcome::Refused(why) => (commit_duration, TaskStatus::Failed, Some(why)),
-            }
-        } else {
-            (Duration::ZERO, steps_status, steps_reason)
-        };
-
-    crate::attempt::end_attempt(
-        journal,
-        task.id,
-        token.number,
-        AttemptRun {
-            duration: pre_duration + steps_duration + post_duration,
-            exit_code,
-            status,
-            reason: reason.as_deref(),
-        },
-        clock.now(),
-    )?;
-    Ok(Attempted {
-        id: task.id,
-        status,
-        reason,
-    })
-}
-
 /// Picks and attempts pending tasks, one at a time, until the queue stops the run: a task of
 /// kind `human`, an attempt that does not report `done`, an earlier task already left
-/// `failed`, `blocked` or `failed-unknown`, or nothing left pending.
+/// `failed`, `blocked` or `failed-unknown`, or nothing left pending. Ahead of each attempt,
+/// runs the sync and health-check gates of [`crate::steps`] when the project has configured
+/// and switched them on; either refusing to run stops the run before an attempt is even
+/// begun, leaving the task `pending`.
 ///
 /// # Errors
 ///
@@ -1118,16 +245,19 @@ fn attempt_loop(
         match pick_next_task(journal)? {
             Pick::Task(task) => {
                 let mut pre_steps = Vec::new();
-                if let Some(tracked_branch) = context.tracked_branch
-                    && context.step_enabled(SYNC_STEP)
-                {
-                    match run_sync(git, clock, tracked_branch, context) {
-                        Sync::Passed { duration, message } => pre_steps.push(PreStep {
-                            name: SYNC_STEP,
-                            duration,
-                            reason: Some(message),
-                        }),
-                        Sync::Failed(problem) => {
+                if steps::sync::enabled(context) {
+                    let Some(tracked_branch) = context.tracked_branch else {
+                        unreachable!("sync::enabled only returns true when a branch is tracked");
+                    };
+                    match steps::sync::run(git, clock, tracked_branch, context) {
+                        steps::sync::Sync::Passed { duration, message } => {
+                            pre_steps.push(steps::PreStep {
+                                name: crate::SYNC_STEP,
+                                duration,
+                                reason: Some(message),
+                            });
+                        }
+                        steps::sync::Sync::Failed(problem) => {
                             let end = RunEnd::SyncFailed {
                                 id: task.id,
                                 tracked_branch: tracked_branch.to_owned(),
@@ -1137,16 +267,21 @@ fn attempt_loop(
                         }
                     }
                 }
-                if let Some(command) = context.health_check_command
-                    && context.step_enabled(HEALTH_CHECK_STEP)
-                {
-                    match run_health_check(commands, clock, command, context) {
-                        HealthCheck::Passed(duration) => pre_steps.push(PreStep {
-                            name: HEALTH_CHECK_STEP,
-                            duration,
-                            reason: None,
-                        }),
-                        HealthCheck::Failed {
+                if steps::health_check::enabled(context) {
+                    let Some(command) = context.health_check_command else {
+                        unreachable!(
+                            "health_check::enabled only returns true when a command is configured"
+                        );
+                    };
+                    match steps::health_check::run(commands, clock, command, context) {
+                        steps::health_check::HealthCheck::Passed(duration) => {
+                            pre_steps.push(steps::PreStep {
+                                name: crate::HEALTH_CHECK_STEP,
+                                duration,
+                                reason: None,
+                            });
+                        }
+                        steps::health_check::HealthCheck::Failed {
                             reason,
                             output_tail,
                         } => {
@@ -1160,14 +295,19 @@ fn attempt_loop(
                         }
                     }
                 }
-                let result = run_one_attempt(
+                let deps = steps::Deps {
                     journal,
                     clock,
-                    Ports { commands, git },
+                    commands,
+                    git,
                     provider,
+                };
+                let result = steps::run_one_attempt(
+                    deps,
                     context,
                     &task,
                     &pre_steps,
+                    &steps::default_steps(),
                 )?;
                 let status = result.status;
                 attempted.push(result);
@@ -1234,83 +374,6 @@ pub fn run_queue(
     attempt_loop(journal, clock, commands, git, provider, context)
 }
 
-/// What a step ended at: its exit code (`None` when the provider could not be run at all, or
-/// was killed), the resulting status, the reason when it is not `done`, and the fine-grained
-/// outcome the agent itself reported, when it reported anything.
-struct StepOutcome {
-    exit_code: Option<i32>,
-    status: TaskStatus,
-    reason: Option<String>,
-    reported: Option<Outcome>,
-}
-
-impl StepOutcome {
-    /// No report could ever have been read for this step: the provider itself never ran to
-    /// completion, so there is nothing to distinguish beyond `reason`.
-    fn unreported(reason: String) -> Self {
-        Self {
-            exit_code: None,
-            status: TaskStatus::FailedUnknown,
-            reason: Some(reason),
-            reported: None,
-        }
-    }
-}
-
-/// What attempt `token` of `task`'s step `step` ended at, given what running the provider
-/// produced for it.
-fn attempt_outcome(
-    journal: &impl Journal,
-    task: &Task,
-    token: &AttemptToken,
-    step: &str,
-    result: Result<Output, ProviderRunError>,
-) -> Result<StepOutcome, RunError> {
-    let output = match result {
-        Ok(output) => output,
-        Err(error) => {
-            return Ok(StepOutcome::unreported(format!(
-                "the provider could not run: {error}"
-            )));
-        }
-    };
-    let exit_code = match output.exit {
-        Exit::Code(code) => code,
-        Exit::Killed => {
-            return Ok(StepOutcome::unreported(
-                "the provider ran past its time limit and was killed".to_owned(),
-            ));
-        }
-        Exit::Interrupted => {
-            return Ok(StepOutcome::unreported(INTERRUPTED.to_owned()));
-        }
-    };
-    let report = crate::attempt::report_of_step(journal, task.id, token.number, step)?;
-    let reported = report.as_ref().map(|(outcome, _)| *outcome);
-    let (status, reason) = match report {
-        Some((Outcome::Done | Outcome::Approved | Outcome::Accepted, _)) => {
-            (TaskStatus::Done, None)
-        }
-        Some((
-            Outcome::Failed | Outcome::TooLarge | Outcome::ChangesRequested | Outcome::Rejected,
-            reason,
-        )) => (TaskStatus::Failed, reason),
-        Some((Outcome::NeedsInput, reason)) => (TaskStatus::Blocked, reason),
-        None => (
-            TaskStatus::FailedUnknown,
-            Some(format!(
-                "the provider exited with code {exit_code} and reported nothing"
-            )),
-        ),
-    };
-    Ok(StepOutcome {
-        exit_code: Some(exit_code),
-        status,
-        reason,
-        reported,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -1319,8 +382,10 @@ mod tests {
 
     use crate::fakes::{FakeClock, FakeCommands, FakeGit, FakeJournal, FakeRunLock, at, draft};
     use crate::{
-        Event, Exit, Outcome, Placement, ProviderCommand, TaskDraft, TaskKind, TaskStatus,
-        add_task, report,
+        AttemptRun, AttemptToken, COMMIT_STEP, CommandSpec, Commands, CommandsError,
+        CommitAllError, Event, Exit, HEALTH_CHECK_STEP, IMPLEMENTATION, Outcome, Output, PUSH_STEP,
+        Placement, Provider, ProviderCommand, PullRebase, PullRebaseError, REVIEW_STEP, SYNC_STEP,
+        TEST_STEP, TaskDraft, TaskId, TaskKind, TaskStatus, add_task, report,
     };
 
     use super::*;
@@ -1386,84 +451,6 @@ mod tests {
             &FakeRunLock::free(),
             context(timeout),
         )
-    }
-
-    #[test]
-    fn build_prompt_carries_the_title_body_criteria_and_the_exact_report_command() {
-        let task = Task {
-            id: TaskId(7),
-            position: 1,
-            title: "Do the thing".to_owned(),
-            body: "Some body text.".to_owned(),
-            criteria: vec!["first thing".to_owned(), "second thing".to_owned()],
-            kind: TaskKind::Agent,
-            links: vec![],
-            status: TaskStatus::Running,
-            created_at: at(1),
-        };
-        let token = AttemptToken::new("proj", TaskId(7), 3);
-        let binary_path = Path::new("/opt/ktask-rs/bin/ktask-rs");
-        let prompt = build_prompt(&task, &token, binary_path);
-        assert!(prompt.contains("Do the thing"), "{prompt}");
-        assert!(prompt.contains("Some body text."), "{prompt}");
-        assert!(prompt.contains("- first thing"), "{prompt}");
-        assert!(prompt.contains("- second thing"), "{prompt}");
-        assert!(
-            prompt.contains("/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 done"),
-            "{prompt}"
-        );
-        assert!(
-            prompt.contains("/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 failed --reason"),
-            "{prompt}"
-        );
-        assert!(
-            prompt.contains(
-                "/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 needs-input --reason"
-            ),
-            "{prompt}"
-        );
-        assert!(
-            prompt
-                .contains("/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 too-large --reason"),
-            "{prompt}"
-        );
-        // No line names the binary by its bare name alone: an agent that runs the shown
-        // command must never depend on `ktask-rs` being on its own `PATH`.
-        assert!(!prompt.contains("\n    ktask-rs report"), "{prompt}");
-    }
-
-    #[test]
-    fn build_review_prompt_carries_the_title_criteria_the_diff_and_the_exact_report_commands() {
-        let task = Task {
-            id: TaskId(7),
-            position: 1,
-            title: "Do the thing".to_owned(),
-            body: "Some body text.".to_owned(),
-            criteria: vec!["first thing".to_owned()],
-            kind: TaskKind::Agent,
-            links: vec![],
-            status: TaskStatus::Running,
-            created_at: at(1),
-        };
-        let token = AttemptToken::new("proj", TaskId(7), 3);
-        let binary_path = Path::new("/opt/ktask-rs/bin/ktask-rs");
-        let diff = "--- a/file\n+++ b/file\n+added line\n";
-        let prompt = build_review_prompt(&task, &token, binary_path, diff);
-        assert!(prompt.contains("Do the thing"), "{prompt}");
-        assert!(prompt.contains("Some body text."), "{prompt}");
-        assert!(prompt.contains("- first thing"), "{prompt}");
-        assert!(prompt.contains("+added line"), "{prompt}");
-        assert!(
-            prompt.contains("/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 approved"),
-            "{prompt}"
-        );
-        assert!(
-            prompt.contains(
-                "/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 changes-requested --reason"
-            ),
-            "{prompt}"
-        );
-        assert!(!prompt.contains("\n    ktask-rs report"), "{prompt}");
     }
 
     #[test]
@@ -2922,54 +1909,6 @@ mod tests {
     }
 
     #[test]
-    fn a_step_that_ends_badly_stops_the_sequence_and_later_steps_leave_no_event() {
-        let journal = journal_of_abc();
-        let number =
-            crate::attempt::begin_attempt_running(&journal, &clock(), TaskId(1), "test").unwrap();
-        let token = AttemptToken::new("proj", TaskId(1), number);
-        let task = crate::list_all_tasks(&journal).unwrap().remove(0);
-        let commands = ReportingCommands {
-            journal: &journal,
-            outcome: Outcome::Failed,
-            exit: Exit::Code(0),
-        };
-
-        let target = RunTarget {
-            task: &task,
-            token: &token,
-            prompt: "prompt",
-            start_commit: None,
-        };
-        let (_, _, status, reason) = run_steps(
-            &journal,
-            &clock(),
-            Ports {
-                commands: &commands,
-                git: &FakeGit::default(),
-            },
-            &test_provider(),
-            context(Duration::from_secs(60)),
-            &target,
-            &["one", "two"],
-        )
-        .unwrap();
-
-        assert_eq!(status, TaskStatus::Failed);
-        assert_eq!(reason, Some("because".to_owned()));
-        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
-            .unwrap()
-            .unwrap();
-        // Only the first, failing step ran: the second is never begun, so it leaves no event
-        // and no line of its own.
-        assert_eq!(attempt.steps.len(), 1, "{:?}", attempt.steps);
-        assert_eq!(attempt.steps[0].name, "one");
-        assert_eq!(
-            attempt.steps[0].ended.as_ref().unwrap().status,
-            TaskStatus::Failed
-        );
-    }
-
-    #[test]
     fn a_journal_failure_is_passed_on() {
         let failure = JournalError::new("disk on fire");
         let journal = FakeJournal::failing(failure.clone());
@@ -3234,27 +2173,42 @@ mod tests {
     }
 
     #[test]
-    fn the_commit_message_carries_the_title_id_and_criteria_and_no_trailer() {
-        let task = Task {
-            id: TaskId(7),
-            position: 1,
-            title: "Do the thing".to_owned(),
-            body: "ignored here".to_owned(),
-            criteria: vec!["first thing".to_owned(), "second thing".to_owned()],
-            kind: TaskKind::Agent,
-            links: vec![],
-            status: TaskStatus::Running,
-            created_at: at(1),
+    fn a_push_confirmed_on_the_remote_ends_the_task_done_with_its_own_line() {
+        let journal = journal_of_abc();
+        let commands = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
         };
-        let message = build_commit_message(&task);
-        assert!(message.starts_with("Do the thing\n\n"), "{message}");
-        assert!(message.contains("Task #7"), "{message}");
-        assert!(message.contains("- first thing"), "{message}");
-        assert!(message.contains("- second thing"), "{message}");
-        let lower = message.to_lowercase();
-        assert!(!lower.contains("co-authored-by"), "{message}");
-        assert!(!lower.contains("claude"), "{message}");
-        assert!(!lower.contains("generated"), "{message}");
+        let git = FakeGit {
+            commit_all: Some(Ok(Some("abcdef1".to_owned()))),
+            push: Some(Ok("abcdef1".to_owned())),
+            ..FakeGit::default()
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &git,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Done
+        );
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        let push = attempt.steps.last().expect("the push step ran");
+        assert_eq!(push.name, PUSH_STEP);
+        let end = push.ended.as_ref().expect("the step ended");
+        assert_eq!(end.status, TaskStatus::Done);
+        assert_eq!(end.reason.as_deref(), Some("pushed abcdef1 to origin/main"));
+        assert!(*git.push_calls.borrow() >= 1);
     }
 
     #[test]
@@ -3422,45 +2376,6 @@ mod tests {
     }
 
     #[test]
-    fn a_push_confirmed_on_the_remote_ends_the_task_done_with_its_own_line() {
-        let journal = journal_of_abc();
-        let commands = ReportingCommands {
-            journal: &journal,
-            outcome: Outcome::Done,
-            exit: Exit::Code(0),
-        };
-        let git = FakeGit {
-            commit_all: Some(Ok(Some("abcdef1".to_owned()))),
-            push: Some(Ok("abcdef1".to_owned())),
-            ..FakeGit::default()
-        };
-        let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &test_provider(),
-            &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
-        )
-        .unwrap();
-        assert_eq!(report.end, RunEnd::Completed);
-        assert_eq!(
-            crate::list_all_tasks(&journal).unwrap()[0].status,
-            TaskStatus::Done
-        );
-        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
-            .unwrap()
-            .unwrap();
-        let push = attempt.steps.last().expect("the push step ran");
-        assert_eq!(push.name, PUSH_STEP);
-        let end = push.ended.as_ref().expect("the step ended");
-        assert_eq!(end.status, TaskStatus::Done);
-        assert_eq!(end.reason.as_deref(), Some("pushed abcdef1 to origin/main"));
-        assert!(*git.push_calls.borrow() >= 1);
-    }
-
-    #[test]
     fn a_push_rejected_because_the_remote_moved_on_ends_the_task_failed_and_says_so() {
         let journal = journal_of_abc();
         let commands = ReportingCommands {
@@ -3470,7 +2385,7 @@ mod tests {
         };
         let git = FakeGit {
             commit_all: Some(Ok(Some("abc1234".to_owned()))),
-            push: Some(Err(GitPushError::Rejected)),
+            push: Some(Err(crate::PushError::Rejected)),
             ..FakeGit::default()
         };
         let report = run_queue(
@@ -3509,7 +2424,7 @@ mod tests {
         };
         let git = FakeGit {
             commit_all: Some(Ok(Some("abc1234".to_owned()))),
-            push: Some(Err(GitPushError::Failed(
+            push: Some(Err(crate::PushError::Failed(
                 "`git push origin HEAD:refs/heads/main` exited with code 128: fatal: could not \
                  read from remote repository"
                     .to_owned(),

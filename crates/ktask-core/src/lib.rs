@@ -9,6 +9,7 @@ mod git;
 mod import;
 mod journal;
 mod lock;
+mod pick;
 mod project;
 mod provider;
 mod queue;
@@ -19,6 +20,7 @@ mod resolve;
 mod run;
 mod settings;
 mod status;
+mod steps;
 mod task;
 
 pub use clock::Clock;
