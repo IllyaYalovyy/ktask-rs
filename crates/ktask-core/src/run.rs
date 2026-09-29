@@ -222,6 +222,96 @@ fn account_for_interrupted_run(
     }))
 }
 
+/// Runs the sync gate ahead of `task_id`'s attempt, when the project has it configured and
+/// switched on: the pre-step to record when it passes, `None` when it is not enabled, or the
+/// [`RunEnd`] that stops the run — before an attempt is even begun — when it refuses.
+fn run_sync_gate(
+    git: &dyn Git,
+    clock: &dyn Clock,
+    context: RunContext<'_>,
+    task_id: TaskId,
+) -> Result<Option<steps::PreStep>, RunEnd> {
+    if !steps::sync::enabled(context) {
+        return Ok(None);
+    }
+    let Some(tracked_branch) = context.tracked_branch else {
+        unreachable!("sync::enabled only returns true when a branch is tracked");
+    };
+    match steps::sync::run(git, clock, tracked_branch, context) {
+        steps::sync::Sync::Passed { duration, message } => Ok(Some(steps::PreStep {
+            name: crate::SYNC_STEP,
+            duration,
+            reason: Some(message),
+        })),
+        steps::sync::Sync::Failed(problem) => Err(RunEnd::SyncFailed {
+            id: task_id,
+            tracked_branch: tracked_branch.to_owned(),
+            problem,
+        }),
+    }
+}
+
+/// Runs the health-check gate ahead of `task_id`'s attempt, when the project has it
+/// configured and switched on: the pre-step to record when it passes, `None` when it is not
+/// enabled, or the [`RunEnd`] that stops the run — before an attempt is even begun — when it
+/// fails.
+fn run_health_check_gate(
+    commands: &dyn Commands,
+    clock: &dyn Clock,
+    context: RunContext<'_>,
+    task_id: TaskId,
+) -> Result<Option<steps::PreStep>, RunEnd> {
+    if !steps::health_check::enabled(context) {
+        return Ok(None);
+    }
+    let Some(command) = context.health_check_command else {
+        unreachable!("health_check::enabled only returns true when a command is configured");
+    };
+    match steps::health_check::run(commands, clock, command, context) {
+        steps::health_check::HealthCheck::Passed(duration) => Ok(Some(steps::PreStep {
+            name: crate::HEALTH_CHECK_STEP,
+            duration,
+            reason: None,
+        })),
+        steps::health_check::HealthCheck::Failed {
+            reason,
+            output_tail,
+        } => Err(RunEnd::HealthCheckFailed {
+            id: task_id,
+            command: command.to_owned(),
+            reason,
+            output_tail,
+        }),
+    }
+}
+
+/// Runs `task`'s sync and health-check gates, then its one attempt, appending its result to
+/// `attempted`. `Ok(Some(end))` when the run stops here — a gate refused, or the attempt did
+/// not report `done` — `Ok(None)` to carry on to the next task.
+fn attempt_task(
+    deps: steps::Deps<'_>,
+    context: RunContext<'_>,
+    task: &crate::Task,
+    attempted: &mut Vec<Attempted>,
+) -> Result<Option<RunEnd>, RunError> {
+    let mut pre_steps = Vec::new();
+    match run_sync_gate(deps.git, deps.clock, context, task.id) {
+        Ok(step) => pre_steps.extend(step),
+        Err(end) => return Ok(Some(end)),
+    }
+    match run_health_check_gate(deps.commands, deps.clock, context, task.id) {
+        Ok(step) => pre_steps.extend(step),
+        Err(end) => return Ok(Some(end)),
+    }
+    let result = steps::run_one_attempt(deps, context, task, &pre_steps, &steps::default_steps())?;
+    let status = result.status;
+    attempted.push(result);
+    Ok((status != TaskStatus::Done).then_some(RunEnd::Stopped {
+        id: task.id,
+        status,
+    }))
+}
+
 /// Picks and attempts pending tasks, one at a time, until the queue stops the run: a task of
 /// kind `human`, an attempt that does not report `done`, an earlier task already left
 /// `failed`, `blocked` or `failed-unknown`, or nothing left pending. Ahead of each attempt,
@@ -240,82 +330,19 @@ fn attempt_loop(
     provider: &Provider,
     context: RunContext<'_>,
 ) -> Result<RunReport, RunError> {
+    let deps = steps::Deps {
+        journal,
+        clock,
+        commands,
+        git,
+        provider,
+    };
     let mut attempted = Vec::new();
     loop {
         match pick_next_task(journal)? {
             Pick::Task(task) => {
-                let mut pre_steps = Vec::new();
-                if steps::sync::enabled(context) {
-                    let Some(tracked_branch) = context.tracked_branch else {
-                        unreachable!("sync::enabled only returns true when a branch is tracked");
-                    };
-                    match steps::sync::run(git, clock, tracked_branch, context) {
-                        steps::sync::Sync::Passed { duration, message } => {
-                            pre_steps.push(steps::PreStep {
-                                name: crate::SYNC_STEP,
-                                duration,
-                                reason: Some(message),
-                            });
-                        }
-                        steps::sync::Sync::Failed(problem) => {
-                            let end = RunEnd::SyncFailed {
-                                id: task.id,
-                                tracked_branch: tracked_branch.to_owned(),
-                                problem,
-                            };
-                            return Ok(RunReport { attempted, end });
-                        }
-                    }
-                }
-                if steps::health_check::enabled(context) {
-                    let Some(command) = context.health_check_command else {
-                        unreachable!(
-                            "health_check::enabled only returns true when a command is configured"
-                        );
-                    };
-                    match steps::health_check::run(commands, clock, command, context) {
-                        steps::health_check::HealthCheck::Passed(duration) => {
-                            pre_steps.push(steps::PreStep {
-                                name: crate::HEALTH_CHECK_STEP,
-                                duration,
-                                reason: None,
-                            });
-                        }
-                        steps::health_check::HealthCheck::Failed {
-                            reason,
-                            output_tail,
-                        } => {
-                            let end = RunEnd::HealthCheckFailed {
-                                id: task.id,
-                                command: command.to_owned(),
-                                reason,
-                                output_tail,
-                            };
-                            return Ok(RunReport { attempted, end });
-                        }
-                    }
-                }
-                let deps = steps::Deps {
-                    journal,
-                    clock,
-                    commands,
-                    git,
-                    provider,
-                };
-                let result = steps::run_one_attempt(
-                    deps,
-                    context,
-                    &task,
-                    &pre_steps,
-                    &steps::default_steps(),
-                )?;
-                let status = result.status;
-                attempted.push(result);
-                if status != TaskStatus::Done {
-                    let end = RunEnd::Stopped {
-                        id: task.id,
-                        status,
-                    };
+                let end = attempt_task(deps, context, &task, &mut attempted)?;
+                if let Some(end) = end {
                     return Ok(RunReport { attempted, end });
                 }
             }
