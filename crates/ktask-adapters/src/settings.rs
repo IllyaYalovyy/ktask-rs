@@ -12,12 +12,15 @@ use serde::{Deserialize, Serialize};
 struct SettingsFile {
     #[serde(rename = "attempt-timeout", skip_serializing_if = "Option::is_none")]
     attempt_timeout: Option<u64>,
+    #[serde(rename = "health-check", skip_serializing_if = "Option::is_none")]
+    health_check: Option<String>,
 }
 
 impl From<Settings> for SettingsFile {
     fn from(settings: Settings) -> Self {
         Self {
             attempt_timeout: settings.attempt_timeout_seconds,
+            health_check: settings.health_check_command,
         }
     }
 }
@@ -26,6 +29,7 @@ impl From<SettingsFile> for Settings {
     fn from(file: SettingsFile) -> Self {
         Self {
             attempt_timeout_seconds: file.attempt_timeout,
+            health_check_command: file.health_check,
         }
     }
 }
@@ -69,7 +73,7 @@ impl SettingsStore for TomlSettingsStore {
             std::fs::create_dir_all(directory)
                 .map_err(|error| failed("cannot create the state directory", directory, &error))?;
         }
-        let file = SettingsFile::from(*settings);
+        let file = SettingsFile::from(settings.clone());
         let text = toml::to_string_pretty(&file)
             .map_err(|error| failed("cannot encode the settings file", &self.path, &error))?;
         std::fs::write(&self.path, text)
@@ -97,9 +101,10 @@ mod tests {
         let store = TomlSettingsStore::new(path.clone());
         let settings = Settings {
             attempt_timeout_seconds: Some(7_200),
+            health_check_command: Some("cargo test".to_owned()),
         };
         store.save(&settings).unwrap();
-        assert_eq!(store.load(), Ok(settings));
+        assert_eq!(store.load(), Ok(settings.clone()));
         assert_eq!(TomlSettingsStore::new(path).load(), Ok(settings));
     }
 
@@ -111,6 +116,7 @@ mod tests {
         store
             .save(&Settings {
                 attempt_timeout_seconds: Some(60),
+                health_check_command: None,
             })
             .unwrap();
         assert!(path.is_file());

@@ -216,7 +216,7 @@ impl SettingsStore for FakeSettingsStore {
     fn load(&self) -> Result<Settings, SettingsError> {
         match &self.failure {
             Some(failure) => Err(failure.clone()),
-            None => Ok(*self.settings.borrow()),
+            None => Ok(self.settings.borrow().clone()),
         }
     }
 
@@ -224,7 +224,7 @@ impl SettingsStore for FakeSettingsStore {
         if let Some(failure) = &self.failure {
             return Err(failure.clone());
         }
-        *self.settings.borrow_mut() = *settings;
+        *self.settings.borrow_mut() = settings.clone();
         Ok(())
     }
 }
