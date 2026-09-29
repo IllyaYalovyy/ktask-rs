@@ -336,7 +336,7 @@ fn with_cancelled_tasks_shown_the_removed_task_stays_in_its_place_and_the_select
 }
 
 #[test]
-fn d_on_a_cancelled_task_asks_nothing() -> Result<()> {
+fn d_on_a_cancelled_task_shows_the_same_refusal_as_remove_and_asks_nothing() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.cli(&["remove", "1"])?;
     let mut terminal = open_on(&fixture, "bravo")?;
@@ -345,15 +345,32 @@ fn d_on_a_cancelled_task_asks_nothing() -> Result<()> {
         screen.contents().contains("cancelled  agent  alpha")
     })?;
     terminal.send("k")?;
-    wait_selected(&terminal, "alpha")?;
+    let row = wait_selected(&terminal, "alpha")?;
     let before = terminal.screen();
 
     terminal.send("d")?;
-    // Keys are handled in order: this one is answered by the queue, not by a question.
+
+    let screen = terminal.wait_for("the refusal", |screen| {
+        screen.contents().contains("task 1 is already cancelled")
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[3], "task 1 is already cancelled");
+    assert!(!screen.contains("y to remove"), "{screen}");
+    assert_eq!(marked(&screen), [row], "the refusal asked nothing");
+    // The same words the CLI gives for removing the same task again.
+    let cli_refusal = fixture.sandbox.run(&fixture.repository, &["remove", "1"])?;
+    assert_eq!(cli_refusal.code, Some(2));
+    assert!(
+        cli_refusal.stderr.contains(&lines[3]),
+        "{}",
+        cli_refusal.stderr
+    );
+
     terminal.send("j")?;
     let screen = wait_selected_screen(&terminal, "bravo")?;
-
     assert!(!screen.contains("Remove #"));
+    assert!(!screen.contains("is already cancelled"));
+
     terminal.send("k")?;
     let screen = wait_selected_screen(&terminal, "alpha")?;
     assert_eq!(screen, before);

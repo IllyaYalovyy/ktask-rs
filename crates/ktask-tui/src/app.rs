@@ -1,6 +1,8 @@
 //! The state of the terminal interface and how events change it.
 
-use ktask_core::{Placement, QueueView, SettingView, TaskDraft, TaskId, TaskStatus};
+use ktask_core::{
+    AppendError, CancelError, Placement, QueueView, SettingView, TaskDraft, TaskId, TaskStatus,
+};
 use ratatui::crossterm::event::KeyCode;
 
 use crate::form::Form;
@@ -19,9 +21,9 @@ pub struct App {
     pub help: bool,
     /// What the operator is being asked to confirm, if anything; the answer is the next key.
     pub confirming: Option<Confirming>,
-    /// The task `d` just refused to remove because it is running: shown until the next key,
-    /// or until it is no longer running. No confirmation is asked for it.
-    pub refused: Option<TaskId>,
+    /// A key that named a task was refused at once, without asking or opening anything: shown
+    /// until the next key, or until the condition that raised it no longer holds.
+    pub refused: Option<Refusal>,
     /// The task whose removal was confirmed: the loop carries it out and clears this.
     pub removal: Option<TaskId>,
     /// The form a new task is written in, while it is open; it covers the queue.
@@ -59,6 +61,32 @@ pub enum Confirming {
     Removal(TaskId),
     /// Discarding the open form's content, after a first Ctrl-C found something typed in it.
     Discard,
+}
+
+/// Why [`App::refused`] holds what it does: the same reason, in the same words, that
+/// `ktask-rs remove` or `ktask-rs add` gives for the same situation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// `d` on the selected task, which is running: `ktask-rs remove` would refuse it too.
+    Running(TaskId),
+    /// `d` on the selected task, which is cancelled already: `ktask-rs remove` would refuse
+    /// it too.
+    AlreadyCancelled(TaskId),
+    /// `o` or `O` next to the selected task, which is cancelled: `ktask-rs add` would refuse
+    /// a task placed next to it too.
+    NextToCancelled(TaskId),
+}
+
+impl Refusal {
+    /// The message shown for this refusal, word for word what the CLI command it mirrors
+    /// would print.
+    pub(crate) fn message(self) -> String {
+        match self {
+            Self::Running(id) => CancelError::Running(id).to_string(),
+            Self::AlreadyCancelled(id) => CancelError::AlreadyCancelled(id).to_string(),
+            Self::NextToCancelled(id) => AppendError::CancelledTask(id).to_string(),
+        }
+    }
 }
 
 /// Something that happened: the only way an [`App`] changes.
@@ -132,14 +160,17 @@ pub fn update(app: App, event: Event) -> App {
 }
 
 /// The app after the queue is (re)loaded: keeps the selection, a pending removal confirmation
-/// and a running-task refusal only as long as they still make sense against the fresh queue.
+/// and a refusal only as long as they still make sense against the fresh queue.
 fn update_loaded(app: App, queue: QueueView) -> App {
     let selected = reselect(&app, &queue);
     let confirming = app.confirming.filter(|confirm| match confirm {
         Confirming::Removal(id) => removable(&queue, *id),
         Confirming::Discard => true,
     });
-    let refused = app.refused.filter(|id| is_running(&queue, *id));
+    let refused = app.refused.filter(|refusal| match refusal {
+        Refusal::Running(id) => is_running(&queue, *id),
+        Refusal::AlreadyCancelled(id) | Refusal::NextToCancelled(id) => cancelled(&queue, *id),
+    });
     App {
         queue: Some(queue),
         selected,
@@ -361,10 +392,19 @@ fn open_form(app: App, placement: Placement) -> App {
 }
 
 /// The app with an empty form open, for a task that goes next to the selected one the way
-/// `beside` says; at the end when nothing is selected.
+/// `beside` says; at the end when nothing is selected. Refuses at once, without opening the
+/// form, when the selected task is cancelled.
 fn open_form_next_to(app: App, beside: fn(TaskId) -> Placement) -> App {
-    let placement = app.selected.map_or(Placement::End, beside);
-    open_form(app, placement)
+    let Some(id) = app.selected else {
+        return open_form(app, Placement::End);
+    };
+    if app.queue.as_ref().is_some_and(|queue| cancelled(queue, id)) {
+        return App {
+            refused: Some(Refusal::NextToCancelled(id)),
+            ..app
+        };
+    }
+    open_form(app, beside(id))
 }
 
 /// The app once the task the form holds is added as `id`: the form closes, and a task put
@@ -389,9 +429,10 @@ fn added(app: App, id: TaskId) -> App {
 /// Whether `queue` shows the task `id` and it can still be removed: a cancelled or a running
 /// one cannot.
 fn removable(queue: &QueueView, id: TaskId) -> bool {
-    queue.tasks.iter().any(|task| {
-        task.id == id && task.status != TaskStatus::Cancelled && task.status != TaskStatus::Running
-    })
+    queue
+        .tasks
+        .iter()
+        .any(|task| task.id == id && !cancelled(queue, id) && !is_running(queue, id))
 }
 
 /// Whether `queue` shows the task `id` as running.
@@ -402,9 +443,17 @@ fn is_running(queue: &QueueView, id: TaskId) -> bool {
         .any(|task| task.id == id && task.status == TaskStatus::Running)
 }
 
+/// Whether `queue` shows the task `id` as cancelled.
+fn cancelled(queue: &QueueView, id: TaskId) -> bool {
+    queue
+        .tasks
+        .iter()
+        .any(|task| task.id == id && task.status == TaskStatus::Cancelled)
+}
+
 /// The app after `d` on the selected task: it asks to confirm removing it when it can be
-/// removed, refuses without asking when it is running, and otherwise, with nothing selected
-/// or the selection cancelled already, changes nothing.
+/// removed, and otherwise refuses at once, naming why — running, or cancelled already —
+/// without asking; with nothing selected, changes nothing.
 fn press_d(app: App) -> App {
     let Some(id) = app.selected else {
         return app;
@@ -419,7 +468,12 @@ fn press_d(app: App) -> App {
         }
     } else if is_running(queue, id) {
         App {
-            refused: Some(id),
+            refused: Some(Refusal::Running(id)),
+            ..app
+        }
+    } else if cancelled(queue, id) {
+        App {
+            refused: Some(Refusal::AlreadyCancelled(id)),
             ..app
         }
     } else {
@@ -657,12 +711,8 @@ mod tests {
     }
 
     #[test]
-    fn d_with_nothing_selected_or_a_cancelled_task_selected_asks_nothing() {
+    fn d_with_nothing_selected_asks_nothing() {
         assert_eq!(press(loaded(&[]), &[KeyCode::Char('d')]).confirming, None);
-        let mut queue = queue_of(&[1, 2]);
-        queue.tasks[0].status = TaskStatus::Cancelled;
-        let app = update(App::default(), Event::Loaded(queue));
-        assert_eq!(press(app, &[KeyCode::Char('d')]).confirming, None);
     }
 
     #[test]
@@ -675,7 +725,25 @@ mod tests {
 
         assert_eq!(app.confirming, None);
         assert_eq!(app.removal, None);
-        assert_eq!(app.refused, Some(TaskId(1)));
+        assert_eq!(app.refused, Some(Refusal::Running(TaskId(1))));
+        assert_eq!(app.queue, Some(queue));
+    }
+
+    #[test]
+    fn d_on_a_cancelled_task_refuses_without_asking_and_changes_nothing_else() {
+        let mut queue = queue_of(&[1, 2]);
+        queue.tasks[0].status = TaskStatus::Cancelled;
+        let app = update(App::default(), Event::Loaded(queue.clone()));
+
+        let app = press(app, &[KeyCode::Char('d')]);
+
+        assert_eq!(app.confirming, None);
+        assert_eq!(app.removal, None);
+        assert_eq!(app.refused, Some(Refusal::AlreadyCancelled(TaskId(1))));
+        assert_eq!(
+            Refusal::AlreadyCancelled(TaskId(1)).message(),
+            "task 1 is already cancelled"
+        );
         assert_eq!(app.queue, Some(queue));
     }
 
@@ -685,7 +753,7 @@ mod tests {
         queue.tasks[0].status = TaskStatus::Running;
         let app = update(App::default(), Event::Loaded(queue));
         let refused = press(app, &[KeyCode::Char('d')]);
-        assert_eq!(refused.refused, Some(TaskId(1)));
+        assert_eq!(refused.refused, Some(Refusal::Running(TaskId(1))));
 
         for key in [KeyCode::Char('j'), KeyCode::Char('x')] {
             assert_eq!(press(refused.clone(), &[key]).refused, None);
@@ -693,22 +761,37 @@ mod tests {
         // The task is still running, so d again just shows the same refusal afresh.
         assert_eq!(
             press(refused, &[KeyCode::Char('d')]).refused,
-            Some(TaskId(1))
+            Some(Refusal::Running(TaskId(1)))
         );
     }
 
     #[test]
-    fn the_refusal_goes_when_its_task_stops_running_from_elsewhere() {
+    fn the_running_refusal_goes_when_its_task_stops_running_from_elsewhere() {
         let mut queue = queue_of(&[1, 2]);
         queue.tasks[0].status = TaskStatus::Running;
         let app = update(App::default(), Event::Loaded(queue));
         let refused = press(app, &[KeyCode::Char('d')]);
-        assert_eq!(refused.refused, Some(TaskId(1)));
+        assert_eq!(refused.refused, Some(Refusal::Running(TaskId(1))));
 
         let mut queue = queue_of(&[1, 2]);
         queue.tasks[0].status = TaskStatus::Done;
         let reloaded = update(refused, Event::Loaded(queue));
         assert_eq!(reloaded.refused, None);
+    }
+
+    #[test]
+    fn the_cancelled_refusal_survives_a_reload_and_goes_when_the_task_is_gone() {
+        let mut queue = queue_of(&[1, 2]);
+        queue.tasks[0].status = TaskStatus::Cancelled;
+        let app = update(App::default(), Event::Loaded(queue.clone()));
+        let refused = press(app, &[KeyCode::Char('d')]);
+        assert_eq!(refused.refused, Some(Refusal::AlreadyCancelled(TaskId(1))));
+
+        let reloaded = update(refused, Event::Loaded(queue));
+        assert_eq!(reloaded.refused, Some(Refusal::AlreadyCancelled(TaskId(1))));
+
+        let gone = update(reloaded, Event::Loaded(queue_of(&[2])));
+        assert_eq!(gone.refused, None);
     }
 
     #[test]
@@ -946,6 +1029,22 @@ mod tests {
         for key in [KeyCode::Char('o'), KeyCode::Char('O')] {
             let app = press(loaded(&[]), &[key]);
             assert_eq!(form_of(&app).placement, Placement::End);
+        }
+    }
+
+    #[test]
+    fn o_and_capital_o_next_to_a_cancelled_task_refuse_at_once_without_opening_the_form() {
+        let mut queue = queue_of(&[1, 2, 3]);
+        queue.tasks[1].status = TaskStatus::Cancelled;
+        for key in [KeyCode::Char('o'), KeyCode::Char('O')] {
+            let app = update(App::default(), Event::Loaded(queue.clone()));
+            let app = press(app, &[KeyCode::Char('j'), key]);
+            assert_eq!(app.refused, Some(Refusal::NextToCancelled(TaskId(2))));
+            assert_eq!(
+                Refusal::NextToCancelled(TaskId(2)).message(),
+                "task 2 is cancelled"
+            );
+            assert!(app.form.is_none(), "{key:?} opened the form");
         }
     }
 

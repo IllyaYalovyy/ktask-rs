@@ -1,8 +1,6 @@
 //! Draws an [`App`] into a buffer.
 
-use ktask_core::{
-    AttemptLine, CancelError, QueueView, StepLine, Task, TaskStatus, displayed_status,
-};
+use ktask_core::{AttemptLine, QueueView, StepLine, Task, TaskStatus, displayed_status};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -109,9 +107,9 @@ fn key_map(area: Rect, buf: &mut Buffer) {
 /// The header: the project, the counts, and the question of a removal or the refusal of one,
 /// while there is either.
 /// The one-line question or notice shown under the summary — a removal confirmation or a
-/// running-task refusal, whichever was raised most recently — or an empty line when neither
-/// applies. The last run this screen started's own results are shown in the list area below
-/// instead, by [`run_message_lines`], since there can be more than one line of them.
+/// refusal, whichever was raised most recently — or an empty line when neither applies. The
+/// last run this screen started's own results are shown in the list area below instead, by
+/// [`run_message_lines`], since there can be more than one line of them.
 fn question_line(app: &App, queue: &QueueView) -> Line<'static> {
     let question = app
         .confirming
@@ -128,11 +126,8 @@ fn question_line(app: &App, queue: &QueueView) -> Line<'static> {
                 Style::new().add_modifier(Modifier::BOLD),
             )
         });
-    app.refused.map_or(question, |id| {
-        Line::styled(
-            CancelError::Running(id).to_string(),
-            Style::new().add_modifier(Modifier::BOLD),
-        )
+    app.refused.map_or(question, |refusal| {
+        Line::styled(refusal.message(), Style::new().add_modifier(Modifier::BOLD))
     })
 }
 
@@ -829,7 +824,20 @@ mod tests {
         let rows = drawn(&app, 60, 8);
         assert_eq!(
             inside(&rows[3]),
-            CancelError::Running(TaskId(10)).to_string()
+            crate::Refusal::Running(TaskId(10)).message()
+        );
+    }
+
+    #[test]
+    fn d_on_a_cancelled_task_shows_the_refusal_in_place_of_the_question() {
+        use ratatui::crossterm::event::KeyCode::Char;
+        let mut cancelled = task(1, "first", TaskKind::Agent);
+        cancelled.status = TaskStatus::Cancelled;
+        let app = keys(loaded(vec![cancelled]), &[Char('d')]);
+        let rows = drawn(&app, 60, 8);
+        assert_eq!(
+            inside(&rows[3]),
+            crate::Refusal::AlreadyCancelled(TaskId(10)).message()
         );
     }
 

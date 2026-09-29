@@ -12,6 +12,6 @@ mod settings_form;
 mod settings_screen;
 mod text;
 
-pub use app::{App, Confirming, Event, update};
+pub use app::{App, Confirming, Event, Refusal, update};
 pub use render::render;
 pub use run::run;

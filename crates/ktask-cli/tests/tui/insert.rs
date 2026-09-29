@@ -320,7 +320,8 @@ fn quit_from_form(mut terminal: Terminal) -> Result<()> {
 }
 
 #[test]
-fn a_cancelled_task_selected_refuses_a_task_next_to_it_and_the_form_says_so() -> Result<()> {
+fn a_cancelled_task_selected_refuses_a_task_next_to_it_at_once_without_opening_the_form()
+-> Result<()> {
     let fixture = Fixture::new()?;
     fixture.cli(&["remove", "3"])?;
     let mut terminal = fixture.open(ROWS)?;
@@ -329,17 +330,43 @@ fn a_cancelled_task_selected_refuses_a_task_next_to_it_and_the_form_says_so() ->
         screen.contents().contains("cancelled  agent  charlie")
     })?;
     terminal.send("jj")?;
-    wait_selected(&terminal, "charlie")?;
+    let row = wait_selected(&terminal, "charlie")?;
 
-    terminal.send("o")?;
-    wait_form(&terminal, "New task below #3")?;
-    write_and_submit(&mut terminal, "beside a ghost")?;
+    for key in ["o", "O"] {
+        terminal.send(key)?;
 
-    terminal.wait_for("the refusal", |screen| {
-        screen.contents().contains("! task 3 is cancelled")
-    })?;
+        let screen = terminal.wait_for("the refusal", |screen| {
+            screen.contents().contains("task 3 is cancelled")
+        })?;
+        let lines = lines_inside_frame(&screen);
+        assert_eq!(lines[3], "task 3 is cancelled");
+        assert!(!screen.contains("New task"), "{key} opened the form");
+        assert_eq!(
+            marked(&screen),
+            vec![row.clone()],
+            "the refusal asked nothing"
+        );
+        // The same words the CLI gives for placing a task next to the same cancelled one.
+        let cli_refusal = fixture.sandbox.run(
+            &fixture.repository,
+            &["add", "--title", "t", "--criterion", "c", "--after", "3"],
+        )?;
+        assert_eq!(cli_refusal.code, Some(2));
+        assert!(
+            cli_refusal.stderr.contains(&lines[3]),
+            "{}",
+            cli_refusal.stderr
+        );
+
+        // The next key dismisses the refusal without having opened anything.
+        terminal.send("k")?;
+        let screen = wait_selected_screen(&terminal, "bravo")?;
+        assert!(!screen.contains("task 3 is cancelled"));
+        terminal.send("j")?;
+        wait_selected(&terminal, "charlie")?;
+    }
     assert_eq!(order(&fixture)?.len(), 5);
-    quit_from_form(terminal)
+    quit(terminal)
 }
 
 #[test]
