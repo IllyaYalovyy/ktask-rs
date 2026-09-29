@@ -145,12 +145,39 @@ pub(crate) fn run(report: &RunReport, out: &mut impl Write) -> Result<bool, Stri
             }
             .map_err(|e| e.to_string())?;
         }
+        RunEnd::HealthCheckFailed {
+            id,
+            command,
+            reason,
+            output_tail,
+        } => health_check_failed(*id, command, reason, output_tail, out)?,
         RunEnd::Completed | RunEnd::Stopped { .. } => {}
     }
     Ok(matches!(
         report.end,
-        RunEnd::Stopped { .. } | RunEnd::Blocked { .. }
+        RunEnd::Stopped { .. } | RunEnd::Blocked { .. } | RunEnd::HealthCheckFailed { .. }
     ))
+}
+
+/// Writes why the health check ahead of task `id` failed: the command, why, the end of what it
+/// printed, and that the task was not started because of it.
+fn health_check_failed(
+    id: TaskId,
+    command: &str,
+    reason: &str,
+    output_tail: &str,
+    out: &mut impl Write,
+) -> Result<(), String> {
+    writeln!(out, "task {id}: health check failed: {command}: {reason}")
+        .map_err(|e| e.to_string())?;
+    if !output_tail.is_empty() {
+        writeln!(out, "{output_tail}").map_err(|e| e.to_string())?;
+    }
+    writeln!(
+        out,
+        "task {id} was not started; fix the health check, then run again"
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// One task as `list --json` shows it.
@@ -203,7 +230,18 @@ pub(crate) fn tasks(tasks: &[Task], json: bool, out: &mut impl Write) -> Result<
     }
 }
 
-/// One task's attempt as `status --json` shows it.
+/// One step of a task's attempt as `status --json` shows it.
+#[derive(Debug, Serialize)]
+struct StepJson<'a> {
+    step: &'a str,
+    time_spent_seconds: u64,
+    outcome: &'static str,
+    reason: Option<&'a str>,
+}
+
+/// One task's attempt as `status --json` shows it: the current — most recent — step's own
+/// fields, kept flat here for whatever only cares about that, plus `steps`, every step run so
+/// far, in order.
 #[derive(Debug, Serialize)]
 struct AttemptJson<'a> {
     number: u32,
@@ -212,6 +250,7 @@ struct AttemptJson<'a> {
     time_spent_seconds: u64,
     outcome: &'static str,
     reason: Option<&'a str>,
+    steps: Vec<StepJson<'a>>,
 }
 
 /// One task as `status --json` shows it.
@@ -221,6 +260,16 @@ struct StatusJson<'a> {
     title: &'a str,
     status: &'static str,
     attempt: AttemptJson<'a>,
+}
+
+/// `line` as a [`StepJson`].
+fn step_json(line: &ktask_core::StepLine) -> StepJson<'_> {
+    StepJson {
+        step: &line.step,
+        time_spent_seconds: line.time_spent.as_secs(),
+        outcome: line.outcome.as_str(),
+        reason: line.reason.as_deref(),
+    }
 }
 
 /// Writes `entries`: for every task that was attempted, one `#ID<TAB>status<TAB>title` line
@@ -254,6 +303,7 @@ fn status_json(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
                 time_spent_seconds: entry.attempt.time_spent.as_secs(),
                 outcome: entry.attempt.outcome.as_str(),
                 reason: entry.attempt.reason.as_deref(),
+                steps: entry.attempt.steps.iter().map(step_json).collect(),
             },
         })
         .collect();
@@ -265,7 +315,7 @@ fn status_json(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
 #[derive(Debug, Serialize)]
 struct SettingJson<'a> {
     name: &'a str,
-    value: u64,
+    value: &'a str,
     default: bool,
 }
 
@@ -281,7 +331,7 @@ pub(crate) fn settings(
             .iter()
             .map(|view| SettingJson {
                 name: view.name,
-                value: view.value,
+                value: &view.value,
                 default: view.is_default,
             })
             .collect();
@@ -305,7 +355,7 @@ pub(crate) fn setting_set(
     if json {
         let shown = SettingJson {
             name: view.name,
-            value: view.value,
+            value: &view.value,
             default: view.is_default,
         };
         serde_json::to_writer(&mut *out, &shown).map_err(|e| e.to_string())?;
@@ -315,9 +365,9 @@ pub(crate) fn setting_set(
     }
 }
 
-/// Writes `entries`: for every task, one `#ID<TAB>status<TAB>title` line followed by an
-/// indented line for its attempt — step, provider, time spent, outcome, and the reason
-/// when it did not succeed.
+/// Writes `entries`: for every task, one `#ID<TAB>status<TAB>title` line, followed by one
+/// indented line per step its attempt has run so far, in order — step, provider, time spent,
+/// outcome, and the reason when it did not succeed.
 fn status_text(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), String> {
     entries
         .iter()
@@ -325,24 +375,21 @@ fn status_text(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
             let status = ktask_core::displayed_status(entry.status, Some(entry.attempt.outcome));
             writeln!(out, "#{}\t{}\t{}", entry.task, status, entry.title)?;
             let provider = entry.attempt.provider.as_deref().unwrap_or("-");
-            match &entry.attempt.reason {
-                Some(reason) => writeln!(
-                    out,
-                    "\t{}\t{}\t{}s\t{}\t{reason}",
-                    entry.attempt.step,
-                    provider,
-                    entry.attempt.time_spent.as_secs(),
-                    entry.attempt.outcome
-                ),
-                None => writeln!(
-                    out,
-                    "\t{}\t{}\t{}s\t{}",
-                    entry.attempt.step,
-                    provider,
-                    entry.attempt.time_spent.as_secs(),
-                    entry.attempt.outcome
-                ),
-            }
+            entry.attempt.steps.iter().try_for_each(|step| {
+                let seconds = step.time_spent.as_secs();
+                match &step.reason {
+                    Some(reason) => writeln!(
+                        out,
+                        "\t{}\t{provider}\t{seconds}s\t{}\t{reason}",
+                        step.step, step.outcome
+                    ),
+                    None => writeln!(
+                        out,
+                        "\t{}\t{provider}\t{seconds}s\t{}",
+                        step.step, step.outcome
+                    ),
+                }
+            })
         })
         .map_err(|e: std::io::Error| e.to_string())
 }

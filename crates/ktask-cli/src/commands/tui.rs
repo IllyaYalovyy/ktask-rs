@@ -54,8 +54,8 @@ pub(crate) fn run(args: &Args) -> Result<(), Failure> {
                 .map_err(|problems| problems.iter().map(ToString::to_string).collect())
         },
         move || start_run(&binary_path, &run_project),
-        || load_setting(&settings_store),
-        |value| save_setting(&settings_store, value),
+        || load_settings(&settings_store),
+        |name, value| save_setting(&settings_store, name, value),
         watch,
     )?)
 }
@@ -73,18 +73,14 @@ fn ensure_terminal() -> Result<(), Failure> {
     })
 }
 
-/// The attempt-timeout setting, for the settings screen to open on.
-fn load_setting(store: &TomlSettingsStore) -> Result<SettingView, String> {
-    ktask_core::show_settings(store)
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .find(|view| view.name == ktask_core::ATTEMPT_TIMEOUT)
-        .ok_or_else(|| "no attempt-timeout setting".to_owned())
+/// Every project setting, for the settings screen to open on.
+fn load_settings(store: &TomlSettingsStore) -> Result<Vec<SettingView>, String> {
+    ktask_core::show_settings(store).map_err(|e| e.to_string())
 }
 
-/// Changes the attempt-timeout setting to `value`, as the settings screen was submitted.
-fn save_setting(store: &TomlSettingsStore, value: &str) -> Result<SettingView, String> {
-    ktask_core::set_setting(store, ktask_core::ATTEMPT_TIMEOUT, value).map_err(|e| e.to_string())
+/// Changes the setting `name` to `value`, as the settings screen was submitted.
+fn save_setting(store: &TomlSettingsStore, name: &str, value: &str) -> Result<SettingView, String> {
+    ktask_core::set_setting(store, name, value).map_err(|e| e.to_string())
 }
 
 /// Starts `binary_path run --project <project.name>`, detached from this process — its own

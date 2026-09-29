@@ -53,8 +53,10 @@ fn main() {
             Err(vec!["not supported in this test binary".to_owned()])
         },
         || Err("not supported in this test binary".to_owned()),
-        || -> Result<SettingView, String> { Err("not supported in this test binary".to_owned()) },
-        |_value: &str| Err("not supported in this test binary".to_owned()),
+        || -> Result<Vec<SettingView>, String> {
+            Err("not supported in this test binary".to_owned())
+        },
+        |_name: &str, _value: &str| Err("not supported in this test binary".to_owned()),
         NeverChanges,
     );
 }

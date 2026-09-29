@@ -1,4 +1,5 @@
-//! `ktask-rs settings`: a project's settings — the attempt time limit, so far.
+//! `ktask-rs settings`: a project's settings — the attempt time limit and the health-check
+//! command, so far.
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -27,7 +28,7 @@ pub(crate) struct Args {
 pub(crate) enum Command {
     /// Change a setting
     Set {
-        /// The setting to change: currently only attempt-timeout
+        /// The setting to change: attempt-timeout or health-check
         #[arg(value_name = "NAME")]
         name: String,
         /// The new value
