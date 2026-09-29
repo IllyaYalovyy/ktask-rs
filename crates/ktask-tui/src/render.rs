@@ -94,9 +94,10 @@ fn draw_queue(app: &App, queue: &QueueView, area: Rect, buf: &mut Buffer) {
     let [header, list] = Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(area);
     Paragraph::new(header_lines(app, queue)).render(header, buf);
     let height = usize::from(list.height);
+    let width = usize::from(list.width);
     match &app.message {
         Some(message) => Paragraph::new(message_lines(app, message, height)).render(list, buf),
-        None => Paragraph::new(task_lines(app, queue, height)).render(list, buf),
+        None => Paragraph::new(task_lines(app, queue, height, width)).render(list, buf),
     }
 }
 
@@ -209,15 +210,43 @@ fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
 /// earliest are replaced by a single `…` line so the block still fits, keeping the most
 /// recently finished steps, and the one still running, visible — never a line cut with no
 /// sign of it.
-fn task_lines(app: &App, queue: &QueueView, height: usize) -> Vec<Line<'static>> {
+fn task_lines(app: &App, queue: &QueueView, height: usize, width: usize) -> Vec<Line<'static>> {
     if queue.tasks.is_empty() {
         return vec![Line::from("The queue is empty.")];
     }
+    let columns = Columns::of(queue);
     let selected = queue
         .tasks
         .iter()
         .position(|task| Some(task.id) == app.selected);
-    let block_heights: Vec<usize> = queue
+    let first = first_shown(&block_heights(queue), selected, height);
+    let mut lines = Vec::new();
+    for (index, task) in queue.tasks.iter().enumerate().skip(first) {
+        let remaining = height.saturating_sub(lines.len());
+        if remaining == 0 {
+            break;
+        }
+        let attempt = queue.attempts.get(&task.id);
+        let steps = attempt.map_or_else(Vec::new, |attempt| step_lines(&attempt.steps, width));
+        if !steps.is_empty() && remaining < 2 {
+            break;
+        }
+        lines.push(task_line(
+            task,
+            attempt,
+            Some(index) == selected,
+            &columns,
+            width,
+        ));
+        lines.extend(windowed(steps, remaining - 1));
+    }
+    lines
+}
+
+/// How many lines each task in `queue.tasks` takes: one for the task itself, plus one per
+/// step its attempt, if any, has run so far.
+fn block_heights(queue: &QueueView) -> Vec<usize> {
+    queue
         .tasks
         .iter()
         .map(|task| {
@@ -226,23 +255,54 @@ fn task_lines(app: &App, queue: &QueueView, height: usize) -> Vec<Line<'static>>
                 .get(&task.id)
                 .map_or(0, |attempt| attempt.steps.len())
         })
-        .collect();
-    let first = first_shown(&block_heights, selected, height);
-    let mut lines = Vec::new();
-    for (index, task) in queue.tasks.iter().enumerate().skip(first) {
-        let remaining = height.saturating_sub(lines.len());
-        if remaining == 0 {
-            break;
+        .collect()
+}
+
+/// The width each of a task line's leading four columns needs to hold every task's own value
+/// in the queue, so every row's title starts at the same offset as the one before it,
+/// whichever task's position, ID, status or kind is widest.
+struct Columns {
+    position: usize,
+    id: usize,
+    status: usize,
+    kind: usize,
+}
+
+impl Columns {
+    fn of(queue: &QueueView) -> Self {
+        let mut columns = Self {
+            position: 0,
+            id: 0,
+            status: 0,
+            kind: 0,
+        };
+        for task in &queue.tasks {
+            let attempt = queue.attempts.get(&task.id);
+            let status = displayed_status(task.status, attempt.map(|attempt| attempt.outcome));
+            columns.position = columns
+                .position
+                .max(task.position.to_string().chars().count());
+            columns.id = columns.id.max(format!("#{}", task.id).chars().count());
+            columns.status = columns.status.max(status.chars().count());
+            columns.kind = columns.kind.max(task.kind.to_string().chars().count());
         }
-        let attempt = queue.attempts.get(&task.id);
-        let steps = attempt.map_or_else(Vec::new, |attempt| step_lines(&attempt.steps));
-        if !steps.is_empty() && remaining < 2 {
-            break;
-        }
-        lines.push(task_line(task, attempt, Some(index) == selected));
-        lines.extend(windowed(steps, remaining - 1));
+        columns
     }
-    lines
+}
+
+/// `text` cut to at most `max` characters, its last one replaced by `…` when that cut
+/// something off; `text` unchanged when it already fits, empty when there is no room for
+/// anything at all.
+fn elide(text: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let mut cut: String = text.chars().take(max - 1).collect();
+    cut.push('…');
+    cut
 }
 
 /// The index of the first task shown: it walks back from the selected task, adding earlier
@@ -269,22 +329,23 @@ fn first_shown(block_heights: &[usize], selected: Option<usize>, height: usize) 
 
 /// One line per step of `steps`, in order — the same lines `status` prints for the same
 /// attempt, from the same use case: step, provider (`-` for a step the tool ran itself, which
-/// names none), time spent, outcome, and the reason when there is one.
-fn step_lines(steps: &[StepLine]) -> Vec<Line<'static>> {
+/// names none), time spent, outcome, and the reason when there is one, cut to fit `width`
+/// with a trailing `…` when it does not.
+fn step_lines(steps: &[StepLine], width: usize) -> Vec<Line<'static>> {
     steps
         .iter()
         .map(|step| {
             let provider = step.provider.as_deref().unwrap_or("-");
-            let mut text = format!(
-                "      {} · {provider} · {}s · {}",
-                step.step,
-                step.time_spent.as_secs(),
-                step.outcome
+            let seconds = step.time_spent.as_secs();
+            let outcome = step.outcome;
+            let prefix = format!("      {} · {provider} · {seconds}s · {outcome}", step.step);
+            let text = step.reason.as_deref().map_or_else(
+                || prefix.clone(),
+                |reason| {
+                    let budget = width.saturating_sub(prefix.chars().count() + 2);
+                    format!("{prefix}: {}", elide(reason, budget))
+                },
             );
-            if let Some(reason) = &step.reason {
-                text.push_str(": ");
-                text.push_str(reason);
-            }
             Line::styled(text, Style::new().add_modifier(Modifier::DIM))
         })
         .collect()
@@ -308,10 +369,18 @@ fn windowed(lines: Vec<Line<'static>>, budget: usize) -> Vec<Line<'static>> {
     shown
 }
 
-/// `task`'s row: its position, ID, status, kind and title. `attempt` — the same line
-/// `status` shows for it, from the same use case — decides the status word when it says the
-/// task is shown `interrupted` rather than `task.status`'s own `running`.
-fn task_line(task: &Task, attempt: Option<&AttemptLine>, selected: bool) -> Line<'static> {
+/// `task`'s row: its position, ID, status, kind and title, each of the first four padded to
+/// `columns`' width so every row lines up under the one before it, and the title cut to fit
+/// `width` with a trailing `…` when it does not. `attempt` — the same line `status` shows for
+/// it, from the same use case — decides the status word when it says the task is shown
+/// `interrupted` rather than `task.status`'s own `running`.
+fn task_line(
+    task: &Task,
+    attempt: Option<&AttemptLine>,
+    selected: bool,
+    columns: &Columns,
+    width: usize,
+) -> Line<'static> {
     let marker = if selected { '>' } else { ' ' };
     let mut style = Style::new();
     if task.status == TaskStatus::Cancelled {
@@ -320,14 +389,19 @@ fn task_line(task: &Task, attempt: Option<&AttemptLine>, selected: bool) -> Line
     if selected {
         style = style.add_modifier(Modifier::REVERSED);
     }
+    let position = task.position.to_string();
+    let id = format!("#{}", task.id);
     let status = displayed_status(task.status, attempt.map(|attempt| attempt.outcome));
-    Line::styled(
-        format!(
-            "{marker}{:>3}  #{}  {}  {}  {}",
-            task.position, task.id, status, task.kind, task.title
-        ),
-        style,
-    )
+    let kind = task.kind.to_string();
+    let prefix = format!(
+        "{marker}{position:>pw$}  {id:<iw$}  {status:<sw$}  {kind:<kw$}  ",
+        pw = columns.position,
+        iw = columns.id,
+        sw = columns.status,
+        kw = columns.kind,
+    );
+    let budget = width.saturating_sub(prefix.chars().count());
+    Line::styled(format!("{prefix}{}", elide(&task.title, budget)), style)
 }
 
 #[cfg(test)]
@@ -488,9 +562,54 @@ mod tests {
             inside(&rows[2]),
             "pending 2  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
         );
-        assert_eq!(inside(&rows[4]), ">  1  #10  pending  agent  first");
-        assert_eq!(inside(&rows[5]), "   2  #20  pending  human  second");
+        assert_eq!(inside(&rows[4]), ">1  #10  pending  agent  first");
+        assert_eq!(inside(&rows[5]), " 2  #20  pending  human  second");
         assert!(!rows.iter().any(|row| row.contains("The queue is empty.")));
+    }
+
+    #[test]
+    fn a_title_too_long_for_the_screen_is_cut_with_a_trailing_ellipsis() {
+        let long_title = "x".repeat(60);
+        let app = loaded(vec![task(1, &long_title, TaskKind::Agent)]);
+        // The frame's border takes one column each side, leaving 38 for the row itself.
+        let rows = drawn(&app, 40, 8);
+        let row = inside(&rows[4]);
+        assert!(row.starts_with(">1  #10  pending  agent  x"), "{row:?}");
+        assert!(row.ends_with('…'), "{row:?}");
+        assert_eq!(row.chars().count(), 38, "{row:?}");
+        assert!(!row.contains(&long_title), "the title was not cut: {row:?}");
+    }
+
+    #[test]
+    fn a_reason_too_long_for_the_screen_is_cut_with_a_trailing_ellipsis() {
+        let long_reason = "y".repeat(60);
+        let mut attempts = HashMap::new();
+        attempts.insert(
+            TaskId(10),
+            attempt(
+                "echo",
+                1,
+                AttemptOutcome::Reported(Outcome::Failed),
+                Some(&long_reason),
+            ),
+        );
+        let mut failed = task(1, "first", TaskKind::Agent);
+        failed.status = TaskStatus::Failed;
+        let app = loaded_with_attempts(vec![failed], attempts);
+        // The frame's border takes one column each side, leaving 63 for the row itself —
+        // room for the step's own fixed text plus a cut reason.
+        let rows = drawn(&app, 65, 8);
+        let row = inside(&rows[5]);
+        assert!(
+            row.starts_with("      implementation · echo · 1s · failed: y"),
+            "{row:?}"
+        );
+        assert!(row.ends_with('…'), "{row:?}");
+        assert_eq!(row.chars().count(), 63, "{row:?}");
+        assert!(
+            !row.contains(&long_reason),
+            "the reason was not cut: {row:?}"
+        );
     }
 
     #[test]
@@ -515,8 +634,8 @@ mod tests {
             task(2, "second", TaskKind::Agent),
         ]);
         let rows = drawn(&keys(app.clone(), &[Char('j')]), 60, 8);
-        assert_eq!(inside(&rows[4]), "   1  #10  pending  agent  first");
-        assert_eq!(inside(&rows[5]), ">  2  #20  pending  agent  second");
+        assert_eq!(inside(&rows[4]), " 1  #10  pending  agent  first");
+        assert_eq!(inside(&rows[5]), ">2  #20  pending  agent  second");
     }
 
     #[test]
@@ -524,7 +643,7 @@ mod tests {
         let mut gone = task(2, "gone", TaskKind::Agent);
         gone.status = TaskStatus::Cancelled;
         let rows = drawn(&loaded(vec![gone]), 60, 8);
-        assert_eq!(inside(&rows[4]), ">  2  #20  cancelled  agent  gone");
+        assert_eq!(inside(&rows[4]), ">2  #20  cancelled  agent  gone");
     }
 
     #[test]
@@ -536,7 +655,7 @@ mod tests {
         );
         let app = loaded_with_attempts(vec![task(1, "first", TaskKind::Agent)], attempts);
         let rows = drawn(&app, 60, 8);
-        assert_eq!(inside(&rows[4]), ">  1  #10  pending  agent  first");
+        assert_eq!(inside(&rows[4]), ">1  #10  pending  agent  first");
         assert_eq!(
             inside(&rows[5]),
             "      implementation · echo · 12s · running"
@@ -554,7 +673,7 @@ mod tests {
         task.status = TaskStatus::Done;
         let app = loaded_with_attempts(vec![task], attempts);
         let rows = drawn(&app, 60, 8);
-        assert_eq!(inside(&rows[4]), ">  1  #10  done  agent  first");
+        assert_eq!(inside(&rows[4]), ">1  #10  done  agent  first");
         assert_eq!(inside(&rows[5]), "      implementation · echo · 3s · done");
     }
 
@@ -630,7 +749,7 @@ mod tests {
         done.status = TaskStatus::Done;
         let app = loaded_with_attempts(vec![done], attempts);
         let rows = drawn(&app, 80, 10);
-        assert_eq!(inside(&rows[4]), ">  1  #10  done  agent  first");
+        assert_eq!(inside(&rows[4]), ">1  #10  done  agent  first");
         // The sync and commit steps are run by the tool itself, not the agent: their lines
         // name no provider.
         assert_eq!(inside(&rows[5]), "      sync · - · 2s · passed: 2 commits");
@@ -680,7 +799,7 @@ mod tests {
         // three for its steps: an ellipsis for the ones it has no room for, then the tail —
         // the still-running step and the one finished right before it.
         let rows = drawn(&app, 80, 9);
-        assert_eq!(inside(&rows[4]), ">  1  #10  running  agent  first");
+        assert_eq!(inside(&rows[4]), ">1  #10  running  agent  first");
         assert_eq!(inside(&rows[5]), "      …");
         assert_eq!(inside(&rows[6]), "      review · echo · 1s · approved");
         assert_eq!(inside(&rows[7]), "      testing · echo · 3s · running");
@@ -712,7 +831,7 @@ mod tests {
         running.status = TaskStatus::Running;
         let app = loaded_with_attempts(vec![running], attempts);
         let rows = drawn(&app, 80, 10);
-        assert_eq!(inside(&rows[4]), ">  1  #10  running  agent  first");
+        assert_eq!(inside(&rows[4]), ">1  #10  running  agent  first");
         // The health check is run by the tool itself, not the agent: its line names no
         // provider.
         assert_eq!(inside(&rows[5]), "      health check · - · 4s · passed");
@@ -738,13 +857,13 @@ mod tests {
         // third task off the bottom.
         let app = loaded_with_attempts(tasks, attempts);
         let rows = drawn(&app, 60, 9);
-        assert_eq!(inside(&rows[4]), ">  1  #10  pending  agent  first");
+        assert_eq!(inside(&rows[4]), ">1  #10  pending  agent  first");
         assert_eq!(
             inside(&rows[5]),
             "      implementation · echo · 1s · running"
         );
-        assert_eq!(inside(&rows[6]), "   2  #20  pending  agent  second");
-        assert_eq!(inside(&rows[7]), "   3  #30  pending  agent  third");
+        assert_eq!(inside(&rows[6]), " 2  #20  pending  agent  second");
+        assert_eq!(inside(&rows[7]), " 3  #30  pending  agent  third");
     }
 
     #[test]
@@ -754,11 +873,13 @@ mod tests {
             .map(|n| task(n, &format!("t{n}"), TaskKind::Agent))
             .collect();
         // Five lines are left for the list under the frame and the header.
+        // The widest position (`10`) and widest ID (`#100`) among all ten tasks set the width
+        // of their columns for every row, not only the one that needs it.
         let rows = drawn(&keys(loaded(tasks), &[Char('G')]), 60, 10);
-        assert_eq!(inside(&rows[4]), "   6  #60  pending  agent  t6");
-        assert_eq!(inside(&rows[8]), "> 10  #100  pending  agent  t10");
+        assert_eq!(inside(&rows[4]), "  6  #60   pending  agent  t6");
+        assert_eq!(inside(&rows[8]), ">10  #100  pending  agent  t10");
         let rows = drawn(&keys(loaded_ten(), &[Char('G'), Char('g')]), 60, 10);
-        assert_eq!(inside(&rows[4]), ">  1  #10  pending  agent  t1");
+        assert_eq!(inside(&rows[4]), "> 1  #10   pending  agent  t1");
     }
 
     fn loaded_ten() -> App {
@@ -802,7 +923,7 @@ mod tests {
             inside(&rows[3]),
             "Remove #20 second? y to remove · n or Esc to keep"
         );
-        assert_eq!(inside(&rows[5]), ">  2  #20  pending  agent  second");
+        assert_eq!(inside(&rows[5]), ">2  #20  pending  agent  second");
         let rows = drawn(&keys(app, &[Char('n')]), 60, 8);
         assert_eq!(inside(&rows[3]), "");
     }

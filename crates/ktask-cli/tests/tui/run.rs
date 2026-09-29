@@ -132,7 +132,7 @@ fn r_starts_the_run_and_the_screen_shows_its_progress_as_it_would_for_a_run_star
                 .is_some_and(|line| line.contains("implementation"))
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  running  agent  a");
+    assert_eq!(lines[4], ">1  #1  running  agent  a");
     assert!(
         lines[5].contains("implementation · echo") && lines[5].ends_with("running"),
         "{}",
@@ -143,7 +143,7 @@ fn r_starts_the_run_and_the_screen_shows_its_progress_as_it_would_for_a_run_star
     let screen = terminal.wait_for("the task done", |screen| {
         lines_inside_frame(&screen.contents())
             .get(4)
-            .is_some_and(|line| line.starts_with(">  1  #1  done"))
+            .is_some_and(|line| line.starts_with(">1  #1  done"))
     })?;
     assert!(
         screen.contains("pending 0") && screen.contains("running 0") && screen.contains("done 1"),
@@ -305,14 +305,14 @@ fn quitting_the_screen_does_not_stop_the_run_it_started_and_opening_it_again_sho
                 .is_some_and(|line| line.contains("implementation"))
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  running  agent  a");
+    assert_eq!(lines[4], ">1  #1  running  agent  a");
     assert!(!screen.contains("interrupted"), "{screen}");
 
     std::fs::write(&go, "")?;
     second.wait_for("the task done", |screen| {
         lines_inside_frame(&screen.contents())
             .get(4)
-            .is_some_and(|line| line.starts_with(">  1  #1  done"))
+            .is_some_and(|line| line.starts_with(">1  #1  done"))
     })?;
 
     second.send("q")?;

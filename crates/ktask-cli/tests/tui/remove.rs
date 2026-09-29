@@ -71,7 +71,7 @@ fn d_asks_before_removing_and_names_the_selected_task_without_changing_anything(
         lines[2],
         "pending 5  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
     );
-    assert_eq!(marked(&screen), [">  2  #2  pending  agent  bravo"]);
+    assert_eq!(marked(&screen), [">2  #2  pending  agent  bravo"]);
     assert!(screen.contains("echo"), "{screen}");
     assert_eq!(journal(&fixture)?, before);
     quit(terminal)
@@ -94,10 +94,10 @@ fn d_then_y_removes_the_selected_task_and_the_selection_moves_to_the_one_after_i
         lines[2],
         "pending 4  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 1"
     );
-    assert_eq!(lines[4], "   1  #1  pending  agent  alpha");
-    assert_eq!(lines[5], ">  2  #3  pending  agent  charlie");
-    assert_eq!(lines[6], "   3  #4  pending  agent  delta");
-    assert_eq!(lines[7], "   4  #5  pending  agent  echo");
+    assert_eq!(lines[4], " 1  #1  pending  agent  alpha");
+    assert_eq!(lines[5], ">2  #3  pending  agent  charlie");
+    assert_eq!(lines[6], " 3  #4  pending  agent  delta");
+    assert_eq!(lines[7], " 4  #5  pending  agent  echo");
     assert_eq!(lines[8], "");
     assert_eq!(marked(&screen), [lines[5].clone()]);
     assert_eq!(
@@ -128,7 +128,7 @@ fn removing_the_last_task_selects_the_one_before_it() -> Result<()> {
 
     terminal.wait_for("echo gone", |screen| !screen.contents().contains("echo"))?;
     let row = wait_selected(&terminal, "delta")?;
-    assert_eq!(row, ">  4  #4  pending  agent  delta");
+    assert_eq!(row, ">4  #4  pending  agent  delta");
     assert!(journal(&fixture)?.contains(&"5:cancelled:echo".to_owned()));
     quit(terminal)
 }
@@ -143,7 +143,7 @@ fn removing_the_first_task_selects_the_one_that_takes_its_place() -> Result<()> 
 
     terminal.wait_for("alpha gone", |screen| !screen.contents().contains("alpha"))?;
     let row = wait_selected(&terminal, "bravo")?;
-    assert_eq!(row, ">  1  #2  pending  agent  bravo");
+    assert_eq!(row, ">1  #2  pending  agent  bravo");
     quit(terminal)
 }
 
@@ -328,9 +328,11 @@ fn with_cancelled_tasks_shown_the_removed_task_stays_in_its_place_and_the_select
         lines[2],
         "pending 4  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 1"
     );
-    assert_eq!(lines[4], "   1  #1  pending  agent  alpha");
-    assert_eq!(lines[5], "   2  #2  cancelled  agent  bravo");
-    assert_eq!(lines[6], ">  3  #3  pending  agent  charlie");
+    // `cancelled` (9 characters) is now the widest status shown, so every `pending` row
+    // pads out to match it.
+    assert_eq!(lines[4], " 1  #1  pending    agent  alpha");
+    assert_eq!(lines[5], " 2  #2  cancelled  agent  bravo");
+    assert_eq!(lines[6], ">3  #3  pending    agent  charlie");
     assert_eq!(marked(&screen), [lines[6].clone()]);
     quit(terminal)
 }
@@ -412,7 +414,7 @@ fn d_on_the_running_task_shows_the_same_refusal_and_asks_nothing() -> Result<()>
     let screen = terminal.wait_for("the task running", |screen| {
         lines_inside_frame(&screen.contents())
             .get(4)
-            .is_some_and(|line| line.starts_with(">  1  #1  running"))
+            .is_some_and(|line| line.starts_with(">1  #1  running"))
     })?;
     let running_row = lines_inside_frame(&screen)[4].clone();
 
@@ -437,7 +439,7 @@ fn d_on_the_running_task_shows_the_same_refusal_and_asks_nothing() -> Result<()>
     terminal.wait_for("the task done", |screen| {
         lines_inside_frame(&screen.contents())
             .get(4)
-            .is_some_and(|line| line.starts_with(">  1  #1  done"))
+            .is_some_and(|line| line.starts_with(">1  #1  done"))
     })?;
 
     let listed = fixture

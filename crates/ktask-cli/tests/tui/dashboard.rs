@@ -205,7 +205,7 @@ fn a_run_started_elsewhere_shows_pending_then_running_with_elapsed_time_increasi
         screen.contents().contains("pending")
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  pending  agent  a");
+    assert_eq!(lines[4], ">1  #1  pending  agent  a");
     assert!(!lines[5].contains("implementation"), "{lines:?}");
 
     let mut run = fixture.spawn_run()?;
@@ -217,7 +217,7 @@ fn a_run_started_elsewhere_shows_pending_then_running_with_elapsed_time_increasi
                 .is_some_and(|line| line.contains("implementation"))
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  running  agent  a");
+    assert_eq!(lines[4], ">1  #1  running  agent  a");
     assert!(
         lines[5].contains("implementation · echo") && lines[5].ends_with("running"),
         "{}",
@@ -255,11 +255,11 @@ fn a_run_started_elsewhere_shows_pending_then_running_with_elapsed_time_increasi
             screen.contents().contains("commit")
                 && lines_inside_frame(&screen.contents())
                     .get(4)
-                    .is_some_and(|line| line.starts_with(">  1  #1  done"))
+                    .is_some_and(|line| line.starts_with(">1  #1  done"))
         },
     )?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  done  agent  a");
+    assert_eq!(lines[4], ">1  #1  done  agent  a");
     // Every step the attempt ran shows, in order — not only the last, `commit`.
     assert!(
         lines[5].contains("implementation · echo") && lines[5].ends_with("done"),
@@ -308,13 +308,13 @@ fn a_task_that_changes_a_file_gets_a_real_commit_and_the_dashboard_shows_its_sho
         contents.contains("committed as")
             && lines_inside_frame(&contents)
                 .get(4)
-                .is_some_and(|line| line.starts_with(">  1  #1  done"))
+                .is_some_and(|line| line.starts_with(">1  #1  done"))
     })?;
     assert!(run.wait()?.success());
 
     let hash = fixture.head()?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  done  agent  a");
+    assert_eq!(lines[4], ">1  #1  done  agent  a");
     // Every step shows, in order — the commit line is the fourth, not the only one.
     assert!(
         lines[5].contains("implementation · echo") && lines[5].ends_with("done"),
@@ -417,7 +417,7 @@ fn a_run_killed_outright_shows_the_task_interrupted_at_once_with_no_next_run() -
             .is_some_and(|line| line.contains("interrupted"))
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  interrupted  agent  a");
+    assert_eq!(lines[4], ">1  #1  interrupted  agent  a");
     assert!(
         lines[5].contains("implementation · echo") && lines[5].ends_with("interrupted"),
         "{}",
@@ -454,7 +454,7 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
         screen.contents().contains("commit") && screen.contents().ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  done  agent  a");
+    assert_eq!(lines[4], ">1  #1  done  agent  a");
     // All four steps of the successful attempt show, in order.
     assert!(
         lines[5].contains("implementation") && lines[5].ends_with("done"),
@@ -488,13 +488,15 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
         screen.contents().contains("failed: it broke") && screen.contents().ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  done  agent  x");
+    // `failed` (6 characters) is wider than `done` (4), so `done`'s status column pads out
+    // to match it.
+    assert_eq!(lines[4], ">1  #1  done    agent  x");
     // `x`'s four finished steps stay above `b`'s own header and single failed step.
     assert!(lines[5].contains("implementation") && lines[5].ends_with("done"));
     assert!(lines[6].contains("review") && lines[6].ends_with("approved"));
     assert!(lines[7].contains("testing") && lines[7].ends_with("accepted"));
     assert!(lines[8].contains("commit"));
-    assert_eq!(lines[9], "   2  #2  failed  agent  b");
+    assert_eq!(lines[9], " 2  #2  failed  agent  b");
     assert!(lines[10].ends_with("failed: it broke"), "{}", lines[10]);
     assert_eq!(lines[2], summary(1, 1, 0, 0));
     drop(terminal);
@@ -508,8 +510,8 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
         screen.contents().contains("too-large: split me") && screen.contents().ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  done  agent  x");
-    assert_eq!(lines[9], "   2  #2  failed  agent  c");
+    assert_eq!(lines[4], ">1  #1  done    agent  x");
+    assert_eq!(lines[9], " 2  #2  failed  agent  c");
     assert!(lines[10].ends_with("too-large: split me"), "{}", lines[10]);
     assert_eq!(lines[2], summary(1, 1, 0, 0));
     drop(terminal);
@@ -526,8 +528,10 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
         screen.contents().contains("needs-input: which path?") && screen.contents().ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  done  agent  x");
-    assert_eq!(lines[9], "   2  #2  blocked  agent  d");
+    // `blocked` (7 characters) is wider than `done` (4), so `done`'s status column pads out
+    // to match it.
+    assert_eq!(lines[4], ">1  #1  done     agent  x");
+    assert_eq!(lines[9], " 2  #2  blocked  agent  d");
     assert!(
         lines[10].ends_with("needs-input: which path?"),
         "{}",
@@ -545,8 +549,10 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
         screen.contents().contains("failed-unknown:") && screen.contents().ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  done  agent  x");
-    assert_eq!(lines[9], "   2  #2  failed-unknown  agent  e");
+    // `failed-unknown` (14 characters) is wider than `done` (4), so `done`'s status column
+    // pads out to match it.
+    assert_eq!(lines[4], ">1  #1  done            agent  x");
+    assert_eq!(lines[9], " 2  #2  failed-unknown  agent  e");
     assert!(lines[10].contains("failed-unknown:"), "{}", lines[10]);
     assert!(lines[10].contains("reported nothing"), "{}", lines[10]);
     assert_eq!(lines[2], summary(1, 0, 0, 1));
@@ -569,7 +575,7 @@ fn a_changes_requested_review_shows_its_own_outcome_and_findings() -> Result<()>
         screen.contents().contains("changes-requested") && screen.contents().ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  failed  agent  a");
+    assert_eq!(lines[4], ">1  #1  failed  agent  a");
     // The implementation step that passed stays visible above the review that failed it.
     assert!(
         lines[5].contains("implementation · echo") && lines[5].ends_with("done"),
@@ -601,7 +607,7 @@ fn a_rejecting_tester_shows_its_own_outcome_and_what_failed() -> Result<()> {
         screen.contents().contains("rejected") && screen.contents().ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  failed  agent  a");
+    assert_eq!(lines[4], ">1  #1  failed  agent  a");
     // The implementation and review steps that passed stay visible above the tester's own.
     assert!(
         lines[5].contains("implementation · echo") && lines[5].ends_with("done"),
@@ -640,12 +646,14 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
         contents.contains("commit") && contents.ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  done  agent  a");
+    // `pending` (7 characters) is wider than `done` (4), so `done`'s status column pads out
+    // to match it.
+    assert_eq!(lines[4], ">1  #1  done     agent  a");
     // `a`'s block carries one line per step it ran — implementation, review, testing, commit
     // — so `b`'s own header is pushed down to row 9, not row 6.
     assert!(lines[5].contains("implementation"), "{}", lines[5]);
     assert!(lines[8].contains("commit"), "{}", lines[8]);
-    assert_eq!(lines[9], "   2  #2  pending  agent  b");
+    assert_eq!(lines[9], " 2  #2  pending  agent  b");
 
     // Down moves past the five-line block of the attempted task onto the very next task.
     terminal.send("j")?;
@@ -655,7 +663,7 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
             .is_some_and(|line| line.starts_with('>'))
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[9], ">  2  #2  pending  agent  b");
+    assert_eq!(lines[9], ">2  #2  pending  agent  b");
     assert!(lines[8].contains("commit"), "{}", lines[8]);
 
     terminal.send("k")?;
@@ -689,7 +697,7 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
         !contents.contains("Keys") && contents.contains("commit")
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  done  agent  a");
+    assert_eq!(lines[4], ">1  #1  done     agent  a");
     assert!(lines[8].contains("commit"), "{}", lines[8]);
 
     // The cancelled task, never attempted, appears in its place with no step lines of its
@@ -699,10 +707,12 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
         screen.contents().contains("cancelled  agent  c")
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  done  agent  a");
+    // `cancelled` (9 characters) is now the widest status shown, so `done`'s and `pending`'s
+    // columns pad out to match it.
+    assert_eq!(lines[4], ">1  #1  done       agent  a");
     assert!(lines[8].contains("commit"), "{}", lines[8]);
-    assert_eq!(lines[9], "   2  #2  pending  agent  b");
-    assert_eq!(lines[10], "   3  #3  cancelled  agent  c");
+    assert_eq!(lines[9], " 2  #2  pending    agent  b");
+    assert_eq!(lines[10], " 3  #3  cancelled  agent  c");
 
     terminal.send("a")?;
     terminal.wait_for("the cancelled task hidden again", |screen| {
@@ -757,7 +767,7 @@ fn a_task_that_commits_and_pushes_shows_the_dashboard_its_push_line() -> Result<
         contents.contains("pushed")
             && lines_inside_frame(&contents)
                 .get(4)
-                .is_some_and(|line| line.starts_with(">  1  #1  done"))
+                .is_some_and(|line| line.starts_with(">1  #1  done"))
     })?;
     assert!(run.wait()?.success());
 
@@ -768,7 +778,7 @@ fn a_task_that_commits_and_pushes_shows_the_dashboard_its_push_line() -> Result<
     let hash = String::from_utf8(head.stdout)?.trim().to_owned();
 
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  done  agent  a");
+    assert_eq!(lines[4], ">1  #1  done  agent  a");
     // Every step of the attempt shows, in order: sync, implementation, review, testing,
     // commit, then push last.
     assert!(lines[5].contains("sync · -"), "{}", lines[5]);
@@ -843,7 +853,7 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
         },
     )?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  running  agent  a");
+    assert_eq!(lines[4], ">1  #1  running  agent  a");
     assert!(
         lines[5].contains("health check · -") && lines[5].ends_with("passed"),
         "{}",
@@ -866,7 +876,7 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
         contents.contains("commit")
             && lines_inside_frame(&contents)
                 .get(4)
-                .is_some_and(|line| line.starts_with(">  1  #1  done"))
+                .is_some_and(|line| line.starts_with(">1  #1  done"))
     })?;
     let lines = lines_inside_frame(&screen);
     assert!(
@@ -898,7 +908,7 @@ fn a_failing_health_check_gate_shows_on_the_queue_screen_pending_and_clears_once
         screen.contents().contains("health check")
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  pending  agent  a");
+    assert_eq!(lines[4], ">1  #1  pending  agent  a");
     assert!(
         lines[5].contains("health check · -") && lines[5].contains("failed"),
         "{}",
@@ -917,7 +927,7 @@ fn a_failing_health_check_gate_shows_on_the_queue_screen_pending_and_clears_once
             let contents = screen.contents();
             lines_inside_frame(&contents)
                 .get(4)
-                .is_some_and(|line| line.starts_with(">  1  #1  done"))
+                .is_some_and(|line| line.starts_with(">1  #1  done"))
         },
     )?;
     assert!(!screen.contains("exited with code 1"), "{screen}");
@@ -973,7 +983,7 @@ fn steps_taller_than_the_screen_scroll_behind_an_ellipsis_until_there_is_room_fo
         screen.contents().ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  done  agent  a");
+    assert_eq!(lines[4], ">1  #1  done  agent  a");
     assert_eq!(lines[5], "      …");
     assert!(lines[6].contains("commit · -"), "{}", lines[6]);
     assert!(lines[7].contains("push · -"), "{}", lines[7]);
@@ -991,7 +1001,7 @@ fn steps_taller_than_the_screen_scroll_behind_an_ellipsis_until_there_is_room_fo
         contents.contains("push") && !contents.contains('…')
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  done  agent  a");
+    assert_eq!(lines[4], ">1  #1  done  agent  a");
     assert!(lines[5].contains("sync · -"), "{}", lines[5]);
     assert!(lines[6].contains("health check · -"), "{}", lines[6]);
     assert!(lines[7].contains("implementation · echo"), "{}", lines[7]);
@@ -999,6 +1009,62 @@ fn steps_taller_than_the_screen_scroll_behind_an_ellipsis_until_there_is_room_fo
     assert!(lines[9].contains("testing · echo"), "{}", lines[9]);
     assert!(lines[10].contains("commit · -"), "{}", lines[10]);
     assert!(lines[11].contains("push · -"), "{}", lines[11]);
+
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
+fn a_long_title_on_a_narrow_terminal_is_cut_with_a_trailing_ellipsis() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let long_title = "x".repeat(100);
+    fixture.add_agent_task(&long_title, "")?;
+
+    // `>1  #1  pending  agent  ` (24 characters) leaves 14 of the 38-column list — the
+    // 40-column terminal minus the frame's one-column border each side — for the title: 13
+    // characters of it, then the ellipsis that replaces the rest.
+    let mut terminal = Terminal::launch(&fixture.sandbox, &fixture.repository, &["tui"], 24, 40)?;
+    let screen = terminal.wait_for("the queue screen", |screen| {
+        screen.contents().ends_with('┘')
+    })?;
+    let lines = lines_inside_frame(&screen);
+    let expected_title = format!("{}…", "x".repeat(13));
+    assert_eq!(
+        lines[4],
+        format!(">1  #1  pending  agent  {expected_title}")
+    );
+    assert!(!screen.contains(&long_title), "{screen}");
+
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
+fn a_long_failure_reason_on_a_narrow_terminal_is_cut_with_a_trailing_ellipsis() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let long_reason = "y".repeat(100);
+    fixture.add_agent_task("a", &reporting_body_with_reason("failed", &long_reason))?;
+    fixture.run_the_queue()?;
+
+    let mut terminal = Terminal::launch(&fixture.sandbox, &fixture.repository, &["tui"], 24, 80)?;
+    let screen = terminal.wait_for("a's cut reason", |screen| {
+        let contents = screen.contents();
+        contents.contains("failed: y") && contents.ends_with('┘')
+    })?;
+    let lines = lines_inside_frame(&screen);
+    // The 80-column terminal, minus the frame's one-column border each side, leaves 78 for
+    // the implementation line: comfortable room for its own fixed text, so only the reason
+    // itself needs cutting.
+    assert!(
+        lines[5].contains("implementation · echo") && lines[5].contains("failed: y"),
+        "{}",
+        lines[5]
+    );
+    assert!(lines[5].ends_with('…'), "{}", lines[5]);
+    assert_eq!(lines[5].chars().count(), 78, "{}", lines[5]);
+    assert!(!screen.contains(&long_reason), "{screen}");
 
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);

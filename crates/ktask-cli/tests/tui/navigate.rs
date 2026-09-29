@@ -60,7 +60,7 @@ impl Fixture {
         terminal.wait_for("the queue with the first task selected", |screen| {
             let contents = screen.contents();
             contents.ends_with('┘')
-                && marked(&contents).contains(&">  1  #1  pending  agent  alpha".to_owned())
+                && marked(&contents).contains(&">1  #1  pending  agent  alpha".to_owned())
         })?;
         Ok(terminal)
     }
@@ -112,9 +112,9 @@ fn the_first_task_starts_selected_and_the_selection_is_marked_on_one_row_only() 
 
     let screen = terminal.screen();
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">  1  #1  pending  agent  alpha");
-    assert_eq!(lines[5], "   2  #2  pending  agent  bravo");
-    assert_eq!(lines[8], "   5  #5  pending  agent  echo");
+    assert_eq!(lines[4], ">1  #1  pending  agent  alpha");
+    assert_eq!(lines[5], " 2  #2  pending  agent  bravo");
+    assert_eq!(lines[8], " 5  #5  pending  agent  echo");
     assert_eq!(marked(&screen), [lines[4].clone()]);
     quit(terminal)
 }
@@ -129,7 +129,7 @@ fn j_and_down_move_the_selection_down_and_it_stops_at_the_last_task() -> Result<
         &[("j", "bravo"), (DOWN, "charlie"), ("j", "delta")],
     )?;
     let row = wait_selected(&terminal, "delta")?;
-    assert_eq!(row, ">  4  #4  pending  agent  delta");
+    assert_eq!(row, ">4  #4  pending  agent  delta");
     walk(&mut terminal, &[(DOWN, "echo")])?;
     // Past the end nothing moves: the key that follows goes up from the last task.
     terminal.send("j")?;
@@ -195,14 +195,14 @@ fn a_long_queue_scrolls_so_that_the_selection_stays_on_screen() -> Result<()> {
     let screen = terminal.wait_for("the last task on screen", |screen| {
         screen.contents().contains("hotel")
     })?;
-    assert_eq!(marked(&screen), [">  8  #8  pending  agent  hotel"]);
+    assert_eq!(marked(&screen), [">8  #8  pending  agent  hotel"]);
     assert!(!screen.contains("alpha"), "{screen}");
 
     terminal.send("g")?;
     let screen = terminal.wait_for("the first task on screen", |screen| {
         screen.contents().contains("alpha")
     })?;
-    assert_eq!(marked(&screen), [">  1  #1  pending  agent  alpha"]);
+    assert_eq!(marked(&screen), [">1  #1  pending  agent  alpha"]);
     assert!(!screen.contains("hotel"), "{screen}");
     quit(terminal)
 }
@@ -217,23 +217,25 @@ fn a_toggles_cancelled_tasks_in_their_places_marked_as_cancelled_and_back() -> R
         lines[2],
         "pending 4  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 1"
     );
-    assert_eq!(lines[5], "   2  #3  pending  agent  charlie");
+    assert_eq!(lines[5], " 2  #3  pending  agent  charlie");
     assert!(!terminal.screen().contains("bravo"));
 
     terminal.send("a")?;
     let screen = terminal.wait_for("the cancelled task among the others", |screen| {
-        screen.contents().contains("   5  #5  pending  agent  echo")
+        screen.contents().contains(" 5  #5  pending    agent  echo")
     })?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
         "pending 4  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 1"
     );
-    assert_eq!(lines[4], ">  1  #1  pending  agent  alpha");
-    assert_eq!(lines[5], "   2  #2  cancelled  agent  bravo");
-    assert_eq!(lines[6], "   3  #3  pending  agent  charlie");
-    assert_eq!(lines[7], "   4  #4  pending  agent  delta");
-    assert_eq!(lines[8], "   5  #5  pending  agent  echo");
+    // `cancelled` (9 characters) is now the widest status shown, so every `pending` row
+    // pads out to match it.
+    assert_eq!(lines[4], ">1  #1  pending    agent  alpha");
+    assert_eq!(lines[5], " 2  #2  cancelled  agent  bravo");
+    assert_eq!(lines[6], " 3  #3  pending    agent  charlie");
+    assert_eq!(lines[7], " 4  #4  pending    agent  delta");
+    assert_eq!(lines[8], " 5  #5  pending    agent  echo");
 
     // Walking onto the cancelled task marks it like any other.
     walk(&mut terminal, &[("j", "bravo")])?;
@@ -243,8 +245,8 @@ fn a_toggles_cancelled_tasks_in_their_places_marked_as_cancelled_and_back() -> R
         !screen.contents().contains("bravo")
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], "   1  #1  pending  agent  alpha");
-    assert_eq!(lines[5], ">  2  #3  pending  agent  charlie");
+    assert_eq!(lines[4], " 1  #1  pending  agent  alpha");
+    assert_eq!(lines[5], ">2  #3  pending  agent  charlie");
     assert_eq!(lines[8], "");
     quit(terminal)
 }
@@ -414,10 +416,10 @@ fn a_task_added_from_the_cli_appears_and_the_selection_stays_on_the_same_task() 
         lines[2],
         "pending 7  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
     );
-    assert_eq!(lines[4], "   1  #6  pending  agent  zulu");
-    assert_eq!(lines[5], "   2  #1  pending  agent  alpha");
-    assert_eq!(lines[6], ">  3  #2  pending  agent  bravo");
-    assert_eq!(lines[10], "   7  #7  pending  agent  yankee");
+    assert_eq!(lines[4], " 1  #6  pending  agent  zulu");
+    assert_eq!(lines[5], " 2  #1  pending  agent  alpha");
+    assert_eq!(lines[6], ">3  #2  pending  agent  bravo");
+    assert_eq!(lines[10], " 7  #7  pending  agent  yankee");
     assert_eq!(marked(&screen), [lines[6].clone()]);
     // The selection keeps moving from where it was.
     walk(&mut terminal, &[("j", "charlie")])?;
@@ -435,7 +437,7 @@ fn a_task_added_to_an_empty_queue_appears_selected() -> Result<()> {
     let screen = terminal.wait_for("the new task selected", |screen| {
         !marked(&screen.contents()).is_empty()
     })?;
-    assert_eq!(marked(&screen), [">  1  #1  pending  agent  alpha"]);
+    assert_eq!(marked(&screen), [">1  #1  pending  agent  alpha"]);
     assert!(!screen.contains("The queue is empty."), "{screen}");
     quit(terminal)
 }
@@ -451,7 +453,7 @@ fn a_selected_task_removed_from_the_cli_gives_the_selection_to_the_one_after_it(
     let screen = terminal.wait_for("the removed task gone", |screen| {
         !screen.contents().contains("charlie")
     })?;
-    assert_eq!(marked(&screen), [">  3  #4  pending  agent  delta"]);
+    assert_eq!(marked(&screen), [">3  #4  pending  agent  delta"]);
     assert!(screen.contains("cancelled 1"), "{screen}");
     quit(terminal)
 }
@@ -469,7 +471,8 @@ fn a_task_removed_from_the_cli_appears_when_cancelled_tasks_are_shown() -> Resul
         screen.contents().contains("cancelled  agent  alpha")
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], "   1  #1  cancelled  agent  alpha");
-    assert_eq!(lines[5], ">  2  #2  pending  agent  bravo");
+    // `cancelled` (9 characters) is now the widest status shown, so `pending` pads to match.
+    assert_eq!(lines[4], " 1  #1  cancelled  agent  alpha");
+    assert_eq!(lines[5], ">2  #2  pending    agent  bravo");
     quit(terminal)
 }

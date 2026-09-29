@@ -323,7 +323,7 @@ fn open_with_tasks(sandbox: &Sandbox, cwd: &Path) -> Result<Terminal> {
     let terminal = Terminal::launch(sandbox, cwd, &["tui"], ROWS, COLS)?;
     terminal.wait_for("the queue with its tasks", |screen| {
         let contents = screen.contents();
-        contents.contains("  1  #1  ") && contents.ends_with('┘')
+        contents.contains("1  #1  ") && contents.ends_with('┘')
     })?;
     Ok(terminal)
 }
@@ -345,8 +345,8 @@ fn tasks_added_from_the_cli_appear_with_the_summary_updated() -> Result<()> {
         lines[2],
         "pending 2  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
     );
-    assert_eq!(lines[4], ">  1  #1  pending  agent  Write the parser");
-    assert_eq!(lines[5], "   2  #2  pending  human  Approve the design");
+    assert_eq!(lines[4], ">1  #1  pending  agent  Write the parser");
+    assert_eq!(lines[5], " 2  #2  pending  human  Approve the design");
     assert!(!screen.contains("The queue is empty."), "{screen}");
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
@@ -370,7 +370,7 @@ fn a_task_added_after_the_screen_was_closed_shows_the_next_time_it_opens() -> Re
         lines[2],
         "pending 1  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
     );
-    assert_eq!(lines[4], ">  1  #1  pending  agent  Late arrival");
+    assert_eq!(lines[4], ">1  #1  pending  agent  Late arrival");
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())
@@ -414,11 +414,11 @@ fn tasks_inserted_from_the_cli_show_in_their_place_with_their_own_ids() -> Resul
         lines[2],
         "pending 5  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
     );
-    assert_eq!(lines[4], ">  1  #4  pending  agent  First");
-    assert_eq!(lines[5], "   2  #1  pending  agent  Second");
-    assert_eq!(lines[6], "   3  #3  pending  agent  Third");
-    assert_eq!(lines[7], "   4  #2  pending  agent  Fourth");
-    assert_eq!(lines[8], "   5  #5  pending  agent  Fifth");
+    assert_eq!(lines[4], ">1  #4  pending  agent  First");
+    assert_eq!(lines[5], " 2  #1  pending  agent  Second");
+    assert_eq!(lines[6], " 3  #3  pending  agent  Third");
+    assert_eq!(lines[7], " 4  #2  pending  agent  Fourth");
+    assert_eq!(lines[8], " 5  #5  pending  agent  Fifth");
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())
@@ -447,7 +447,7 @@ fn tasks_imported_from_the_cli_show_in_their_place_with_their_own_ids() -> Resul
     let mut terminal = Terminal::launch(&sandbox, &repository, &["tui"], ROWS, COLS)?;
     let screen = terminal.wait_for("the queue with four tasks", |screen| {
         let contents = screen.contents();
-        contents.contains("  4  #2  pending  agent  b") && contents.ends_with('┘')
+        contents.contains(" 4  #2  pending  agent  b") && contents.ends_with('┘')
     })?;
 
     let lines = lines_inside_frame(&screen);
@@ -455,10 +455,10 @@ fn tasks_imported_from_the_cli_show_in_their_place_with_their_own_ids() -> Resul
         lines[2],
         "pending 4  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
     );
-    assert_eq!(lines[4], ">  1  #1  pending  agent  a");
-    assert_eq!(lines[5], "   2  #3  pending  agent  x");
-    assert_eq!(lines[6], "   3  #4  pending  human  y");
-    assert_eq!(lines[7], "   4  #2  pending  agent  b");
+    assert_eq!(lines[4], ">1  #1  pending  agent  a");
+    assert_eq!(lines[5], " 2  #3  pending  agent  x");
+    assert_eq!(lines[6], " 3  #4  pending  human  y");
+    assert_eq!(lines[7], " 4  #2  pending  agent  b");
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())
@@ -483,8 +483,8 @@ fn a_task_removed_from_the_cli_is_hidden_and_counted_as_cancelled() -> Result<()
         lines[2],
         "pending 2  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 1"
     );
-    assert_eq!(lines[4], ">  1  #1  pending  agent  First");
-    assert_eq!(lines[5], "   2  #3  pending  agent  Third");
+    assert_eq!(lines[4], ">1  #1  pending  agent  First");
+    assert_eq!(lines[5], " 2  #3  pending  agent  Third");
     assert_eq!(lines[6], "");
     assert!(!screen.contains("Second"), "{screen}");
     terminal.send("q")?;

@@ -71,13 +71,10 @@ fn capital_o_then_submit_inserts_above_the_selected_task_with_the_ids_unchanged(
     wait_queue_with(&terminal, "new")?;
     let screen = wait_selected_screen(&terminal, "new")?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(
-        marked(&screen),
-        [">  2  #6  pending  agent  new".to_owned()]
-    );
-    assert_eq!(lines[4], "   1  #1  pending  agent  alpha");
-    assert_eq!(lines[6], "   3  #2  pending  agent  bravo");
-    assert_eq!(lines[9], "   6  #5  pending  agent  echo");
+    assert_eq!(marked(&screen), [">2  #6  pending  agent  new".to_owned()]);
+    assert_eq!(lines[4], " 1  #1  pending  agent  alpha");
+    assert_eq!(lines[6], " 3  #2  pending  agent  bravo");
+    assert_eq!(lines[9], " 6  #5  pending  agent  echo");
     assert_eq!(
         order(&fixture)?,
         queue(&["alpha", "new", "bravo", "charlie", "delta", "echo"])
@@ -99,12 +96,9 @@ fn o_then_submit_inserts_below_the_selected_task_with_the_ids_unchanged() -> Res
     wait_queue_with(&terminal, "new")?;
     let screen = wait_selected_screen(&terminal, "new")?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(
-        marked(&screen),
-        [">  3  #6  pending  agent  new".to_owned()]
-    );
-    assert_eq!(lines[5], "   2  #2  pending  agent  bravo");
-    assert_eq!(lines[7], "   4  #3  pending  agent  charlie");
+    assert_eq!(marked(&screen), [">3  #6  pending  agent  new".to_owned()]);
+    assert_eq!(lines[5], " 2  #2  pending  agent  bravo");
+    assert_eq!(lines[7], " 4  #3  pending  agent  charlie");
     assert_eq!(
         order(&fixture)?,
         queue(&["alpha", "bravo", "new", "charlie", "delta", "echo"])
@@ -123,7 +117,7 @@ fn the_first_and_the_last_task_take_a_new_one_above_and_below() -> Result<()> {
     wait_queue_with(&terminal, "first")?;
     assert_eq!(
         wait_selected(&terminal, "first")?,
-        ">  1  #6  pending  agent  first"
+        ">1  #6  pending  agent  first"
     );
 
     terminal.send("G")?;
@@ -134,7 +128,7 @@ fn the_first_and_the_last_task_take_a_new_one_above_and_below() -> Result<()> {
     wait_queue_with(&terminal, "last")?;
     assert_eq!(
         wait_selected(&terminal, "last")?,
-        ">  7  #7  pending  agent  last"
+        ">7  #7  pending  agent  last"
     );
 
     let titles = order(&fixture)?;
@@ -207,10 +201,10 @@ fn a_task_added_with_the_cli_at_a_place_is_shown_where_the_form_would_have_put_i
         let lines = lines_inside_frame(&screen.contents());
         lines
             .get(5)
-            .is_some_and(|line| line == ">  2  #2  pending  agent  bravo")
+            .is_some_and(|line| line == ">2  #2  pending  agent  bravo")
             && lines
                 .get(6)
-                .is_some_and(|line| line == "   3  #6  pending  agent  via cli")
+                .is_some_and(|line| line == " 3  #6  pending  agent  via cli")
     })?;
     quit(terminal)
 }
@@ -238,7 +232,7 @@ fn on_an_empty_queue_o_and_capital_o_add_at_the_end_and_select_the_new_task() ->
         wait_queue_with(&terminal, "only")?;
         assert_eq!(
             wait_selected(&terminal, "only")?,
-            ">  1  #1  pending  agent  only"
+            ">1  #1  pending  agent  only"
         );
         assert_eq!(order(&fixture)?, [(1, "only".to_owned())]);
         let side = if key == "o" { "below" } else { "above" };
