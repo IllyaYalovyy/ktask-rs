@@ -36,15 +36,17 @@ pub use queue::{QueueView, StatusSummary, queue_view};
 pub use register::{RegisterError, register_project};
 pub use report::{AttemptToken, Outcome, ReportError, report, start_attempt};
 pub use resolve::{Resolution, ResolveError, resolve_project};
-pub use run::{Attempted, RunContext, RunEnd, RunError, RunReport, build_prompt, run_queue};
+pub use run::{
+    Attempted, RunContext, RunEnd, RunError, RunReport, SyncProblem, build_prompt, run_queue,
+};
 pub use settings::{
     ATTEMPT_TIMEOUT, DEFAULT_ATTEMPT_TIMEOUT_SECS, HEALTH_CHECK, SetSettingError, SettingView,
     Settings, SettingsError, SettingsStore, TRACKED_BRANCH, effective_attempt_timeout, set_setting,
     show_settings,
 };
 pub use status::{
-    AttemptLine, AttemptOutcome, HEALTH_CHECK_STEP, IMPLEMENTATION, StatusEntry, StepLine,
-    displayed_status, status,
+    AttemptLine, AttemptOutcome, HEALTH_CHECK_STEP, IMPLEMENTATION, SYNC_STEP, StatusEntry,
+    StepLine, displayed_status, status,
 };
 pub use task::{
     AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, add_task,

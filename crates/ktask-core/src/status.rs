@@ -11,6 +11,10 @@ use crate::{
 /// The step kind that runs an agent on the task's whole prompt.
 pub const IMPLEMENTATION: &str = "implementation";
 
+/// The step kind that pulls the project's tracked branch with rebase before the health
+/// check.
+pub const SYNC_STEP: &str = "sync";
+
 /// The step kind that runs the project's configured health-check command before the
 /// implementation step.
 pub const HEALTH_CHECK_STEP: &str = "health check";
@@ -133,8 +137,10 @@ fn ended_outcome(
 
 /// The outcome and reason shown for a step named `name` that ended at `end`: the implementation
 /// step is judged by what the agent itself reported, when it reported anything; every other
-/// step — the health check, today — is a command-kind step, only ever journaled once it has
-/// already passed.
+/// step — the sync and the health check, today — is a command-kind step, only ever journaled
+/// once it has already passed, with whatever it recorded — the health check has nothing to
+/// add, the sync step says how many commits it took in, or that there were none — shown
+/// alongside it.
 fn step_outcome(
     name: &str,
     end: &AttemptEnd,
@@ -143,7 +149,7 @@ fn step_outcome(
     if name == IMPLEMENTATION {
         ended_outcome(end, reported)
     } else {
-        (AttemptOutcome::Passed, None)
+        (AttemptOutcome::Passed, end.reason.clone())
     }
 }
 

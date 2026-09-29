@@ -6,11 +6,12 @@ use std::fmt::{self, Write as _};
 use std::path::Path;
 use std::time::Duration;
 
+use crate::settings::split_tracked_branch;
 use crate::{
     AttemptRun, AttemptToken, BeginAttemptError, Clock, CommandSpec, Commands, CommandsError, Exit,
     HEALTH_CHECK_STEP, IMPLEMENTATION, Journal, JournalError, Outcome, Output, Provider,
-    ProviderRunError, RecordReportError, RunLock, RunLockError, StepCall, Task, TaskId, TaskKind,
-    TaskStatus, list_tasks, run_provider,
+    ProviderRunError, RecordReportError, RunLock, RunLockError, SYNC_STEP, StepCall, Task, TaskId,
+    TaskKind, TaskStatus, list_tasks, run_provider,
 };
 
 /// Why a run could not proceed at all — never for how an attempt itself ended, which is a
@@ -114,6 +115,31 @@ pub enum RunEnd {
         /// The end of its combined standard output and standard error.
         output_tail: String,
     },
+    /// The next task's sync, ahead of its health check, refused to run it: it stays
+    /// `pending`.
+    SyncFailed {
+        /// The task the sync ran ahead of.
+        id: TaskId,
+        /// The tracked branch, as configured: `"<remote>/<branch>"`.
+        tracked_branch: String,
+        /// What went wrong.
+        problem: SyncProblem,
+    },
+}
+
+/// Why the sync ahead of a task's health check refused to run it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncProblem {
+    /// The project's directory holds changes git has not committed: the listing is
+    /// `git status --porcelain`'s own output, read before anything else was touched.
+    UncommittedChanges(String),
+    /// The tracked branch's remote could not be reached.
+    RemoteUnreachable(String),
+    /// Rebasing onto the tracked branch conflicted in these files. The rebase was undone
+    /// before this was returned: the directory is exactly as it was.
+    Conflict(Vec<String>),
+    /// Git itself could not do the work asked of it, for some other reason.
+    GitFailed(String),
 }
 
 /// What a run did.
@@ -143,6 +169,10 @@ pub struct RunContext<'a> {
     /// implementation step, subject to `attempt_timeout` the same way. `None` when the
     /// project has not set one: the step is skipped, and leaves no line.
     pub health_check_command: Option<&'a str>,
+    /// The project's configured tracked branch, as `"<remote>/<branch>"`, pulled with rebase
+    /// in `project_dir` ahead of the health check. `None` when the project has not set one:
+    /// the step is skipped, and leaves no line.
+    pub tracked_branch: Option<&'a str>,
 }
 
 /// The prompt for attempt `token` of `task`: its title, body and acceptance criteria, and
@@ -375,31 +405,188 @@ fn health_check_outcome(result: Result<Output, CommandsError>, duration: Duratio
     }
 }
 
-/// Records the health check that already ran, in `duration`, as the first step of attempt
-/// `number` of task `id` — begun and ended in the same call, since it ran before the attempt
-/// itself was begun.
-fn record_health_check_step(
+/// Records a step, named `step`, that already ran and passed, in `duration`, with `reason` —
+/// `Some` when it has something to say even though it passed, as the sync step does — as one
+/// of the steps of attempt `number` of task `id` ahead of the pipeline's own: begun and ended
+/// in the same call, since it ran before the attempt itself was begun.
+fn record_passed_step(
     journal: &impl Journal,
     clock: &impl Clock,
     id: TaskId,
     number: u32,
+    step: &str,
     duration: Duration,
+    reason: Option<&str>,
 ) -> Result<(), RunError> {
-    crate::attempt::begin_step(journal, clock, id, number, HEALTH_CHECK_STEP)?;
+    crate::attempt::begin_step(journal, clock, id, number, step)?;
     crate::attempt::end_step(
         journal,
         clock,
         id,
         number,
-        HEALTH_CHECK_STEP,
+        step,
         AttemptRun {
             duration,
             exit_code: Some(0),
             status: TaskStatus::Done,
-            reason: None,
+            reason,
         },
     )?;
     Ok(())
+}
+
+/// Runs `args` as `git`, in `context.project_dir`, subject to `context.attempt_timeout`.
+fn run_git(
+    commands: &impl Commands,
+    context: RunContext<'_>,
+    args: &[&str],
+) -> Result<Output, CommandsError> {
+    commands.run(&CommandSpec {
+        program: "git".to_owned(),
+        args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+        dir: context.project_dir.to_owned(),
+        stdin: Vec::new(),
+        timeout: context.attempt_timeout,
+    })
+}
+
+/// Runs `args` as `git`, turning anything other than a clean exit into a [`SyncProblem`] built
+/// by `problem` from a description of what went wrong.
+fn require_git(
+    commands: &impl Commands,
+    context: RunContext<'_>,
+    args: &[&str],
+    problem: impl Fn(String) -> SyncProblem,
+) -> Result<Output, SyncProblem> {
+    let description = || format!("`git {}`", args.join(" "));
+    match run_git(commands, context, args) {
+        Ok(output) => match output.exit {
+            Exit::Code(0) => Ok(output),
+            Exit::Code(code) => Err(problem(format!(
+                "{} exited with code {code}: {}",
+                description(),
+                output_tail(&output)
+            ))),
+            Exit::Killed => Err(problem(format!(
+                "{} ran past its time limit and was killed",
+                description()
+            ))),
+            Exit::Interrupted => Err(problem(INTERRUPTED.to_owned())),
+        },
+        Err(error) => Err(problem(format!(
+            "{} could not be run: {error}",
+            description()
+        ))),
+    }
+}
+
+/// Every path `git diff --name-only --diff-filter=U` named as conflicting, in `context`'s
+/// project directory — read while a rebase there is still stopped on the conflict, before it
+/// is undone.
+fn conflicted_files(commands: &impl Commands, context: RunContext<'_>) -> Vec<String> {
+    require_git(
+        commands,
+        context,
+        &["diff", "--name-only", "--diff-filter=U"],
+        SyncProblem::GitFailed,
+    )
+    .map(|output| {
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Pulls `tracked_branch` (`"<remote>/<branch>"`) with rebase into `context.project_dir`: is
+/// refused when the directory holds uncommitted changes or the remote cannot be reached;
+/// rebases onto the tracked branch when it fetched anything new, undoing the rebase and
+/// naming every file it conflicted in when it did. Returns a message for `status` to show —
+/// how many commits were taken in, or that there were none — once it succeeded.
+fn sync_with_tracked_branch(
+    commands: &impl Commands,
+    tracked_branch: &str,
+    context: RunContext<'_>,
+) -> Result<String, SyncProblem> {
+    let status_output = require_git(
+        commands,
+        context,
+        &["status", "--porcelain"],
+        SyncProblem::GitFailed,
+    )?;
+    let dirty = String::from_utf8_lossy(&status_output.stdout)
+        .trim()
+        .to_owned();
+    if !dirty.is_empty() {
+        return Err(SyncProblem::UncommittedChanges(dirty));
+    }
+
+    let Some((remote, branch)) = split_tracked_branch(tracked_branch) else {
+        unreachable!("a saved tracked-branch setting always names a remote and a branch");
+    };
+    require_git(
+        commands,
+        context,
+        &["fetch", remote],
+        SyncProblem::RemoteUnreachable,
+    )?;
+
+    let remote_ref = format!("{remote}/{branch}");
+    let count_output = require_git(
+        commands,
+        context,
+        &["rev-list", "--count", &format!("HEAD..{remote_ref}")],
+        SyncProblem::GitFailed,
+    )?;
+    let count: u64 = String::from_utf8_lossy(&count_output.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(0);
+    if count == 0 {
+        return Ok("nothing new".to_owned());
+    }
+
+    match run_git(commands, context, &["rebase", &remote_ref]) {
+        Ok(output) if matches!(output.exit, Exit::Code(0)) => Ok(format!(
+            "took in {count} commit{} from {tracked_branch}",
+            if count == 1 { "" } else { "s" }
+        )),
+        Ok(_) => {
+            let files = conflicted_files(commands, context);
+            let _ = run_git(commands, context, &["rebase", "--abort"]);
+            Err(SyncProblem::Conflict(files))
+        }
+        Err(error) => Err(SyncProblem::GitFailed(format!(
+            "`git rebase {remote_ref}` could not be run: {error}"
+        ))),
+    }
+}
+
+/// What the sync ahead of a task's health check produced.
+enum Sync {
+    /// It found and, when there was anything to bring in, rebased in `message`'s worth of
+    /// commits, taking `duration`.
+    Passed { duration: Duration, message: String },
+    /// It refused to run.
+    Failed(SyncProblem),
+}
+
+/// Times [`sync_with_tracked_branch`] with `clock`.
+fn run_sync(
+    commands: &impl Commands,
+    clock: &impl Clock,
+    tracked_branch: &str,
+    context: RunContext<'_>,
+) -> Sync {
+    let started = clock.now();
+    match sync_with_tracked_branch(commands, tracked_branch, context) {
+        Ok(message) => Sync::Passed {
+            duration: clock.now().duration_since(started).unwrap_or_default(),
+            message,
+        },
+        Err(problem) => Sync::Failed(problem),
+    }
 }
 
 /// Runs `provider` on `target.prompt` for `target.token`'s step `step`, timing it from `clock`.
@@ -486,9 +673,22 @@ fn run_steps(
     Ok((total, exit_code, status, reason))
 }
 
-/// Runs one attempt at `task` with `provider`: begins it, records `health_check_duration` as
-/// the attempt's first step when the health check ran ahead of it, builds the prompt, runs it
-/// through the pipeline's steps, and ends the attempt with the outcome they left it at.
+/// One step that already ran and passed before the attempt it belongs to was even begun — the
+/// sync and the health check, when the project has configured them — recorded as the
+/// attempt's own first steps, in the order they ran.
+struct PreStep {
+    /// The step's name: [`SYNC_STEP`] or [`HEALTH_CHECK_STEP`].
+    name: &'static str,
+    /// How long it took.
+    duration: Duration,
+    /// What it has to say even though it passed — the sync step's own message, or `None` for
+    /// the health check, which has nothing to add.
+    reason: Option<String>,
+}
+
+/// Runs one attempt at `task` with `provider`: begins it, records `pre_steps` as the attempt's
+/// own first steps in order, builds the prompt, runs it through the pipeline's steps, and ends
+/// the attempt with the outcome they left it at.
 ///
 /// # Errors
 ///
@@ -500,11 +700,21 @@ fn run_one_attempt(
     provider: &Provider,
     context: RunContext<'_>,
     task: &Task,
-    health_check_duration: Option<Duration>,
+    pre_steps: &[PreStep],
 ) -> Result<Attempted, RunError> {
     let number = crate::attempt::begin_attempt_running(journal, clock, task.id, provider.name)?;
-    if let Some(duration) = health_check_duration {
-        record_health_check_step(journal, clock, task.id, number, duration)?;
+    let mut pre_duration = Duration::ZERO;
+    for pre_step in pre_steps {
+        record_passed_step(
+            journal,
+            clock,
+            task.id,
+            number,
+            pre_step.name,
+            pre_step.duration,
+            pre_step.reason.as_deref(),
+        )?;
+        pre_duration += pre_step.duration;
     }
     let token = AttemptToken::new(context.project_name, task.id, number);
     let prompt = build_prompt(task, &token, context.binary_path);
@@ -522,7 +732,7 @@ fn run_one_attempt(
         task.id,
         token.number,
         AttemptRun {
-            duration: health_check_duration.unwrap_or_default() + duration,
+            duration: pre_duration + duration,
             exit_code,
             status,
             reason: reason.as_deref(),
@@ -554,9 +764,31 @@ fn attempt_loop(
     loop {
         match pick_next_task(journal)? {
             Pick::Task(task) => {
-                let health_check_duration = match context.health_check_command {
-                    Some(command) => match run_health_check(commands, clock, command, context) {
-                        HealthCheck::Passed(duration) => Some(duration),
+                let mut pre_steps = Vec::new();
+                if let Some(tracked_branch) = context.tracked_branch {
+                    match run_sync(commands, clock, tracked_branch, context) {
+                        Sync::Passed { duration, message } => pre_steps.push(PreStep {
+                            name: SYNC_STEP,
+                            duration,
+                            reason: Some(message),
+                        }),
+                        Sync::Failed(problem) => {
+                            let end = RunEnd::SyncFailed {
+                                id: task.id,
+                                tracked_branch: tracked_branch.to_owned(),
+                                problem,
+                            };
+                            return Ok(RunReport { attempted, end });
+                        }
+                    }
+                }
+                if let Some(command) = context.health_check_command {
+                    match run_health_check(commands, clock, command, context) {
+                        HealthCheck::Passed(duration) => pre_steps.push(PreStep {
+                            name: HEALTH_CHECK_STEP,
+                            duration,
+                            reason: None,
+                        }),
                         HealthCheck::Failed {
                             reason,
                             output_tail,
@@ -569,17 +801,10 @@ fn attempt_loop(
                             };
                             return Ok(RunReport { attempted, end });
                         }
-                    },
-                    None => None,
-                };
+                    }
+                }
                 let result = run_one_attempt(
-                    journal,
-                    clock,
-                    commands,
-                    provider,
-                    context,
-                    &task,
-                    health_check_duration,
+                    journal, clock, commands, provider, context, &task, &pre_steps,
                 )?;
                 let status = result.status;
                 attempted.push(result);
@@ -698,6 +923,7 @@ fn attempt_outcome(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::path::Path;
     use std::time::SystemTime;
 
@@ -750,6 +976,7 @@ mod tests {
             binary_path: Path::new("/opt/ktask-rs/bin/ktask-rs"),
             attempt_timeout: timeout,
             health_check_command: None,
+            tracked_branch: None,
         }
     }
 
@@ -1131,6 +1358,403 @@ mod tests {
             .unwrap();
         assert_eq!(attempt.steps.len(), 1, "{:?}", attempt.steps);
         assert_eq!(attempt.steps[0].name, IMPLEMENTATION);
+    }
+
+    /// A ready-to-return, always-successful [`Output`] carrying `stdout`.
+    fn git_ok(stdout: &[u8]) -> Output {
+        Output {
+            stdout: stdout.to_vec(),
+            stderr: Vec::new(),
+            exit: Exit::Code(0),
+        }
+    }
+
+    /// An [`Output`] that failed with `code`, saying `stderr`.
+    fn git_failed(code: i32, stderr: &[u8]) -> Output {
+        Output {
+            stdout: Vec::new(),
+            stderr: stderr.to_vec(),
+            exit: Exit::Code(code),
+        }
+    }
+
+    /// A commands port that answers `git` invocations by their exact arguments — every other
+    /// `git` call it is asked for, not just the ones a test cares about (`rebase --abort`,
+    /// say), succeeds with nothing — and passes anything that is not `git` on to `other`.
+    /// Records every `git` call it received, in order, so a test can tell what ran.
+    struct GitScript<'a> {
+        responses: Vec<(&'static [&'static str], Output)>,
+        calls: RefCell<Vec<Vec<String>>>,
+        other: &'a dyn Commands,
+    }
+
+    impl Commands for GitScript<'_> {
+        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+            if spec.program != "git" {
+                return self.other.run(spec);
+            }
+            self.calls.borrow_mut().push(spec.args.clone());
+            Ok(self
+                .responses
+                .iter()
+                .find(|(args, _)| spec.args == *args)
+                .map_or_else(|| git_ok(b""), |(_, output)| output.clone()))
+        }
+    }
+
+    /// [`RunContext`] tracking `origin/main`, on top of `context`.
+    fn context_tracking(timeout: Duration) -> RunContext<'static> {
+        let mut ctx = context(timeout);
+        ctx.tracked_branch = Some("origin/main");
+        ctx
+    }
+
+    #[test]
+    fn new_commits_on_the_tracked_branch_are_rebased_in_and_recorded_first() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = GitScript {
+            responses: vec![
+                (&["status", "--porcelain"], git_ok(b"")),
+                (&["fetch", "origin"], git_ok(b"")),
+                (
+                    &["rev-list", "--count", "HEAD..origin/main"],
+                    git_ok(b"3\n"),
+                ),
+                (&["rebase", "origin/main"], git_ok(b"")),
+            ],
+            calls: RefCell::default(),
+            other: &reporting,
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt.steps.len(), 2, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps[0].name, SYNC_STEP);
+        let synced = attempt.steps[0].ended.as_ref().unwrap();
+        assert_eq!(synced.status, TaskStatus::Done);
+        assert_eq!(
+            synced.reason.as_deref(),
+            Some("took in 3 commits from origin/main")
+        );
+        assert_eq!(attempt.steps[1].name, IMPLEMENTATION);
+    }
+
+    #[test]
+    fn one_new_commit_is_singular_in_the_message() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = GitScript {
+            responses: vec![
+                (&["status", "--porcelain"], git_ok(b"")),
+                (&["fetch", "origin"], git_ok(b"")),
+                (
+                    &["rev-list", "--count", "HEAD..origin/main"],
+                    git_ok(b"1\n"),
+                ),
+                (&["rebase", "origin/main"], git_ok(b"")),
+            ],
+            calls: RefCell::default(),
+            other: &reporting,
+        };
+        run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            attempt.steps[0].ended.as_ref().unwrap().reason.as_deref(),
+            Some("took in 1 commit from origin/main")
+        );
+    }
+
+    #[test]
+    fn nothing_new_says_so_and_never_rebases() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = GitScript {
+            responses: vec![
+                (&["status", "--porcelain"], git_ok(b"")),
+                (&["fetch", "origin"], git_ok(b"")),
+                (
+                    &["rev-list", "--count", "HEAD..origin/main"],
+                    git_ok(b"0\n"),
+                ),
+            ],
+            calls: RefCell::default(),
+            other: &reporting,
+        };
+        run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt.steps[0].name, SYNC_STEP);
+        assert_eq!(
+            attempt.steps[0].ended.as_ref().unwrap().reason.as_deref(),
+            Some("nothing new")
+        );
+        assert!(
+            !commands
+                .calls
+                .borrow()
+                .iter()
+                .any(|args| args.first().map(String::as_str) == Some("rebase")),
+            "{:?}",
+            commands.calls.borrow()
+        );
+    }
+
+    #[test]
+    fn uncommitted_changes_stop_the_sync_before_anything_else_runs_and_the_task_stays_pending() {
+        let journal = journal_of_abc();
+        let commands = GitScript {
+            responses: vec![(&["status", "--porcelain"], git_ok(b" M file.txt\n"))],
+            calls: RefCell::default(),
+            other: &NeverRun,
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+        assert_eq!(
+            report,
+            RunReport {
+                attempted: vec![],
+                end: RunEnd::SyncFailed {
+                    id: TaskId(1),
+                    tracked_branch: "origin/main".to_owned(),
+                    problem: SyncProblem::UncommittedChanges("M file.txt".to_owned()),
+                },
+            }
+        );
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Pending
+        );
+        assert!(
+            !commands
+                .calls
+                .borrow()
+                .iter()
+                .any(|args| args.first().map(String::as_str) == Some("fetch")),
+            "{:?}",
+            commands.calls.borrow()
+        );
+    }
+
+    #[test]
+    fn an_unreachable_remote_stops_the_sync_and_the_task_stays_pending() {
+        let journal = journal_of_abc();
+        let commands = GitScript {
+            responses: vec![
+                (&["status", "--porcelain"], git_ok(b"")),
+                (
+                    &["fetch", "origin"],
+                    git_failed(128, b"fatal: could not read from remote repository"),
+                ),
+            ],
+            calls: RefCell::default(),
+            other: &NeverRun,
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+        match report.end {
+            RunEnd::SyncFailed {
+                id,
+                tracked_branch,
+                problem: SyncProblem::RemoteUnreachable(reason),
+            } => {
+                assert_eq!(id, TaskId(1));
+                assert_eq!(tracked_branch, "origin/main");
+                assert!(reason.contains("could not read from remote"), "{reason}");
+            }
+            other => panic!("expected SyncFailed/RemoteUnreachable, got {other:?}"),
+        }
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Pending
+        );
+    }
+
+    #[test]
+    fn a_rebase_conflict_is_undone_and_names_every_conflicting_file() {
+        let journal = journal_of_abc();
+        let commands = GitScript {
+            responses: vec![
+                (&["status", "--porcelain"], git_ok(b"")),
+                (&["fetch", "origin"], git_ok(b"")),
+                (
+                    &["rev-list", "--count", "HEAD..origin/main"],
+                    git_ok(b"1\n"),
+                ),
+                (
+                    &["rebase", "origin/main"],
+                    git_failed(1, b"CONFLICT (content): Merge conflict in file.txt"),
+                ),
+                (
+                    &["diff", "--name-only", "--diff-filter=U"],
+                    git_ok(b"file.txt\nother.txt\n"),
+                ),
+                (&["rebase", "--abort"], git_ok(b"")),
+            ],
+            calls: RefCell::default(),
+            other: &NeverRun,
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_tracking(Duration::from_secs(60)),
+        )
+        .unwrap();
+        assert_eq!(
+            report,
+            RunReport {
+                attempted: vec![],
+                end: RunEnd::SyncFailed {
+                    id: TaskId(1),
+                    tracked_branch: "origin/main".to_owned(),
+                    problem: SyncProblem::Conflict(vec![
+                        "file.txt".to_owned(),
+                        "other.txt".to_owned()
+                    ]),
+                },
+            }
+        );
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Pending
+        );
+        assert!(
+            commands
+                .calls
+                .borrow()
+                .iter()
+                .any(|args| args.as_slice() == ["rebase", "--abort"]),
+            "{:?}",
+            commands.calls.borrow()
+        );
+    }
+
+    #[test]
+    fn no_tracked_branch_set_skips_the_sync_step() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        let commands = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt.steps.len(), 1, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps[0].name, IMPLEMENTATION);
+    }
+
+    #[test]
+    fn the_sync_runs_ahead_of_the_health_check() {
+        let journal = journal_of_abc();
+        let reporting = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let commands = GitScript {
+            responses: vec![
+                (&["status", "--porcelain"], git_ok(b"")),
+                (&["fetch", "origin"], git_ok(b"")),
+                (
+                    &["rev-list", "--count", "HEAD..origin/main"],
+                    git_ok(b"0\n"),
+                ),
+            ],
+            calls: RefCell::default(),
+            other: &HealthCheckAnd {
+                health_check: Ok(Output {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    exit: Exit::Code(0),
+                }),
+                other: &reporting,
+            },
+        };
+        let mut ctx = context_tracking(Duration::from_secs(60));
+        ctx.health_check_command = Some("make check");
+        run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt.steps.len(), 3, "{:?}", attempt.steps);
+        assert_eq!(attempt.steps[0].name, SYNC_STEP);
+        assert_eq!(attempt.steps[1].name, HEALTH_CHECK_STEP);
+        assert_eq!(attempt.steps[2].name, IMPLEMENTATION);
     }
 
     #[test]
