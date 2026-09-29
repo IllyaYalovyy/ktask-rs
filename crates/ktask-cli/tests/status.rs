@@ -63,6 +63,20 @@ fn wait_until(what: &str, mut condition: impl FnMut() -> bool) -> Result<()> {
     Ok(())
 }
 
+/// Like [`wait_until`], for a `probe` that also produces the value being waited for.
+fn wait_until_some<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> Result<T> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(value) = probe() {
+            return Ok(value);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("timed out waiting for {what}").into());
+        }
+        std::thread::park_timeout(Duration::from_millis(20));
+    }
+}
+
 /// A sandbox with a git repository called `my-app`.
 struct Fixture {
     sandbox: Sandbox,
@@ -538,10 +552,9 @@ fn a_task_left_running_by_a_run_killed_outright_shows_interrupted_not_running() 
 
     let mut run = fixture.spawn_the_queue(&["run"])?;
     let run_pid = run.id();
-    wait_until("the provider to record its process id", || {
-        pid_file.exists()
+    let provider_pid: u32 = wait_until_some("the provider to record its process id", || {
+        std::fs::read_to_string(&pid_file).ok()?.trim().parse().ok()
     })?;
-    let provider_pid: u32 = std::fs::read_to_string(&pid_file)?.trim().parse()?;
     assert!(
         is_running(provider_pid),
         "provider {provider_pid} is not running"

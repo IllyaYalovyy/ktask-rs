@@ -671,10 +671,9 @@ fn signal_to_run_ends_it_at_once_with_the_interrupted_reason_and_real_duration(
     let first = fixture.spawn_the_queue(&["run"])?;
     let first_pid = i32::try_from(first.id())?;
 
-    wait_until("the provider to record its process id", || {
-        pid_file.exists()
+    let provider_pid: u32 = wait_until_some("the provider to record its process id", || {
+        std::fs::read_to_string(&pid_file).ok()?.trim().parse().ok()
     })?;
-    let provider_pid: u32 = std::fs::read_to_string(&pid_file)?.trim().parse()?;
     assert!(
         is_running(provider_pid),
         "provider {provider_pid} is not running"
@@ -741,10 +740,9 @@ fn a_run_killed_outright_does_not_leave_its_provider_running_and_status_shows_it
     let mut first = fixture.spawn_the_queue(&["run"])?;
     let first_pid = i32::try_from(first.id())?;
 
-    wait_until("the provider to record its process id", || {
-        pid_file.exists()
+    let provider_pid: u32 = wait_until_some("the provider to record its process id", || {
+        std::fs::read_to_string(&pid_file).ok()?.trim().parse().ok()
     })?;
-    let provider_pid: u32 = std::fs::read_to_string(&pid_file)?.trim().parse()?;
     assert!(
         is_running(provider_pid),
         "provider {provider_pid} is not running"
@@ -815,11 +813,14 @@ fn a_run_killed_outright_leaves_nothing_its_script_started_alive_foreground_or_b
     let mut first = fixture.spawn_the_queue(&["run"])?;
     let first_pid = i32::try_from(first.id())?;
 
-    wait_until("the background sleep to record its pid", || {
-        bg_pid_file.exists()
+    let bg_pid: u32 = wait_until_some("the background sleep to record its pid", || {
+        std::fs::read_to_string(&bg_pid_file)
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
     })?;
     let script_pid: u32 = std::fs::read_to_string(&script_pid_file)?.trim().parse()?;
-    let bg_pid: u32 = std::fs::read_to_string(&bg_pid_file)?.trim().parse()?;
     // The foreground `sleep 30` is the script's other child, forked once it moves past the
     // line above — not `exec`ed into in its own process, since it is not the script's last
     // command.
