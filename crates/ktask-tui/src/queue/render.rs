@@ -1,5 +1,5 @@
-//! Drawing the queue screen: the header, the question or notice line, the key map, and the
-//! task list or the last run's or import's report in place of it.
+//! Drawing the queue screen: the header, the question or notice line, the key map, the task
+//! list, and, above it when there is one, the last run's or import's own report.
 
 use ktask_core::{AttemptLine, QueueView, StepLine, Task, TaskId, TaskStatus, displayed_status};
 use ratatui::buffer::Buffer;
@@ -58,20 +58,32 @@ impl Queue {
             key_map(self.help_keys(), area, buf);
             return;
         }
-        let [header, list] =
-            Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(area);
+        let [header, notice, list] = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Length(self.message_height(area.height)),
+            Constraint::Min(0),
+        ])
+        .areas(area);
         Paragraph::new(self.header_lines(view, usize::from(header.width))).render(header, buf);
+        if let Some(message) = &self.message {
+            let height = usize::from(notice.height);
+            Paragraph::new(message_lines(self.message_offset, message, height)).render(notice, buf);
+        }
         let height = usize::from(list.height);
         let width = usize::from(list.width);
-        match &self.message {
-            Some(message) => {
-                Paragraph::new(message_lines(self.message_offset, message, height))
-                    .render(list, buf);
-            }
-            None => {
-                Paragraph::new(task_lines(self.selected, view, height, width)).render(list, buf);
-            }
-        }
+        Paragraph::new(task_lines(self.selected, view, height, width)).render(list, buf);
+    }
+
+    /// How many of `total` rows go to the last run's or import's own report, above the task
+    /// list: as many as it has, so a short one wastes nothing, but never more than half of
+    /// what is left after the header, so the list it is about — and the selection on it — is
+    /// never pushed off screen by it, however long the report runs.
+    fn message_height(&self, total: u16) -> u16 {
+        let Some(message) = &self.message else {
+            return 0;
+        };
+        let cap = (total.saturating_sub(3) / 2).max(1);
+        u16::try_from(message.len()).unwrap_or(u16::MAX).min(cap)
     }
 
     /// The keys `?` shows right now: the removal question's own keys while it is asking, the
@@ -490,12 +502,13 @@ mod tests {
     }
 
     #[test]
-    fn a_run_message_shows_in_place_of_the_task_list_one_line_per_line_it_printed() {
+    fn a_run_message_shows_above_the_task_list_which_stays_on_show_beneath_it() {
         let text = "task 1: done\ntask 2: failed: it broke\nnothing else is pending";
         let queue = loaded(&[1]).run_message(text.to_owned());
         let rows = drawn(&queue, 60, 8);
         assert_eq!(row(&rows, 3), "task 1: done");
         assert_eq!(row(&rows, 4), "task 2: failed: it broke");
+        assert_eq!(row(&rows, 5), ">0  #1  pending  agent  task 1");
     }
 
     #[test]

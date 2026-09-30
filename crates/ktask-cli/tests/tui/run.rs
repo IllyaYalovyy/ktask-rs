@@ -1,9 +1,10 @@
 //! `r` on the queue screen: it starts executing the pending tasks exactly as `ktask-rs run`
 //! does, the screen shows the run's progress the same way it shows one started elsewhere, a
 //! refusal to start — an earlier task left unfinished, another run already in progress, or
-//! nothing left pending — is shown beside the task list rather than in place of it, printing
-//! the same words `ktask-rs run` itself would, and quitting the screen does not stop a run it
-//! started.
+//! nothing left pending — is shown above the task list rather than in place of it, printing
+//! the same words `ktask-rs run` itself would, a run's own report of what it did is shown
+//! above the task list too, which stays visible and keeps the selection under either, and
+//! quitting the screen does not stop a run it started.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -116,8 +117,8 @@ impl Fixture {
     }
 }
 
-/// The list area's row at `index`, counting from its top — where the last run's results are
-/// shown, one per line, when it covers the task list, or the task list's own rows otherwise.
+/// The row at `index`, counting from the top of where the last run's results are shown, one
+/// per line, above the task list.
 fn result_line(screen: &str, index: usize) -> String {
     lines_inside_frame(screen)
         .get(4 + index)
@@ -284,16 +285,26 @@ fn r_past_an_earlier_task_that_did_not_finish_shows_the_refusal_beside_the_task_
     Ok(())
 }
 
+/// Whether `screen` still shows a row of the task list — one with `#`, the mark of a task's
+/// own ID column, that no line of a run's or import's report ever carries — proving the list
+/// was not replaced by whatever the screen also has to say.
+fn list_still_shown(screen: &str) -> bool {
+    lines_inside_frame(screen)
+        .iter()
+        .any(|line| line.contains('#'))
+}
+
 #[test]
-fn a_run_that_attempts_several_tasks_shows_one_result_per_line_scrollable_when_more_than_fit()
+fn a_run_that_attempts_several_tasks_shows_one_result_per_line_scrollable_when_more_than_fit_and_the_list_stays_visible()
 -> Result<()> {
     let fixture = Fixture::new()?;
     for letter in ["a", "b", "c", "d", "e", "f"] {
         fixture.add_agent_task(letter, &reporting_body("done"))?;
     }
-    // Small enough that the list area (5 rows: 8 inner rows minus the 3-row header) holds
-    // fewer than the six result lines a run through every task prints.
-    let terminal = Terminal::launch(&fixture.sandbox, &fixture.repository, &["tui"], 10, 80)?;
+    // Small enough that the report's own area (capped to half of what is left after the
+    // header) holds fewer than the six result lines a run through every task prints, so
+    // scrolling it is the only way to see them all.
+    let terminal = Terminal::launch(&fixture.sandbox, &fixture.repository, &["tui"], 12, 80)?;
     terminal.wait_for("the queue screen", |screen| {
         screen.contents().ends_with('┘')
     })?;
@@ -309,30 +320,31 @@ fn a_run_that_attempts_several_tasks_shows_one_result_per_line_scrollable_when_m
         result_line(&screen.contents(), 0) == "task 1: done"
     })?;
     // Each result is its own line, in the words `ktask-rs run` itself prints — not joined —
-    // and only as many as fit in the list area are shown.
+    // and only as many as fit in the report's own area are shown; the task list, below it,
+    // is not hidden by it.
     assert_eq!(result_line(&screen, 0), "task 1: done");
     assert_eq!(result_line(&screen, 1), "task 2: done");
     assert_eq!(result_line(&screen, 2), "task 3: done");
-    assert_eq!(result_line(&screen, 3), "task 4: done");
-    assert_eq!(result_line(&screen, 4), "task 5: done");
-    assert!(!screen.contains("task 6: done"), "{screen}");
+    assert!(!screen.contains("task 4: done"), "{screen}");
+    assert!(list_still_shown(&screen), "{screen}");
+    assert!(selected_row(&screen).ends_with("  a"), "{screen}");
 
     terminal.send("G")?;
 
     let screen = terminal.wait_for("the results scrolled to the last line", |screen| {
-        result_line(&screen.contents(), 4) == "task 6: done"
+        result_line(&screen.contents(), 2) == "task 6: done"
     })?;
-    assert_eq!(result_line(&screen, 0), "task 2: done");
-    assert_eq!(result_line(&screen, 1), "task 3: done");
-    assert_eq!(result_line(&screen, 2), "task 4: done");
-    assert_eq!(result_line(&screen, 3), "task 5: done");
-    assert_eq!(result_line(&screen, 4), "task 6: done");
+    assert_eq!(result_line(&screen, 0), "task 4: done");
+    assert_eq!(result_line(&screen, 1), "task 5: done");
+    assert_eq!(result_line(&screen, 2), "task 6: done");
+    assert!(list_still_shown(&screen), "{screen}");
 
     terminal.send("g")?;
     let screen = terminal.wait_for("the results scrolled back to the first line", |screen| {
         result_line(&screen.contents(), 0) == "task 1: done"
     })?;
-    assert_eq!(result_line(&screen, 4), "task 5: done");
+    assert_eq!(result_line(&screen, 2), "task 3: done");
+    assert!(list_still_shown(&screen), "{screen}");
 
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);

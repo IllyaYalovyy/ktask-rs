@@ -1,5 +1,6 @@
-//! Showing the last run's or import's own report in place of the task list, or a run's
-//! refusal to start beside it, and scrolling either one.
+//! Showing the last run's or import's own report, and a run's refusal to start, both above
+//! the task list, which stays on show under either, and scrolling the report when it does
+//! not fit.
 
 use ratatui::crossterm::event::KeyCode;
 
@@ -8,7 +9,7 @@ use super::{Queue, Request};
 impl Queue {
     /// The screen once a run or an import this screen started has finished, showing `text` —
     /// its own report, the same words `ktask-rs run` or `ktask-rs import` itself would print —
-    /// in place of the task list.
+    /// above the task list, which stays on show under it.
     pub(crate) fn shown_message(self, text: &str) -> Self {
         Self {
             message: Some(text.lines().map(str::to_owned).collect()),
@@ -19,9 +20,11 @@ impl Queue {
     }
 
     /// The screen once a run this screen started has ended, or refused to start: `text`, the
-    /// same words `ktask-rs run` itself printed, either way. A run that attempted nothing —
-    /// recognised by [`is_start_refusal`] — shows `text` beside the task list; anything else
-    /// shows `text` in place of the task list, the same as an import's own report.
+    /// same words `ktask-rs run` itself printed, either way, shown above the task list, which
+    /// stays on show under it either way. A run that attempted nothing — recognised by
+    /// [`is_start_refusal`] — shows `text` in the header's own notice line, one line, never
+    /// scrolled; anything else shows `text` in the scrollable report above the list, the same
+    /// as an import's own.
     pub(crate) fn run_message(self, text: String) -> Self {
         if is_start_refusal(&text) {
             Self {
@@ -35,10 +38,10 @@ impl Queue {
         }
     }
 
-    /// A key while the last run's or import's results are shown in place of the task list:
-    /// `j`/`Down` and `k`/`Up` scroll one line, `g`/`G` jump to the first or last line, and any
-    /// other key dismisses the results, then is handled as it would be on the plain queue
-    /// screen — so, for example, `r` both dismisses a shown message and starts a fresh run.
+    /// A key while the last run's or import's results are shown above the task list: `j`/`Down`
+    /// and `k`/`Up` scroll one line, `g`/`G` jump to the first or last line, and any other key
+    /// dismisses the results, then is handled as it would be on the plain queue screen — so,
+    /// for example, `r` both dismisses a shown message and starts a fresh run.
     pub(super) fn message_key(self, key: KeyCode) -> (Self, Option<Request>) {
         match key {
             KeyCode::Char('j') | KeyCode::Down => (self.scroll_message(1), None),

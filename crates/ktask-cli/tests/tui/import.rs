@@ -1,6 +1,6 @@
 //! `i` on the queue screen: it asks for a file path and imports the tasks of that file
 //! exactly as `ktask-rs import` does, showing the same result, or the same refusal, in the
-//! same words.
+//! same words, above the task list, which stays visible under it.
 
 use std::path::PathBuf;
 
@@ -71,13 +71,22 @@ impl Fixture {
     }
 }
 
-/// The row of the list area at `index` — where an import's results are shown, one per line,
-/// in place of the task list.
+/// The row at `index`, counting from the top of where an import's results are shown, one per
+/// line, above the task list.
 fn result_line(screen: &str, index: usize) -> String {
     lines_inside_frame(screen)
         .get(4 + index)
         .cloned()
         .unwrap_or_default()
+}
+
+/// Whether `screen` still shows a row of the task list — one with `#`, the mark of a task's
+/// own ID column, that no line of an import's own report ever carries — or the empty queue's
+/// own placeholder line, proving the list was not replaced by whatever the import has to say.
+fn list_still_shown(screen: &str) -> bool {
+    lines_inside_frame(screen)
+        .iter()
+        .any(|line| line.contains('#') || line.contains("The queue is empty."))
 }
 
 #[test]
@@ -144,6 +153,7 @@ fn ctrl_s_imports_the_tasks_of_the_typed_path_and_shows_their_ids_one_per_line()
     assert_eq!(result_line(&screen, 0), "2");
     assert_eq!(result_line(&screen, 1), "3");
     assert!(!screen.contains("Import tasks"), "{screen}");
+    assert!(list_still_shown(&screen), "{screen}");
 
     terminal.send("x")?;
     let screen = terminal.wait_for("the reloaded queue with the imported tasks", |screen| {
@@ -186,6 +196,7 @@ fn an_invalid_task_is_refused_in_the_same_words_ktask_rs_import_would_give() -> 
         result_line(&screen, 1),
         "  - task 1: the title is empty: a task needs a title"
     );
+    assert!(list_still_shown(&screen), "{screen}");
 
     terminal.send("x")?;
     let screen = terminal.wait_for("the queue back with nothing new added", |screen| {
@@ -213,6 +224,7 @@ fn a_file_that_cannot_be_read_is_refused_naming_it() -> Result<()> {
 
     let screen = terminal.wait_for_text("cannot read")?;
     assert!(result_line(&screen, 0).contains(&missing), "{screen}");
+    assert!(list_still_shown(&screen), "{screen}");
 
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
@@ -235,6 +247,7 @@ fn a_cancelled_task_in_the_file_is_skipped_saying_how_many() -> Result<()> {
     let screen = terminal.wait_for_text("cancelled task was skipped")?;
     assert_eq!(result_line(&screen, 0), "1");
     assert_eq!(result_line(&screen, 1), "1 cancelled task was skipped");
+    assert!(list_still_shown(&screen), "{screen}");
 
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);

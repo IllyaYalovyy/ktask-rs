@@ -66,8 +66,9 @@ pub(crate) struct Queue {
     /// The task a removal is being confirmed for.
     confirming: Option<TaskId>,
     refused: Option<Refusal>,
-    /// The last run's or import's own report of what it did, one per line, shown in place of
-    /// the task list until a key that is not one of the ones that scroll it dismisses it.
+    /// The last run's or import's own report of what it did, one per line, shown above the
+    /// task list — which stays on show under it, with the selection kept — until a key that
+    /// is not one of the ones that scroll it dismisses it.
     message: Option<Vec<String>>,
     /// The first of `message`'s lines shown, when there are more than fit.
     message_offset: usize,
@@ -676,6 +677,10 @@ mod tests {
             queue.message.as_deref(),
             Some(["1".to_owned(), "2".to_owned()].as_slice())
         );
+        // The message shows above the task list, not instead of it: the list and the
+        // selection on it are still there underneath.
+        assert_eq!(queue.view, Some(queue_of(&[1])));
+        assert_eq!(on(&queue), Some(1));
         assert_eq!(press(queue.clone(), &[KeyCode::Char('x')]).message, None);
     }
 
@@ -686,6 +691,8 @@ mod tests {
             queue.message.as_deref(),
             Some(["task 1: done".to_owned()].as_slice())
         );
+        assert_eq!(queue.view, Some(queue_of(&[1])));
+        assert_eq!(on(&queue), Some(1));
 
         for key in [
             KeyCode::Char('j'),
