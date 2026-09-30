@@ -96,7 +96,13 @@ fn without_yes_it_asks_and_y_confirms_forgetting_it() -> Result<()> {
     let outcome = run_with_stdin(&sandbox, &repository, &["project", "forget", "app"], "y\n")?;
     assert_eq!(outcome.stderr, "");
     assert_eq!(outcome.code, Some(0));
-    assert!(outcome.stdout.contains("[y/N]"), "{}", outcome.stdout);
+    assert!(
+        outcome
+            .stdout
+            .contains("y to forget, anything else to keep it"),
+        "{}",
+        outcome.stdout
+    );
     assert!(outcome.stdout.contains("app"), "{}", outcome.stdout);
     assert_eq!(listed(&sandbox)?, "");
     assert!(journal.is_file());

@@ -120,11 +120,12 @@ fn forget(name: &str, yes: bool, stdout: &mut impl Write) -> Result<ExitCode, Fa
 
 /// Asks on `stdout` whether to forget `name`, reading the answer from standard input: `y` or
 /// `yes`, in any case, is the only answer that confirms; anything else, including no input at
-/// all, declines.
+/// all, declines — named the same way the TUI names its own answers, rather than a terse
+/// `[y/N]`.
 fn confirmed(name: &str, stdout: &mut impl Write) -> Result<bool, Failure> {
     write!(
         stdout,
-        "Forget project {name:?}? Its journal stays on disk. [y/N] "
+        "Forget project {name:?}? Its journal stays on disk. y to forget, anything else to keep it: "
     )
     .map_err(|e| e.to_string())?;
     stdout.flush().map_err(|e| e.to_string())?;
