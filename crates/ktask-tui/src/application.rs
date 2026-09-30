@@ -9,7 +9,9 @@
 
 use std::fmt::Display;
 
-use ktask_core::{Placement, Project, QueueView, SettingView, TaskDraft, TaskId};
+use ktask_core::{
+    Import, Placement, Project, QueueView, RunReport, SettingView, TaskDraft, TaskId,
+};
 
 /// Every use case the terminal interface calls, named the way the operator invokes them.
 pub trait Application {
@@ -31,6 +33,10 @@ pub trait Application {
     type ForgetError: Display;
     /// Why [`register`](Application::register) failed.
     type RegisterError: Display;
+    /// Why [`import`](Application::import) added nothing.
+    type ImportError: Display;
+    /// Why [`start_run`](Application::start_run) refused to start a run at all.
+    type RunRefusal: Display;
 
     /// The queue to show, with the cancelled tasks when `show_cancelled`.
     ///
@@ -74,15 +80,15 @@ pub trait Application {
     /// accepts.
     fn save_setting(&self, name: &str, value: &str) -> Result<SettingView, Self::SaveSettingError>;
 
-    /// Imports the tasks of the file `path` names into the queue, giving what to show for it
-    /// — the same words `ktask-rs import` itself would print, whether it succeeded or was
-    /// refused.
+    /// Imports the tasks of the file `path` names into the queue, at its end: the tasks added,
+    /// in order, and how many cancelled ones were left out — the same typed result
+    /// `ktask_core::import_tasks` itself gives, for the screen to word as it shows it.
     ///
     /// # Errors
     ///
-    /// Fails, importing nothing, with the same words `ktask-rs import` itself would print for
-    /// the same refusal.
-    fn import(&self, path: &str) -> Result<String, String>;
+    /// Fails, importing nothing, with why: the file could not be read, or the same reason
+    /// `ktask-rs import` itself would refuse for.
+    fn import(&self, path: &str) -> Result<Import, Self::ImportError>;
 
     /// The registered projects, for the project picker to open on — the same list
     /// `ktask-rs project list` prints.
@@ -120,11 +126,12 @@ pub trait Application {
     fn register(&self, name: &str) -> Result<QueueView, Self::RegisterError>;
 
     /// Starts executing the pending tasks, exactly as `ktask-rs run` does, blocking until it
-    /// ends or refuses to start, and gives what it printed either way — the same words
-    /// `ktask-rs run` itself would show, one line per line it wrote.
+    /// ends or refuses to start, and gives its own typed report of what it did — the same
+    /// values `ktask_core::run_queue` itself gives, for the screen to word as it shows them.
     ///
     /// # Errors
     ///
-    /// Fails with the same words `ktask-rs run` itself would show for the same refusal.
-    fn start_run(&self) -> Result<String, String>;
+    /// Fails, attempting nothing, when a run could not even be started at all — another one
+    /// already in progress, or no project open yet.
+    fn start_run(&self) -> Result<RunReport, Self::RunRefusal>;
 }

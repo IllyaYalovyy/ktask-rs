@@ -17,6 +17,7 @@ use crate::registration_screen::RegistrationScreen;
 use crate::{App, Event, render, update};
 
 mod actions;
+mod report_text;
 
 use actions::handle_input;
 

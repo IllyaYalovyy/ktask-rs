@@ -11,15 +11,16 @@ use ktask_adapters::{
     TomlSettingsStore,
 };
 use ktask_core::{
-    AddError, CancelError, ForgetError, JournalError, Placement, Project, QueueView, RegisterError,
-    RegistryError, SetSettingError, SettingView, SettingsError, TaskDraft, TaskId,
+    AddError, CancelError, ForgetError, Import, JournalError, Placement, Project, QueueView,
+    RegisterError, RegistryError, RunReport, SetSettingError, SettingView, SettingsError,
+    TaskDraft, TaskId,
 };
 use ktask_tui::Application;
 
 use crate::context::{journal_file, open_settings_store, run_lock_file, state_root};
 
-use super::process::start_run;
-use super::{Start, import_into};
+use super::process::{RunRefusal as ProcessRefusal, start_run};
+use super::{ImportProblem, Start, import_into};
 
 /// Why opening a project's state failed: an environment problem — the same kind every other
 /// command already reports as text, since there is no further structure to it — or the journal
@@ -186,6 +187,8 @@ impl Application for CliApplication {
     type SwitchError = SwitchProjectError;
     type ForgetError = ForgetProjectError;
     type RegisterError = RegisterProjectError;
+    type ImportError = NeedsProject<ImportProblem>;
+    type RunRefusal = NeedsProject<ProcessRefusal>;
 
     fn load_queue(&self, show_cancelled: bool) -> Result<QueueView, Self::LoadError> {
         self.with_context(|context| {
@@ -233,12 +236,8 @@ impl Application for CliApplication {
         })
     }
 
-    fn import(&self, path: &str) -> Result<String, String> {
-        let guard = self.context.lock().unwrap_or_else(PoisonError::into_inner);
-        let context = guard
-            .as_ref()
-            .ok_or_else(|| "no project is open yet".to_owned())?;
-        import_into(&context.journal, path)
+    fn import(&self, path: &str) -> Result<Import, Self::ImportError> {
+        self.with_context(|context| import_into(&context.journal, path))
     }
 
     fn load_projects(&self) -> Result<Vec<Project>, Self::ProjectsError> {
@@ -282,15 +281,15 @@ impl Application for CliApplication {
         Ok(view)
     }
 
-    fn start_run(&self) -> Result<String, String> {
+    fn start_run(&self) -> Result<RunReport, Self::RunRefusal> {
         let project = self
             .active_project
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
         match project {
-            Some(project) => start_run(&self.binary_path, &project),
-            None => Err("no project is open yet".to_owned()),
+            Some(project) => start_run(&self.binary_path, &project).map_err(NeedsProject::Failed),
+            None => Err(NeedsProject::NoProject),
         }
     }
 }

@@ -1,17 +1,35 @@
 //! `ktask-rs tui`: open the terminal interface on the project's queue.
 
+use std::fmt;
 use std::io::{self, IsTerminal};
 use std::path::Path;
 
 use ktask_adapters::{GitCli, SqliteJournal, SqliteRegistry, SystemClock};
-use ktask_core::{Placement, Project, ResolveError};
+use ktask_core::{Import, ImportError, Placement, Project, ResolveError};
 
 use crate::context::{current_dir, current_exe, merge_project, open_registry, resolved};
 use crate::error::Failure;
-use crate::render;
 
 mod application;
 mod process;
+
+/// Why importing through the file the import form was submitted with added nothing: it could
+/// not be read, or the same reason `ktask-rs import` itself would refuse for, keeping that
+/// error's own meaning until it is shown.
+#[derive(Debug)]
+pub(super) enum ImportProblem {
+    Read(String),
+    Import(ImportError),
+}
+
+impl fmt::Display for ImportProblem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Read(message) => f.write_str(message),
+            Self::Import(error) => error.fmt(f),
+        }
+    }
+}
 
 /// `ktask-rs tui`'s arguments.
 #[derive(Debug, clap::Args)]
@@ -69,18 +87,12 @@ fn read_file(path: &str) -> Result<String, String> {
 }
 
 /// Imports the tasks of the file `path` names into `journal`, at the end of the queue, giving
-/// what to show for it — the same words `ktask-rs import` itself would print, whether it
-/// succeeded or was refused.
-fn import_into(journal: &SqliteJournal, path: &str) -> Result<String, String> {
-    let json = read_file(path)?;
-    match ktask_core::import_tasks(journal, &SystemClock, &json, Placement::End) {
-        Ok(import) => {
-            let mut buf = Vec::new();
-            render::imported(&import, &mut buf)?;
-            Ok(String::from_utf8_lossy(&buf).trim_end().to_owned())
-        }
-        Err(error) => Err(error.to_string()),
-    }
+/// the same typed result `ktask_core::import_tasks` itself gives, for the screen to word as it
+/// shows it.
+fn import_into(journal: &SqliteJournal, path: &str) -> Result<Import, ImportProblem> {
+    let json = read_file(path).map_err(ImportProblem::Read)?;
+    ktask_core::import_tasks(journal, &SystemClock, &json, Placement::End)
+        .map_err(ImportProblem::Import)
 }
 
 /// Refuses to open the terminal interface when there is no terminal to draw it on.

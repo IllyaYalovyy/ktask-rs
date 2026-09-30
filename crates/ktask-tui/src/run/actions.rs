@@ -12,6 +12,7 @@ use crate::application::Application;
 use crate::{App, Event, update};
 
 use super::Wake;
+use super::report_text::{import_text, report_text};
 
 /// Removes or adds the task `app` has pending, if either, through `application`: `(app, true)`
 /// when one was, `(app, false)`, unchanged, otherwise.
@@ -106,13 +107,15 @@ fn handle_registration_action(mut app: App, application: &impl Application) -> (
 
 /// Imports the file `app` has pending, if any, through `application`: `(app, true)` when one
 /// was, `(app, false)`, unchanged, otherwise. Shows the same result, or the same refusal,
-/// `ktask-rs import` itself would print, one line per line of it.
+/// `ktask-rs import` itself would print, one line per line of it — built here, from the typed
+/// value `application.import` gives, not received already rendered into text.
 fn handle_import_action(mut app: App, application: &impl Application) -> (App, bool) {
     let Some(path) = app.import_submission.take() else {
         return (app, false);
     };
     let text = match application.import(&path) {
-        Ok(text) | Err(text) => text,
+        Ok(import) => import_text(&import),
+        Err(problem) => problem.to_string(),
     };
     (update(app, Event::ImportMessage(text)), true)
 }
@@ -165,14 +168,21 @@ pub(super) fn handle_input<A: Application + Send + Sync + 'static>(
     Ok((app, should_reload))
 }
 
+/// What `application.start_run()` gave, worded — built here, from the typed value it gives,
+/// not received already rendered into text.
+fn run_result_text<E: std::fmt::Display>(result: Result<ktask_core::RunReport, E>) -> String {
+    match result {
+        Ok(report) => report_text(&report),
+        Err(refusal) => refusal.to_string(),
+    }
+}
+
 /// Calls `application.start_run()` on a thread of its own, so the loop stays responsive for
 /// however long the run it starts takes, and raises [`Wake::RunMessage`] with what it printed
 /// once it returns, whether it ran to completion, stopped partway, or refused to start at all.
 fn spawn_run<A: Application + Send + Sync + 'static>(application: Arc<A>, sender: Sender<Wake>) {
     std::thread::spawn(move || {
-        let text = match application.start_run() {
-            Ok(text) | Err(text) => text,
-        };
+        let text = run_result_text(application.start_run());
         let _ = sender.send(Wake::RunMessage(text));
     });
 }
@@ -183,8 +193,8 @@ mod tests {
     use std::fmt;
 
     use ktask_core::{
-        ATTEMPT_TIMEOUT, Placement, Project, QueueView, SettingView, StatusSummary, TaskDraft,
-        TaskId,
+        ATTEMPT_TIMEOUT, Import, Placement, Project, QueueView, RunEnd, RunReport, SettingView,
+        StatusSummary, TaskDraft, TaskId, TaskStatus,
     };
 
     use super::{
@@ -218,11 +228,12 @@ mod tests {
         remove: RefCell<Vec<Result<(), Failure>>>,
         settings: RefCell<Vec<Result<Vec<SettingView>, Failure>>>,
         save_setting: RefCell<Vec<Result<SettingView, Failure>>>,
-        import: RefCell<Vec<Result<String, String>>>,
+        import: RefCell<Vec<Result<Import, Failure>>>,
         projects: RefCell<Vec<Result<Vec<Project>, Failure>>>,
         switch: RefCell<Vec<Result<QueueView, Failure>>>,
         forget: RefCell<Vec<Result<Vec<Project>, Failure>>>,
         register: RefCell<Vec<Result<QueueView, Failure>>>,
+        start_run: RefCell<Vec<Result<RunReport, Failure>>>,
     }
 
     fn empty_queue() -> QueueView {
@@ -248,6 +259,8 @@ mod tests {
         type SwitchError = Failure;
         type ForgetError = Failure;
         type RegisterError = Failure;
+        type ImportError = Failure;
+        type RunRefusal = Failure;
 
         fn load_queue(&self, _show_cancelled: bool) -> Result<QueueView, Failure> {
             Ok(empty_queue())
@@ -273,7 +286,7 @@ mod tests {
             self.save_setting.borrow_mut().remove(0)
         }
 
-        fn import(&self, _path: &str) -> Result<String, String> {
+        fn import(&self, _path: &str) -> Result<Import, Failure> {
             self.import.borrow_mut().remove(0)
         }
 
@@ -293,8 +306,8 @@ mod tests {
             self.register.borrow_mut().remove(0)
         }
 
-        fn start_run(&self) -> Result<String, String> {
-            Ok(String::new())
+        fn start_run(&self) -> Result<RunReport, Failure> {
+            self.start_run.borrow_mut().remove(0)
         }
     }
 
@@ -428,9 +441,9 @@ mod tests {
     }
 
     #[test]
-    fn import_shows_the_same_text_on_success_or_refusal() {
+    fn a_refused_import_shows_the_error_types_own_message_not_a_pre_rendered_one() {
         let fake = Fake::default();
-        *fake.import.borrow_mut() = vec![Err("cannot read x".to_owned())];
+        *fake.import.borrow_mut() = vec![Err(Failure("cannot read x".to_owned()))];
         let app = App {
             import_submission: Some("x".to_owned()),
             ..App::default()
@@ -441,7 +454,38 @@ mod tests {
         assert!(handled);
         assert_eq!(
             app.queue.message(),
-            Some(["cannot read x".to_owned()].as_slice())
+            Some(["failed: cannot read x".to_owned()].as_slice())
+        );
+    }
+
+    #[test]
+    fn a_successful_import_shows_the_ids_built_from_the_typed_value() {
+        let fake = Fake::default();
+        *fake.import.borrow_mut() = vec![Ok(Import {
+            tasks: vec![ktask_core::Task {
+                id: TaskId(5),
+                position: 1,
+                title: "t".to_owned(),
+                body: String::new(),
+                criteria: vec!["it works".to_owned()],
+                kind: ktask_core::TaskKind::Agent,
+                links: vec![],
+                status: TaskStatus::Pending,
+                created_at: std::time::SystemTime::UNIX_EPOCH,
+            }],
+            skipped_cancelled: 1,
+        })];
+        let app = App {
+            import_submission: Some("x".to_owned()),
+            ..App::default()
+        };
+
+        let (app, handled) = handle_import_action(app, &fake);
+
+        assert!(handled);
+        assert_eq!(
+            app.queue.message(),
+            Some(["5".to_owned(), "1 cancelled task was skipped".to_owned()].as_slice())
         );
     }
 
@@ -546,5 +590,24 @@ mod tests {
         let (_app, handled) = handle_registration_action(app, &fake);
 
         assert!(handled);
+    }
+
+    #[test]
+    fn a_refused_run_shows_the_error_types_own_message_not_a_pre_rendered_one() {
+        let text = super::run_result_text(Result::<RunReport, _>::Err(Failure(
+            "a run is already in progress".to_owned(),
+        )));
+
+        assert_eq!(text, "failed: a run is already in progress");
+    }
+
+    #[test]
+    fn a_finished_run_shows_the_report_built_from_the_typed_value() {
+        let text = super::run_result_text(Result::<_, Failure>::Ok(RunReport {
+            attempted: vec![],
+            end: RunEnd::NothingPending,
+        }));
+
+        assert_eq!(text, "nothing is pending");
     }
 }

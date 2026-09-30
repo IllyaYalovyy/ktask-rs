@@ -10,8 +10,8 @@ use std::sync::{Mutex, PoisonError};
 use std::time::SystemTime;
 
 use ktask_core::{
-    JournalError, JournalWatch, Placement, Project, QueueView, SettingView, StatusSummary,
-    TaskDraft, TaskId,
+    Import, JournalError, JournalWatch, Placement, Project, QueueView, RunReport, SettingView,
+    StatusSummary, TaskDraft, TaskId,
 };
 use ktask_tui::Application;
 
@@ -58,6 +58,8 @@ impl Application for PanicTestApplication {
     type SwitchError = String;
     type ForgetError = String;
     type RegisterError = String;
+    type ImportError = String;
+    type RunRefusal = String;
 
     fn load_queue(&self, _show_cancelled: bool) -> Result<QueueView, String> {
         let mut loaded_once = self
@@ -88,7 +90,7 @@ impl Application for PanicTestApplication {
         Err(NOT_SUPPORTED.to_owned())
     }
 
-    fn import(&self, _path: &str) -> Result<String, String> {
+    fn import(&self, _path: &str) -> Result<Import, String> {
         Err(NOT_SUPPORTED.to_owned())
     }
 
@@ -108,7 +110,7 @@ impl Application for PanicTestApplication {
         Err(NOT_SUPPORTED.to_owned())
     }
 
-    fn start_run(&self) -> Result<String, String> {
+    fn start_run(&self) -> Result<RunReport, String> {
         Err(NOT_SUPPORTED.to_owned())
     }
 }
