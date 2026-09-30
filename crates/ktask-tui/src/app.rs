@@ -357,10 +357,14 @@ fn update_settings_ctrl(app: App, letter: char) -> App {
 }
 
 /// A key while the project picker is open: while it is asking to confirm forgetting a project,
-/// only that question's own keys answer.
+/// only that question's own keys answer; while its own key map is open, only `?` or Esc, to
+/// close it back onto the picker, answer.
 fn update_projects_key(app: App, key: KeyCode) -> App {
     if app.project_forgetting.is_some() {
         return update_forget_confirm_key(app, key);
+    }
+    if app.help {
+        return update_help_key(app, key);
     }
     match key {
         KeyCode::Esc => App {
@@ -372,6 +376,7 @@ fn update_projects_key(app: App, key: KeyCode) -> App {
         KeyCode::Char('k') | KeyCode::Up => move_project_selection(app, -1),
         KeyCode::Enter => submit_project_switch(app),
         KeyCode::Char('d') => ask_forget_selected(app),
+        KeyCode::Char('?') => App { help: true, ..app },
         _ => app,
     }
 }
@@ -396,8 +401,13 @@ fn ask_forget_selected(app: App) -> App {
     }
 }
 
-/// A key while the picker is asking to confirm forgetting the project it named.
+/// A key while the picker is asking to confirm forgetting the project it named: while its own
+/// key map is open, only that map's own keys (`?` or Esc, to close it back onto the question)
+/// answer.
 fn update_forget_confirm_key(app: App, key: KeyCode) -> App {
+    if app.help {
+        return update_help_key(app, key);
+    }
     match key {
         KeyCode::Char('y') => App {
             project_forget: app.project_forgetting.clone(),
@@ -408,6 +418,7 @@ fn update_forget_confirm_key(app: App, key: KeyCode) -> App {
             project_forgetting: None,
             ..app
         },
+        KeyCode::Char('?') => App { help: true, ..app },
         _ => app,
     }
 }
@@ -539,14 +550,19 @@ fn registered(app: App, queue: QueueView) -> App {
     )
 }
 
-/// A key while a first Ctrl-C is asking whether to discard the open form.
+/// A key while a first Ctrl-C is asking whether to discard the open form: while its own key map
+/// is open, only `?` or Esc, to close it back onto the question, answer.
 fn update_discard_key(app: App, key: KeyCode) -> App {
+    if app.help {
+        return update_help_key(app, key);
+    }
     match key {
         KeyCode::Char('y') => App { quit: true, ..app },
         KeyCode::Char('n') | KeyCode::Esc => App {
             confirming: None,
             ..app
         },
+        KeyCode::Char('?') => App { help: true, ..app },
         _ => app,
     }
 }
@@ -590,14 +606,19 @@ fn update_import_ctrl(app: App, letter: char) -> App {
     }
 }
 
-/// A key while removing the selected task is being confirmed.
+/// A key while removing the selected task is being confirmed: while its own key map is open,
+/// only `?` or Esc, to close it back onto the question, answer.
 fn update_removal_confirm_key(app: App, key: KeyCode) -> App {
+    if app.help {
+        return update_help_key(app, key);
+    }
     match key {
         KeyCode::Char('y') => confirm_removal(app),
         KeyCode::Char('n') | KeyCode::Esc => App {
             confirming: None,
             ..app
         },
+        KeyCode::Char('?') => App { help: true, ..app },
         _ => app,
     }
 }
@@ -1470,19 +1491,38 @@ mod tests {
     }
 
     #[test]
-    fn while_a_removal_is_asked_about_only_its_answers_and_quit_are_heard() {
+    fn while_a_removal_is_asked_about_only_its_answers_quit_and_the_key_map_are_heard() {
         let asked = press(loaded(&[1, 2]), &[KeyCode::Char('d')]);
         for key in [
             KeyCode::Char('j'),
             KeyCode::Char('G'),
             KeyCode::Char('a'),
-            KeyCode::Char('?'),
             KeyCode::Char('d'),
             KeyCode::Char('x'),
         ] {
             assert_eq!(press(asked.clone(), &[key]), asked);
         }
-        assert!(press(asked, &[KeyCode::Char('q')]).quit);
+        assert!(press(asked.clone(), &[KeyCode::Char('q')]).quit);
+
+        let mapped = press(asked.clone(), &[KeyCode::Char('?')]);
+        assert!(mapped.help);
+        assert_eq!(
+            mapped.confirming, asked.confirming,
+            "the key map does not answer the question itself"
+        );
+        for key in [
+            KeyCode::Char('y'),
+            KeyCode::Char('n'),
+            KeyCode::Char('j'),
+            KeyCode::Char('x'),
+        ] {
+            assert_eq!(press(mapped.clone(), &[key]), mapped);
+        }
+        for close in [KeyCode::Esc, KeyCode::Char('?')] {
+            let closed = press(mapped.clone(), &[close]);
+            assert!(!closed.help);
+            assert_eq!(closed.confirming, asked.confirming);
+        }
     }
 
     #[test]
@@ -1693,7 +1733,7 @@ mod tests {
     }
 
     #[test]
-    fn while_discard_is_asked_only_y_n_esc_and_a_second_ctrl_c_are_answered() {
+    fn while_discard_is_asked_only_y_n_esc_a_second_ctrl_c_and_the_key_map_are_answered() {
         let app = typed(press(loaded(&[1]), &[KeyCode::Char('n')]), "Title");
         let asked = update(app, Event::Ctrl('c'));
         for key in [KeyCode::Char('q'), KeyCode::Char('x'), KeyCode::Enter] {
@@ -1702,7 +1742,19 @@ mod tests {
         for letter in ['s', 'n', 'd'] {
             assert_eq!(update(asked.clone(), Event::Ctrl(letter)), asked);
         }
-        assert!(update(asked, Event::Ctrl('c')).quit);
+        assert!(update(asked.clone(), Event::Ctrl('c')).quit);
+
+        let mapped = update(asked.clone(), Event::Key(KeyCode::Char('?')));
+        assert!(mapped.help);
+        assert_eq!(mapped.confirming, asked.confirming);
+        for key in [KeyCode::Char('y'), KeyCode::Char('n'), KeyCode::Char('x')] {
+            assert_eq!(update(mapped.clone(), Event::Key(key)), mapped);
+        }
+        for close in [KeyCode::Esc, KeyCode::Char('?')] {
+            let closed = update(mapped.clone(), Event::Key(close));
+            assert!(!closed.help);
+            assert_eq!(closed.confirming, asked.confirming);
+        }
     }
 
     #[test]
@@ -1926,10 +1978,27 @@ mod tests {
     #[test]
     fn while_the_picker_is_open_only_its_own_keys_and_ctrl_c_are_heard() {
         let open = update(loaded(&[1]), Event::ProjectsLoaded(projects()));
-        for key in [KeyCode::Char('q'), KeyCode::Char('a'), KeyCode::Char('?')] {
+        for key in [KeyCode::Char('q'), KeyCode::Char('a')] {
             assert_eq!(press(open.clone(), &[key]), open);
         }
-        assert!(update(open, Event::Ctrl('c')).quit);
+        assert!(update(open.clone(), Event::Ctrl('c')).quit);
+
+        let mapped = press(open.clone(), &[KeyCode::Char('?')]);
+        assert!(mapped.help);
+        assert_eq!(mapped.projects, open.projects);
+        for key in [
+            KeyCode::Char('j'),
+            KeyCode::Char('d'),
+            KeyCode::Enter,
+            KeyCode::Char('x'),
+        ] {
+            assert_eq!(press(mapped.clone(), &[key]), mapped);
+        }
+        for close in [KeyCode::Esc, KeyCode::Char('?')] {
+            let closed = press(mapped.clone(), &[close]);
+            assert!(!closed.help);
+            assert_eq!(closed.projects, open.projects);
+        }
     }
 
     #[test]
@@ -1972,7 +2041,7 @@ mod tests {
     }
 
     #[test]
-    fn while_the_forget_question_is_open_only_y_n_and_esc_answer_it() {
+    fn while_the_forget_question_is_open_only_y_n_esc_and_the_key_map_answer_it() {
         let asked = press(
             update(loaded(&[1]), Event::ProjectsLoaded(projects())),
             &[KeyCode::Char('d')],
@@ -1984,6 +2053,18 @@ mod tests {
             KeyCode::Char('q'),
         ] {
             assert_eq!(press(asked.clone(), &[key]), asked);
+        }
+
+        let mapped = press(asked.clone(), &[KeyCode::Char('?')]);
+        assert!(mapped.help);
+        assert_eq!(mapped.project_forgetting, asked.project_forgetting);
+        for key in [KeyCode::Char('y'), KeyCode::Char('n'), KeyCode::Char('x')] {
+            assert_eq!(press(mapped.clone(), &[key]), mapped);
+        }
+        for close in [KeyCode::Esc, KeyCode::Char('?')] {
+            let closed = press(mapped.clone(), &[close]);
+            assert!(!closed.help);
+            assert_eq!(closed.project_forgetting, asked.project_forgetting);
         }
     }
 

@@ -232,6 +232,144 @@ fn d_asks_to_confirm_forgetting_the_selected_project() -> Result<()> {
 }
 
 #[test]
+fn question_mark_shows_the_pickers_own_keys_and_esc_closes_it_back_to_the_picker() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let mut terminal = fixture.open_picker()?;
+    let before = terminal.screen();
+
+    terminal.send("?")?;
+    let screen = terminal.wait_for("the picker's key map", |screen| {
+        screen.contents().contains("Keys")
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert!(
+        lines.contains(&"j, k   select the next or previous project".to_owned()),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&"Enter  switch to the selected project".to_owned()),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&"d      forget the selected project, after asking".to_owned()),
+        "{lines:?}"
+    );
+    assert!(lines.contains(&"Esc    cancel".to_owned()), "{lines:?}");
+    assert!(!screen.contains("my-app"), "{screen}");
+
+    // Other keys, including d and Enter, do nothing while the key map is up.
+    terminal.send("d")?;
+    terminal.send(ENTER)?;
+
+    terminal.send(ESC)?;
+    let screen = terminal.wait_for("the picker back", |screen| {
+        !screen.contents().contains("Keys")
+    })?;
+    assert_eq!(screen, before);
+
+    terminal.send(ESC)?;
+    terminal.wait_for("the queue back, without the picker", |screen| {
+        !screen.contents().contains("Projects")
+    })?;
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
+fn question_mark_shows_the_forget_questions_own_keys_while_it_is_asking() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let mut terminal = fixture.open_picker()?;
+    terminal.send("d")?;
+    let asked = terminal.wait_for("the forget question", |screen| {
+        screen.contents().contains("Forget project")
+    })?;
+
+    terminal.send("?")?;
+    let screen = terminal.wait_for("the forget question's key map", |screen| {
+        screen.contents().contains("Keys")
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert!(lines.contains(&"y       forget it".to_owned()), "{lines:?}");
+    assert!(lines.contains(&"n, Esc  keep it".to_owned()), "{lines:?}");
+    assert!(!screen.contains("Forget project"), "{screen}");
+
+    // y does nothing while the key map is up: the project is not forgotten.
+    terminal.send("y")?;
+
+    terminal.send(ESC)?;
+    let screen = terminal.wait_for("the question back", |screen| {
+        screen.contents().contains("Forget project")
+    })?;
+    assert_eq!(screen, asked);
+
+    terminal.send(ESC)?;
+    terminal.wait_for("the plain picker, the question gone", |screen| {
+        !screen.contents().contains("Forget project")
+    })?;
+    terminal.send(ESC)?;
+    terminal.wait_for("the queue back, without the picker", |screen| {
+        !screen.contents().contains("Projects")
+    })?;
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    assert!(fixture.cli_project_list()?.contains("my-app"));
+    Ok(())
+}
+
+#[test]
+fn a_project_name_too_long_to_fit_is_cut_with_an_ellipsis_but_the_forget_keys_never_are()
+-> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, work) = scratch()?;
+    let long_name = "a-very-long-project-name-that-will-not-fit-next-to-the-question-keys";
+    let repository = git_repository(&sandbox, &work, long_name)?;
+    let outcome = sandbox.run(&repository, &["project", "register", "--name", long_name])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    let added = sandbox.run(
+        &repository,
+        &["add", "--title", "t", "--criterion", "it works"],
+    )?;
+    assert_eq!(added.code, Some(0), "{}", added.stderr);
+
+    let mut terminal = Terminal::launch(&sandbox, &repository, &["tui"], ROWS, COLS)?;
+    terminal.wait_for("the queue with its task selected", |screen| {
+        screen.contents().ends_with('┘') && screen.contents().contains(">1")
+    })?;
+    terminal.send("p")?;
+    terminal.wait_for("the project picker", |screen| {
+        screen.contents().contains("Projects")
+    })?;
+
+    terminal.send("d")?;
+    let screen = terminal.wait_for("the forget question", |screen| {
+        screen.contents().contains("Forget project")
+    })?;
+    let lines = lines_inside_frame(&screen);
+    let question = lines
+        .iter()
+        .find(|line| line.starts_with("Forget project"))
+        .unwrap_or_else(|| panic!("no forget question in {lines:?}"));
+    assert!(
+        question.ends_with("\"? Its journal stays on disk. y to forget · n or Esc to keep it"),
+        "{question:?}"
+    );
+    assert!(!question.contains(long_name), "{question:?}");
+
+    terminal.send(ESC)?;
+    terminal.wait_for("the plain picker, the question gone", |screen| {
+        !screen.contents().contains("Forget project")
+    })?;
+    terminal.send(ESC)?;
+    terminal.wait_for("the queue back, without the picker", |screen| {
+        !screen.contents().contains("Projects")
+    })?;
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
 fn n_and_esc_drop_the_forget_question_and_forget_nothing() -> Result<()> {
     let fixture = Fixture::new()?;
     for answer in ["n", ESC] {

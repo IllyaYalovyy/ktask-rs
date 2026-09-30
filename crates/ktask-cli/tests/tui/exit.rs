@@ -7,7 +7,7 @@ use nix::sys::signal::Signal;
 
 use super::add::open_form;
 use super::navigate::{ESC, Fixture, ROWS, quit};
-use super::pty::{HungUp, Terminal};
+use super::pty::{HungUp, Terminal, lines_inside_frame};
 use super::support::{Result, Sandbox};
 
 const CTRL_C: &str = "\x03";
@@ -88,6 +88,52 @@ fn a_second_ctrl_c_quits_from_the_discard_question() -> Result<()> {
     })?;
 
     ctrl_c_quits(terminal)
+}
+
+#[test]
+fn question_mark_shows_the_discard_questions_own_keys_and_esc_closes_it_back_to_the_question()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    let mut terminal = open_form(&fixture)?;
+    terminal.send("Half typed")?;
+    terminal.send(CTRL_C)?;
+    let asked = terminal.wait_for("the discard question", |screen| {
+        screen.contents().contains("Discard this task?")
+    })?;
+
+    terminal.send("?")?;
+    let screen = terminal.wait_for("the discard question's key map", |screen| {
+        screen.contents().contains("Keys")
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert!(
+        lines.contains(&"y       discard it".to_owned()),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&"n, Esc  keep writing".to_owned()),
+        "{lines:?}"
+    );
+    assert!(!screen.contains("Half typed"), "{screen}");
+
+    // y does nothing while the key map is up: nothing is discarded.
+    terminal.send("y")?;
+
+    terminal.send(ESC)?;
+    let screen = terminal.wait_for("the question back", |screen| {
+        screen.contents().contains("Discard this task?")
+    })?;
+    assert_eq!(screen, asked);
+
+    terminal.send("n")?;
+    terminal.wait_for("the form back with its content", |screen| {
+        !screen.contents().contains("Discard this task?")
+    })?;
+    terminal.send(ESC)?;
+    terminal.wait_for("the queue back", |screen| {
+        !screen.contents().contains("New task")
+    })?;
+    quit(terminal)
 }
 
 #[test]

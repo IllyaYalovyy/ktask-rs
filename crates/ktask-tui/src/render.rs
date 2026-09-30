@@ -63,6 +63,25 @@ const PROJECTS_KEYS: &str = " j, k select · Enter switch · d forget · Esc can
 /// project.
 const FORGET_KEYS: &str = " y forget · n, Esc keep it ";
 
+/// The keys shown by `?` while the removal question is asking — the question itself already
+/// shows them inline, but a long enough title still leaves `?` as the one way to see them
+/// without cutting anything.
+const REMOVAL_QUESTION_KEYS: [(&str, &str); 2] = [("y", "remove the task"), ("n, Esc", "keep it")];
+
+/// The keys shown by `?` while the discard question is asking.
+const DISCARD_QUESTION_KEYS: [(&str, &str); 2] = [("y", "discard it"), ("n, Esc", "keep writing")];
+
+/// The keys shown by `?` while the forget question is asking.
+const FORGET_QUESTION_KEYS: [(&str, &str); 2] = [("y", "forget it"), ("n, Esc", "keep it")];
+
+/// The keys shown by `?` while the project picker is open, not asking to forget a project.
+const PICKER_KEYS: [(&str, &str); 4] = [
+    ("j, k", "select the next or previous project"),
+    ("Enter", "switch to the selected project"),
+    ("d", "forget the selected project, after asking"),
+    ("Esc", "cancel"),
+];
+
 /// What the registration screen's frame says at the bottom: there is no queue behind it to
 /// cancel back onto, so Esc quits rather than cancelling.
 const REGISTRATION_KEYS: &str = " Ctrl-S register · Esc quit ";
@@ -103,6 +122,10 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     if let Some(settings) = &app.settings {
         return Some(settings_screen::draw(settings, inner, buf));
     }
+    if discarding && app.help {
+        key_map(&DISCARD_QUESTION_KEYS, inner, buf);
+        return None;
+    }
     if let Some(form) = &app.form {
         return form_screen::draw(form, discarding, inner, buf);
     }
@@ -110,15 +133,39 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
         return Some(import_screen(import, inner, buf));
     }
     if let Some(projects) = &app.projects {
-        projects_screen(app, projects, inner, buf);
+        if app.help {
+            key_map(picker_help_keys(app), inner, buf);
+        } else {
+            projects_screen(app, projects, inner, buf);
+        }
         return None;
     }
     match &app.queue {
         None => Paragraph::new("Loading the queue…").render(inner, buf),
-        Some(_) if app.help => key_map(inner, buf),
+        Some(_) if app.help => key_map(queue_help_keys(app), inner, buf),
         Some(queue) => draw_queue(app, queue, inner, buf),
     }
     None
+}
+
+/// The keys `?` shows over the queue screen right now: the removal question's own keys while
+/// it is asking — the discard question is handled separately, since it covers the form, not
+/// the queue — the queue's full key map otherwise.
+fn queue_help_keys(app: &App) -> &'static [(&'static str, &'static str)] {
+    match app.confirming {
+        Some(Confirming::Removal(_)) => &REMOVAL_QUESTION_KEYS,
+        Some(Confirming::Discard) | None => &KEYS,
+    }
+}
+
+/// The keys `?` shows over the project picker right now: the forget question's own keys while
+/// it is asking, the picker's own keys otherwise.
+fn picker_help_keys(app: &App) -> &'static [(&'static str, &'static str)] {
+    if app.project_forgetting.is_some() {
+        &FORGET_QUESTION_KEYS
+    } else {
+        &PICKER_KEYS
+    }
 }
 
 /// Draws the header — the project, the counts and the question line, which shows a run's
@@ -128,7 +175,7 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
 /// since that leaves `app.message` untouched.
 fn draw_queue(app: &App, queue: &QueueView, area: Rect, buf: &mut Buffer) {
     let [header, list] = Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(area);
-    Paragraph::new(header_lines(app, queue)).render(header, buf);
+    Paragraph::new(header_lines(app, queue, usize::from(header.width))).render(header, buf);
     let height = usize::from(list.height);
     let width = usize::from(list.width);
     match &app.message {
@@ -186,19 +233,21 @@ fn registration_screen(form: &RegistrationForm, area: Rect, buf: &mut Buffer) ->
 }
 
 /// The picker's title, its problem line when its last submission changed nothing, and its
-/// forget question while one is open — everything above the project rows themselves.
-fn projects_header(app: &App) -> Vec<Line<'static>> {
+/// forget question while one is open — everything above the project rows themselves. The
+/// forget question's name is cut with `…` to fit `width` when it is long, so its keys are
+/// never pushed off screen.
+fn projects_header(app: &App, width: usize) -> Vec<Line<'static>> {
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let mut lines = vec![Line::styled("Projects", bold)];
     if let Some(problem) = &app.project_problem {
         lines.push(Line::styled(format!("! {problem}"), bold));
     }
     if let Some(name) = &app.project_forgetting {
+        let prefix = "Forget project \"";
+        let suffix = "\"? Its journal stays on disk. y to forget · n or Esc to keep it";
+        let budget = width.saturating_sub(prefix.chars().count() + suffix.chars().count());
         lines.push(Line::styled(
-            format!(
-                "Forget project {name:?}? Its journal stays on disk. \
-                 y to forget · n or Esc to keep it"
-            ),
+            format!("{prefix}{}{suffix}", elide(name, budget)),
             bold,
         ));
     }
@@ -235,7 +284,7 @@ fn project_row(
 /// the same list `ktask-rs project list` prints, from the same use case — the one whose queue
 /// is on show marked, and the selection marked and shown reversed.
 fn projects_screen(app: &App, projects: &[Project], area: Rect, buf: &mut Buffer) {
-    let mut lines = projects_header(app);
+    let mut lines = projects_header(app, usize::from(area.width));
     if projects.is_empty() {
         lines.push(Line::from("No projects are registered."));
     }
@@ -253,8 +302,10 @@ fn projects_screen(app: &App, projects: &[Project], area: Rect, buf: &mut Buffer
     Paragraph::new(lines).render(area, buf);
 }
 
-fn key_map(area: Rect, buf: &mut Buffer) {
-    let width = KEYS
+/// Draws `keys` — the ones that work right now — as a `key  does` list over the whole of
+/// `area`.
+fn key_map(keys: &[(&str, &str)], area: Rect, buf: &mut Buffer) {
+    let width = keys
         .iter()
         .map(|(key, _)| key.chars().count())
         .max()
@@ -264,7 +315,7 @@ fn key_map(area: Rect, buf: &mut Buffer) {
         Line::default(),
     ];
     lines.extend(
-        KEYS.iter()
+        keys.iter()
             .map(|(key, does)| Line::from(format!("{key:<width$}  {does}"))),
     );
     Paragraph::new(lines).render(area, buf);
@@ -277,8 +328,9 @@ fn key_map(area: Rect, buf: &mut Buffer) {
 /// The last run's or import's own report of what it did is shown in the list area below
 /// instead, by [`message_lines`], since there can be more than one line of it; a run's refusal
 /// to start is shown here, beside the task list, instead — there is only ever one line of it,
-/// and the list stays worth seeing next to it.
-fn question_line(app: &App, queue: &QueueView) -> Line<'static> {
+/// and the list stays worth seeing next to it. The title is cut with `…` to fit `width` when
+/// it is long, so its keys are never pushed off screen.
+fn question_line(app: &App, queue: &QueueView, width: usize) -> Line<'static> {
     if let Some(refusal) = &app.run_refusal {
         return Line::styled(refusal.clone(), Style::new().add_modifier(Modifier::BOLD));
     }
@@ -289,11 +341,11 @@ fn question_line(app: &App, queue: &QueueView) -> Line<'static> {
             Confirming::Discard => None,
         })
         .map_or_else(Line::default, |task| {
+            let prefix = format!("Remove #{} ", task.id);
+            let suffix = "? y to remove · n or Esc to keep";
+            let budget = width.saturating_sub(prefix.chars().count() + suffix.chars().count());
             Line::styled(
-                format!(
-                    "Remove #{} {}? y to remove · n or Esc to keep",
-                    task.id, task.title
-                ),
+                format!("{prefix}{}{suffix}", elide(&task.title, budget)),
                 Style::new().add_modifier(Modifier::BOLD),
             )
         });
@@ -320,7 +372,7 @@ fn message_lines(app: &App, message: &[String], height: usize) -> Vec<Line<'stat
         .collect()
 }
 
-fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
+fn header_lines(app: &App, queue: &QueueView, width: usize) -> Vec<Line<'static>> {
     let summary = queue.summary;
     vec![
         Line::styled(
@@ -337,7 +389,7 @@ fn header_lines(app: &App, queue: &QueueView) -> Vec<Line<'static>> {
             summary.failed_unknown,
             summary.cancelled
         )),
-        question_line(app, queue),
+        question_line(app, queue, width),
     ]
 }
 

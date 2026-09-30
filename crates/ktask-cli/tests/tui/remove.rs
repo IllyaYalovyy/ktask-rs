@@ -217,7 +217,7 @@ fn while_the_question_is_open_only_y_n_esc_and_q_are_answered() -> Result<()> {
     let before = terminal.screen();
     let asked = ask(&mut terminal, 1, "alpha")?;
 
-    for keys in ["j", "G", "a", "?", "d", "x", "k"] {
+    for keys in ["j", "G", "a", "d", "x", "k"] {
         terminal.send(keys)?;
     }
     // Keys are handled in order: once n has been, the ones before it were too.
@@ -233,6 +233,67 @@ fn while_the_question_is_open_only_y_n_esc_and_q_are_answered() -> Result<()> {
             .iter()
             .all(|line| !line.contains("cancelled"))
     );
+    quit(terminal)
+}
+
+#[test]
+fn question_mark_shows_the_removal_questions_own_keys_and_esc_closes_it_back_to_the_question()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    let mut terminal = fixture.open(ROWS)?;
+    let asked = ask(&mut terminal, 1, "alpha")?;
+
+    terminal.send("?")?;
+    let screen = terminal.wait_for("the removal question's key map", |screen| {
+        screen.contents().contains("Keys")
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert!(
+        lines.contains(&"y       remove the task".to_owned()),
+        "{lines:?}"
+    );
+    assert!(lines.contains(&"n, Esc  keep it".to_owned()), "{lines:?}");
+    // Neither the task list nor the queue's own keys show while this key map is up.
+    assert!(!screen.contains("alpha"), "{screen}");
+    assert!(!screen.contains("select the next task"), "{screen}");
+
+    // Other keys, including y, do nothing while the key map covers the question.
+    terminal.send("y")?;
+    terminal.send("j")?;
+
+    terminal.send(ESC)?;
+    let screen = terminal.wait_for("the question back", |screen| {
+        screen.contents().contains("Remove #")
+    })?;
+    assert_eq!(screen, asked);
+
+    terminal.send("y")?;
+    terminal.wait_for("alpha gone", |screen| !screen.contents().contains("alpha"))?;
+    quit(terminal)
+}
+
+#[test]
+fn a_title_too_long_to_fit_is_cut_with_an_ellipsis_but_the_keys_never_are() -> Result<()> {
+    let fixture = Fixture::empty()?;
+    let long_title = "a very long task title that will not fit next to the question's keys";
+    fixture.add(long_title)?;
+    let mut terminal =
+        Terminal::launch(&fixture.sandbox, &fixture.repository, &["tui"], ROWS, COLS)?;
+    terminal.wait_for("the queue with its task selected", |screen| {
+        let contents = screen.contents();
+        contents.ends_with('┘') && marked(&contents).len() == 1
+    })?;
+
+    terminal.send("d")?;
+    let screen = terminal.wait_for("the removal question", |screen| {
+        screen.contents().contains("Remove #1")
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert!(
+        lines[3].ends_with("…? y to remove · n or Esc to keep"),
+        "{lines:?}"
+    );
+    assert!(!lines[3].contains(long_title), "{lines:?}");
     quit(terminal)
 }
 
