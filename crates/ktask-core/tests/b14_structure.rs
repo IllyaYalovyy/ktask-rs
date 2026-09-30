@@ -5,14 +5,14 @@
 
 use std::path::Path;
 
-/// `ktask-core/src/task.rs`'s own source.
+/// `ktask-core/src/task/use_cases.rs`'s own source, where `add_task` is defined.
 fn task_source() -> std::io::Result<String> {
-    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/task.rs"))
+    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/task/use_cases.rs"))
 }
 
-/// `ktask-core/src/settings.rs`'s own source.
+/// `ktask-core/src/settings/mod.rs`'s own source.
 fn settings_source() -> std::io::Result<String> {
-    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/settings.rs"))
+    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/settings/mod.rs"))
 }
 
 /// The body of the first `#[cfg(test)]` module in `text`, cut off, so a check does not trip
