@@ -1,14 +1,18 @@
 //! The structural rules of docs/CODER.md's task B-13, "each step of a task is a unit of its
-//! own": no file in `ktask-core/src` is longer than 400 lines without its tests, and none of
-//! the seven step modules under `src/steps/` names another.
+//! own", and B-25, "every source file can be read in one sitting": no source file anywhere in
+//! the workspace is longer than 400 lines without its tests, and none of the seven step
+//! modules under `src/steps/` names another. Integration tests under `tests/` are exempt, as
+//! they are for the function-length rule below: they are entirely tests, with no such module
+//! to set aside.
 
 use std::path::{Path, PathBuf};
 
-/// Files that were already over 400 non-test lines before this task, and whose own
-/// restructuring is a separate piece of work: `queue_state.rs`, `task.rs` and `settings.rs`.
-/// Everything this task touches or adds — `run.rs`, `pick.rs` and everything under
-/// `src/steps/` — carries no such exception.
-const PRE_EXISTING_EXCEPTIONS: &[&str] = &["queue_state.rs", "task.rs", "settings.rs"];
+/// The workspace root: two directories up from this crate's own.
+fn workspace_root() -> std::io::Result<PathBuf> {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+}
 
 /// Every `.rs` file directly or transitively under `dir`.
 fn rust_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
@@ -37,24 +41,20 @@ fn lines_without_tests(text: &str) -> usize {
         .count()
 }
 
-/// No file under `ktask-core/src` — except a short, named list of files this task did not
-/// touch — is longer than 400 lines once its own `#[cfg(test)]` module is set aside.
+/// No source file anywhere in the workspace's crates is longer than 400 lines once its own
+/// `#[cfg(test)]` module is set aside: every part of the tool can be read whole.
 #[test]
 fn no_file_is_longer_than_400_lines_without_its_tests() -> std::io::Result<()> {
-    let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let root = workspace_root()?;
     let mut offenders = Vec::new();
-    for path in rust_files(&source_dir)? {
-        let name = path
-            .file_name()
-            .and_then(std::ffi::OsStr::to_str)
-            .unwrap_or("");
-        if PRE_EXISTING_EXCEPTIONS.contains(&name) {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path)?;
-        let lines = lines_without_tests(&text);
-        if lines > 400 {
-            offenders.push(format!("{}: {lines} lines", path.display()));
+    for crate_dir in ["ktask-core", "ktask-adapters", "ktask-cli", "ktask-tui"] {
+        let src = root.join("crates").join(crate_dir).join("src");
+        for path in rust_files(&src)? {
+            let text = std::fs::read_to_string(&path)?;
+            let lines = lines_without_tests(&text);
+            if lines > 400 {
+                offenders.push(format!("{}: {lines} lines", path.display()));
+            }
         }
     }
     assert!(offenders.is_empty(), "{}", offenders.join("\n"));
