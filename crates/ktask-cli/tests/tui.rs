@@ -16,6 +16,8 @@ mod import;
 mod insert;
 #[path = "tui/navigate.rs"]
 mod navigate;
+#[path = "tui/no_leftover_processes.rs"]
+mod no_leftover_processes;
 #[path = "tui/projects.rs"]
 mod projects;
 #[path = "support/pty.rs"]
@@ -28,6 +30,8 @@ mod remove;
 mod repo;
 #[path = "tui/run.rs"]
 mod run;
+#[path = "support/run_cleanup.rs"]
+mod run_cleanup;
 #[path = "tui/settings.rs"]
 mod settings;
 mod support;

@@ -5,6 +5,8 @@
 //! the commit sitting in the project, and tells the operator what is expected. A task with
 //! nothing to commit makes no push and leaves no line.
 
+#[path = "support/run_cleanup.rs"]
+mod run_cleanup;
 mod support;
 #[path = "support/tracked_branch.rs"]
 mod tracked_branch;
@@ -65,6 +67,13 @@ struct Fixture {
     seed: PathBuf,
     bare: PathBuf,
     _keep: tempfile::TempDir,
+}
+
+/// However a test above left its `run`, nothing of it survives the test itself.
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        run_cleanup::kill_run_if_in_progress(&self.sandbox, "my-app");
+    }
 }
 
 impl Fixture {
@@ -229,11 +238,11 @@ impl Fixture {
 }
 
 /// A bash block: for the review and test steps, approves and accepts at once; for the
-/// implementation step, waits for the file at `go` to exist, then writes `new.txt` and
-/// reports `done`.
+/// implementation step, blocks on a fifo at `go` until this test writes to it, then writes
+/// `new.txt` and reports `done`.
 fn gated_body(go: &Path) -> String {
     format!(
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  while [ ! -f \"{}\" ]; do sleep 0.02; done\n  echo fresh > new.txt\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  [ -p \"{0}\" ] || mkfifo \"{0}\"\n  read _ < \"{0}\"\n  echo fresh > new.txt\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
         go.display()
     )
 }

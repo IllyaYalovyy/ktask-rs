@@ -21,6 +21,15 @@ pub(crate) struct Fixture {
     _keep: tempfile::TempDir,
 }
 
+/// However a test above left a `run` it started — through the CLI or through the TUI's `r`,
+/// which starts one detached on purpose so quitting the screen alone does not stop it —
+/// nothing of it survives the test itself.
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        super::run_cleanup::kill_run_if_in_progress(&self.sandbox, "my-app");
+    }
+}
+
 impl Fixture {
     pub(crate) fn new() -> Result<Self> {
         let fixture = Self::empty()?;

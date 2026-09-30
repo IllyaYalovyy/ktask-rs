@@ -50,12 +50,12 @@ fn reporting_body_with_reason(outcome: &str, reason: &str) -> String {
     )
 }
 
-/// A bash block that waits for the file at `go` to exist, then reports `done` (or, for the
-/// review step, `approved`; for the test step, `accepted`): an attempt that stays running
-/// until the test lets it finish.
+/// A bash block that blocks on a fifo at `go` until this test writes to it, then reports
+/// `done` (or, for the review step, `approved`; for the test step, `accepted`): an attempt
+/// that stays running until the test lets it finish.
 fn gated_body(go: &Path) -> String {
     format!(
-        "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  [ -p \"{0}\" ] || mkfifo \"{0}\"\n  read _ < \"{0}\"\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
         go.display()
     )
 }
@@ -66,6 +66,15 @@ struct Fixture {
     work: PathBuf,
     repository: PathBuf,
     _keep: tempfile::TempDir,
+}
+
+/// However a test above left a `run` it started — through the CLI or through the TUI, which
+/// starts one detached on purpose so quitting the screen alone does not stop it — nothing of
+/// it survives the test itself.
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        super::run_cleanup::kill_run_if_in_progress(&self.sandbox, "my-app");
+    }
 }
 
 impl Fixture {

@@ -7,6 +7,8 @@
 
 #[path = "support/repo.rs"]
 mod repo;
+#[path = "support/run_cleanup.rs"]
+mod run_cleanup;
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -83,6 +85,13 @@ struct Fixture {
     work: PathBuf,
     repository: PathBuf,
     _keep: tempfile::TempDir,
+}
+
+/// However a test above left its `run`, nothing of it survives the test itself.
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        run_cleanup::kill_run_if_in_progress(&self.sandbox, "my-app");
+    }
 }
 
 impl Fixture {
@@ -486,7 +495,7 @@ fn while_a_run_is_in_progress_the_running_task_shows_its_elapsed_time_so_far() -
     fixture.add_agent_task(
         "a",
         &format!(
-            "```bash\nwhile [ ! -f \"{}\" ]; do sleep 0.02; done\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  [ -p \"{0}\" ] || mkfifo \"{0}\"\n  read _ < \"{0}\"\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
             go.display()
         ),
     )?;
