@@ -120,9 +120,11 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     None
 }
 
-/// Draws the header — the project, the counts and the question line — over `area`'s first
-/// three rows, then, under it, either the last run's or import's results, one per line, when
-/// there are any, or the task list otherwise.
+/// Draws the header — the project, the counts and the question line, which shows a run's
+/// refusal to start when there is one — over `area`'s first three rows, then, under it, either
+/// the last run's or import's own report of what it did, one per line, when there is one, or
+/// the task list otherwise — which is what shows here while a run's refusal to start is up,
+/// since that leaves `app.message` untouched.
 fn draw_queue(app: &App, queue: &QueueView, area: Rect, buf: &mut Buffer) {
     let [header, list] = Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(area);
     Paragraph::new(header_lines(app, queue)).render(header, buf);
@@ -267,13 +269,18 @@ fn key_map(area: Rect, buf: &mut Buffer) {
     Paragraph::new(lines).render(area, buf);
 }
 
-/// The header: the project, the counts, and the question of a removal or the refusal of one,
-/// while there is either.
-/// The one-line question or notice shown under the summary — a removal confirmation or a
-/// refusal, whichever was raised most recently — or an empty line when neither applies. The
-/// last run's or import's own results are shown in the list area below instead, by
-/// [`message_lines`], since there can be more than one line of them.
+/// The header: the project, the counts, and the question of a removal, the refusal of one, or
+/// a run's refusal to start, while there is any.
+/// The one-line question or notice shown under the summary — a removal confirmation, a
+/// refusal, or a run's refusal to start, whichever applies — or an empty line when none does.
+/// The last run's or import's own report of what it did is shown in the list area below
+/// instead, by [`message_lines`], since there can be more than one line of it; a run's refusal
+/// to start is shown here, beside the task list, instead — there is only ever one line of it,
+/// and the list stays worth seeing next to it.
 fn question_line(app: &App, queue: &QueueView) -> Line<'static> {
+    if let Some(refusal) = &app.run_refusal {
+        return Line::styled(refusal.clone(), Style::new().add_modifier(Modifier::BOLD));
+    }
     let question = app
         .confirming
         .and_then(|confirm| match confirm {
@@ -1086,6 +1093,18 @@ mod tests {
         assert_eq!(inside(&rows[4]), "task 1: done");
         assert_eq!(inside(&rows[5]), "task 2: failed: it broke");
         assert_eq!(inside(&rows[6]), "nothing else is pending");
+    }
+
+    #[test]
+    fn a_run_that_refuses_to_start_shows_beside_the_task_list_not_in_place_of_it() {
+        let app = update(
+            loaded(vec![task(1, "first", TaskKind::Agent)]),
+            Event::RunMessage("nothing is pending".to_owned()),
+        );
+        let rows = drawn(&app, 60, 8);
+        assert_eq!(inside(&rows[3]), "nothing is pending");
+        // The task list is still there, under the refusal, not covered by it.
+        assert!(inside(&rows[4]).contains("first"), "{}", rows[4]);
     }
 
     #[test]

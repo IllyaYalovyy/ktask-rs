@@ -42,15 +42,23 @@ pub struct App {
     pub(crate) import: Option<ImportForm>,
     /// The path the import form was submitted with, for the loop to import, and clears this.
     pub import_submission: Option<String>,
-    /// The result of the last thing this screen started that prints its own report — a run,
-    /// or an import — the same words `ktask-rs run` or `ktask-rs import` itself would print,
-    /// one per line, whether it succeeded, was refused, or (for a run) stopped partway —
-    /// shown in place of the task list until a key that is not one of the ones that scroll it
-    /// dismisses it.
+    /// The result of the last thing this screen started that prints its own report — a run
+    /// that attempted at least one task, or an import — the same words `ktask-rs run` or
+    /// `ktask-rs import` itself would print, one per line, whether it succeeded, was refused,
+    /// or (for a run) stopped partway — shown in place of the task list until a key that is
+    /// not one of the ones that scroll it dismisses it. A run that refused to start without
+    /// attempting anything shows in `run_refusal` instead, beside the task list rather than
+    /// over it.
     pub message: Option<Vec<String>>,
     /// The first of `message`'s lines shown, when there are more than fit; reset to `0`
     /// whenever a fresh message arrives.
     pub message_offset: usize,
+    /// A run this screen started refused to start at all, without attempting any task — an
+    /// earlier one left unfinished, another run already in progress, or nothing left pending
+    /// — printing the same words `ktask-rs run` itself would show for the refusal. Shown next
+    /// to the task list, which stays on show under it and keeps its selection, until a key
+    /// that does not move the selection dismisses it, or a fresh run replaces it.
+    pub run_refusal: Option<String>,
     /// The settings screen, while it is open; it covers the queue like the task form does.
     pub(crate) settings: Option<SettingsForm>,
     /// Set when the operator asked to open the settings screen: the loop loads the
@@ -143,8 +151,11 @@ pub enum Event {
     Rejected(Vec<String>),
     /// The terminal changed size; the screen is drawn again at the new size.
     Resize,
-    /// The run this screen started has ended, or could not start, printing this — the same
-    /// words `ktask-rs run` itself would show.
+    /// The run this screen started has ended, or refused to start at all, printing this — the
+    /// same words `ktask-rs run` itself would show. A refusal to start without attempting
+    /// anything — an earlier task left unfinished, another run already in progress, or nothing
+    /// left pending — is recognised from these same words and shown beside the task list, in
+    /// `run_refusal`; anything else shows in `message`, over the task list.
     RunMessage(String),
     /// The import this screen started has finished, printing this — the same words
     /// `ktask-rs import` itself would show, whether it succeeded or was refused.
@@ -291,9 +302,11 @@ fn update_rest(app: App, event: Event) -> App {
         Event::Ctrl(letter) if app.import.is_some() => update_import_ctrl(app, letter),
         Event::Added(id) => added(app, id),
         Event::Rejected(problems) => in_form(app, |form| Form { problems, ..form }),
-        Event::RunMessage(text) | Event::ImportMessage(text) => shown_message(app, &text),
+        Event::RunMessage(text) => run_message(app, text),
+        Event::ImportMessage(text) => shown_message(app, &text),
         Event::Key(KeyCode::Char('q')) => App { quit: true, ..app },
         Event::Key(key) if app.message.is_some() => update_message_key(app, key),
+        Event::Key(key) if app.run_refusal.is_some() => update_run_refusal_key(app, key),
         Event::Key(key) if app.confirming.is_some() => update_removal_confirm_key(app, key),
         Event::Key(key) if app.help => update_help_key(app, key),
         Event::Key(key) => update_queue_key(app, key),
@@ -604,8 +617,40 @@ fn shown_message(app: App, text: &str) -> App {
     App {
         message: Some(text.lines().map(str::to_owned).collect()),
         message_offset: 0,
+        run_refusal: None,
         ..app
     }
+}
+
+/// The app once a run this screen started has ended, or refused to start: `text`, the same
+/// words `ktask-rs run` itself printed, either way. A run that attempted nothing — recognised
+/// by [`is_start_refusal`], from the very words that make the three ways it refuses to start
+/// unmistakable — shows `text` beside the task list, which stays on show under it; anything
+/// else, including a run that attempted at least one task and only then stopped, shows `text`
+/// in place of the task list, the same as `shown_message` shows an import's own report.
+fn run_message(app: App, text: String) -> App {
+    if is_start_refusal(&text) {
+        App {
+            run_refusal: Some(text),
+            message: None,
+            message_offset: 0,
+            ..app
+        }
+    } else {
+        shown_message(app, &text)
+    }
+}
+
+/// Whether `text` is what a run prints when it refuses to start without attempting any task:
+/// an earlier task left unfinished (ends with `"; run did not start"`), another run already
+/// in progress (contains `"a run is already in progress"`), or nothing left pending (exactly
+/// `"nothing is pending"`) — the same words `ktask-rs run` itself gives for each. A run
+/// started as a detached subprocess has no channel back to this screen but what it printed, so
+/// this is the only way to tell its three refusals to start apart from a report of what it did.
+fn is_start_refusal(text: &str) -> bool {
+    text == "nothing is pending"
+        || text.contains("a run is already in progress")
+        || text.ends_with("; run did not start")
 }
 
 /// A key while the last run's or import's results are shown in place of the task list:
@@ -628,6 +673,26 @@ fn update_message_key(app: App, key: KeyCode) -> App {
             App {
                 message: None,
                 message_offset: 0,
+                ..app
+            },
+            key,
+        ),
+    }
+}
+
+/// A key while a run's refusal to start is shown beside the task list: `j`/`Down`, `k`/`Up`,
+/// `g` and `G` move the selection exactly as they would on the plain queue screen — the
+/// refusal stays shown, beside whichever task the selection lands on — and any other key
+/// dismisses the refusal, then is handled as it would be on the plain queue screen, so, for
+/// example, `r` both dismisses the refusal and starts a fresh run.
+fn update_run_refusal_key(app: App, key: KeyCode) -> App {
+    match key {
+        KeyCode::Char('j' | 'k' | 'g' | 'G') | KeyCode::Down | KeyCode::Up => {
+            update_queue_key(app, key)
+        }
+        _ => update_queue_key(
+            App {
+                run_refusal: None,
                 ..app
             },
             key,
@@ -1234,13 +1299,10 @@ mod tests {
 
     #[test]
     fn a_run_message_is_shown_until_a_key_that_does_not_scroll_it_dismisses_it() {
-        let app = update(
-            loaded(&[1]),
-            Event::RunMessage("nothing is pending".to_owned()),
-        );
+        let app = update(loaded(&[1]), Event::RunMessage("task 1: done".to_owned()));
         assert_eq!(
             app.message.as_deref(),
-            Some(["nothing is pending".to_owned()].as_slice())
+            Some(["task 1: done".to_owned()].as_slice())
         );
 
         // `j`, `k`, the arrows, `g` and `G` scroll the message rather than dismiss it.
@@ -1293,12 +1355,87 @@ mod tests {
 
     #[test]
     fn r_again_both_dismisses_a_shown_message_and_requests_a_fresh_run() {
+        let app = update(loaded(&[1]), Event::RunMessage("task 1: done".to_owned()));
+        let app = press(app, &[KeyCode::Char('r')]);
+        assert_eq!(app.message, None);
+        assert_eq!(app.run_requested, Some(()));
+    }
+
+    #[test]
+    fn a_run_that_refuses_to_start_shows_beside_the_task_list_with_the_selection_kept() {
+        let app = press(loaded(&[1, 2, 3]), &[KeyCode::Char('j')]);
+        assert_eq!(on(&app), Some(2));
+
+        let app = update(app, Event::RunMessage("nothing is pending".to_owned()));
+
+        assert_eq!(app.run_refusal.as_deref(), Some("nothing is pending"));
+        assert_eq!(app.message, None);
+        // The task list, and the selection on it, stay exactly as they were.
+        assert_eq!(app.queue, Some(queue_of(&[1, 2, 3])));
+        assert_eq!(on(&app), Some(2));
+    }
+
+    #[test]
+    fn every_run_refusal_to_start_is_recognised_the_same_way() {
+        for text in [
+            "nothing is pending",
+            "task 3: failed: it broke; run did not start",
+            "task 3: blocked; run did not start",
+            "ktask-rs: a run is already in progress: process 4321",
+            "ktask-rs: a run is already in progress",
+        ] {
+            let app = update(loaded(&[1]), Event::RunMessage(text.to_owned()));
+            assert_eq!(app.run_refusal.as_deref(), Some(text), "{text}");
+            assert_eq!(app.message, None, "{text}");
+        }
+    }
+
+    #[test]
+    fn j_k_g_and_shift_g_move_the_selection_while_a_run_refusal_is_shown() {
+        let app = update(
+            loaded(&[1, 2, 3]),
+            Event::RunMessage("nothing is pending".to_owned()),
+        );
+        assert_eq!(on(&app), Some(1));
+
+        let app = press(app, &[KeyCode::Char('j')]);
+        assert_eq!(app.run_refusal.as_deref(), Some("nothing is pending"));
+        assert_eq!(on(&app), Some(2));
+
+        let app = press(app, &[KeyCode::Char('G')]);
+        assert_eq!(app.run_refusal.as_deref(), Some("nothing is pending"));
+        assert_eq!(on(&app), Some(3));
+
+        let app = press(app, &[KeyCode::Char('k')]);
+        assert_eq!(app.run_refusal.as_deref(), Some("nothing is pending"));
+        assert_eq!(on(&app), Some(2));
+
+        let app = press(app, &[KeyCode::Char('g')]);
+        assert_eq!(app.run_refusal.as_deref(), Some("nothing is pending"));
+        assert_eq!(on(&app), Some(1));
+    }
+
+    #[test]
+    fn a_key_that_is_not_jkgg_dismisses_a_run_refusal_then_acts_as_it_would_otherwise() {
+        let app = update(
+            loaded(&[1, 2]),
+            Event::RunMessage("nothing is pending".to_owned()),
+        );
+
+        let app = press(app, &[KeyCode::Char('a')]);
+        assert_eq!(app.run_refusal, None);
+        // `a` toggled showing cancelled tasks, exactly as it would with no refusal shown.
+        assert!(app.show_cancelled);
+    }
+
+    #[test]
+    fn r_again_both_dismisses_a_shown_run_refusal_and_requests_a_fresh_run() {
         let app = update(
             loaded(&[1]),
             Event::RunMessage("nothing is pending".to_owned()),
         );
         let app = press(app, &[KeyCode::Char('r')]);
-        assert_eq!(app.message, None);
+        assert_eq!(app.run_refusal, None);
         assert_eq!(app.run_requested, Some(()));
     }
 

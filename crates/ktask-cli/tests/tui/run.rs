@@ -1,7 +1,9 @@
 //! `r` on the queue screen: it starts executing the pending tasks exactly as `ktask-rs run`
-//! does, the screen shows the run's progress the same way it shows one started elsewhere, the
-//! refusals `ktask-rs run` itself prints are shown in the same words, and quitting the screen
-//! does not stop a run it started.
+//! does, the screen shows the run's progress the same way it shows one started elsewhere, a
+//! refusal to start — an earlier task left unfinished, another run already in progress, or
+//! nothing left pending — is shown beside the task list rather than in place of it, printing
+//! the same words `ktask-rs run` itself would, and quitting the screen does not stop a run it
+//! started.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -105,12 +107,41 @@ impl Fixture {
     }
 }
 
-/// The first row of the list area — where the last run's results are shown, one per line, in
-/// place of the task list.
+/// The list area's row at `index`, counting from its top — where the last run's results are
+/// shown, one per line, when it covers the task list, or the task list's own rows otherwise.
 fn result_line(screen: &str, index: usize) -> String {
     lines_inside_frame(screen)
         .get(4 + index)
         .cloned()
+        .unwrap_or_default()
+}
+
+/// The header's question line — where a run's refusal to start is shown, beside the task list
+/// rather than in place of it.
+fn header_line(screen: &str) -> String {
+    lines_inside_frame(screen)
+        .get(3)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The task list's row that carries the selection marker, wherever a task's own attempt steps
+/// have pushed it to.
+fn selected_row(screen: &str) -> String {
+    lines_inside_frame(screen)
+        .into_iter()
+        .find(|line| line.starts_with('>'))
+        .unwrap_or_default()
+}
+
+/// The task list's row for the task titled `title` — wherever another task's own attempt
+/// steps have pushed it to — found by its title, the last column of its row and unique among
+/// the fixtures below.
+fn row_titled(screen: &str, title: &str) -> String {
+    let suffix = format!("  {title}");
+    lines_inside_frame(screen)
+        .into_iter()
+        .find(|line| line.ends_with(&suffix))
         .unwrap_or_default()
 }
 
@@ -156,16 +187,55 @@ fn r_starts_the_run_and_the_screen_shows_its_progress_as_it_would_for_a_run_star
 }
 
 #[test]
-fn r_on_a_queue_with_nothing_pending_refuses_in_the_same_words_ktask_rs_run_would() -> Result<()> {
+fn r_on_a_queue_with_nothing_pending_shows_the_refusal_beside_the_task_list() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add_agent_task("a", &reporting_body("done"))?;
+    fixture.add_agent_task("b", &reporting_body("done"))?;
     fixture.run_the_queue()?;
     let mut terminal = fixture.open()?;
 
     terminal.send("r")?;
 
     let screen = terminal.wait_for_text("nothing is pending")?;
-    assert_eq!(result_line(&screen, 0), "nothing is pending");
+    assert_eq!(header_line(&screen), "nothing is pending");
+    // The task list is still there, under the refusal, with the selection on the first task,
+    // where it was — not replaced by the refusal the way a run's own report would.
+    let selected = selected_row(&screen);
+    assert!(selected.ends_with("  a"), "{screen}");
+    assert!(row_titled(&screen, "b").starts_with(' '), "{screen}");
+
+    // `j`, `k`, `g` and `G` move the selection while the refusal stays shown.
+    terminal.send("j")?;
+    let screen = terminal.wait_for("the selection moved to the second task", |screen| {
+        selected_row(&screen.contents()).ends_with("  b")
+    })?;
+    assert_eq!(header_line(&screen), "nothing is pending");
+
+    terminal.send("G")?;
+    let screen = terminal.wait_for("G kept the selection on the last task", |screen| {
+        selected_row(&screen.contents()).ends_with("  b")
+    })?;
+    assert_eq!(header_line(&screen), "nothing is pending");
+
+    terminal.send("g")?;
+    let screen = terminal.wait_for("g moved the selection to the first task", |screen| {
+        selected_row(&screen.contents()).ends_with("  a")
+    })?;
+    assert_eq!(header_line(&screen), "nothing is pending");
+
+    terminal.send("k")?;
+    let screen = terminal.wait_for("k held the selection on the first task", |screen| {
+        selected_row(&screen.contents()).ends_with("  a")
+    })?;
+    assert_eq!(header_line(&screen), "nothing is pending");
+
+    // Any other key dismisses the refusal.
+    terminal.send("a")?;
+    let screen = terminal.wait_for(
+        "the refusal dismissed by a key that is not j, k, g or G",
+        |screen| header_line(&screen.contents()).is_empty(),
+    )?;
+    assert!(!screen.contains("nothing is pending"), "{screen}");
 
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
@@ -173,10 +243,11 @@ fn r_on_a_queue_with_nothing_pending_refuses_in_the_same_words_ktask_rs_run_woul
 }
 
 #[test]
-fn r_past_an_earlier_task_that_did_not_finish_refuses_in_the_same_words_ktask_rs_run_would()
--> Result<()> {
+fn r_past_an_earlier_task_that_did_not_finish_shows_the_refusal_beside_the_task_list() -> Result<()>
+{
     let fixture = Fixture::new()?;
     fixture.add_agent_task("a", &reporting_body_with_reason("failed", "it broke"))?;
+    fixture.add_agent_task("b", &reporting_body("done"))?;
     fixture.run_the_queue()?;
     let mut terminal = fixture.open()?;
 
@@ -184,7 +255,18 @@ fn r_past_an_earlier_task_that_did_not_finish_refuses_in_the_same_words_ktask_rs
 
     let screen = terminal.wait_for_text("run did not start")?;
     assert_eq!(
-        result_line(&screen, 0),
+        header_line(&screen),
+        "task 1: failed: it broke; run did not start"
+    );
+    assert!(selected_row(&screen).ends_with("  a"), "{screen}");
+    assert!(row_titled(&screen, "b").starts_with(' '), "{screen}");
+
+    terminal.send("j")?;
+    let screen = terminal.wait_for("the selection moved to the second task", |screen| {
+        selected_row(&screen.contents()).ends_with("  b")
+    })?;
+    assert_eq!(
+        header_line(&screen),
         "task 1: failed: it broke; run did not start"
     );
 
@@ -249,10 +331,12 @@ fn a_run_that_attempts_several_tasks_shows_one_result_per_line_scrollable_when_m
 }
 
 #[test]
-fn r_while_a_run_started_elsewhere_holds_the_queue_refuses_naming_its_process() -> Result<()> {
+fn r_while_a_run_started_elsewhere_holds_the_queue_shows_the_refusal_beside_the_task_list()
+-> Result<()> {
     let fixture = Fixture::new()?;
     let go = fixture.work.join("go");
     fixture.add_agent_task("a", &gated_body(&go))?;
+    fixture.add_agent_task("b", &reporting_body("done"))?;
     let mut terminal = fixture.open()?;
     let mut outside = fixture.spawn_run_outside_the_tui()?;
     let outside_pid = outside.id();
@@ -265,10 +349,21 @@ fn r_while_a_run_started_elsewhere_holds_the_queue_refuses_naming_its_process() 
     terminal.send("r")?;
 
     let screen = terminal.wait_for_text("already in progress")?;
-    assert_eq!(
-        result_line(&screen, 0),
-        format!("ktask-rs: a run is already in progress: process {outside_pid}")
-    );
+    let expected = format!("ktask-rs: a run is already in progress: process {outside_pid}");
+    assert_eq!(header_line(&screen), expected);
+    // The task list is still there, both tasks on it, under the refusal, with the selection
+    // on the first task, where it was.
+    let selected = selected_row(&screen);
+    assert!(selected.ends_with("  a"), "{screen}");
+    assert!(selected.contains("running"), "{screen}");
+    assert!(row_titled(&screen, "b").starts_with(' '), "{screen}");
+
+    // `j` moves the selection while the refusal stays shown.
+    terminal.send("j")?;
+    let screen = terminal.wait_for("the selection moved to the second task", |screen| {
+        selected_row(&screen.contents()).ends_with("  b")
+    })?;
+    assert_eq!(header_line(&screen), expected);
 
     std::fs::write(&go, "")?;
     let status = outside.wait()?;
