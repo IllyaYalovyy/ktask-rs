@@ -368,7 +368,7 @@ fn a_removed_tasks_id_is_never_reused() -> Result<()> {
     let file = fixture.work.join("more.json");
     std::fs::write(&file, r#"[{"title": "f", "criteria": ["c"]}]"#)?;
     let imported = fixture.run(&["import", &file.to_string_lossy()])?;
-    assert_eq!(imported.stdout, "6\n", "{}", imported.stderr);
+    assert_eq!(imported.stdout, "1 task added: 6\n", "{}", imported.stderr);
     Ok(())
 }
 

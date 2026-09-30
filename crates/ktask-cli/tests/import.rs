@@ -158,7 +158,7 @@ fn a_valid_file_of_three_tasks_adds_all_three_in_order_and_prints_their_ids() ->
 
     let outcome = fixture.import(&tasks, &[])?;
 
-    assert_eq!(outcome.stdout, "1\n2\n3\n");
+    assert_eq!(outcome.stdout, "3 tasks added: 1, 2, 3\n");
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     let listed = fixture.listed()?;
     assert_eq!(
@@ -196,7 +196,7 @@ fn what_is_left_out_of_a_task_takes_its_default() -> Result<()> {
 
     let outcome = fixture.import(&json!([task("Plain")]), &[])?;
 
-    assert_eq!(outcome.stdout, "1\n");
+    assert_eq!(outcome.stdout, "1 task added: 1\n");
     assert_eq!(
         authored(&fixture.listed()?),
         [
@@ -227,7 +227,7 @@ fn imported_tasks_get_the_next_ids_after_the_tasks_already_there() -> Result<()>
 
     let outcome = fixture.import(&json!([task("a"), task("b")]), &[])?;
 
-    assert_eq!(outcome.stdout, "2\n3\n");
+    assert_eq!(outcome.stdout, "2 tasks added: 2, 3\n");
     assert_eq!(fixture.queue()?, ["1:Existing", "2:a", "3:b"]);
     Ok(())
 }
@@ -251,7 +251,7 @@ fn before_puts_the_whole_batch_immediately_before_the_task_named_in_order() -> R
         ("3", ["1:a", "2:b", "4:x", "5:y", "3:c"]),
     ] {
         let (fixture, outcome) = import_xy_into_abc(&["--before", id])?;
-        assert_eq!(outcome.stdout, "4\n5\n", "--before {id}");
+        assert_eq!(outcome.stdout, "2 tasks added: 4, 5\n", "--before {id}");
         assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
         assert_eq!(fixture.queue()?, expected, "--before {id}");
     }
@@ -266,7 +266,7 @@ fn after_puts_the_whole_batch_immediately_after_the_task_named_in_order() -> Res
         ("3", ["1:a", "2:b", "3:c", "4:x", "5:y"]),
     ] {
         let (fixture, outcome) = import_xy_into_abc(&["--after", id])?;
-        assert_eq!(outcome.stdout, "4\n5\n", "--after {id}");
+        assert_eq!(outcome.stdout, "2 tasks added: 4, 5\n", "--after {id}");
         assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
         assert_eq!(fixture.queue()?, expected, "--after {id}");
     }
@@ -469,7 +469,7 @@ fn a_dash_reads_the_tasks_from_standard_input() -> Result<()> {
 
     let outcome = fixture.run_with_stdin(&["import", "-"], &tasks.to_string())?;
 
-    assert_eq!(outcome.stdout, "1\n2\n");
+    assert_eq!(outcome.stdout, "2 tasks added: 1, 2\n");
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     assert_eq!(fixture.queue()?, ["1:From stdin", "2:Also"]);
     Ok(())
@@ -548,7 +548,7 @@ fn the_output_of_list_json_reduced_to_authored_fields_imports_into_another_proje
         ],
     )?;
 
-    assert_eq!(outcome.stdout, "1\n2\n");
+    assert_eq!(outcome.stdout, "2 tasks added: 1, 2\n");
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     let imported = fixture.sandbox.run(&other, &["list", "--json"])?;
     let imported: Vec<Value> = serde_json::from_str(&imported.stdout)?;
@@ -569,7 +569,7 @@ fn the_full_output_of_list_json_with_its_tool_managed_fields_imports_unchanged()
 
     let outcome = fixture.sandbox.run(&other, &["import", &file])?;
 
-    assert_eq!(outcome.stdout, "1\n2\n");
+    assert_eq!(outcome.stdout, "2 tasks added: 1, 2\n");
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     let imported = fixture.sandbox.run(&other, &["list", "--json"])?;
     let imported: Vec<Value> = serde_json::from_str(&imported.stdout)?;
@@ -606,7 +606,10 @@ fn a_cancelled_task_from_list_all_json_is_skipped_saying_how_many() -> Result<()
 
     let outcome = fixture.sandbox.run(&other, &["import", &file])?;
 
-    assert_eq!(outcome.stdout, "1\n2\n1 cancelled task was skipped\n");
+    assert_eq!(
+        outcome.stdout,
+        "2 tasks added: 1, 2\n1 cancelled task was skipped\n"
+    );
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     let queued = fixture.sandbox.run(&other, &["list"])?;
     assert_eq!(
@@ -627,7 +630,7 @@ fn project_selects_the_queue_the_tasks_are_imported_into() -> Result<()> {
 
     let outcome = fixture.import(&json!([task("Elsewhere")]), &["--project", "other-app"])?;
 
-    assert_eq!(outcome.stdout, "1\n");
+    assert_eq!(outcome.stdout, "1 task added: 1\n");
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     assert_eq!(fixture.listed()?, Vec::<Value>::new());
     let listed = fixture.sandbox.run(&other, &["list"])?;
@@ -651,11 +654,11 @@ fn project_named_before_or_after_import_gives_the_same_result() -> Result<()> {
     let before = fixture
         .sandbox
         .run(&other, &["--project", "my-app", "import", &before_file])?;
-    assert_eq!(before.stdout, "1\n", "{}", before.stderr);
+    assert_eq!(before.stdout, "1 task added: 1\n", "{}", before.stderr);
     let after = fixture
         .sandbox
         .run(&other, &["import", &after_file, "--project", "my-app"])?;
-    assert_eq!(after.stdout, "2\n", "{}", after.stderr);
+    assert_eq!(after.stdout, "1 task added: 2\n", "{}", after.stderr);
 
     let listed = fixture
         .sandbox

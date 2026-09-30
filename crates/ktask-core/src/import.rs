@@ -48,6 +48,25 @@ pub struct Import {
 }
 
 impl Import {
+    /// The message naming how many tasks were added and their IDs, in order, or `None` when
+    /// none were.
+    #[must_use]
+    pub fn added_message(&self) -> Option<String> {
+        if self.tasks.is_empty() {
+            return None;
+        }
+        let ids = self
+            .tasks
+            .iter()
+            .map(|task| task.id.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(match self.tasks.len() {
+            1 => format!("1 task added: {ids}"),
+            n => format!("{n} tasks added: {ids}"),
+        })
+    }
+
     /// The message naming how many cancelled tasks were skipped, or `None` when there were
     /// none.
     #[must_use]
@@ -201,6 +220,21 @@ mod tests {
         FakeClock(at(500))
     }
 
+    /// A task with `id` and nothing else that matters, for messages that only name IDs.
+    fn task_with_id(id: u64) -> Task {
+        Task {
+            id: TaskId(id),
+            position: 0,
+            title: "t".to_owned(),
+            body: String::new(),
+            criteria: vec!["c".to_owned()],
+            kind: TaskKind::default(),
+            links: vec![],
+            status: TaskStatus::Pending,
+            created_at: std::time::SystemTime::UNIX_EPOCH,
+        }
+    }
+
     fn titles(journal: &FakeJournal) -> Vec<String> {
         list_tasks(journal)
             .unwrap()
@@ -336,6 +370,28 @@ mod tests {
             Some("1 cancelled task was skipped")
         );
         assert_eq!(titles(&journal), ["kept one", "kept two"]);
+    }
+
+    #[test]
+    fn added_message_names_the_count_and_ids_or_says_nothing() {
+        let none = Import {
+            tasks: vec![],
+            skipped_cancelled: 0,
+        };
+        assert_eq!(none.added_message(), None);
+        let one = Import {
+            tasks: vec![task_with_id(7)],
+            skipped_cancelled: 0,
+        };
+        assert_eq!(one.added_message().as_deref(), Some("1 task added: 7"));
+        let many = Import {
+            tasks: vec![task_with_id(4), task_with_id(5), task_with_id(6)],
+            skipped_cancelled: 0,
+        };
+        assert_eq!(
+            many.added_message().as_deref(),
+            Some("3 tasks added: 4, 5, 6")
+        );
     }
 
     #[test]
