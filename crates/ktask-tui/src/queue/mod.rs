@@ -685,6 +685,23 @@ mod tests {
     }
 
     #[test]
+    fn an_import_that_added_tasks_selects_the_first_one_and_shows_its_own_report() {
+        let queue = loaded(&[1, 2, 3]).imported("1 task added: 3", Some(TaskId(3)));
+        assert_eq!(
+            queue.message.as_deref(),
+            Some(["1 task added: 3".to_owned()].as_slice())
+        );
+        assert_eq!(on(&queue), Some(3));
+    }
+
+    #[test]
+    fn an_import_that_added_nothing_leaves_the_selection_where_it_was() {
+        let queue = press(loaded(&[1, 2]), &[KeyCode::Char('j')]);
+        let queue = queue.imported("1 cancelled task was skipped", None);
+        assert_eq!(on(&queue), Some(2));
+    }
+
+    #[test]
     fn a_run_message_is_shown_until_a_key_that_does_not_scroll_it_dismisses_it() {
         let queue = loaded(&[1]).run_message("task 1: done".to_owned());
         assert_eq!(

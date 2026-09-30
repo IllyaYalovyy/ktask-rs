@@ -78,8 +78,9 @@ pub enum Event {
     /// same words `ktask-rs run` itself would show.
     RunMessage(String),
     /// The import this screen started has finished, printing this — the same words
-    /// `ktask-rs import` itself would print.
-    ImportMessage(String),
+    /// `ktask-rs import` itself would print — and, when any task was added, the first one's
+    /// ID, so the queue can select it.
+    ImportMessage(String, Option<TaskId>),
     /// The project's settings were loaded: the settings screen opens on these values.
     SettingsLoaded(Vec<SettingView>),
     /// The settings screen's submission was saved: it closes.
@@ -156,8 +157,8 @@ fn dispatch(app: App, event: Event) -> App {
             queue: app.queue.run_message(text),
             ..app
         },
-        Event::ImportMessage(text) => App {
-            queue: app.queue.shown_message(&text),
+        Event::ImportMessage(text, first) => App {
+            queue: app.queue.imported(&text, first),
             ..app
         },
         Event::Key(key) => on_queue(app, |q| q.key(key)),

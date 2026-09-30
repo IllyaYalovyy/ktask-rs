@@ -108,16 +108,17 @@ fn handle_registration_action(mut app: App, application: &impl Application) -> (
 /// Imports the file `app` has pending, if any, through `application`: `(app, true)` when one
 /// was, `(app, false)`, unchanged, otherwise. Shows the same result, or the same refusal,
 /// `ktask-rs import` itself would print, one line per line of it — built here, from the typed
-/// value `application.import` gives, not received already rendered into text.
+/// value `application.import` gives, not received already rendered into text — and selects the
+/// first task added, when any was.
 fn handle_import_action(mut app: App, application: &impl Application) -> (App, bool) {
     let Some(path) = app.import_submission.take() else {
         return (app, false);
     };
-    let text = match application.import(&path) {
-        Ok(import) => import_text(&import),
-        Err(problem) => problem.to_string(),
+    let (text, first) = match application.import(&path) {
+        Ok(import) => (import_text(&import), import.tasks.first().map(|t| t.id)),
+        Err(problem) => (problem.to_string(), None),
     };
-    (update(app, Event::ImportMessage(text)), true)
+    (update(app, Event::ImportMessage(text, first)), true)
 }
 
 /// Evaluates to the app a `(App, bool)` pair carries once its `bool` is read, returning at
@@ -459,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn a_successful_import_shows_the_ids_built_from_the_typed_value() {
+    fn a_successful_import_shows_the_count_and_ids_built_from_the_typed_value_and_selects_it() {
         let fake = Fake::default();
         *fake.import.borrow_mut() = vec![Ok(Import {
             tasks: vec![ktask_core::Task {
@@ -485,8 +486,15 @@ mod tests {
         assert!(handled);
         assert_eq!(
             app.queue.message(),
-            Some(["5".to_owned(), "1 cancelled task was skipped".to_owned()].as_slice())
+            Some(
+                [
+                    "1 task added: 5".to_owned(),
+                    "1 cancelled task was skipped".to_owned()
+                ]
+                .as_slice()
+            )
         );
+        assert_eq!(app.queue.selected(), Some(TaskId(5)));
     }
 
     #[test]

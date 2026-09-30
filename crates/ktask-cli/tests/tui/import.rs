@@ -131,7 +131,7 @@ fn esc_closes_the_import_form_and_imports_nothing() -> Result<()> {
 }
 
 #[test]
-fn ctrl_s_imports_the_tasks_of_the_typed_path_and_shows_their_ids_one_per_line() -> Result<()> {
+fn ctrl_s_imports_the_tasks_of_the_typed_path_and_shows_how_many_and_their_ids() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add("Existing")?;
     let file = fixture.file(
@@ -144,14 +144,13 @@ fn ctrl_s_imports_the_tasks_of_the_typed_path_and_shows_their_ids_one_per_line()
     terminal.send(SUBMIT)?;
 
     let screen = terminal.wait_for(
-        "the imported ids, not the form still showing the path",
+        "the imported count and ids, not the form still showing the path",
         |screen| {
             let contents = screen.contents();
-            !contents.contains("Import tasks") && result_line(&contents, 0) == "2"
+            !contents.contains("Import tasks") && result_line(&contents, 0) == "2 tasks added: 2, 3"
         },
     )?;
-    assert_eq!(result_line(&screen, 0), "2");
-    assert_eq!(result_line(&screen, 1), "3");
+    assert_eq!(result_line(&screen, 0), "2 tasks added: 2, 3");
     assert!(!screen.contains("Import tasks"), "{screen}");
     assert!(list_still_shown(&screen), "{screen}");
 
@@ -164,8 +163,11 @@ fn ctrl_s_imports_the_tasks_of_the_typed_path_and_shows_their_ids_one_per_line()
         lines[2],
         "pending 3  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
     );
+    // The first task the import added, "x", is selected.
     assert!(
-        lines.iter().any(|line| line.ends_with("agent  x")),
+        lines
+            .iter()
+            .any(|line| line.starts_with('>') && line.ends_with("agent  x")),
         "{screen}"
     );
     assert!(
@@ -245,9 +247,25 @@ fn a_cancelled_task_in_the_file_is_skipped_saying_how_many() -> Result<()> {
     terminal.send(SUBMIT)?;
 
     let screen = terminal.wait_for_text("cancelled task was skipped")?;
-    assert_eq!(result_line(&screen, 0), "1");
+    assert_eq!(result_line(&screen, 0), "1 task added: 1");
     assert_eq!(result_line(&screen, 1), "1 cancelled task was skipped");
     assert!(list_still_shown(&screen), "{screen}");
+
+    terminal.send("x")?;
+    let screen = terminal.wait_for("the reloaded queue with the kept task selected", |screen| {
+        let contents = screen.contents();
+        !contents.contains("cancelled task was skipped")
+            && lines_inside_frame(&contents)
+                .iter()
+                .any(|line| line.starts_with('>'))
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with('>') && line.ends_with("agent  kept")),
+        "{screen}"
+    );
 
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);

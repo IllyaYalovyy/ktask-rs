@@ -2,6 +2,7 @@
 //! the task list, which stays on show under either, and scrolling the report when it does
 //! not fit.
 
+use ktask_core::TaskId;
 use ratatui::crossterm::event::KeyCode;
 
 use super::{Queue, Request};
@@ -17,6 +18,15 @@ impl Queue {
             run_refusal: None,
             ..self
         }
+    }
+
+    /// The screen once an import this screen started has finished, showing `text` exactly as
+    /// [`Self::shown_message`] does, with the selection moved to `first` — the first task the
+    /// import added, when it added any — so the new tasks are already selected once the report
+    /// is dismissed.
+    pub(crate) fn imported(self, text: &str, first: Option<TaskId>) -> Self {
+        let selected = first.or(self.selected);
+        Self { selected, ..self }.shown_message(text)
     }
 
     /// The screen once a run this screen started has ended, or refused to start: `text`, the

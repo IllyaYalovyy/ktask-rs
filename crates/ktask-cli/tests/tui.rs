@@ -449,7 +449,7 @@ fn tasks_imported_from_the_cli_show_in_their_place_with_their_own_ids() -> Resul
         &repository,
         &["import", &file.to_string_lossy(), "--before", "2"],
     )?;
-    assert_eq!(imported.stdout, "3\n4\n");
+    assert_eq!(imported.stdout, "2 tasks added: 3, 4\n");
     assert_eq!(imported.code, Some(0), "{}", imported.stderr);
 
     let mut terminal = Terminal::launch(&sandbox, &repository, &["tui"], ROWS, COLS)?;

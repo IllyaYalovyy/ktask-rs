@@ -6,15 +6,12 @@
 
 use ktask_core::{Attempted, Import, RunEnd, RunReport, SyncProblem, TaskId};
 
-/// The words for `import`'s own result: the ID of each task added, one per line, then, when
+/// The words for `import`'s own result: how many tasks were added and their IDs, then, when
 /// any cancelled task was left out, one line saying how many — the same words `ktask-rs
 /// import` itself prints.
 pub(super) fn import_text(import: &Import) -> String {
-    let mut lines: Vec<String> = import
-        .tasks
-        .iter()
-        .map(|task| task.id.to_string())
-        .collect();
+    let mut lines: Vec<String> = Vec::new();
+    lines.extend(import.added_message());
     lines.extend(import.skipped_message());
     lines.join("\n")
 }
@@ -136,12 +133,15 @@ mod tests {
     }
 
     #[test]
-    fn import_text_lists_each_added_id_then_the_skipped_message() {
+    fn import_text_names_the_count_and_ids_then_the_skipped_message() {
         let import = Import {
             tasks: vec![task(1), task(2)],
             skipped_cancelled: 1,
         };
-        assert_eq!(import_text(&import), "1\n2\n1 cancelled task was skipped");
+        assert_eq!(
+            import_text(&import),
+            "2 tasks added: 1, 2\n1 cancelled task was skipped"
+        );
     }
 
     #[test]
@@ -150,7 +150,7 @@ mod tests {
             tasks: vec![task(7)],
             skipped_cancelled: 0,
         };
-        assert_eq!(import_text(&import), "7");
+        assert_eq!(import_text(&import), "1 task added: 7");
     }
 
     #[test]
