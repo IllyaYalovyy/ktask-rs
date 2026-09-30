@@ -10,6 +10,7 @@ use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
 use crate::form_screen;
 use crate::import_form::ImportForm;
 use crate::registration_form::RegistrationForm;
+use crate::scroll::first_shown;
 use crate::settings_screen;
 use crate::{App, Confirming};
 
@@ -441,28 +442,6 @@ fn elide(text: &str, max: usize) -> String {
     let mut cut: String = text.chars().take(max - 1).collect();
     cut.push('…');
     cut
-}
-
-/// The index of the first task shown: it walks back from the selected task, adding earlier
-/// tasks while the lines of everything from there to the selection still fit in `height`, so
-/// the selection's block ends up the last one in view exactly when it would not fit otherwise.
-fn first_shown(block_heights: &[usize], selected: Option<usize>, height: usize) -> usize {
-    let Some(selected) = selected else {
-        return 0;
-    };
-    let mut first = selected;
-    let mut shown = block_heights.get(selected).copied().unwrap_or(1);
-    while first > 0 {
-        let Some(&before) = block_heights.get(first - 1) else {
-            break;
-        };
-        if shown + before > height {
-            break;
-        }
-        first -= 1;
-        shown += before;
-    }
-    first
 }
 
 /// One line per step of `steps`, in order — the same lines `status` prints for the same

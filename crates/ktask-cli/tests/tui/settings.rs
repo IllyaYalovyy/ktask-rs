@@ -14,6 +14,7 @@ use super::tracked_branch::cloned_repository;
 const BACKSPACE: &str = "\x7f";
 const SUBMIT: &str = "\x13";
 const TAB: &str = "\t";
+const SHIFT_TAB: &str = "\x1b[Z";
 
 /// Every step switch at its default: on — the tail of `settings`' output, whatever the first
 /// three settings show.
@@ -363,5 +364,44 @@ fn switching_commit_off_from_the_settings_screen_shows_the_same_refusal_the_cli_
         "{lines:?}"
     );
     assert_eq!(cli_settings(&fixture)?, before);
+    quit_from_settings(terminal)
+}
+
+/// Small enough that not every setting fits at once: the frame, one header row and two
+/// settings' worth of lines fit, but a third does not.
+const SMALL: u16 = 10;
+
+/// Every setting's own label, in the order the screen shows them.
+const FIELD_LABELS: [&str; 9] = [
+    "Attempt timeout, in seconds",
+    "Health check command",
+    "Tracked branch (remote/branch)",
+    "Sync step (on/off)",
+    "Health check step (on/off)",
+    "Review step (on/off)",
+    "Testing step (on/off)",
+    "Commit step (on/off)",
+    "Push step (on/off)",
+];
+
+#[test]
+fn on_a_small_terminal_tab_and_shift_tab_keep_the_focused_field_on_screen() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let mut terminal = enter_settings(fixture.open(SMALL)?)?;
+
+    // Not every setting fits on ten rows: the last is not shown until it is reached, which is
+    // what makes the rest of this test meaningful.
+    assert!(!terminal.screen().contains(FIELD_LABELS[8]));
+
+    for label in FIELD_LABELS.into_iter().skip(1) {
+        terminal.send(TAB)?;
+        terminal.wait_for_text(label)?;
+    }
+
+    for label in FIELD_LABELS.into_iter().take(8).rev() {
+        terminal.send(SHIFT_TAB)?;
+        terminal.wait_for_text(label)?;
+    }
+
     quit_from_settings(terminal)
 }

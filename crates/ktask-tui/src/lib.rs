@@ -10,6 +10,7 @@ mod import_form;
 mod registration_form;
 mod render;
 mod run;
+mod scroll;
 mod settings_form;
 mod settings_screen;
 mod text;
