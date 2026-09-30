@@ -4,6 +4,7 @@
 //! thin loop ([`run`]). See docs/ARCHITECTURE.md.
 
 mod app;
+mod application;
 mod form;
 mod form_screen;
 mod import_form;
@@ -16,5 +17,6 @@ mod settings_screen;
 mod text;
 
 pub use app::{App, Confirming, Event, Refusal, update};
+pub use application::Application;
 pub use render::render;
-pub use run::{Actions, Start, run};
+pub use run::{Start, run};

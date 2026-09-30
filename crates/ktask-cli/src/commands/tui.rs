@@ -1,18 +1,22 @@
 //! `ktask-rs tui`: open the terminal interface on the project's queue.
 
-use std::cell::RefCell;
+use std::fmt;
 use std::io::{self, IsTerminal, Read};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Mutex, PoisonError};
 use std::thread::JoinHandle;
 
 use ktask_adapters::{
     FileJournalWatch, FileRunLock, GitCli, SqliteJournal, SqliteRegistry, SystemClock,
     TomlSettingsStore,
 };
-use ktask_core::{Placement, Project, QueueView, ResolveError, SettingView, TaskDraft, TaskId};
+use ktask_core::{
+    AddError, CancelError, ForgetError, JournalError, Placement, Project, QueueView, RegisterError,
+    RegistryError, ResolveError, SetSettingError, SettingView, SettingsError, TaskDraft, TaskId,
+};
+use ktask_tui::Application;
 
 use crate::context::{
     current_dir, current_exe, journal_file, merge_project, open_registry, open_settings_store,
@@ -49,7 +53,7 @@ pub(crate) fn run(args: &Args, project: Option<&str>) -> Result<(), Failure> {
     let cwd = current_dir()?;
     let start = resolve_or_ask_to_register(&registry, &cwd, selected.as_deref())?;
     let binary_path = current_exe()?;
-    Ok(drive(&registry, &cwd, start, binary_path)?)
+    Ok(drive(registry, cwd, start, binary_path)?)
 }
 
 /// Resolves the project the terminal interface opens on, exactly as every other command does,
@@ -70,6 +74,24 @@ fn resolve_or_ask_to_register(
     }
 }
 
+/// Why opening a project's state failed: an environment problem — the same kind every other
+/// command already reports as text, since there is no further structure to it — or the journal
+/// could not be used, keeping that error's own meaning until it is shown.
+#[derive(Debug)]
+enum OpenProjectError {
+    Environment(String),
+    Journal(JournalError),
+}
+
+impl fmt::Display for OpenProjectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Environment(message) => f.write_str(message),
+            Self::Journal(error) => error.fmt(f),
+        }
+    }
+}
+
 /// Everything wired to whichever project is active: its journal, run lock and settings —
 /// reopened fresh each time the operator switches to another one, or once the current directory
 /// is registered under a name it was asked for, so every action from then on applies to it.
@@ -81,10 +103,14 @@ struct ProjectContext {
 }
 
 impl ProjectContext {
-    fn open(project: Project) -> Result<Self, String> {
-        let journal = SqliteJournal::open(&journal_file(&project)?).map_err(|e| e.to_string())?;
-        let lock = FileRunLock::new(run_lock_file(&project)?);
-        let settings_store = open_settings_store(&project)?;
+    fn open(project: Project) -> Result<Self, OpenProjectError> {
+        let journal =
+            SqliteJournal::open(&journal_file(&project).map_err(OpenProjectError::Environment)?)
+                .map_err(OpenProjectError::Journal)?;
+        let lock =
+            FileRunLock::new(run_lock_file(&project).map_err(OpenProjectError::Environment)?);
+        let settings_store =
+            open_settings_store(&project).map_err(OpenProjectError::Environment)?;
         Ok(Self {
             project,
             journal,
@@ -97,7 +123,7 @@ impl ProjectContext {
 /// `project`'s context, opened fresh, with its queue — the two steps that always go together
 /// when the active project changes, whether by switching to another registered one or by
 /// registering the current directory under a name it was asked for.
-fn opened(project: Project) -> Result<(ProjectContext, QueueView), String> {
+fn opened(project: Project) -> Result<(ProjectContext, QueueView), OpenProjectError> {
     let context = ProjectContext::open(project.clone())?;
     let view = ktask_core::queue_view(
         project,
@@ -106,203 +132,250 @@ fn opened(project: Project) -> Result<(ProjectContext, QueueView), String> {
         &context.lock,
         false,
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(OpenProjectError::Journal)?;
     Ok((context, view))
 }
 
-/// The project context `guard` holds, when one is open yet: absent only until the current
-/// directory is registered under a name asked for on the registration screen, before which no
-/// other action the screen offers can be reached.
-fn project_context(guard: Option<&ProjectContext>) -> Result<&ProjectContext, String> {
-    guard.ok_or_else(|| "no project is open yet".to_owned())
+/// Why an action that needs a project open failed: none is open yet — only possible before the
+/// registration screen's name is submitted — or its own use case refused, keeping that error's
+/// own meaning until it is shown.
+#[derive(Debug)]
+enum NeedsProject<E> {
+    NoProject,
+    Failed(E),
+}
+
+impl<E: fmt::Display> fmt::Display for NeedsProject<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoProject => f.write_str("no project is open yet"),
+            Self::Failed(error) => error.fmt(f),
+        }
+    }
+}
+
+/// Why [`CliApplication::switch_project`] failed.
+#[derive(Debug)]
+enum SwitchProjectError {
+    List(RegistryError),
+    Unknown(String),
+    Open(OpenProjectError),
+}
+
+impl fmt::Display for SwitchProjectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::List(error) => error.fmt(f),
+            Self::Unknown(name) => write!(f, "unknown project {name:?}"),
+            Self::Open(error) => error.fmt(f),
+        }
+    }
+}
+
+/// Why [`CliApplication::forget_project`] failed.
+#[derive(Debug)]
+enum ForgetProjectError {
+    Forget(ForgetError),
+    List(RegistryError),
+}
+
+impl fmt::Display for ForgetProjectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Forget(error) => error.fmt(f),
+            Self::List(error) => error.fmt(f),
+        }
+    }
+}
+
+/// Why [`CliApplication::register`] failed.
+#[derive(Debug)]
+enum RegisterProjectError {
+    Register(RegisterError),
+    Open(OpenProjectError),
+}
+
+impl fmt::Display for RegisterProjectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Register(error) => error.fmt(f),
+            Self::Open(error) => error.fmt(f),
+        }
+    }
+}
+
+/// The one value every use case the terminal interface reaches is called through, wired to
+/// whichever project is active. Held behind `Mutex`es, not `RefCell`s, because `start_run` runs
+/// on a thread of its own so the screen stays responsive for however long a run takes, while
+/// every other action runs on the loop's own thread — both reach the same state.
+struct CliApplication {
+    context: Mutex<Option<ProjectContext>>,
+    active_project: Mutex<Option<Project>>,
+    registry: Mutex<SqliteRegistry>,
+    cwd: PathBuf,
+    binary_path: PathBuf,
+}
+
+impl CliApplication {
+    /// Runs `with` against the active project's context, refusing with [`NeedsProject::NoProject`]
+    /// when none is open yet.
+    fn with_context<T, E>(
+        &self,
+        with: impl FnOnce(&ProjectContext) -> Result<T, E>,
+    ) -> Result<T, NeedsProject<E>> {
+        let guard = self.context.lock().unwrap_or_else(PoisonError::into_inner);
+        let context = guard.as_ref().ok_or(NeedsProject::NoProject)?;
+        with(context).map_err(NeedsProject::Failed)
+    }
+}
+
+impl Application for CliApplication {
+    type LoadError = NeedsProject<JournalError>;
+    type RemoveError = NeedsProject<CancelError>;
+    type AddProblem = NeedsProject<AddError>;
+    type SettingsError = NeedsProject<SettingsError>;
+    type SaveSettingError = NeedsProject<SetSettingError>;
+    type ProjectsError = RegistryError;
+    type SwitchError = SwitchProjectError;
+    type ForgetError = ForgetProjectError;
+    type RegisterError = RegisterProjectError;
+
+    fn load_queue(&self, show_cancelled: bool) -> Result<QueueView, Self::LoadError> {
+        self.with_context(|context| {
+            ktask_core::queue_view(
+                context.project.clone(),
+                &context.journal,
+                &SystemClock,
+                &context.lock,
+                show_cancelled,
+            )
+        })
+    }
+
+    fn remove_task(&self, id: TaskId) -> Result<(), Self::RemoveError> {
+        self.with_context(|context| ktask_core::remove_task(&context.journal, &SystemClock, id))
+    }
+
+    fn add_task(
+        &self,
+        draft: &TaskDraft,
+        placement: Placement,
+    ) -> Result<TaskId, Vec<Self::AddProblem>> {
+        let guard = self.context.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(context) = guard.as_ref() else {
+            return Err(vec![NeedsProject::NoProject]);
+        };
+        ktask_core::add_task(&context.journal, &SystemClock, draft, placement)
+            .map(|task| task.id)
+            .map_err(|errors| errors.into_iter().map(NeedsProject::Failed).collect())
+    }
+
+    fn load_settings(&self) -> Result<Vec<SettingView>, Self::SettingsError> {
+        self.with_context(|context| ktask_core::show_settings(&context.settings_store))
+    }
+
+    fn save_setting(&self, name: &str, value: &str) -> Result<SettingView, Self::SaveSettingError> {
+        self.with_context(|context| {
+            ktask_core::set_setting(
+                &context.settings_store,
+                &GitCli,
+                &context.project.path,
+                name,
+                value,
+            )
+        })
+    }
+
+    fn import(&self, path: &str) -> Result<String, String> {
+        let guard = self.context.lock().unwrap_or_else(PoisonError::into_inner);
+        let context = guard
+            .as_ref()
+            .ok_or_else(|| "no project is open yet".to_owned())?;
+        import_into(&context.journal, path)
+    }
+
+    fn load_projects(&self) -> Result<Vec<Project>, Self::ProjectsError> {
+        let registry = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
+        ktask_core::list_projects(&*registry)
+    }
+
+    fn switch_project(&self, name: &str) -> Result<QueueView, Self::SwitchError> {
+        let registry = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
+        let projects = ktask_core::list_projects(&*registry).map_err(SwitchProjectError::List)?;
+        let project = projects
+            .into_iter()
+            .find(|project| project.name == name)
+            .ok_or_else(|| SwitchProjectError::Unknown(name.to_owned()))?;
+        let (fresh, view) = opened(project.clone()).map_err(SwitchProjectError::Open)?;
+        *self.context.lock().unwrap_or_else(PoisonError::into_inner) = Some(fresh);
+        *self
+            .active_project
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(project);
+        Ok(view)
+    }
+
+    fn forget_project(&self, name: &str) -> Result<Vec<Project>, Self::ForgetError> {
+        let registry = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
+        ktask_core::forget_project(&*registry, name).map_err(ForgetProjectError::Forget)?;
+        ktask_core::list_projects(&*registry).map_err(ForgetProjectError::List)
+    }
+
+    fn register(&self, name: &str) -> Result<QueueView, Self::RegisterError> {
+        let registry = self.registry.lock().unwrap_or_else(PoisonError::into_inner);
+        let project =
+            ktask_core::register_project(&*registry, &GitCli, &SystemClock, &self.cwd, name)
+                .map_err(RegisterProjectError::Register)?;
+        let (fresh, view) = opened(project.clone()).map_err(RegisterProjectError::Open)?;
+        *self.context.lock().unwrap_or_else(PoisonError::into_inner) = Some(fresh);
+        *self
+            .active_project
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(project);
+        Ok(view)
+    }
+
+    fn start_run(&self) -> Result<String, String> {
+        let project = self
+            .active_project
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match project {
+            Some(project) => start_run(&self.binary_path, &project),
+            None => Err("no project is open yet".to_owned()),
+        }
+    }
 }
 
 /// Wires every action the screen can take to the active project's journal, run lock and
-/// settings, starting on `start`, and runs the terminal interface with them until the operator
+/// settings, starting on `start`, and runs the terminal interface with it until the operator
 /// quits. The journal watch covers every registered project's state, not just the active
 /// project's, so a project switched to, or a directory registered, after the screen opened is
 /// covered too.
 fn drive(
-    registry: &SqliteRegistry,
-    cwd: &Path,
+    registry: SqliteRegistry,
+    cwd: PathBuf,
     start: Start,
     binary_path: PathBuf,
 ) -> Result<(), String> {
     let (initial_context, tui_start, initial_project) = match start {
         Start::Ready(project) => (
-            Some(ProjectContext::open(project.clone())?),
+            Some(ProjectContext::open(project.clone()).map_err(|e| e.to_string())?),
             ktask_tui::Start::Ready,
             Some(project),
         ),
         Start::NameTaken(message) => (None, ktask_tui::Start::NameTaken { message }, None),
     };
-    let context = RefCell::new(initial_context);
     let watch = FileJournalWatch::open(&state_root()?, true).map_err(|e| e.to_string())?;
-    let active_project = Arc::new(Mutex::new(initial_project));
-    let run_project = Arc::clone(&active_project);
-    ktask_tui::run(
-        tui_start,
-        actions(&context, &active_project, registry, cwd),
-        move || {
-            let project = run_project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-            match project {
-                Some(project) => start_run(&binary_path, &project),
-                None => Err("no project is open yet".to_owned()),
-            }
-        },
-        watch,
-    )
-}
-
-/// Every action the screen can take, wired to whichever project `context` and
-/// `active_project` currently hold — switching either is `switch_project`'s or
-/// `register_directory`'s job, not this function's.
-#[allow(clippy::type_complexity)]
-fn actions<'a>(
-    context: &'a RefCell<Option<ProjectContext>>,
-    active_project: &'a Mutex<Option<Project>>,
-    registry: &'a SqliteRegistry,
-    cwd: &'a Path,
-) -> ktask_tui::Actions<
-    impl FnMut(bool) -> Result<QueueView, String> + 'a,
-    impl FnMut(TaskId) -> Result<(), String> + 'a,
-    impl FnMut(&TaskDraft, Placement) -> Result<TaskId, Vec<String>> + 'a,
-    impl FnMut() -> Result<Vec<SettingView>, String> + 'a,
-    impl FnMut(&str, &str) -> Result<SettingView, String> + 'a,
-    impl FnMut(&str) -> Result<String, String> + 'a,
-    impl FnMut() -> Result<Vec<Project>, String> + 'a,
-    impl FnMut(&str) -> Result<QueueView, String> + 'a,
-    impl FnMut(&str) -> Result<Vec<Project>, String> + 'a,
-    impl FnMut(&str) -> Result<QueueView, String> + 'a,
-> {
-    ktask_tui::Actions {
-        load: |show_cancelled| load_queue(context, show_cancelled),
-        remove: |id| remove_from(context, id),
-        add: |draft: &TaskDraft, placement: Placement| add_to(context, draft, placement),
-        load_settings: || settings_of(context),
-        save_setting: |name: &str, value: &str| save_setting_for(context, name, value),
-        import: |path: &str| import_to(context, path),
-        load_projects: || ktask_core::list_projects(registry).map_err(|e| e.to_string()),
-        switch_project: |name: &str| switch_project(context, active_project, registry, name),
-        forget_project: |name: &str| forget_project(registry, name),
-        register: |name: &str| register_directory(context, active_project, registry, cwd, name),
-    }
-}
-
-/// Forgets the registered project named `name`, giving the registered projects that remain —
-/// the same list `ktask-rs project list` prints afterward.
-fn forget_project(registry: &SqliteRegistry, name: &str) -> Result<Vec<Project>, String> {
-    ktask_core::forget_project(registry, name).map_err(|e| e.to_string())?;
-    ktask_core::list_projects(registry).map_err(|e| e.to_string())
-}
-
-/// Removes the task numbered `id` from the active project's queue.
-fn remove_from(context: &RefCell<Option<ProjectContext>>, id: TaskId) -> Result<(), String> {
-    let guard = context.borrow();
-    let ctx = project_context(guard.as_ref())?;
-    ktask_core::remove_task(&ctx.journal, &SystemClock, id).map_err(|e| e.to_string())
-}
-
-/// Adds `draft` to the active project's queue at `placement`, giving its number, or every rule
-/// it broke.
-fn add_to(
-    context: &RefCell<Option<ProjectContext>>,
-    draft: &TaskDraft,
-    placement: Placement,
-) -> Result<TaskId, Vec<String>> {
-    let guard = context.borrow();
-    let ctx = project_context(guard.as_ref()).map_err(|error| vec![error])?;
-    ktask_core::add_task(&ctx.journal, &SystemClock, draft, placement)
-        .map(|task| task.id)
-        .map_err(|problems| problems.iter().map(ToString::to_string).collect())
-}
-
-/// Every setting of the active project, for the settings screen to open on.
-fn settings_of(context: &RefCell<Option<ProjectContext>>) -> Result<Vec<SettingView>, String> {
-    let guard = context.borrow();
-    load_settings(&project_context(guard.as_ref())?.settings_store)
-}
-
-/// Imports the tasks of the file `path` names into the active project's queue.
-fn import_to(context: &RefCell<Option<ProjectContext>>, path: &str) -> Result<String, String> {
-    let guard = context.borrow();
-    import_into(&project_context(guard.as_ref())?.journal, path)
-}
-
-/// The active project's queue, with the cancelled tasks when `show_cancelled`.
-fn load_queue(
-    context: &RefCell<Option<ProjectContext>>,
-    show_cancelled: bool,
-) -> Result<QueueView, String> {
-    let guard = context.borrow();
-    let ctx = project_context(guard.as_ref())?;
-    ktask_core::queue_view(
-        ctx.project.clone(),
-        &ctx.journal,
-        &SystemClock,
-        &ctx.lock,
-        show_cancelled,
-    )
-    .map_err(|e| e.to_string())
-}
-
-/// Changes the active project's setting `name` to `value`, as the settings screen was
-/// submitted.
-fn save_setting_for(
-    context: &RefCell<Option<ProjectContext>>,
-    name: &str,
-    value: &str,
-) -> Result<SettingView, String> {
-    let guard = context.borrow();
-    let ctx = project_context(guard.as_ref())?;
-    save_setting(&ctx.settings_store, &ctx.project.path, name, value)
-}
-
-/// Switches the active project to the registered one called `name`: reopens its journal, run
-/// lock and settings fresh, replacing whichever project's they were, and gives its queue —
-/// every action after this applies to the new project. Fails, changing nothing, when `name` is
-/// not a registered project or its state cannot be opened.
-fn switch_project(
-    context: &RefCell<Option<ProjectContext>>,
-    active_project: &Mutex<Option<Project>>,
-    registry: &SqliteRegistry,
-    name: &str,
-) -> Result<QueueView, String> {
-    let projects = ktask_core::list_projects(registry).map_err(|e| e.to_string())?;
-    let project = projects
-        .into_iter()
-        .find(|project| project.name == name)
-        .ok_or_else(|| format!("unknown project {name:?}"))?;
-    let (fresh, view) = opened(project.clone())?;
-    *context.borrow_mut() = Some(fresh);
-    *active_project
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project);
-    Ok(view)
-}
-
-/// Registers `cwd`'s directory under `name`, exactly as `ktask-rs project register --name`
-/// would, and, once it succeeds, opens its queue so every action from then on applies to it —
-/// the same as switching to a freshly registered project from the picker. Fails, registering
-/// nothing, when `name` is refused or its state cannot be opened.
-fn register_directory(
-    context: &RefCell<Option<ProjectContext>>,
-    active_project: &Mutex<Option<Project>>,
-    registry: &SqliteRegistry,
-    cwd: &Path,
-    name: &str,
-) -> Result<QueueView, String> {
-    let project = ktask_core::register_project(registry, &GitCli, &SystemClock, cwd, name)
-        .map_err(|e| e.to_string())?;
-    let (fresh, view) = opened(project.clone())?;
-    *context.borrow_mut() = Some(fresh);
-    *active_project
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project);
-    Ok(view)
+    let application = CliApplication {
+        context: Mutex::new(initial_context),
+        active_project: Mutex::new(initial_project),
+        registry: Mutex::new(registry),
+        cwd,
+        binary_path,
+    };
+    ktask_tui::run(tui_start, application, watch)
 }
 
 /// Reads the file `path` names as text, refusing with the same wording `ktask-rs import`
@@ -337,21 +410,6 @@ fn ensure_terminal() -> Result<(), Failure> {
             .to_owned(),
         code: 2,
     })
-}
-
-/// Every project setting, for the settings screen to open on.
-fn load_settings(store: &TomlSettingsStore) -> Result<Vec<SettingView>, String> {
-    ktask_core::show_settings(store).map_err(|e| e.to_string())
-}
-
-/// Changes the setting `name` to `value`, as the settings screen was submitted.
-fn save_setting(
-    store: &TomlSettingsStore,
-    project_dir: &Path,
-    name: &str,
-    value: &str,
-) -> Result<SettingView, String> {
-    ktask_core::set_setting(store, &GitCli, project_dir, name, value).map_err(|e| e.to_string())
 }
 
 /// Starts `binary_path run --project <project.name>`, detached from this process — its own

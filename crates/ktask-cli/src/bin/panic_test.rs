@@ -6,12 +6,14 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Mutex, PoisonError};
 use std::time::SystemTime;
 
 use ktask_core::{
     JournalError, JournalWatch, Placement, Project, QueueView, SettingView, StatusSummary,
     TaskDraft, TaskId,
 };
+use ktask_tui::Application;
 
 /// Never reports a change: this binary only cares about the first frame.
 struct NeverChanges;
@@ -37,40 +39,84 @@ fn empty_queue() -> QueueView {
     }
 }
 
+/// Every use case answers with a refusal, except the first load, which crashes deliberately —
+/// this binary only cares about the first frame drawing before it does.
+#[derive(Default)]
+struct PanicTestApplication {
+    loaded_once: Mutex<bool>,
+}
+
+const NOT_SUPPORTED: &str = "not supported in this test binary";
+
+impl Application for PanicTestApplication {
+    type LoadError = String;
+    type RemoveError = String;
+    type AddProblem = String;
+    type SettingsError = String;
+    type SaveSettingError = String;
+    type ProjectsError = String;
+    type SwitchError = String;
+    type ForgetError = String;
+    type RegisterError = String;
+
+    fn load_queue(&self, _show_cancelled: bool) -> Result<QueueView, String> {
+        let mut loaded_once = self
+            .loaded_once
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let already_loaded = std::mem::replace(&mut *loaded_once, true);
+        assert!(
+            !already_loaded,
+            "deliberate crash for the terminal-recovery test"
+        );
+        Ok(empty_queue())
+    }
+
+    fn remove_task(&self, _id: TaskId) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn add_task(&self, _draft: &TaskDraft, _placement: Placement) -> Result<TaskId, Vec<String>> {
+        Err(vec![NOT_SUPPORTED.to_owned()])
+    }
+
+    fn load_settings(&self) -> Result<Vec<SettingView>, String> {
+        Err(NOT_SUPPORTED.to_owned())
+    }
+
+    fn save_setting(&self, _name: &str, _value: &str) -> Result<SettingView, String> {
+        Err(NOT_SUPPORTED.to_owned())
+    }
+
+    fn import(&self, _path: &str) -> Result<String, String> {
+        Err(NOT_SUPPORTED.to_owned())
+    }
+
+    fn load_projects(&self) -> Result<Vec<Project>, String> {
+        Err(NOT_SUPPORTED.to_owned())
+    }
+
+    fn switch_project(&self, _name: &str) -> Result<QueueView, String> {
+        Err(NOT_SUPPORTED.to_owned())
+    }
+
+    fn forget_project(&self, _name: &str) -> Result<Vec<Project>, String> {
+        Err(NOT_SUPPORTED.to_owned())
+    }
+
+    fn register(&self, _name: &str) -> Result<QueueView, String> {
+        Err(NOT_SUPPORTED.to_owned())
+    }
+
+    fn start_run(&self) -> Result<String, String> {
+        Err(NOT_SUPPORTED.to_owned())
+    }
+}
+
 fn main() {
-    let mut loaded_once = false;
     let _ = ktask_tui::run(
         ktask_tui::Start::Ready,
-        ktask_tui::Actions {
-            load: move |_show_cancelled| {
-                let already_loaded = std::mem::replace(&mut loaded_once, true);
-                assert!(
-                    !already_loaded,
-                    "deliberate crash for the terminal-recovery test"
-                );
-                Ok(empty_queue())
-            },
-            remove: |_id: TaskId| Ok(()),
-            add: |_draft: &TaskDraft, _placement: Placement| {
-                Err(vec!["not supported in this test binary".to_owned()])
-            },
-            load_settings: || -> Result<Vec<SettingView>, String> {
-                Err("not supported in this test binary".to_owned())
-            },
-            save_setting: |_name: &str, _value: &str| {
-                Err("not supported in this test binary".to_owned())
-            },
-            import: |_path: &str| Err("not supported in this test binary".to_owned()),
-            load_projects: || -> Result<Vec<Project>, String> {
-                Err("not supported in this test binary".to_owned())
-            },
-            switch_project: |_name: &str| Err("not supported in this test binary".to_owned()),
-            forget_project: |_name: &str| -> Result<Vec<Project>, String> {
-                Err("not supported in this test binary".to_owned())
-            },
-            register: |_name: &str| Err("not supported in this test binary".to_owned()),
-        },
-        || Err("not supported in this test binary".to_owned()),
+        PanicTestApplication::default(),
         NeverChanges,
     );
 }
