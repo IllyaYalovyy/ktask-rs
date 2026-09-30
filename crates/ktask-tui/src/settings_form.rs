@@ -1,9 +1,33 @@
 //! The settings screen: every project setting, and the field each is edited in.
 
-use ktask_core::SettingView;
+use ktask_core::{
+    STEP_COMMIT, STEP_HEALTH_CHECK, STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING, SettingView,
+};
 use ratatui::crossterm::event::KeyCode;
 
 use crate::text::TextArea;
+
+/// Every setting whose field is an on/off switch rather than free text.
+const TOGGLE_NAMES: [&str; 6] = [
+    STEP_SYNC,
+    STEP_HEALTH_CHECK,
+    STEP_REVIEW,
+    STEP_TESTING,
+    STEP_COMMIT,
+    STEP_PUSH,
+];
+
+/// Whether the setting called `name` is an on/off switch: edited with Space, Left or Right,
+/// and unable to hold anything but `"on"` or `"off"` — never free text.
+fn is_toggle(name: &str) -> bool {
+    TOGGLE_NAMES.contains(&name)
+}
+
+/// `"on"` when `value` is `"off"`, `"off"` otherwise — an on/off field's value after it is
+/// switched.
+fn toggled(value: &str) -> &'static str {
+    if value == "on" { "off" } else { "on" }
+}
 
 /// One setting's own field in the settings screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +39,10 @@ pub(crate) struct SettingField {
     pub(crate) is_default: bool,
     /// The value, as typed so far.
     pub(crate) text: TextArea,
+    /// Whether this field is an on/off switch: [`SettingsForm::press`] only lets Space, Left
+    /// or Right change it, flipping it between `"on"` and `"off"` — it can never hold anything
+    /// typed.
+    pub(crate) is_toggle: bool,
 }
 
 /// The settings screen: one field per project setting, with the focus on one of them.
@@ -38,6 +66,7 @@ impl SettingsForm {
                     name: view.name,
                     is_default: view.is_default,
                     text: TextArea::with_text(false, &view.value),
+                    is_toggle: is_toggle(view.name),
                 })
                 .collect(),
             focus: 0,
@@ -45,10 +74,18 @@ impl SettingsForm {
         }
     }
 
-    /// The focused field after `key` was pressed in it.
+    /// The focused field after `key` was pressed in it: an on/off field only answers to
+    /// Space, Left and Right, which flip it — every other key changes nothing, so it can never
+    /// hold anything but `"on"` or `"off"`. Any other field is free text, edited as typed.
     pub(crate) fn press(mut self, key: KeyCode) -> Self {
         if let Some(field) = self.fields.get_mut(self.focus) {
-            field.text = field.text.clone().press(key);
+            if field.is_toggle {
+                if matches!(key, KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right) {
+                    field.text = TextArea::with_text(false, toggled(&field.text.text()));
+                }
+            } else {
+                field.text = field.text.clone().press(key);
+            }
         }
         self
     }
@@ -100,6 +137,14 @@ mod tests {
         ]
     }
 
+    fn views_with_a_toggle() -> Vec<SettingView> {
+        vec![SettingView {
+            name: STEP_REVIEW,
+            value: "on".to_owned(),
+            is_default: true,
+        }]
+    }
+
     #[test]
     fn a_new_screen_opens_on_the_first_field_with_its_value_and_no_problem() {
         let form = SettingsForm::new(&views());
@@ -142,5 +187,44 @@ mod tests {
             .fold(form, |form, c| form.press(KeyCode::Char(c)));
         assert_eq!(form.value(), "cargo test");
         assert_eq!(form.fields[0].text.text(), "14400");
+    }
+
+    #[test]
+    fn an_on_off_field_is_marked_a_toggle_and_the_others_are_not() {
+        let form = SettingsForm::new(&views_with_a_toggle());
+        assert!(form.fields[0].is_toggle);
+        let form = SettingsForm::new(&views());
+        assert!(!form.fields[0].is_toggle);
+        assert!(!form.fields[1].is_toggle);
+    }
+
+    #[test]
+    fn space_flips_an_on_off_field() {
+        let form = SettingsForm::new(&views_with_a_toggle());
+        assert_eq!(form.value(), "on");
+        let form = form.press(KeyCode::Char(' '));
+        assert_eq!(form.value(), "off");
+        let form = form.press(KeyCode::Char(' '));
+        assert_eq!(form.value(), "on");
+    }
+
+    #[test]
+    fn left_and_right_also_flip_an_on_off_field() {
+        let form = SettingsForm::new(&views_with_a_toggle());
+        let form = form.press(KeyCode::Left);
+        assert_eq!(form.value(), "off");
+        let form = form.press(KeyCode::Right);
+        assert_eq!(form.value(), "on");
+    }
+
+    #[test]
+    fn an_on_off_field_cannot_hold_anything_typed() {
+        let form = SettingsForm::new(&views_with_a_toggle());
+        let form = "off"
+            .chars()
+            .fold(form, |form, c| form.press(KeyCode::Char(c)));
+        assert_eq!(form.value(), "on");
+        let form = form.press(KeyCode::Backspace);
+        assert_eq!(form.value(), "on");
     }
 }

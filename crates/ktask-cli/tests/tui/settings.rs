@@ -15,6 +15,9 @@ const BACKSPACE: &str = "\x7f";
 const SUBMIT: &str = "\x13";
 const TAB: &str = "\t";
 const SHIFT_TAB: &str = "\x1b[Z";
+const SPACE: &str = " ";
+const LEFT: &str = "\x1b[D";
+const RIGHT: &str = "\x1b[C";
 
 /// Every step switch at its default: on — the tail of `settings`' output, whatever the first
 /// three settings show.
@@ -323,7 +326,7 @@ fn tabbing_to_the_review_step_and_switching_it_off_saves_through_the_same_use_ca
         let lines = lines_inside_frame(&screen.contents());
         lines.get(19).is_some_and(|line| line == "> on")
     })?;
-    terminal.send(&format!("{BACKSPACE}{BACKSPACE}off"))?;
+    terminal.send(SPACE)?;
     terminal.wait_for("the edited value", |screen| {
         screen.contents().contains("> off")
     })?;
@@ -350,7 +353,7 @@ fn switching_commit_off_from_the_settings_screen_shows_the_same_refusal_the_cli_
         let lines = lines_inside_frame(&screen.contents());
         lines.get(25).is_some_and(|line| line == "> on")
     })?;
-    terminal.send(&format!("{BACKSPACE}{BACKSPACE}off"))?;
+    terminal.send(LEFT)?;
     terminal.wait_for("the edited value", |screen| {
         screen.contents().contains("> off")
     })?;
@@ -404,4 +407,52 @@ fn on_a_small_terminal_tab_and_shift_tab_keep_the_focused_field_on_screen() -> R
     }
 
     quit_from_settings(terminal)
+}
+
+#[test]
+fn an_on_off_field_is_changed_with_space_left_or_right_and_cannot_hold_anything_else() -> Result<()>
+{
+    let fixture = Fixture::new()?;
+    let mut terminal = enter_settings(fixture.open(TALL)?)?;
+
+    terminal.send(&TAB.repeat(3))?;
+    terminal.wait_for("the focus on the sync-step field", |screen| {
+        let lines = lines_inside_frame(&screen.contents());
+        lines.get(13).is_some_and(|line| line == "> on")
+    })?;
+
+    // Typing "off" over "on" must not append to it: none of these keys are Space, Left or
+    // Right, so the field cannot hold anything but what it already does.
+    terminal.send("off")?;
+    terminal.wait_for("the value unchanged by typing", |screen| {
+        let lines = lines_inside_frame(&screen.contents());
+        lines.get(13).is_some_and(|line| line == "> on")
+    })?;
+
+    terminal.send(SPACE)?;
+    terminal.wait_for("space switched it off", |screen| {
+        let lines = lines_inside_frame(&screen.contents());
+        lines.get(13).is_some_and(|line| line == "> off")
+    })?;
+
+    terminal.send(RIGHT)?;
+    terminal.wait_for("right switched it back on", |screen| {
+        let lines = lines_inside_frame(&screen.contents());
+        lines.get(13).is_some_and(|line| line == "> on")
+    })?;
+
+    terminal.send(LEFT)?;
+    terminal.wait_for("left switched it off", |screen| {
+        let lines = lines_inside_frame(&screen.contents());
+        lines.get(13).is_some_and(|line| line == "> off")
+    })?;
+
+    terminal.send(SUBMIT)?;
+
+    terminal.wait_for("the queue back", |screen| {
+        !screen.contents().contains("Settings")
+    })?;
+    let shown = cli_settings(&fixture)?;
+    assert!(shown.contains("step-sync\toff\tcustom\n"), "{shown}");
+    quit(terminal)
 }
