@@ -1,0 +1,241 @@
+//! The commands that turn into events: add, cancel, begin an attempt, record a report, end an
+//! attempt, begin and end a step. Each `decide_*` method here validates against the folded
+//! state and either produces the event or refuses.
+
+use std::time::SystemTime;
+
+use super::{
+    AppendError, AttemptRun, BeginAttemptError, CancelError, Event, Outcome, Placement, QueueState,
+    RecordReportError, Task, TaskDraft, TaskId, TaskStatus,
+};
+
+impl QueueState {
+    /// The number the next task added to this state would get: one past the highest ever
+    /// used, cancelled tasks included, so a number is never reused.
+    fn next_id(&self) -> TaskId {
+        TaskId(self.tasks.iter().map(|task| task.id.0).max().unwrap_or(0) + 1)
+    }
+
+    /// Checks that `placement` names a task that exists and is not cancelled, when it names
+    /// one at all.
+    fn check_placement(&self, placement: Placement) -> Result<(), AppendError> {
+        let anchor = match placement {
+            Placement::End => return Ok(()),
+            Placement::Before(anchor) | Placement::After(anchor) => anchor,
+        };
+        match self.tasks.iter().find(|task| task.id == anchor) {
+            None => Err(AppendError::UnknownTask(anchor)),
+            Some(task) if task.status == TaskStatus::Cancelled => {
+                Err(AppendError::CancelledTask(anchor))
+            }
+            Some(_) => Ok(()),
+        }
+    }
+
+    /// The command "add `drafts`, together, at `placement`": the events it produces and the
+    /// tasks they add, or the reason `placement` is invalid. Does not check `drafts` against
+    /// the queue's own rules (title, criteria, links) — the caller has done that.
+    ///
+    /// # Errors
+    ///
+    /// Fails, deciding nothing, when `placement` names a task that does not exist or was
+    /// cancelled.
+    pub(crate) fn decide_add(
+        &self,
+        drafts: &[TaskDraft],
+        placement: Placement,
+        at: SystemTime,
+    ) -> Result<(Vec<Event>, Vec<Task>), AppendError> {
+        self.check_placement(placement)?;
+        let mut state = self.clone();
+        let mut events = Vec::with_capacity(drafts.len());
+        let mut placed_at = placement;
+        for draft in drafts {
+            let id = state.next_id();
+            let event = Event::TaskAdded {
+                id,
+                draft: draft.clone(),
+                placement: placed_at,
+                at,
+            };
+            state.apply(&event);
+            placed_at = placed_at.then_after(id);
+            events.push(event);
+        }
+        let added = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::TaskAdded { id, .. } => {
+                    state.tasks.iter().find(|task| task.id == *id).cloned()
+                }
+                _ => None,
+            })
+            .collect();
+        Ok((events, added))
+    }
+
+    /// The command "cancel `id`": the event it produces, or the reason it cannot be.
+    ///
+    /// # Errors
+    ///
+    /// Fails, deciding nothing, when there is no such task, it is running, or it is
+    /// cancelled already.
+    pub(crate) fn decide_cancel(&self, id: TaskId, at: SystemTime) -> Result<Event, CancelError> {
+        match self.tasks.iter().find(|task| task.id == id) {
+            None => Err(CancelError::UnknownTask(id)),
+            Some(task) if task.status == TaskStatus::Running => Err(CancelError::Running(id)),
+            Some(task) if task.status == TaskStatus::Cancelled => {
+                Err(CancelError::AlreadyCancelled(id))
+            }
+            Some(_) => Ok(Event::TaskCancelled { id, at }),
+        }
+    }
+
+    /// The task numbered `id`'s current attempt number: `0` when it was never attempted.
+    fn current_attempt_number(&self, id: TaskId) -> u32 {
+        self.attempts.get(&id).map_or(0, |attempt| attempt.number)
+    }
+
+    /// The command "begin the next attempt at `id`": the event it produces and the attempt's
+    /// number, or the reason it cannot start.
+    ///
+    /// # Errors
+    ///
+    /// Fails, deciding nothing, when there is no such task or it is not pending.
+    pub(crate) fn decide_begin_attempt(
+        &self,
+        id: TaskId,
+        at: SystemTime,
+    ) -> Result<(Vec<Event>, u32), BeginAttemptError> {
+        let task = self
+            .tasks
+            .iter()
+            .find(|task| task.id == id)
+            .ok_or(BeginAttemptError::UnknownTask(id))?;
+        if task.status != TaskStatus::Pending {
+            return Err(BeginAttemptError::NotPending(id));
+        }
+        let number = self.current_attempt_number(id) + 1;
+        Ok((vec![Event::AttemptStarted { id, number, at }], number))
+    }
+
+    /// Checks that attempt `number` of task `id` is the one currently running: the caller of
+    /// [`QueueState::decide_record_report`] and [`QueueState::decide_end_attempt`] shares this
+    /// rule.
+    fn check_attempt_running(&self, id: TaskId, number: u32) -> Result<(), RecordReportError> {
+        let task = self
+            .tasks
+            .iter()
+            .find(|task| task.id == id)
+            .ok_or(RecordReportError::UnknownAttempt { task: id, number })?;
+        if self.current_attempt_number(id) != number {
+            return Err(RecordReportError::UnknownAttempt { task: id, number });
+        }
+        if task.status != TaskStatus::Running {
+            return Err(RecordReportError::AttemptEnded { task: id, number });
+        }
+        Ok(())
+    }
+
+    /// The command "record `outcome` (and `reason`) for attempt `number` of task `id`": the
+    /// event it produces, or the reason it cannot be recorded.
+    ///
+    /// # Errors
+    ///
+    /// Fails, deciding nothing, when no attempt numbered `number` was started for this task, or
+    /// when it was but has since ended.
+    pub(crate) fn decide_record_report(
+        &self,
+        id: TaskId,
+        number: u32,
+        outcome: Outcome,
+        reason: Option<&str>,
+        at: SystemTime,
+    ) -> Result<Event, RecordReportError> {
+        self.check_attempt_running(id, number)?;
+        Ok(Event::AttemptReported {
+            id,
+            number,
+            outcome,
+            reason: reason.map(str::to_owned),
+            step: self.current_step(id),
+            at,
+        })
+    }
+
+    /// The command "end attempt `number` of task `id` with `run`": the event it produces, or
+    /// the reason it cannot end.
+    ///
+    /// # Errors
+    ///
+    /// Fails, deciding nothing, when no attempt numbered `number` is running for this task.
+    pub(crate) fn decide_end_attempt(
+        &self,
+        id: TaskId,
+        number: u32,
+        run: AttemptRun<'_>,
+        at: SystemTime,
+    ) -> Result<Event, RecordReportError> {
+        self.check_attempt_running(id, number)?;
+        Ok(Event::AttemptEnded {
+            id,
+            number,
+            duration: run.duration,
+            exit_code: run.exit_code,
+            status: run.status,
+            reason: run.reason.map(str::to_owned),
+            at,
+        })
+    }
+
+    /// The command "begin step `step` of attempt `number` of task `id`": the event it
+    /// produces, or the reason it cannot begin.
+    ///
+    /// # Errors
+    ///
+    /// Fails, deciding nothing, when no attempt numbered `number` is running for this task.
+    pub(crate) fn decide_begin_step(
+        &self,
+        id: TaskId,
+        number: u32,
+        step: String,
+        at: SystemTime,
+    ) -> Result<Event, RecordReportError> {
+        self.check_attempt_running(id, number)?;
+        Ok(Event::StepStarted {
+            id,
+            number,
+            step,
+            at,
+        })
+    }
+
+    /// The command "end step `step` of attempt `number` of task `id` with `run`, having
+    /// reported `reported`": the event it produces, or the reason it cannot end.
+    ///
+    /// # Errors
+    ///
+    /// Fails, deciding nothing, when no attempt numbered `number` is running for this task.
+    pub(crate) fn decide_end_step(
+        &self,
+        id: TaskId,
+        number: u32,
+        step: &str,
+        run: AttemptRun<'_>,
+        reported: Option<Outcome>,
+        at: SystemTime,
+    ) -> Result<Event, RecordReportError> {
+        self.check_attempt_running(id, number)?;
+        Ok(Event::StepEnded {
+            id,
+            number,
+            step: step.to_owned(),
+            duration: run.duration,
+            exit_code: run.exit_code,
+            status: run.status,
+            reason: run.reason.map(str::to_owned),
+            reported,
+            at,
+        })
+    }
+}
