@@ -13,7 +13,7 @@ use signal_hook::consts::{SIGHUP, SIGTERM};
 use signal_hook::iterator::Signals;
 
 use crate::application::Application;
-use crate::registration_form::RegistrationForm;
+use crate::registration_screen::RegistrationScreen;
 use crate::{App, Event, render, update};
 
 /// What the loop starts on: the project's queue, already resolved, or a name still needed to
@@ -364,7 +364,7 @@ fn handle_input<A: Application + Send + Sync + 'static>(
     input: &Input,
     sender: &Sender<Wake>,
 ) -> Result<(App, bool), String> {
-    let asked = app.show_cancelled;
+    let asked = app.queue.show_cancelled();
     if let Some(event) = translate(input) {
         app = update(app, event);
     }
@@ -374,14 +374,14 @@ fn handle_input<A: Application + Send + Sync + 'static>(
         spawn_run(Arc::clone(application), sender.clone());
         return Ok((app, true));
     }
-    let should_reload = app.show_cancelled != asked;
+    let should_reload = app.queue.show_cancelled() != asked;
     Ok((app, should_reload))
 }
 
 /// Whether `app`'s queue shows a task currently running.
 fn task_running(app: &App) -> bool {
     app.queue
-        .as_ref()
+        .view()
         .is_some_and(|queue| queue.summary.running > 0)
 }
 
@@ -420,7 +420,7 @@ fn initial_app(start: Start, application: &impl Application) -> Result<App, Stri
     Ok(match start {
         Start::Ready => update(App::default(), Event::Loaded(load(application, false)?)),
         Start::NameTaken { message } => App {
-            registration: Some(RegistrationForm::new(message)),
+            registration: Some(RegistrationScreen::new(message)),
             ..App::default()
         },
     })
@@ -461,7 +461,7 @@ fn run_loop<A: Application + Send + Sync + 'static>(
         };
         pending = new_pending;
         app = if reload {
-            let queue = load(application.as_ref(), new_app.show_cancelled)?;
+            let queue = load(application.as_ref(), new_app.queue.show_cancelled())?;
             update(new_app, Event::Loaded(queue))
         } else {
             new_app
@@ -511,9 +511,10 @@ mod tests {
     };
     use crate::App;
     use crate::application::Application;
-    use crate::form::Form;
-    use crate::registration_form::RegistrationForm;
-    use crate::settings_form::SettingsForm;
+    use crate::projects::ProjectsScreen;
+    use crate::registration_screen::RegistrationScreen;
+    use crate::settings::SettingsScreen;
+    use crate::task_form::TaskFormScreen;
 
     /// An error a [`Fake`] gives back, carrying whatever text the test gave it: proof that
     /// `run.rs` turns it into that same text only when the failed action is handled, never
@@ -638,7 +639,7 @@ mod tests {
         let fake = Fake::default();
         *fake.add.borrow_mut() = vec![Err(vec![Failure("empty title".to_owned())])];
         let app = App {
-            form: Some(Form::new(Placement::End)),
+            form: Some(TaskFormScreen::new(Placement::End)),
             submission: Some((empty_draft(), Placement::End)),
             ..App::default()
         };
@@ -647,8 +648,8 @@ mod tests {
 
         assert!(handled);
         assert_eq!(
-            app.form.expect("form stays open").problems,
-            vec!["failed: empty title".to_owned()]
+            app.form.expect("form stays open").problems(),
+            ["failed: empty title".to_owned()]
         );
     }
 
@@ -657,7 +658,7 @@ mod tests {
         let fake = Fake::default();
         *fake.add.borrow_mut() = vec![Ok(TaskId(7))];
         let app = App {
-            form: Some(Form::new(Placement::End)),
+            form: Some(TaskFormScreen::new(Placement::End)),
             submission: Some((empty_draft(), Placement::End)),
             ..App::default()
         };
@@ -697,7 +698,7 @@ mod tests {
         let fake = Fake::default();
         *fake.save_setting.borrow_mut() = vec![Err(Failure("not a whole number".to_owned()))];
         let app = App {
-            settings: Some(SettingsForm::new(&[])),
+            settings: Some(SettingsScreen::new(&[])),
             setting_submission: Some((ATTEMPT_TIMEOUT, "soon".to_owned())),
             ..App::default()
         };
@@ -706,7 +707,10 @@ mod tests {
 
         assert!(handled);
         assert_eq!(
-            app.settings.expect("settings screen stays open").problem,
+            app.settings
+                .expect("settings screen stays open")
+                .problem()
+                .map(ToOwned::to_owned),
             Some("failed: not a whole number".to_owned())
         );
     }
@@ -730,7 +734,7 @@ mod tests {
         let fake = Fake::default();
         *fake.save_setting.borrow_mut() = vec![Ok(setting())];
         let app = App {
-            settings: Some(SettingsForm::new(&[])),
+            settings: Some(SettingsScreen::new(&[])),
             setting_submission: Some((ATTEMPT_TIMEOUT, "1".to_owned())),
             ..App::default()
         };
@@ -753,7 +757,10 @@ mod tests {
         let (app, handled) = handle_import_action(app, &fake);
 
         assert!(handled);
-        assert_eq!(app.message, Some(vec!["cannot read x".to_owned()]));
+        assert_eq!(
+            app.queue.message(),
+            Some(["cannot read x".to_owned()].as_slice())
+        );
     }
 
     #[test]
@@ -761,6 +768,7 @@ mod tests {
         let fake = Fake::default();
         *fake.switch.borrow_mut() = vec![Err(Failure("unknown project".to_owned()))];
         let app = App {
+            projects: Some(ProjectsScreen::open(vec![], None)),
             project_switch: Some("ghost".to_owned()),
             ..App::default()
         };
@@ -769,7 +777,10 @@ mod tests {
 
         assert!(handled);
         assert_eq!(
-            app.project_problem,
+            app.projects
+                .expect("picker stays open")
+                .problem()
+                .map(ToOwned::to_owned),
             Some("failed: unknown project".to_owned())
         );
     }
@@ -779,6 +790,7 @@ mod tests {
         let fake = Fake::default();
         *fake.forget.borrow_mut() = vec![Err(Failure("unknown project".to_owned()))];
         let app = App {
+            projects: Some(ProjectsScreen::open(vec![], None)),
             project_forget: Some("ghost".to_owned()),
             ..App::default()
         };
@@ -787,7 +799,10 @@ mod tests {
 
         assert!(handled);
         assert_eq!(
-            app.project_problem,
+            app.projects
+                .expect("picker stays open")
+                .problem()
+                .map(ToOwned::to_owned),
             Some("failed: unknown project".to_owned())
         );
     }
@@ -811,7 +826,7 @@ mod tests {
         let fake = Fake::default();
         *fake.register.borrow_mut() = vec![Err(Failure("taken".to_owned()))];
         let app = App {
-            registration: Some(RegistrationForm::new("need a name".to_owned())),
+            registration: Some(RegistrationScreen::new("need a name".to_owned())),
             registration_submission: Some("name".to_owned()),
             ..App::default()
         };
@@ -822,7 +837,7 @@ mod tests {
         assert_eq!(
             app.registration
                 .expect("registration screen stays open")
-                .problem,
+                .problem(),
             "failed: taken"
         );
     }
