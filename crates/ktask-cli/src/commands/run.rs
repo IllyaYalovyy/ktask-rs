@@ -42,6 +42,9 @@ pub(crate) struct Args {
     /// Work on this registered project instead of the one the current directory is in
     #[arg(long, value_name = "NAME")]
     project: Option<String>,
+    /// Print the run's own report as JSON instead of text
+    #[arg(long)]
+    json: bool,
 }
 
 /// Runs the pending tasks of the resolved project in queue order, one attempt each with the
@@ -76,7 +79,7 @@ pub(crate) fn run(
             disabled_steps: &disabled,
         },
     )?;
-    let stopped = render::run(&report, stdout)?;
+    let stopped = render::run(&report, args.json, stdout)?;
     Ok(if stopped {
         ExitCode::FAILURE
     } else {

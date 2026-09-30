@@ -4,13 +4,34 @@ use std::io::Write;
 
 use ktask_core::{RunEnd, RunReport, SyncProblem, TaskId};
 
-/// Writes what a run did: one line per task attempted, then a line saying why it ended when
-/// there was nothing left to attempt, a task of kind `human` stopped it, or an earlier task
-/// left `failed`, `blocked` or `failed-unknown` refused it. Returns whether the run stopped
-/// on a failing ending — `failed`, `blocked` or `failed-unknown`, whether from an attempt
-/// this run made or one an earlier run already left behind — which the caller reports with
-/// exit code 1.
-pub(crate) fn run(report: &RunReport, out: &mut impl Write) -> Result<bool, String> {
+use crate::run_report_json::RunReportJson;
+
+/// Whether `report` ended on a failing ending — `failed`, `blocked` or `failed-unknown`,
+/// whether from an attempt this run made or one an earlier run already left behind — which
+/// the caller reports with exit code 1, whichever way `report` is shown.
+pub(crate) fn stopped(report: &RunReport) -> bool {
+    matches!(
+        report.end,
+        RunEnd::Stopped { .. }
+            | RunEnd::Blocked { .. }
+            | RunEnd::HealthCheckFailed { .. }
+            | RunEnd::SyncFailed { .. }
+    )
+}
+
+/// Writes `report`: a JSON object with `json`, for `ktask-rs run --json` and for the terminal
+/// interface, which reads it back into the same typed report to word as it shows it; text
+/// otherwise — one line per task attempted, then a line saying why it ended when there was
+/// nothing left to attempt, a task of kind `human` stopped it, or an earlier task left
+/// `failed`, `blocked` or `failed-unknown` refused it. Returns whether `report` ended on a
+/// failing ending, [`stopped`]'s own answer, which the caller reports with exit code 1.
+pub(crate) fn run(report: &RunReport, json: bool, out: &mut impl Write) -> Result<bool, String> {
+    if json {
+        serde_json::to_writer(&mut *out, &RunReportJson::from(report))
+            .map_err(|e| e.to_string())?;
+        writeln!(out).map_err(|e| e.to_string())?;
+        return Ok(stopped(report));
+    }
     for attempt in &report.attempted {
         match &attempt.reason {
             Some(reason) => writeln!(out, "task {}: {}: {reason}", attempt.id, attempt.status),
@@ -19,13 +40,7 @@ pub(crate) fn run(report: &RunReport, out: &mut impl Write) -> Result<bool, Stri
         .map_err(|e| e.to_string())?;
     }
     run_end(&report.end, out)?;
-    Ok(matches!(
-        report.end,
-        RunEnd::Stopped { .. }
-            | RunEnd::Blocked { .. }
-            | RunEnd::HealthCheckFailed { .. }
-            | RunEnd::SyncFailed { .. }
-    ))
+    Ok(stopped(report))
 }
 
 /// Writes the line, or lines, saying why a run ended at `end` — nothing for `Completed` or

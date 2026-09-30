@@ -8,6 +8,7 @@ mod error;
 mod exec_tied_to_parent;
 mod kill_group_if_orphaned;
 mod render;
+mod run_report_json;
 
 use std::io::{self, Write};
 use std::process::ExitCode;

@@ -609,6 +609,44 @@ fn run_and_its_options_are_in_the_help() -> Result<()> {
     let help = fixture.run(&["run", "--help"])?;
     assert_eq!(help.code, Some(0), "{}", help.stderr);
     assert!(help.stdout.contains("--attempt-timeout"), "{}", help.stdout);
+    assert!(help.stdout.contains("--json"), "{}", help.stdout);
+    Ok(())
+}
+
+#[test]
+fn json_reports_every_task_attempted_and_why_it_ended() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", &reporting_body("done"))?;
+
+    let outcome = fixture.run_the_queue(&["run", "--json"])?;
+
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    let shown: serde_json::Value = serde_json::from_str(&outcome.stdout)?;
+    assert_eq!(
+        shown,
+        serde_json::json!({
+            "attempted": [{"id": 1, "status": "done", "reason": null}],
+            "end": {"kind": "completed"},
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn json_reports_a_refusal_to_start_the_same_way_text_does() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task("a", &reporting_body("done"))?;
+    let ran = fixture.run_the_queue(&["run"])?;
+    assert_eq!(ran.code, Some(0), "{}", ran.stderr);
+
+    let outcome = fixture.run_the_queue(&["run", "--json"])?;
+
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    let shown: serde_json::Value = serde_json::from_str(&outcome.stdout)?;
+    assert_eq!(
+        shown,
+        serde_json::json!({"attempted": [], "end": {"kind": "nothing_pending"}})
+    );
     Ok(())
 }
 
