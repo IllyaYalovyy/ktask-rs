@@ -279,3 +279,28 @@ pub(crate) fn current_step(
 ) -> Result<Option<String>, JournalError> {
     read_and_query(journal, |state| state.current_step(id))
 }
+
+/// The answer recorded for attempt `number` of task `id`, with [`crate::answer_task`]. `None`
+/// when it was never answered.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub(crate) fn answer_of(
+    journal: &dyn Journal,
+    id: TaskId,
+    number: u32,
+) -> Result<Option<String>, JournalError> {
+    read_and_query(journal, |state| state.answer_of(id, number))
+}
+
+/// `reason`, with `answer`, when there is one, appended as "— answer: …" — the one line
+/// `status` and the queue screen show for a blocked attempt once [`crate::answer_task`] has
+/// recorded an answer for it, and the one a later attempt's own prompt names the same
+/// attempt's earlier outcome with, too.
+pub(crate) fn with_answer(reason: Option<String>, answer: Option<&str>) -> Option<String> {
+    match (reason, answer) {
+        (Some(reason), Some(answer)) => Some(format!("{reason} — answer: {answer}")),
+        (reason, _) => reason,
+    }
+}

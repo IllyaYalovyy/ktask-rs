@@ -2,7 +2,7 @@
 //! cancelled ones.
 
 use crate::queue_state::{QueueState, decide_and_append};
-use crate::{CancelError, Clock, Journal, JournalError, RetryError};
+use crate::{AnswerError, CancelError, Clock, Journal, JournalError, RetryError};
 
 use super::validate::{AddError, draft_problems};
 use super::{Placement, Task, TaskDraft, TaskId, TaskStatus};
@@ -99,6 +99,32 @@ pub fn retry_task(
     let at = clock.now();
     decide_and_append(journal, |state| {
         state.decide_retry(id, at).map(|event| (vec![event], ()))
+    })
+}
+
+/// Use case: records `text` as the answer to the question task `id`'s attempt asked, and
+/// sends it back to `pending`, so the next run picks it up with it: the next attempt's own
+/// prompt carries both the question and this answer. Every attempt already recorded for it
+/// stays in the journal, and the next one begins at the next number.
+///
+/// # Errors
+///
+/// Fails, changing nothing, when there is no such task, its status is not `blocked`, or
+/// `text` is empty or only whitespace.
+pub fn answer_task(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    id: TaskId,
+    text: &str,
+) -> Result<(), AnswerError> {
+    if text.trim().is_empty() {
+        return Err(AnswerError::EmptyAnswer);
+    }
+    let at = clock.now();
+    decide_and_append(journal, |state| {
+        state
+            .decide_answer(id, text, at)
+            .map(|event| (vec![event], ()))
     })
 }
 
@@ -549,6 +575,80 @@ mod tests {
         assert_eq!(
             retry_task(&journal, &clock(), TaskId(1)),
             Err(RetryError::Journal(failure))
+        );
+    }
+
+    #[test]
+    fn answering_a_blocked_task_records_the_answer_and_sends_it_to_pending() {
+        let journal = journal_with_a_task_ended_at(TaskStatus::Blocked, Some("which path?"));
+        assert_eq!(
+            answer_task(&journal, &clock(), TaskId(1), "the left one"),
+            Ok(())
+        );
+        assert_eq!(list_tasks(&journal).unwrap()[0].status, TaskStatus::Pending);
+        assert_eq!(
+            crate::attempt::answer_of(&journal, TaskId(1), 1).unwrap(),
+            Some("the left one".to_owned())
+        );
+    }
+
+    #[test]
+    fn answering_a_task_that_is_not_blocked_is_refused_naming_its_status_and_changes_nothing() {
+        for (journal, status) in [
+            (FakeJournal::default(), TaskStatus::Pending),
+            (
+                journal_with_a_task_ended_at(TaskStatus::Failed, Some("why")),
+                TaskStatus::Failed,
+            ),
+            (
+                journal_with_a_task_ended_at(TaskStatus::Done, None),
+                TaskStatus::Done,
+            ),
+        ] {
+            if status == TaskStatus::Pending {
+                add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+            }
+            let before = list_all_tasks(&journal).unwrap();
+            assert_eq!(
+                answer_task(&journal, &clock(), TaskId(1), "an answer"),
+                Err(AnswerError::NotBlocked {
+                    id: TaskId(1),
+                    status
+                })
+            );
+            assert_eq!(list_all_tasks(&journal).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn answering_with_an_empty_or_blank_text_is_refused_and_changes_nothing() {
+        let journal = journal_with_a_task_ended_at(TaskStatus::Blocked, Some("which path?"));
+        let before = list_all_tasks(&journal).unwrap();
+        for text in ["", "   ", "\t\n"] {
+            assert_eq!(
+                answer_task(&journal, &clock(), TaskId(1), text),
+                Err(AnswerError::EmptyAnswer)
+            );
+        }
+        assert_eq!(list_all_tasks(&journal).unwrap(), before);
+    }
+
+    #[test]
+    fn answering_an_unknown_task_is_refused_and_names_it() {
+        let journal = FakeJournal::default();
+        assert_eq!(
+            answer_task(&journal, &clock(), TaskId(9), "an answer"),
+            Err(AnswerError::UnknownTask(TaskId(9)))
+        );
+    }
+
+    #[test]
+    fn a_journal_failure_is_passed_on_when_answering() {
+        let failure = JournalError::new("disk on fire");
+        let journal = FakeJournal::failing(failure.clone());
+        assert_eq!(
+            answer_task(&journal, &clock(), TaskId(1), "an answer"),
+            Err(AnswerError::Journal(failure))
         );
     }
 

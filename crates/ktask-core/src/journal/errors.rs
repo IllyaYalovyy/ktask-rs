@@ -156,6 +156,48 @@ impl From<JournalError> for RetryError {
     }
 }
 
+/// Why a task was not answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnswerError {
+    /// There is no such task.
+    UnknownTask(TaskId),
+    /// The task's own status is not `blocked`: only a blocked task can be answered.
+    NotBlocked {
+        /// The task that cannot be answered.
+        id: TaskId,
+        /// Its current status.
+        status: TaskStatus,
+    },
+    /// The answer is empty or only whitespace.
+    EmptyAnswer,
+    /// The journal could not be used.
+    Journal(JournalError),
+}
+
+impl fmt::Display for AnswerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownTask(id) => write!(f, "there is no task {id}"),
+            Self::NotBlocked { id, status } => {
+                write!(
+                    f,
+                    "task {id} is {status}: only a blocked task can be answered"
+                )
+            }
+            Self::EmptyAnswer => f.write_str("the answer is empty"),
+            Self::Journal(error) => error.fmt(f),
+        }
+    }
+}
+
+impl Error for AnswerError {}
+
+impl From<JournalError> for AnswerError {
+    fn from(error: JournalError) -> Self {
+        Self::Journal(error)
+    }
+}
+
 /// Why a report could not be recorded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordReportError {

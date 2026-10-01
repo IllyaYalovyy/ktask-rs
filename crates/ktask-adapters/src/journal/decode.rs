@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use super::{
     ATTEMPT_ENDED, ATTEMPT_REPORTED, ATTEMPT_RUNNING, ATTEMPT_STARTED, GATE_FAILED, STEP_ENDED,
-    STEP_STARTED, TASK_ADDED, TASK_CANCELLED, TASK_RETRIED, failed,
+    STEP_STARTED, TASK_ADDED, TASK_ANSWERED, TASK_CANCELLED, TASK_RETRIED, failed,
 };
 
 fn from_seconds(seconds: i64) -> SystemTime {
@@ -273,6 +273,22 @@ fn decode_gate_failed(
     })
 }
 
+/// The [`Event::TaskAnswered`] a `task_answered` row's `payload` decodes to.
+fn decode_task_answered(
+    kind: &str,
+    task_id: i64,
+    id: TaskId,
+    at: SystemTime,
+    payload: &Value,
+) -> Result<Event, JournalError> {
+    let text = payload
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| corrupt_event(kind, task_id, "text", "missing"))?;
+    Ok(Event::TaskAnswered { id, text, at })
+}
+
 /// The attempt event an `attempt_started`, `attempt_running`, `attempt_reported`,
 /// `attempt_ended`, `step_started` or `step_ended` row's `payload` decodes to.
 fn decode_attempt_event(
@@ -336,6 +352,8 @@ pub(super) fn decode_event(
         decode_task_added(kind, task_id, id, at, &payload)
     } else if kind == GATE_FAILED {
         decode_gate_failed(kind, task_id, id, at, &payload)
+    } else if kind == TASK_ANSWERED {
+        decode_task_answered(kind, task_id, id, at, &payload)
     } else {
         decode_attempt_event(kind, task_id, id, at, &payload)
     }

@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::{
     ATTEMPT_ENDED, ATTEMPT_REPORTED, ATTEMPT_RUNNING, ATTEMPT_STARTED, GATE_FAILED, STEP_ENDED,
-    STEP_STARTED, TASK_ADDED, TASK_CANCELLED, TASK_RETRIED,
+    STEP_STARTED, TASK_ADDED, TASK_ANSWERED, TASK_CANCELLED, TASK_RETRIED,
 };
 
 pub(super) fn to_seconds(time: SystemTime) -> i64 {
@@ -153,6 +153,14 @@ fn gate_failed_payload(event: &Event) -> String {
     serde_json::json!({ "step": step, "reason": reason }).to_string()
 }
 
+/// The payload a `task_answered` row is written with.
+fn task_answered_payload(event: &Event) -> String {
+    let Event::TaskAnswered { text, .. } = event else {
+        unreachable!("only called for Event::TaskAnswered")
+    };
+    serde_json::json!({ "text": text }).to_string()
+}
+
 /// The task any `event` carries — every kind of event names one.
 fn event_task_id(event: &Event) -> TaskId {
     match event {
@@ -165,7 +173,8 @@ fn event_task_id(event: &Event) -> TaskId {
         | Event::StepStarted { id, .. }
         | Event::StepEnded { id, .. }
         | Event::GateFailed { id, .. }
-        | Event::TaskRetried { id, .. } => *id,
+        | Event::TaskRetried { id, .. }
+        | Event::TaskAnswered { id, .. } => *id,
     }
 }
 
@@ -181,7 +190,8 @@ fn event_at(event: &Event) -> SystemTime {
         | Event::StepStarted { at, .. }
         | Event::StepEnded { at, .. }
         | Event::GateFailed { at, .. }
-        | Event::TaskRetried { at, .. } => *at,
+        | Event::TaskRetried { at, .. }
+        | Event::TaskAnswered { at, .. } => *at,
     }
 }
 
@@ -201,6 +211,7 @@ fn event_kind_and_payload(event: &Event) -> (&'static str, String) {
         Event::StepEnded { .. } => (STEP_ENDED, step_ended_payload(event)),
         Event::GateFailed { .. } => (GATE_FAILED, gate_failed_payload(event)),
         Event::TaskRetried { .. } => (TASK_RETRIED, "{}".to_owned()),
+        Event::TaskAnswered { .. } => (TASK_ANSWERED, task_answered_payload(event)),
     }
 }
 

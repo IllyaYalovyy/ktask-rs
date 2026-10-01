@@ -9,7 +9,8 @@ use crate::{Outcome, Placement, TaskDraft, TaskId, TaskStatus};
 mod errors;
 
 pub use errors::{
-    AppendConflict, AppendError, BeginAttemptError, CancelError, RecordReportError, RetryError,
+    AnswerError, AppendConflict, AppendError, BeginAttemptError, CancelError, RecordReportError,
+    RetryError,
 };
 
 /// One thing that happened to the queue: what [`Journal::events`] reads and
@@ -144,6 +145,16 @@ pub enum Event {
     TaskRetried {
         /// The task retried.
         id: TaskId,
+        /// When.
+        at: SystemTime,
+    },
+    /// A `blocked` task was given the answer to the question its attempt asked, and sent
+    /// back to `pending` so the next attempt can carry both the question and this answer.
+    TaskAnswered {
+        /// The task answered.
+        id: TaskId,
+        /// The answer given.
+        text: String,
         /// When.
         at: SystemTime,
     },

@@ -69,7 +69,7 @@ pub(super) fn mirror(transaction: &Transaction<'_>, event: &Event) -> Result<(),
                 (task_id(*id), status.as_str()),
             )?;
         }
-        Event::TaskRetried { id, .. } => {
+        Event::TaskRetried { id, .. } | Event::TaskAnswered { id, .. } => {
             transaction.execute(
                 "UPDATE tasks SET status = ?2 WHERE id = ?1",
                 (task_id(*id), TaskStatus::Pending.as_str()),

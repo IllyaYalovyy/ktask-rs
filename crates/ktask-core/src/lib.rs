@@ -30,8 +30,8 @@ pub use forget::{ForgetError, forget_project};
 pub use git::{CommitAllError, Git, GitError, PullRebase, PullRebaseError, PushError};
 pub use import::{Import, ImportError, InvalidTask, import_tasks};
 pub use journal::{
-    AppendConflict, AppendError, Attempt, AttemptEnd, AttemptRun, BeginAttemptError, CancelError,
-    Event, Journal, JournalError, JournalWatch, RecordReportError, RetryError, Step,
+    AnswerError, AppendConflict, AppendError, Attempt, AttemptEnd, AttemptRun, BeginAttemptError,
+    CancelError, Event, Journal, JournalError, JournalWatch, RecordReportError, RetryError, Step,
 };
 pub use lock::{RunLock, RunLockError};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
@@ -55,8 +55,8 @@ pub use status::{
     REVIEW_STEP, SYNC_STEP, StatusEntry, StepLine, TEST_STEP, displayed_status, status,
 };
 pub use task::{
-    AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, add_task, list_all_tasks,
-    list_tasks, remove_task, retry_task,
+    AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, add_task, answer_task,
+    list_all_tasks, list_tasks, remove_task, retry_task,
 };
 
 #[cfg(test)]

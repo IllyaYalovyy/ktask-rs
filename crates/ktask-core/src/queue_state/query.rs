@@ -92,6 +92,13 @@ impl QueueState {
             .cloned()
     }
 
+    /// The answer recorded for attempt `number` of task `id`, when it was answered: exactly
+    /// the attempt that was `blocked` when [`crate::answer_task`] was called. `None` when it
+    /// never was.
+    pub(crate) fn answer_of(&self, id: TaskId, number: u32) -> Option<String> {
+        self.answers.get(&(id, number)).cloned()
+    }
+
     /// The step name and reason of the most recent gate stop recorded for task `id`, not yet
     /// superseded by a later attempt actually beginning. `None` when it was never stopped by a
     /// gate, or a later attempt has since begun.

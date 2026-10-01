@@ -84,6 +84,20 @@ impl QueueState {
         }
     }
 
+    /// Applies a [`Event::TaskAnswered`]: records `text` against the attempt that was blocked
+    /// when it was given — this task's current one — and sends the task back to `pending`.
+    pub(super) fn apply_task_answered(&mut self, event: &Event) {
+        let Event::TaskAnswered { id, text, .. } = event else {
+            return;
+        };
+        if let Some(number) = self.current_attempt(*id).map(|attempt| attempt.number) {
+            self.answers.insert((*id, number), text.clone());
+        }
+        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id) {
+            task.status = TaskStatus::Pending;
+        }
+    }
+
     /// Applies a [`Event::GateFailed`]: records it as the task's current gate stop, replacing
     /// whatever it held before.
     pub(super) fn apply_gate_failed(&mut self, event: &Event) {

@@ -95,6 +95,7 @@ const STEP_STARTED: &str = "step_started";
 const STEP_ENDED: &str = "step_ended";
 const GATE_FAILED: &str = "gate_failed";
 const TASK_RETRIED: &str = "task_retried";
+const TASK_ANSWERED: &str = "task_answered";
 
 impl Journal for SqliteJournal {
     fn events(&self) -> Result<Vec<Event>, JournalError> {
@@ -346,6 +347,44 @@ mod tests {
             },
         );
         assert_eq!(journal.events().unwrap()[3], retried);
+        assert_eq!(cached(&journal, 1), (TaskStatus::Pending, 1));
+    }
+
+    #[test]
+    fn an_answered_event_round_trips_its_text_and_mirrors_the_task_back_to_pending() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "a", Placement::End);
+        append(
+            &journal,
+            Event::AttemptStarted {
+                id: TaskId(1),
+                number: 1,
+                start_commit: None,
+                at: at(2),
+            },
+        );
+        append(
+            &journal,
+            Event::AttemptEnded {
+                id: TaskId(1),
+                number: 1,
+                duration: Duration::from_secs(1),
+                exit_code: Some(0),
+                status: TaskStatus::Blocked,
+                reason: Some("which path?".to_owned()),
+                at: at(3),
+            },
+        );
+        let answered = append(
+            &journal,
+            Event::TaskAnswered {
+                id: TaskId(1),
+                text: "the left one".to_owned(),
+                at: at(900),
+            },
+        );
+        assert_eq!(journal.events().unwrap()[3], answered);
         assert_eq!(cached(&journal, 1), (TaskStatus::Pending, 1));
     }
 

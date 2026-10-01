@@ -11,9 +11,9 @@ use std::time::SystemTime;
 
 use crate::journal::{AttemptRun, Event};
 use crate::{
-    AppendConflict, AppendError, Attempt, AttemptEnd, BeginAttemptError, CancelError, Journal,
-    JournalError, Outcome, Placement, RecordReportError, RetryError, Step, Task, TaskDraft, TaskId,
-    TaskStatus,
+    AnswerError, AppendConflict, AppendError, Attempt, AttemptEnd, BeginAttemptError, CancelError,
+    Journal, JournalError, Outcome, Placement, RecordReportError, RetryError, Step, Task,
+    TaskDraft, TaskId, TaskStatus,
 };
 
 mod apply;
@@ -52,6 +52,8 @@ pub(crate) struct QueueState {
     /// The most recent gate stop recorded for each task, cleared once a later attempt for it
     /// actually begins: [`QueueState::gate_stop_of`].
     gate_stops: HashMap<TaskId, (String, String)>,
+    /// The answer recorded for each attempt that was answered: [`QueueState::answer_of`].
+    answers: HashMap<(TaskId, u32), String>,
 }
 
 impl QueueState {
@@ -78,6 +80,7 @@ impl QueueState {
             Event::StepEnded { .. } => self.apply_step_ended(event),
             Event::GateFailed { .. } => self.apply_gate_failed(event),
             Event::TaskRetried { .. } => self.apply_task_retried(event),
+            Event::TaskAnswered { .. } => self.apply_task_answered(event),
         }
     }
 

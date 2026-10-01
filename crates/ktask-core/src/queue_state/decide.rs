@@ -5,8 +5,8 @@
 use std::time::SystemTime;
 
 use super::{
-    AppendError, AttemptRun, BeginAttemptError, CancelError, Event, Outcome, Placement, QueueState,
-    RecordReportError, RetryError, Task, TaskDraft, TaskId, TaskStatus,
+    AnswerError, AppendError, AttemptRun, BeginAttemptError, CancelError, Event, Outcome,
+    Placement, QueueState, RecordReportError, RetryError, Task, TaskDraft, TaskId, TaskStatus,
 };
 
 impl QueueState {
@@ -153,6 +153,36 @@ impl QueueState {
                 status: task.status,
             })
         }
+    }
+
+    /// The command "answer `id`'s question with `text`": the event it produces, or the
+    /// reason it cannot be answered.
+    ///
+    /// # Errors
+    ///
+    /// Fails, deciding nothing, when there is no such task, or its status is not `blocked`.
+    pub(crate) fn decide_answer(
+        &self,
+        id: TaskId,
+        text: &str,
+        at: SystemTime,
+    ) -> Result<Event, AnswerError> {
+        let task = self
+            .tasks
+            .iter()
+            .find(|task| task.id == id)
+            .ok_or(AnswerError::UnknownTask(id))?;
+        if task.status != TaskStatus::Blocked {
+            return Err(AnswerError::NotBlocked {
+                id,
+                status: task.status,
+            });
+        }
+        Ok(Event::TaskAnswered {
+            id,
+            text: text.to_owned(),
+            at,
+        })
     }
 
     /// Checks that attempt `number` of task `id` is the one currently running: the caller of
