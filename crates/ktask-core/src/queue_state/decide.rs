@@ -5,8 +5,9 @@
 use std::time::SystemTime;
 
 use super::{
-    AnswerError, AppendError, AttemptRun, BeginAttemptError, CancelError, Event, Outcome,
-    Placement, QueueState, RecordReportError, RetryError, Task, TaskDraft, TaskId, TaskStatus,
+    AnswerError, AppendError, AttemptRun, BeginAttemptError, CancelError, DoneError, Event,
+    Outcome, Placement, QueueState, RecordReportError, RetryError, Task, TaskDraft, TaskId,
+    TaskStatus,
 };
 
 impl QueueState {
@@ -183,6 +184,41 @@ impl QueueState {
             text: text.to_owned(),
             at,
         })
+    }
+
+    /// The command "mark `id` done, with `reason`, by the operator's own hand": the event it
+    /// produces, or the reason it cannot be.
+    ///
+    /// # Errors
+    ///
+    /// Fails, deciding nothing, when there is no such task, or its status is not `failed`,
+    /// `failed-unknown` or `blocked`.
+    pub(crate) fn decide_done(
+        &self,
+        id: TaskId,
+        reason: &str,
+        at: SystemTime,
+    ) -> Result<Event, DoneError> {
+        let task = self
+            .tasks
+            .iter()
+            .find(|task| task.id == id)
+            .ok_or(DoneError::UnknownTask(id))?;
+        if matches!(
+            task.status,
+            TaskStatus::Failed | TaskStatus::FailedUnknown | TaskStatus::Blocked
+        ) {
+            Ok(Event::TaskDoneByUser {
+                id,
+                reason: reason.to_owned(),
+                at,
+            })
+        } else {
+            Err(DoneError::NotDoneable {
+                id,
+                status: task.status,
+            })
+        }
     }
 
     /// Checks that attempt `number` of task `id` is the one currently running: the caller of

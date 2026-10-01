@@ -2,7 +2,7 @@
 //! cancelled ones.
 
 use crate::queue_state::{QueueState, decide_and_append};
-use crate::{AnswerError, CancelError, Clock, Journal, JournalError, RetryError};
+use crate::{AnswerError, CancelError, Clock, DoneError, Journal, JournalError, RetryError};
 
 use super::validate::{AddError, draft_problems};
 use super::{Placement, Task, TaskDraft, TaskId, TaskStatus};
@@ -128,6 +128,34 @@ pub fn answer_task(
     })
 }
 
+/// Use case: marks the task numbered `id` `done`, by the operator's own hand, with `reason`,
+/// after it ended `failed`, `failed-unknown` or `blocked` — work finished outside the tool,
+/// recorded as finished instead of removed or left failed. Every attempt already recorded for
+/// it stays in the journal; the next run continues past it, the same as any other task already
+/// `done`.
+///
+/// # Errors
+///
+/// Fails, changing nothing, when there is no such task, its status is not `failed`,
+/// `failed-unknown` or `blocked` — `pending`, `running`, `done` and `cancelled` are all
+/// refused, naming the task's own status — or `reason` is empty or only whitespace.
+pub fn done_task(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    id: TaskId,
+    reason: &str,
+) -> Result<(), DoneError> {
+    if reason.trim().is_empty() {
+        return Err(DoneError::EmptyReason);
+    }
+    let at = clock.now();
+    decide_and_append(journal, |state| {
+        state
+            .decide_done(id, reason, at)
+            .map(|event| (vec![event], ()))
+    })
+}
+
 /// Every task, cancelled ones included, in queue order, with its full status: pending or
 /// cancelled, or what its most recent attempt, if it has one, is at — `running`, or what it
 /// ended at.
@@ -166,7 +194,7 @@ pub(crate) fn without_cancelled(tasks: Vec<Task>) -> Vec<Task> {
 #[cfg(test)]
 mod tests {
     use crate::fakes::{FakeClock, FakeJournal, at, draft};
-    use crate::{JournalError, TaskKind};
+    use crate::{DoneError, JournalError, TaskKind};
 
     use super::*;
 
@@ -702,6 +730,97 @@ mod tests {
             );
             assert_eq!(list_tasks(&journal), Ok(vec![]));
         }
+    }
+
+    #[test]
+    fn marking_a_failed_a_blocked_or_a_failed_unknown_task_done_seals_it_done() {
+        for status in [
+            TaskStatus::Failed,
+            TaskStatus::Blocked,
+            TaskStatus::FailedUnknown,
+        ] {
+            let journal = journal_with_a_task_ended_at(status, Some("why"));
+            assert_eq!(
+                done_task(&journal, &clock(), TaskId(1), "finished by hand"),
+                Ok(())
+            );
+            assert_eq!(list_tasks(&journal).unwrap()[0].status, TaskStatus::Done);
+        }
+    }
+
+    #[test]
+    fn marking_done_records_the_reason_and_when() {
+        let journal = journal_with_a_task_ended_at(TaskStatus::Failed, Some("why"));
+        done_task(&journal, &clock(), TaskId(1), "finished by hand").unwrap();
+        assert_eq!(
+            crate::attempt::done_mark_of(&journal, TaskId(1)).unwrap(),
+            Some(("finished by hand".to_owned(), clock().now()))
+        );
+    }
+
+    #[test]
+    fn marking_a_pending_a_running_or_an_already_done_task_done_is_refused_naming_its_status() {
+        let pending = FakeJournal::default();
+        add_task(&pending, &clock(), &draft("a"), Placement::End).unwrap();
+        assert_eq!(
+            done_task(&pending, &clock(), TaskId(1), "finished by hand"),
+            Err(DoneError::NotDoneable {
+                id: TaskId(1),
+                status: TaskStatus::Pending
+            })
+        );
+
+        let running = FakeJournal::default();
+        add_task(&running, &clock(), &draft("a"), Placement::End).unwrap();
+        crate::attempt::begin_attempt(&running, &clock(), TaskId(1)).unwrap();
+        assert_eq!(
+            done_task(&running, &clock(), TaskId(1), "finished by hand"),
+            Err(DoneError::NotDoneable {
+                id: TaskId(1),
+                status: TaskStatus::Running
+            })
+        );
+
+        let done = journal_with_a_task_ended_at(TaskStatus::Done, None);
+        assert_eq!(
+            done_task(&done, &clock(), TaskId(1), "finished by hand"),
+            Err(DoneError::NotDoneable {
+                id: TaskId(1),
+                status: TaskStatus::Done
+            })
+        );
+    }
+
+    #[test]
+    fn marking_an_unknown_task_done_is_refused_and_names_it() {
+        let journal = FakeJournal::default();
+        assert_eq!(
+            done_task(&journal, &clock(), TaskId(9), "finished by hand"),
+            Err(DoneError::UnknownTask(TaskId(9)))
+        );
+    }
+
+    #[test]
+    fn marking_done_with_an_empty_or_blank_reason_is_refused_and_changes_nothing() {
+        let journal = journal_with_a_task_ended_at(TaskStatus::Failed, Some("why"));
+        let before = list_all_tasks(&journal).unwrap();
+        for reason in ["", "   ", "\t\n"] {
+            assert_eq!(
+                done_task(&journal, &clock(), TaskId(1), reason),
+                Err(DoneError::EmptyReason)
+            );
+        }
+        assert_eq!(list_all_tasks(&journal).unwrap(), before);
+    }
+
+    #[test]
+    fn a_journal_failure_is_passed_on_when_marking_done() {
+        let failure = JournalError::new("disk on fire");
+        let journal = FakeJournal::failing(failure.clone());
+        assert_eq!(
+            done_task(&journal, &clock(), TaskId(1), "finished by hand"),
+            Err(DoneError::Journal(failure))
+        );
     }
 
     #[test]

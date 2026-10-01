@@ -98,6 +98,18 @@ impl QueueState {
         }
     }
 
+    /// Applies a [`Event::TaskDoneByUser`]: records `reason` and when against the task, and
+    /// marks it `done` — sealed, not picked up by a later run the way a retried task would be.
+    pub(super) fn apply_task_done_by_user(&mut self, event: &Event) {
+        let Event::TaskDoneByUser { id, reason, at } = event else {
+            return;
+        };
+        self.done_marks.insert(*id, (reason.clone(), *at));
+        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id) {
+            task.status = TaskStatus::Done;
+        }
+    }
+
     /// Applies a [`Event::GateFailed`]: records it as the task's current gate stop, replacing
     /// whatever it held before.
     pub(super) fn apply_gate_failed(&mut self, event: &Event) {

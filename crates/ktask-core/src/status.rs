@@ -1,6 +1,6 @@
 //! `status`: what ran and how it ended, for every task that has been attempted.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::{
     Clock, Journal, JournalError, Outcome, RunLock, Task, TaskId, TaskStatus, list_all_tasks,
@@ -82,6 +82,16 @@ pub struct AttemptLine {
     pub steps: Vec<StepLine>,
 }
 
+/// Who sealed a task `done` by hand, with [`crate::done_task`], instead of an attempt
+/// reporting it: why, in the operator's own words, and when.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoneMark {
+    /// Why, in the operator's own words.
+    pub reason: String,
+    /// When.
+    pub at: SystemTime,
+}
+
 /// One task as `status` shows it: not pending, with its most recent attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusEntry {
@@ -96,6 +106,9 @@ pub struct StatusEntry {
     /// Every earlier attempt, oldest first — every one it was retried past. Empty for a task
     /// still on its first attempt.
     pub history: Vec<AttemptLine>,
+    /// Set when the task was sealed `done` by the operator's own hand, with
+    /// [`crate::done_task`], rather than by an attempt reporting it.
+    pub done_by_user: Option<DoneMark>,
 }
 
 /// The status word to show for a task: `status.as_str()`, except `"interrupted"` when its
@@ -226,6 +239,7 @@ fn entry_for(
         status: task.status,
         attempt: attempt_line(attempt, reported, clock, run_alive, answer),
         history,
+        done_by_user: None,
     }
 }
 
@@ -255,6 +269,7 @@ fn gate_stop_entry(task: Task, step: String, reason: String) -> StatusEntry {
             steps: vec![line],
         },
         history: Vec::new(),
+        done_by_user: None,
     }
 }
 
@@ -281,10 +296,36 @@ fn entry_for_task(
     };
     let reported = crate::attempt::last_report(journal, task.id, attempt.number)?;
     let answer = crate::attempt::answer_of(journal, task.id, attempt.number)?;
+    let done_by_user =
+        crate::attempt::done_mark_of(journal, task.id)?.map(|(reason, at)| DoneMark { reason, at });
+    let history = attempt_history(journal, task.id, &attempts, clock)?;
+    Ok(Some(StatusEntry {
+        done_by_user,
+        ..entry_for(
+            task,
+            &attempt,
+            reported,
+            history,
+            clock,
+            run_alive,
+            answer.as_deref(),
+        )
+    }))
+}
+
+/// Every earlier attempt of `attempts` as an [`AttemptLine`], oldest first, given its own
+/// report and answer — [`entry_for_task`]'s own work, pulled out of it so it stays within the
+/// workspace's function-length limit.
+fn attempt_history(
+    journal: &impl Journal,
+    id: TaskId,
+    attempts: &[crate::Attempt],
+    clock: &impl Clock,
+) -> Result<Vec<AttemptLine>, JournalError> {
     let mut history = Vec::with_capacity(attempts.len());
-    for earlier in &attempts {
-        let reported = crate::attempt::last_report(journal, task.id, earlier.number)?;
-        let earlier_answer = crate::attempt::answer_of(journal, task.id, earlier.number)?;
+    for earlier in attempts {
+        let reported = crate::attempt::last_report(journal, id, earlier.number)?;
+        let earlier_answer = crate::attempt::answer_of(journal, id, earlier.number)?;
         history.push(attempt_line(
             earlier,
             reported,
@@ -293,15 +334,7 @@ fn entry_for_task(
             earlier_answer.as_deref(),
         ));
     }
-    Ok(Some(entry_for(
-        task,
-        &attempt,
-        reported,
-        history,
-        clock,
-        run_alive,
-        answer.as_deref(),
-    )))
+    Ok(history)
 }
 
 /// A task never attempted, never stopped by a gate, pending or cancelled before it ever ran, is
@@ -416,6 +449,7 @@ mod tests {
                     }],
                 },
                 history: vec![],
+                done_by_user: None,
             }]
         );
     }
@@ -449,6 +483,7 @@ mod tests {
                     }],
                 },
                 history: vec![],
+                done_by_user: None,
             }]
         );
         assert_eq!(
@@ -591,6 +626,42 @@ mod tests {
             step.reason.as_deref(),
             Some("which path? — answer: the left one")
         );
+    }
+
+    #[test]
+    fn a_task_marked_done_by_the_user_shows_done_with_the_reason_and_when() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(0), &draft("a"), Placement::End).unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock(0), TaskId(1), "echo", None)
+            .unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(1),
+            1,
+            AttemptRun {
+                duration: Duration::from_secs(1),
+                exit_code: Some(1),
+                status: TaskStatus::Failed,
+                reason: Some("it broke"),
+            },
+            clock(1).0,
+        )
+        .unwrap();
+        crate::done_task(&journal, &clock(2), TaskId(1), "fixed by hand").unwrap();
+
+        let entries = status(&journal, &clock(10), &no_run()).unwrap();
+        assert_eq!(entries[0].status, TaskStatus::Done);
+        assert_eq!(
+            entries[0].done_by_user,
+            Some(DoneMark {
+                reason: "fixed by hand".to_owned(),
+                at: clock(2).0,
+            })
+        );
+        // The attempt itself still shows what actually happened to it — the manual marking is
+        // recorded alongside it, not in place of it.
+        assert_eq!(entries[0].attempt.outcome, AttemptOutcome::Unreported);
+        assert_eq!(entries[0].attempt.reason.as_deref(), Some("it broke"));
     }
 
     #[test]

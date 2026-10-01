@@ -198,6 +198,48 @@ impl From<JournalError> for AnswerError {
     }
 }
 
+/// Why a task was not marked done.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DoneError {
+    /// There is no such task.
+    UnknownTask(TaskId),
+    /// The task's own status is not one `done` accepts: only `failed`, `failed-unknown` or
+    /// `blocked` can be.
+    NotDoneable {
+        /// The task that cannot be marked done.
+        id: TaskId,
+        /// Its current status.
+        status: TaskStatus,
+    },
+    /// The reason is empty or only whitespace.
+    EmptyReason,
+    /// The journal could not be used.
+    Journal(JournalError),
+}
+
+impl fmt::Display for DoneError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownTask(id) => write!(f, "there is no task {id}"),
+            Self::NotDoneable { id, status } => write!(
+                f,
+                "task {id} is {status}: only a failed, failed-unknown or blocked task can be \
+                 marked done"
+            ),
+            Self::EmptyReason => f.write_str("the reason is empty"),
+            Self::Journal(error) => error.fmt(f),
+        }
+    }
+}
+
+impl Error for DoneError {}
+
+impl From<JournalError> for DoneError {
+    fn from(error: JournalError) -> Self {
+        Self::Journal(error)
+    }
+}
+
 /// Why a report could not be recorded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordReportError {

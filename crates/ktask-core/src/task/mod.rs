@@ -7,7 +7,9 @@ use std::time::SystemTime;
 mod use_cases;
 mod validate;
 
-pub use use_cases::{add_task, answer_task, list_all_tasks, list_tasks, remove_task, retry_task};
+pub use use_cases::{
+    add_task, answer_task, done_task, list_all_tasks, list_tasks, remove_task, retry_task,
+};
 pub(crate) use use_cases::{add_tasks, without_cancelled};
 pub use validate::AddError;
 pub(crate) use validate::draft_problems;

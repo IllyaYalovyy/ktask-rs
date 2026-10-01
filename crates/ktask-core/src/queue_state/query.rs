@@ -1,6 +1,8 @@
 //! Reading folded state: every task, the current run, an attempt's history, and what an
 //! agent or a gate reported.
 
+use std::time::SystemTime;
+
 use super::{Attempt, Outcome, QueueState, Step, Task, TaskId, TaskStatus};
 
 impl QueueState {
@@ -97,6 +99,12 @@ impl QueueState {
     /// never was.
     pub(crate) fn answer_of(&self, id: TaskId, number: u32) -> Option<String> {
         self.answers.get(&(id, number)).cloned()
+    }
+
+    /// The reason and when task `id` was marked done by the operator's own hand, with
+    /// [`crate::done_task`]. `None` when it never was.
+    pub(crate) fn done_mark_of(&self, id: TaskId) -> Option<(String, SystemTime)> {
+        self.done_marks.get(&id).cloned()
     }
 
     /// The step name and reason of the most recent gate stop recorded for task `id`, not yet

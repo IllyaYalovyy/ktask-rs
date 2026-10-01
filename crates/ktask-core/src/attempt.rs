@@ -294,6 +294,19 @@ pub(crate) fn answer_of(
     read_and_query(journal, |state| state.answer_of(id, number))
 }
 
+/// The reason and when task `id` was marked done by the operator's own hand, with
+/// [`crate::done_task`]. `None` when it never was.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub(crate) fn done_mark_of(
+    journal: &dyn Journal,
+    id: TaskId,
+) -> Result<Option<(String, SystemTime)>, JournalError> {
+    read_and_query(journal, |state| state.done_mark_of(id))
+}
+
 /// `reason`, with `answer`, when there is one, appended as "— answer: …" — the one line
 /// `status` and the queue screen show for a blocked attempt once [`crate::answer_task`] has
 /// recorded an answer for it, and the one a later attempt's own prompt names the same

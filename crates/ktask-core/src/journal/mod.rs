@@ -9,8 +9,8 @@ use crate::{Outcome, Placement, TaskDraft, TaskId, TaskStatus};
 mod errors;
 
 pub use errors::{
-    AnswerError, AppendConflict, AppendError, BeginAttemptError, CancelError, RecordReportError,
-    RetryError,
+    AnswerError, AppendConflict, AppendError, BeginAttemptError, CancelError, DoneError,
+    RecordReportError, RetryError,
 };
 
 /// One thing that happened to the queue: what [`Journal::events`] reads and
@@ -155,6 +155,16 @@ pub enum Event {
         id: TaskId,
         /// The answer given.
         text: String,
+        /// When.
+        at: SystemTime,
+    },
+    /// A task that had ended `failed`, `failed-unknown` or `blocked` was marked `done` by the
+    /// operator's own hand, with `reason` — work finished outside the tool.
+    TaskDoneByUser {
+        /// The task marked done.
+        id: TaskId,
+        /// Why, in the operator's own words.
+        reason: String,
         /// When.
         at: SystemTime,
     },

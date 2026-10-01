@@ -12,8 +12,8 @@ use std::time::SystemTime;
 use crate::journal::{AttemptRun, Event};
 use crate::{
     AnswerError, AppendConflict, AppendError, Attempt, AttemptEnd, BeginAttemptError, CancelError,
-    Journal, JournalError, Outcome, Placement, RecordReportError, RetryError, Step, Task,
-    TaskDraft, TaskId, TaskStatus,
+    DoneError, Journal, JournalError, Outcome, Placement, RecordReportError, RetryError, Step,
+    Task, TaskDraft, TaskId, TaskStatus,
 };
 
 mod apply;
@@ -54,6 +54,9 @@ pub(crate) struct QueueState {
     gate_stops: HashMap<TaskId, (String, String)>,
     /// The answer recorded for each attempt that was answered: [`QueueState::answer_of`].
     answers: HashMap<(TaskId, u32), String>,
+    /// The reason and when each task was marked done by the user's own hand:
+    /// [`QueueState::done_mark_of`].
+    done_marks: HashMap<TaskId, (String, SystemTime)>,
 }
 
 impl QueueState {
@@ -81,6 +84,7 @@ impl QueueState {
             Event::GateFailed { .. } => self.apply_gate_failed(event),
             Event::TaskRetried { .. } => self.apply_task_retried(event),
             Event::TaskAnswered { .. } => self.apply_task_answered(event),
+            Event::TaskDoneByUser { .. } => self.apply_task_done_by_user(event),
         }
     }
 

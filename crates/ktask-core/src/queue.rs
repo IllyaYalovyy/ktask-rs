@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::status::{AttemptLine, AttemptOutcome, status};
+use crate::status::{AttemptLine, AttemptOutcome, DoneMark, status};
 use crate::task::without_cancelled;
 use crate::{
     Clock, Journal, JournalError, Project, RunLock, Task, TaskId, TaskStatus, list_all_tasks,
@@ -77,6 +77,10 @@ pub struct QueueView {
     /// retried past, from the same use case `status` reads its own history from. A task on
     /// its first attempt, or never attempted, has no entry here.
     pub history: HashMap<TaskId, Vec<AttemptLine>>,
+    /// The reason and when, for every task sealed `done` by the operator's own hand, with
+    /// [`crate::done_task`], from the same use case `status` reads it from. A task not marked
+    /// done this way has no entry here.
+    pub done_by_user: HashMap<TaskId, DoneMark>,
 }
 
 /// Use case: the queue of `project`, whose journal is `journal`; with the cancelled tasks in
@@ -102,6 +106,10 @@ pub fn queue_view(
         .iter()
         .map(|entry| (entry.task, entry.attempt.clone()))
         .collect();
+    let done_by_user: HashMap<TaskId, DoneMark> = entries
+        .iter()
+        .filter_map(|entry| entry.done_by_user.clone().map(|mark| (entry.task, mark)))
+        .collect();
     let history: HashMap<TaskId, Vec<AttemptLine>> = entries
         .into_iter()
         .filter(|entry| !entry.history.is_empty())
@@ -117,6 +125,7 @@ pub fn queue_view(
         },
         attempts,
         history,
+        done_by_user,
     })
 }
 
@@ -299,6 +308,39 @@ mod tests {
                 failed_unknown: 1,
                 ..StatusSummary::default()
             }
+        );
+    }
+
+    #[test]
+    fn a_task_marked_done_by_the_user_carries_the_reason_and_when() {
+        let journal = FakeJournal::default();
+        let clock = FakeClock(at(0));
+        add_task(&journal, &clock, &draft("a"), Placement::End).unwrap();
+        let number = crate::attempt::begin_attempt(&journal, &clock, TaskId(1)).unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(1),
+            number,
+            AttemptRun {
+                duration: Duration::ZERO,
+                exit_code: Some(1),
+                status: TaskStatus::Failed,
+                reason: Some("it broke"),
+            },
+            clock.0,
+        )
+        .unwrap();
+        crate::done_task(&journal, &FakeClock(at(5)), TaskId(1), "fixed by hand").unwrap();
+
+        let view = queue_view(project("app", 10), &journal, &clock, &no_run(), false).unwrap();
+
+        assert_eq!(view.tasks[0].status, TaskStatus::Done);
+        assert_eq!(
+            view.done_by_user.get(&TaskId(1)),
+            Some(&DoneMark {
+                reason: "fixed by hand".to_owned(),
+                at: at(5),
+            })
         );
     }
 }
