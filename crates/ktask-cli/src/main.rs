@@ -49,6 +49,9 @@ enum Command {
     /// Send a task that ended failed, failed-unknown or blocked back to pending, so the next
     /// run picks it up again — every earlier attempt stays in its history
     Retry(commands::retry::Args),
+    /// Answer the question a blocked task's attempt asked, and send it back to pending, so
+    /// the next attempt's own prompt carries both
+    Answer(commands::answer::Args),
     /// List the queue in order, without the tasks that were removed
     List(commands::list::Args),
     /// Open the terminal interface on the project's queue
@@ -105,6 +108,7 @@ fn dispatch(
         Command::Import(args) => commands::import::run(args, project, stdout),
         Command::Remove(args) => commands::remove::run(args, project, stdout),
         Command::Retry(args) => commands::retry::run(args, project, stdout),
+        Command::Answer(args) => commands::answer::run(args, project, stdout),
         Command::List(args) => commands::list::run(args, project, stdout),
         Command::Tui(args) => {
             commands::tui::run(args, project)?;
