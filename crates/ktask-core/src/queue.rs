@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::status::{AttemptLine, AttemptOutcome, DoneMark, status};
-use crate::task::without_cancelled_or_skipped;
+use crate::task::without_hidden_statuses;
 use crate::{
     Clock, Journal, JournalError, Project, RunLock, Task, TaskId, TaskStatus, list_all_tasks,
 };
@@ -30,6 +30,9 @@ pub struct StatusSummary {
     pub cancelled: usize,
     /// Tasks the resolver decided are no longer the right thing to do.
     pub skipped: usize,
+    /// Tasks the resolver decided were too large to finish as written, and replaced with
+    /// smaller tasks.
+    pub superseded: usize,
 }
 
 impl StatusSummary {
@@ -55,6 +58,7 @@ impl StatusSummary {
                     TaskStatus::FailedUnknown => &mut summary.failed_unknown,
                     TaskStatus::Cancelled => &mut summary.cancelled,
                     TaskStatus::Skipped => &mut summary.skipped,
+                    TaskStatus::Superseded => &mut summary.superseded,
                 }
             };
             *count += 1;
@@ -70,8 +74,9 @@ pub struct QueueView {
     pub project: Project,
     /// How many tasks are in each status.
     pub summary: StatusSummary,
-    /// The tasks to show, in queue order: without the cancelled or skipped ones, which the
-    /// summary counts anyway, unless they were asked for. Positions count what is shown.
+    /// The tasks to show, in queue order: without the cancelled, skipped or superseded ones,
+    /// which the summary counts anyway, unless they were asked for. Positions count what is
+    /// shown.
     pub tasks: Vec<Task>,
     /// The most recent attempt of every task that has one — the same line `status` shows,
     /// from the same use case. A task with no entry here was never attempted.
@@ -86,8 +91,8 @@ pub struct QueueView {
     pub done_by_user: HashMap<TaskId, DoneMark>,
 }
 
-/// Use case: the queue of `project`, whose journal is `journal`; with the cancelled and skipped
-/// tasks in their places when `show_cancelled`.
+/// Use case: the queue of `project`, whose journal is `journal`; with the cancelled, skipped and
+/// superseded tasks in their places when `show_cancelled`.
 ///
 /// A task the journal still calls `running` is shown `running` only while `lock` says a run is
 /// actually alive; otherwise it is shown `interrupted` at once, with no need to wait for the
@@ -124,7 +129,7 @@ pub fn queue_view(
         tasks: if show_cancelled {
             tasks
         } else {
-            without_cancelled_or_skipped(tasks)
+            without_hidden_statuses(tasks)
         },
         attempts,
         history,

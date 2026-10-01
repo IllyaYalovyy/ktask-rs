@@ -26,7 +26,7 @@ const KEYS: [(&str, &str); 19] = [
     ("k, Up", "select the previous task"),
     ("g", "select the first task"),
     ("G", "select the last task"),
-    ("a", "show or hide cancelled and skipped tasks"),
+    ("a", "show or hide cancelled, skipped and superseded tasks"),
     ("n", "add a task at the end, written in a form"),
     ("o", "add a task below the selected one, written in a form"),
     ("O", "add a task above the selected one, written in a form"),
@@ -122,7 +122,7 @@ impl Queue {
             ),
             Line::from(format!(
                 "pending {} running {} done {} failed {} blocked {} unknown {} cancelled {} \
-                 skipped {}",
+                 skipped {} superseded {}",
                 summary.pending,
                 summary.running,
                 summary.done,
@@ -130,7 +130,8 @@ impl Queue {
                 summary.blocked,
                 summary.failed_unknown,
                 summary.cancelled,
-                summary.skipped
+                summary.skipped,
+                summary.superseded
             )),
             self.question_line(view, width),
         ]
@@ -181,7 +182,8 @@ fn message_lines(offset: usize, message: &[String], height: usize) -> Vec<Line<'
 
 /// The rows of the task list that fit in `height` lines, scrolled so that the selected task's
 /// block is the last one in view when it would not be otherwise. The selected task is marked
-/// with `>` and shown reversed; a cancelled or skipped one is dimmed and says so in its status.
+/// with `>` and shown reversed; a cancelled, skipped or superseded one is dimmed and says so
+/// in its status.
 /// A task
 /// that has an attempt carries one dimmed line per step run so far, in the same order
 /// `status` prints them, from the same use case. When a task's own steps do not all fit, the
@@ -334,7 +336,10 @@ fn task_line(
 ) -> Line<'static> {
     let marker = if selected { '>' } else { ' ' };
     let mut style = Style::new();
-    if matches!(task.status, TaskStatus::Cancelled | TaskStatus::Skipped) {
+    if matches!(
+        task.status,
+        TaskStatus::Cancelled | TaskStatus::Skipped | TaskStatus::Superseded
+    ) {
         style = style.add_modifier(Modifier::DIM);
     }
     if selected {
@@ -467,7 +472,8 @@ mod tests {
         assert_eq!(row(&rows, 0), "app");
         assert_eq!(
             row(&rows, 1),
-            "pending 0 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
+            "pending 0 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0 \
+             superseded 0"
         );
         assert_eq!(row(&rows, 3), "The queue is empty.");
     }

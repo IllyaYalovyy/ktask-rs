@@ -159,6 +159,41 @@ fn read_item(value: serde_json::Value) -> Result<Parsed, Vec<String>> {
     }
 }
 
+/// Reads the JSON array `json` into the tasks to add, in order, and how many were left out
+/// because they were cancelled where they came from — every rule [`import_tasks`] itself
+/// applies, pulled out so [`crate::report_supersede`] refuses a bad file the same way, with the
+/// same messages, before anything else about its own command is decided.
+///
+/// # Errors
+///
+/// Fails, parsing nothing, when `json` is not a JSON array, or when any task breaks a rule or
+/// carries a field that is neither authored nor tool-managed — all of them are listed, by their
+/// place in the array.
+pub(crate) fn parse_items(json: &str) -> Result<(Vec<TaskDraft>, usize), ImportError> {
+    let serde_json::Value::Array(values) =
+        serde_json::from_str(json).map_err(|e| ImportError::Malformed(e.to_string()))?
+    else {
+        return Err(ImportError::NotAnArray);
+    };
+    let mut drafts = Vec::new();
+    let mut invalid = Vec::new();
+    let mut skipped_cancelled = 0usize;
+    for (index, value) in values.into_iter().enumerate() {
+        match read_item(value) {
+            Ok(Parsed::Draft(draft)) => drafts.push(draft),
+            Ok(Parsed::Cancelled) => skipped_cancelled += 1,
+            Err(problems) => invalid.push(InvalidTask {
+                index: index + 1,
+                problems,
+            }),
+        }
+    }
+    if !invalid.is_empty() {
+        return Err(ImportError::Invalid(invalid));
+    }
+    Ok((drafts, skipped_cancelled))
+}
+
 /// Use case: adds every task of the JSON array `json` to the queue, in order and together, at
 /// `placement`, so that what one project's `list --json` or `list --all --json` prints
 /// imports into another as it is.
@@ -181,27 +216,7 @@ pub fn import_tasks(
     json: &str,
     placement: Placement,
 ) -> Result<Import, ImportError> {
-    let serde_json::Value::Array(values) =
-        serde_json::from_str(json).map_err(|e| ImportError::Malformed(e.to_string()))?
-    else {
-        return Err(ImportError::NotAnArray);
-    };
-    let mut drafts = Vec::new();
-    let mut invalid = Vec::new();
-    let mut skipped_cancelled = 0usize;
-    for (index, value) in values.into_iter().enumerate() {
-        match read_item(value) {
-            Ok(Parsed::Draft(draft)) => drafts.push(draft),
-            Ok(Parsed::Cancelled) => skipped_cancelled += 1,
-            Err(problems) => invalid.push(InvalidTask {
-                index: index + 1,
-                problems,
-            }),
-        }
-    }
-    if !invalid.is_empty() {
-        return Err(ImportError::Invalid(invalid));
-    }
+    let (drafts, skipped_cancelled) = parse_items(json)?;
     let tasks = add_tasks(journal, clock, &drafts, placement).map_err(ImportError::Add)?;
     Ok(Import {
         tasks,

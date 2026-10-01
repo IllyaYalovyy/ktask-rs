@@ -56,7 +56,9 @@ fn append_diff(prompt: &mut String, diff: &str) {
 /// of attempt `token` — `retry` takes an optional `--model <name>`, to hand the task's next
 /// attempt to a different model when this one keeps failing a cheaper one; `stop` ends the task
 /// `failed`, for an attempt not worth retrying; `skip` ends it `skipped`, for a task that is no
-/// longer the right thing to do at all.
+/// longer the right thing to do at all; `supersede` ends it `superseded`, replacing it with the
+/// smaller tasks of a JSON array in the same format `import` takes, for a task too large to
+/// finish as written.
 fn append_reporting(prompt: &mut String, token: &AttemptToken, binary_path: &Path) {
     let binary = binary_path.display();
     let _ = write!(
@@ -66,7 +68,8 @@ fn append_reporting(prompt: &mut String, token: &AttemptToken, binary_path: &Pat
          that fits:\n\n\
          \x20\x20\x20\x20{binary} report --token {token} retry [--model <name>]\n\
          \x20\x20\x20\x20{binary} report --token {token} stop --reason \"<why>\"\n\
-         \x20\x20\x20\x20{binary} report --token {token} skip --reason \"<why>\"\n"
+         \x20\x20\x20\x20{binary} report --token {token} skip --reason \"<why>\"\n\
+         \x20\x20\x20\x20{binary} report --token {token} supersede --tasks <file>\n"
     );
 }
 

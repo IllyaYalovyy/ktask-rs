@@ -234,8 +234,9 @@ fn account_for_interrupted_run(
 
 /// Runs `task`'s sync and health-check gates, then its one attempt, appending its result to
 /// `attempted`. `Ok(Some(end))` when the run stops here — a gate refused, or the attempt ended
-/// anything but `done` or `skipped`, the resolver's own way of saying the task is no longer the
-/// right thing to do — `Ok(None)` to carry on to the next task either way. A gate that refuses
+/// anything but `done`, `skipped` or `superseded`, the resolver's own way of saying the task is
+/// no longer the right thing to do as written — `Ok(None)` to carry on to the next task either
+/// way. A gate that refuses
 /// records why in the journal itself, [`steps::sync::run_gate`] and
 /// [`steps::health_check::run_gate`]'s own job, so a later `status` can show it even though the
 /// task stays `pending`.
@@ -266,17 +267,20 @@ fn attempt_task(
     )?;
     let status = result.status;
     attempted.push(result);
-    Ok(
-        (!matches!(status, TaskStatus::Done | TaskStatus::Skipped)).then_some(RunEnd::Stopped {
-            id: task.id,
-            status,
-        }),
-    )
+    Ok((!matches!(
+        status,
+        TaskStatus::Done | TaskStatus::Skipped | TaskStatus::Superseded
+    ))
+    .then_some(RunEnd::Stopped {
+        id: task.id,
+        status,
+    }))
 }
 
 /// Picks and attempts pending tasks, one at a time, until the queue stops the run: a task of
-/// kind `human`, an attempt that ends at anything but `done` or `skipped`, an earlier task
-/// already left `failed`, `blocked` or `failed-unknown`, or nothing left pending. Ahead of each
+/// kind `human`, an attempt that ends at anything but `done`, `skipped` or `superseded`, an
+/// earlier task already left `failed`, `blocked` or `failed-unknown`, or nothing left pending.
+/// Ahead of each
 /// attempt, runs the sync and health-check gates of [`crate::steps`] when the project has
 /// configured and switched them on; either refusing to run stops the run before an attempt is
 /// even begun, leaving the task `pending`.
@@ -338,9 +342,9 @@ fn run_attempt_loop(
 
 /// Use case: runs the pending tasks of `context.project_name`, in queue order, one attempt
 /// each, with `provider` — stopping at the first task of kind `human`, at the first attempt
-/// that ends at anything but `done` or `skipped`, at the first task in queue order already left
-/// `failed`, `blocked` or `failed-unknown` (nothing is attempted in that case), or when nothing
-/// is left pending.
+/// that ends at anything but `done`, `skipped` or `superseded`, at the first task in queue
+/// order already left `failed`, `blocked` or `failed-unknown` (nothing is attempted in that
+/// case), or when nothing is left pending.
 ///
 /// Takes `lock` for the whole run, so that two runs of the same project never overlap. When
 /// the previous run was killed while an attempt was in progress, this run finds its task
@@ -399,7 +403,7 @@ mod tests {
         CommitAllError, Event, Exit, HEALTH_CHECK_STEP, IMPLEMENTATION, Outcome, Output, PUSH_STEP,
         Placement, Provider, ProviderCommand, PullRebase, PullRebaseError, RESOLVE_STEP,
         REVIEW_STEP, SYNC_STEP, TEST_STEP, TaskDraft, TaskId, TaskKind, TaskStatus, add_task,
-        report, report_retry,
+        report, report_retry, report_supersede,
     };
 
     use super::*;
@@ -3311,6 +3315,111 @@ mod tests {
         let end = attempts[0].ended.as_ref().unwrap();
         assert_eq!(end.status, TaskStatus::Skipped);
         assert_eq!(end.reason.as_deref(), Some("no longer relevant"));
+    }
+
+    /// A commands port whose implementation step fails task 1's own first attempt, then
+    /// supersedes it with two smaller tasks; every other attempt — the new tasks' own first
+    /// ones included — succeeds at once, approving every review and accepting every test.
+    struct ResolverSupersedeCommands<'a> {
+        journal: &'a FakeJournal,
+    }
+
+    impl Commands for ResolverSupersedeCommands<'_> {
+        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+            let token: AttemptToken = spec
+                .args
+                .iter()
+                .find_map(|arg| arg.parse().ok())
+                .expect("one arg is the attempt token");
+            let step = crate::attempt::current_step(self.journal, token.task).unwrap();
+            match step.as_deref() {
+                Some(REVIEW_STEP) => {
+                    report(self.journal, &clock(), &token, Outcome::Approved, None).unwrap();
+                }
+                Some(TEST_STEP) => {
+                    report(self.journal, &clock(), &token, Outcome::Accepted, None).unwrap();
+                }
+                Some(RESOLVE_STEP) => {
+                    let tasks = r#"[
+                        {"title": "part one", "criteria": ["a"]},
+                        {"title": "part two", "criteria": ["b"]}
+                    ]"#;
+                    report_supersede(self.journal, &clock(), &token, tasks).unwrap();
+                }
+                _ if token.task == TaskId(1) && token.number == 1 => {
+                    report(
+                        self.journal,
+                        &clock(),
+                        &token,
+                        Outcome::Failed,
+                        Some("too large"),
+                    )
+                    .unwrap();
+                }
+                _ => {
+                    report(self.journal, &clock(), &token, Outcome::Done, None).unwrap();
+                }
+            }
+            Ok(Output {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit: Exit::Code(0),
+            })
+        }
+    }
+
+    #[test]
+    fn a_resolver_that_supersedes_replaces_the_task_and_the_run_continues_with_the_first_new_one() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("too large"), Placement::End).unwrap();
+        let commands = ResolverSupersedeCommands { journal: &journal };
+
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &FakeGit::default(),
+            &test_provider(),
+            &FakeSessionLog::default(),
+            &FakeRunLock::free(),
+            context_with_max_attempts(3),
+        )
+        .unwrap();
+
+        assert_eq!(report.end, RunEnd::Completed);
+        let statuses: Vec<_> = report
+            .attempted
+            .iter()
+            .map(|attempted| (attempted.id, attempted.status))
+            .collect();
+        assert_eq!(
+            statuses,
+            [
+                (TaskId(1), TaskStatus::Superseded),
+                (TaskId(2), TaskStatus::Done),
+                (TaskId(3), TaskStatus::Done),
+            ]
+        );
+        let shown: Vec<_> = crate::list_all_tasks(&journal)
+            .unwrap()
+            .into_iter()
+            .map(|task| (task.position, task.id, task.title, task.status))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (1, TaskId(1), "too large".to_owned(), TaskStatus::Superseded),
+                (2, TaskId(2), "part one".to_owned(), TaskStatus::Done),
+                (3, TaskId(3), "part two".to_owned(), TaskStatus::Done),
+            ]
+        );
+        assert_eq!(
+            crate::attempt::last_report(&journal, TaskId(1), 1).unwrap(),
+            Some((
+                Outcome::Supersede,
+                Some("superseded by 2 tasks: 2, 3".to_owned())
+            ))
+        );
     }
 
     #[test]

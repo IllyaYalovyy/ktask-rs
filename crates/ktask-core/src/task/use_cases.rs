@@ -168,21 +168,26 @@ pub fn list_all_tasks(journal: &impl Journal) -> Result<Vec<Task>, JournalError>
     Ok(QueueState::fold(&events).into_tasks())
 }
 
-/// Use case: every task in the queue, in order, without the cancelled or skipped ones.
-/// Positions count the tasks shown.
+/// Use case: every task in the queue, in order, without the cancelled, skipped or superseded
+/// ones. Positions count the tasks shown.
 ///
 /// # Errors
 ///
 /// Fails when the journal cannot be read.
 pub fn list_tasks(journal: &impl Journal) -> Result<Vec<Task>, JournalError> {
-    Ok(without_cancelled_or_skipped(list_all_tasks(journal)?))
+    Ok(without_hidden_statuses(list_all_tasks(journal)?))
 }
 
-/// `tasks` without the cancelled or skipped ones, positions counting from 1 again.
-pub(crate) fn without_cancelled_or_skipped(tasks: Vec<Task>) -> Vec<Task> {
+/// `tasks` without the cancelled, skipped or superseded ones, positions counting from 1 again.
+pub(crate) fn without_hidden_statuses(tasks: Vec<Task>) -> Vec<Task> {
     tasks
         .into_iter()
-        .filter(|task| !matches!(task.status, TaskStatus::Cancelled | TaskStatus::Skipped))
+        .filter(|task| {
+            !matches!(
+                task.status,
+                TaskStatus::Cancelled | TaskStatus::Skipped | TaskStatus::Superseded
+            )
+        })
         .enumerate()
         .map(|(index, task)| Task {
             position: index + 1,

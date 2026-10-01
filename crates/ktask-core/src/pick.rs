@@ -25,21 +25,23 @@ pub(crate) enum Pick {
 }
 
 /// Looks at the queue in order and decides what the run does next: the first task not
-/// already `done` or `skipped` — a skipped task is resolved the same as a done one, and never
-/// blocks or is attempted again. A `pending` task is attempted (or stops the run, when it is
-/// kind `human`); a task that already ended `failed`, `blocked` or `failed-unknown` stops the
-/// run without attempting anything, since the queue runs in order and nothing after it may run
-/// ahead of it.
+/// already `done`, `skipped` or `superseded` — each of these is resolved the same as a done
+/// one, and never blocks or is attempted again. A `pending` task is attempted (or stops the
+/// run, when it is kind `human`); a task that already ended `failed`, `blocked` or
+/// `failed-unknown` stops the run without attempting anything, since the queue runs in order
+/// and nothing after it may run ahead of it.
 ///
 /// # Errors
 ///
 /// Fails when the journal cannot be read.
 pub(crate) fn pick_next_task(journal: &impl Journal) -> Result<Pick, RunError> {
     let tasks = list_tasks(journal)?;
-    let Some(next) = tasks
-        .iter()
-        .find(|task| !matches!(task.status, TaskStatus::Done | TaskStatus::Skipped))
-    else {
+    let Some(next) = tasks.iter().find(|task| {
+        !matches!(
+            task.status,
+            TaskStatus::Done | TaskStatus::Skipped | TaskStatus::Superseded
+        )
+    }) else {
         return Ok(Pick::NothingLeft {
             queue_is_empty: tasks.is_empty(),
         });
@@ -60,10 +62,14 @@ pub(crate) fn pick_next_task(journal: &impl Journal) -> Result<Pick, RunError> {
                 reason,
             })
         }
-        TaskStatus::Running | TaskStatus::Cancelled | TaskStatus::Done | TaskStatus::Skipped => {
+        TaskStatus::Running
+        | TaskStatus::Cancelled
+        | TaskStatus::Done
+        | TaskStatus::Skipped
+        | TaskStatus::Superseded => {
             unreachable!(
-                "a task left running is resolved before this loop runs; cancelled, done and \
-                 skipped are filtered out above"
+                "a task left running is resolved before this loop runs; cancelled, done, \
+                 skipped and superseded are filtered out above"
             )
         }
     }

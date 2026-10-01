@@ -40,7 +40,10 @@ pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
 pub use provider::{Provider, ProviderCommand, ProviderRunError, Resume, StepCall, run_provider};
 pub use queue::{QueueView, StatusSummary, queue_view};
 pub use register::{RegisterError, register_project};
-pub use report::{AttemptToken, Outcome, ReportError, report, report_retry, start_attempt};
+pub use report::{
+    AttemptToken, Outcome, ReportError, Supersede, report, report_retry, report_supersede,
+    start_attempt,
+};
 pub use resolve::{Resolution, ResolveError, resolve_project};
 pub use run::{
     Attempted, RunContext, RunEnd, RunError, RunReport, SyncProblem, build_prompt,

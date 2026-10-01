@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use ktask_adapters::{SystemClock, echo};
+use ktask_adapters::{SystemClock, echo, read_text};
 use ktask_core::{AttemptToken, Outcome};
 
 use crate::context::{open_journal, open_registry, reject_project, resolve};
@@ -18,11 +18,12 @@ pub(crate) struct Args {
     token: String,
     /// What the attempt ended with: done, failed, needs-input or too-large for the
     /// implementation step; approved or changes-requested for the review step; accepted or
-    /// rejected for the test step; retry, stop or skip for the resolve step — an outcome that
-    /// does not belong to the step currently running is refused
+    /// rejected for the test step; retry, stop, skip or supersede for the resolve step — an
+    /// outcome that does not belong to the step currently running is refused
     #[arg(value_name = "OUTCOME")]
     outcome: String,
-    /// Why it ended that way; required unless the outcome is done, approved, accepted or retry
+    /// Why it ended that way; required unless the outcome is done, approved, accepted, retry or
+    /// supersede
     #[arg(long)]
     reason: Option<String>,
     /// The provider the task's next attempt should run with; only valid with the `retry`
@@ -42,6 +43,11 @@ pub(crate) struct Args {
     /// `retry` outcome
     #[arg(long)]
     reset_tree: bool,
+    /// The JSON file of tasks that replace the superseded one, in the same format `import`
+    /// takes, or - for standard input; required with the `supersede` outcome, refused with
+    /// every other one
+    #[arg(long, value_name = "FILE")]
+    tasks: Option<String>,
 }
 
 /// Checks `args.provider`, `args.model`, `args.same_session` and `args.reset_tree` against
@@ -64,6 +70,21 @@ fn check_provider_and_model(outcome: Outcome, args: &Args) -> Result<(), Failure
         });
     }
     Ok(())
+}
+
+/// Checks `args.tasks` against `outcome`: `supersede` needs it, every other outcome refuses it.
+fn check_tasks_flag(outcome: Outcome, args: &Args) -> Result<(), Failure> {
+    match (outcome, &args.tasks) {
+        (Outcome::Supersede, None) => Err(Failure {
+            message: "outcome supersede needs --tasks".to_owned(),
+            code: 2,
+        }),
+        (Outcome::Supersede, Some(_)) | (_, None) => Ok(()),
+        (_, Some(_)) => Err(Failure {
+            message: format!("outcome {outcome} does not accept --tasks: only supersede does"),
+            code: 2,
+        }),
+    }
 }
 
 /// Records `args.outcome` (and `args.reason`, or — for `retry` — `args.model`,
@@ -114,10 +135,23 @@ pub(crate) fn run(
         .parse()
         .map_err(|message| Failure { message, code: 2 })?;
     check_provider_and_model(outcome, args)?;
+    check_tasks_flag(outcome, args)?;
+    // Read before anything is registered or opened, so that a missing file changes nothing.
+    let tasks_json = args
+        .tasks
+        .as_deref()
+        .map(read_text)
+        .transpose()
+        .map_err(|message| Failure { message, code: 2 })?;
     let registry = open_registry()?;
     let (project, _settings) = resolve(&registry, Some(&token.project))?;
     let journal = open_journal(&project)?;
-    record(&journal, &token, outcome, args)?;
-    render::reported(&token, outcome, stdout)?;
+    if let Some(tasks_json) = tasks_json {
+        let supersede = ktask_core::report_supersede(&journal, &SystemClock, &token, &tasks_json)?;
+        render::reported_supersede(token.task, &supersede, stdout)?;
+    } else {
+        record(&journal, &token, outcome, args)?;
+        render::reported(&token, outcome, stdout)?;
+    }
     Ok(ExitCode::SUCCESS)
 }

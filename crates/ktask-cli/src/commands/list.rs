@@ -1,4 +1,5 @@
-//! `ktask-rs list`: list the queue in order, without the tasks that were removed or skipped.
+//! `ktask-rs list`: list the queue in order, without the tasks that were removed, skipped or
+//! superseded.
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -13,7 +14,8 @@ pub(crate) struct Args {
     /// Work on this registered project instead of the one the current directory is in
     #[arg(long, value_name = "NAME")]
     project: Option<String>,
-    /// Show the tasks that were removed or skipped too, with status cancelled or skipped
+    /// Show the tasks that were removed, skipped or superseded too, with status cancelled,
+    /// skipped or superseded
     #[arg(long)]
     all: bool,
     /// Print a JSON array with every field of every task instead of one line per task

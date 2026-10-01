@@ -64,6 +64,7 @@ fn status_and_reason(
             reason,
         )) => (TaskStatus::Failed, reason),
         Some((Outcome::Skip, reason)) => (TaskStatus::Skipped, reason),
+        Some((Outcome::Supersede, reason)) => (TaskStatus::Superseded, reason),
         Some((Outcome::NeedsInput, reason)) => (TaskStatus::Blocked, reason),
         Some((Outcome::Retry, reason)) => (TaskStatus::Done, reason),
         None => (

@@ -49,30 +49,7 @@ impl QueueState {
     ) -> Result<(Vec<Event>, Vec<Task>), AppendError> {
         self.check_placement(placement)?;
         let mut state = self.clone();
-        let mut events = Vec::with_capacity(drafts.len());
-        let mut placed_at = placement;
-        for draft in drafts {
-            let id = state.next_id();
-            let event = Event::TaskAdded {
-                id,
-                draft: draft.clone(),
-                placement: placed_at,
-                at,
-            };
-            state.apply(&event);
-            placed_at = placed_at.then_after(id);
-            events.push(event);
-        }
-        let added = events
-            .iter()
-            .filter_map(|event| match event {
-                Event::TaskAdded { id, .. } => {
-                    state.tasks.iter().find(|task| task.id == *id).cloned()
-                }
-                _ => None,
-            })
-            .collect();
-        Ok((events, added))
+        Ok(supersede::add_drafts(&mut state, drafts, placement, at))
     }
 
     /// The command "cancel `id`": the event it produces, or the reason it cannot be.
@@ -372,3 +349,5 @@ impl QueueState {
         })
     }
 }
+
+mod supersede;

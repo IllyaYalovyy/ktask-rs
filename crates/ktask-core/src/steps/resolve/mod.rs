@@ -400,6 +400,10 @@ mod tests {
             prompt.contains("/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 skip --reason"),
             "{prompt}"
         );
+        assert!(
+            prompt.contains("/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 supersede --tasks"),
+            "{prompt}"
+        );
         assert!(!prompt.contains("\n    ktask-rs report"), "{prompt}");
     }
 

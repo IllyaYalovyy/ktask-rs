@@ -10,7 +10,8 @@ use std::time::SystemTime;
 use crate::journal::AttemptRun;
 use crate::queue_state::decide_and_append;
 use crate::{
-    BeginAttemptError, Clock, Event, Journal, JournalError, Outcome, RecordReportError, TaskId,
+    BeginAttemptError, Clock, Event, Journal, JournalError, Outcome, RecordReportError, Task,
+    TaskDraft, TaskId,
 };
 
 mod query;
@@ -105,6 +106,26 @@ pub(crate) fn record_report(
                 at,
             )
             .map(|event| (vec![event], ()))
+    })
+}
+
+/// Use case: records the resolver's `supersede` decision for attempt `number` of task `id`,
+/// adding every draft of `drafts`, together, in order, where `id` was. Returns the tasks added.
+///
+/// # Errors
+///
+/// Fails, recording nothing, when attempt `number` of task `id` is not the one currently
+/// running, or when the journal cannot be read or written.
+pub(crate) fn record_supersede(
+    journal: &dyn Journal,
+    clock: &dyn Clock,
+    id: TaskId,
+    number: u32,
+    drafts: &[TaskDraft],
+) -> Result<Vec<Task>, RecordReportError> {
+    let at = clock.now();
+    decide_and_append(journal, |state| {
+        state.decide_supersede(id, number, drafts, at)
     })
 }
 

@@ -10,7 +10,7 @@ mod validate;
 pub use use_cases::{
     add_task, answer_task, done_task, list_all_tasks, list_tasks, remove_task, retry_task,
 };
-pub(crate) use use_cases::{add_tasks, without_cancelled_or_skipped};
+pub(crate) use use_cases::{add_tasks, without_hidden_statuses};
 pub use validate::AddError;
 pub(crate) use validate::draft_problems;
 
@@ -83,6 +83,9 @@ pub enum TaskStatus {
     Cancelled,
     /// The resolver decided the task is no longer the right thing to do: the reason is why.
     Skipped,
+    /// The resolver decided the task is too large to finish as written, and replaced it with
+    /// smaller tasks placed where it was.
+    Superseded,
 }
 
 impl TaskStatus {
@@ -98,6 +101,7 @@ impl TaskStatus {
             Self::FailedUnknown => "failed-unknown",
             Self::Cancelled => "cancelled",
             Self::Skipped => "skipped",
+            Self::Superseded => "superseded",
         }
     }
 }
@@ -121,6 +125,7 @@ impl FromStr for TaskStatus {
             Self::FailedUnknown,
             Self::Cancelled,
             Self::Skipped,
+            Self::Superseded,
         ]
         .into_iter()
         .find(|status| status.as_str() == text)
@@ -207,6 +212,7 @@ mod tests {
             TaskStatus::FailedUnknown,
             TaskStatus::Cancelled,
             TaskStatus::Skipped,
+            TaskStatus::Superseded,
         ] {
             assert_eq!(status.as_str().parse(), Ok(status));
         }

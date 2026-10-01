@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fmt;
 use std::str::FromStr;
 
-use crate::{Clock, Journal, RecordReportError, TaskId};
+use crate::{Clock, ImportError, Journal, RecordReportError, TaskId};
 
 /// What an attempt ended with, as the agent that ran it reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +31,9 @@ pub enum Outcome {
     Stop,
     /// The resolver decided the task is no longer the right thing to do: the reason is why.
     Skip,
+    /// The resolver decided the task is too large to finish as written, and replaced it with
+    /// smaller tasks.
+    Supersede,
 }
 
 impl Outcome {
@@ -49,6 +52,7 @@ impl Outcome {
             Self::Retry => "retry",
             Self::Stop => "stop",
             Self::Skip => "skip",
+            Self::Supersede => "supersede",
         }
     }
 
@@ -84,13 +88,14 @@ impl FromStr for Outcome {
             Self::Retry,
             Self::Stop,
             Self::Skip,
+            Self::Supersede,
         ]
         .into_iter()
         .find(|outcome| outcome.as_str() == text)
         .ok_or_else(|| {
             format!(
                 "unknown outcome {text:?}: expected done, failed, needs-input, too-large, \
-                 approved, changes-requested, accepted, rejected, retry, stop or skip"
+                 approved, changes-requested, accepted, rejected, retry, stop, skip or supersede"
             )
         })
     }
@@ -114,7 +119,12 @@ fn outcomes_for_step(step: &str) -> Option<&'static [Outcome]> {
     } else if step == crate::TEST_STEP {
         Some(&[Outcome::Accepted, Outcome::Rejected])
     } else if step == crate::RESOLVE_STEP {
-        Some(&[Outcome::Retry, Outcome::Stop, Outcome::Skip])
+        Some(&[
+            Outcome::Retry,
+            Outcome::Stop,
+            Outcome::Skip,
+            Outcome::Supersede,
+        ])
     } else {
         None
     }
@@ -197,6 +207,9 @@ pub enum ReportError {
     /// `--same-session` was given, but the attempt the token names reported no session to
     /// continue.
     NoSessionRecorded,
+    /// `supersede`'s own tasks file is refused — the same way, with the same messages,
+    /// [`crate::import_tasks`] refuses one.
+    Import(ImportError),
 }
 
 impl fmt::Display for ReportError {
@@ -228,6 +241,7 @@ impl fmt::Display for ReportError {
             Self::NoSessionRecorded => f.write_str(
                 "this attempt reported no session to continue: --same-session needs one",
             ),
+            Self::Import(error) => error.fmt(f),
         }
     }
 }
@@ -237,6 +251,12 @@ impl Error for ReportError {}
 impl From<RecordReportError> for ReportError {
     fn from(error: RecordReportError) -> Self {
         Self::Record(error)
+    }
+}
+
+impl From<ImportError> for ReportError {
+    fn from(error: ImportError) -> Self {
+        Self::Import(error)
     }
 }
 
@@ -340,17 +360,7 @@ fn report_impl(
     if outcome.needs_reason() && blank {
         return Err(ReportError::ReasonRequired(outcome));
     }
-    if let Some(step) =
-        crate::attempt::current_step(journal, token.task).map_err(RecordReportError::from)?
-        && let Some(expected) = outcomes_for_step(&step)
-        && !expected.contains(&outcome)
-    {
-        return Err(ReportError::WrongStep {
-            outcome,
-            step,
-            expected: expected.to_vec(),
-        });
-    }
+    supersede::check_outcome_for_step(journal, token, outcome)?;
     crate::attempt::record_report(
         journal,
         clock,
@@ -364,6 +374,10 @@ fn report_impl(
     )?;
     Ok(())
 }
+
+mod supersede;
+
+pub use supersede::{Supersede, report_supersede};
 
 #[cfg(test)]
 mod tests {

@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::Path;
 
 use jiff::Timestamp;
-use ktask_core::{AttemptToken, Outcome, Output, Project, Task, TaskId};
+use ktask_core::{AttemptToken, Outcome, Output, Project, Supersede, Task, TaskId};
 use serde::Serialize;
 
 mod run;
@@ -175,4 +175,19 @@ pub(crate) fn reported(
         token.task, token.number
     )
     .map_err(|e| e.to_string())
+}
+
+/// Writes `supersede`: one line naming `original`, the task it replaced, and the new tasks
+/// that replaced it, by their IDs, then, when any cancelled task was left out of the file, one
+/// line saying how many.
+pub(crate) fn reported_supersede(
+    original: TaskId,
+    supersede: &Supersede,
+    out: &mut impl Write,
+) -> Result<(), String> {
+    writeln!(out, "{}", supersede.message(original)).map_err(|e| e.to_string())?;
+    if let Some(message) = supersede.skipped_message() {
+        writeln!(out, "{message}").map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
