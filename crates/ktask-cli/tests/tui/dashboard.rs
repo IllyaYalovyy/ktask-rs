@@ -447,7 +447,7 @@ fn a_run_killed_outright_shows_the_task_interrupted_at_once_with_no_next_run() -
 /// baseline for a queue of one or two tasks, none cancelled or skipped.
 fn summary(done: u32, failed: u32, blocked: u32, unknown: u32) -> String {
     format!(
-        "pending 0 running 0 done {done} failed {failed} blocked {blocked} unknown {unknown} cancelled 0 skipped 0"
+        "pending 0 running 0 done {done} failed {failed} blocked {blocked} unknown {unknown} cancelled 0 skipped 0 superseded 0"
     )
 }
 

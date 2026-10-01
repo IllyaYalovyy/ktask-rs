@@ -244,6 +244,174 @@ fn list_hides_a_skipped_task_the_same_as_a_cancelled_one_and_all_shows_it() -> R
     Ok(())
 }
 
+/// A JSON task for a `supersede` file: `title`, one criterion, and `succeeding_body` as its
+/// body, so the new task's own first attempt succeeds at once when the run reaches it.
+fn new_task(title: &str) -> serde_json::Value {
+    serde_json::json!({
+        "title": title,
+        "criteria": ["it works"],
+        "body": succeeding_body(),
+    })
+}
+
+#[test]
+fn a_supersede_decision_replaces_the_task_with_the_new_ones_and_the_run_continues_with_the_first()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    let tasks_file = fixture.work.join("tasks.json");
+    std::fs::write(
+        &tasks_file,
+        serde_json::json!([
+            new_task("part one"),
+            new_task("part two"),
+            new_task("part three")
+        ])
+        .to_string(),
+    )?;
+    fixture.add_agent_task(
+        "too large",
+        &failing_once_body(
+            "it broke",
+            &format!(
+                "ktask-rs report --token \"$1\" supersede --tasks \"{}\"",
+                tasks_file.display()
+            ),
+        ),
+    )?;
+
+    let outcome = fixture.run_the_queue()?;
+
+    // Unlike `stop`, `supersede` does not stop the run: it carries on through every new task.
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stdout);
+    assert_eq!(
+        fixture.status_lines()?,
+        [
+            "#1\tsuperseded\ttoo large",
+            "\timplementation\techo\t0s\tfailed\tit broke",
+            "\tresolve\techo\t0s\tsupersede\tsuperseded by 3 tasks: 2, 3, 4",
+            "#2\tdone\tpart one",
+            "\timplementation\techo\t0s\tdone",
+            "\treview\techo\t0s\tapproved",
+            "\ttesting\techo\t0s\taccepted",
+            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "#3\tdone\tpart two",
+            "\timplementation\techo\t0s\tdone",
+            "\treview\techo\t0s\tapproved",
+            "\ttesting\techo\t0s\taccepted",
+            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "#4\tdone\tpart three",
+            "\timplementation\techo\t0s\tdone",
+            "\treview\techo\t0s\tapproved",
+            "\ttesting\techo\t0s\taccepted",
+            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+        ]
+    );
+
+    let hidden = fixture.run(&["list"])?;
+    assert_eq!(hidden.code, Some(0), "{}", hidden.stderr);
+    assert_eq!(
+        hidden.stdout,
+        "1\t#2\tdone\tagent\tpart one\n2\t#3\tdone\tagent\tpart two\n\
+         3\t#4\tdone\tagent\tpart three\n"
+    );
+
+    let all = fixture.run(&["list", "--all"])?;
+    assert_eq!(all.code, Some(0), "{}", all.stderr);
+    assert_eq!(
+        all.stdout,
+        "1\t#1\tsuperseded\tagent\ttoo large\n2\t#2\tdone\tagent\tpart one\n\
+         3\t#3\tdone\tagent\tpart two\n4\t#4\tdone\tagent\tpart three\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_invalid_tasks_file_is_refused_with_the_same_messages_import_gives_and_changes_nothing()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    let bad_file = fixture.work.join("bad.json");
+    std::fs::write(&bad_file, "[{\"title\": \"  \"}]")?;
+    let supersede_stderr = fixture.work.join("supersede-stderr");
+    let supersede_exit = fixture.work.join("supersede-exit");
+    fixture.add_agent_task(
+        "too large",
+        &failing_once_body(
+            "it broke",
+            &format!(
+                "ktask-rs report --token \"$1\" supersede --tasks \"{}\" 2> \"{}\"; \
+                 echo $? > \"{}\"\n  \
+                 ktask-rs report --token \"$1\" stop --reason \"supersede was refused\"",
+                bad_file.display(),
+                supersede_stderr.display(),
+                supersede_exit.display(),
+            ),
+        ),
+    )?;
+
+    let outcome = fixture.run_the_queue()?;
+
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stdout);
+    let exit: i32 = std::fs::read_to_string(&supersede_exit)?.trim().parse()?;
+    assert_eq!(exit, 2);
+    let stderr = std::fs::read_to_string(&supersede_stderr)?;
+    assert!(stderr.contains("1 task is invalid"), "{stderr}");
+    assert!(stderr.contains("the title is empty"), "{stderr}");
+    assert!(
+        stderr.contains("a task needs at least one acceptance criterion"),
+        "{stderr}"
+    );
+    // The refused `supersede` recorded nothing and added no task: the task ended through the
+    // `stop` that followed it.
+    assert_eq!(
+        fixture.status_lines()?,
+        [
+            "#1\tfailed\ttoo large",
+            "\timplementation\techo\t0s\tfailed\tit broke",
+            "\tresolve\techo\t0s\tstop\tsupersede was refused",
+        ]
+    );
+    let all = fixture.run(&["list", "--all"])?;
+    assert_eq!(all.code, Some(0), "{}", all.stderr);
+    assert_eq!(all.stdout, "1\t#1\tfailed\tagent\ttoo large\n");
+    Ok(())
+}
+
+#[test]
+fn supersede_without_tasks_is_refused_and_supersede_outside_the_resolve_step_too() -> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let no_tasks = fixture.run(&["report", "--token", "my-app/1/1", "supersede"])?;
+    assert_eq!(no_tasks.code, Some(2), "{}", no_tasks.stdout);
+    assert!(
+        no_tasks.stderr.contains("needs --tasks"),
+        "{}",
+        no_tasks.stderr
+    );
+
+    let tasks_file = fixture.work.join("tasks.json");
+    std::fs::write(&tasks_file, serde_json::json!([new_task("x")]).to_string())?;
+    let retry_with_tasks = fixture.run(&[
+        "report",
+        "--token",
+        "my-app/1/1",
+        "retry",
+        "--tasks",
+        &tasks_file.to_string_lossy(),
+    ])?;
+    assert_eq!(
+        retry_with_tasks.code,
+        Some(2),
+        "{}",
+        retry_with_tasks.stdout
+    );
+    assert!(
+        retry_with_tasks.stderr.contains("does not accept --tasks"),
+        "{}",
+        retry_with_tasks.stderr
+    );
+    Ok(())
+}
+
 #[test]
 fn a_resolver_that_reports_nothing_ends_the_task_failed_unknown_with_what_was_observed()
 -> Result<()> {

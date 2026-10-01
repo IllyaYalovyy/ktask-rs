@@ -313,7 +313,7 @@ fn question_mark_shows_the_key_map_and_esc_closes_it_back_to_the_queue() -> Resu
         "k, Up    select the previous task",
         "g        select the first task",
         "G        select the last task",
-        "a        show or hide cancelled and skipped tasks",
+        "a        show or hide cancelled, skipped and superseded tasks",
         "n        add a task at the end, written in a form",
         "d        remove the selected task, after asking",
         "?        show or hide this key map",

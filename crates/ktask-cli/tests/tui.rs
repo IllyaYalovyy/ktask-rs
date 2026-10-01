@@ -48,6 +48,8 @@ mod same_session;
 mod settings;
 #[path = "tui/skip.rs"]
 mod skip;
+#[path = "tui/supersede.rs"]
+mod supersede;
 mod support;
 #[path = "support/tracked_branch.rs"]
 mod tracked_branch;
