@@ -16,7 +16,7 @@ use crate::{
     RunLock, RunLockError, TaskId, TaskStatus,
 };
 
-pub use crate::steps::implementation::build_prompt;
+pub use crate::steps::implementation::{build_prompt, implementation_prompt};
 pub use crate::steps::review::build_review_prompt;
 pub use crate::steps::sync::SyncProblem;
 pub use crate::steps::test_step::build_test_prompt;
@@ -2345,6 +2345,162 @@ mod tests {
             ]
         );
         assert_eq!(report.end, RunEnd::Completed);
+    }
+
+    #[test]
+    fn retrying_the_blocking_task_lets_the_run_continue_with_it_not_restart_the_queue() {
+        let journal = journal_of_abc();
+        end_task_from_a_previous_run(&journal, TaskId(1), TaskStatus::Failed, "it broke");
+        crate::retry_task(&journal, &clock(), TaskId(1)).unwrap();
+
+        let commands = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Done,
+            exit: Exit::Code(0),
+        };
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+
+        // Task 1 is attempted again, first — the run picks up exactly where the retried task
+        // sits in the queue, not from its own start, since nothing before it needed retrying.
+        assert_eq!(
+            report.attempted,
+            vec![
+                Attempted {
+                    id: TaskId(1),
+                    status: TaskStatus::Done,
+                    reason: None,
+                },
+                Attempted {
+                    id: TaskId(2),
+                    status: TaskStatus::Done,
+                    reason: None,
+                },
+                Attempted {
+                    id: TaskId(3),
+                    status: TaskStatus::Done,
+                    reason: None,
+                },
+            ]
+        );
+        assert_eq!(report.end, RunEnd::Completed);
+    }
+
+    /// A commands port that behaves like [`ReportingCommands`] — reporting `done` for the
+    /// implementation step and approving/accepting the review and test steps — but also
+    /// records every command it ran, so a test can inspect the exact prompt a later step was
+    /// handed, not merely that the run passed.
+    struct RecordingCommands<'a> {
+        journal: &'a FakeJournal,
+        specs: RefCell<Vec<CommandSpec>>,
+    }
+
+    impl Commands for RecordingCommands<'_> {
+        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+            self.specs.borrow_mut().push(spec.clone());
+            let token: AttemptToken = spec
+                .args
+                .iter()
+                .find_map(|arg| arg.parse().ok())
+                .expect("one arg is the attempt token");
+            let step = crate::attempt::current_step(self.journal, token.task).unwrap();
+            let outcome = match step.as_deref() {
+                Some(REVIEW_STEP) => Outcome::Approved,
+                Some(TEST_STEP) => Outcome::Accepted,
+                _ => Outcome::Done,
+            };
+            report(
+                self.journal,
+                &FakeClock(SystemTime::UNIX_EPOCH),
+                &token,
+                outcome,
+                Some("because"),
+            )
+            .unwrap();
+            Ok(Output {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit: Exit::Code(0),
+            })
+        }
+    }
+
+    #[test]
+    fn a_retried_tasks_second_attempt_prompt_carries_the_first_attempts_outcome_reason_and_the_diff_since_the_task_started()
+     {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        // Git's `HEAD` never actually moves in this fake, so the diff the second attempt's
+        // prompt shows comes entirely from `git.diff` — proving it is read from the *first*
+        // attempt's own start commit, not merely a non-empty value by coincidence.
+        let git = FakeGit {
+            head: Some("c1".to_owned()),
+            diff: "--- a/file\n+++ b/file\n+added line\n".to_owned(),
+            ..FakeGit::default()
+        };
+
+        let failing = ReportingCommands {
+            journal: &journal,
+            outcome: Outcome::Failed,
+            exit: Exit::Code(0),
+        };
+        let first = run_queue(
+            &journal,
+            &clock(),
+            &failing,
+            &git,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context(Duration::from_secs(60)),
+        )
+        .unwrap();
+        assert_eq!(
+            first.end,
+            RunEnd::Stopped {
+                id: TaskId(1),
+                status: TaskStatus::Failed,
+            }
+        );
+        crate::retry_task(&journal, &clock(), TaskId(1)).unwrap();
+
+        let recording = RecordingCommands {
+            journal: &journal,
+            specs: RefCell::new(Vec::new()),
+        };
+        let second = run_queue(
+            &journal,
+            &clock(),
+            &recording,
+            &git,
+            &test_provider(),
+            &FakeRunLock::free(),
+            context(Duration::from_secs(60)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            second.attempted,
+            vec![Attempted {
+                id: TaskId(1),
+                status: TaskStatus::Done,
+                reason: None,
+            }]
+        );
+        let implementation_spec = recording
+            .specs
+            .borrow()
+            .iter()
+            .find(|spec| spec.args.get(3).map(String::as_str) == Some(IMPLEMENTATION))
+            .expect("the implementation step ran")
+            .clone();
+        let prompt = String::from_utf8(implementation_spec.stdin).unwrap();
+        assert!(prompt.contains("attempt 1: failed — because"), "{prompt}");
+        assert!(prompt.contains("+added line"), "{prompt}");
     }
 
     #[test]

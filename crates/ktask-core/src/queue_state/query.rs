@@ -12,7 +12,7 @@ impl QueueState {
     /// The name of the step currently open — begun, not yet ended — for task `id`'s current
     /// attempt. `None` when it has no open step.
     pub(crate) fn current_step(&self, id: TaskId) -> Option<String> {
-        self.attempts.get(&id).and_then(|attempt| {
+        self.current_attempt(id).and_then(|attempt| {
             attempt
                 .steps
                 .iter()
@@ -28,26 +28,47 @@ impl QueueState {
         self.tasks
             .iter()
             .find(|task| task.status == TaskStatus::Running)
-            .map(|task| (task.id, self.attempts.get(&task.id).map_or(0, |a| a.number)))
+            .map(|task| {
+                (
+                    task.id,
+                    self.current_attempt(task.id).map_or(0, |a| a.number),
+                )
+            })
     }
 
-    /// The most recent attempt at task `id`. `None` when it was never attempted.
-    pub(crate) fn attempt_of(&self, id: TaskId) -> Option<Attempt> {
-        self.attempts.get(&id).map(|attempt| Attempt {
-            number: attempt.number,
-            started_at: attempt.started_at,
-            provider: attempt.provider.clone(),
-            ended: attempt.ended.clone(),
-            steps: attempt
+    /// `fold` as the [`Attempt`] [`QueueState::attempt_of`] and [`QueueState::attempts_of`]
+    /// give back.
+    fn attempt_from_fold(fold: &super::AttemptFold) -> Attempt {
+        Attempt {
+            number: fold.number,
+            started_at: fold.started_at,
+            start_commit: fold.start_commit.clone(),
+            provider: fold.provider.clone(),
+            ended: fold.ended.clone(),
+            steps: fold
                 .steps
                 .iter()
-                .map(|fold| Step {
-                    name: fold.name.clone(),
-                    started_at: fold.started_at,
-                    ended: fold.ended.clone(),
+                .map(|step| Step {
+                    name: step.name.clone(),
+                    started_at: step.started_at,
+                    ended: step.ended.clone(),
                 })
                 .collect(),
-        })
+        }
+    }
+
+    /// The most recently begun attempt at task `id`. `None` when it was never attempted.
+    pub(crate) fn attempt_of(&self, id: TaskId) -> Option<Attempt> {
+        self.current_attempt(id).map(Self::attempt_from_fold)
+    }
+
+    /// Every attempt ever begun at task `id`, oldest first — every one it was retried past
+    /// included, not only the most recent. Empty when it was never attempted.
+    pub(crate) fn attempts_of(&self, id: TaskId) -> Vec<Attempt> {
+        self.attempts
+            .get(&id)
+            .map(|attempts| attempts.iter().map(Self::attempt_from_fold).collect())
+            .unwrap_or_default()
     }
 
     /// The most recent outcome and reason the agent itself reported for attempt `number` of

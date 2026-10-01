@@ -6,7 +6,7 @@ use std::time::SystemTime;
 
 use super::{
     AppendError, AttemptRun, BeginAttemptError, CancelError, Event, Outcome, Placement, QueueState,
-    RecordReportError, Task, TaskDraft, TaskId, TaskStatus,
+    RecordReportError, RetryError, Task, TaskDraft, TaskId, TaskStatus,
 };
 
 impl QueueState {
@@ -93,11 +93,13 @@ impl QueueState {
 
     /// The task numbered `id`'s current attempt number: `0` when it was never attempted.
     fn current_attempt_number(&self, id: TaskId) -> u32 {
-        self.attempts.get(&id).map_or(0, |attempt| attempt.number)
+        self.current_attempt(id).map_or(0, |attempt| attempt.number)
     }
 
-    /// The command "begin the next attempt at `id`": the event it produces and the attempt's
-    /// number, or the reason it cannot start.
+    /// The command "begin the next attempt at `id`, at commit `start_commit`": the event it
+    /// produces and the attempt's number, or the reason it cannot start. The number always
+    /// follows the highest one this task has ever had, retried or not, so a retried task's
+    /// next attempt is never confused with one of its earlier ones.
     ///
     /// # Errors
     ///
@@ -106,6 +108,7 @@ impl QueueState {
         &self,
         id: TaskId,
         at: SystemTime,
+        start_commit: Option<String>,
     ) -> Result<(Vec<Event>, u32), BeginAttemptError> {
         let task = self
             .tasks
@@ -116,7 +119,40 @@ impl QueueState {
             return Err(BeginAttemptError::NotPending(id));
         }
         let number = self.current_attempt_number(id) + 1;
-        Ok((vec![Event::AttemptStarted { id, number, at }], number))
+        Ok((
+            vec![Event::AttemptStarted {
+                id,
+                number,
+                start_commit,
+                at,
+            }],
+            number,
+        ))
+    }
+
+    /// The command "retry `id`": the event it produces, or the reason it cannot be retried.
+    ///
+    /// # Errors
+    ///
+    /// Fails, deciding nothing, when there is no such task, or its status is not `failed`,
+    /// `failed-unknown` or `blocked`.
+    pub(crate) fn decide_retry(&self, id: TaskId, at: SystemTime) -> Result<Event, RetryError> {
+        let task = self
+            .tasks
+            .iter()
+            .find(|task| task.id == id)
+            .ok_or(RetryError::UnknownTask(id))?;
+        if matches!(
+            task.status,
+            TaskStatus::Failed | TaskStatus::FailedUnknown | TaskStatus::Blocked
+        ) {
+            Ok(Event::TaskRetried { id, at })
+        } else {
+            Err(RetryError::NotRetryable {
+                id,
+                status: task.status,
+            })
+        }
     }
 
     /// Checks that attempt `number` of task `id` is the one currently running: the caller of

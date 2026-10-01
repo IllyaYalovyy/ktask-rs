@@ -442,7 +442,7 @@ mod tests {
     /// `step` begun but not yet ended — the state `report` sees while an agent is mid-step.
     fn journal_with_a_running_step(step: &str) -> FakeJournal {
         let journal = journal_with_a_pending_task();
-        crate::attempt::begin_attempt_running(&journal, &clock(), TaskId(1), "test").unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock(), TaskId(1), "test", None).unwrap();
         crate::attempt::begin_step(&journal, &clock(), TaskId(1), 1, step).unwrap();
         journal
     }

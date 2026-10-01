@@ -9,6 +9,7 @@
 
 mod agent;
 pub(crate) mod commit;
+mod execute;
 pub(crate) mod health_check;
 pub(crate) mod implementation;
 pub(crate) mod push;
@@ -19,11 +20,12 @@ pub(crate) mod test_step;
 use std::time::Duration;
 
 pub(crate) use agent::run_agent_step;
+use execute::{record_pre_steps, run_one_step};
 
 use crate::run::Attempted;
 use crate::{
     AttemptRun, AttemptToken, Clock, Commands, Git, Journal, Outcome, Provider, RunContext,
-    RunError, Task, TaskId, TaskStatus,
+    RunError, Task, TaskStatus,
 };
 
 /// The reason recorded for an attempt a killed run left running, found still running when the
@@ -165,103 +167,6 @@ pub(crate) fn diff_since(
     git.diff_since(context.project_dir, start_commit)
 }
 
-/// Records a step, named `step`, that already ran and passed, in `duration`, with `reason` —
-/// `Some` when it has something to say even though it passed — as one of the steps of attempt
-/// `number` of task `id`'s own steps ahead of the list's own: begun and ended in the same call,
-/// since it ran before the attempt itself was begun.
-fn record_passed_step(
-    journal: &dyn Journal,
-    clock: &dyn Clock,
-    id: TaskId,
-    number: u32,
-    step: &str,
-    duration: Duration,
-    reason: Option<&str>,
-) -> Result<(), RunError> {
-    crate::attempt::begin_step(journal, clock, id, number, step)?;
-    crate::attempt::end_step(
-        journal,
-        clock,
-        id,
-        number,
-        step,
-        AttemptRun {
-            duration,
-            exit_code: Some(0),
-            status: TaskStatus::Done,
-            reason,
-        },
-        None,
-    )?;
-    Ok(())
-}
-
-/// `outcome`'s duration, exit code, status (`done` for [`StepOutcome::Passed`]), reason and
-/// reported outcome, whichever of the two it is.
-fn outcome_fields(
-    outcome: StepOutcome,
-) -> (
-    Duration,
-    Option<i32>,
-    TaskStatus,
-    Option<String>,
-    Option<Outcome>,
-) {
-    match outcome {
-        StepOutcome::Passed {
-            duration,
-            exit_code,
-            reason,
-            reported,
-        } => (duration, exit_code, TaskStatus::Done, reason, reported),
-        StepOutcome::Ended {
-            duration,
-            exit_code,
-            status,
-            reason,
-            reported,
-        } => (duration, exit_code, status, reason, reported),
-    }
-}
-
-/// Begins, runs and ends one `step`, already known enabled: its duration, the status it ended
-/// at, and, when that is not `done`, why.
-///
-/// # Errors
-///
-/// Fails when the journal cannot be read or written.
-fn run_one_step(
-    deps: &Deps<'_>,
-    context: RunContext<'_>,
-    state: &mut PipelineState<'_>,
-    step: &dyn Step,
-) -> Result<(Duration, TaskStatus, Option<String>), RunError> {
-    crate::attempt::begin_step(
-        deps.journal,
-        deps.clock,
-        state.task.id,
-        state.token.number,
-        step.name(),
-    )?;
-    let (duration, exit_code, status, reason, reported) =
-        outcome_fields(step.run(deps, context, state)?);
-    crate::attempt::end_step(
-        deps.journal,
-        deps.clock,
-        state.task.id,
-        state.token.number,
-        step.name(),
-        AttemptRun {
-            duration,
-            exit_code,
-            status,
-            reason: reason.as_deref(),
-        },
-        reported,
-    )?;
-    Ok((duration, status, reason))
-}
-
 /// Walks `steps`, in order: skips a disabled one entirely, otherwise runs it via
 /// [`run_one_step`] — stopping at the first that does not pass, so a step after it is never
 /// begun and leaves no event in the journal. Returns the steps' combined duration and the
@@ -296,42 +201,6 @@ pub(crate) fn run_attempt_steps(
     Ok((total, status, reason))
 }
 
-/// Records every one of `pre_steps` as attempt `number` of task `id`'s own first steps, in
-/// order, via [`record_passed_step`]; their combined duration.
-///
-/// # Errors
-///
-/// Fails when the journal cannot be read or written.
-fn record_pre_steps(
-    journal: &dyn Journal,
-    clock: &dyn Clock,
-    id: TaskId,
-    number: u32,
-    pre_steps: &[PreStep],
-) -> Result<Duration, RunError> {
-    let mut total = Duration::ZERO;
-    for pre_step in pre_steps {
-        record_passed_step(
-            journal,
-            clock,
-            id,
-            number,
-            pre_step.name,
-            pre_step.duration,
-            pre_step.reason.as_deref(),
-        )?;
-        total += pre_step.duration;
-    }
-    Ok(total)
-}
-
-/// Runs one attempt at `task` with `deps.provider`: begins it, records `pre_steps` as the
-/// attempt's own first steps in order, then walks `steps`, and ends the attempt with the
-/// outcome they left it at.
-///
-/// # Errors
-///
-/// Fails when the journal cannot be read or written.
 /// Builds the pipeline state for attempt `number`, walks `steps` through it, and ends the
 /// attempt with the outcome they left it at, `pre_duration` already spent on its pre-steps.
 ///
@@ -343,10 +212,10 @@ fn finish_attempt(
     context: RunContext<'_>,
     task: &Task,
     number: u32,
+    start_commit: Option<String>,
     pre_duration: Duration,
     steps: &[Box<dyn Step>],
 ) -> Result<Attempted, RunError> {
-    let start_commit = current_commit(deps.git, context);
     let token = AttemptToken::new(context.project_name, task.id, number);
     let mut state = PipelineState {
         task,
@@ -382,14 +251,24 @@ pub(crate) fn run_one_attempt(
     pre_steps: &[PreStep],
     steps: &[Box<dyn Step>],
 ) -> Result<Attempted, RunError> {
+    let start_commit = current_commit(deps.git, context);
     let number = crate::attempt::begin_attempt_running(
         deps.journal,
         deps.clock,
         task.id,
         deps.provider.name,
+        start_commit.as_deref(),
     )?;
     let pre_duration = record_pre_steps(deps.journal, deps.clock, task.id, number, pre_steps)?;
-    finish_attempt(deps, context, task, number, pre_duration, steps)
+    finish_attempt(
+        deps,
+        context,
+        task,
+        number,
+        start_commit,
+        pre_duration,
+        steps,
+    )
 }
 
 #[cfg(test)]
@@ -398,7 +277,7 @@ mod tests {
 
     use super::*;
     use crate::fakes::{FakeClock, FakeCommands, FakeGit, FakeJournal, at, draft};
-    use crate::{Exit, Output, Placement, ProviderCommand, add_task, list_all_tasks};
+    use crate::{Exit, Output, Placement, ProviderCommand, TaskId, add_task, list_all_tasks};
 
     fn clock() -> FakeClock {
         FakeClock(at(1_000))

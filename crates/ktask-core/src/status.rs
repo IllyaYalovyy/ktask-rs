@@ -1,12 +1,15 @@
 //! `status`: what ran and how it ended, for every task that has been attempted.
 
-use std::fmt;
 use std::time::Duration;
 
 use crate::{
     AttemptEnd, Clock, Journal, JournalError, Outcome, RunLock, Task, TaskId, TaskStatus,
     list_all_tasks,
 };
+
+mod outcome;
+
+pub use outcome::AttemptOutcome;
 
 /// The step kind that runs an agent on the task's whole prompt.
 pub const IMPLEMENTATION: &str = "implementation";
@@ -34,51 +37,6 @@ pub const COMMIT_STEP: &str = "commit";
 /// The step kind that pushes the commit step's commit to the project's tracked branch, once it
 /// has made one, and confirms the remote branch's tip is that commit.
 pub const PUSH_STEP: &str = "push";
-
-/// How an attempt's outcome is labelled: as the agent itself reported it, or as the tool
-/// observed it when the agent never reported at all — a crash, a kill past the time limit, or
-/// a run left running by a killed one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AttemptOutcome {
-    /// Still running: there is no outcome yet.
-    Running,
-    /// The agent's own reported outcome.
-    Reported(Outcome),
-    /// The tool observed the attempt end with no report from the agent.
-    Unreported,
-    /// The journal still calls the attempt running, but no run is alive to finish it: a run
-    /// that was killed outright left it behind, and nothing has reconciled it yet.
-    Interrupted,
-    /// A command-kind step — the sync or the health check, say — ran and exited zero. Such a
-    /// pre-attempt step is only ever journaled once it has already succeeded: a failing one
-    /// stops the run before an attempt even begins, so this is the only outcome one is ever
-    /// shown with.
-    Passed,
-    /// A command-kind step that runs inside the attempt itself — the commit step, today — did
-    /// not succeed: `reason` on its line says why.
-    Failed,
-}
-
-impl AttemptOutcome {
-    /// The word the outcome is written with.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::Reported(outcome) => outcome.as_str(),
-            Self::Unreported => TaskStatus::FailedUnknown.as_str(),
-            Self::Interrupted => "interrupted",
-            Self::Passed => "passed",
-            Self::Failed => TaskStatus::Failed.as_str(),
-        }
-    }
-}
-
-impl fmt::Display for AttemptOutcome {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
 
 /// One step of an attempt, as `status` shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,6 +92,9 @@ pub struct StatusEntry {
     pub status: TaskStatus,
     /// Its most recent attempt.
     pub attempt: AttemptLine,
+    /// Every earlier attempt, oldest first — every one it was retried past. Empty for a task
+    /// still on its first attempt.
+    pub history: Vec<AttemptLine>,
 }
 
 /// The status word to show for a task: `status.as_str()`, except `"interrupted"` when its
@@ -291,28 +252,43 @@ fn current_step_line(
     fallback
 }
 
-fn entry_for(
-    task: Task,
+/// `attempt` as an [`AttemptLine`]: every step it has run so far, and the most recently started
+/// or ended one's own fields carried flat, given the agent's own report of it, when there was
+/// one; `run_alive` only matters for the attempt currently open, never for an earlier one in a
+/// task's history, which has always ended.
+fn attempt_line(
     attempt: &crate::Attempt,
     reported: Option<(Outcome, Option<String>)>,
     clock: &impl Clock,
     run_alive: bool,
-) -> StatusEntry {
+) -> AttemptLine {
     let mut steps = step_lines(attempt, clock, run_alive);
     let current = current_step_line(&mut steps, attempt, reported, clock, run_alive);
+    AttemptLine {
+        number: attempt.number,
+        step: current.step,
+        provider: current.provider,
+        time_spent: current.time_spent,
+        outcome: current.outcome,
+        reason: current.reason,
+        steps,
+    }
+}
+
+fn entry_for(
+    task: Task,
+    attempt: &crate::Attempt,
+    reported: Option<(Outcome, Option<String>)>,
+    history: Vec<AttemptLine>,
+    clock: &impl Clock,
+    run_alive: bool,
+) -> StatusEntry {
     StatusEntry {
         task: task.id,
         title: task.title,
         status: task.status,
-        attempt: AttemptLine {
-            number: attempt.number,
-            step: current.step,
-            provider: current.provider,
-            time_spent: current.time_spent,
-            outcome: current.outcome,
-            reason: current.reason,
-            steps,
-        },
+        attempt: attempt_line(attempt, reported, clock, run_alive),
+        history,
     }
 }
 
@@ -341,6 +317,7 @@ fn gate_stop_entry(task: Task, step: String, reason: String) -> StatusEntry {
             reason: line.reason.clone(),
             steps: vec![line],
         },
+        history: Vec::new(),
     }
 }
 
@@ -370,7 +347,8 @@ pub fn status(
     };
     let mut entries = Vec::new();
     for task in list_all_tasks(journal)? {
-        let Some(attempt) = crate::attempt::last_attempt(journal, task.id)? else {
+        let mut attempts = crate::attempt::all_attempts(journal, task.id)?;
+        let Some(attempt) = attempts.pop() else {
             if task.status == TaskStatus::Pending
                 && let Some((step, reason)) = crate::attempt::gate_stop_of(journal, task.id)?
             {
@@ -379,7 +357,14 @@ pub fn status(
             continue;
         };
         let reported = crate::attempt::last_report(journal, task.id, attempt.number)?;
-        entries.push(entry_for(task, &attempt, reported, clock, run_alive));
+        let mut history = Vec::with_capacity(attempts.len());
+        for earlier in &attempts {
+            let reported = crate::attempt::last_report(journal, task.id, earlier.number)?;
+            history.push(attempt_line(earlier, reported, clock, false));
+        }
+        entries.push(entry_for(
+            task, &attempt, reported, history, clock, run_alive,
+        ));
     }
     Ok(entries)
 }
@@ -435,7 +420,8 @@ mod tests {
     fn journal_with_a_started_attempt() -> FakeJournal {
         let journal = FakeJournal::default();
         add_task(&journal, &clock(0), &draft("a"), Placement::End).unwrap();
-        crate::attempt::begin_attempt_running(&journal, &clock(100), TaskId(1), "echo").unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock(100), TaskId(1), "echo", None)
+            .unwrap();
         journal
     }
 
@@ -464,6 +450,7 @@ mod tests {
                         reason: None,
                     }],
                 },
+                history: vec![],
             }]
         );
     }
@@ -496,6 +483,7 @@ mod tests {
                         reason: None,
                     }],
                 },
+                history: vec![],
             }]
         );
         assert_eq!(
@@ -624,12 +612,75 @@ mod tests {
     }
 
     #[test]
+    fn a_task_waiting_to_be_retried_is_shown_pending_with_its_ended_attempt() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(0), &draft("a"), Placement::End).unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock(0), TaskId(1), "echo", None)
+            .unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(1),
+            1,
+            AttemptRun {
+                duration: Duration::from_secs(1),
+                exit_code: Some(1),
+                status: TaskStatus::Failed,
+                reason: Some("it broke"),
+            },
+            clock(1).0,
+        )
+        .unwrap();
+        crate::retry_task(&journal, &clock(2), TaskId(1)).unwrap();
+
+        let entries = status(&journal, &clock(3), &no_run()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, TaskStatus::Pending);
+        assert_eq!(entries[0].attempt.number, 1);
+        assert_eq!(entries[0].attempt.outcome, AttemptOutcome::Unreported);
+        assert_eq!(entries[0].history, vec![]);
+    }
+
+    #[test]
+    fn a_retried_tasks_second_attempt_shows_its_first_as_history_under_it() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(0), &draft("a"), Placement::End).unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock(0), TaskId(1), "echo", None)
+            .unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(1),
+            1,
+            AttemptRun {
+                duration: Duration::from_secs(1),
+                exit_code: Some(1),
+                status: TaskStatus::Failed,
+                reason: Some("it broke"),
+            },
+            clock(1).0,
+        )
+        .unwrap();
+        crate::retry_task(&journal, &clock(2), TaskId(1)).unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock(3), TaskId(1), "echo", None)
+            .unwrap();
+
+        let entries = status(&journal, &clock(10), &a_live_run()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, TaskStatus::Running);
+        assert_eq!(entries[0].attempt.number, 2);
+        assert_eq!(entries[0].history.len(), 1, "{:?}", entries[0].history);
+        assert_eq!(entries[0].history[0].number, 1);
+        assert_eq!(entries[0].history[0].outcome, AttemptOutcome::Unreported);
+        assert_eq!(entries[0].history[0].reason.as_deref(), Some("it broke"));
+    }
+
+    #[test]
     fn entries_are_in_queue_order_and_pending_tasks_are_skipped_in_between() {
         let journal = FakeJournal::default();
         for title in ["a", "b", "c"] {
             add_task(&journal, &clock(0), &draft(title), Placement::End).unwrap();
         }
-        crate::attempt::begin_attempt_running(&journal, &clock(0), TaskId(1), "echo").unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock(0), TaskId(1), "echo", None)
+            .unwrap();
         report(
             &journal,
             &clock(1),
@@ -652,7 +703,8 @@ mod tests {
         )
         .unwrap();
         // task 2 stays pending.
-        crate::attempt::begin_attempt_running(&journal, &clock(0), TaskId(3), "echo").unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock(0), TaskId(3), "echo", None)
+            .unwrap();
         report(
             &journal,
             &clock(1),

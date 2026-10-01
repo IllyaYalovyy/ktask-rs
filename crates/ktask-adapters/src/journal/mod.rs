@@ -94,6 +94,7 @@ const ATTEMPT_ENDED: &str = "attempt_ended";
 const STEP_STARTED: &str = "step_started";
 const STEP_ENDED: &str = "step_ended";
 const GATE_FAILED: &str = "gate_failed";
+const TASK_RETRIED: &str = "task_retried";
 
 impl Journal for SqliteJournal {
     fn events(&self) -> Result<Vec<Event>, JournalError> {
@@ -312,6 +313,72 @@ mod tests {
     }
 
     #[test]
+    fn a_retried_event_round_trips_and_mirrors_the_task_back_to_pending() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "a", Placement::End);
+        append(
+            &journal,
+            Event::AttemptStarted {
+                id: TaskId(1),
+                number: 1,
+                start_commit: None,
+                at: at(2),
+            },
+        );
+        append(
+            &journal,
+            Event::AttemptEnded {
+                id: TaskId(1),
+                number: 1,
+                duration: Duration::from_secs(1),
+                exit_code: Some(1),
+                status: TaskStatus::Failed,
+                reason: Some("it broke".to_owned()),
+                at: at(3),
+            },
+        );
+        let retried = append(
+            &journal,
+            Event::TaskRetried {
+                id: TaskId(1),
+                at: at(900),
+            },
+        );
+        assert_eq!(journal.events().unwrap()[3], retried);
+        assert_eq!(cached(&journal, 1), (TaskStatus::Pending, 1));
+    }
+
+    #[test]
+    fn an_attempt_starteds_own_start_commit_round_trips_both_present_and_absent() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "a", Placement::End);
+        let with_commit = append(
+            &journal,
+            Event::AttemptStarted {
+                id: TaskId(1),
+                number: 1,
+                start_commit: Some("abc123".to_owned()),
+                at: at(2),
+            },
+        );
+        assert_eq!(journal.events().unwrap()[1], with_commit);
+
+        add(&journal, 2, "b", Placement::End);
+        let without_commit = append(
+            &journal,
+            Event::AttemptStarted {
+                id: TaskId(2),
+                number: 1,
+                start_commit: None,
+                at: at(3),
+            },
+        );
+        assert_eq!(journal.events().unwrap()[3], without_commit);
+    }
+
+    #[test]
     fn every_attempt_event_round_trips() {
         let dir = TempDir::new().unwrap();
         let journal = open(&dir);
@@ -321,6 +388,7 @@ mod tests {
             Event::AttemptStarted {
                 id: TaskId(1),
                 number: 1,
+                start_commit: None,
                 at: at(10),
             },
         );
@@ -586,6 +654,7 @@ mod tests {
             Event::AttemptStarted {
                 id: TaskId(1),
                 number: 1,
+                start_commit: None,
                 at: at(2),
             },
         );
@@ -720,6 +789,7 @@ mod tests {
             Event::AttemptStarted {
                 id: TaskId(2),
                 number: 1,
+                start_commit: None,
                 at: at(300),
             },
         );

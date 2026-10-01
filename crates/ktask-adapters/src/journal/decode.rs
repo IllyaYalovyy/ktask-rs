@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use super::{
     ATTEMPT_ENDED, ATTEMPT_REPORTED, ATTEMPT_RUNNING, ATTEMPT_STARTED, GATE_FAILED, STEP_ENDED,
-    STEP_STARTED, TASK_ADDED, TASK_CANCELLED, failed,
+    STEP_STARTED, TASK_ADDED, TASK_CANCELLED, TASK_RETRIED, failed,
 };
 
 fn from_seconds(seconds: i64) -> SystemTime {
@@ -293,7 +293,18 @@ fn decode_attempt_event(
         .and_then(Value::as_str)
         .map(str::to_owned);
     match kind {
-        ATTEMPT_STARTED => Ok(Event::AttemptStarted { id, number, at }),
+        ATTEMPT_STARTED => {
+            let start_commit = payload
+                .get("start_commit")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            Ok(Event::AttemptStarted {
+                id,
+                number,
+                start_commit,
+                at,
+            })
+        }
         ATTEMPT_RUNNING => decode_attempt_running(payload, id, number, at, &corrupt),
         ATTEMPT_REPORTED => decode_attempt_reported(payload, id, number, reason, at, &corrupt),
         ATTEMPT_ENDED => decode_attempt_ended(payload, id, number, reason, at, &corrupt),
@@ -315,6 +326,9 @@ pub(super) fn decode_event(
     let at = from_seconds(at);
     if kind == TASK_CANCELLED {
         return Ok(Event::TaskCancelled { id, at });
+    }
+    if kind == TASK_RETRIED {
+        return Ok(Event::TaskRetried { id, at });
     }
     let payload: Value =
         serde_json::from_str(payload).map_err(|e| corrupt_event(kind, task_id, "payload", e))?;

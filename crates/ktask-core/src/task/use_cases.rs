@@ -2,7 +2,7 @@
 //! cancelled ones.
 
 use crate::queue_state::{QueueState, decide_and_append};
-use crate::{CancelError, Clock, Journal, JournalError};
+use crate::{CancelError, Clock, Journal, JournalError, RetryError};
 
 use super::validate::{AddError, draft_problems};
 use super::{Placement, Task, TaskDraft, TaskId, TaskStatus};
@@ -78,6 +78,27 @@ pub fn remove_task(
     let at = clock.now();
     decide_and_append(journal, |state| {
         state.decide_cancel(id, at).map(|event| (vec![event], ()))
+    })
+}
+
+/// Use case: sends the task numbered `id` back to `pending`, after it ended `failed`,
+/// `failed-unknown` or `blocked`, so the next run picks it up again. Every attempt already
+/// recorded for it stays in the journal, and the next one begins at the next number; the
+/// working tree is left exactly as the task's attempts so far have left it.
+///
+/// # Errors
+///
+/// Fails, changing nothing, when there is no such task, or its status is not `failed`,
+/// `failed-unknown` or `blocked` — `pending`, `running`, `done` and `cancelled` are all
+/// refused, naming the task's own status.
+pub fn retry_task(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    id: TaskId,
+) -> Result<(), RetryError> {
+    let at = clock.now();
+    decide_and_append(journal, |state| {
+        state.decide_retry(id, at).map(|event| (vec![event], ()))
     })
 }
 
@@ -403,6 +424,132 @@ mod tests {
     #[test]
     fn an_empty_queue_lists_nothing() {
         assert_eq!(list_tasks(&FakeJournal::default()), Ok(vec![]));
+    }
+
+    /// Ends task 1's attempt `number` at `status`, with `reason` when it needs one.
+    fn end_at(journal: &FakeJournal, number: u32, status: TaskStatus, reason: Option<&str>) {
+        crate::attempt::end_attempt(
+            journal,
+            TaskId(1),
+            number,
+            crate::journal::AttemptRun {
+                duration: std::time::Duration::ZERO,
+                exit_code: Some(0),
+                status,
+                reason,
+            },
+            clock().now(),
+        )
+        .unwrap();
+    }
+
+    /// A journal with one pending task, `a`, whose one attempt ended at `status` with `reason`.
+    fn journal_with_a_task_ended_at(status: TaskStatus, reason: Option<&str>) -> FakeJournal {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        crate::attempt::begin_attempt(&journal, &clock(), TaskId(1)).unwrap();
+        end_at(&journal, 1, status, reason);
+        journal
+    }
+
+    #[test]
+    fn retrying_a_failed_a_blocked_or_a_failed_unknown_task_sends_it_back_to_pending() {
+        for status in [
+            TaskStatus::Failed,
+            TaskStatus::Blocked,
+            TaskStatus::FailedUnknown,
+        ] {
+            let journal = journal_with_a_task_ended_at(status, Some("why"));
+            assert_eq!(retry_task(&journal, &clock(), TaskId(1)), Ok(()));
+            assert_eq!(list_tasks(&journal).unwrap()[0].status, TaskStatus::Pending);
+        }
+    }
+
+    #[test]
+    fn retrying_keeps_the_earlier_attempt_and_the_next_one_takes_the_next_number() {
+        let journal = journal_with_a_task_ended_at(TaskStatus::Failed, Some("why"));
+        retry_task(&journal, &clock(), TaskId(1)).unwrap();
+
+        let attempts = crate::attempt::all_attempts(&journal, TaskId(1)).unwrap();
+        assert_eq!(attempts.len(), 1, "the earlier attempt is still there");
+        assert_eq!(attempts[0].number, 1);
+        assert_eq!(
+            attempts[0].ended.as_ref().map(|end| end.status),
+            Some(TaskStatus::Failed)
+        );
+
+        let number = crate::attempt::begin_attempt(&journal, &clock(), TaskId(1)).unwrap();
+        assert_eq!(number, 2);
+        let attempts = crate::attempt::all_attempts(&journal, TaskId(1)).unwrap();
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(attempts[0].number, 1);
+        assert_eq!(attempts[1].number, 2);
+    }
+
+    #[test]
+    fn retrying_a_pending_a_running_or_a_done_task_is_refused_naming_its_status() {
+        let pending = FakeJournal::default();
+        add_task(&pending, &clock(), &draft("a"), Placement::End).unwrap();
+        assert_eq!(
+            retry_task(&pending, &clock(), TaskId(1)),
+            Err(RetryError::NotRetryable {
+                id: TaskId(1),
+                status: TaskStatus::Pending
+            })
+        );
+
+        let running = FakeJournal::default();
+        add_task(&running, &clock(), &draft("a"), Placement::End).unwrap();
+        crate::attempt::begin_attempt(&running, &clock(), TaskId(1)).unwrap();
+        assert_eq!(
+            retry_task(&running, &clock(), TaskId(1)),
+            Err(RetryError::NotRetryable {
+                id: TaskId(1),
+                status: TaskStatus::Running
+            })
+        );
+
+        let done = journal_with_a_task_ended_at(TaskStatus::Done, None);
+        assert_eq!(
+            retry_task(&done, &clock(), TaskId(1)),
+            Err(RetryError::NotRetryable {
+                id: TaskId(1),
+                status: TaskStatus::Done
+            })
+        );
+    }
+
+    #[test]
+    fn retrying_an_unknown_task_is_refused_and_names_it() {
+        let journal = FakeJournal::default();
+        assert_eq!(
+            retry_task(&journal, &clock(), TaskId(9)),
+            Err(RetryError::UnknownTask(TaskId(9)))
+        );
+    }
+
+    #[test]
+    fn a_retried_tasks_cancelled_status_is_refused_too() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        remove_task(&journal, &clock(), TaskId(1)).unwrap();
+        assert_eq!(
+            retry_task(&journal, &clock(), TaskId(1)),
+            Err(RetryError::NotRetryable {
+                id: TaskId(1),
+                status: TaskStatus::Cancelled
+            })
+        );
+    }
+
+    #[test]
+    fn a_journal_failure_is_passed_on_when_retrying() {
+        let failure = JournalError::new("disk on fire");
+        let journal = FakeJournal::failing(failure.clone());
+        assert_eq!(
+            retry_task(&journal, &clock(), TaskId(1)),
+            Err(RetryError::Journal(failure))
+        );
     }
 
     #[test]

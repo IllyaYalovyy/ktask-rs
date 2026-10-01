@@ -6,6 +6,12 @@ use std::time::{Duration, SystemTime};
 
 use crate::{Outcome, Placement, TaskDraft, TaskId, TaskStatus};
 
+mod errors;
+
+pub use errors::{
+    AppendConflict, AppendError, BeginAttemptError, CancelError, RecordReportError, RetryError,
+};
+
 /// One thing that happened to the queue: what [`Journal::events`] reads and
 /// [`Journal::append_events`] writes. [`crate::queue_state`] is the one place that decides
 /// what these mean.
@@ -35,6 +41,10 @@ pub enum Event {
         id: TaskId,
         /// The attempt's number.
         number: u32,
+        /// The project's commit `HEAD` right before this attempt began, so a later attempt's
+        /// own prompt can show everything the task has changed since its first attempt
+        /// started. `None` when it could not be captured.
+        start_commit: Option<String>,
         /// When.
         at: SystemTime,
     },
@@ -128,6 +138,15 @@ pub enum Event {
         /// When.
         at: SystemTime,
     },
+    /// A task that had ended `failed`, `failed-unknown` or `blocked` was sent back to
+    /// `pending`, so the next run picks it up again; every earlier attempt stays in the
+    /// journal, and the next one begins at the next number.
+    TaskRetried {
+        /// The task retried.
+        id: TaskId,
+        /// When.
+        at: SystemTime,
+    },
 }
 
 /// Why the journal could not be read or written.
@@ -152,158 +171,6 @@ impl fmt::Display for JournalError {
 }
 
 impl Error for JournalError {}
-
-/// Why a task was not added at the place it was asked for.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppendError {
-    /// The task the new one was to be placed next to does not exist.
-    UnknownTask(TaskId),
-    /// The task the new one was to be placed next to was cancelled.
-    CancelledTask(TaskId),
-}
-
-impl fmt::Display for AppendError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownTask(id) => write!(f, "there is no task {id}"),
-            Self::CancelledTask(id) => write!(f, "task {id} is cancelled"),
-        }
-    }
-}
-
-impl Error for AppendError {}
-
-/// Why [`Journal::append_events`] refused to append.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppendConflict {
-    /// The journal already held more events than were read to decide the ones given: read
-    /// it again, decide again, and retry.
-    Conflict,
-    /// The journal could not be written.
-    Journal(JournalError),
-}
-
-impl fmt::Display for AppendConflict {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Conflict => f.write_str("the journal has moved on since it was read"),
-            Self::Journal(error) => error.fmt(f),
-        }
-    }
-}
-
-impl Error for AppendConflict {}
-
-impl From<JournalError> for AppendConflict {
-    fn from(error: JournalError) -> Self {
-        Self::Journal(error)
-    }
-}
-
-/// Why a task was not cancelled.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CancelError {
-    /// There is no such task.
-    UnknownTask(TaskId),
-    /// The task was cancelled already.
-    AlreadyCancelled(TaskId),
-    /// The task is running: it must finish or be interrupted first.
-    Running(TaskId),
-    /// The journal could not be used.
-    Journal(JournalError),
-}
-
-impl fmt::Display for CancelError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownTask(id) => write!(f, "there is no task {id}"),
-            Self::AlreadyCancelled(id) => write!(f, "task {id} is already cancelled"),
-            Self::Running(id) => write!(f, "task {id} is running"),
-            Self::Journal(error) => error.fmt(f),
-        }
-    }
-}
-
-impl Error for CancelError {}
-
-impl From<JournalError> for CancelError {
-    fn from(error: JournalError) -> Self {
-        Self::Journal(error)
-    }
-}
-
-/// Why an attempt could not be started.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BeginAttemptError {
-    /// There is no such task.
-    UnknownTask(TaskId),
-    /// The task is not pending, so it cannot be started: it is already running, or it is
-    /// done, failed or cancelled.
-    NotPending(TaskId),
-    /// The journal could not be used.
-    Journal(JournalError),
-}
-
-impl fmt::Display for BeginAttemptError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownTask(id) => write!(f, "there is no task {id}"),
-            Self::NotPending(id) => write!(f, "task {id} is not pending"),
-            Self::Journal(error) => error.fmt(f),
-        }
-    }
-}
-
-impl Error for BeginAttemptError {}
-
-impl From<JournalError> for BeginAttemptError {
-    fn from(error: JournalError) -> Self {
-        Self::Journal(error)
-    }
-}
-
-/// Why a report could not be recorded.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RecordReportError {
-    /// No attempt numbered like this was ever started for this task.
-    UnknownAttempt {
-        /// The task the report named.
-        task: TaskId,
-        /// The attempt number the report named.
-        number: u32,
-    },
-    /// This attempt was started, but is no longer running.
-    AttemptEnded {
-        /// The task the report named.
-        task: TaskId,
-        /// The attempt number the report named.
-        number: u32,
-    },
-    /// The journal could not be used.
-    Journal(JournalError),
-}
-
-impl fmt::Display for RecordReportError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownAttempt { task, number } => {
-                write!(f, "there is no attempt {number} of task {task}")
-            }
-            Self::AttemptEnded { task, number } => {
-                write!(f, "attempt {number} of task {task} has ended")
-            }
-            Self::Journal(error) => error.fmt(f),
-        }
-    }
-}
-
-impl Error for RecordReportError {}
-
-impl From<JournalError> for RecordReportError {
-    fn from(error: JournalError) -> Self {
-        Self::Journal(error)
-    }
-}
 
 /// What running an attempt produced, given to [`crate::attempt::end_attempt`].
 #[derive(Debug, Clone, Copy)]
@@ -355,6 +222,9 @@ pub struct Attempt {
     pub number: u32,
     /// When it started.
     pub started_at: SystemTime,
+    /// The project's commit `HEAD` right before this attempt began. `None` when it could not
+    /// be captured.
+    pub start_commit: Option<String>,
     /// The provider it ran with, once [`crate::attempt::begin_attempt_running`] has recorded it.
     pub provider: Option<String>,
     /// How it ended, once [`crate::attempt::end_attempt`] has recorded it; `None` while it runs.

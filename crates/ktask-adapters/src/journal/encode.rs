@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::{
     ATTEMPT_ENDED, ATTEMPT_REPORTED, ATTEMPT_RUNNING, ATTEMPT_STARTED, GATE_FAILED, STEP_ENDED,
-    STEP_STARTED, TASK_ADDED, TASK_CANCELLED,
+    STEP_STARTED, TASK_ADDED, TASK_CANCELLED, TASK_RETRIED,
 };
 
 pub(super) fn to_seconds(time: SystemTime) -> i64 {
@@ -44,10 +44,15 @@ fn task_added_payload(draft: &TaskDraft, placement: Placement) -> String {
 
 /// The payload an `attempt_started` row is written with.
 fn attempt_started_payload(event: &Event) -> String {
-    let Event::AttemptStarted { number, .. } = event else {
+    let Event::AttemptStarted {
+        number,
+        start_commit,
+        ..
+    } = event
+    else {
         unreachable!("only called for Event::AttemptStarted")
     };
-    serde_json::json!({ "number": number }).to_string()
+    serde_json::json!({ "number": number, "start_commit": start_commit }).to_string()
 }
 
 /// The payload an `attempt_running` row is written with.
@@ -159,7 +164,8 @@ fn event_task_id(event: &Event) -> TaskId {
         | Event::AttemptEnded { id, .. }
         | Event::StepStarted { id, .. }
         | Event::StepEnded { id, .. }
-        | Event::GateFailed { id, .. } => *id,
+        | Event::GateFailed { id, .. }
+        | Event::TaskRetried { id, .. } => *id,
     }
 }
 
@@ -174,7 +180,8 @@ fn event_at(event: &Event) -> SystemTime {
         | Event::AttemptEnded { at, .. }
         | Event::StepStarted { at, .. }
         | Event::StepEnded { at, .. }
-        | Event::GateFailed { at, .. } => *at,
+        | Event::GateFailed { at, .. }
+        | Event::TaskRetried { at, .. } => *at,
     }
 }
 
@@ -193,6 +200,7 @@ fn event_kind_and_payload(event: &Event) -> (&'static str, String) {
         Event::StepStarted { .. } => (STEP_STARTED, step_started_payload(event)),
         Event::StepEnded { .. } => (STEP_ENDED, step_ended_payload(event)),
         Event::GateFailed { .. } => (GATE_FAILED, gate_failed_payload(event)),
+        Event::TaskRetried { .. } => (TASK_RETRIED, "{}".to_owned()),
     }
 }
 

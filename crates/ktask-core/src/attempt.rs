@@ -70,7 +70,7 @@ pub(crate) fn begin_attempt(
     id: TaskId,
 ) -> Result<u32, BeginAttemptError> {
     let at = clock.now();
-    decide_and_append(journal, |state| state.decide_begin_attempt(id, at))
+    decide_and_append(journal, |state| state.decide_begin_attempt(id, at, None))
 }
 
 /// Use case: records `outcome` (and `reason`) for attempt `number` of task `id`. A later
@@ -100,7 +100,10 @@ pub(crate) fn record_report(
 /// Use case: begins the next attempt at the pending task numbered `id` and, in the same
 /// append, marks it running with `provider` — for a caller (the `run` use case) that always
 /// knows its provider up front, so "begun" and "running" are never visible apart, one journal
-/// round trip apart from each other. Returns the attempt's number.
+/// round trip apart from each other. `start_commit` is the project's commit `HEAD` right
+/// before this attempt begins, recorded with it so a later attempt's own prompt can show
+/// everything the task has changed since its first attempt started. Returns the attempt's
+/// number.
 ///
 /// # Errors
 ///
@@ -111,11 +114,13 @@ pub(crate) fn begin_attempt_running(
     clock: &dyn Clock,
     id: TaskId,
     provider: &str,
+    start_commit: Option<&str>,
 ) -> Result<u32, BeginAttemptError> {
     let at = clock.now();
     let provider = provider.to_owned();
+    let start_commit = start_commit.map(str::to_owned);
     decide_and_append(journal, move |state| {
-        let (mut events, number) = state.decide_begin_attempt(id, at)?;
+        let (mut events, number) = state.decide_begin_attempt(id, at, start_commit.clone())?;
         events.push(Event::AttemptRunning {
             id,
             number,
@@ -217,6 +222,19 @@ pub(crate) fn last_attempt(
     id: TaskId,
 ) -> Result<Option<Attempt>, JournalError> {
     read_and_query(journal, |state| state.attempt_of(id))
+}
+
+/// Every attempt ever begun at task `id`, oldest first — every one it was retried past
+/// included. Empty when it was never attempted.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub(crate) fn all_attempts(
+    journal: &dyn Journal,
+    id: TaskId,
+) -> Result<Vec<Attempt>, JournalError> {
+    read_and_query(journal, |state| state.attempts_of(id))
 }
 
 /// The most recent outcome and reason the agent itself reported for attempt `number` of task

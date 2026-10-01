@@ -73,6 +73,10 @@ pub struct QueueView {
     /// The most recent attempt of every task that has one — the same line `status` shows,
     /// from the same use case. A task with no entry here was never attempted.
     pub attempts: HashMap<TaskId, AttemptLine>,
+    /// Every earlier attempt of every task that has one, oldest first — every one it was
+    /// retried past, from the same use case `status` reads its own history from. A task on
+    /// its first attempt, or never attempted, has no entry here.
+    pub history: HashMap<TaskId, Vec<AttemptLine>>,
 }
 
 /// Use case: the queue of `project`, whose journal is `journal`; with the cancelled tasks in
@@ -93,9 +97,15 @@ pub fn queue_view(
     show_cancelled: bool,
 ) -> Result<QueueView, JournalError> {
     let tasks = list_all_tasks(journal)?;
-    let attempts: HashMap<TaskId, AttemptLine> = status(journal, clock, lock)?
+    let entries = status(journal, clock, lock)?;
+    let attempts: HashMap<TaskId, AttemptLine> = entries
+        .iter()
+        .map(|entry| (entry.task, entry.attempt.clone()))
+        .collect();
+    let history: HashMap<TaskId, Vec<AttemptLine>> = entries
         .into_iter()
-        .map(|entry| (entry.task, entry.attempt))
+        .filter(|entry| !entry.history.is_empty())
+        .map(|entry| (entry.task, entry.history))
         .collect();
     Ok(QueueView {
         project,
@@ -106,6 +116,7 @@ pub fn queue_view(
             without_cancelled(tasks)
         },
         attempts,
+        history,
     })
 }
 
@@ -247,7 +258,7 @@ mod tests {
         let journal = FakeJournal::default();
         let clock = FakeClock(at(0));
         add_task(&journal, &clock, &draft("a"), Placement::End).unwrap();
-        crate::attempt::begin_attempt_running(&journal, &clock, TaskId(1), "echo").unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock, TaskId(1), "echo", None).unwrap();
 
         let view = queue_view(
             project("app", 10),
@@ -270,7 +281,7 @@ mod tests {
         let journal = FakeJournal::default();
         let clock = FakeClock(at(0));
         add_task(&journal, &clock, &draft("a"), Placement::End).unwrap();
-        crate::attempt::begin_attempt_running(&journal, &clock, TaskId(1), "echo").unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock, TaskId(1), "echo", None).unwrap();
 
         let view = queue_view(project("app", 10), &journal, &clock, &no_run(), false).unwrap();
 

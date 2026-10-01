@@ -12,7 +12,8 @@ use std::time::SystemTime;
 use crate::journal::{AttemptRun, Event};
 use crate::{
     AppendConflict, AppendError, Attempt, AttemptEnd, BeginAttemptError, CancelError, Journal,
-    JournalError, Outcome, Placement, RecordReportError, Step, Task, TaskDraft, TaskId, TaskStatus,
+    JournalError, Outcome, Placement, RecordReportError, RetryError, Step, Task, TaskDraft, TaskId,
+    TaskStatus,
 };
 
 mod apply;
@@ -33,18 +34,19 @@ struct StepFold {
 struct AttemptFold {
     number: u32,
     started_at: SystemTime,
+    start_commit: Option<String>,
     provider: Option<String>,
     ended: Option<AttemptEnd>,
     steps: Vec<StepFold>,
 }
 
 /// The queue's state: every task ever added, in queue order, with the cancelled ones marked
-/// but kept in place, and every task's most recent attempt — folded from the events recorded
-/// for it.
+/// but kept in place, and every attempt ever begun for each task, oldest first — folded from
+/// the events recorded for it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct QueueState {
     tasks: Vec<Task>,
-    attempts: HashMap<TaskId, AttemptFold>,
+    attempts: HashMap<TaskId, Vec<AttemptFold>>,
     reports: HashMap<(TaskId, u32), (Outcome, Option<String>)>,
     step_reports: HashMap<(TaskId, u32, String), (Outcome, Option<String>)>,
     /// The most recent gate stop recorded for each task, cleared once a later attempt for it
@@ -75,7 +77,25 @@ impl QueueState {
             Event::StepStarted { .. } => self.apply_step_started(event),
             Event::StepEnded { .. } => self.apply_step_ended(event),
             Event::GateFailed { .. } => self.apply_gate_failed(event),
+            Event::TaskRetried { .. } => self.apply_task_retried(event),
         }
+    }
+
+    /// The attempt numbered `number` of task `id`, when its fold is still held. Shared by the
+    /// handful of events (running, reported, ended, a step) that update an attempt already
+    /// begun, found by number rather than assumed to be the last one, so an event addressed to
+    /// an earlier attempt — never produced by any use case, but not this fold's job to rule
+    /// out — never lands on the wrong one.
+    fn attempt_mut(&mut self, id: TaskId, number: u32) -> Option<&mut AttemptFold> {
+        self.attempts
+            .get_mut(&id)?
+            .iter_mut()
+            .find(|attempt| attempt.number == number)
+    }
+
+    /// The most recently begun attempt of task `id`, when it has one.
+    fn current_attempt(&self, id: TaskId) -> Option<&AttemptFold> {
+        self.attempts.get(&id).and_then(|attempts| attempts.last())
     }
 }
 

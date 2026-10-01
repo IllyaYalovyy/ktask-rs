@@ -45,27 +45,43 @@ impl QueueState {
     }
 
     /// Applies a [`Event::AttemptStarted`]: marks the task it names running and starts
-    /// folding a fresh attempt for it.
+    /// folding a fresh attempt for it, kept alongside every earlier one already folded.
     pub(super) fn apply_attempt_started(&mut self, event: &Event) {
-        let Event::AttemptStarted { id, number, at } = event else {
+        let Event::AttemptStarted {
+            id,
+            number,
+            start_commit,
+            at,
+        } = event
+        else {
             return;
         };
         if let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id) {
             task.status = TaskStatus::Running;
         }
-        self.attempts.insert(
-            *id,
-            AttemptFold {
-                number: *number,
-                started_at: *at,
-                provider: None,
-                ended: None,
-                steps: Vec::new(),
-            },
-        );
+        self.attempts.entry(*id).or_default().push(AttemptFold {
+            number: *number,
+            started_at: *at,
+            start_commit: start_commit.clone(),
+            provider: None,
+            ended: None,
+            steps: Vec::new(),
+        });
         // A later run got past every gate ahead of this task's attempt, sync and health check
         // alike, or it would not have begun one: any gate stop recorded for it is history now.
         self.gate_stops.remove(id);
+    }
+
+    /// Applies a [`Event::TaskRetried`]: sends the task it names back to `pending`. Every
+    /// attempt folded for it stays exactly as it was — retrying never touches history, only
+    /// lets a new one begin.
+    pub(super) fn apply_task_retried(&mut self, event: &Event) {
+        let Event::TaskRetried { id, .. } = event else {
+            return;
+        };
+        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id) {
+            task.status = TaskStatus::Pending;
+        }
     }
 
     /// Applies a [`Event::GateFailed`]: records it as the task's current gate stop, replacing
@@ -92,9 +108,7 @@ impl QueueState {
         else {
             return;
         };
-        if let Some(attempt) = self.attempts.get_mut(id)
-            && attempt.number == *number
-        {
+        if let Some(attempt) = self.attempt_mut(*id, *number) {
             attempt.provider = Some(provider.clone());
         }
     }
@@ -138,9 +152,7 @@ impl QueueState {
         if let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id) {
             task.status = *status;
         }
-        if let Some(attempt) = self.attempts.get_mut(id)
-            && attempt.number == *number
-        {
+        if let Some(attempt) = self.attempt_mut(*id, *number) {
             attempt.ended = Some(AttemptEnd {
                 duration: *duration,
                 status: *status,
@@ -162,9 +174,7 @@ impl QueueState {
         else {
             return;
         };
-        if let Some(attempt) = self.attempts.get_mut(id)
-            && attempt.number == *number
-        {
+        if let Some(attempt) = self.attempt_mut(*id, *number) {
             attempt.steps.push(StepFold {
                 name: step.clone(),
                 started_at: *at,
@@ -189,8 +199,7 @@ impl QueueState {
         else {
             return;
         };
-        if let Some(attempt) = self.attempts.get_mut(id)
-            && attempt.number == *number
+        if let Some(attempt) = self.attempt_mut(*id, *number)
             && let Some(current) = attempt
                 .steps
                 .iter_mut()
