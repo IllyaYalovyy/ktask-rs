@@ -28,6 +28,12 @@ struct SettingsFile {
     step_commit: Option<bool>,
     #[serde(rename = "step-push", skip_serializing_if = "Option::is_none")]
     step_push: Option<bool>,
+    #[serde(rename = "max-attempts", skip_serializing_if = "Option::is_none")]
+    max_attempts: Option<u32>,
+    #[serde(rename = "resolver-provider", skip_serializing_if = "Option::is_none")]
+    resolver_provider: Option<String>,
+    #[serde(rename = "resolver-model", skip_serializing_if = "Option::is_none")]
+    resolver_model: Option<String>,
 }
 
 impl From<Settings> for SettingsFile {
@@ -42,6 +48,9 @@ impl From<Settings> for SettingsFile {
             step_testing: settings.testing_step,
             step_commit: settings.commit_step,
             step_push: settings.push_step,
+            max_attempts: settings.max_attempts,
+            resolver_provider: settings.resolver_provider,
+            resolver_model: settings.resolver_model,
         }
     }
 }
@@ -58,6 +67,9 @@ impl From<SettingsFile> for Settings {
             testing_step: file.step_testing,
             commit_step: file.step_commit,
             push_step: file.step_push,
+            max_attempts: file.max_attempts,
+            resolver_provider: file.resolver_provider,
+            resolver_model: file.resolver_model,
         }
     }
 }
@@ -137,6 +149,9 @@ mod tests {
             testing_step: Some(false),
             commit_step: Some(true),
             push_step: Some(false),
+            max_attempts: Some(5),
+            resolver_provider: Some("claude".to_owned()),
+            resolver_model: Some("opus".to_owned()),
         };
         store.save(&settings).unwrap();
         assert_eq!(store.load(), Ok(settings.clone()));

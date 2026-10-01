@@ -208,10 +208,15 @@ fn decode_step_started(
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| corrupt("step", "missing".to_owned()))?;
+    let model = payload
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     Ok(Event::StepStarted {
         id,
         number,
         step,
+        model,
         at,
     })
 }

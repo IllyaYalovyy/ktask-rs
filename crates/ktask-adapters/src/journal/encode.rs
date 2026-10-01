@@ -112,10 +112,16 @@ fn attempt_ended_payload(event: &Event) -> String {
 
 /// The payload a `step_started` row is written with.
 fn step_started_payload(event: &Event) -> String {
-    let Event::StepStarted { number, step, .. } = event else {
+    let Event::StepStarted {
+        number,
+        step,
+        model,
+        ..
+    } = event
+    else {
         unreachable!("only called for Event::StepStarted")
     };
-    serde_json::json!({ "number": number, "step": step }).to_string()
+    serde_json::json!({ "number": number, "step": step, "model": model }).to_string()
 }
 
 /// The payload a `step_ended` row is written with.
