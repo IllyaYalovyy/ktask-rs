@@ -81,6 +81,7 @@ impl Fixture {
         let sandbox = Sandbox::new()?;
         let (keep, scratch) = scratch()?;
         let repository = cloned_repository(&sandbox, &scratch, "my-app")?;
+        sandbox.run(&repository, &["settings", "set", "max-attempts", "1"])?;
         let seed = scratch.join("my-app-seed");
         let bare = scratch.join("my-app.git");
         Ok(Self {
@@ -242,7 +243,7 @@ impl Fixture {
 /// `new.txt` and reports `done`.
 fn gated_body(go: &Path) -> String {
     format!(
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  [ -p \"{0}\" ] || mkfifo \"{0}\"\n  read _ < \"{0}\"\n  echo fresh > new.txt\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  [ -p \"{0}\" ] || mkfifo \"{0}\"\n  read _ < \"{0}\"\n  echo fresh > new.txt\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
         go.display()
     )
 }
@@ -253,7 +254,7 @@ fn a_pushed_commit_lands_on_the_remote_its_line_says_so_and_the_task_ends_done()
     fixture.track_origin_main()?;
     fixture.add_agent_task(
         "a",
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  echo fresh > new.txt\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  echo fresh > new.txt\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
     )?;
 
     let outcome = fixture.run_the_queue()?;
@@ -372,7 +373,7 @@ fn a_task_with_nothing_to_commit_has_no_push_line_and_ends_done() -> Result<()> 
     fixture.track_origin_main()?;
     fixture.add_agent_task(
         "a",
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
     )?;
 
     let outcome = fixture.run_the_queue()?;

@@ -43,6 +43,7 @@ impl Fixture {
         let sandbox = Sandbox::new()?;
         let (keep, work) = scratch()?;
         let repository = git_repository(&sandbox, &work, "my-app")?;
+        sandbox.run(&repository, &["settings", "set", "max-attempts", "1"])?;
         Ok(Self {
             sandbox,
             repository,

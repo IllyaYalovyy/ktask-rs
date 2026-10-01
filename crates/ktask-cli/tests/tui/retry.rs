@@ -15,7 +15,7 @@ const COLS: u16 = 100;
 /// implementation step; the review and test steps, when reached, approve and accept.
 fn reporting_body(outcome: &str) -> String {
     format!(
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" {outcome}\nfi\n```\n"
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" {outcome}\nfi\n```\n"
     )
 }
 
@@ -45,6 +45,7 @@ impl Fixture {
         let sandbox = Sandbox::new()?;
         let (keep, work) = scratch()?;
         let repository = git_repository(&sandbox, &work, "my-app")?;
+        sandbox.run(&repository, &["settings", "set", "max-attempts", "1"])?;
         Ok(Self {
             sandbox,
             repository,

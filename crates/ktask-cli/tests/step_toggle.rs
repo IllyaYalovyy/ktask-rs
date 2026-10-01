@@ -36,14 +36,14 @@ fn with_nested_ktask_rs_on_path(command: &mut Command) {
 /// to succeed end to end still does, whether or not review or testing are switched off.
 fn reporting_body(outcome: &str) -> String {
     format!(
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" {outcome}\nfi\n```\n"
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" {outcome}\nfi\n```\n"
     )
 }
 
 /// A bash block like [`reporting_body`], that also writes a file before reporting `done` for
 /// the implementation step — so the commit step has something to commit.
 fn reporting_body_with_a_change() -> String {
-    "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  echo fresh > new.txt\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
+    "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  echo fresh > new.txt\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
         .to_owned()
 }
 
@@ -60,6 +60,7 @@ impl Fixture {
         let sandbox = Sandbox::new()?;
         let (keep, work) = scratch()?;
         let repository = git_repository(&sandbox, &work, "my-app")?;
+        sandbox.run(&repository, &["settings", "set", "max-attempts", "1"])?;
         Ok(Self {
             sandbox,
             repository,
@@ -176,6 +177,7 @@ impl TrackedFixture {
         let sandbox = Sandbox::new()?;
         let (keep, work) = scratch()?;
         let repository = cloned_repository(&sandbox, &work, "my-app")?;
+        sandbox.run(&repository, &["settings", "set", "max-attempts", "1"])?;
         let bare = work.join("my-app.git");
         Ok(Self {
             sandbox,

@@ -44,6 +44,7 @@ impl Fixture {
         let sandbox = Sandbox::new()?;
         let (keep, work) = scratch()?;
         let repository = git_repository(&sandbox, &work, "my-app")?;
+        sandbox.run(&repository, &["settings", "set", "max-attempts", "1"])?;
         Ok(Self {
             sandbox,
             repository,
@@ -186,6 +187,8 @@ fn a_second_run_after_answering_continues_and_the_prompt_carries_the_question_an
         health_check_command: None,
         tracked_branch: None,
         disabled_steps: &[],
+        max_attempts: 3,
+        resolver_model: "",
     };
     let task = Task {
         id: TaskId(1),

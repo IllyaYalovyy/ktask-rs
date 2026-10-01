@@ -113,7 +113,7 @@ impl Drop for Fixture {
 /// and again for the test step, accepts it, so a task meant to succeed end to end still does.
 fn reporting_body(outcome: &str) -> String {
     format!(
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" {outcome}\nfi\n```\n"
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" {outcome}\nfi\n```\n"
     )
 }
 
@@ -121,7 +121,7 @@ fn reporting_body(outcome: &str) -> String {
 /// implementation step; the review and test steps, when reached, approve and accept.
 fn reporting_body_with_reason(outcome: &str, reason: &str) -> String {
     format!(
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nfi\n```\n"
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nfi\n```\n"
     )
 }
 
@@ -130,12 +130,16 @@ impl Fixture {
         let sandbox = Sandbox::new()?;
         let (keep, work) = scratch()?;
         let repository = git_repository(&sandbox, &work, "my-app")?;
-        Ok(Self {
+        let fixture = Self {
             sandbox,
             work,
             repository,
             _keep: keep,
-        })
+        };
+        // Most of this file's tests are about one attempt's own outcome, not the resolver —
+        // M4-04's own tests set `max-attempts` back up when they want it to run.
+        fixture.run(&["settings", "set", "max-attempts", "1"])?;
+        Ok(fixture)
     }
 
     /// Runs `ktask-rs` with `args` inside the repository.
@@ -428,7 +432,7 @@ fn the_command_lines_attempt_timeout_still_overrides_the_projects_setting() -> R
     assert_eq!(set.code, Some(0), "{}", set.stderr);
     fixture.add_agent_task(
         "a",
-        "```bash\nsleep 2\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+        "```bash\nsleep 2\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
     )?;
 
     let outcome = fixture.run_the_queue(&["run", "--attempt-timeout", "30"])?;
@@ -710,7 +714,7 @@ fn a_second_run_while_one_is_in_progress_exits_two_naming_the_running_process() 
     fixture.add_agent_task(
         "a",
         &format!(
-            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  [ -p \"{0}\" ] || mkfifo \"{0}\"\n  read _ < \"{0}\"\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  [ -p \"{0}\" ] || mkfifo \"{0}\"\n  read _ < \"{0}\"\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
             go.display()
         ),
     )?;
@@ -1089,11 +1093,11 @@ fn the_report_command_the_prompt_gives_the_agent_is_the_full_path_and_works_with
 fn review_body(outcome: &str, reason: &str) -> String {
     if reason.is_empty() {
         format!(
-            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" {outcome}\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
+            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" {outcome}\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
         )
     } else {
         format!(
-            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
+            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
         )
     }
 }
@@ -1217,7 +1221,7 @@ fn ktask_rs_report_refuses_an_outcome_outside_the_running_step_naming_the_ones_t
     fixture.add_agent_task(
         "a",
         &format!(
-            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" done 2> \"{}\"; echo $? > \"{}\"\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" done 2> \"{}\"; echo $? > \"{}\"\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
             stderr_file.display(),
             exit_file.display(),
         ),
@@ -1246,11 +1250,11 @@ fn ktask_rs_report_refuses_an_outcome_outside_the_running_step_naming_the_ones_t
 fn test_body(outcome: &str, reason: &str) -> String {
     if reason.is_empty() {
         format!(
-            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" {outcome}\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
+            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" {outcome}\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
         )
     } else {
         format!(
-            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
+            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
         )
     }
 }
