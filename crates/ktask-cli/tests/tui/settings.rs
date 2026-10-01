@@ -160,10 +160,60 @@ fn editing_and_ctrl_s_saves_through_the_same_use_case_settings_set_runs() -> Res
     assert_eq!(
         cli_settings(&fixture)?,
         format!(
-            "attempt-timeout\t7200\tcustom\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
+            "attempt-timeout\t7200\tcustom\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t1\tcustom\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
         )
     );
     quit(terminal)
+}
+
+#[test]
+fn tabbing_to_max_attempts_and_saving_a_valid_value_works_and_an_invalid_one_is_refused()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    let mut terminal = open_settings(&fixture)?;
+    // attempt-timeout, health-check, tracked-branch, the six step switches, then max-attempts.
+    // This fixture already set `max-attempts` to 1, as every one of this file's own tests do.
+    terminal.send(&TAB.repeat(9))?;
+    terminal.wait_for("the focus on the max-attempts field", |screen| {
+        let lines = lines_inside_frame(&screen.contents());
+        lines.iter().any(|line| line.contains("Max attempts")) && screen.contents().contains("> 1")
+    })?;
+    terminal.send(&format!("{BACKSPACE}5"))?;
+    terminal.wait_for("the edited value", |screen| {
+        screen.contents().contains("> 5")
+    })?;
+
+    terminal.send(SUBMIT)?;
+
+    terminal.wait_for("the queue back", |screen| {
+        !screen.contents().contains("Settings")
+    })?;
+    assert_eq!(
+        cli_settings(&fixture)?,
+        format!(
+            "attempt-timeout\t14400\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t5\tcustom\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
+        )
+    );
+
+    // Reopening and setting an invalid value refuses it, with the same words the CLI gives,
+    // and saves nothing.
+    let mut terminal = open_settings(&fixture)?;
+    terminal.send(&TAB.repeat(9))?;
+    terminal.wait_for("the focus on the max-attempts field again", |screen| {
+        screen.contents().contains("> 5")
+    })?;
+    terminal.send(&format!("{BACKSPACE}0"))?;
+    terminal.send(SUBMIT)?;
+    terminal.wait_for("the refusal", |screen| {
+        screen.contents().contains("must be at least 1")
+    })?;
+    assert_eq!(
+        cli_settings(&fixture)?,
+        format!(
+            "attempt-timeout\t14400\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t5\tcustom\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
+        )
+    );
+    quit_from_settings(terminal)
 }
 
 #[test]
@@ -190,7 +240,7 @@ fn tab_moves_to_the_health_check_field_and_ctrl_s_saves_it_leaving_the_timeout_u
     assert_eq!(
         cli_settings(&fixture)?,
         format!(
-            "attempt-timeout\t14400\tdefault\nhealth-check\tcargo test\tcustom\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
+            "attempt-timeout\t14400\tdefault\nhealth-check\tcargo test\tcustom\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t1\tcustom\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
         )
     );
     quit(terminal)
@@ -219,7 +269,7 @@ fn tab_tab_moves_to_the_tracked_branch_field_and_ctrl_s_saves_a_valid_value() ->
     assert_eq!(
         fixture.cli_settings()?,
         format!(
-            "attempt-timeout\t14400\tdefault\nhealth-check\t\tdefault\ntracked-branch\torigin/main\tcustom\n{STEP_DEFAULTS}"
+            "attempt-timeout\t14400\tdefault\nhealth-check\t\tdefault\ntracked-branch\torigin/main\tcustom\n{STEP_DEFAULTS}max-attempts\t3\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
         )
     );
     quit(terminal)

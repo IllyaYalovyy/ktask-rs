@@ -65,14 +65,19 @@ const STEP_DEFAULTS: &str = "step-sync\ton\tdefault\n\
      step-review\ton\tdefault\n\
      step-testing\ton\tdefault\n\
      step-commit\ton\tdefault\n\
-     step-push\ton\tdefault\n";
+     step-push\ton\tdefault\n\
+     max-attempts\t3\tdefault\n\
+     resolver-provider\techo\tdefault\n\
+     resolver-model\t\tdefault\n";
 
 /// The default `settings` output: attempt-timeout at its built-in default, health-check and
-/// tracked-branch unset, every step switch on.
+/// tracked-branch unset, every step switch on, max-attempts and the resolver's provider and
+/// model at their built-in defaults.
 const DEFAULTS: &str = "attempt-timeout\t14400\tdefault\nhealth-check\t\tdefault\n\
      tracked-branch\t\tdefault\nstep-sync\ton\tdefault\nstep-health-check\ton\tdefault\n\
      step-review\ton\tdefault\nstep-testing\ton\tdefault\nstep-commit\ton\tdefault\n\
-     step-push\ton\tdefault\n";
+     step-push\ton\tdefault\nmax-attempts\t3\tdefault\nresolver-provider\techo\tdefault\n\
+     resolver-model\t\tdefault\n";
 
 #[test]
 fn a_fresh_project_shows_every_default() -> Result<()> {
@@ -102,7 +107,10 @@ fn json_carries_the_same() -> Result<()> {
          {\"name\":\"step-review\",\"value\":\"on\",\"default\":true},\
          {\"name\":\"step-testing\",\"value\":\"on\",\"default\":true},\
          {\"name\":\"step-commit\",\"value\":\"on\",\"default\":true},\
-         {\"name\":\"step-push\",\"value\":\"on\",\"default\":true}]\n"
+         {\"name\":\"step-push\",\"value\":\"on\",\"default\":true},\
+         {\"name\":\"max-attempts\",\"value\":\"3\",\"default\":true},\
+         {\"name\":\"resolver-provider\",\"value\":\"echo\",\"default\":true},\
+         {\"name\":\"resolver-model\",\"value\":\"\",\"default\":true}]\n"
     );
     Ok(())
 }
@@ -495,5 +503,75 @@ fn switching_implementation_off_exits_two_naming_why_and_it_is_not_one_of_the_se
         "{}",
         shown.stdout
     );
+    Ok(())
+}
+
+#[test]
+fn setting_max_attempts_resolver_provider_and_resolver_model_changes_and_persists_them()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let attempts = fixture.run(&["settings", "set", "max-attempts", "5"])?;
+    assert_eq!(attempts.code, Some(0), "{}", attempts.stderr);
+    assert_eq!(attempts.stdout, "max-attempts\t5\n");
+
+    let provider = fixture.run(&["settings", "set", "resolver-provider", "claude"])?;
+    assert_eq!(provider.code, Some(0), "{}", provider.stderr);
+    assert_eq!(provider.stdout, "resolver-provider\tclaude\n");
+
+    let model = fixture.run(&["settings", "set", "resolver-model", "opus"])?;
+    assert_eq!(model.code, Some(0), "{}", model.stderr);
+    assert_eq!(model.stdout, "resolver-model\topus\n");
+
+    let shown = fixture.run(&["settings"])?;
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    assert!(
+        shown.stdout.contains("max-attempts\t5\tcustom\n"),
+        "{}",
+        shown.stdout
+    );
+    assert!(
+        shown.stdout.contains("resolver-provider\tclaude\tcustom\n"),
+        "{}",
+        shown.stdout
+    );
+    assert!(
+        shown.stdout.contains("resolver-model\topus\tcustom\n"),
+        "{}",
+        shown.stdout
+    );
+    Ok(())
+}
+
+#[test]
+fn max_attempts_refuses_anything_but_a_whole_number_of_at_least_one() -> Result<()> {
+    let fixture = Fixture::new()?;
+
+    for value in ["0", "soon", "1.5", "-1"] {
+        let outcome = fixture.run(&["settings", "set", "max-attempts", value])?;
+        assert_eq!(outcome.code, Some(2), "{value}: {}", outcome.stderr);
+    }
+    let zero = fixture.run(&["settings", "set", "max-attempts", "0"])?;
+    assert!(zero.stderr.contains("at least 1"), "{}", zero.stderr);
+    let shown = fixture.run(&["settings"])?;
+    assert_eq!(shown.stdout, DEFAULTS);
+    Ok(())
+}
+
+#[test]
+fn an_empty_resolver_provider_or_resolver_model_is_refused_and_changes_nothing() -> Result<()> {
+    let fixture = Fixture::new()?;
+
+    for name in ["resolver-provider", "resolver-model"] {
+        let outcome = fixture.run(&["settings", "set", name, "   "])?;
+        assert_eq!(outcome.code, Some(2), "{name}: {}", outcome.stderr);
+        assert!(
+            outcome.stderr.contains("must not be empty"),
+            "{}",
+            outcome.stderr
+        );
+    }
+    let shown = fixture.run(&["settings"])?;
+    assert_eq!(shown.stdout, DEFAULTS);
     Ok(())
 }
