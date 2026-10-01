@@ -3,7 +3,7 @@
 
 use ktask_core::{
     AddError, CancelError, ForgetError, ImportError, RegisterError, ReportError, ResolveError,
-    RunError, SetSettingError,
+    RetryError, RunError, SetSettingError,
 };
 
 /// Why a command failed, and the exit code to report it with.
@@ -108,6 +108,22 @@ impl From<CancelError> for Failure {
             },
             CancelError::Running(_) => Self {
                 message: format!("{error}; wait for the run to finish, or stop it, then try again"),
+                code: 2,
+            },
+        }
+    }
+}
+
+impl From<RetryError> for Failure {
+    fn from(error: RetryError) -> Self {
+        match error {
+            RetryError::Journal(_) => Self::from(error.to_string()),
+            RetryError::UnknownTask(_) => Self {
+                message: format!("{error}; `ktask-rs list --all` shows every task"),
+                code: 2,
+            },
+            RetryError::NotRetryable { .. } => Self {
+                message: error.to_string(),
                 code: 2,
             },
         }

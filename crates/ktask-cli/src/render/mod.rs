@@ -142,6 +142,11 @@ pub(crate) fn removed(id: TaskId, out: &mut impl Write) -> Result<(), String> {
     writeln!(out, "removed task {id}").map_err(|e| e.to_string())
 }
 
+/// Writes the line telling that the task numbered `id` has just been sent back to pending.
+pub(crate) fn retried(id: TaskId, out: &mut impl Write) -> Result<(), String> {
+    writeln!(out, "task {id} is pending again").map_err(|e| e.to_string())
+}
+
 /// Writes the line telling that `outcome` has just been recorded for the attempt `token`
 /// names.
 pub(crate) fn reported(

@@ -8,6 +8,7 @@ pub(crate) mod project;
 pub(crate) mod provider;
 pub(crate) mod remove;
 pub(crate) mod report;
+pub(crate) mod retry;
 pub(crate) mod run;
 pub(crate) mod settings;
 pub(crate) mod status;

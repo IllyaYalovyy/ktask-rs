@@ -36,6 +36,7 @@ struct StatusJson<'a> {
     title: &'a str,
     status: &'static str,
     attempt: AttemptJson<'a>,
+    history: Vec<AttemptJson<'a>>,
 }
 
 /// `line` as a [`StepJson`].
@@ -65,6 +66,19 @@ pub(crate) fn status(
     }
 }
 
+/// `line` as an [`AttemptJson`].
+fn attempt_json(line: &ktask_core::AttemptLine) -> AttemptJson<'_> {
+    AttemptJson {
+        number: line.number,
+        step: &line.step,
+        provider: line.provider.as_deref(),
+        time_spent_seconds: line.time_spent.as_secs(),
+        outcome: line.outcome.as_str(),
+        reason: line.reason.as_deref(),
+        steps: line.steps.iter().map(step_json).collect(),
+    }
+}
+
 /// Writes `entries` as a JSON array.
 fn status_json(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), String> {
     let shown: Vec<_> = entries
@@ -73,15 +87,8 @@ fn status_json(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
             id: entry.task.0,
             title: &entry.title,
             status: ktask_core::displayed_status(entry.status, Some(entry.attempt.outcome)),
-            attempt: AttemptJson {
-                number: entry.attempt.number,
-                step: &entry.attempt.step,
-                provider: entry.attempt.provider.as_deref(),
-                time_spent_seconds: entry.attempt.time_spent.as_secs(),
-                outcome: entry.attempt.outcome.as_str(),
-                reason: entry.attempt.reason.as_deref(),
-                steps: entry.attempt.steps.iter().map(step_json).collect(),
-            },
+            attempt: attempt_json(&entry.attempt),
+            history: entry.history.iter().map(attempt_json).collect(),
         })
         .collect();
     serde_json::to_writer(&mut *out, &shown).map_err(|e| e.to_string())?;
@@ -98,22 +105,41 @@ fn status_text(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
         .try_for_each(|entry| {
             let status = ktask_core::displayed_status(entry.status, Some(entry.attempt.outcome));
             writeln!(out, "#{}\t{}\t{}", entry.task, status, entry.title)?;
-            entry.attempt.steps.iter().try_for_each(|step| {
-                let provider = step.provider.as_deref().unwrap_or("-");
-                let seconds = step.time_spent.as_secs();
-                match &step.reason {
-                    Some(reason) => writeln!(
-                        out,
-                        "\t{}\t{provider}\t{seconds}s\t{}\t{reason}",
-                        step.step, step.outcome
-                    ),
-                    None => writeln!(
-                        out,
-                        "\t{}\t{provider}\t{seconds}s\t{}",
-                        step.step, step.outcome
-                    ),
-                }
-            })
+            entry.history.iter().try_for_each(|attempt| {
+                write_step_lines(
+                    out,
+                    &attempt.steps,
+                    &format!("attempt {}: ", attempt.number),
+                )
+            })?;
+            write_step_lines(out, &entry.attempt.steps, "")
         })
         .map_err(|e: std::io::Error| e.to_string())
+}
+
+/// Writes one indented line per step of `steps`, in order — step (named with `prefix` ahead of
+/// it, so an earlier attempt's own steps read apart from the current one's, which carries none)
+/// provider (`-` for a step the tool ran itself, which names none), time spent, outcome, and
+/// the reason when it did not succeed.
+fn write_step_lines(
+    out: &mut impl Write,
+    steps: &[ktask_core::StepLine],
+    prefix: &str,
+) -> Result<(), std::io::Error> {
+    steps.iter().try_for_each(|step| {
+        let provider = step.provider.as_deref().unwrap_or("-");
+        let seconds = step.time_spent.as_secs();
+        match &step.reason {
+            Some(reason) => writeln!(
+                out,
+                "\t{prefix}{}\t{provider}\t{seconds}s\t{}\t{reason}",
+                step.step, step.outcome
+            ),
+            None => writeln!(
+                out,
+                "\t{prefix}{}\t{provider}\t{seconds}s\t{}",
+                step.step, step.outcome
+            ),
+        }
+    })
 }
