@@ -65,6 +65,7 @@ pub(crate) fn run(
             token,
             attempt: *attempt,
             step,
+            model: None,
         },
         &dir,
         Duration::from_millis(*timeout_ms),
@@ -77,8 +78,10 @@ pub(crate) fn run(
     exit_code(&output, provider, *timeout_ms)
 }
 
-/// Rejects any provider name other than the one built-in `echo` provider.
-fn check_known(provider: &str) -> Result<(), Failure> {
+/// Rejects any provider name other than the one built-in `echo` provider — shared with
+/// `ktask-rs report`'s own `--provider`, which names the provider the resolver wants the
+/// task's next attempt to run with.
+pub(crate) fn check_known(provider: &str) -> Result<(), Failure> {
     if provider == echo::NAME {
         return Ok(());
     }

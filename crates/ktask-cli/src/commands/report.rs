@@ -18,13 +18,61 @@ pub(crate) struct Args {
     token: String,
     /// What the attempt ended with: done, failed, needs-input or too-large for the
     /// implementation step; approved or changes-requested for the review step; accepted or
-    /// rejected for the test step — an outcome that does not belong to the step currently
-    /// running is refused
+    /// rejected for the test step; retry or stop for the resolve step — an outcome that does
+    /// not belong to the step currently running is refused
     #[arg(value_name = "OUTCOME")]
     outcome: String,
-    /// Why it ended that way; required unless the outcome is done
+    /// Why it ended that way; required unless the outcome is done, approved, accepted or retry
     #[arg(long)]
     reason: Option<String>,
+    /// The provider the task's next attempt should run with; only valid with the `retry`
+    /// outcome, refused when it does not name a known provider
+    #[arg(long, value_name = "NAME")]
+    provider: Option<String>,
+    /// The model the task's next attempt should run with; only valid with the `retry` outcome
+    #[arg(long, value_name = "NAME")]
+    model: Option<String>,
+}
+
+/// Checks `args.provider` and `args.model` against `outcome`: with `retry`, a named provider
+/// must be a known one; with anything else, neither may be given at all.
+fn check_provider_and_model(outcome: Outcome, args: &Args) -> Result<(), Failure> {
+    if outcome == Outcome::Retry {
+        if let Some(provider) = &args.provider {
+            super::provider::check_known(provider)?;
+        }
+        return Ok(());
+    }
+    if args.provider.is_some() || args.model.is_some() {
+        return Err(Failure {
+            message: format!(
+                "outcome {outcome} does not accept --provider or --model: only retry does"
+            ),
+            code: 2,
+        });
+    }
+    Ok(())
+}
+
+/// Records `args.outcome` (and `args.reason`, or — for `retry` — `args.model`) for the attempt
+/// `token` names, as the step currently running for it allows.
+fn record(
+    journal: &impl ktask_core::Journal,
+    token: &AttemptToken,
+    outcome: Outcome,
+    args: &Args,
+) -> Result<(), ktask_core::ReportError> {
+    if outcome == Outcome::Retry {
+        ktask_core::report_retry(journal, &SystemClock, token, args.model.as_deref())
+    } else {
+        ktask_core::report(
+            journal,
+            &SystemClock,
+            token,
+            outcome,
+            args.reason.as_deref(),
+        )
+    }
 }
 
 /// Records `args.outcome` (and `args.reason`) for the attempt `args.token` names, in the
@@ -44,16 +92,11 @@ pub(crate) fn run(
         .token
         .parse()
         .map_err(|message| Failure { message, code: 2 })?;
+    check_provider_and_model(outcome, args)?;
     let registry = open_registry()?;
     let (project, _settings) = resolve(&registry, Some(&token.project))?;
     let journal = open_journal(&project)?;
-    ktask_core::report(
-        &journal,
-        &SystemClock,
-        &token,
-        outcome,
-        args.reason.as_deref(),
-    )?;
+    record(&journal, &token, outcome, args)?;
     render::reported(&token, outcome, stdout)?;
     Ok(ExitCode::SUCCESS)
 }
