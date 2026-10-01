@@ -74,10 +74,25 @@ pub enum Event {
         /// `retry` and it named one. `None` for every other outcome, and for a `retry` that
         /// named none.
         retry_model: Option<String>,
+        /// Whether the resolver's `retry` decision asked the task's next attempt to resume
+        /// this attempt's own session. Always `false` for every outcome but `retry`.
+        retry_same_session: bool,
         /// The step that was open when this was reported — so a later step's own report of
         /// the same attempt never reads back as this one's. `None` when no step was open,
         /// which only happens ahead of the pipeline itself ever beginning one.
         step: Option<String>,
+        /// When.
+        at: SystemTime,
+    },
+    /// The provider reported the session this attempt ran its implementation step in —
+    /// recorded once the provider has run, whether or not it went on to succeed.
+    AttemptSessionRecorded {
+        /// The task attempted.
+        id: TaskId,
+        /// The attempt's number.
+        number: u32,
+        /// The session, as the provider itself reported it.
+        session: String,
         /// When.
         at: SystemTime,
     },
@@ -258,6 +273,10 @@ pub struct Attempt {
     pub start_commit: Option<String>,
     /// The provider it ran with, once [`crate::attempt::begin_attempt_running`] has recorded it.
     pub provider: Option<String>,
+    /// The session the provider reported for this attempt's implementation step, once
+    /// [`crate::attempt::record_session`] has recorded one. `None` when it reported none, or
+    /// has not run yet.
+    pub session: Option<String>,
     /// How it ended, once [`crate::attempt::end_attempt`] has recorded it; `None` while it runs.
     pub ended: Option<AttemptEnd>,
     /// Every step run so far, in the order they were started.

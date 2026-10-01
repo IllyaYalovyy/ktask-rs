@@ -10,7 +10,7 @@ use crate::run::Attempted;
 use crate::steps::implementation::{EarlierAttempt, earlier_attempts};
 use crate::steps::{Deps, PipelineState, Step, StepOutcome, run_agent_step, run_one_step};
 use crate::{
-    AttemptRun, AttemptToken, RESOLVE_STEP, RunContext, RunError, Task, TaskId, TaskStatus,
+    AttemptRun, AttemptToken, Journal, RESOLVE_STEP, RunContext, RunError, Task, TaskId, TaskStatus,
 };
 
 /// Appends one `- attempt N: outcome — reason` line per entry of `attempts` to `prompt`.
@@ -191,6 +191,25 @@ pub(crate) fn end_attempt_now(
     Ok(())
 }
 
+/// The session the resolver's `retry` decision for attempt `number` of task `id` asked its
+/// next attempt to resume: the one that attempt itself ran in, when `retry --same-session`
+/// asked for it; `None` when it did not, or that attempt reported no session at all.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+fn requested_session(
+    journal: &dyn Journal,
+    id: TaskId,
+    number: u32,
+) -> Result<Option<String>, RunError> {
+    if crate::attempt::last_retry_same_session(journal, id, number)? {
+        Ok(crate::attempt::last_session(journal, id, number)?)
+    } else {
+        Ok(None)
+    }
+}
+
 /// Sends task `id` back to `pending`, the same transition [`crate::retry_task`] makes by hand,
 /// now made by the resolver's own `retry` decision, so the task's next attempt begins exactly
 /// as a hand-retried one would.
@@ -223,8 +242,12 @@ pub(crate) fn resolver_eligible(status: TaskStatus, number: u32, max_attempts: u
 /// # Errors
 ///
 /// Fails when the journal cannot be read or written.
+/// Runs the resolve step itself and ends the attempt at whatever it, or the step ahead of it,
+/// decided — [`resolve_and_continue`]'s own first half, pulled out of it so it stays within the
+/// workspace's function-length limit. Returns whether the resolver decided `retry`, and the
+/// status and reason the attempt ended at.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_and_continue(
+fn run_resolve_and_end_attempt(
     deps: Deps<'_>,
     context: RunContext<'_>,
     task: &Task,
@@ -233,8 +256,7 @@ pub(crate) fn resolve_and_continue(
     state: &mut PipelineState<'_>,
     status: TaskStatus,
     reason: Option<String>,
-    steps: &[Box<dyn Step>],
-) -> Result<Attempted, RunError> {
+) -> Result<(bool, TaskStatus, Option<String>), RunError> {
     state.failure = Some((status, reason.clone()));
     let (resolve_duration, resolve_status, resolve_reason) =
         run_one_step(&deps, context, state, &Resolve)?;
@@ -254,9 +276,42 @@ pub(crate) fn resolve_and_continue(
         end_status,
         end_reason.as_deref(),
     )?;
+    Ok((retried, end_status, end_reason))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_and_continue(
+    deps: Deps<'_>,
+    context: RunContext<'_>,
+    task: &Task,
+    number: u32,
+    duration_so_far: Duration,
+    state: &mut PipelineState<'_>,
+    status: TaskStatus,
+    reason: Option<String>,
+    steps: &[Box<dyn Step>],
+) -> Result<Attempted, RunError> {
+    let (retried, end_status, end_reason) = run_resolve_and_end_attempt(
+        deps,
+        context,
+        task,
+        number,
+        duration_so_far,
+        state,
+        status,
+        reason,
+    )?;
     if retried {
         let requested_model = crate::attempt::last_retry_model(deps.journal, task.id, number)?;
-        return retry_the_task(deps, context, task, steps, requested_model);
+        let requested_session = requested_session(deps.journal, task.id, number)?;
+        return retry_the_task(
+            deps,
+            context,
+            task,
+            steps,
+            requested_model,
+            requested_session,
+        );
     }
     Ok(Attempted {
         id: task.id,
@@ -267,8 +322,9 @@ pub(crate) fn resolve_and_continue(
 
 /// Sends `task` back to `pending`, the resolver's own `retry` decision, and begins its next
 /// attempt at the implementation step at once — with `requested_model`, when the resolver named
-/// one — never the sync or health-check gates, which run only once, ahead of a task's very
-/// first attempt.
+/// one, and `requested_session`, when the resolver's `retry --same-session` asked the task's
+/// next attempt to resume the one that just ended — never the sync or health-check gates, which
+/// run only once, ahead of a task's very first attempt.
 ///
 /// # Errors
 ///
@@ -279,9 +335,18 @@ fn retry_the_task(
     task: &Task,
     steps: &[Box<dyn Step>],
     requested_model: Option<String>,
+    requested_session: Option<String>,
 ) -> Result<Attempted, RunError> {
     retry_for_resolver(deps, task.id)?;
-    super::run_one_attempt(deps, context, task, &[], steps, requested_model)
+    super::run_one_attempt(
+        deps,
+        context,
+        task,
+        &[],
+        steps,
+        requested_model,
+        requested_session,
+    )
 }
 
 #[cfg(test)]
@@ -356,6 +421,7 @@ mod tests {
             disabled_steps: &[],
             max_attempts: 3,
             resolver_model: "opus",
+            sessions_dir: Path::new("/state/sessions"),
         };
         let state = PipelineState {
             task: &task(),
@@ -365,6 +431,7 @@ mod tests {
             exit_code: None,
             failure: None,
             requested_model: None,
+            requested_session: None,
         };
         assert!(Resolve.enabled(context, &state));
         assert_eq!(Resolve.name(), RESOLVE_STEP);

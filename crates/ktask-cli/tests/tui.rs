@@ -42,6 +42,8 @@ mod retry;
 mod run;
 #[path = "support/run_cleanup.rs"]
 mod run_cleanup;
+#[path = "tui/same_session.rs"]
+mod same_session;
 #[path = "tui/settings.rs"]
 mod settings;
 mod support;

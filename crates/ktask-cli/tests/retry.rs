@@ -371,6 +371,7 @@ fn a_retried_tasks_second_attempt_prompt_names_the_firsts_outcome_reason_and_the
         disabled_steps: &[],
         max_attempts: 3,
         resolver_model: "",
+        sessions_dir: std::path::Path::new("/state/sessions"),
     };
     let prompt =
         ktask_core::implementation_prompt(&journal, &GitCli, context, &task_named(1, "a"), &token)?;

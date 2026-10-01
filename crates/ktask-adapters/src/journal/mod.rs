@@ -90,6 +90,7 @@ const TASK_CANCELLED: &str = "task_cancelled";
 const ATTEMPT_STARTED: &str = "attempt_started";
 const ATTEMPT_RUNNING: &str = "attempt_running";
 const ATTEMPT_REPORTED: &str = "attempt_reported";
+const ATTEMPT_SESSION_RECORDED: &str = "attempt_session_recorded";
 const ATTEMPT_ENDED: &str = "attempt_ended";
 const STEP_STARTED: &str = "step_started";
 const STEP_ENDED: &str = "step_ended";
@@ -487,6 +488,7 @@ mod tests {
                 outcome: Outcome::Failed,
                 reason: Some("it broke".to_owned()),
                 retry_model: None,
+                retry_same_session: false,
                 step: None,
                 at: at(12),
             },
@@ -507,6 +509,44 @@ mod tests {
             journal.events().unwrap()[1..],
             [started, running, reported, ended]
         );
+    }
+
+    #[test]
+    fn an_attempt_session_recorded_event_round_trips() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "a", Placement::End);
+        let recorded = append(
+            &journal,
+            Event::AttemptSessionRecorded {
+                id: TaskId(1),
+                number: 1,
+                session: "my-app/1/1".to_owned(),
+                at: at(10),
+            },
+        );
+        assert_eq!(journal.events().unwrap()[1..], [recorded]);
+    }
+
+    #[test]
+    fn a_retry_report_with_same_session_round_trips() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "a", Placement::End);
+        let reported = append(
+            &journal,
+            Event::AttemptReported {
+                id: TaskId(1),
+                number: 1,
+                outcome: Outcome::Retry,
+                reason: None,
+                retry_model: Some("opus".to_owned()),
+                retry_same_session: true,
+                step: Some("resolve".to_owned()),
+                at: at(10),
+            },
+        );
+        assert_eq!(journal.events().unwrap()[1..], [reported]);
     }
 
     #[test]
@@ -590,6 +630,7 @@ mod tests {
                 outcome: Outcome::Done,
                 reason: None,
                 retry_model: None,
+                retry_same_session: false,
                 step: Some("implementation".to_owned()),
                 at: at(2),
             },
@@ -777,6 +818,7 @@ mod tests {
                 outcome: Outcome::Done,
                 reason: None,
                 retry_model: None,
+                retry_same_session: false,
                 step: None,
                 at: at(4),
             },

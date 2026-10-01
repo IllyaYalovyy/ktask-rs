@@ -1,0 +1,216 @@
+//! Decoding the payload of an attempt or step event — [`super::decode_attempt_event`]'s own
+//! lowest-level work, pulled out of it so that file stays within the workspace's file-length
+//! limit.
+
+use std::time::{Duration, SystemTime};
+
+use ktask_core::{Event, JournalError, Outcome, TaskId, TaskStatus};
+use serde_json::Value;
+
+/// The [`Event::AttemptStarted`] an `attempt_started` row's `payload` decodes to.
+pub(super) fn decode_attempt_started(
+    payload: &Value,
+    id: TaskId,
+    number: u32,
+    at: SystemTime,
+) -> Event {
+    let start_commit = payload
+        .get("start_commit")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    Event::AttemptStarted {
+        id,
+        number,
+        start_commit,
+        at,
+    }
+}
+
+/// The `duration`, `exit_code` and `status` an `attempt_ended` or `step_ended` row's `payload`
+/// carries — the fields the two kinds decode identically.
+fn decode_duration_exit_status(
+    payload: &Value,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<(Duration, Option<i32>, TaskStatus), JournalError> {
+    let duration_ms = payload
+        .get("duration_ms")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| corrupt("duration_ms", "missing".to_owned()))?;
+    let exit_code = payload
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .map(|code| i32::try_from(code).unwrap_or(i32::MAX));
+    let status = payload
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or_else(|| corrupt("status", "missing".to_owned()))?
+        .parse::<TaskStatus>()
+        .map_err(|e| corrupt("status", e))?;
+    let duration = Duration::from_millis(
+        u64::try_from(duration_ms).map_err(|e| corrupt("duration_ms", e.to_string()))?,
+    );
+    Ok((duration, exit_code, status))
+}
+
+/// The [`Event::AttemptRunning`] a `attempt_running` row's `payload` decodes to.
+pub(super) fn decode_attempt_running(
+    payload: &Value,
+    id: TaskId,
+    number: u32,
+    at: SystemTime,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Event, JournalError> {
+    let provider = payload
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| corrupt("provider", "missing".to_owned()))?;
+    Ok(Event::AttemptRunning {
+        id,
+        number,
+        provider,
+        at,
+    })
+}
+
+/// The [`Event::AttemptReported`] an `attempt_reported` row's `payload` decodes to.
+pub(super) fn decode_attempt_reported(
+    payload: &Value,
+    id: TaskId,
+    number: u32,
+    reason: Option<String>,
+    at: SystemTime,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Event, JournalError> {
+    let outcome = payload
+        .get("outcome")
+        .and_then(Value::as_str)
+        .ok_or_else(|| corrupt("outcome", "missing".to_owned()))?
+        .parse::<Outcome>()
+        .map_err(|e| corrupt("outcome", e))?;
+    let step = payload
+        .get("step")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let retry_model = payload
+        .get("retry_model")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let retry_same_session = payload
+        .get("retry_same_session")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok(Event::AttemptReported {
+        id,
+        number,
+        outcome,
+        reason,
+        retry_model,
+        retry_same_session,
+        step,
+        at,
+    })
+}
+
+/// The [`Event::AttemptSessionRecorded`] an `attempt_session_recorded` row's `payload` decodes
+/// to.
+pub(super) fn decode_attempt_session_recorded(
+    payload: &Value,
+    id: TaskId,
+    number: u32,
+    at: SystemTime,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Event, JournalError> {
+    let session = payload
+        .get("session")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| corrupt("session", "missing".to_owned()))?;
+    Ok(Event::AttemptSessionRecorded {
+        id,
+        number,
+        session,
+        at,
+    })
+}
+
+/// The [`Event::AttemptEnded`] an `attempt_ended` row's `payload` decodes to.
+pub(super) fn decode_attempt_ended(
+    payload: &Value,
+    id: TaskId,
+    number: u32,
+    reason: Option<String>,
+    at: SystemTime,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Event, JournalError> {
+    let (duration, exit_code, status) = decode_duration_exit_status(payload, corrupt)?;
+    Ok(Event::AttemptEnded {
+        id,
+        number,
+        duration,
+        exit_code,
+        status,
+        reason,
+        at,
+    })
+}
+
+/// The [`Event::StepStarted`] a `step_started` row's `payload` decodes to.
+pub(super) fn decode_step_started(
+    payload: &Value,
+    id: TaskId,
+    number: u32,
+    at: SystemTime,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Event, JournalError> {
+    let step = payload
+        .get("step")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| corrupt("step", "missing".to_owned()))?;
+    let model = payload
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    Ok(Event::StepStarted {
+        id,
+        number,
+        step,
+        model,
+        at,
+    })
+}
+
+/// The [`Event::StepEnded`] a `step_ended` row's `payload` decodes to.
+pub(super) fn decode_step_ended(
+    payload: &Value,
+    id: TaskId,
+    number: u32,
+    reason: Option<String>,
+    at: SystemTime,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Event, JournalError> {
+    let step = payload
+        .get("step")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| corrupt("step", "missing".to_owned()))?;
+    let (duration, exit_code, status) = decode_duration_exit_status(payload, corrupt)?;
+    let reported = payload
+        .get("reported")
+        .and_then(Value::as_str)
+        .map(str::parse::<Outcome>)
+        .transpose()
+        .map_err(|e| corrupt("reported", e))?;
+    Ok(Event::StepEnded {
+        id,
+        number,
+        step,
+        duration,
+        exit_code,
+        status,
+        reason,
+        reported,
+        at,
+    })
+}

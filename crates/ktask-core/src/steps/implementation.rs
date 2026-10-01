@@ -487,6 +487,7 @@ mod tests {
             disabled_steps: &[IMPLEMENTATION],
             max_attempts: 1,
             resolver_model: "",
+            sessions_dir: Path::new("/state/sessions"),
         };
         let task = Task {
             id: TaskId(1),
@@ -508,6 +509,7 @@ mod tests {
             exit_code: None,
             failure: None,
             requested_model: None,
+            requested_session: None,
         };
         assert!(Implementation.enabled(context, &state));
         assert_eq!(Implementation.name(), IMPLEMENTATION);
@@ -525,6 +527,7 @@ mod tests {
             disabled_steps: &[],
             max_attempts: 1,
             resolver_model: "",
+            sessions_dir: Path::new("/state/sessions"),
         };
         let task = Task {
             id: TaskId(1),
@@ -546,6 +549,7 @@ mod tests {
             exit_code: None,
             failure: None,
             requested_model: None,
+            requested_session: None,
         };
         assert_eq!(Implementation.model(context, &state), None);
         state.requested_model = Some("opus".to_owned());

@@ -19,6 +19,7 @@ mod register;
 mod report;
 mod resolve;
 mod run;
+mod sessions;
 mod settings;
 mod status;
 mod steps;
@@ -36,7 +37,7 @@ pub use journal::{
 };
 pub use lock::{RunLock, RunLockError};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
-pub use provider::{Provider, ProviderCommand, ProviderRunError, StepCall, run_provider};
+pub use provider::{Provider, ProviderCommand, ProviderRunError, Resume, StepCall, run_provider};
 pub use queue::{QueueView, StatusSummary, queue_view};
 pub use register::{RegisterError, register_project};
 pub use report::{AttemptToken, Outcome, ReportError, report, report_retry, start_attempt};
@@ -45,6 +46,7 @@ pub use run::{
     Attempted, RunContext, RunEnd, RunError, RunReport, SyncProblem, build_prompt,
     build_review_prompt, build_test_prompt, implementation_prompt, run_queue,
 };
+pub use sessions::{SessionLog, SessionLogError};
 pub use settings::{
     ATTEMPT_TIMEOUT, DEFAULT_ATTEMPT_TIMEOUT_SECS, DEFAULT_MAX_ATTEMPTS, DEFAULT_RESOLVER_PROVIDER,
     HEALTH_CHECK, MAX_ATTEMPTS, RESOLVER_MODEL, RESOLVER_PROVIDER, STEP_COMMIT, STEP_HEALTH_CHECK,

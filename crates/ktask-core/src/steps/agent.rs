@@ -1,12 +1,13 @@
 //! Turns what running a provider produced into a [`StepOutcome`] — the one piece shared by the
 //! implementation, review and test steps, none of which otherwise names the others.
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::steps::{Deps, INTERRUPTED, PipelineState, StepOutcome};
 use crate::{
-    AttemptToken, Exit, Journal, Outcome, Output, ProviderRunError, RunContext, RunError, StepCall,
-    Task, TaskStatus, run_provider,
+    AttemptToken, Exit, IMPLEMENTATION, Journal, Outcome, Output, ProviderRunError, Resume,
+    RunContext, RunError, StepCall, Task, TaskStatus, run_provider,
 };
 
 /// What a step that ran a provider ended at: its exit code (`None` when the provider could not
@@ -126,9 +127,84 @@ fn to_step_outcome(duration: Duration, outcome: AgentOutcome) -> StepOutcome {
     }
 }
 
+/// Where the transcript of session `session` lives, under `sessions_dir` — the tool's own
+/// state directory, never the project's working tree.
+fn session_transcript_path(sessions_dir: &Path, session: &str) -> PathBuf {
+    sessions_dir.join(format!("{session}.log"))
+}
+
+/// The session and transcript path the implementation step of `state`'s attempt is told to
+/// resume, when `state.requested_session` names one and `step` is the implementation step.
+/// `None` for every other step, and for an attempt with nothing to resume.
+fn requested_resume(
+    step: &str,
+    context: RunContext<'_>,
+    state: &PipelineState<'_>,
+) -> Option<(String, PathBuf)> {
+    let session = (step == IMPLEMENTATION).then(|| state.requested_session.clone())??;
+    let transcript_path = session_transcript_path(context.sessions_dir, &session);
+    Some((session, transcript_path))
+}
+
+/// Records `output`'s own prompt and standard output under `session`'s own transcript, and
+/// the session itself against this attempt — the implementation step's own bookkeeping, so a
+/// later `retry --same-session` has something to resume and something to read back.
+fn record_session(
+    deps: &Deps<'_>,
+    context: RunContext<'_>,
+    state: &PipelineState<'_>,
+    prompt: &str,
+    output: &Output,
+    session: &str,
+) -> Result<(), RunError> {
+    let path = session_transcript_path(context.sessions_dir, session);
+    let mut transcript = format!("=== prompt ===\n{prompt}\n\n=== output ===\n");
+    transcript.push_str(&String::from_utf8_lossy(&output.stdout));
+    if !transcript.ends_with('\n') {
+        transcript.push('\n');
+    }
+    deps.session_log
+        .append(&path, transcript.as_bytes())
+        .map_err(|error| RunError::Other(error.to_string()))?;
+    crate::attempt::record_session(
+        deps.journal,
+        deps.clock,
+        state.task.id,
+        state.token.number,
+        session,
+    )?;
+    Ok(())
+}
+
+/// For the implementation step only, when `result` ran and the provider's own `read_session`
+/// reports a session for it: records it, with its own transcript, against `state`'s attempt.
+fn maybe_record_session(
+    deps: &Deps<'_>,
+    context: RunContext<'_>,
+    state: &PipelineState<'_>,
+    step: &str,
+    prompt: &str,
+    result: &Result<Output, ProviderRunError>,
+) -> Result<(), RunError> {
+    if step != IMPLEMENTATION {
+        return Ok(());
+    }
+    let Ok(output) = result else {
+        return Ok(());
+    };
+    let Some(session) = (deps.provider.read_session)(output) else {
+        return Ok(());
+    };
+    record_session(deps, context, state, prompt, output, &session)
+}
+
 /// Runs `prompt` through `deps`'s provider for `state`'s attempt's step `step`, with `model` —
 /// the model this step runs with, when it has one, passed to the provider alongside the token,
 /// attempt number and step name — timing it, and turns what came back into a [`StepOutcome`].
+/// For the implementation step only: when `state.requested_session` names one, the provider is
+/// told to resume it; whatever session the provider's own `read_session` reads back from what
+/// it produced — `None` when it reported none at all — is recorded against the attempt, with
+/// its own transcript kept under `context.sessions_dir`.
 ///
 /// # Errors
 ///
@@ -141,6 +217,11 @@ pub(crate) fn run_agent_step(
     model: Option<&str>,
     prompt: &str,
 ) -> Result<StepOutcome, RunError> {
+    let requested = requested_resume(step, context, state);
+    let resume = requested.as_ref().map(|(session, transcript_path)| Resume {
+        session,
+        transcript_path,
+    });
     let started = deps.clock.now();
     let result = run_provider(
         deps.commands,
@@ -151,11 +232,13 @@ pub(crate) fn run_agent_step(
             attempt: state.token.number,
             step,
             model,
+            resume,
         },
         context.project_dir,
         context.attempt_timeout,
     );
     let duration = deps.clock.now().duration_since(started).unwrap_or_default();
+    maybe_record_session(deps, context, state, step, prompt, &result)?;
     let outcome = agent_outcome(deps.journal, state.task, state.token, step, result)?;
     state.exit_code = outcome.exit_code;
     Ok(to_step_outcome(duration, outcome))

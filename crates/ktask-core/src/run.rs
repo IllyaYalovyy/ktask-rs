@@ -13,7 +13,7 @@ use crate::pick::{Pick, end_when_nothing_left, pick_next_task};
 use crate::steps::{self, INTERRUPTED};
 use crate::{
     BeginAttemptError, Clock, Commands, Git, Journal, JournalError, Provider, RecordReportError,
-    RunLock, RunLockError, TaskId, TaskStatus,
+    RunLock, RunLockError, SessionLog, TaskId, TaskStatus,
 };
 
 pub use crate::steps::implementation::{build_prompt, implementation_prompt};
@@ -176,6 +176,9 @@ pub struct RunContext<'a> {
     /// The project's `resolver-model` setting, recorded against the resolve step when it runs.
     /// Empty when the project has not set one.
     pub resolver_model: &'a str,
+    /// Where a provider's session transcripts are kept, under the tool's own state directory
+    /// — never the project's working tree.
+    pub sessions_dir: &'a Path,
 }
 
 impl RunContext<'_> {
@@ -257,6 +260,7 @@ fn attempt_task(
         &pre_steps,
         &steps::default_steps(),
         None,
+        None,
     )?;
     let status = result.status;
     attempted.push(result);
@@ -282,6 +286,7 @@ fn attempt_loop(
     commands: &impl Commands,
     git: &impl Git,
     provider: &Provider,
+    session_log: &impl SessionLog,
     context: RunContext<'_>,
 ) -> Result<RunReport, RunError> {
     let deps = steps::Deps {
@@ -290,7 +295,18 @@ fn attempt_loop(
         commands,
         git,
         provider,
+        session_log,
     };
+    run_attempt_loop(deps, journal, context)
+}
+
+/// [`attempt_loop`]'s own loop, pulled out of it so building `deps` stays within the
+/// workspace's function-length limit.
+fn run_attempt_loop(
+    deps: steps::Deps<'_>,
+    journal: &impl Journal,
+    context: RunContext<'_>,
+) -> Result<RunReport, RunError> {
     let mut attempted = Vec::new();
     loop {
         match pick_next_task(journal)? {
@@ -332,12 +348,14 @@ fn attempt_loop(
 /// Fails, attempting nothing, when another run already holds `lock`. Fails when the journal
 /// cannot be read or written; an attempt's own failure is reported in the returned
 /// [`RunReport`], not here.
+#[allow(clippy::too_many_arguments)]
 pub fn run_queue(
     journal: &impl Journal,
     clock: &impl Clock,
     commands: &impl Commands,
     git: &impl Git,
     provider: &Provider,
+    session_log: &impl SessionLog,
     lock: &impl RunLock,
     context: RunContext<'_>,
 ) -> Result<RunReport, RunError> {
@@ -352,7 +370,15 @@ pub fn run_queue(
             end,
         });
     }
-    attempt_loop(journal, clock, commands, git, provider, context)
+    attempt_loop(
+        journal,
+        clock,
+        commands,
+        git,
+        provider,
+        session_log,
+        context,
+    )
 }
 
 #[cfg(test)]
@@ -361,7 +387,9 @@ mod tests {
     use std::path::Path;
     use std::time::SystemTime;
 
-    use crate::fakes::{FakeClock, FakeCommands, FakeGit, FakeJournal, FakeRunLock, at, draft};
+    use crate::fakes::{
+        FakeClock, FakeCommands, FakeGit, FakeJournal, FakeRunLock, FakeSessionLog, at, draft,
+    };
     use crate::{
         AttemptRun, AttemptToken, COMMIT_STEP, CommandSpec, Commands, CommandsError,
         CommitAllError, Event, Exit, HEALTH_CHECK_STEP, IMPLEMENTATION, Outcome, Output, PUSH_STEP,
@@ -395,6 +423,8 @@ mod tests {
                     stdin: prompt.as_bytes().to_vec(),
                 })
             },
+            supports_resume: false,
+            read_session: |_| None,
         }
     }
 
@@ -417,6 +447,7 @@ mod tests {
             disabled_steps: &[],
             max_attempts: 1,
             resolver_model: "",
+            sessions_dir: Path::new("/state/sessions"),
         }
     }
 
@@ -432,6 +463,7 @@ mod tests {
             commands,
             &FakeGit::default(),
             provider,
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context(timeout),
         )
@@ -627,6 +659,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -678,6 +711,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -721,6 +755,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -771,6 +806,7 @@ mod tests {
             &failing,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -800,6 +836,7 @@ mod tests {
             &passing,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -843,6 +880,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -871,6 +909,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -925,6 +964,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -963,6 +1003,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -995,6 +1036,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -1027,6 +1069,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -1059,6 +1102,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -1100,6 +1144,7 @@ mod tests {
             &commands,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1140,6 +1185,7 @@ mod tests {
             &commands,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1171,6 +1217,7 @@ mod tests {
             &commands,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1201,6 +1248,7 @@ mod tests {
             &NeverRun,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1237,6 +1285,7 @@ mod tests {
             &NeverRun,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1275,6 +1324,7 @@ mod tests {
             &NeverRun,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1314,6 +1364,7 @@ mod tests {
             &NeverRun,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1349,6 +1400,7 @@ mod tests {
             &NeverRun,
             &failing_git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1374,6 +1426,7 @@ mod tests {
             &reporting,
             &passing_git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1439,6 +1492,7 @@ mod tests {
             &commands,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -1513,6 +1567,8 @@ mod tests {
                     stdin: Vec::new(),
                 })
             },
+            supports_resume: false,
+            read_session: |_| None,
         };
         let commands = ReportingCommands {
             journal: &journal,
@@ -1842,6 +1898,7 @@ mod tests {
             &commands,
             &git_with_diff(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -1872,6 +1929,7 @@ mod tests {
             &commands,
             &git_with_diff(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -2004,6 +2062,8 @@ mod tests {
         let refusing = Provider {
             name: "refusing",
             command: |_, _| Err("cannot build it".to_owned()),
+            supports_resume: false,
+            read_session: |_| None,
         };
         let commands = commands_ok(Exit::Code(0));
         let report = run(&journal, &commands, &refusing, Duration::from_secs(60)).unwrap();
@@ -2033,6 +2093,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(42)),
         )
@@ -2126,6 +2187,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &lock,
             context(Duration::from_secs(60)),
         )
@@ -2472,6 +2534,7 @@ mod tests {
             &failing,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -2495,6 +2558,7 @@ mod tests {
             &recording,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -2539,6 +2603,7 @@ mod tests {
             &commands,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -2577,6 +2642,7 @@ mod tests {
             &commands,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -2618,6 +2684,7 @@ mod tests {
             &commands,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -2655,6 +2722,7 @@ mod tests {
             &commands,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -2699,6 +2767,7 @@ mod tests {
             &commands,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -2742,6 +2811,7 @@ mod tests {
             &commands,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -2785,6 +2855,7 @@ mod tests {
             &commands,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -2820,6 +2891,7 @@ mod tests {
             &commands,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -2860,6 +2932,7 @@ mod tests {
             &commands,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -2902,6 +2975,7 @@ mod tests {
             &commands,
             &git,
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -3003,6 +3077,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -3060,6 +3135,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_with_max_attempts(3),
         )
@@ -3110,6 +3186,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_with_max_attempts(3),
         )
@@ -3144,6 +3221,7 @@ mod tests {
             &commands,
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_with_max_attempts(1),
         )
@@ -3226,6 +3304,7 @@ mod tests {
             &AlwaysFails(commands),
             &FakeGit::default(),
             &test_provider(),
+            &FakeSessionLog::default(),
             &FakeRunLock::free(),
             context_with_max_attempts(3),
         )

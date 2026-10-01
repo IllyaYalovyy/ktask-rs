@@ -7,8 +7,8 @@ use std::time::{Duration, SystemTime};
 use crate::{
     AppendConflict, Clock, CommandSpec, Commands, CommandsError, CommitAllError, Event, Git,
     GitError, Journal, JournalError, Output, Project, ProjectRegistry, PullRebase, PullRebaseError,
-    PushError, RegistryError, RunLock, RunLockError, Settings, SettingsError, SettingsStore,
-    TaskDraft, TaskKind,
+    PushError, RegistryError, RunLock, RunLockError, SessionLog, SessionLogError, Settings,
+    SettingsError, SettingsStore, TaskDraft, TaskKind,
 };
 
 /// An in-memory registry that can be told to fail.
@@ -232,6 +232,22 @@ impl Commands for FakeCommands {
     fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
         *self.last.borrow_mut() = Some(spec.clone());
         self.result.clone()
+    }
+}
+
+/// An in-memory session log: remembers every `(path, content)` [`SessionLog::append`] was
+/// called with, in order, so a test can see exactly what a step wrote and where.
+#[derive(Debug, Default)]
+pub(crate) struct FakeSessionLog {
+    pub(crate) appended: RefCell<Vec<(PathBuf, Vec<u8>)>>,
+}
+
+impl SessionLog for FakeSessionLog {
+    fn append(&self, path: &Path, content: &[u8]) -> Result<(), SessionLogError> {
+        self.appended
+            .borrow_mut()
+            .push((path.to_owned(), content.to_owned()));
+        Ok(())
     }
 }
 

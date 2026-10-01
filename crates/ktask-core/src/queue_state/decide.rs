@@ -246,6 +246,7 @@ impl QueueState {
     ///
     /// Fails, deciding nothing, when no attempt numbered `number` was started for this task, or
     /// when it was but has since ended.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn decide_record_report(
         &self,
         id: TaskId,
@@ -253,6 +254,7 @@ impl QueueState {
         outcome: Outcome,
         reason: Option<&str>,
         retry_model: Option<&str>,
+        retry_same_session: bool,
         at: SystemTime,
     ) -> Result<Event, RecordReportError> {
         self.check_attempt_running(id, number)?;
@@ -262,7 +264,30 @@ impl QueueState {
             outcome,
             reason: reason.map(str::to_owned),
             retry_model: retry_model.map(str::to_owned),
+            retry_same_session,
             step: self.current_step(id),
+            at,
+        })
+    }
+
+    /// The command "record session `session` for attempt `number` of task `id`": the event it
+    /// produces, or the reason it cannot be recorded.
+    ///
+    /// # Errors
+    ///
+    /// Fails, deciding nothing, when no attempt numbered `number` is running for this task.
+    pub(crate) fn decide_record_session(
+        &self,
+        id: TaskId,
+        number: u32,
+        session: String,
+        at: SystemTime,
+    ) -> Result<Event, RecordReportError> {
+        self.check_attempt_running(id, number)?;
+        Ok(Event::AttemptSessionRecorded {
+            id,
+            number,
+            session,
             at,
         })
     }

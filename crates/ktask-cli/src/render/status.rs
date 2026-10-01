@@ -12,6 +12,7 @@ struct StepJson<'a> {
     step: &'a str,
     provider: Option<&'a str>,
     model: Option<&'a str>,
+    session: Option<&'a str>,
     time_spent_seconds: u64,
     outcome: &'static str,
     reason: Option<&'a str>,
@@ -26,6 +27,7 @@ struct AttemptJson<'a> {
     step: &'a str,
     provider: Option<&'a str>,
     model: Option<&'a str>,
+    session: Option<&'a str>,
     time_spent_seconds: u64,
     outcome: &'static str,
     reason: Option<&'a str>,
@@ -56,6 +58,7 @@ fn step_json(line: &ktask_core::StepLine) -> StepJson<'_> {
         step: &line.step,
         provider: line.provider.as_deref(),
         model: line.model.as_deref(),
+        session: line.session.as_deref(),
         time_spent_seconds: line.time_spent.as_secs(),
         outcome: line.outcome.as_str(),
         reason: line.reason.as_deref(),
@@ -85,6 +88,7 @@ fn attempt_json(line: &ktask_core::AttemptLine) -> AttemptJson<'_> {
         step: &line.step,
         provider: line.provider.as_deref(),
         model: line.model.as_deref(),
+        session: line.session.as_deref(),
         time_spent_seconds: line.time_spent.as_secs(),
         outcome: line.outcome.as_str(),
         reason: line.reason.as_deref(),
@@ -176,15 +180,19 @@ fn write_step_lines(
             Some(model) => format!("{}\t{model}", step.step),
             None => step.step.clone(),
         };
+        let session = step
+            .session
+            .as_deref()
+            .map_or_else(String::new, |session| format!("\tsession:{session}"));
         match &step.reason {
             Some(reason) => writeln!(
                 out,
-                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}\t{reason}",
+                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}\t{reason}{session}",
                 step.outcome
             ),
             None => writeln!(
                 out,
-                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}",
+                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{session}",
                 step.outcome
             ),
         }

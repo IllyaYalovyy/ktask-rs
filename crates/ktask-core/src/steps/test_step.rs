@@ -122,6 +122,7 @@ mod tests {
             disabled_steps: &[TEST_STEP],
             max_attempts: 1,
             resolver_model: "",
+            sessions_dir: Path::new("/state/sessions"),
         };
         let task = Task {
             id: TaskId(1),
@@ -143,6 +144,7 @@ mod tests {
             exit_code: None,
             failure: None,
             requested_model: None,
+            requested_session: None,
         };
         assert!(!Test.enabled(context, &state));
     }

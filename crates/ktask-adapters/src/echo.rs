@@ -1,22 +1,47 @@
 //! The `echo` provider: a built-in [`Provider`] value that uses no tokens. It runs the first
 //! fenced `bash` code block of a prompt with `bash`, passing the token, attempt number, step
-//! name and model as positional arguments.
+//! name, a session to resume (and its transcript's path) and model as positional arguments —
+//! and it keeps real session transcripts, so `retry --same-session` can be tested with no
+//! model and no network. A script reports the session it ran in by printing a line
+//! `KTASK_SESSION: <id>`; a script that never prints one gets no session recorded at all,
+//! exactly as before this existed.
 
-use ktask_core::{Provider, ProviderCommand, StepCall};
+use ktask_core::{Output, Provider, ProviderCommand, StepCall};
 
 /// The name the `echo` provider is known by.
 pub const NAME: &str = "echo";
 
-/// The `echo` provider.
+/// The line prefix a script's own standard output reports its session with: the rest of the
+/// line, trimmed, is the session id.
+const SESSION_PREFIX: &str = "KTASK_SESSION: ";
+
+/// The `echo` provider. It supports resuming a session: a resumed invocation is told which
+/// one, and where its transcript lives, as positional arguments; it reads the session an
+/// invocation ran in back from its own standard output.
 pub const PROVIDER: Provider = Provider {
     name: NAME,
     command,
+    supports_resume: true,
+    read_session,
 };
 
+/// The session a script reported running in, when its standard output has a line `KTASK_
+/// SESSION: <id>` — the first one, when there is more than one. `None` when it reported none.
+fn read_session(output: &Output) -> Option<String> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().find_map(|line| {
+        line.strip_prefix(SESSION_PREFIX)
+            .map(|session| session.trim().to_owned())
+    })
+}
+
 /// Turns `prompt` into the command that runs its first fenced `bash` code block with `bash`,
-/// passing `call.token` as `$1`, `call.attempt` as `$2`, `call.step` as `$3` and `call.model`
-/// (empty when it is `None`) as `$4` — so a scripted prompt can prove to a test which model it
-/// was run with.
+/// passing `call.token` as `$1`, `call.attempt` as `$2`, `call.step` as `$3`, the session
+/// `call.resume` names to continue (empty when it is `None`) as `$4`, the path of that
+/// session's transcript (empty when `call.resume` is `None`) as `$5`, and `call.model` (empty
+/// when it is `None`) as `$6` — so a scripted prompt can prove to a test which session and
+/// model it was run with, and read back what an earlier invocation under the same session
+/// wrote.
 ///
 /// # Errors
 ///
@@ -25,6 +50,13 @@ fn command(prompt: &str, call: StepCall<'_>) -> Result<ProviderCommand, String> 
     let block = first_bash_block(prompt).ok_or_else(|| {
         "the prompt has no fenced bash code block for the echo provider to run".to_owned()
     })?;
+    let (resume_session, resume_transcript) = match call.resume {
+        Some(resume) => (
+            resume.session.to_owned(),
+            resume.transcript_path.display().to_string(),
+        ),
+        None => (String::new(), String::new()),
+    };
     Ok(ProviderCommand {
         program: "bash".to_owned(),
         args: vec![
@@ -32,6 +64,8 @@ fn command(prompt: &str, call: StepCall<'_>) -> Result<ProviderCommand, String> 
             call.token.to_owned(),
             call.attempt.to_string(),
             call.step.to_owned(),
+            resume_session,
+            resume_transcript,
             call.model.unwrap_or_default().to_owned(),
         ],
         stdin: block.into_bytes(),
@@ -70,6 +104,7 @@ mod tests {
             attempt,
             step,
             model: None,
+            resume: None,
         }
     }
 
@@ -92,13 +127,13 @@ mod tests {
         assert_eq!(built.program, "bash");
         assert_eq!(
             built.args,
-            vec!["-s", "the-token", "3", "implementation", ""]
+            vec!["-s", "the-token", "3", "implementation", "", "", ""]
         );
         assert_eq!(built.stdin, b"echo hi\n");
     }
 
     #[test]
-    fn the_model_is_passed_as_a_fourth_positional_arg_when_there_is_one() {
+    fn the_model_is_passed_as_a_sixth_positional_arg_when_there_is_one() {
         let prompt = "```bash\necho hi\n```\n";
         let built = command(
             prompt,
@@ -107,12 +142,46 @@ mod tests {
                 attempt: 3,
                 step: "implementation",
                 model: Some("opus"),
+                resume: None,
             },
         )
         .unwrap();
         assert_eq!(
             built.args,
-            vec!["-s", "the-token", "3", "implementation", "opus"]
+            vec!["-s", "the-token", "3", "implementation", "", "", "opus"]
+        );
+    }
+
+    #[test]
+    fn a_resumed_invocation_gets_the_session_and_transcript_path_as_the_fourth_and_fifth_args() {
+        use std::path::Path;
+
+        let prompt = "```bash\necho hi\n```\n";
+        let built = command(
+            prompt,
+            StepCall {
+                token: "the-token",
+                attempt: 3,
+                step: "implementation",
+                model: None,
+                resume: Some(ktask_core::Resume {
+                    session: "the-session",
+                    transcript_path: Path::new("/state/sessions/the-session.log"),
+                }),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            built.args,
+            vec![
+                "-s",
+                "the-token",
+                "3",
+                "implementation",
+                "the-session",
+                "/state/sessions/the-session.log",
+                "",
+            ]
         );
     }
 
@@ -134,5 +203,35 @@ mod tests {
     fn the_provider_is_named_echo() {
         assert_eq!(PROVIDER.name, NAME);
         assert_eq!(NAME, "echo");
+    }
+
+    fn output(stdout: &[u8]) -> Output {
+        Output {
+            stdout: stdout.to_vec(),
+            stderr: Vec::new(),
+            exit: ktask_core::Exit::Code(0),
+        }
+    }
+
+    #[test]
+    fn a_script_that_never_reports_a_session_has_none_read_back() {
+        assert_eq!(read_session(&output(b"just some output\n")), None);
+        assert_eq!(read_session(&output(b"")), None);
+    }
+
+    #[test]
+    fn a_script_that_reports_a_session_has_it_read_back() {
+        assert_eq!(
+            read_session(&output(b"before\nKTASK_SESSION: abc-123\nafter\n")),
+            Some("abc-123".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_first_reported_session_wins_when_there_is_more_than_one() {
+        assert_eq!(
+            read_session(&output(b"KTASK_SESSION: first\nKTASK_SESSION: second\n")),
+            Some("first".to_owned())
+        );
     }
 }

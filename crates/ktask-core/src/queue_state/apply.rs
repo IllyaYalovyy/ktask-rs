@@ -64,6 +64,7 @@ impl QueueState {
             started_at: *at,
             start_commit: start_commit.clone(),
             provider: None,
+            session: None,
             ended: None,
             steps: Vec::new(),
         });
@@ -149,6 +150,7 @@ impl QueueState {
             outcome,
             reason,
             retry_model,
+            retry_same_session,
             step,
             ..
         } = event
@@ -168,6 +170,25 @@ impl QueueState {
             None => {
                 self.retry_models.remove(&(*id, *number));
             }
+        }
+        self.retry_same_sessions
+            .insert((*id, *number), *retry_same_session);
+    }
+
+    /// Applies a [`Event::AttemptSessionRecorded`]: records the session against the attempt it
+    /// names, when it is the attempt currently folded for that task.
+    pub(super) fn apply_attempt_session_recorded(&mut self, event: &Event) {
+        let Event::AttemptSessionRecorded {
+            id,
+            number,
+            session,
+            ..
+        } = event
+        else {
+            return;
+        };
+        if let Some(attempt) = self.attempt_mut(*id, *number) {
+            attempt.session = Some(session.clone());
         }
     }
 

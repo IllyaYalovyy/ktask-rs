@@ -4,7 +4,9 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use ktask_adapters::{FileRunLock, GitCli, ProcessCommands, SystemClock, echo};
+use std::path::Path;
+
+use ktask_adapters::{FileRunLock, FileSessionLog, GitCli, ProcessCommands, SystemClock, echo};
 use ktask_core::{
     COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, SYNC_STEP, Settings,
     TEST_STEP,
@@ -12,6 +14,7 @@ use ktask_core::{
 
 use crate::context::{
     current_exe, merge_project, open_journal, open_registry, resolve, run_lock_file,
+    sessions_dir_file,
 };
 use crate::error::Failure;
 use crate::render;
@@ -50,13 +53,15 @@ pub(crate) struct Args {
 /// The [`RunContext`] `run` hands `run_queue`, built from `project`'s own directory and name,
 /// `binary_path`, `args` and `settings`, and `settings`' own steps switched off, held in
 /// `disabled` since `RunContext` only borrows them.
+#[allow(clippy::too_many_arguments)]
 fn run_context<'a>(
     project: &'a ktask_core::Project,
-    binary_path: &'a std::path::Path,
+    binary_path: &'a Path,
     args: &Args,
     settings: &'a Settings,
     disabled: &'a [&'static str],
     resolver_model: &'a str,
+    sessions_dir: &'a Path,
 ) -> RunContext<'a> {
     RunContext {
         project_name: &project.name,
@@ -68,6 +73,7 @@ fn run_context<'a>(
         disabled_steps: disabled,
         max_attempts: ktask_core::effective_max_attempts(settings),
         resolver_model,
+        sessions_dir,
     }
 }
 
@@ -86,6 +92,7 @@ pub(crate) fn run(
     let binary_path = current_exe()?;
     let resolver_model = settings.resolver_model.clone().unwrap_or_default();
     let disabled = disabled_steps(&settings);
+    let sessions_dir = sessions_dir_file(&project)?;
     let context = run_context(
         &project,
         &binary_path,
@@ -93,6 +100,7 @@ pub(crate) fn run(
         &settings,
         &disabled,
         &resolver_model,
+        &sessions_dir,
     );
     let report = ktask_core::run_queue(
         &journal,
@@ -100,6 +108,7 @@ pub(crate) fn run(
         &ProcessCommands,
         &GitCli,
         &echo::PROVIDER,
+        &FileSessionLog,
         &lock,
         context,
     )?;

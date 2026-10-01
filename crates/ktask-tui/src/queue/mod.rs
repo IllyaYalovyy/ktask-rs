@@ -521,6 +521,7 @@ mod tests {
             step: "implementation".to_owned(),
             provider: Some("echo".to_owned()),
             model: None,
+            session: None,
             time_spent: std::time::Duration::from_secs(1),
             outcome: AttemptOutcome::Reported(Outcome::NeedsInput),
             reason: Some(reason.to_owned()),

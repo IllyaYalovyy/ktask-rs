@@ -189,6 +189,7 @@ fn a_second_run_after_answering_continues_and_the_prompt_carries_the_question_an
         disabled_steps: &[],
         max_attempts: 3,
         resolver_model: "",
+        sessions_dir: std::path::Path::new("/state/sessions"),
     };
     let task = Task {
         id: TaskId(1),

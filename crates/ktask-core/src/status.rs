@@ -9,7 +9,7 @@ use crate::{
 mod lines;
 mod outcome;
 
-use lines::{running_step, step_outcome, step_provider};
+use lines::{gate_stop_entry, running_step, step_outcome, step_provider, step_session};
 pub use outcome::AttemptOutcome;
 
 /// The step kind that runs an agent on the task's whole prompt.
@@ -56,6 +56,10 @@ pub struct StepLine {
     /// The model configured for the resolve step, when it is one and the project has set one.
     /// `None` for every other step, and for a resolve step with no model configured.
     pub model: Option<String>,
+    /// The session the provider reported, for the implementation step, when it reported one.
+    /// `None` for every other step, and for an implementation step whose provider reported
+    /// none.
+    pub session: Option<String>,
     /// How long it has run: the recorded duration once it has ended, elapsed time so far
     /// while it is running.
     pub time_spent: Duration,
@@ -81,6 +85,9 @@ pub struct AttemptLine {
     /// The model configured for the most recent step, when it is the resolve step and the
     /// project has set one. `None` otherwise.
     pub model: Option<String>,
+    /// The session the provider reported for this attempt's implementation step, when it
+    /// reported one. `None` otherwise.
+    pub session: Option<String>,
     /// How long the most recent step has run: the recorded duration once it has ended,
     /// elapsed time so far while it is running.
     pub time_spent: Duration,
@@ -153,6 +160,7 @@ fn step_lines(
     answer: Option<&str>,
 ) -> Vec<StepLine> {
     let provider = attempt.provider.as_deref();
+    let session = attempt.session.as_deref();
     attempt
         .steps
         .iter()
@@ -164,6 +172,7 @@ fn step_lines(
                     step: step.name.clone(),
                     provider: step_provider(&step.name, provider),
                     model: step.model.clone(),
+                    session: step_session(&step.name, session),
                     time_spent: end.duration,
                     outcome,
                     reason,
@@ -173,6 +182,7 @@ fn step_lines(
                 &step.name,
                 provider,
                 step.model.as_deref(),
+                session,
                 step.started_at,
                 clock,
                 run_alive,
@@ -202,6 +212,7 @@ fn current_step_line(
                 step: IMPLEMENTATION.to_owned(),
                 provider: step_provider(IMPLEMENTATION, attempt.provider.as_deref()),
                 model: None,
+                session: step_session(IMPLEMENTATION, attempt.session.as_deref()),
                 time_spent: end.duration,
                 outcome,
                 reason,
@@ -211,6 +222,7 @@ fn current_step_line(
             IMPLEMENTATION,
             attempt.provider.as_deref(),
             None,
+            attempt.session.as_deref(),
             attempt.started_at,
             clock,
             run_alive,
@@ -238,6 +250,7 @@ fn attempt_line(
         step: current.step,
         provider: current.provider,
         model: current.model,
+        session: current.session,
         time_spent: current.time_spent,
         outcome: current.outcome,
         reason: current.reason,
@@ -260,38 +273,6 @@ fn entry_for(
         status: task.status,
         attempt: attempt_line(attempt, reported, clock, run_alive, answer),
         history,
-        done_by_user: None,
-    }
-}
-
-/// The [`StatusEntry`] for `task`, given the step and reason a gate recorded stopping it before
-/// any attempt began: one [`StepLine`] shown [`AttemptOutcome::Failed`], the same way a
-/// command-kind step that fails inside an attempt is shown — `task.status` is untouched, still
-/// `pending`.
-fn gate_stop_entry(task: Task, step: String, reason: String) -> StatusEntry {
-    let line = StepLine {
-        step,
-        provider: None,
-        model: None,
-        time_spent: Duration::ZERO,
-        outcome: AttemptOutcome::Failed,
-        reason: Some(reason),
-    };
-    StatusEntry {
-        task: task.id,
-        title: task.title,
-        status: task.status,
-        attempt: AttemptLine {
-            number: 0,
-            step: line.step.clone(),
-            provider: None,
-            model: None,
-            time_spent: Duration::ZERO,
-            outcome: line.outcome,
-            reason: line.reason.clone(),
-            steps: vec![line],
-        },
-        history: Vec::new(),
         done_by_user: None,
     }
 }
@@ -461,6 +442,7 @@ mod tests {
                     step: IMPLEMENTATION.to_owned(),
                     provider: Some("echo".to_owned()),
                     model: None,
+                    session: None,
                     time_spent: Duration::from_secs(30),
                     outcome: AttemptOutcome::Running,
                     reason: None,
@@ -468,6 +450,7 @@ mod tests {
                         step: IMPLEMENTATION.to_owned(),
                         provider: Some("echo".to_owned()),
                         model: None,
+                        session: None,
                         time_spent: Duration::from_secs(30),
                         outcome: AttemptOutcome::Running,
                         reason: None,
@@ -497,6 +480,7 @@ mod tests {
                     step: IMPLEMENTATION.to_owned(),
                     provider: Some("echo".to_owned()),
                     model: None,
+                    session: None,
                     time_spent: Duration::from_secs(30),
                     outcome: AttemptOutcome::Interrupted,
                     reason: None,
@@ -504,6 +488,7 @@ mod tests {
                         step: IMPLEMENTATION.to_owned(),
                         provider: Some("echo".to_owned()),
                         model: None,
+                        session: None,
                         time_spent: Duration::from_secs(30),
                         outcome: AttemptOutcome::Interrupted,
                         reason: None,
@@ -929,6 +914,7 @@ mod tests {
                     // provider, even though the attempt ran with `echo`.
                     provider: None,
                     model: None,
+                    session: None,
                     time_spent: Duration::from_secs(4),
                     outcome: AttemptOutcome::Passed,
                     reason: None,
@@ -937,6 +923,7 @@ mod tests {
                     step: IMPLEMENTATION.to_owned(),
                     provider: Some("echo".to_owned()),
                     model: None,
+                    session: None,
                     time_spent: Duration::from_secs(6),
                     outcome: AttemptOutcome::Running,
                     reason: None,
@@ -998,6 +985,7 @@ mod tests {
                 step: SYNC_STEP.to_owned(),
                 provider: None,
                 model: None,
+                session: None,
                 time_spent: Duration::ZERO,
                 outcome: AttemptOutcome::Failed,
                 reason: Some("uncommitted changes; commit or stash".to_owned()),

@@ -66,6 +66,7 @@ pub(crate) fn run(
             attempt: *attempt,
             step,
             model: None,
+            resume: None,
         },
         &dir,
         Duration::from_millis(*timeout_ms),

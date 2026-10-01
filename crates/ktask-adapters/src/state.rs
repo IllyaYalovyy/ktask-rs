@@ -78,6 +78,21 @@ pub fn settings_path(
     )
 }
 
+/// The directory a provider's session transcripts for the project called `project` are kept
+/// under, `<state home>/ktask-rs/<project>/sessions`.
+#[must_use]
+pub fn sessions_dir_path(
+    xdg_state_home: Option<OsString>,
+    home: Option<OsString>,
+    project: &str,
+) -> Option<PathBuf> {
+    Some(
+        state_directory(xdg_state_home, home)?
+            .join(project)
+            .join("sessions"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -151,6 +166,19 @@ mod tests {
             Some(Path::new("/home/me/.local/state/ktask-rs/my-app/run.lock").to_owned())
         );
         assert_eq!(run_lock_path(None, None, "my-app"), None);
+    }
+
+    #[test]
+    fn sessions_live_next_to_their_projects_journal() {
+        assert_eq!(
+            sessions_dir_path(Some(set("/state")), None, "my-app"),
+            Some(Path::new("/state/ktask-rs/my-app/sessions").to_owned())
+        );
+        assert_eq!(
+            sessions_dir_path(None, Some(set("/home/me")), "my-app"),
+            Some(Path::new("/home/me/.local/state/ktask-rs/my-app/sessions").to_owned())
+        );
+        assert_eq!(sessions_dir_path(None, None, "my-app"), None);
     }
 
     #[test]

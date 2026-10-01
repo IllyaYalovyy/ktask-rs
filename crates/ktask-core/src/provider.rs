@@ -22,6 +22,17 @@ pub struct ProviderCommand {
     pub stdin: Vec<u8>,
 }
 
+/// The session an invocation is told to resume, and where its earlier transcript lives — given
+/// to a provider's [`Provider::command`] only when the resolver's `retry --same-session` named
+/// one for this attempt, and the provider [`Provider::supports_resume`].
+#[derive(Debug, Clone, Copy)]
+pub struct Resume<'a> {
+    /// The session to resume, as the provider itself reported it.
+    pub session: &'a str,
+    /// Where the session's transcript so far lives, so a provider that needs to can read it.
+    pub transcript_path: &'a Path,
+}
+
 /// Which step of which attempt a provider command runs for: the token that names the attempt,
 /// its number, and the step's name — passed to a real provider's script or command line as
 /// positional arguments, so it can call back into `ktask-rs report` and tell which step it is
@@ -37,10 +48,15 @@ pub struct StepCall<'a> {
     /// The model this step runs with, when it has one — `None` for a step with no model
     /// configured, and for every step but the resolve and implementation steps.
     pub model: Option<&'a str>,
+    /// The session this invocation is told to resume, when the resolver's `retry
+    /// --same-session` named one for this attempt. `None` for a fresh session, and for every
+    /// step but the implementation step.
+    pub resume: Option<Resume<'a>>,
 }
 
-/// A provider: a name it is known by, and a pure function from a prompt and a [`StepCall`] to
-/// the [`ProviderCommand`] that runs it.
+/// A provider: a name it is known by, a pure function from a prompt and a [`StepCall`] to the
+/// [`ProviderCommand`] that runs it, whether it supports resuming a session at all, and how a
+/// session id is read back from what it produced.
 #[derive(Debug, Clone, Copy)]
 pub struct Provider {
     /// The name the provider is known by.
@@ -51,6 +67,14 @@ pub struct Provider {
     ///
     /// Fails when the prompt cannot be turned into a command to run.
     pub command: fn(prompt: &str, call: StepCall<'_>) -> Result<ProviderCommand, String>,
+    /// Whether this provider can be told to resume a session at all — a `retry
+    /// --same-session` naming a provider that cannot is refused rather than silently started
+    /// fresh.
+    pub supports_resume: bool,
+    /// Reads the session this invocation ran in back out of what it produced. `None` when it
+    /// reported none — no session is recorded for this invocation at all, the common case for
+    /// a provider that never reports one, or a prompt that was never meant to.
+    pub read_session: fn(output: &Output) -> Option<String>,
 }
 
 /// Why running a provider failed — never for the command's own exit code, which is a normal
@@ -123,6 +147,8 @@ mod tests {
         Provider {
             name: "test",
             command,
+            supports_resume: false,
+            read_session: |_| None,
         }
     }
 
@@ -132,6 +158,7 @@ mod tests {
             attempt,
             step,
             model: None,
+            resume: None,
         }
     }
 

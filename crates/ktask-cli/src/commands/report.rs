@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use ktask_adapters::SystemClock;
+use ktask_adapters::{SystemClock, echo};
 use ktask_core::{AttemptToken, Outcome};
 
 use crate::context::{open_journal, open_registry, reject_project, resolve};
@@ -32,10 +32,16 @@ pub(crate) struct Args {
     /// The model the task's next attempt should run with; only valid with the `retry` outcome
     #[arg(long, value_name = "NAME")]
     model: Option<String>,
+    /// Ask the task's next attempt to resume this attempt's own session instead of starting
+    /// fresh; only valid with the `retry` outcome, refused when this attempt reported no
+    /// session, or the configured provider does not support resuming one at all
+    #[arg(long)]
+    same_session: bool,
 }
 
-/// Checks `args.provider` and `args.model` against `outcome`: with `retry`, a named provider
-/// must be a known one; with anything else, neither may be given at all.
+/// Checks `args.provider`, `args.model` and `args.same_session` against `outcome`: with
+/// `retry`, a named provider must be a known one; with anything else, none of the three may be
+/// given at all.
 fn check_provider_and_model(outcome: Outcome, args: &Args) -> Result<(), Failure> {
     if outcome == Outcome::Retry {
         if let Some(provider) = &args.provider {
@@ -43,10 +49,11 @@ fn check_provider_and_model(outcome: Outcome, args: &Args) -> Result<(), Failure
         }
         return Ok(());
     }
-    if args.provider.is_some() || args.model.is_some() {
+    if args.provider.is_some() || args.model.is_some() || args.same_session {
         return Err(Failure {
             message: format!(
-                "outcome {outcome} does not accept --provider or --model: only retry does"
+                "outcome {outcome} does not accept --provider, --model or --same-session: only \
+                 retry does"
             ),
             code: 2,
         });
@@ -54,8 +61,9 @@ fn check_provider_and_model(outcome: Outcome, args: &Args) -> Result<(), Failure
     Ok(())
 }
 
-/// Records `args.outcome` (and `args.reason`, or — for `retry` — `args.model`) for the attempt
-/// `token` names, as the step currently running for it allows.
+/// Records `args.outcome` (and `args.reason`, or — for `retry` — `args.model` and
+/// `args.same_session`) for the attempt `token` names, as the step currently running for it
+/// allows.
 fn record(
     journal: &impl ktask_core::Journal,
     token: &AttemptToken,
@@ -63,7 +71,14 @@ fn record(
     args: &Args,
 ) -> Result<(), ktask_core::ReportError> {
     if outcome == Outcome::Retry {
-        ktask_core::report_retry(journal, &SystemClock, token, args.model.as_deref())
+        ktask_core::report_retry(
+            journal,
+            &SystemClock,
+            token,
+            args.model.as_deref(),
+            args.same_session,
+            echo::PROVIDER.supports_resume,
+        )
     } else {
         ktask_core::report(
             journal,

@@ -37,6 +37,7 @@ struct AttemptFold {
     started_at: SystemTime,
     start_commit: Option<String>,
     provider: Option<String>,
+    session: Option<String>,
     ended: Option<AttemptEnd>,
     steps: Vec<StepFold>,
 }
@@ -53,6 +54,9 @@ pub(crate) struct QueueState {
     /// The model the resolver named for an attempt's own retry decision, when it named one:
     /// [`QueueState::retry_model_of`].
     retry_models: HashMap<(TaskId, u32), String>,
+    /// Whether the resolver's retry decision for an attempt asked to resume its own session:
+    /// [`QueueState::retry_same_session_of`].
+    retry_same_sessions: HashMap<(TaskId, u32), bool>,
     /// The most recent gate stop recorded for each task, cleared once a later attempt for it
     /// actually begins: [`QueueState::gate_stop_of`].
     gate_stops: HashMap<TaskId, (String, String)>,
@@ -82,6 +86,7 @@ impl QueueState {
             Event::AttemptStarted { .. } => self.apply_attempt_started(event),
             Event::AttemptRunning { .. } => self.apply_attempt_running(event),
             Event::AttemptReported { .. } => self.apply_attempt_reported(event),
+            Event::AttemptSessionRecorded { .. } => self.apply_attempt_session_recorded(event),
             Event::AttemptEnded { .. } => self.apply_attempt_ended(event),
             Event::StepStarted { .. } => self.apply_step_started(event),
             Event::StepEnded { .. } => self.apply_step_ended(event),
@@ -256,6 +261,7 @@ mod tests {
     /// One randomly generated command against a queue that already holds `existing` ids,
     /// applied to both `journal` (through the real use cases) and `oracle` (independently),
     /// asserting the use case's own outcome matches what the oracle expects.
+    #[allow(clippy::too_many_lines)]
     fn apply_random_command(
         rng: &mut Rng,
         journal: &FakeJournal,
@@ -318,6 +324,7 @@ mod tests {
                         outcome,
                         Some("why"),
                         None,
+                        false,
                     );
                     if status == TaskStatus::Running {
                         assert_eq!(result, Ok(()));

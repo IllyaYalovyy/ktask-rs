@@ -12,6 +12,7 @@ mod journal;
 mod lock;
 mod process;
 mod registry;
+mod sessions;
 mod settings;
 mod state;
 mod watch;
@@ -26,6 +27,9 @@ pub use process::{
     exec_tied_to_parent, kill_group_if_orphaned,
 };
 pub use registry::SqliteRegistry;
+pub use sessions::FileSessionLog;
 pub use settings::TomlSettingsStore;
-pub use state::{journal_path, registry_path, run_lock_path, settings_path, state_root_path};
+pub use state::{
+    journal_path, registry_path, run_lock_path, sessions_dir_path, settings_path, state_root_path,
+};
 pub use watch::FileJournalWatch;

@@ -145,6 +145,7 @@ mod tests {
             disabled_steps: &[],
             max_attempts: 1,
             resolver_model: "",
+            sessions_dir: Path::new("/state/sessions"),
         }
     }
 
@@ -179,6 +180,7 @@ mod tests {
             exit_code: None,
             failure: None,
             requested_model: None,
+            requested_session: None,
         };
         let commands = crate::fakes::FakeCommands::returning(Ok(crate::Output {
             stdout: Vec::new(),
@@ -188,13 +190,17 @@ mod tests {
         let provider = crate::Provider {
             name: "test",
             command: |_, _| unreachable!("the commit step never runs a provider"),
+            supports_resume: false,
+            read_session: |_| None,
         };
+        let session_log = crate::fakes::FakeSessionLog::default();
         let deps = Deps {
             journal: &crate::fakes::FakeJournal::default(),
             clock: &StoppedClock,
             commands: &commands,
             git,
             provider: &provider,
+            session_log: &session_log,
         };
         Commit.run(&deps, context(), &mut state).unwrap()
     }
@@ -289,6 +295,7 @@ mod tests {
             exit_code: None,
             failure: None,
             requested_model: None,
+            requested_session: None,
         };
         assert!(!Commit.enabled(ctx, &state));
     }

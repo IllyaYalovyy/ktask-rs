@@ -1,9 +1,7 @@
 //! Drawing the queue screen: the header, the question or notice line, the key map, the task
 //! list, and, above it when there is one, the last run's or import's own report.
 
-use ktask_core::{
-    AttemptLine, DoneMark, QueueView, StepLine, Task, TaskId, TaskStatus, displayed_status,
-};
+use ktask_core::{AttemptLine, DoneMark, QueueView, Task, TaskId, TaskStatus, displayed_status};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -14,6 +12,10 @@ use crate::scroll::first_shown;
 use crate::widgets::{elide, key_map};
 
 use super::Queue;
+
+mod lines;
+
+use lines::{step_lines_named, windowed};
 
 /// Every key the queue screen itself answers, and what it does. Keys that only work while a
 /// question, a form or another screen is up are that context's own — shown there, in its own
@@ -315,54 +317,6 @@ impl Columns {
     }
 }
 
-/// One line per step of `steps`, in order — the same lines `status` prints for the same
-/// attempt, from the same use case: step (named with `label` ahead of it, so an earlier
-/// attempt's own steps read apart from the current one's, which carries none), provider (`-`
-/// for a step the tool ran itself, which names none), time spent, outcome, and the reason when
-/// there is one, cut to fit `width` with a trailing `…` when it does not.
-fn step_lines_named(steps: &[StepLine], width: usize, label: &str) -> Vec<Line<'static>> {
-    steps
-        .iter()
-        .map(|step| {
-            let provider = step.provider.as_deref().unwrap_or("-");
-            let seconds = step.time_spent.as_secs();
-            let outcome = step.outcome;
-            let shown_provider = step.model.as_deref().map_or_else(
-                || provider.to_owned(),
-                |model| format!("{provider} ({model})"),
-            );
-            let prefix = format!(
-                "      {label}{} · {shown_provider} · {seconds}s · {outcome}",
-                step.step
-            );
-            let text = step.reason.as_deref().map_or_else(
-                || prefix.clone(),
-                |reason| {
-                    let budget = width.saturating_sub(prefix.chars().count() + 2);
-                    format!("{prefix}: {}", elide(reason, budget))
-                },
-            );
-            Line::styled(text, Style::new().add_modifier(Modifier::DIM))
-        })
-        .collect()
-}
-
-/// `lines`, kept to at most `budget`: shown in full when they already fit; otherwise the
-/// earliest are dropped in favour of one leading `…` line, so the tail — the most recently
-/// finished steps, and the one still running — stays visible, and the cut is never silent.
-fn windowed(lines: Vec<Line<'static>>, budget: usize) -> Vec<Line<'static>> {
-    if lines.len() <= budget {
-        return lines;
-    }
-    let skip = lines.len() + 1 - budget;
-    let mut shown = vec![Line::styled(
-        "      …",
-        Style::new().add_modifier(Modifier::DIM),
-    )];
-    shown.extend(lines.into_iter().skip(skip));
-    shown
-}
-
 /// `task`'s row: its position, ID, status, kind and title, each of the first four padded to
 /// `columns`' width so every row lines up under the one before it, and the title cut to fit
 /// `width` with a trailing `…` when it does not. `attempt` — the same line `status` shows for
@@ -405,7 +359,7 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use ktask_core::{
-        AttemptOutcome, IMPLEMENTATION, Outcome, Project, StatusSummary, TaskId, TaskKind,
+        AttemptOutcome, IMPLEMENTATION, Outcome, Project, StatusSummary, StepLine, TaskId, TaskKind,
     };
     use ratatui::buffer::Buffer;
     use ratatui::crossterm::event::KeyCode;
@@ -603,6 +557,7 @@ mod tests {
             step: IMPLEMENTATION.to_owned(),
             provider: Some(provider.to_owned()),
             model: None,
+            session: None,
             time_spent: Duration::from_secs(seconds),
             outcome,
             reason: None,
@@ -610,6 +565,7 @@ mod tests {
                 step: IMPLEMENTATION.to_owned(),
                 provider: Some(provider.to_owned()),
                 model: None,
+                session: None,
                 time_spent: Duration::from_secs(seconds),
                 outcome,
                 reason: None,

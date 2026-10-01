@@ -176,6 +176,7 @@ mod tests {
             disabled_steps: &[],
             max_attempts: 1,
             resolver_model: "",
+            sessions_dir: Path::new("/state/sessions"),
         }
     }
 

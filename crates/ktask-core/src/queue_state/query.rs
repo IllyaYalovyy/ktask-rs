@@ -46,6 +46,7 @@ impl QueueState {
             started_at: fold.started_at,
             start_commit: fold.start_commit.clone(),
             provider: fold.provider.clone(),
+            session: fold.session.clone(),
             ended: fold.ended.clone(),
             steps: fold
                 .steps
@@ -100,6 +101,27 @@ impl QueueState {
     /// `retry`.
     pub(crate) fn retry_model_of(&self, id: TaskId, number: u32) -> Option<String> {
         self.retry_models.get(&(id, number)).cloned()
+    }
+
+    /// Whether the resolver's `retry` decision for attempt `number` of task `id` asked to
+    /// resume its own session. `false` when it named none, or reported something other than
+    /// `retry`.
+    pub(crate) fn retry_same_session_of(&self, id: TaskId, number: u32) -> bool {
+        self.retry_same_sessions
+            .get(&(id, number))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// The session the provider reported for attempt `number` of task `id`'s implementation
+    /// step. `None` when it reported none, or the attempt has not run it yet.
+    pub(crate) fn session_of(&self, id: TaskId, number: u32) -> Option<String> {
+        self.attempts
+            .get(&id)?
+            .iter()
+            .find(|attempt| attempt.number == number)?
+            .session
+            .clone()
     }
 
     /// The answer recorded for attempt `number` of task `id`, when it was answered: exactly

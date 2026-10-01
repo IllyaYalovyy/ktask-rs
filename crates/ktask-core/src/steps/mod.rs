@@ -25,8 +25,8 @@ pub(crate) use execute::{record_pre_steps, run_one_step};
 
 use crate::run::Attempted;
 use crate::{
-    AttemptToken, Clock, Commands, Git, Journal, Outcome, Provider, RunContext, RunError, Task,
-    TaskStatus,
+    AttemptToken, Clock, Commands, Git, Journal, Outcome, Provider, RunContext, RunError,
+    SessionLog, Task, TaskStatus,
 };
 
 /// The reason recorded for an attempt a killed run left running, found still running when the
@@ -109,6 +109,7 @@ pub(crate) struct Deps<'a> {
     pub(crate) commands: &'a dyn Commands,
     pub(crate) git: &'a dyn Git,
     pub(crate) provider: &'a Provider,
+    pub(crate) session_log: &'a dyn SessionLog,
 }
 
 /// What is common to every step of one attempt: the task and the token identifying it, the
@@ -135,6 +136,9 @@ pub(crate) struct PipelineState<'a> {
     /// it. `None` for a task's first attempt, and for a retry that named none — the
     /// implementation step's own [`Step::model`].
     pub(crate) requested_model: Option<String>,
+    /// The session the resolver's `retry --same-session` decision asked this attempt to
+    /// resume. `None` for a task's first attempt, and for a retry that did not ask for it.
+    pub(crate) requested_session: Option<String>,
 }
 
 /// One step that already ran and passed before the attempt it belongs to was even begun — the
@@ -264,6 +268,7 @@ fn finish_attempt(
     pre_duration: Duration,
     steps: &[Box<dyn Step>],
     requested_model: Option<String>,
+    requested_session: Option<String>,
 ) -> Result<Attempted, RunError> {
     let token = AttemptToken::new(context.project_name, task.id, number);
     let mut state = PipelineState {
@@ -274,6 +279,7 @@ fn finish_attempt(
         exit_code: None,
         failure: None,
         requested_model,
+        requested_session,
     };
     let (steps_duration, status, reason) = run_attempt_steps(&deps, context, &mut state, steps)?;
     let duration = pre_duration + steps_duration;
@@ -296,6 +302,7 @@ fn finish_attempt(
 /// Begins and runs one attempt at `task`, with `requested_model` — the model the resolver's
 /// own `retry` decision named for it, when this is the attempt that decision began; `None` for
 /// a task's first attempt, and for a retry that named none.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_one_attempt(
     deps: Deps<'_>,
     context: RunContext<'_>,
@@ -303,6 +310,7 @@ pub(crate) fn run_one_attempt(
     pre_steps: &[PreStep],
     steps: &[Box<dyn Step>],
     requested_model: Option<String>,
+    requested_session: Option<String>,
 ) -> Result<Attempted, RunError> {
     let start_commit = current_commit(deps.git, context);
     let number = crate::attempt::begin_attempt_running(
@@ -322,6 +330,7 @@ pub(crate) fn run_one_attempt(
         pre_duration,
         steps,
         requested_model,
+        requested_session,
     )
 }
 
@@ -330,7 +339,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::fakes::{FakeClock, FakeCommands, FakeGit, FakeJournal, at, draft};
+    use crate::fakes::{FakeClock, FakeCommands, FakeGit, FakeJournal, FakeSessionLog, at, draft};
     use crate::{Exit, Output, Placement, ProviderCommand, TaskId, add_task, list_all_tasks};
 
     fn clock() -> FakeClock {
@@ -348,6 +357,7 @@ mod tests {
             disabled_steps: &[],
             max_attempts: 1,
             resolver_model: "",
+            sessions_dir: Path::new("/state/sessions"),
         }
     }
 
@@ -361,6 +371,8 @@ mod tests {
                     stdin: vec![],
                 })
             },
+            supports_resume: false,
+            read_session: |_| None,
         }
     }
 
@@ -429,13 +441,19 @@ mod tests {
             status: TaskStatus::Done,
             pass_reason: None,
         })];
-        let (clock, git, provider) = (clock(), FakeGit::default(), test_provider());
+        let (clock, git, provider, session_log) = (
+            clock(),
+            FakeGit::default(),
+            test_provider(),
+            FakeSessionLog::default(),
+        );
         let deps = Deps {
             journal: &journal,
             clock: &clock,
             commands: &commands,
             git: &git,
             provider: &provider,
+            session_log: &session_log,
         };
         let attempted = run_one_attempt(
             deps,
@@ -443,6 +461,7 @@ mod tests {
             &task,
             &[],
             &steps,
+            None,
             None,
         )
         .unwrap();
@@ -480,13 +499,19 @@ mod tests {
                 pass_reason: None,
             }),
         ];
-        let (clock, git, provider) = (clock(), FakeGit::default(), test_provider());
+        let (clock, git, provider, session_log) = (
+            clock(),
+            FakeGit::default(),
+            test_provider(),
+            FakeSessionLog::default(),
+        );
         let deps = Deps {
             journal: &journal,
             clock: &clock,
             commands: &commands,
             git: &git,
             provider: &provider,
+            session_log: &session_log,
         };
         let attempted = run_one_attempt(
             deps,
@@ -494,6 +519,7 @@ mod tests {
             &task,
             &[],
             &steps,
+            None,
             None,
         )
         .unwrap();
@@ -521,13 +547,19 @@ mod tests {
             status: TaskStatus::Done,
             pass_reason: Some("something worth noting"),
         })];
-        let (clock, git, provider) = (clock(), FakeGit::default(), test_provider());
+        let (clock, git, provider, session_log) = (
+            clock(),
+            FakeGit::default(),
+            test_provider(),
+            FakeSessionLog::default(),
+        );
         let deps = Deps {
             journal: &journal,
             clock: &clock,
             commands: &commands,
             git: &git,
             provider: &provider,
+            session_log: &session_log,
         };
         let attempted = run_one_attempt(
             deps,
@@ -535,6 +567,7 @@ mod tests {
             &task,
             &[],
             &steps,
+            None,
             None,
         )
         .unwrap();

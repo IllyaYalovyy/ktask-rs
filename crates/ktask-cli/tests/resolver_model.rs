@@ -68,7 +68,7 @@ impl Fixture {
 
 /// A bash block for attempt 1 of a task: fails the implementation step with `reason`; the
 /// review and test steps, if ever reached, approve and accept; the resolve step reports
-/// `resolve_branch`; attempt 2's implementation step writes the model it was run with (`$4`) to
+/// `resolve_branch`; attempt 2's implementation step writes the model it was run with (`$6`) to
 /// `model_file` and reports done.
 fn retry_with_model_body(
     reason: &str,
@@ -76,7 +76,7 @@ fn retry_with_model_body(
     model_file: &std::path::Path,
 ) -> String {
     format!(
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  {resolve_branch}\nelif [ \"$2\" = \"1\" ]; then\n  ktask-rs report --token \"$1\" failed --reason \"{reason}\"\nelse\n  printf '%s' \"$4\" > \"{model}\"\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  {resolve_branch}\nelif [ \"$2\" = \"1\" ]; then\n  ktask-rs report --token \"$1\" failed --reason \"{reason}\"\nelse\n  printf '%s' \"$6\" > \"{model}\"\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
         model = model_file.display(),
     )
 }
@@ -183,7 +183,7 @@ fn provider_and_model_are_refused_outside_the_retry_outcome() -> Result<()> {
     assert!(
         outcome
             .stderr
-            .contains("does not accept --provider or --model"),
+            .contains("does not accept --provider, --model or --same-session"),
         "{}",
         outcome.stderr
     );

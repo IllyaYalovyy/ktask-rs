@@ -2,9 +2,14 @@
 //! has not ended yet — [`super::status`]'s own lowest-level work, pulled out of it so that
 //! file stays within the workspace's function-length limit.
 
-use crate::{AttemptEnd, Clock, Outcome, TaskStatus};
+use std::time::Duration;
 
-use super::{AttemptOutcome, IMPLEMENTATION, RESOLVE_STEP, REVIEW_STEP, StepLine, TEST_STEP};
+use crate::{AttemptEnd, Clock, Outcome, Task, TaskStatus};
+
+use super::{
+    AttemptLine, AttemptOutcome, IMPLEMENTATION, RESOLVE_STEP, REVIEW_STEP, StatusEntry, StepLine,
+    TEST_STEP,
+};
 
 /// The outcome and reason shown for the implementation step ended at `end`, given what the
 /// agent itself reported for it, when it reported anything at all; `answer`, when the report
@@ -59,12 +64,24 @@ pub(super) fn step_provider(name: &str, provider: Option<&str>) -> Option<String
     }
 }
 
+/// The session named for a step called `name`, given the session the attempt's provider
+/// reported, when one is known: only the implementation step ever resumes one, so only it ever
+/// names one here.
+pub(super) fn step_session(name: &str, session: Option<&str>) -> Option<String> {
+    if name == IMPLEMENTATION {
+        session.map(str::to_owned)
+    } else {
+        None
+    }
+}
+
 /// The still-running step line for a step named `name`, started at `started_at`: its elapsed
 /// time so far, and whether it shows `running` or `interrupted` depending on `run_alive`.
 pub(super) fn running_step(
     name: &str,
     provider: Option<&str>,
     model: Option<&str>,
+    session: Option<&str>,
     started_at: std::time::SystemTime,
     clock: &impl Clock,
     run_alive: bool,
@@ -79,8 +96,43 @@ pub(super) fn running_step(
         step: name.to_owned(),
         provider: step_provider(name, provider),
         model: model.map(str::to_owned),
+        session: step_session(name, session),
         time_spent: elapsed,
         outcome,
         reason: None,
+    }
+}
+
+/// The [`StatusEntry`] for `task`, given the step and reason a gate recorded stopping it before
+/// any attempt began: one [`StepLine`] shown [`AttemptOutcome::Failed`], the same way a
+/// command-kind step that fails inside an attempt is shown — `task.status` is untouched, still
+/// `pending`.
+pub(super) fn gate_stop_entry(task: Task, step: String, reason: String) -> StatusEntry {
+    let line = StepLine {
+        step,
+        provider: None,
+        model: None,
+        session: None,
+        time_spent: Duration::ZERO,
+        outcome: AttemptOutcome::Failed,
+        reason: Some(reason),
+    };
+    StatusEntry {
+        task: task.id,
+        title: task.title,
+        status: task.status,
+        attempt: AttemptLine {
+            number: 0,
+            step: line.step.clone(),
+            provider: None,
+            model: None,
+            session: None,
+            time_spent: Duration::ZERO,
+            outcome: line.outcome,
+            reason: line.reason.clone(),
+            steps: vec![line],
+        },
+        history: Vec::new(),
+        done_by_user: None,
     }
 }
