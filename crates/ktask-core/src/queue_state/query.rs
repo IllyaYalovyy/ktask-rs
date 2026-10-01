@@ -52,6 +52,7 @@ impl QueueState {
                 .iter()
                 .map(|step| Step {
                     name: step.name.clone(),
+                    model: step.model.clone(),
                     started_at: step.started_at,
                     ended: step.ended.clone(),
                 })

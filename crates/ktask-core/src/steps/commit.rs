@@ -143,6 +143,8 @@ mod tests {
             health_check_command: None,
             tracked_branch: None,
             disabled_steps: &[],
+            max_attempts: 1,
+            resolver_model: "",
         }
     }
 
@@ -175,6 +177,7 @@ mod tests {
             start_commit: None,
             committed: None,
             exit_code: None,
+            failure: None,
         };
         let commands = crate::fakes::FakeCommands::returning(Ok(crate::Output {
             stdout: Vec::new(),
@@ -283,6 +286,7 @@ mod tests {
             start_commit: None,
             committed: None,
             exit_code: None,
+            failure: None,
         };
         assert!(!Commit.enabled(ctx, &state));
     }

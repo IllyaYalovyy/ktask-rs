@@ -25,6 +25,10 @@ pub enum Outcome {
     Accepted,
     /// The tester found something that failed: what failed is the reason.
     Rejected,
+    /// The resolver decided a fresh attempt at the implementation step is worth trying.
+    Retry,
+    /// The resolver decided the task should end `failed`: the reason is why.
+    Stop,
 }
 
 impl Outcome {
@@ -40,13 +44,18 @@ impl Outcome {
             Self::ChangesRequested => "changes-requested",
             Self::Accepted => "accepted",
             Self::Rejected => "rejected",
+            Self::Retry => "retry",
+            Self::Stop => "stop",
         }
     }
 
     /// Whether this outcome must be reported with a reason.
     #[must_use]
     pub fn needs_reason(self) -> bool {
-        !matches!(self, Self::Done | Self::Approved | Self::Accepted)
+        !matches!(
+            self,
+            Self::Done | Self::Approved | Self::Accepted | Self::Retry
+        )
     }
 }
 
@@ -69,13 +78,15 @@ impl FromStr for Outcome {
             Self::ChangesRequested,
             Self::Accepted,
             Self::Rejected,
+            Self::Retry,
+            Self::Stop,
         ]
         .into_iter()
         .find(|outcome| outcome.as_str() == text)
         .ok_or_else(|| {
             format!(
                 "unknown outcome {text:?}: expected done, failed, needs-input, too-large, \
-                 approved, changes-requested, accepted or rejected"
+                 approved, changes-requested, accepted, rejected, retry or stop"
             )
         })
     }
@@ -98,6 +109,8 @@ fn outcomes_for_step(step: &str) -> Option<&'static [Outcome]> {
         Some(&[Outcome::Approved, Outcome::ChangesRequested])
     } else if step == crate::TEST_STEP {
         Some(&[Outcome::Accepted, Outcome::Rejected])
+    } else if step == crate::RESOLVE_STEP {
+        Some(&[Outcome::Retry, Outcome::Stop])
     } else {
         None
     }
@@ -443,7 +456,7 @@ mod tests {
     fn journal_with_a_running_step(step: &str) -> FakeJournal {
         let journal = journal_with_a_pending_task();
         crate::attempt::begin_attempt_running(&journal, &clock(), TaskId(1), "test", None).unwrap();
-        crate::attempt::begin_step(&journal, &clock(), TaskId(1), 1, step).unwrap();
+        crate::attempt::begin_step(&journal, &clock(), TaskId(1), 1, step, None).unwrap();
         journal
     }
 

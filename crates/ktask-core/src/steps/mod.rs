@@ -13,6 +13,7 @@ mod execute;
 pub(crate) mod health_check;
 pub(crate) mod implementation;
 pub(crate) mod push;
+pub(crate) mod resolve;
 pub(crate) mod review;
 pub(crate) mod sync;
 pub(crate) mod test_step;
@@ -20,12 +21,12 @@ pub(crate) mod test_step;
 use std::time::Duration;
 
 pub(crate) use agent::run_agent_step;
-use execute::{record_pre_steps, run_one_step};
+pub(crate) use execute::{record_pre_steps, run_one_step};
 
 use crate::run::Attempted;
 use crate::{
-    AttemptRun, AttemptToken, Clock, Commands, Git, Journal, Outcome, Provider, RunContext,
-    RunError, Task, TaskStatus,
+    AttemptToken, Clock, Commands, Git, Journal, Outcome, Provider, RunContext, RunError, Task,
+    TaskStatus,
 };
 
 /// The reason recorded for an attempt a killed run left running, found still running when the
@@ -43,6 +44,13 @@ pub(crate) trait Step {
     /// whose readiness also depends on what an earlier step left in `state` — otherwise ready
     /// to run. A step this returns `false` for is skipped entirely: it leaves no journal event.
     fn enabled(&self, context: RunContext<'_>, state: &PipelineState<'_>) -> bool;
+
+    /// The model this step runs with, recorded alongside it when it begins. `None` for every
+    /// step but the resolve step, which names the project's own `resolver-model` setting, when
+    /// it has set one.
+    fn model(&self, _context: RunContext<'_>) -> Option<String> {
+        None
+    }
 
     /// Runs the step, returning what it found and did.
     ///
@@ -118,6 +126,10 @@ pub(crate) struct PipelineState<'a> {
     /// The most recent process-running step's own exit code — never touched by a step, such as
     /// the commit or push step, that runs no process of its own.
     pub(crate) exit_code: Option<i32>,
+    /// What the step ahead of the resolve step ended at, and why — set right before the
+    /// resolve step is run, so its own prompt can carry this attempt's own outcome alongside
+    /// every earlier attempt's. `None` for every other step.
+    pub(crate) failure: Option<(TaskStatus, Option<String>)>,
 }
 
 /// One step that already ran and passed before the attempt it belongs to was even begun — the
@@ -201,8 +213,16 @@ pub(crate) fn run_attempt_steps(
     Ok((total, status, reason))
 }
 
+/// Ends attempt `number` of `task_id` at `status` (with `reason`), having run for `duration`
+/// with `exit_code`, whichever of its own pipeline or the resolve step's decided it.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read or written.
 /// Builds the pipeline state for attempt `number`, walks `steps` through it, and ends the
-/// attempt with the outcome they left it at, `pre_duration` already spent on its pre-steps.
+/// attempt with the outcome they left it at — or, when it ended `failed` or `failed-unknown`
+/// with attempts still left, hands it to [`resolve::resolve_and_continue`] instead —
+/// `pre_duration` already spent on its pre-steps.
 ///
 /// # Errors
 ///
@@ -223,19 +243,23 @@ fn finish_attempt(
         start_commit,
         committed: None,
         exit_code: None,
+        failure: None,
     };
     let (steps_duration, status, reason) = run_attempt_steps(&deps, context, &mut state, steps)?;
-    crate::attempt::end_attempt(
-        deps.journal,
+    let duration = pre_duration + steps_duration;
+    if resolve::resolver_eligible(status, number, context.max_attempts) {
+        return resolve::resolve_and_continue(
+            deps, context, task, number, duration, &mut state, status, reason, steps,
+        );
+    }
+    resolve::end_attempt_now(
+        deps,
         task.id,
         number,
-        AttemptRun {
-            duration: pre_duration + steps_duration,
-            exit_code: state.exit_code,
-            status,
-            reason: reason.as_deref(),
-        },
-        deps.clock.now(),
+        duration,
+        state.exit_code,
+        status,
+        reason.as_deref(),
     )?;
     Ok(Attempted {
         id: task.id,
@@ -292,6 +316,8 @@ mod tests {
             health_check_command: None,
             tracked_branch: None,
             disabled_steps: &[],
+            max_attempts: 1,
+            resolver_model: "",
         }
     }
 

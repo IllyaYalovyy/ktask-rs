@@ -12,6 +12,14 @@ mod specs;
 /// `run`'s time limit for one attempt when nothing else sets it: four hours.
 pub const DEFAULT_ATTEMPT_TIMEOUT_SECS: u64 = 14_400;
 
+/// How many attempts a task may have before the resolver is no longer run, when nothing else
+/// sets it.
+pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
+
+/// The provider the resolve step runs with, when nothing else sets it: the only one this
+/// milestone ships, like every other role.
+pub const DEFAULT_RESOLVER_PROVIDER: &str = "echo";
+
 /// The attempt time limit setting's name.
 pub const ATTEMPT_TIMEOUT: &str = "attempt-timeout";
 
@@ -38,6 +46,15 @@ pub const STEP_COMMIT: &str = "step-commit";
 
 /// The push step's on/off switch setting's name.
 pub const STEP_PUSH: &str = "step-push";
+
+/// The max-attempts setting's name.
+pub const MAX_ATTEMPTS: &str = "max-attempts";
+
+/// The resolver-provider setting's name.
+pub const RESOLVER_PROVIDER: &str = "resolver-provider";
+
+/// The resolver-model setting's name.
+pub const RESOLVER_MODEL: &str = "resolver-model";
 
 /// The name [`set_setting`] refuses under: the implementation step always runs, for every
 /// task, so it is never one of the switches [`show_settings`] lists — this name exists only
@@ -74,6 +91,13 @@ pub struct Settings {
     /// Whether the push step runs, when the project has switched it. `None` means on.
     /// Switching it on is refused while [`Settings::commit_step`] is off.
     pub push_step: Option<bool>,
+    /// How many attempts a task may have before the resolver is no longer run and it ends
+    /// `failed` with its last attempt's own reason, when the project has set one.
+    pub max_attempts: Option<u32>,
+    /// The provider the resolve step runs with, when the project has set one.
+    pub resolver_provider: Option<String>,
+    /// The model the resolve step runs with, when the project has set one.
+    pub resolver_model: Option<String>,
 }
 
 /// Whether a step whose own setting is `value` runs: on unless the project explicitly
@@ -249,6 +273,23 @@ pub fn effective_attempt_timeout(settings: &Settings, cli_override: Option<u64>)
     )
 }
 
+/// How many attempts a task may have before the resolver is no longer run: the project's own
+/// setting, else the built-in default.
+#[must_use]
+pub fn effective_max_attempts(settings: &Settings) -> u32 {
+    settings.max_attempts.unwrap_or(DEFAULT_MAX_ATTEMPTS)
+}
+
+/// The provider the resolve step runs with: the project's own setting, else the built-in
+/// default.
+#[must_use]
+pub fn effective_resolver_provider(settings: &Settings) -> &str {
+    settings
+        .resolver_provider
+        .as_deref()
+        .unwrap_or(DEFAULT_RESOLVER_PROVIDER)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::fakes::{FakeGit, FakeSettingsStore};
@@ -326,6 +367,21 @@ mod tests {
                     value: "on".to_owned(),
                     is_default: true,
                 },
+                SettingView {
+                    name: MAX_ATTEMPTS,
+                    value: DEFAULT_MAX_ATTEMPTS.to_string(),
+                    is_default: true,
+                },
+                SettingView {
+                    name: RESOLVER_PROVIDER,
+                    value: DEFAULT_RESOLVER_PROVIDER.to_owned(),
+                    is_default: true,
+                },
+                SettingView {
+                    name: RESOLVER_MODEL,
+                    value: String::new(),
+                    is_default: true,
+                },
             ])
         );
     }
@@ -342,6 +398,9 @@ mod tests {
             testing_step: Some(false),
             commit_step: Some(false),
             push_step: Some(false),
+            max_attempts: Some(5),
+            resolver_provider: Some("claude".to_owned()),
+            resolver_model: Some("opus".to_owned()),
         });
         assert_eq!(
             show_settings(&store),
@@ -389,6 +448,21 @@ mod tests {
                 SettingView {
                     name: STEP_PUSH,
                     value: "off".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: MAX_ATTEMPTS,
+                    value: "5".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: RESOLVER_PROVIDER,
+                    value: "claude".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: RESOLVER_MODEL,
+                    value: "opus".to_owned(),
                     is_default: false,
                 },
             ])
@@ -759,6 +833,128 @@ mod tests {
             }
         );
         assert_eq!(store.load(), Ok(Settings::default()));
+    }
+
+    #[test]
+    fn setting_a_valid_max_attempts_changes_it_and_persists_it() {
+        let store = FakeSettingsStore::with(Settings::default());
+        let view = set(&store, MAX_ATTEMPTS, "5").unwrap();
+        assert_eq!(
+            view,
+            SettingView {
+                name: MAX_ATTEMPTS,
+                value: "5".to_owned(),
+                is_default: false,
+            }
+        );
+        assert_eq!(
+            store.load(),
+            Ok(Settings {
+                max_attempts: Some(5),
+                ..Settings::default()
+            })
+        );
+    }
+
+    #[test]
+    fn a_max_attempts_that_is_not_a_whole_number_is_refused_and_nothing_changes() {
+        let store = FakeSettingsStore::with(Settings::default());
+        for value in ["soon", "1.5", "-1"] {
+            let error = set(&store, MAX_ATTEMPTS, value).unwrap_err();
+            assert!(
+                matches!(error, SetSettingError::InvalidValue { .. }),
+                "{error:?}"
+            );
+        }
+        assert_eq!(store.load(), Ok(Settings::default()));
+    }
+
+    #[test]
+    fn a_zero_max_attempts_is_refused_and_nothing_changes() {
+        let store = FakeSettingsStore::with(Settings::default());
+        let error = set(&store, MAX_ATTEMPTS, "0").unwrap_err();
+        assert_eq!(
+            error,
+            SetSettingError::InvalidValue {
+                name: MAX_ATTEMPTS,
+                message: "must be at least 1".to_owned(),
+            }
+        );
+        assert_eq!(store.load(), Ok(Settings::default()));
+    }
+
+    #[test]
+    fn setting_a_valid_resolver_provider_and_resolver_model_changes_and_persists_them() {
+        let store = FakeSettingsStore::with(Settings::default());
+        let provider = set(&store, RESOLVER_PROVIDER, "claude").unwrap();
+        assert_eq!(
+            provider,
+            SettingView {
+                name: RESOLVER_PROVIDER,
+                value: "claude".to_owned(),
+                is_default: false,
+            }
+        );
+        let model = set(&store, RESOLVER_MODEL, "opus").unwrap();
+        assert_eq!(
+            model,
+            SettingView {
+                name: RESOLVER_MODEL,
+                value: "opus".to_owned(),
+                is_default: false,
+            }
+        );
+        assert_eq!(
+            store.load(),
+            Ok(Settings {
+                resolver_provider: Some("claude".to_owned()),
+                resolver_model: Some("opus".to_owned()),
+                ..Settings::default()
+            })
+        );
+    }
+
+    #[test]
+    fn an_empty_resolver_provider_or_model_is_refused_and_nothing_changes() {
+        let store = FakeSettingsStore::with(Settings::default());
+        for name in [RESOLVER_PROVIDER, RESOLVER_MODEL] {
+            let error = set(&store, name, "   ").unwrap_err();
+            assert_eq!(
+                error,
+                SetSettingError::InvalidValue {
+                    name,
+                    message: "must not be empty".to_owned(),
+                }
+            );
+        }
+        assert_eq!(store.load(), Ok(Settings::default()));
+    }
+
+    #[test]
+    fn the_effective_max_attempts_and_resolver_provider_prefer_the_projects_own_setting_then_the_default()
+     {
+        assert_eq!(
+            effective_max_attempts(&Settings::default()),
+            DEFAULT_MAX_ATTEMPTS
+        );
+        assert_eq!(
+            effective_max_attempts(&Settings {
+                max_attempts: Some(7),
+                ..Settings::default()
+            }),
+            7
+        );
+        assert_eq!(
+            effective_resolver_provider(&Settings::default()),
+            DEFAULT_RESOLVER_PROVIDER
+        );
+        assert_eq!(
+            effective_resolver_provider(&Settings {
+                resolver_provider: Some("claude".to_owned()),
+                ..Settings::default()
+            }),
+            "claude"
+        );
     }
 
     #[test]

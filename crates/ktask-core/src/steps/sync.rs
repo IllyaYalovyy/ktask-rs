@@ -176,6 +176,8 @@ mod tests {
             health_check_command: None,
             tracked_branch: Some("origin/main"),
             disabled_steps: &[],
+            max_attempts: 1,
+            resolver_model: "",
         }
     }
 

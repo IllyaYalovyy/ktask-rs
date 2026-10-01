@@ -301,6 +301,7 @@ impl QueueState {
         id: TaskId,
         number: u32,
         step: String,
+        model: Option<String>,
         at: SystemTime,
     ) -> Result<Event, RecordReportError> {
         self.check_attempt_running(id, number)?;
@@ -308,6 +309,7 @@ impl QueueState {
             id,
             number,
             step,
+            model,
             at,
         })
     }

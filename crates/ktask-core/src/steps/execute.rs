@@ -21,7 +21,7 @@ fn record_passed_step(
     duration: Duration,
     reason: Option<&str>,
 ) -> Result<(), RunError> {
-    crate::attempt::begin_step(journal, clock, id, number, step)?;
+    crate::attempt::begin_step(journal, clock, id, number, step, None)?;
     crate::attempt::end_step(
         journal,
         clock,
@@ -73,7 +73,7 @@ fn outcome_fields(
 /// # Errors
 ///
 /// Fails when the journal cannot be read or written.
-pub(super) fn run_one_step(
+pub(crate) fn run_one_step(
     deps: &Deps<'_>,
     context: RunContext<'_>,
     state: &mut PipelineState<'_>,
@@ -85,6 +85,7 @@ pub(super) fn run_one_step(
         state.task.id,
         state.token.number,
         step.name(),
+        step.model(context).as_deref(),
     )?;
     let (duration, exit_code, status, reason, reported) =
         outcome_fields(step.run(deps, context, state)?);
@@ -111,7 +112,7 @@ pub(super) fn run_one_step(
 /// # Errors
 ///
 /// Fails when the journal cannot be read or written.
-pub(super) fn record_pre_steps(
+pub(crate) fn record_pre_steps(
     journal: &dyn Journal,
     clock: &dyn Clock,
     id: TaskId,

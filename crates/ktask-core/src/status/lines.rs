@@ -4,7 +4,7 @@
 
 use crate::{AttemptEnd, Clock, Outcome, TaskStatus};
 
-use super::{AttemptOutcome, IMPLEMENTATION, REVIEW_STEP, StepLine, TEST_STEP};
+use super::{AttemptOutcome, IMPLEMENTATION, RESOLVE_STEP, REVIEW_STEP, StepLine, TEST_STEP};
 
 /// The outcome and reason shown for the implementation step ended at `end`, given what the
 /// agent itself reported for it, when it reported anything at all; `answer`, when the report
@@ -38,7 +38,7 @@ pub(super) fn step_outcome(
     reported: Option<(Outcome, Option<String>)>,
     answer: Option<&str>,
 ) -> (AttemptOutcome, Option<String>) {
-    if name == IMPLEMENTATION || name == REVIEW_STEP || name == TEST_STEP {
+    if name == IMPLEMENTATION || name == REVIEW_STEP || name == TEST_STEP || name == RESOLVE_STEP {
         ended_outcome(end, reported, answer)
     } else if end.status == TaskStatus::Done {
         (AttemptOutcome::Passed, end.reason.clone())
@@ -52,7 +52,7 @@ pub(super) fn step_outcome(
 /// every other step — the sync, health check, commit and push steps, today — is run by the
 /// tool itself, and names none.
 pub(super) fn step_provider(name: &str, provider: Option<&str>) -> Option<String> {
-    if name == IMPLEMENTATION || name == REVIEW_STEP || name == TEST_STEP {
+    if name == IMPLEMENTATION || name == REVIEW_STEP || name == TEST_STEP || name == RESOLVE_STEP {
         provider.map(str::to_owned)
     } else {
         None
@@ -64,6 +64,7 @@ pub(super) fn step_provider(name: &str, provider: Option<&str>) -> Option<String
 pub(super) fn running_step(
     name: &str,
     provider: Option<&str>,
+    model: Option<&str>,
     started_at: std::time::SystemTime,
     clock: &impl Clock,
     run_alive: bool,
@@ -77,6 +78,7 @@ pub(super) fn running_step(
     StepLine {
         step: name.to_owned(),
         provider: step_provider(name, provider),
+        model: model.map(str::to_owned),
         time_spent: elapsed,
         outcome,
         reason: None,

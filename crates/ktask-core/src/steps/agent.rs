@@ -53,10 +53,15 @@ fn status_and_reason(
             (TaskStatus::Done, None)
         }
         Some((
-            Outcome::Failed | Outcome::TooLarge | Outcome::ChangesRequested | Outcome::Rejected,
+            Outcome::Failed
+            | Outcome::TooLarge
+            | Outcome::ChangesRequested
+            | Outcome::Rejected
+            | Outcome::Stop,
             reason,
         )) => (TaskStatus::Failed, reason),
         Some((Outcome::NeedsInput, reason)) => (TaskStatus::Blocked, reason),
+        Some((Outcome::Retry, reason)) => (TaskStatus::Done, reason),
         None => (
             TaskStatus::FailedUnknown,
             Some(format!(

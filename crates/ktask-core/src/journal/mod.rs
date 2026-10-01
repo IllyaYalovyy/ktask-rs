@@ -102,6 +102,9 @@ pub enum Event {
         number: u32,
         /// The step's name.
         step: String,
+        /// The model configured for this step, when it is the resolve step and the project
+        /// has set one. `None` for every other step.
+        model: Option<String>,
         /// When.
         at: SystemTime,
     },
@@ -230,6 +233,9 @@ pub struct AttemptEnd {
 pub struct Step {
     /// The step's name.
     pub name: String,
+    /// The model configured for this step, when it is the resolve step and the project has
+    /// set one. `None` for every other step, and for a resolve step with no model configured.
+    pub model: Option<String>,
     /// When it started.
     pub started_at: SystemTime,
     /// How it ended, once [`crate::attempt::end_step`] has recorded it; `None` while it runs.

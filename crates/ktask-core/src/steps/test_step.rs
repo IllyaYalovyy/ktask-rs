@@ -120,6 +120,8 @@ mod tests {
             health_check_command: None,
             tracked_branch: None,
             disabled_steps: &[TEST_STEP],
+            max_attempts: 1,
+            resolver_model: "",
         };
         let task = Task {
             id: TaskId(1),
@@ -139,6 +141,7 @@ mod tests {
             start_commit: None,
             committed: None,
             exit_code: None,
+            failure: None,
         };
         assert!(!Test.enabled(context, &state));
     }

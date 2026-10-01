@@ -9,10 +9,10 @@ use crate::{
 /// One earlier attempt at the task this prompt is for, as [`earlier_attempts`] reads it back:
 /// its number, and what it ended at in the agent's own words when it reported one, or the
 /// tool's when it never did.
-struct EarlierAttempt {
-    number: u32,
-    outcome: String,
-    reason: Option<String>,
+pub(crate) struct EarlierAttempt {
+    pub(crate) number: u32,
+    pub(crate) outcome: String,
+    pub(crate) reason: Option<String>,
 }
 
 /// Every attempt at task `id` numbered before `before`, oldest first, with what each one
@@ -24,7 +24,7 @@ struct EarlierAttempt {
 /// # Errors
 ///
 /// Fails when the journal cannot be read.
-fn earlier_attempts(
+pub(crate) fn earlier_attempts(
     journal: &dyn Journal,
     id: TaskId,
     before: u32,
@@ -64,7 +64,7 @@ fn earlier_attempts(
 /// committed or still sitting uncommitted — not merely since the current attempt's own start,
 /// which would show nothing when a task is retried, since nothing is reverted between
 /// attempts. Empty when it has no earlier attempt, or git could not produce it.
-fn diff_since_first_attempt(
+pub(crate) fn diff_since_first_attempt(
     journal: &dyn Journal,
     git: &dyn crate::Git,
     context: RunContext<'_>,
@@ -473,6 +473,8 @@ mod tests {
             health_check_command: None,
             tracked_branch: None,
             disabled_steps: &[IMPLEMENTATION],
+            max_attempts: 1,
+            resolver_model: "",
         };
         let task = Task {
             id: TaskId(1),
@@ -492,6 +494,7 @@ mod tests {
             start_commit: None,
             committed: None,
             exit_code: None,
+            failure: None,
         };
         assert!(Implementation.enabled(context, &state));
         assert_eq!(Implementation.name(), IMPLEMENTATION);

@@ -169,6 +169,13 @@ pub struct RunContext<'a> {
     /// `tracked_branch`, respectively `health_check_command`, is also set, and the push step
     /// only when the commit step made a commit.
     pub disabled_steps: &'a [&'static str],
+    /// How many attempts a task may have before the resolver is no longer run and it ends
+    /// `failed` with its last attempt's own reason — the project's `max-attempts` setting, or
+    /// its default.
+    pub max_attempts: u32,
+    /// The project's `resolver-model` setting, recorded against the resolve step when it runs.
+    /// Empty when the project has not set one.
+    pub resolver_model: &'a str,
 }
 
 impl RunContext<'_> {
@@ -351,8 +358,9 @@ mod tests {
     use crate::{
         AttemptRun, AttemptToken, COMMIT_STEP, CommandSpec, Commands, CommandsError,
         CommitAllError, Event, Exit, HEALTH_CHECK_STEP, IMPLEMENTATION, Outcome, Output, PUSH_STEP,
-        Placement, Provider, ProviderCommand, PullRebase, PullRebaseError, REVIEW_STEP, SYNC_STEP,
-        TEST_STEP, TaskDraft, TaskId, TaskKind, TaskStatus, add_task, report,
+        Placement, Provider, ProviderCommand, PullRebase, PullRebaseError, RESOLVE_STEP,
+        REVIEW_STEP, SYNC_STEP, TEST_STEP, TaskDraft, TaskId, TaskKind, TaskStatus, add_task,
+        report,
     };
 
     use super::*;
@@ -400,6 +408,8 @@ mod tests {
             health_check_command: None,
             tracked_branch: None,
             disabled_steps: &[],
+            max_attempts: 1,
+            resolver_model: "",
         }
     }
 
@@ -2905,5 +2915,337 @@ mod tests {
             attempt.steps
         );
         assert_eq!(*git.push_calls.borrow(), 0);
+    }
+
+    /// A resolve step's decision, as a test's own `resolve` function answers with: the outcome
+    /// to report, and a reason when it has one. `None` reports nothing at all, as a crashed or
+    /// timed-out resolver would leave it.
+    type ResolveAnswer = Option<(Outcome, Option<&'static str>)>;
+
+    /// A commands port whose implementation step fails on attempt 1 and succeeds from attempt
+    /// 2 on, approves every review and accepts every test, and answers the resolve step with
+    /// whatever `resolve` decides.
+    struct ResolverCommands<'a> {
+        journal: &'a FakeJournal,
+        resolve: fn(&AttemptToken) -> ResolveAnswer,
+    }
+
+    impl Commands for ResolverCommands<'_> {
+        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+            let token: AttemptToken = spec
+                .args
+                .iter()
+                .find_map(|arg| arg.parse().ok())
+                .expect("one arg is the attempt token");
+            let step = crate::attempt::current_step(self.journal, token.task).unwrap();
+            match step.as_deref() {
+                Some(REVIEW_STEP) => {
+                    report(self.journal, &clock(), &token, Outcome::Approved, None).unwrap();
+                }
+                Some(TEST_STEP) => {
+                    report(self.journal, &clock(), &token, Outcome::Accepted, None).unwrap();
+                }
+                Some(RESOLVE_STEP) => {
+                    if let Some((outcome, reason)) = (self.resolve)(&token) {
+                        report(self.journal, &clock(), &token, outcome, reason).unwrap();
+                    }
+                }
+                _ if token.number == 1 => {
+                    report(
+                        self.journal,
+                        &clock(),
+                        &token,
+                        Outcome::Failed,
+                        Some("it broke"),
+                    )
+                    .unwrap();
+                }
+                _ => {
+                    report(self.journal, &clock(), &token, Outcome::Done, None).unwrap();
+                }
+            }
+            Ok(Output {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit: Exit::Code(0),
+            })
+        }
+    }
+
+    /// [`context`] with `max_attempts` set to `n`, so the resolver test suite never relies on
+    /// the test-wide default of 1, which turns the resolver off entirely.
+    fn context_with_max_attempts(n: u32) -> RunContext<'static> {
+        let mut ctx = context(Duration::from_secs(60));
+        ctx.max_attempts = n;
+        ctx
+    }
+
+    #[test]
+    fn a_resolver_that_retries_ends_the_second_attempt_done_and_records_the_resolution() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        let commands = ResolverCommands {
+            journal: &journal,
+            resolve: |_| Some((Outcome::Retry, None)),
+        };
+        let mut ctx = context_with_max_attempts(3);
+        ctx.resolver_model = "opus";
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &FakeGit::default(),
+            &test_provider(),
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(
+            report,
+            RunReport {
+                attempted: vec![Attempted {
+                    id: TaskId(1),
+                    status: TaskStatus::Done,
+                    reason: None,
+                }],
+                end: RunEnd::Completed,
+            }
+        );
+        let attempts = crate::attempt::all_attempts(&journal, TaskId(1)).unwrap();
+        assert_eq!(attempts.len(), 2, "{attempts:?}");
+        // Attempt 1 ended failed, its own reason untouched by the resolver's own decision.
+        let first = &attempts[0];
+        assert_eq!(first.ended.as_ref().unwrap().status, TaskStatus::Failed);
+        assert_eq!(
+            first.ended.as_ref().unwrap().reason.as_deref(),
+            Some("it broke")
+        );
+        let resolve_step = first
+            .steps
+            .iter()
+            .find(|step| step.name == RESOLVE_STEP)
+            .expect("a resolve step between the two attempts");
+        let end = resolve_step.ended.as_ref().unwrap();
+        assert_eq!(end.status, TaskStatus::Done);
+        assert_eq!(end.reported, Some(Outcome::Retry));
+        assert_eq!(resolve_step.model.as_deref(), Some("opus"));
+        // Attempt 2, started fresh at the implementation step, ends the task done.
+        assert_eq!(attempts[1].ended.as_ref().unwrap().status, TaskStatus::Done);
+        let names: Vec<_> = attempts[1]
+            .steps
+            .iter()
+            .map(|step| step.name.as_str())
+            .collect();
+        assert_eq!(names, [IMPLEMENTATION, REVIEW_STEP, TEST_STEP, COMMIT_STEP]);
+    }
+
+    #[test]
+    fn a_resolver_that_stops_ends_the_task_failed_with_its_own_reason_not_the_attempts() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        let commands = ResolverCommands {
+            journal: &journal,
+            resolve: |_| Some((Outcome::Stop, Some("not worth another try"))),
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &FakeGit::default(),
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_with_max_attempts(3),
+        )
+        .unwrap();
+        assert_eq!(
+            report,
+            RunReport {
+                attempted: vec![Attempted {
+                    id: TaskId(1),
+                    status: TaskStatus::Failed,
+                    reason: Some("not worth another try".to_owned()),
+                }],
+                end: RunEnd::Stopped {
+                    id: TaskId(1),
+                    status: TaskStatus::Failed,
+                },
+            }
+        );
+        // Only one attempt was ever made: `stop` never starts another.
+        let attempts = crate::attempt::all_attempts(&journal, TaskId(1)).unwrap();
+        assert_eq!(attempts.len(), 1, "{attempts:?}");
+        let end = attempts[0].ended.as_ref().unwrap();
+        assert_eq!(end.status, TaskStatus::Failed);
+        assert_eq!(end.reason.as_deref(), Some("not worth another try"));
+        // The implementation step's own reason is untouched, history of what actually failed.
+        let implementation = attempts[0]
+            .steps
+            .iter()
+            .find(|step| step.name == IMPLEMENTATION)
+            .unwrap();
+        assert_eq!(
+            implementation.ended.as_ref().unwrap().reason.as_deref(),
+            Some("it broke")
+        );
+    }
+
+    #[test]
+    fn a_resolver_that_reports_nothing_ends_the_task_failed_unknown() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        let commands = ResolverCommands {
+            journal: &journal,
+            resolve: |_| None,
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &FakeGit::default(),
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_with_max_attempts(3),
+        )
+        .unwrap();
+        match report.end {
+            RunEnd::Stopped { status, .. } => assert_eq!(status, TaskStatus::FailedUnknown),
+            other => panic!("expected Stopped/FailedUnknown, got {other:?}"),
+        }
+        assert_eq!(report.attempted[0].status, TaskStatus::FailedUnknown);
+        assert!(
+            report.attempted[0]
+                .reason
+                .as_deref()
+                .unwrap()
+                .contains("reported nothing"),
+            "{:?}",
+            report.attempted[0].reason
+        );
+    }
+
+    #[test]
+    fn with_max_attempts_reached_the_resolver_is_not_run_and_there_is_no_resolution() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        let commands = ResolverCommands {
+            journal: &journal,
+            resolve: |_| panic!("the resolver must not run once max-attempts is reached"),
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &FakeGit::default(),
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_with_max_attempts(1),
+        )
+        .unwrap();
+        assert_eq!(
+            report,
+            RunReport {
+                attempted: vec![Attempted {
+                    id: TaskId(1),
+                    status: TaskStatus::Failed,
+                    reason: Some("it broke".to_owned()),
+                }],
+                end: RunEnd::Stopped {
+                    id: TaskId(1),
+                    status: TaskStatus::Failed,
+                },
+            }
+        );
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert!(
+            !attempt.steps.iter().any(|step| step.name == RESOLVE_STEP),
+            "{:?}",
+            attempt.steps
+        );
+    }
+
+    /// Wraps a [`ResolverCommands`], overriding its own "attempt 1 fails, the rest succeed"
+    /// rule with one that always fails the implementation step — for a test that needs every
+    /// attempt to fail, not just the first.
+    struct AlwaysFails<'a>(ResolverCommands<'a>);
+
+    impl Commands for AlwaysFails<'_> {
+        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+            let token: AttemptToken = spec
+                .args
+                .iter()
+                .find_map(|arg| arg.parse().ok())
+                .expect("token");
+            let step = crate::attempt::current_step(self.0.journal, token.task).unwrap();
+            if step.as_deref() == Some(IMPLEMENTATION) {
+                report(
+                    self.0.journal,
+                    &clock(),
+                    &token,
+                    Outcome::Failed,
+                    Some("it broke"),
+                )
+                .unwrap();
+                return Ok(Output {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    exit: Exit::Code(0),
+                });
+            }
+            self.0.run(spec)
+        }
+    }
+
+    #[test]
+    fn with_max_attempts_3_the_third_failure_ends_the_task_without_a_resolution() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        // Attempt 1 and 2 are retried; attempt 3 (and every attempt after the first) also
+        // fails, so the task runs out its three attempts.
+        let commands = ResolverCommands {
+            journal: &journal,
+            resolve: |token| {
+                if token.number < 3 {
+                    Some((Outcome::Retry, None))
+                } else {
+                    panic!("the resolver must not run for the third attempt")
+                }
+            },
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &AlwaysFails(commands),
+            &FakeGit::default(),
+            &test_provider(),
+            &FakeRunLock::free(),
+            context_with_max_attempts(3),
+        )
+        .unwrap();
+        assert_eq!(
+            report,
+            RunReport {
+                attempted: vec![Attempted {
+                    id: TaskId(1),
+                    status: TaskStatus::Failed,
+                    reason: Some("it broke".to_owned()),
+                }],
+                end: RunEnd::Stopped {
+                    id: TaskId(1),
+                    status: TaskStatus::Failed,
+                },
+            }
+        );
+        let attempts = crate::attempt::all_attempts(&journal, TaskId(1)).unwrap();
+        assert_eq!(attempts.len(), 3, "{attempts:?}");
+        assert!(
+            !attempts[2]
+                .steps
+                .iter()
+                .any(|step| step.name == RESOLVE_STEP),
+            "{:?}",
+            attempts[2].steps
+        );
     }
 }

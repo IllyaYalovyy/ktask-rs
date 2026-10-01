@@ -174,6 +174,8 @@ mod tests {
             health_check_command: Some("make check"),
             tracked_branch: None,
             disabled_steps: &[],
+            max_attempts: 1,
+            resolver_model: "",
         }
     }
 

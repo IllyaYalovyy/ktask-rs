@@ -39,16 +39,23 @@ pub const COMMIT_STEP: &str = "commit";
 /// has made one, and confirms the remote branch's tip is that commit.
 pub const PUSH_STEP: &str = "push";
 
+/// The step kind that runs an agent in the resolve role once an attempt has ended `failed` or
+/// `failed-unknown`, deciding whether a fresh attempt is worth trying.
+pub const RESOLVE_STEP: &str = "resolve";
+
 /// One step of an attempt, as `status` shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepLine {
     /// The step's name.
     pub step: String,
-    /// The provider that ran it, for a step an agent runs — the implementation, review and
-    /// test steps. `None` for a step the tool runs itself — the sync, health check, commit
-    /// and push steps, today — which names no provider because none had anything to do with
-    /// it.
+    /// The provider that ran it, for a step an agent runs — the implementation, review, test
+    /// and resolve steps. `None` for a step the tool runs itself — the sync, health check,
+    /// commit and push steps, today — which names no provider because none had anything to do
+    /// with it.
     pub provider: Option<String>,
+    /// The model configured for the resolve step, when it is one and the project has set one.
+    /// `None` for every other step, and for a resolve step with no model configured.
+    pub model: Option<String>,
     /// How long it has run: the recorded duration once it has ended, elapsed time so far
     /// while it is running.
     pub time_spent: Duration,
@@ -71,6 +78,9 @@ pub struct AttemptLine {
     /// The provider that ran the most recent step, when it is run by an agent; `None` when
     /// that step is run by the tool itself.
     pub provider: Option<String>,
+    /// The model configured for the most recent step, when it is the resolve step and the
+    /// project has set one. `None` otherwise.
+    pub model: Option<String>,
     /// How long the most recent step has run: the recorded duration once it has ended,
     /// elapsed time so far while it is running.
     pub time_spent: Duration,
@@ -153,12 +163,20 @@ fn step_lines(
                 StepLine {
                     step: step.name.clone(),
                     provider: step_provider(&step.name, provider),
+                    model: step.model.clone(),
                     time_spent: end.duration,
                     outcome,
                     reason,
                 }
             }
-            None => running_step(&step.name, provider, step.started_at, clock, run_alive),
+            None => running_step(
+                &step.name,
+                provider,
+                step.model.as_deref(),
+                step.started_at,
+                clock,
+                run_alive,
+            ),
         })
         .collect()
 }
@@ -183,6 +201,7 @@ fn current_step_line(
             StepLine {
                 step: IMPLEMENTATION.to_owned(),
                 provider: step_provider(IMPLEMENTATION, attempt.provider.as_deref()),
+                model: None,
                 time_spent: end.duration,
                 outcome,
                 reason,
@@ -191,6 +210,7 @@ fn current_step_line(
         None => running_step(
             IMPLEMENTATION,
             attempt.provider.as_deref(),
+            None,
             attempt.started_at,
             clock,
             run_alive,
@@ -217,6 +237,7 @@ fn attempt_line(
         number: attempt.number,
         step: current.step,
         provider: current.provider,
+        model: current.model,
         time_spent: current.time_spent,
         outcome: current.outcome,
         reason: current.reason,
@@ -251,6 +272,7 @@ fn gate_stop_entry(task: Task, step: String, reason: String) -> StatusEntry {
     let line = StepLine {
         step,
         provider: None,
+        model: None,
         time_spent: Duration::ZERO,
         outcome: AttemptOutcome::Failed,
         reason: Some(reason),
@@ -263,6 +285,7 @@ fn gate_stop_entry(task: Task, step: String, reason: String) -> StatusEntry {
             number: 0,
             step: line.step.clone(),
             provider: None,
+            model: None,
             time_spent: Duration::ZERO,
             outcome: line.outcome,
             reason: line.reason.clone(),
@@ -437,12 +460,14 @@ mod tests {
                     number: 1,
                     step: IMPLEMENTATION.to_owned(),
                     provider: Some("echo".to_owned()),
+                    model: None,
                     time_spent: Duration::from_secs(30),
                     outcome: AttemptOutcome::Running,
                     reason: None,
                     steps: vec![StepLine {
                         step: IMPLEMENTATION.to_owned(),
                         provider: Some("echo".to_owned()),
+                        model: None,
                         time_spent: Duration::from_secs(30),
                         outcome: AttemptOutcome::Running,
                         reason: None,
@@ -471,12 +496,14 @@ mod tests {
                     number: 1,
                     step: IMPLEMENTATION.to_owned(),
                     provider: Some("echo".to_owned()),
+                    model: None,
                     time_spent: Duration::from_secs(30),
                     outcome: AttemptOutcome::Interrupted,
                     reason: None,
                     steps: vec![StepLine {
                         step: IMPLEMENTATION.to_owned(),
                         provider: Some("echo".to_owned()),
+                        model: None,
                         time_spent: Duration::from_secs(30),
                         outcome: AttemptOutcome::Interrupted,
                         reason: None,
@@ -872,7 +899,8 @@ mod tests {
     #[test]
     fn a_health_check_step_that_already_passed_is_its_own_line_ahead_of_the_current_one() {
         let journal = journal_with_a_started_attempt();
-        crate::attempt::begin_step(&journal, &clock(100), TaskId(1), 1, HEALTH_CHECK_STEP).unwrap();
+        crate::attempt::begin_step(&journal, &clock(100), TaskId(1), 1, HEALTH_CHECK_STEP, None)
+            .unwrap();
         crate::attempt::end_step(
             &journal,
             &clock(104),
@@ -888,7 +916,8 @@ mod tests {
             None,
         )
         .unwrap();
-        crate::attempt::begin_step(&journal, &clock(104), TaskId(1), 1, IMPLEMENTATION).unwrap();
+        crate::attempt::begin_step(&journal, &clock(104), TaskId(1), 1, IMPLEMENTATION, None)
+            .unwrap();
 
         let entries = status(&journal, &clock(110), &a_live_run()).unwrap();
         assert_eq!(
@@ -899,6 +928,7 @@ mod tests {
                     // The health check is run by the tool itself, not the agent: it names no
                     // provider, even though the attempt ran with `echo`.
                     provider: None,
+                    model: None,
                     time_spent: Duration::from_secs(4),
                     outcome: AttemptOutcome::Passed,
                     reason: None,
@@ -906,6 +936,7 @@ mod tests {
                 StepLine {
                     step: IMPLEMENTATION.to_owned(),
                     provider: Some("echo".to_owned()),
+                    model: None,
                     time_spent: Duration::from_secs(6),
                     outcome: AttemptOutcome::Running,
                     reason: None,
@@ -966,6 +997,7 @@ mod tests {
             vec![StepLine {
                 step: SYNC_STEP.to_owned(),
                 provider: None,
+                model: None,
                 time_spent: Duration::ZERO,
                 outcome: AttemptOutcome::Failed,
                 reason: Some("uncommitted changes; commit or stash".to_owned()),

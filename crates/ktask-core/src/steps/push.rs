@@ -97,6 +97,8 @@ mod tests {
             health_check_command: None,
             tracked_branch: Some("origin/main"),
             disabled_steps: &[],
+            max_attempts: 1,
+            resolver_model: "",
         }
     }
 
@@ -129,6 +131,7 @@ mod tests {
             start_commit: None,
             committed: Some("abc1234".to_owned()),
             exit_code: None,
+            failure: None,
         };
         let commands = crate::fakes::FakeCommands::returning(Ok(crate::Output {
             stdout: Vec::new(),
@@ -212,6 +215,7 @@ mod tests {
             start_commit: None,
             committed: Some("abc1234".to_owned()),
             exit_code: None,
+            failure: None,
         };
         assert!(!Push.enabled(ctx, &state));
     }
@@ -226,6 +230,7 @@ mod tests {
             start_commit: None,
             committed: None,
             exit_code: None,
+            failure: None,
         };
         assert!(!Push.enabled(context(), &state));
     }
@@ -242,6 +247,7 @@ mod tests {
             start_commit: None,
             committed: Some("abc1234".to_owned()),
             exit_code: None,
+            failure: None,
         };
         assert!(!Push.enabled(ctx, &state));
     }

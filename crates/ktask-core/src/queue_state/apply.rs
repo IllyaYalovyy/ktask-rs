@@ -195,6 +195,7 @@ impl QueueState {
             id,
             number,
             step,
+            model,
             at,
         } = event
         else {
@@ -203,6 +204,7 @@ impl QueueState {
         if let Some(attempt) = self.attempt_mut(*id, *number) {
             attempt.steps.push(StepFold {
                 name: step.clone(),
+                model: model.clone(),
                 started_at: *at,
                 ended: None,
             });

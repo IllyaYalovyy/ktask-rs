@@ -46,14 +46,16 @@ pub use run::{
     build_review_prompt, build_test_prompt, implementation_prompt, run_queue,
 };
 pub use settings::{
-    ATTEMPT_TIMEOUT, DEFAULT_ATTEMPT_TIMEOUT_SECS, HEALTH_CHECK, STEP_COMMIT, STEP_HEALTH_CHECK,
+    ATTEMPT_TIMEOUT, DEFAULT_ATTEMPT_TIMEOUT_SECS, DEFAULT_MAX_ATTEMPTS, DEFAULT_RESOLVER_PROVIDER,
+    HEALTH_CHECK, MAX_ATTEMPTS, RESOLVER_MODEL, RESOLVER_PROVIDER, STEP_COMMIT, STEP_HEALTH_CHECK,
     STEP_IMPLEMENTATION, STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING, SetSettingError,
     SettingView, Settings, SettingsError, SettingsStore, TRACKED_BRANCH, effective_attempt_timeout,
-    set_setting, show_settings, step_enabled,
+    effective_max_attempts, effective_resolver_provider, set_setting, show_settings, step_enabled,
 };
 pub use status::{
     AttemptLine, AttemptOutcome, COMMIT_STEP, DoneMark, HEALTH_CHECK_STEP, IMPLEMENTATION,
-    PUSH_STEP, REVIEW_STEP, SYNC_STEP, StatusEntry, StepLine, TEST_STEP, displayed_status, status,
+    PUSH_STEP, RESOLVE_STEP, REVIEW_STEP, SYNC_STEP, StatusEntry, StepLine, TEST_STEP,
+    displayed_status, status,
 };
 pub use task::{
     AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, add_task, answer_task,

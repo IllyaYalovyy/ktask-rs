@@ -8,7 +8,8 @@ use std::path::Path;
 use crate::Git;
 
 use super::{
-    ATTEMPT_TIMEOUT, HEALTH_CHECK, STEP_COMMIT, STEP_HEALTH_CHECK, STEP_PUSH, STEP_REVIEW,
+    ATTEMPT_TIMEOUT, DEFAULT_MAX_ATTEMPTS, DEFAULT_RESOLVER_PROVIDER, HEALTH_CHECK, MAX_ATTEMPTS,
+    RESOLVER_MODEL, RESOLVER_PROVIDER, STEP_COMMIT, STEP_HEALTH_CHECK, STEP_PUSH, STEP_REVIEW,
     STEP_SYNC, STEP_TESTING, SetSettingError, Settings, TRACKED_BRANCH, split_tracked_branch,
     step_enabled,
 };
@@ -65,6 +66,9 @@ pub(super) fn setting_specs() -> Vec<SettingSpec> {
         ),
         commit_step_spec(),
         push_step_spec(),
+        max_attempts_spec(),
+        resolver_provider_spec(),
+        resolver_model_spec(),
     ]
 }
 
@@ -202,6 +206,66 @@ fn push_step_spec() -> SettingSpec {
     }
 }
 
+/// [`MAX_ATTEMPTS`]'s description.
+fn max_attempts_spec() -> SettingSpec {
+    SettingSpec {
+        name: MAX_ATTEMPTS,
+        get: Box::new(|settings| {
+            (
+                settings
+                    .max_attempts
+                    .unwrap_or(DEFAULT_MAX_ATTEMPTS)
+                    .to_string(),
+                settings.max_attempts.is_none(),
+            )
+        }),
+        set: Box::new(|settings, value, _git, _dir| {
+            let attempts = parse_max_attempts(value)?;
+            settings.max_attempts = Some(attempts);
+            Ok(attempts.to_string())
+        }),
+    }
+}
+
+/// [`RESOLVER_PROVIDER`]'s description.
+fn resolver_provider_spec() -> SettingSpec {
+    SettingSpec {
+        name: RESOLVER_PROVIDER,
+        get: Box::new(|settings| {
+            (
+                settings
+                    .resolver_provider
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_RESOLVER_PROVIDER.to_owned()),
+                settings.resolver_provider.is_none(),
+            )
+        }),
+        set: Box::new(|settings, value, _git, _dir| {
+            let provider = parse_non_empty(RESOLVER_PROVIDER, value)?;
+            settings.resolver_provider = Some(provider.clone());
+            Ok(provider)
+        }),
+    }
+}
+
+/// [`RESOLVER_MODEL`]'s description.
+fn resolver_model_spec() -> SettingSpec {
+    SettingSpec {
+        name: RESOLVER_MODEL,
+        get: Box::new(|settings| {
+            (
+                settings.resolver_model.clone().unwrap_or_default(),
+                settings.resolver_model.is_none(),
+            )
+        }),
+        set: Box::new(|settings, value, _git, _dir| {
+            let model = parse_non_empty(RESOLVER_MODEL, value)?;
+            settings.resolver_model = Some(model.clone());
+            Ok(model)
+        }),
+    }
+}
+
 /// The attempt-timeout part of [`super::set_setting`]: `value` parsed as a positive whole
 /// number of seconds, or why it was refused.
 fn parse_attempt_timeout(value: &str) -> Result<u64, SetSettingError> {
@@ -231,6 +295,38 @@ fn parse_health_check(value: &str) -> Result<String, SetSettingError> {
         });
     }
     Ok(command.to_owned())
+}
+
+/// The max-attempts part of [`super::set_setting`]: `value` parsed as a whole number of at
+/// least 1, or why it was refused.
+fn parse_max_attempts(value: &str) -> Result<u32, SetSettingError> {
+    let attempts: u32 = value
+        .trim()
+        .parse()
+        .map_err(|_| SetSettingError::InvalidValue {
+            name: MAX_ATTEMPTS,
+            message: format!("{value:?} is not a whole number"),
+        })?;
+    if attempts == 0 {
+        return Err(SetSettingError::InvalidValue {
+            name: MAX_ATTEMPTS,
+            message: "must be at least 1".to_owned(),
+        });
+    }
+    Ok(attempts)
+}
+
+/// `name`'s part of [`super::set_setting`] for a setting that is just a trimmed, non-empty
+/// string: [`RESOLVER_PROVIDER`] and [`RESOLVER_MODEL`].
+fn parse_non_empty(name: &'static str, value: &str) -> Result<String, SetSettingError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(SetSettingError::InvalidValue {
+            name,
+            message: "must not be empty".to_owned(),
+        });
+    }
+    Ok(value.to_owned())
 }
 
 /// A step switch's part of [`super::set_setting`]: `value` read as `"on"` or `"off"`, or why
