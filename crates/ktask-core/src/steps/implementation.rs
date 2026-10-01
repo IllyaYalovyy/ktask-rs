@@ -17,8 +17,9 @@ struct EarlierAttempt {
 
 /// Every attempt at task `id` numbered before `before`, oldest first, with what each one
 /// ended at and why — the agent's own reported outcome when it reported one, the tool's own
-/// word for how it ended (`failed`, `blocked`, `failed-unknown`) otherwise. Empty when `before`
-/// is the task's first attempt.
+/// word for how it ended (`failed`, `blocked`, `failed-unknown`) otherwise, `needs-input`'s own
+/// reason carrying the answer too, once [`crate::answer_task`] has recorded one. Empty when
+/// `before` is the task's first attempt.
 ///
 /// # Errors
 ///
@@ -43,6 +44,12 @@ fn earlier_attempts(
                         .to_owned(),
                     end.and_then(|end| end.reason),
                 )
+            };
+            let reason = if outcome == "needs-input" {
+                let answer = crate::attempt::answer_of(journal, id, attempt.number)?;
+                crate::attempt::with_answer(reason, answer.as_deref())
+            } else {
+                reason
             };
             Ok(EarlierAttempt {
                 number: attempt.number,
@@ -391,6 +398,69 @@ mod tests {
             earlier[1].reason.as_deref(),
             Some("the provider ran past its time limit and was killed")
         );
+    }
+
+    #[test]
+    fn an_answered_attempts_earlier_line_and_so_the_next_prompt_carry_the_question_and_the_answer()
+    {
+        use crate::fakes::{FakeClock, FakeJournal, draft};
+        use crate::{AttemptRun, Outcome, Placement, add_task, answer_task, report};
+
+        let journal = FakeJournal::default();
+        let clock = FakeClock(at(0));
+        add_task(&journal, &clock, &draft("a"), Placement::End).unwrap();
+
+        let token = crate::start_attempt(&journal, &clock, "proj", TaskId(1)).unwrap();
+        report(
+            &journal,
+            &clock,
+            &token,
+            Outcome::NeedsInput,
+            Some("which path?"),
+        )
+        .unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(1),
+            1,
+            AttemptRun {
+                duration: std::time::Duration::ZERO,
+                exit_code: Some(0),
+                status: TaskStatus::Blocked,
+                reason: Some("which path?"),
+            },
+            clock.0,
+        )
+        .unwrap();
+        answer_task(&journal, &clock, TaskId(1), "the left one").unwrap();
+
+        let earlier = earlier_attempts(&journal, TaskId(1), 2).unwrap();
+        assert_eq!(
+            earlier[0].reason.as_deref(),
+            Some("which path? — answer: the left one")
+        );
+
+        let task = Task {
+            id: TaskId(1),
+            position: 1,
+            title: "a".to_owned(),
+            body: String::new(),
+            criteria: vec!["it works".to_owned()],
+            kind: TaskKind::Agent,
+            links: vec![],
+            status: TaskStatus::Pending,
+            created_at: at(0),
+        };
+        let next_token = AttemptToken::new("proj", TaskId(1), 2);
+        let binary_path = Path::new("/opt/ktask-rs/bin/ktask-rs");
+        let earlier = vec![EarlierAttempt {
+            number: 1,
+            outcome: earlier[0].outcome.clone(),
+            reason: earlier[0].reason.clone(),
+        }];
+        let prompt = build_prompt_with_history(&task, &next_token, binary_path, &earlier, "");
+        assert!(prompt.contains("which path?"), "{prompt}");
+        assert!(prompt.contains("the left one"), "{prompt}");
     }
 
     #[test]

@@ -3,12 +3,13 @@
 use std::time::Duration;
 
 use crate::{
-    AttemptEnd, Clock, Journal, JournalError, Outcome, RunLock, Task, TaskId, TaskStatus,
-    list_all_tasks,
+    Clock, Journal, JournalError, Outcome, RunLock, Task, TaskId, TaskStatus, list_all_tasks,
 };
 
+mod lines;
 mod outcome;
 
+use lines::{running_step, step_outcome, step_provider};
 pub use outcome::AttemptOutcome;
 
 /// The step kind that runs an agent on the task's whole prompt.
@@ -111,78 +112,6 @@ pub fn displayed_status(status: TaskStatus, outcome: Option<AttemptOutcome>) -> 
     }
 }
 
-/// The outcome and reason shown for the implementation step ended at `end`, given what the
-/// agent itself reported for it, when it reported anything at all.
-fn ended_outcome(
-    end: &AttemptEnd,
-    reported: Option<(Outcome, Option<String>)>,
-) -> (AttemptOutcome, Option<String>) {
-    match reported {
-        Some((outcome, reason)) => (AttemptOutcome::Reported(outcome), reason),
-        None => (AttemptOutcome::Unreported, end.reason.clone()),
-    }
-}
-
-/// The outcome and reason shown for a step named `name` that ended at `end`: the
-/// implementation, review and test steps are judged by what the agent itself reported, when
-/// it reported anything; every other step — the sync, the health check, the commit step and
-/// the push step, today — is a command-kind step the tool itself ran, shown
-/// [`AttemptOutcome::Passed`] when `end.status` is `done` — the health check has nothing to
-/// add, the sync step says how many commits it took in, the commit step names its own short
-/// hash or says nothing changed, the push step names the branch it landed on — or
-/// [`AttemptOutcome::Failed`] with why, for the steps that can still end an attempt badly
-/// because they run inside the attempt itself rather than ahead of it: the commit step and the
-/// push step.
-fn step_outcome(
-    name: &str,
-    end: &AttemptEnd,
-    reported: Option<(Outcome, Option<String>)>,
-) -> (AttemptOutcome, Option<String>) {
-    if name == IMPLEMENTATION || name == REVIEW_STEP || name == TEST_STEP {
-        ended_outcome(end, reported)
-    } else if end.status == TaskStatus::Done {
-        (AttemptOutcome::Passed, end.reason.clone())
-    } else {
-        (AttemptOutcome::Failed, end.reason.clone())
-    }
-}
-
-/// The provider named for a step called `name`, given the provider the attempt ran with, when
-/// one is known: the implementation, review and test steps are run by an agent, and name it;
-/// every other step — the sync, health check, commit and push steps, today — is run by the
-/// tool itself, and names none.
-fn step_provider(name: &str, provider: Option<&str>) -> Option<String> {
-    if name == IMPLEMENTATION || name == REVIEW_STEP || name == TEST_STEP {
-        provider.map(str::to_owned)
-    } else {
-        None
-    }
-}
-
-/// The still-running step line for a step named `name`, started at `started_at`: its elapsed
-/// time so far, and whether it shows `running` or `interrupted` depending on `run_alive`.
-fn running_step(
-    name: &str,
-    provider: Option<&str>,
-    started_at: std::time::SystemTime,
-    clock: &impl Clock,
-    run_alive: bool,
-) -> StepLine {
-    let elapsed = clock.now().duration_since(started_at).unwrap_or_default();
-    let outcome = if run_alive {
-        AttemptOutcome::Running
-    } else {
-        AttemptOutcome::Interrupted
-    };
-    StepLine {
-        step: name.to_owned(),
-        provider: step_provider(name, provider),
-        time_spent: elapsed,
-        outcome,
-        reason: None,
-    }
-}
-
 /// The [`StatusEntry`] for `task`, given its most recent attempt and the agent's own report of
 /// it, when there was one; `run_alive` says whether a live run currently holds the project's
 /// run lock, which only matters when the attempt's last step has not ended.
@@ -194,7 +123,12 @@ fn running_step(
 /// One line per step of `attempt`, folded from its own recorded outcome — never the whole
 /// attempt's most recent one, which a later report-driven step (review, after implementation)
 /// would otherwise overwrite here.
-fn step_lines(attempt: &crate::Attempt, clock: &impl Clock, run_alive: bool) -> Vec<StepLine> {
+fn step_lines(
+    attempt: &crate::Attempt,
+    clock: &impl Clock,
+    run_alive: bool,
+    answer: Option<&str>,
+) -> Vec<StepLine> {
     let provider = attempt.provider.as_deref();
     attempt
         .steps
@@ -202,7 +136,7 @@ fn step_lines(attempt: &crate::Attempt, clock: &impl Clock, run_alive: bool) -> 
         .map(|step| match &step.ended {
             Some(end) => {
                 let own_report = end.reported.map(|outcome| (outcome, end.reason.clone()));
-                let (outcome, reason) = step_outcome(&step.name, end, own_report);
+                let (outcome, reason) = step_outcome(&step.name, end, own_report, answer);
                 StepLine {
                     step: step.name.clone(),
                     provider: step_provider(&step.name, provider),
@@ -225,13 +159,14 @@ fn current_step_line(
     reported: Option<(Outcome, Option<String>)>,
     clock: &impl Clock,
     run_alive: bool,
+    answer: Option<&str>,
 ) -> StepLine {
     if let Some(last) = steps.last() {
         return last.clone();
     }
     let fallback = match &attempt.ended {
         Some(end) => {
-            let (outcome, reason) = step_outcome(IMPLEMENTATION, end, reported);
+            let (outcome, reason) = step_outcome(IMPLEMENTATION, end, reported, answer);
             StepLine {
                 step: IMPLEMENTATION.to_owned(),
                 provider: step_provider(IMPLEMENTATION, attempt.provider.as_deref()),
@@ -261,9 +196,10 @@ fn attempt_line(
     reported: Option<(Outcome, Option<String>)>,
     clock: &impl Clock,
     run_alive: bool,
+    answer: Option<&str>,
 ) -> AttemptLine {
-    let mut steps = step_lines(attempt, clock, run_alive);
-    let current = current_step_line(&mut steps, attempt, reported, clock, run_alive);
+    let mut steps = step_lines(attempt, clock, run_alive, answer);
+    let current = current_step_line(&mut steps, attempt, reported, clock, run_alive, answer);
     AttemptLine {
         number: attempt.number,
         step: current.step,
@@ -282,12 +218,13 @@ fn entry_for(
     history: Vec<AttemptLine>,
     clock: &impl Clock,
     run_alive: bool,
+    answer: Option<&str>,
 ) -> StatusEntry {
     StatusEntry {
         task: task.id,
         title: task.title,
         status: task.status,
-        attempt: attempt_line(attempt, reported, clock, run_alive),
+        attempt: attempt_line(attempt, reported, clock, run_alive, answer),
         history,
     }
 }
@@ -324,6 +261,49 @@ fn gate_stop_entry(task: Task, step: String, reason: String) -> StatusEntry {
 /// Use case: what ran and how it ended, in queue order — one [`StatusEntry`] for every task
 /// that was attempted at least once, cancelled tasks included when they were, plus every
 /// pending task a sync or health-check gate most recently stopped before its attempt began.
+/// The [`StatusEntry`] for `task`, read fresh from `journal`, given `run_alive` — [`status`]'s
+/// own per-task work, pulled out of it so it stays within the workspace's function-length
+/// limit. `None` when `task` was never attempted and no gate ever stopped it either.
+fn entry_for_task(
+    journal: &impl Journal,
+    task: Task,
+    clock: &impl Clock,
+    run_alive: bool,
+) -> Result<Option<StatusEntry>, JournalError> {
+    let mut attempts = crate::attempt::all_attempts(journal, task.id)?;
+    let Some(attempt) = attempts.pop() else {
+        let gate_stop = if task.status == TaskStatus::Pending {
+            crate::attempt::gate_stop_of(journal, task.id)?
+        } else {
+            None
+        };
+        return Ok(gate_stop.map(|(step, reason)| gate_stop_entry(task, step, reason)));
+    };
+    let reported = crate::attempt::last_report(journal, task.id, attempt.number)?;
+    let answer = crate::attempt::answer_of(journal, task.id, attempt.number)?;
+    let mut history = Vec::with_capacity(attempts.len());
+    for earlier in &attempts {
+        let reported = crate::attempt::last_report(journal, task.id, earlier.number)?;
+        let earlier_answer = crate::attempt::answer_of(journal, task.id, earlier.number)?;
+        history.push(attempt_line(
+            earlier,
+            reported,
+            clock,
+            false,
+            earlier_answer.as_deref(),
+        ));
+    }
+    Ok(Some(entry_for(
+        task,
+        &attempt,
+        reported,
+        history,
+        clock,
+        run_alive,
+        answer.as_deref(),
+    )))
+}
+
 /// A task never attempted, never stopped by a gate, pending or cancelled before it ever ran, is
 /// left out.
 ///
@@ -347,24 +327,9 @@ pub fn status(
     };
     let mut entries = Vec::new();
     for task in list_all_tasks(journal)? {
-        let mut attempts = crate::attempt::all_attempts(journal, task.id)?;
-        let Some(attempt) = attempts.pop() else {
-            if task.status == TaskStatus::Pending
-                && let Some((step, reason)) = crate::attempt::gate_stop_of(journal, task.id)?
-            {
-                entries.push(gate_stop_entry(task, step, reason));
-            }
-            continue;
-        };
-        let reported = crate::attempt::last_report(journal, task.id, attempt.number)?;
-        let mut history = Vec::with_capacity(attempts.len());
-        for earlier in &attempts {
-            let reported = crate::attempt::last_report(journal, task.id, earlier.number)?;
-            history.push(attempt_line(earlier, reported, clock, false));
+        if let Some(entry) = entry_for_task(journal, task, clock, run_alive)? {
+            entries.push(entry);
         }
-        entries.push(entry_for(
-            task, &attempt, reported, history, clock, run_alive,
-        ));
     }
     Ok(entries)
 }
@@ -374,7 +339,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::fakes::{FakeClock, FakeJournal, FakeRunLock, at, draft};
-    use crate::{AttemptRun, Outcome, Placement, TaskId, TaskStatus, add_task, report};
+    use crate::{AttemptEnd, AttemptRun, Outcome, Placement, TaskId, TaskStatus, add_task, report};
 
     use super::*;
 
@@ -585,6 +550,50 @@ mod tests {
     }
 
     #[test]
+    fn once_answered_the_blocked_attempts_reason_carries_the_answer_too() {
+        let journal = journal_with_a_started_attempt();
+        report(
+            &journal,
+            &clock(110),
+            &crate::AttemptToken::new("proj", TaskId(1), 1),
+            Outcome::NeedsInput,
+            Some("which path?"),
+        )
+        .unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(1),
+            1,
+            AttemptRun {
+                duration: Duration::from_secs(5),
+                exit_code: Some(0),
+                status: TaskStatus::Blocked,
+                reason: Some("which path?"),
+            },
+            clock(115).0,
+        )
+        .unwrap();
+        crate::answer_task(&journal, &clock(120), TaskId(1), "the left one").unwrap();
+
+        let entries = status(&journal, &clock(200), &no_run()).unwrap();
+        assert_eq!(entries[0].status, TaskStatus::Pending);
+        assert_eq!(
+            entries[0].attempt.reason.as_deref(),
+            Some("which path? — answer: the left one")
+        );
+        let step = entries[0]
+            .attempt
+            .steps
+            .iter()
+            .find(|step| step.step == IMPLEMENTATION)
+            .expect("the implementation step");
+        assert_eq!(
+            step.reason.as_deref(),
+            Some("which path? — answer: the left one")
+        );
+    }
+
+    #[test]
     fn no_report_at_all_shows_the_tools_own_failed_unknown_outcome_and_reason() {
         let journal = journal_with_a_started_attempt();
         crate::attempt::end_attempt(
@@ -761,7 +770,7 @@ mod tests {
             reported: None,
         };
         assert_eq!(
-            step_outcome(COMMIT_STEP, &end, None),
+            step_outcome(COMMIT_STEP, &end, None, None),
             (
                 AttemptOutcome::Failed,
                 Some("git identity is not configured".to_owned())
