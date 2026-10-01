@@ -34,6 +34,8 @@ pub(crate) enum Request {
     /// Retry this task: it is `failed`, `failed-unknown` or `blocked` already, so this needs
     /// no confirmation.
     Retry(TaskId),
+    /// Open the answer form for this task, with the question its attempt asked.
+    OpenAnswer(TaskId, String),
     /// Leave every screen.
     Quit,
 }
@@ -111,7 +113,7 @@ impl Queue {
         let refused = self.refused.filter(|refusal| match refusal {
             Refusal::Running(id) => is_running(&queue, *id),
             Refusal::AlreadyCancelled(id) | Refusal::NextToCancelled(id) => cancelled(&queue, *id),
-            Refusal::NotRetryable(id, status) => queue
+            Refusal::NotRetryable(id, status) | Refusal::NotBlocked(id, status) => queue
                 .tasks
                 .iter()
                 .any(|task| task.id == *id && task.status == *status),
@@ -241,6 +243,7 @@ impl Queue {
             KeyCode::Char('O') => this.open_form_next_to(Placement::Before),
             KeyCode::Char('d') => (this.press_d(), None),
             KeyCode::Char('t') => this.press_t(),
+            KeyCode::Char('A') => this.press_answer(),
             KeyCode::Char('r') => (this, Some(Request::StartRun)),
             KeyCode::Char('i') => (this, Some(Request::OpenImport)),
             KeyCode::Char('s') => (this, Some(Request::OpenSettings)),
@@ -331,6 +334,39 @@ impl Queue {
         }
     }
 
+    /// The screen after `A` on the selected task: opens the answer form, with the question
+    /// its attempt asked, when it is `blocked`, and otherwise refuses at once, naming its
+    /// status, in the same words `ktask-rs answer` would; with nothing selected, changes
+    /// nothing.
+    fn press_answer(self) -> (Self, Option<Request>) {
+        let Some(id) = self.selected else {
+            return (self, None);
+        };
+        let Some(view) = &self.view else {
+            return (self, None);
+        };
+        let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
+            return (self, None);
+        };
+        if task.status == TaskStatus::Blocked {
+            let question = view
+                .attempts
+                .get(&id)
+                .and_then(|attempt| attempt.reason.clone())
+                .unwrap_or_default();
+            (self, Some(Request::OpenAnswer(id, question)))
+        } else {
+            let status = task.status;
+            (
+                Self {
+                    refused: Some(Refusal::NotBlocked(id, status)),
+                    ..self
+                },
+                None,
+            )
+        }
+    }
+
     /// The screen with the selection moved to the index `target` picks, given the index it is
     /// at and how many tasks there are. It stays inside the list.
     fn select(self, target: impl FnOnce(usize, usize) -> usize) -> Self {
@@ -366,7 +402,10 @@ mod tests {
     use std::path::PathBuf;
     use std::time::SystemTime;
 
-    use ktask_core::{Project, RetryError, StatusSummary, Task, TaskKind};
+    use ktask_core::{
+        AnswerError, AttemptLine, AttemptOutcome, Outcome, Project, RetryError, StatusSummary,
+        Task, TaskKind,
+    };
 
     use super::*;
 
@@ -627,6 +666,90 @@ mod tests {
         let (queue, request) = loaded(&[]).key(KeyCode::Char('t'));
         assert_eq!(request, None);
         assert_eq!(queue.refused, None);
+    }
+
+    /// An [`AttemptLine`] blocked with `reason` as the question its attempt asked.
+    fn blocked_attempt(reason: &str) -> AttemptLine {
+        AttemptLine {
+            number: 1,
+            step: "implementation".to_owned(),
+            provider: Some("echo".to_owned()),
+            time_spent: std::time::Duration::from_secs(1),
+            outcome: AttemptOutcome::Reported(Outcome::NeedsInput),
+            reason: Some(reason.to_owned()),
+            steps: vec![],
+        }
+    }
+
+    #[test]
+    fn capital_a_on_a_blocked_task_opens_the_answer_form_with_its_question() {
+        let mut view = queue_of(&[1, 2]);
+        view.tasks[0].status = TaskStatus::Blocked;
+        view.attempts
+            .insert(TaskId(1), blocked_attempt("which path?"));
+        let queue = Queue::default().loaded(view);
+
+        let (queue, request) = queue.key(KeyCode::Char('A'));
+
+        assert_eq!(
+            request,
+            Some(Request::OpenAnswer(TaskId(1), "which path?".to_owned()))
+        );
+        assert_eq!(queue.refused, None);
+    }
+
+    #[test]
+    fn capital_a_on_a_task_that_is_not_blocked_refuses_naming_its_status() {
+        for status in [
+            TaskStatus::Pending,
+            TaskStatus::Running,
+            TaskStatus::Done,
+            TaskStatus::Failed,
+            TaskStatus::FailedUnknown,
+        ] {
+            let mut view = queue_of(&[1, 2]);
+            view.tasks[0].status = status;
+            let queue = Queue::default().loaded(view.clone());
+
+            let (queue, request) = queue.key(KeyCode::Char('A'));
+
+            assert_eq!(request, None, "{status}");
+            assert_eq!(
+                queue.refused,
+                Some(Refusal::NotBlocked(TaskId(1), status)),
+                "{status}"
+            );
+            assert_eq!(queue.view, Some(view), "{status}");
+        }
+    }
+
+    #[test]
+    fn capital_a_with_nothing_selected_requests_and_refuses_nothing() {
+        let (queue, request) = loaded(&[]).key(KeyCode::Char('A'));
+        assert_eq!(request, None);
+        assert_eq!(queue.refused, None);
+    }
+
+    #[test]
+    fn the_not_blocked_refusal_is_dismissed_by_the_next_key_that_is_not_capital_a_again() {
+        let queue = press(loaded(&[1, 2]), &[KeyCode::Char('A')]);
+        assert_eq!(
+            queue.refused,
+            Some(Refusal::NotBlocked(TaskId(1), TaskStatus::Pending))
+        );
+        assert_eq!(press(queue, &[KeyCode::Char('j')]).refused, None);
+    }
+
+    #[test]
+    fn the_not_blocked_refusal_is_worded_as_ktask_rs_answer_would() {
+        assert_eq!(
+            Refusal::NotBlocked(TaskId(1), TaskStatus::Pending).message(),
+            AnswerError::NotBlocked {
+                id: TaskId(1),
+                status: TaskStatus::Pending
+            }
+            .to_string()
+        );
     }
 
     #[test]

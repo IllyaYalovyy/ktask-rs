@@ -3,6 +3,7 @@
 
 use ktask_core::Project;
 
+use crate::answer_screen::{self, AnswerScreen};
 use crate::import_screen::{self, ImportScreen};
 use crate::projects::{self, ProjectsScreen};
 use crate::queue::Queue;
@@ -48,6 +49,16 @@ pub(super) fn try_form(app: App, event: Event) -> Tried {
             form: app.form.map(|f| f.rejected(problems)),
             ..app
         }),
+        other => Tried::Unhandled(Box::new(app), Box::new(other)),
+    }
+}
+
+/// `event`, applied to the answer form when it owns it — a key or Ctrl-letter while it is
+/// open — or handed back for the next screen to try, unchanged.
+pub(super) fn try_answer(app: App, event: Event) -> Tried {
+    match event {
+        Event::Key(key) if app.answer.is_some() => handled(on_answer(app, |a| a.key(key))),
+        Event::Ctrl(letter) if app.answer.is_some() => handled(on_answer(app, |a| a.ctrl(letter))),
         other => Tried::Unhandled(Box::new(app), Box::new(other)),
     }
 }
@@ -165,6 +176,37 @@ fn on_form(
             ..app
         },
         Some(task_form::Request::Quit) => App { quit: true, ..app },
+        None => app,
+    }
+}
+
+/// The app with `f`'s answer applied to the answer form, when it is open: closed either way —
+/// [`answer_screen::Request::Close`] asks nothing of the loop, and unlike every other form,
+/// [`answer_screen::Request::Submit`] closes the form too, leaving the task and the typed
+/// answer for the loop to record.
+fn on_answer(
+    app: App,
+    f: impl FnOnce(AnswerScreen) -> (AnswerScreen, Option<answer_screen::Request>),
+) -> App {
+    let Some(screen) = app.answer else {
+        return app;
+    };
+    let task = screen.task();
+    let (screen, request) = f(screen);
+    let app = App {
+        answer: Some(screen),
+        ..app
+    };
+    match request {
+        Some(answer_screen::Request::Close) => App {
+            answer: None,
+            ..app
+        },
+        Some(answer_screen::Request::Submit(text)) => App {
+            answer: None,
+            answer_submission: Some((task, text)),
+            ..app
+        },
         None => app,
     }
 }

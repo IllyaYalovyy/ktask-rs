@@ -1,11 +1,11 @@
 //! [`Refusal`]: why a key was refused at once, without asking or opening anything, worded
 //! identically to the CLI command it mirrors.
 
-use ktask_core::{AppendError, CancelError, RetryError, TaskId, TaskStatus};
+use ktask_core::{AnswerError, AppendError, CancelError, RetryError, TaskId, TaskStatus};
 
 /// Why a key was refused at once, without asking or opening anything: the same reason, in the
-/// same words, that `ktask-rs remove`, `ktask-rs add` or `ktask-rs retry` gives for the same
-/// situation.
+/// same words, that `ktask-rs remove`, `ktask-rs add`, `ktask-rs retry` or `ktask-rs answer`
+/// gives for the same situation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Refusal {
     /// `d` on the selected task, which is running: `ktask-rs remove` would refuse it too.
@@ -19,6 +19,9 @@ pub(crate) enum Refusal {
     /// `t` on the selected task, whose status is not `failed`, `failed-unknown` or `blocked`:
     /// `ktask-rs retry` would refuse it too, naming the same status.
     NotRetryable(TaskId, TaskStatus),
+    /// `A` on the selected task, whose status is not `blocked`: `ktask-rs answer` would refuse
+    /// it too, naming the same status.
+    NotBlocked(TaskId, TaskStatus),
 }
 
 impl Refusal {
@@ -30,6 +33,7 @@ impl Refusal {
             Self::AlreadyCancelled(id) => CancelError::AlreadyCancelled(id).to_string(),
             Self::NextToCancelled(id) => AppendError::CancelledTask(id).to_string(),
             Self::NotRetryable(id, status) => RetryError::NotRetryable { id, status }.to_string(),
+            Self::NotBlocked(id, status) => AnswerError::NotBlocked { id, status }.to_string(),
         }
     }
 }

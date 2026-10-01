@@ -29,6 +29,12 @@ fn handle_task_action(mut app: App, application: &impl Application) -> Result<(A
             .map_err(|error| error.to_string())?;
         return Ok((app, true));
     }
+    if let Some((id, text)) = app.answer_submission.take() {
+        application
+            .answer_task(id, &text)
+            .map_err(|error| error.to_string())?;
+        return Ok((app, true));
+    }
     if let Some((draft, placement)) = app.submission.take() {
         let added = match application.add_task(&draft, placement) {
             Ok(id) => Event::Added(id),
@@ -234,6 +240,7 @@ mod tests {
         add: RefCell<Vec<Result<TaskId, Vec<Failure>>>>,
         remove: RefCell<Vec<Result<(), Failure>>>,
         retry: RefCell<Vec<Result<(), Failure>>>,
+        answer: RefCell<Vec<Result<(), Failure>>>,
         settings: RefCell<Vec<Result<Vec<SettingView>, Failure>>>,
         save_setting: RefCell<Vec<Result<SettingView, Failure>>>,
         import: RefCell<Vec<Result<Import, Failure>>>,
@@ -262,6 +269,7 @@ mod tests {
         type LoadError = Failure;
         type RemoveError = Failure;
         type RetryError = Failure;
+        type AnswerError = Failure;
         type AddProblem = Failure;
         type SettingsError = Failure;
         type SaveSettingError = Failure;
@@ -282,6 +290,10 @@ mod tests {
 
         fn retry_task(&self, _id: TaskId) -> Result<(), Failure> {
             self.retry.borrow_mut().remove(0)
+        }
+
+        fn answer_task(&self, _id: TaskId, _text: &str) -> Result<(), Failure> {
+            self.answer.borrow_mut().remove(0)
         }
 
         fn add_task(
@@ -390,6 +402,35 @@ mod tests {
         let error = handle_task_action(app, &fake).unwrap_err();
 
         assert_eq!(error, "failed: no such task");
+    }
+
+    #[test]
+    fn answering_a_task_that_fails_propagates_the_error_types_own_message() {
+        let fake = Fake::default();
+        *fake.answer.borrow_mut() = vec![Err(Failure("task 1 is pending".to_owned()))];
+        let app = App {
+            answer_submission: Some((TaskId(1), "the left one".to_owned())),
+            ..App::default()
+        };
+
+        let error = handle_task_action(app, &fake).unwrap_err();
+
+        assert_eq!(error, "failed: task 1 is pending");
+    }
+
+    #[test]
+    fn a_successful_answer_leaves_nothing_pending() {
+        let fake = Fake::default();
+        *fake.answer.borrow_mut() = vec![Ok(())];
+        let app = App {
+            answer_submission: Some((TaskId(1), "the left one".to_owned())),
+            ..App::default()
+        };
+
+        let (app, handled) = handle_task_action(app, &fake).unwrap();
+
+        assert!(handled);
+        assert!(app.answer_submission.is_none());
     }
 
     #[test]

@@ -53,6 +53,7 @@ impl Application for PanicTestApplication {
     type LoadError = String;
     type RemoveError = String;
     type RetryError = String;
+    type AnswerError = String;
     type AddProblem = String;
     type SettingsError = String;
     type SaveSettingError = String;
@@ -81,6 +82,10 @@ impl Application for PanicTestApplication {
     }
 
     fn retry_task(&self, _id: TaskId) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn answer_task(&self, _id: TaskId, _text: &str) -> Result<(), String> {
         Ok(())
     }
 

@@ -1,10 +1,12 @@
 //! `ktask-rs tui` on the real binary, in a pseudo-terminal: the queue screen, quitting,
 //! resizing, and what happens when there is no terminal. Moving around the queue is in
 //! `tui/navigate.rs`; removing a task is in `tui/remove.rs`; retrying one is in
-//! `tui/retry.rs`.
+//! `tui/retry.rs`; answering one is in `tui/answer.rs`.
 
 #[path = "tui/add.rs"]
 mod add;
+#[path = "tui/answer.rs"]
+mod answer;
 #[path = "tui/dashboard.rs"]
 mod dashboard;
 #[path = "tui/exit.rs"]

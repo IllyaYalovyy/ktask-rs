@@ -21,6 +21,8 @@ pub trait Application {
     type RemoveError: Display;
     /// Why [`retry_task`](Application::retry_task) refused to retry a task.
     type RetryError: Display;
+    /// Why [`answer_task`](Application::answer_task) refused to answer a task.
+    type AnswerError: Display;
     /// One reason [`add_task`](Application::add_task) refused the task.
     type AddProblem: Display;
     /// Why [`load_settings`](Application::load_settings) failed.
@@ -64,6 +66,16 @@ pub trait Application {
     /// Fails, changing nothing, when there is no such task, or its status is not `failed`,
     /// `failed-unknown` or `blocked`.
     fn retry_task(&self, id: TaskId) -> Result<(), Self::RetryError>;
+
+    /// Records `text` as the answer to the question task `id`'s attempt asked — the operator
+    /// submitted the answer form for it — and sends it back to `pending`, so the next run
+    /// picks it up with it.
+    ///
+    /// # Errors
+    ///
+    /// Fails, changing nothing, when there is no such task, its status is not `blocked`, or
+    /// `text` is empty or only whitespace.
+    fn answer_task(&self, id: TaskId, text: &str) -> Result<(), Self::AnswerError>;
 
     /// Adds `draft` to the queue at `placement`, giving its number, or every rule it broke,
     /// so all of them can be put right at once.

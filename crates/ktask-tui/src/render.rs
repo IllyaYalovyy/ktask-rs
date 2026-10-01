@@ -6,6 +6,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::widgets::{Block, Widget};
 
 use crate::App;
+use crate::answer_screen::AnswerScreen;
 use crate::import_screen::ImportScreen;
 use crate::queue::Queue;
 use crate::registration_screen::RegistrationScreen;
@@ -17,6 +18,8 @@ fn footer_keys(app: &App) -> &'static str {
         SettingsScreen::footer_keys()
     } else if let Some(form) = &app.form {
         form.footer_keys()
+    } else if app.answer.is_some() {
+        AnswerScreen::footer_keys()
     } else if app.import.is_some() {
         ImportScreen::footer_keys()
     } else if let Some(projects) = &app.projects {
@@ -43,6 +46,9 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     }
     if let Some(form) = &app.form {
         return form.draw(inner, buf);
+    }
+    if let Some(answer) = &app.answer {
+        return Some(answer.draw(inner, buf));
     }
     if let Some(import) = &app.import {
         return Some(import.draw(inner, buf));

@@ -7,6 +7,7 @@
 use ktask_core::{Placement, Project, QueueView, SettingView, TaskDraft, TaskId};
 use ratatui::crossterm::event::KeyCode;
 
+use crate::answer_screen::AnswerScreen;
 use crate::import_screen::ImportScreen;
 use crate::projects::ProjectsScreen;
 use crate::queue::{self, Queue};
@@ -16,7 +17,7 @@ use crate::task_form::TaskFormScreen;
 
 mod screens;
 
-use screens::{try_form, try_import, try_projects, try_registration, try_settings};
+use screens::{try_answer, try_form, try_import, try_projects, try_registration, try_settings};
 
 /// Everything the terminal interface shows and remembers. Which screen is open is decided by
 /// which of `form`, `import`, `settings`, `projects` and `registration` is `Some` — at most
@@ -27,6 +28,7 @@ use screens::{try_form, try_import, try_projects, try_registration, try_settings
 pub struct App {
     pub(crate) queue: Queue,
     pub(crate) form: Option<TaskFormScreen>,
+    pub(crate) answer: Option<AnswerScreen>,
     pub(crate) import: Option<ImportScreen>,
     pub(crate) settings: Option<SettingsScreen>,
     pub(crate) projects: Option<ProjectsScreen>,
@@ -42,6 +44,8 @@ pub struct App {
     pub(crate) removal: Option<TaskId>,
     /// The task the operator asked to retry, for the loop to carry out.
     pub(crate) retrial: Option<TaskId>,
+    /// The task and text the answer form was submitted with, for the loop to record.
+    pub(crate) answer_submission: Option<(TaskId, String)>,
     /// Set when the operator asked to start executing the pending tasks.
     pub(crate) run_requested: Option<()>,
     /// Set when the operator asked to open the settings screen.
@@ -142,6 +146,10 @@ fn dispatch(app: App, event: Event) -> App {
         Tried::Handled(app) => return *app,
         Tried::Unhandled(app, event) => (*app, *event),
     };
+    let (app, event) = match try_answer(app, event) {
+        Tried::Handled(app) => return *app,
+        Tried::Unhandled(app, event) => (*app, *event),
+    };
     let (app, event) = match try_import(app, event) {
         Tried::Handled(app) => return *app,
         Tried::Unhandled(app, event) => (*app, *event),
@@ -207,6 +215,13 @@ fn on_queue(app: App, f: impl FnOnce(Queue) -> (Queue, Option<queue::Request>)) 
         queue: screen,
         ..app
     };
+    apply_queue_request(app, request)
+}
+
+/// The app with `request`, when the queue left one, carried out: opens the screen or sets the
+/// mailbox field it asks for — pulled out of [`on_queue`] so that function stays within the
+/// workspace's function-length limit.
+fn apply_queue_request(app: App, request: Option<queue::Request>) -> App {
     match request {
         Some(queue::Request::OpenForm(placement)) => App {
             form: Some(TaskFormScreen::new(placement)),
@@ -234,6 +249,10 @@ fn on_queue(app: App, f: impl FnOnce(Queue) -> (Queue, Option<queue::Request>)) 
         },
         Some(queue::Request::Retry(id)) => App {
             retrial: Some(id),
+            ..app
+        },
+        Some(queue::Request::OpenAnswer(id, question)) => App {
+            answer: Some(AnswerScreen::new(id, question)),
             ..app
         },
         Some(queue::Request::Quit) => App { quit: true, ..app },
