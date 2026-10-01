@@ -34,6 +34,8 @@ mod register;
 mod remove;
 #[path = "support/repo.rs"]
 mod repo;
+#[path = "tui/resolver_model.rs"]
+mod resolver_model;
 #[path = "tui/retry.rs"]
 mod retry;
 #[path = "tui/run.rs"]
