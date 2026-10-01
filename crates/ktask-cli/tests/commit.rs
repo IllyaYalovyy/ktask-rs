@@ -1,8 +1,9 @@
 //! The commit step on the real binary: once a task's implementation, review and test steps
 //! have all passed, the tool commits everything the task changed under the user's own git
 //! identity — one commit, message built from the task, no trailer of any kind. A task that
-//! changed nothing makes no commit and carries on; a task whose identity is not configured, or
-//! whose commit git itself refuses, ends `failed` telling the operator what is expected.
+//! changed nothing makes no commit and carries on; a task whose commit git itself refuses ends
+//! `failed` telling the operator what is expected. A task whose identity is not configured is a
+//! known cause instead: the task goes back to `pending` rather than ending `failed`.
 
 #[path = "support/repo.rs"]
 mod repo;
@@ -255,8 +256,7 @@ fn a_task_that_changes_nothing_makes_no_commit_the_line_says_so_and_the_task_car
 }
 
 #[test]
-fn an_unconfigured_git_identity_refuses_the_commit_ends_the_task_failed_and_tells_the_operator_what_is_expected()
--> Result<()> {
+fn an_unconfigured_git_identity_is_a_known_cause_the_task_stays_pending_over() -> Result<()> {
     // No `configure_git_identity` call, and the sandbox's `HOME` carries no `.gitconfig`
     // either: git has nothing at all to say whose the commit would be.
     let fixture = Fixture::new()?;
@@ -276,7 +276,7 @@ fn an_unconfigured_git_identity_refuses_the_commit_ends_the_task_failed_and_tell
     let status = fixture.run(&["status"])?;
     assert_eq!(status.code, Some(0), "{}", status.stderr);
     let lines: Vec<&str> = status.stdout.lines().collect();
-    assert_eq!(lines[0], "#1\tfailed\ta");
+    assert_eq!(lines[0], "#1\tpending\ta");
     assert!(
         lines[4].starts_with("\tcommit\t-\t0s\tfailed\t"),
         "{}",
@@ -287,11 +287,25 @@ fn an_unconfigured_git_identity_refuses_the_commit_ends_the_task_failed_and_tell
         "{}",
         lines[4]
     );
+    assert!(
+        !lines.iter().any(|line| line.starts_with("\tresolve\t")),
+        "no resolver ran over a known cause: {lines:?}"
+    );
 
     // Nothing was committed, and the file the task wrote is still sitting uncommitted.
     assert_eq!(fixture.commit_count()?, 0);
     let dirty = fixture.git(&["status", "--porcelain"])?;
     assert!(dirty.contains("new.txt"), "{dirty}");
+
+    // Fixing the identity and running again picks the task straight back up, with no attempt
+    // spent on the environment's own problem.
+    fixture.configure_git_identity()?;
+    let second = fixture.run_the_queue()?;
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    assert_eq!(
+        fixture.run(&["status"])?.stdout.lines().next(),
+        Some("#1\tdone\ta")
+    );
     Ok(())
 }
 

@@ -1,9 +1,11 @@
 //! The push step on the real binary: once the commit step has made a commit, and the project
 //! tracks a branch, the tool pushes it there and confirms the remote branch's tip is now that
 //! commit — a local bare repository standing in for the remote. A push the remote refuses
-//! because it has moved on, or that cannot reach the remote, ends the task `failed`, leaves
-//! the commit sitting in the project, and tells the operator what is expected. A task with
-//! nothing to commit makes no push and leaves no line.
+//! because it has moved on ends the task `failed`, leaving the commit sitting in the project
+//! and telling the operator what is expected. A push that cannot reach the remote at all is a
+//! known cause instead: the task goes back to `pending`, the commit still sitting in the
+//! project, rather than ending `failed`. A task with nothing to commit makes no push and
+//! leaves no line.
 
 #[path = "support/run_cleanup.rs"]
 mod run_cleanup;
@@ -331,8 +333,8 @@ fn a_push_rejected_because_the_remote_moved_on_ends_the_task_failed_and_the_comm
 }
 
 #[test]
-fn a_push_that_cannot_reach_the_remote_ends_the_task_failed_and_the_commit_stays_local()
--> Result<()> {
+fn a_push_that_cannot_reach_the_remote_is_a_known_cause_the_task_stays_pending_over() -> Result<()>
+{
     let fixture = Fixture::new()?;
     fixture.track_origin_main()?;
     let go = fixture.scratch.join("go");
@@ -347,7 +349,7 @@ fn a_push_that_cannot_reach_the_remote_ends_the_task_failed_and_the_commit_stays
 
     let status = child.wait()?;
     assert!(!status.success(), "{status:?}");
-    assert_eq!(fixture.task_status(1)?, "failed");
+    assert_eq!(fixture.task_status(1)?, "pending");
 
     let stdout = fixture.run(&["status"])?;
     let lines: Vec<&str> = stdout.stdout.lines().collect();
@@ -356,6 +358,14 @@ fn a_push_that_cannot_reach_the_remote_ends_the_task_failed_and_the_commit_stays
         .find(|line| line.starts_with("\tpush\t"))
         .expect("a push line");
     assert!(push_line.contains("git push"), "{push_line}");
+    assert!(
+        push_line.contains("make the remote reachable"),
+        "{push_line}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.starts_with("\tresolve\t")),
+        "no resolver ran over a known cause: {lines:?}"
+    );
 
     // The commit is sitting in the project, never having reached anywhere.
     let subject = git(

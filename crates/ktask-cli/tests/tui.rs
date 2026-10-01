@@ -20,6 +20,8 @@ mod idle;
 mod import;
 #[path = "tui/insert.rs"]
 mod insert;
+#[path = "tui/limit_wait.rs"]
+mod limit_wait;
 #[path = "tui/navigate.rs"]
 mod navigate;
 #[path = "tui/no_leftover_processes.rs"]
