@@ -89,6 +89,7 @@ const TASK_ADDED: &str = "task_added";
 const TASK_CANCELLED: &str = "task_cancelled";
 const ATTEMPT_STARTED: &str = "attempt_started";
 const ATTEMPT_RUNNING: &str = "attempt_running";
+const ATTEMPT_WAITING: &str = "attempt_waiting";
 const ATTEMPT_REPORTED: &str = "attempt_reported";
 const ATTEMPT_SESSION_RECORDED: &str = "attempt_session_recorded";
 const ATTEMPT_ENDED: &str = "attempt_ended";
@@ -527,6 +528,24 @@ mod tests {
             },
         );
         assert_eq!(journal.events().unwrap()[1..], [recorded]);
+    }
+
+    #[test]
+    fn an_attempt_waiting_event_round_trips() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "a", Placement::End);
+        let waiting = append(
+            &journal,
+            Event::AttemptWaiting {
+                id: TaskId(1),
+                number: 1,
+                step: "implementation".to_owned(),
+                until: at(20),
+                at: at(10),
+            },
+        );
+        assert_eq!(journal.events().unwrap()[1..], [waiting]);
     }
 
     #[test]

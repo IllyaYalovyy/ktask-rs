@@ -14,6 +14,7 @@ mod process;
 mod registry;
 mod sessions;
 mod settings;
+mod sleep;
 mod state;
 mod watch;
 
@@ -29,6 +30,7 @@ pub use process::{
 pub use registry::SqliteRegistry;
 pub use sessions::FileSessionLog;
 pub use settings::TomlSettingsStore;
+pub use sleep::RealSleep;
 pub use state::{
     journal_path, registry_path, run_lock_path, sessions_dir_path, settings_path, state_root_path,
 };

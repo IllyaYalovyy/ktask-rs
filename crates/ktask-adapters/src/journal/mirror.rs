@@ -68,6 +68,7 @@ pub(super) fn mirror(transaction: &Transaction<'_>, event: &Event) -> Result<(),
             )?;
         }
         Event::AttemptRunning { .. }
+        | Event::AttemptWaiting { .. }
         | Event::AttemptReported { .. }
         | Event::AttemptSessionRecorded { .. }
         | Event::StepStarted { .. }

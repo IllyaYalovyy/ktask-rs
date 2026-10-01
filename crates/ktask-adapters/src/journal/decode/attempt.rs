@@ -78,6 +78,33 @@ fn bool_field(payload: &Value, key: &str) -> bool {
     payload.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
+/// The [`Event::AttemptWaiting`] an `attempt_waiting` row's `payload` decodes to.
+pub(super) fn decode_attempt_waiting(
+    payload: &Value,
+    id: TaskId,
+    number: u32,
+    at: SystemTime,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Event, JournalError> {
+    let step = payload
+        .get("step")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| corrupt("step", "missing".to_owned()))?;
+    let until = payload
+        .get("until")
+        .and_then(Value::as_i64)
+        .map(super::from_seconds)
+        .ok_or_else(|| corrupt("until", "missing".to_owned()))?;
+    Ok(Event::AttemptWaiting {
+        id,
+        number,
+        step,
+        until,
+        at,
+    })
+}
+
 /// The [`Event::AttemptReported`] an `attempt_reported` row's `payload` decodes to.
 pub(super) fn decode_attempt_reported(
     payload: &Value,

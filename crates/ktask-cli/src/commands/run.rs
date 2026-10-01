@@ -6,10 +6,12 @@ use std::process::ExitCode;
 
 use std::path::Path;
 
-use ktask_adapters::{FileRunLock, FileSessionLog, GitCli, ProcessCommands, SystemClock, echo};
+use ktask_adapters::{
+    FileRunLock, FileSessionLog, GitCli, ProcessCommands, RealSleep, SystemClock, echo,
+};
 use ktask_core::{
-    COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, SYNC_STEP, Settings,
-    TEST_STEP,
+    COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, RunReport, SYNC_STEP,
+    Settings, TEST_STEP,
 };
 
 use crate::context::{
@@ -77,13 +79,10 @@ fn run_context<'a>(
     }
 }
 
-/// Runs the pending tasks of the resolved project in queue order, one attempt each with the
-/// `echo` provider, until one stops it; renders what happened and maps it to an exit code.
-pub(crate) fn run(
-    args: &Args,
-    project: Option<&str>,
-    stdout: &mut impl Write,
-) -> Result<ExitCode, Failure> {
+/// Resolves the project and its settings, builds the context `ktask_core::run_queue` needs,
+/// and runs it with the real adapters — [`run`]'s own work, pulled out of it so it stays
+/// within the workspace's function-length limit.
+fn execute(args: &Args, project: Option<&str>) -> Result<RunReport, Failure> {
     let registry = open_registry()?;
     let project = merge_project(project, args.project.as_deref())?;
     let (project, settings) = resolve(&registry, project.as_deref())?;
@@ -102,16 +101,27 @@ pub(crate) fn run(
         &resolver_model,
         &sessions_dir,
     );
-    let report = ktask_core::run_queue(
+    Ok(ktask_core::run_queue(
         &journal,
         &SystemClock,
         &ProcessCommands,
         &GitCli,
         &echo::PROVIDER,
         &FileSessionLog,
+        &RealSleep,
         &lock,
         context,
-    )?;
+    )?)
+}
+
+/// Runs the pending tasks of the resolved project in queue order, one attempt each with the
+/// `echo` provider, until one stops it; renders what happened and maps it to an exit code.
+pub(crate) fn run(
+    args: &Args,
+    project: Option<&str>,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
+    let report = execute(args, project)?;
     let stopped = render::run(&report, args.json, stdout)?;
     Ok(if stopped {
         ExitCode::FAILURE

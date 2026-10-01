@@ -7,16 +7,16 @@ use serde_json::Value;
 
 use super::{
     ATTEMPT_ENDED, ATTEMPT_REPORTED, ATTEMPT_RUNNING, ATTEMPT_SESSION_RECORDED, ATTEMPT_STARTED,
-    GATE_FAILED, STEP_ENDED, STEP_STARTED, TASK_ADDED, TASK_ANSWERED, TASK_CANCELLED,
-    TASK_DONE_BY_USER, TASK_RETRIED, failed,
+    ATTEMPT_WAITING, GATE_FAILED, STEP_ENDED, STEP_STARTED, TASK_ADDED, TASK_ANSWERED,
+    TASK_CANCELLED, TASK_DONE_BY_USER, TASK_RETRIED, failed,
 };
 
 mod attempt;
 
 use attempt::{
     decode_attempt_ended, decode_attempt_reported, decode_attempt_running,
-    decode_attempt_session_recorded, decode_attempt_started, decode_step_ended,
-    decode_step_started,
+    decode_attempt_session_recorded, decode_attempt_started, decode_attempt_waiting,
+    decode_step_ended, decode_step_started,
 };
 
 fn from_seconds(seconds: i64) -> SystemTime {
@@ -182,6 +182,7 @@ fn decode_attempt_event(
     match kind {
         ATTEMPT_STARTED => Ok(decode_attempt_started(payload, id, number, at)),
         ATTEMPT_RUNNING => decode_attempt_running(payload, id, number, at, &corrupt),
+        ATTEMPT_WAITING => decode_attempt_waiting(payload, id, number, at, &corrupt),
         ATTEMPT_REPORTED => decode_attempt_reported(payload, id, number, reason, at, &corrupt),
         ATTEMPT_SESSION_RECORDED => {
             decode_attempt_session_recorded(payload, id, number, at, &corrupt)

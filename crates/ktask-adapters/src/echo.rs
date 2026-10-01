@@ -6,7 +6,9 @@
 //! `KTASK_SESSION: <id>`; a script that never prints one gets no session recorded at all,
 //! exactly as before this existed.
 
-use ktask_core::{Output, Provider, ProviderCommand, StepCall};
+use std::time::{Duration, SystemTime};
+
+use ktask_core::{LimitSignal, Output, Provider, ProviderCommand, StepCall};
 
 /// The name the `echo` provider is known by.
 pub const NAME: &str = "echo";
@@ -15,14 +17,22 @@ pub const NAME: &str = "echo";
 /// line, trimmed, is the session id.
 const SESSION_PREFIX: &str = "KTASK_SESSION: ";
 
+/// The line prefix a script's own standard output reports hitting its usage limit with: the
+/// rest of the line, trimmed, is the limit's reset time as whole seconds since the epoch, or
+/// empty when the script names no reset time at all. A test script prints this fixed line to
+/// make the resolve role's own limit handling run with no model and no network.
+const LIMIT_PREFIX: &str = "KTASK_LIMIT: ";
+
 /// The `echo` provider. It supports resuming a session: a resumed invocation is told which
 /// one, and where its transcript lives, as positional arguments; it reads the session an
-/// invocation ran in back from its own standard output.
+/// invocation ran in back from its own standard output, and whether that output says its
+/// usage limit was hit.
 pub const PROVIDER: Provider = Provider {
     name: NAME,
     command,
     supports_resume: true,
     read_session,
+    detect_limit,
 };
 
 /// The session a script reported running in, when its standard output has a line `KTASK_
@@ -33,6 +43,23 @@ fn read_session(output: &Output) -> Option<String> {
         line.strip_prefix(SESSION_PREFIX)
             .map(|session| session.trim().to_owned())
     })
+}
+
+/// Whether a script reported hitting its usage limit, with a line `KTASK_LIMIT: <reset>` —
+/// the first one, when there is more than one — `<reset>` the whole seconds since the epoch
+/// its limit resets at, or empty when it names no reset time. `None` when it reported no such
+/// line at all.
+fn detect_limit(output: &Output) -> Option<LimitSignal> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix(LIMIT_PREFIX))?;
+    let reset_at = line
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(|seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds));
+    Some(LimitSignal { reset_at })
 }
 
 /// Turns `prompt` into the command that runs its first fenced `bash` code block with `bash`,
@@ -232,6 +259,30 @@ mod tests {
         assert_eq!(
             read_session(&output(b"KTASK_SESSION: first\nKTASK_SESSION: second\n")),
             Some("first".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_script_that_never_reports_a_limit_has_none_detected() {
+        assert_eq!(detect_limit(&output(b"just some output\n")), None);
+        assert_eq!(detect_limit(&output(b"")), None);
+    }
+
+    #[test]
+    fn a_script_that_reports_a_limit_with_a_reset_time_has_it_read_back() {
+        assert_eq!(
+            detect_limit(&output(b"before\nKTASK_LIMIT: 1700000000\nafter\n")),
+            Some(LimitSignal {
+                reset_at: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
+            })
+        );
+    }
+
+    #[test]
+    fn a_script_that_reports_a_limit_with_no_reset_time_names_none() {
+        assert_eq!(
+            detect_limit(&output(b"KTASK_LIMIT: \n")),
+            Some(LimitSignal { reset_at: None })
         );
     }
 }

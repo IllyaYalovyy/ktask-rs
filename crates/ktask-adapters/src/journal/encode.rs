@@ -8,8 +8,8 @@ use serde_json::Value;
 
 use super::{
     ATTEMPT_ENDED, ATTEMPT_REPORTED, ATTEMPT_RUNNING, ATTEMPT_SESSION_RECORDED, ATTEMPT_STARTED,
-    GATE_FAILED, STEP_ENDED, STEP_STARTED, TASK_ADDED, TASK_ANSWERED, TASK_CANCELLED,
-    TASK_DONE_BY_USER, TASK_RETRIED,
+    ATTEMPT_WAITING, GATE_FAILED, STEP_ENDED, STEP_STARTED, TASK_ADDED, TASK_ANSWERED,
+    TASK_CANCELLED, TASK_DONE_BY_USER, TASK_RETRIED,
 };
 
 pub(super) fn to_seconds(time: SystemTime) -> i64 {
@@ -65,6 +65,20 @@ fn attempt_running_payload(event: &Event) -> String {
         unreachable!("only called for Event::AttemptRunning")
     };
     serde_json::json!({ "number": number, "provider": provider }).to_string()
+}
+
+/// The payload an `attempt_waiting` row is written with.
+fn attempt_waiting_payload(event: &Event) -> String {
+    let Event::AttemptWaiting {
+        number,
+        step,
+        until,
+        ..
+    } = event
+    else {
+        unreachable!("only called for Event::AttemptWaiting")
+    };
+    serde_json::json!({ "number": number, "step": step, "until": to_seconds(*until) }).to_string()
 }
 
 /// The payload an `attempt_reported` row is written with.
@@ -200,6 +214,7 @@ fn event_task_id(event: &Event) -> TaskId {
         | Event::TaskCancelled { id, .. }
         | Event::AttemptStarted { id, .. }
         | Event::AttemptRunning { id, .. }
+        | Event::AttemptWaiting { id, .. }
         | Event::AttemptReported { id, .. }
         | Event::AttemptSessionRecorded { id, .. }
         | Event::AttemptEnded { id, .. }
@@ -219,6 +234,7 @@ fn event_at(event: &Event) -> SystemTime {
         | Event::TaskCancelled { at, .. }
         | Event::AttemptStarted { at, .. }
         | Event::AttemptRunning { at, .. }
+        | Event::AttemptWaiting { at, .. }
         | Event::AttemptReported { at, .. }
         | Event::AttemptSessionRecorded { at, .. }
         | Event::AttemptEnded { at, .. }
@@ -241,6 +257,7 @@ fn event_kind_and_payload(event: &Event) -> (&'static str, String) {
         Event::TaskCancelled { .. } => (TASK_CANCELLED, "{}".to_owned()),
         Event::AttemptStarted { .. } => (ATTEMPT_STARTED, attempt_started_payload(event)),
         Event::AttemptRunning { .. } => (ATTEMPT_RUNNING, attempt_running_payload(event)),
+        Event::AttemptWaiting { .. } => (ATTEMPT_WAITING, attempt_waiting_payload(event)),
         Event::AttemptReported { .. } => (ATTEMPT_REPORTED, attempt_reported_payload(event)),
         Event::AttemptSessionRecorded { .. } => (
             ATTEMPT_SESSION_RECORDED,
