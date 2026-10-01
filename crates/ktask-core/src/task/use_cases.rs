@@ -1,5 +1,5 @@
 //! The task use cases: add one or many, remove one, and list them — with or without the
-//! cancelled ones.
+//! cancelled and skipped ones.
 
 use crate::queue_state::{QueueState, decide_and_append};
 use crate::{AnswerError, CancelError, Clock, DoneError, Journal, JournalError, RetryError};
@@ -156,9 +156,9 @@ pub fn done_task(
     })
 }
 
-/// Every task, cancelled ones included, in queue order, with its full status: pending or
-/// cancelled, or what its most recent attempt, if it has one, is at — `running`, or what it
-/// ended at.
+/// Every task, cancelled and skipped ones included, in queue order, with its full status:
+/// pending, cancelled or skipped, or what its most recent attempt, if it has one, is at —
+/// `running`, or what it ended at.
 ///
 /// # Errors
 ///
@@ -168,21 +168,21 @@ pub fn list_all_tasks(journal: &impl Journal) -> Result<Vec<Task>, JournalError>
     Ok(QueueState::fold(&events).into_tasks())
 }
 
-/// Use case: every task in the queue, in order, without the cancelled ones. Positions count
-/// the tasks shown.
+/// Use case: every task in the queue, in order, without the cancelled or skipped ones.
+/// Positions count the tasks shown.
 ///
 /// # Errors
 ///
 /// Fails when the journal cannot be read.
 pub fn list_tasks(journal: &impl Journal) -> Result<Vec<Task>, JournalError> {
-    Ok(without_cancelled(list_all_tasks(journal)?))
+    Ok(without_cancelled_or_skipped(list_all_tasks(journal)?))
 }
 
-/// `tasks` without the cancelled ones, positions counting from 1 again.
-pub(crate) fn without_cancelled(tasks: Vec<Task>) -> Vec<Task> {
+/// `tasks` without the cancelled or skipped ones, positions counting from 1 again.
+pub(crate) fn without_cancelled_or_skipped(tasks: Vec<Task>) -> Vec<Task> {
     tasks
         .into_iter()
-        .filter(|task| task.status != TaskStatus::Cancelled)
+        .filter(|task| !matches!(task.status, TaskStatus::Cancelled | TaskStatus::Skipped))
         .enumerate()
         .map(|(index, task)| Task {
             position: index + 1,

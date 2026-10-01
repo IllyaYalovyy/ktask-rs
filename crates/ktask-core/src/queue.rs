@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::status::{AttemptLine, AttemptOutcome, DoneMark, status};
-use crate::task::without_cancelled;
+use crate::task::without_cancelled_or_skipped;
 use crate::{
     Clock, Journal, JournalError, Project, RunLock, Task, TaskId, TaskStatus, list_all_tasks,
 };
@@ -28,6 +28,8 @@ pub struct StatusSummary {
     pub failed_unknown: usize,
     /// Tasks that were removed from the queue.
     pub cancelled: usize,
+    /// Tasks the resolver decided are no longer the right thing to do.
+    pub skipped: usize,
 }
 
 impl StatusSummary {
@@ -52,6 +54,7 @@ impl StatusSummary {
                     TaskStatus::Blocked => &mut summary.blocked,
                     TaskStatus::FailedUnknown => &mut summary.failed_unknown,
                     TaskStatus::Cancelled => &mut summary.cancelled,
+                    TaskStatus::Skipped => &mut summary.skipped,
                 }
             };
             *count += 1;
@@ -67,8 +70,8 @@ pub struct QueueView {
     pub project: Project,
     /// How many tasks are in each status.
     pub summary: StatusSummary,
-    /// The tasks to show, in queue order: without the cancelled ones, which the summary
-    /// counts anyway, unless they were asked for. Positions count what is shown.
+    /// The tasks to show, in queue order: without the cancelled or skipped ones, which the
+    /// summary counts anyway, unless they were asked for. Positions count what is shown.
     pub tasks: Vec<Task>,
     /// The most recent attempt of every task that has one — the same line `status` shows,
     /// from the same use case. A task with no entry here was never attempted.
@@ -83,8 +86,8 @@ pub struct QueueView {
     pub done_by_user: HashMap<TaskId, DoneMark>,
 }
 
-/// Use case: the queue of `project`, whose journal is `journal`; with the cancelled tasks in
-/// their places when `show_cancelled`.
+/// Use case: the queue of `project`, whose journal is `journal`; with the cancelled and skipped
+/// tasks in their places when `show_cancelled`.
 ///
 /// A task the journal still calls `running` is shown `running` only while `lock` says a run is
 /// actually alive; otherwise it is shown `interrupted` at once, with no need to wait for the
@@ -121,7 +124,7 @@ pub fn queue_view(
         tasks: if show_cancelled {
             tasks
         } else {
-            without_cancelled(tasks)
+            without_cancelled_or_skipped(tasks)
         },
         attempts,
         history,
@@ -244,6 +247,60 @@ mod tests {
             ]
         );
         assert_eq!(view.summary.cancelled, 1);
+    }
+
+    #[test]
+    fn a_skipped_task_is_counted_and_hidden_the_same_way_a_cancelled_one_is() {
+        let journal = FakeJournal::default();
+        let clock = FakeClock(at(1));
+        for title in ["a", "b", "c"] {
+            add_task(&journal, &clock, &draft(title), Placement::End).unwrap();
+        }
+        let number = crate::attempt::begin_attempt(&journal, &clock, TaskId(2)).unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(2),
+            number,
+            AttemptRun {
+                duration: Duration::ZERO,
+                exit_code: Some(0),
+                status: TaskStatus::Skipped,
+                reason: Some("no longer relevant"),
+            },
+            clock.0,
+        )
+        .unwrap();
+
+        let hidden = queue_view(project("app", 10), &journal, &clock, &no_run(), false).unwrap();
+        let shown: Vec<_> = hidden
+            .tasks
+            .iter()
+            .map(|t| (t.position, &*t.title))
+            .collect();
+        assert_eq!(shown, [(1, "a"), (2, "c")]);
+        assert_eq!(
+            hidden.summary,
+            StatusSummary {
+                pending: 2,
+                skipped: 1,
+                ..StatusSummary::default()
+            }
+        );
+
+        let shown_view = queue_view(project("app", 10), &journal, &clock, &no_run(), true).unwrap();
+        let rows: Vec<_> = shown_view
+            .tasks
+            .iter()
+            .map(|t| (t.position, &*t.title, t.status))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (1, "a", TaskStatus::Pending),
+                (2, "b", TaskStatus::Skipped),
+                (3, "c", TaskStatus::Pending)
+            ]
+        );
     }
 
     #[test]

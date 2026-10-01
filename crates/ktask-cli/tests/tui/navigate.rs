@@ -225,7 +225,7 @@ fn a_toggles_cancelled_tasks_in_their_places_marked_as_cancelled_and_back() -> R
     let lines = lines_inside_frame(&terminal.screen());
     assert_eq!(
         lines[2],
-        "pending 4  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 1"
+        "pending 4 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 1 skipped 0"
     );
     assert_eq!(lines[5], " 2  #3  pending  agent  charlie");
     assert!(!terminal.screen().contains("bravo"));
@@ -237,7 +237,7 @@ fn a_toggles_cancelled_tasks_in_their_places_marked_as_cancelled_and_back() -> R
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 4  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 1"
+        "pending 4 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 1 skipped 0"
     );
     // `cancelled` (9 characters) is now the widest status shown, so every `pending` row
     // pads out to match it.
@@ -313,7 +313,7 @@ fn question_mark_shows_the_key_map_and_esc_closes_it_back_to_the_queue() -> Resu
         "k, Up    select the previous task",
         "g        select the first task",
         "G        select the last task",
-        "a        show or hide cancelled tasks",
+        "a        show or hide cancelled and skipped tasks",
         "n        add a task at the end, written in a form",
         "d        remove the selected task, after asking",
         "?        show or hide this key map",
@@ -427,7 +427,7 @@ fn a_task_added_from_the_cli_appears_and_the_selection_stays_on_the_same_task() 
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 7  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
+        "pending 7 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
     );
     assert_eq!(lines[4], " 1  #6  pending  agent  zulu");
     assert_eq!(lines[5], " 2  #1  pending  agent  alpha");
@@ -467,7 +467,7 @@ fn a_selected_task_removed_from_the_cli_gives_the_selection_to_the_one_after_it(
         !screen.contents().contains("charlie")
     })?;
     assert_eq!(marked(&screen), [">3  #4  pending  agent  delta"]);
-    assert!(screen.contains("cancelled 1"), "{screen}");
+    assert!(screen.contains("cancelled 1 skipped 0"), "{screen}");
     quit(terminal)
 }
 

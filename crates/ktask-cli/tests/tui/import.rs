@@ -161,7 +161,7 @@ fn ctrl_s_imports_the_tasks_of_the_typed_path_and_shows_how_many_and_their_ids()
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 3  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
+        "pending 3 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
     );
     // The first task the import added, "x", is selected.
     assert!(
@@ -207,7 +207,7 @@ fn an_invalid_task_is_refused_in_the_same_words_ktask_rs_import_would_give() -> 
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 1  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
+        "pending 1 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
     );
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);

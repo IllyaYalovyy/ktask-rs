@@ -29,6 +29,8 @@ pub enum Outcome {
     Retry,
     /// The resolver decided the task should end `failed`: the reason is why.
     Stop,
+    /// The resolver decided the task is no longer the right thing to do: the reason is why.
+    Skip,
 }
 
 impl Outcome {
@@ -46,6 +48,7 @@ impl Outcome {
             Self::Rejected => "rejected",
             Self::Retry => "retry",
             Self::Stop => "stop",
+            Self::Skip => "skip",
         }
     }
 
@@ -80,13 +83,14 @@ impl FromStr for Outcome {
             Self::Rejected,
             Self::Retry,
             Self::Stop,
+            Self::Skip,
         ]
         .into_iter()
         .find(|outcome| outcome.as_str() == text)
         .ok_or_else(|| {
             format!(
                 "unknown outcome {text:?}: expected done, failed, needs-input, too-large, \
-                 approved, changes-requested, accepted, rejected, retry or stop"
+                 approved, changes-requested, accepted, rejected, retry, stop or skip"
             )
         })
     }
@@ -110,7 +114,7 @@ fn outcomes_for_step(step: &str) -> Option<&'static [Outcome]> {
     } else if step == crate::TEST_STEP {
         Some(&[Outcome::Accepted, Outcome::Rejected])
     } else if step == crate::RESOLVE_STEP {
-        Some(&[Outcome::Retry, Outcome::Stop])
+        Some(&[Outcome::Retry, Outcome::Stop, Outcome::Skip])
     } else {
         None
     }
@@ -802,6 +806,55 @@ mod tests {
         assert_eq!(
             crate::attempt::last_retry_model(&journal, TaskId(1), 1),
             Ok(None)
+        );
+    }
+
+    #[test]
+    fn a_skip_inside_the_resolve_step_needs_a_reason_and_is_recorded_once_given() {
+        let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+        for blank in [None, Some(""), Some("   ")] {
+            assert_eq!(
+                report(&journal, &clock(), &token, Outcome::Skip, blank),
+                Err(ReportError::ReasonRequired(Outcome::Skip))
+            );
+        }
+        assert_eq!(
+            report(
+                &journal,
+                &clock(),
+                &token,
+                Outcome::Skip,
+                Some("no longer relevant")
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_skip_outside_the_resolve_step_is_refused_naming_retry_stop_and_skip() {
+        let journal = journal_with_a_running_step(crate::IMPLEMENTATION);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+        let error = report(
+            &journal,
+            &clock(),
+            &token,
+            Outcome::Skip,
+            Some("no longer relevant"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ReportError::WrongStep {
+                outcome: Outcome::Skip,
+                step: crate::IMPLEMENTATION.to_owned(),
+                expected: vec![
+                    Outcome::Done,
+                    Outcome::Failed,
+                    Outcome::NeedsInput,
+                    Outcome::TooLarge
+                ],
+            }
         );
     }
 

@@ -10,7 +10,7 @@ mod validate;
 pub use use_cases::{
     add_task, answer_task, done_task, list_all_tasks, list_tasks, remove_task, retry_task,
 };
-pub(crate) use use_cases::{add_tasks, without_cancelled};
+pub(crate) use use_cases::{add_tasks, without_cancelled_or_skipped};
 pub use validate::AddError;
 pub(crate) use validate::draft_problems;
 
@@ -81,6 +81,8 @@ pub enum TaskStatus {
     FailedUnknown,
     /// Removed from the queue.
     Cancelled,
+    /// The resolver decided the task is no longer the right thing to do: the reason is why.
+    Skipped,
 }
 
 impl TaskStatus {
@@ -95,6 +97,7 @@ impl TaskStatus {
             Self::Blocked => "blocked",
             Self::FailedUnknown => "failed-unknown",
             Self::Cancelled => "cancelled",
+            Self::Skipped => "skipped",
         }
     }
 }
@@ -117,6 +120,7 @@ impl FromStr for TaskStatus {
             Self::Blocked,
             Self::FailedUnknown,
             Self::Cancelled,
+            Self::Skipped,
         ]
         .into_iter()
         .find(|status| status.as_str() == text)
@@ -202,6 +206,7 @@ mod tests {
             TaskStatus::Blocked,
             TaskStatus::FailedUnknown,
             TaskStatus::Cancelled,
+            TaskStatus::Skipped,
         ] {
             assert_eq!(status.as_str().parse(), Ok(status));
         }

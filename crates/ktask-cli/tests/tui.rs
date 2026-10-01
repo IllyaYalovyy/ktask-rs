@@ -58,7 +58,8 @@ use support::{Result, Sandbox};
 
 const ROWS: u16 = 24;
 const COLS: u16 = 80;
-const SUMMARY: &str = "pending 0  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0";
+const SUMMARY: &str =
+    "pending 0 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0";
 
 /// Opens the terminal interface in `cwd` and waits until the queue screen is drawn whole:
 /// the frame is drawn top to bottom, so it is complete once its last corner is there.
@@ -363,7 +364,7 @@ fn tasks_added_from_the_cli_appear_with_the_summary_updated() -> Result<()> {
     assert_eq!(lines[1], "my-app");
     assert_eq!(
         lines[2],
-        "pending 2  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
+        "pending 2 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
     );
     assert_eq!(lines[4], ">1  #1  pending  agent  Write the parser");
     assert_eq!(lines[5], " 2  #2  pending  human  Approve the design");
@@ -388,7 +389,7 @@ fn a_task_added_after_the_screen_was_closed_shows_the_next_time_it_opens() -> Re
     let lines = lines_inside_frame(&terminal.screen());
     assert_eq!(
         lines[2],
-        "pending 1  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
+        "pending 1 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
     );
     assert_eq!(lines[4], ">1  #1  pending  agent  Late arrival");
     terminal.send("q")?;
@@ -432,7 +433,7 @@ fn tasks_inserted_from_the_cli_show_in_their_place_with_their_own_ids() -> Resul
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 5  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
+        "pending 5 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
     );
     assert_eq!(lines[4], ">1  #4  pending  agent  First");
     assert_eq!(lines[5], " 2  #1  pending  agent  Second");
@@ -473,7 +474,7 @@ fn tasks_imported_from_the_cli_show_in_their_place_with_their_own_ids() -> Resul
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 4  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
+        "pending 4 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
     );
     assert_eq!(lines[4], ">1  #1  pending  agent  a");
     assert_eq!(lines[5], " 2  #3  pending  agent  x");
@@ -501,7 +502,7 @@ fn a_task_removed_from_the_cli_is_hidden_and_counted_as_cancelled() -> Result<()
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 2  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 1"
+        "pending 2 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 1 skipped 0"
     );
     assert_eq!(lines[4], ">1  #1  pending  agent  First");
     assert_eq!(lines[5], " 2  #3  pending  agent  Third");
@@ -527,7 +528,7 @@ fn a_queue_with_every_task_removed_shows_as_empty_with_them_counted_as_cancelled
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 0  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 1"
+        "pending 0 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 1 skipped 0"
     );
     assert_eq!(lines[4], "The queue is empty.");
     assert!(!screen.contains("Only"), "{screen}");

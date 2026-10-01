@@ -44,7 +44,7 @@ pub trait Application {
     /// Why [`start_run`](Application::start_run) refused to start a run at all.
     type RunRefusal: Display;
 
-    /// The queue to show, with the cancelled tasks when `show_cancelled`.
+    /// The queue to show, with the cancelled and skipped tasks when `show_cancelled`.
     ///
     /// # Errors
     ///

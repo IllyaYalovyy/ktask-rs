@@ -227,7 +227,7 @@ fn drain_changes(wakes: &Receiver<Wake>) -> Option<Wake> {
     }
 }
 
-/// The queue to show, with the cancelled tasks when `show_cancelled`, read through
+/// The queue to show, with the cancelled and skipped tasks when `show_cancelled`, read through
 /// `application` and turned into a message, here, where it is about to leave the loop, if it
 /// could not be loaded at all.
 fn load(application: &impl Application, show_cancelled: bool) -> Result<QueueView, String> {

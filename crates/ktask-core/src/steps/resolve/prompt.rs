@@ -54,7 +54,9 @@ fn append_diff(prompt: &mut String, diff: &str) {
 
 /// Appends the exact `report` command, run through `binary_path`, for each possible decision
 /// of attempt `token` — `retry` takes an optional `--model <name>`, to hand the task's next
-/// attempt to a different model when this one keeps failing a cheaper one.
+/// attempt to a different model when this one keeps failing a cheaper one; `stop` ends the task
+/// `failed`, for an attempt not worth retrying; `skip` ends it `skipped`, for a task that is no
+/// longer the right thing to do at all.
 fn append_reporting(prompt: &mut String, token: &AttemptToken, binary_path: &Path) {
     let binary = binary_path.display();
     let _ = write!(
@@ -63,7 +65,8 @@ fn append_reporting(prompt: &mut String, token: &AttemptToken, binary_path: &Pat
          You may change files. When you are done, run exactly one of these, with the decision \
          that fits:\n\n\
          \x20\x20\x20\x20{binary} report --token {token} retry [--model <name>]\n\
-         \x20\x20\x20\x20{binary} report --token {token} stop --reason \"<why>\"\n"
+         \x20\x20\x20\x20{binary} report --token {token} stop --reason \"<why>\"\n\
+         \x20\x20\x20\x20{binary} report --token {token} skip --reason \"<why>\"\n"
     );
 }
 

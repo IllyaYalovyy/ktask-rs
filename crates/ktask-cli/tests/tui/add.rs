@@ -185,7 +185,7 @@ fn filling_every_field_and_submitting_adds_the_task_at_the_end_as_typed() -> Res
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 6  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
+        "pending 6 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
     );
     assert_eq!(lines[4], ">1  #1  pending  agent  alpha");
     assert_eq!(lines[9], " 6  #6  pending  human  Ship the form");
@@ -371,7 +371,7 @@ fn esc_cancels_the_form_and_adds_nothing_and_the_next_form_is_empty() -> Result<
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 5  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
+        "pending 5 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
     );
     assert_eq!(lines[4], ">1  #1  pending  agent  alpha");
     assert_eq!(lines[8], " 5  #5  pending  agent  echo");
@@ -783,7 +783,7 @@ fn a_task_added_from_the_cli_while_the_form_is_open_shows_once_the_form_is_close
     let lines = lines_inside_frame(&screen);
     assert_eq!(
         lines[2],
-        "pending 7  running 0  done 0  failed 0  blocked 0  unknown 0  cancelled 0"
+        "pending 7 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
     );
     assert_eq!(lines[9], " 6  #6  pending  agent  from the cli");
     assert_eq!(lines[10], " 7  #7  pending  agent  Half typed!");

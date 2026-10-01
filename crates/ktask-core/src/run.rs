@@ -233,10 +233,12 @@ fn account_for_interrupted_run(
 }
 
 /// Runs `task`'s sync and health-check gates, then its one attempt, appending its result to
-/// `attempted`. `Ok(Some(end))` when the run stops here — a gate refused, or the attempt did
-/// not report `done` — `Ok(None)` to carry on to the next task. A gate that refuses records why
-/// in the journal itself, [`steps::sync::run_gate`] and [`steps::health_check::run_gate`]'s own
-/// job, so a later `status` can show it even though the task stays `pending`.
+/// `attempted`. `Ok(Some(end))` when the run stops here — a gate refused, or the attempt ended
+/// anything but `done` or `skipped`, the resolver's own way of saying the task is no longer the
+/// right thing to do — `Ok(None)` to carry on to the next task either way. A gate that refuses
+/// records why in the journal itself, [`steps::sync::run_gate`] and
+/// [`steps::health_check::run_gate`]'s own job, so a later `status` can show it even though the
+/// task stays `pending`.
 fn attempt_task(
     deps: steps::Deps<'_>,
     context: RunContext<'_>,
@@ -264,18 +266,20 @@ fn attempt_task(
     )?;
     let status = result.status;
     attempted.push(result);
-    Ok((status != TaskStatus::Done).then_some(RunEnd::Stopped {
-        id: task.id,
-        status,
-    }))
+    Ok(
+        (!matches!(status, TaskStatus::Done | TaskStatus::Skipped)).then_some(RunEnd::Stopped {
+            id: task.id,
+            status,
+        }),
+    )
 }
 
 /// Picks and attempts pending tasks, one at a time, until the queue stops the run: a task of
-/// kind `human`, an attempt that does not report `done`, an earlier task already left
-/// `failed`, `blocked` or `failed-unknown`, or nothing left pending. Ahead of each attempt,
-/// runs the sync and health-check gates of [`crate::steps`] when the project has configured
-/// and switched them on; either refusing to run stops the run before an attempt is even
-/// begun, leaving the task `pending`.
+/// kind `human`, an attempt that ends at anything but `done` or `skipped`, an earlier task
+/// already left `failed`, `blocked` or `failed-unknown`, or nothing left pending. Ahead of each
+/// attempt, runs the sync and health-check gates of [`crate::steps`] when the project has
+/// configured and switched them on; either refusing to run stops the run before an attempt is
+/// even begun, leaving the task `pending`.
 ///
 /// # Errors
 ///
@@ -334,9 +338,9 @@ fn run_attempt_loop(
 
 /// Use case: runs the pending tasks of `context.project_name`, in queue order, one attempt
 /// each, with `provider` — stopping at the first task of kind `human`, at the first attempt
-/// that does not report `done`, at the first task in queue order already left `failed`,
-/// `blocked` or `failed-unknown` (nothing is attempted in that case), or when nothing is
-/// left pending.
+/// that ends at anything but `done` or `skipped`, at the first task in queue order already left
+/// `failed`, `blocked` or `failed-unknown` (nothing is attempted in that case), or when nothing
+/// is left pending.
 ///
 /// Takes `lock` for the whole run, so that two runs of the same project never overlap. When
 /// the previous run was killed while an attempt was in progress, this run finds its task
@@ -3267,6 +3271,46 @@ mod tests {
             implementation.ended.as_ref().unwrap().reason.as_deref(),
             Some("it broke")
         );
+    }
+
+    #[test]
+    fn a_resolver_that_skips_ends_the_task_skipped_with_its_own_reason_and_the_run_completes() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        let commands = ResolverCommands {
+            journal: &journal,
+            resolve: |_| Some((Outcome::Skip, Some("no longer relevant"))),
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &FakeGit::default(),
+            &test_provider(),
+            &FakeSessionLog::default(),
+            &FakeRunLock::free(),
+            context_with_max_attempts(3),
+        )
+        .unwrap();
+        assert_eq!(
+            report,
+            RunReport {
+                attempted: vec![Attempted {
+                    id: TaskId(1),
+                    status: TaskStatus::Skipped,
+                    reason: Some("no longer relevant".to_owned()),
+                }],
+                // Unlike `stop`, a `skip` does not stop the run: it is treated the same as
+                // `done` for the purpose of moving on, there just being nothing left pending.
+                end: RunEnd::Completed,
+            }
+        );
+        // Only one attempt was ever made: `skip` never starts another.
+        let attempts = crate::attempt::all_attempts(&journal, TaskId(1)).unwrap();
+        assert_eq!(attempts.len(), 1, "{attempts:?}");
+        let end = attempts[0].ended.as_ref().unwrap();
+        assert_eq!(end.status, TaskStatus::Skipped);
+        assert_eq!(end.reason.as_deref(), Some("no longer relevant"));
     }
 
     #[test]

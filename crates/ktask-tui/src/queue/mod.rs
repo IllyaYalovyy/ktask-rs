@@ -70,7 +70,8 @@ impl Queue {
         self.view.as_ref()
     }
 
-    /// Whether cancelled tasks are asked for: the queue is loaded with them, in their places.
+    /// Whether cancelled and skipped tasks are asked for: the queue is loaded with them, in
+    /// their places.
     pub(crate) fn show_cancelled(&self) -> bool {
         self.show_cancelled
     }
