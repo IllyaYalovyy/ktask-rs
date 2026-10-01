@@ -2,108 +2,16 @@
 //! not yet used up its `max-attempts`, runs the provider in the resolve role to decide whether
 //! a fresh attempt is worth trying.
 
-use std::fmt::Write as _;
-use std::path::Path;
 use std::time::Duration;
 
 use crate::run::Attempted;
-use crate::steps::implementation::{EarlierAttempt, earlier_attempts};
+use crate::steps::implementation::earlier_attempts;
 use crate::steps::{Deps, PipelineState, Step, StepOutcome, run_agent_step, run_one_step};
-use crate::{
-    AttemptRun, AttemptToken, Journal, RESOLVE_STEP, RunContext, RunError, Task, TaskId, TaskStatus,
-};
+use crate::{AttemptRun, Journal, RESOLVE_STEP, RunContext, RunError, Task, TaskId, TaskStatus};
 
-/// Appends one `- attempt N: outcome — reason` line per entry of `attempts` to `prompt`.
-fn append_attempts(prompt: &mut String, attempts: &[EarlierAttempt]) {
-    for attempt in attempts {
-        match &attempt.reason {
-            Some(reason) => {
-                let _ = writeln!(
-                    prompt,
-                    "- attempt {}: {} — {reason}",
-                    attempt.number, attempt.outcome
-                );
-            }
-            None => {
-                let _ = writeln!(prompt, "- attempt {}: {}", attempt.number, attempt.outcome);
-            }
-        }
-    }
-}
+mod prompt;
 
-/// Appends `task`'s title, body and acceptance criteria to `prompt`, headed as a resolve
-/// prompt.
-fn append_header(prompt: &mut String, task: &Task) {
-    let _ = writeln!(prompt, "# Resolve: {}", task.title);
-    if !task.body.is_empty() {
-        prompt.push('\n');
-        prompt.push_str(&task.body);
-        prompt.push('\n');
-    }
-    prompt.push_str("\n## Acceptance criteria\n\n");
-    for criterion in &task.criteria {
-        prompt.push_str("- ");
-        prompt.push_str(criterion);
-        prompt.push('\n');
-    }
-}
-
-/// Appends `diff` to `prompt`, fenced under its own heading.
-fn append_diff(prompt: &mut String, diff: &str) {
-    prompt.push_str("\n## What the task has changed so far\n\n```diff\n");
-    prompt.push_str(diff);
-    if !diff.is_empty() && !diff.ends_with('\n') {
-        prompt.push('\n');
-    }
-    prompt.push_str("```\n");
-}
-
-/// Appends the exact `report` command, run through `binary_path`, for each possible decision
-/// of attempt `token` — `retry` takes an optional `--model <name>`, to hand the task's next
-/// attempt to a different model when this one keeps failing a cheaper one.
-fn append_reporting(prompt: &mut String, token: &AttemptToken, binary_path: &Path) {
-    let binary = binary_path.display();
-    let _ = write!(
-        prompt,
-        "\n## Reporting\n\n\
-         You may change files. When you are done, run exactly one of these, with the decision \
-         that fits:\n\n\
-         \x20\x20\x20\x20{binary} report --token {token} retry [--model <name>]\n\
-         \x20\x20\x20\x20{binary} report --token {token} stop --reason \"<why>\"\n"
-    );
-}
-
-/// The prompt for the resolve step of attempt `token` of `task`: its title, body and
-/// acceptance criteria; every attempt so far, `earlier` then this one's own `current_status`
-/// and `current_reason`, each with its own outcome and reason; `diff`, everything the task has
-/// changed since its first attempt began; and the exact `report` command, run through
-/// `binary_path`, to run for each possible decision.
-#[must_use]
-pub(crate) fn build_resolve_prompt(
-    task: &Task,
-    token: &AttemptToken,
-    binary_path: &Path,
-    earlier: &[EarlierAttempt],
-    current_status: TaskStatus,
-    current_reason: Option<&str>,
-    diff: &str,
-) -> String {
-    let mut prompt = String::new();
-    append_header(&mut prompt, task);
-    prompt.push_str("\n## Every attempt so far\n\n");
-    append_attempts(&mut prompt, earlier);
-    append_attempts(
-        &mut prompt,
-        &[EarlierAttempt {
-            number: token.number,
-            outcome: current_status.as_str().to_owned(),
-            reason: current_reason.map(str::to_owned),
-        }],
-    );
-    append_diff(&mut prompt, diff);
-    append_reporting(&mut prompt, token, binary_path);
-    prompt
-}
+use prompt::build_resolve_prompt;
 
 /// The resolve step of a task's attempt: run only when the step ahead of it in the pipeline
 /// ended `failed` or `failed-unknown` and the task has attempts left — [`crate::steps::mod`]'s
@@ -150,15 +58,44 @@ impl Step for Resolve {
             &diff,
         );
         let model = self.model(context, state);
-        run_agent_step(
+        let outcome = run_agent_step(
             deps,
             context,
             state,
             RESOLVE_STEP,
             model.as_deref(),
             &prompt,
-        )
+        )?;
+        mark_reset_tree(deps.journal, state, outcome)
     }
+}
+
+/// `outcome`, with its own reason set to say the working tree was reset, when the resolver's
+/// `retry` decision for `state`'s attempt asked for `--reset-tree`. Every other outcome —
+/// including a `retry` that did not ask for it — is returned untouched.
+fn mark_reset_tree(
+    journal: &dyn Journal,
+    state: &PipelineState<'_>,
+    outcome: StepOutcome,
+) -> Result<StepOutcome, RunError> {
+    let StepOutcome::Passed {
+        duration,
+        exit_code,
+        reported,
+        ..
+    } = outcome
+    else {
+        return Ok(outcome);
+    };
+    let reset = crate::attempt::last_retry_reset_tree(journal, state.task.id, state.token.number)?;
+    let reason = reset
+        .then(|| "the working tree was reset to the commit this attempt started from".to_owned());
+    Ok(StepOutcome::Passed {
+        duration,
+        exit_code,
+        reason,
+        reported,
+    })
 }
 
 /// Ends attempt `number` of `task_id` at `status` (with `reason`), having run for `duration`
@@ -205,6 +142,26 @@ fn requested_session(
 ) -> Result<Option<String>, RunError> {
     if crate::attempt::last_retry_same_session(journal, id, number)? {
         Ok(crate::attempt::last_session(journal, id, number)?)
+    } else {
+        Ok(None)
+    }
+}
+
+/// The commit the working tree should be reset to before task `id`'s next attempt begins:
+/// `start_commit`, attempt `number`'s own, when its resolver's `retry` decision asked for
+/// `--reset-tree`; `None` when it did not, or `start_commit` itself could not be captured.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+fn requested_reset_to(
+    journal: &dyn Journal,
+    id: TaskId,
+    number: u32,
+    start_commit: Option<&str>,
+) -> Result<Option<String>, RunError> {
+    if crate::attempt::last_retry_reset_tree(journal, id, number)? {
+        Ok(start_commit.map(str::to_owned))
     } else {
         Ok(None)
     }
@@ -302,16 +259,7 @@ pub(crate) fn resolve_and_continue(
         reason,
     )?;
     if retried {
-        let requested_model = crate::attempt::last_retry_model(deps.journal, task.id, number)?;
-        let requested_session = requested_session(deps.journal, task.id, number)?;
-        return retry_the_task(
-            deps,
-            context,
-            task,
-            steps,
-            requested_model,
-            requested_session,
-        );
+        return retry_the_task_after_resolver(deps, context, task, number, state, steps);
     }
     Ok(Attempted {
         id: task.id,
@@ -320,15 +268,48 @@ pub(crate) fn resolve_and_continue(
     })
 }
 
-/// Sends `task` back to `pending`, the resolver's own `retry` decision, and begins its next
-/// attempt at the implementation step at once — with `requested_model`, when the resolver named
-/// one, and `requested_session`, when the resolver's `retry --same-session` asked the task's
-/// next attempt to resume the one that just ended — never the sync or health-check gates, which
-/// run only once, ahead of a task's very first attempt.
+/// Reads back what the resolver's own `retry` decision for attempt `number` of `task` asked
+/// for — a different model, resuming its own session, resetting the working tree to `state`'s
+/// own start commit — and begins the task's next attempt accordingly.
 ///
 /// # Errors
 ///
-/// Fails when the journal cannot be read or written.
+/// Fails when the journal cannot be read or written, or the working tree could not be reset.
+fn retry_the_task_after_resolver(
+    deps: Deps<'_>,
+    context: RunContext<'_>,
+    task: &Task,
+    number: u32,
+    state: &PipelineState<'_>,
+    steps: &[Box<dyn Step>],
+) -> Result<Attempted, RunError> {
+    let requested_model = crate::attempt::last_retry_model(deps.journal, task.id, number)?;
+    let requested_session = requested_session(deps.journal, task.id, number)?;
+    let reset_to =
+        requested_reset_to(deps.journal, task.id, number, state.start_commit.as_deref())?;
+    retry_the_task(
+        deps,
+        context,
+        task,
+        steps,
+        requested_model,
+        requested_session,
+        reset_to.as_deref(),
+    )
+}
+
+/// Sends `task` back to `pending`, the resolver's own `retry` decision, and begins its next
+/// attempt at the implementation step at once — with `requested_model`, when the resolver named
+/// one, `requested_session`, when the resolver's `retry --same-session` asked the task's next
+/// attempt to resume the one that just ended, and `reset_to`, the commit the working tree is
+/// returned to first, when the resolver's `retry --reset-tree` asked for it and this attempt's
+/// own start commit could be captured — never the sync or health-check gates, which run only
+/// once, ahead of a task's very first attempt.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read or written, or the working tree could not be reset.
+#[allow(clippy::too_many_arguments)]
 fn retry_the_task(
     deps: Deps<'_>,
     context: RunContext<'_>,
@@ -336,7 +317,13 @@ fn retry_the_task(
     steps: &[Box<dyn Step>],
     requested_model: Option<String>,
     requested_session: Option<String>,
+    reset_to: Option<&str>,
 ) -> Result<Attempted, RunError> {
+    if let Some(commit) = reset_to {
+        deps.git
+            .reset_tree(context.project_dir, commit)
+            .map_err(|error| RunError::Other(error.to_string()))?;
+    }
     retry_for_resolver(deps, task.id)?;
     super::run_one_attempt(
         deps,
@@ -351,9 +338,12 @@ fn retry_the_task(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use crate::fakes::at;
-    use crate::{TaskId, TaskKind};
+    use crate::steps::implementation::EarlierAttempt;
+    use crate::{AttemptToken, TaskId, TaskKind};
 
     fn task() -> Task {
         Task {

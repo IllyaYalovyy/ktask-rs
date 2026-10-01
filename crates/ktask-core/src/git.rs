@@ -142,4 +142,14 @@ pub trait Git {
     /// to match afterwards.
     fn push_and_confirm(&self, dir: &Path, remote: &str, branch: &str)
     -> Result<String, PushError>;
+
+    /// Returns `dir`'s working tree to exactly `commit`: every tracked file back to how
+    /// `commit` left it, discarding any later commit, staged or unstaged change; every
+    /// untracked file that is not ignored, gone too. A file already part of `commit` is left
+    /// exactly as it was.
+    ///
+    /// # Errors
+    ///
+    /// Fails when git cannot be run, or refuses.
+    fn reset_tree(&self, dir: &Path, commit: &str) -> Result<(), GitError>;
 }

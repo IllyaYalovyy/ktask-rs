@@ -395,7 +395,7 @@ mod tests {
         CommitAllError, Event, Exit, HEALTH_CHECK_STEP, IMPLEMENTATION, Outcome, Output, PUSH_STEP,
         Placement, Provider, ProviderCommand, PullRebase, PullRebaseError, RESOLVE_STEP,
         REVIEW_STEP, SYNC_STEP, TEST_STEP, TaskDraft, TaskId, TaskKind, TaskStatus, add_task,
-        report,
+        report, report_retry,
     };
 
     use super::*;
@@ -3051,6 +3051,103 @@ mod tests {
                 exit: Exit::Code(0),
             })
         }
+    }
+
+    /// Like [`ResolverCommands`], but its resolve step always reports `retry --reset-tree`, so
+    /// a test can prove the working tree is reset ahead of the attempt it starts.
+    struct ResolverResetTreeCommands<'a> {
+        journal: &'a FakeJournal,
+    }
+
+    impl Commands for ResolverResetTreeCommands<'_> {
+        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+            let token: AttemptToken = spec
+                .args
+                .iter()
+                .find_map(|arg| arg.parse().ok())
+                .expect("one arg is the attempt token");
+            let step = crate::attempt::current_step(self.journal, token.task).unwrap();
+            match step.as_deref() {
+                Some(REVIEW_STEP) => {
+                    report(self.journal, &clock(), &token, Outcome::Approved, None).unwrap();
+                }
+                Some(TEST_STEP) => {
+                    report(self.journal, &clock(), &token, Outcome::Accepted, None).unwrap();
+                }
+                Some(RESOLVE_STEP) => {
+                    report_retry(self.journal, &clock(), &token, None, false, false, true).unwrap();
+                }
+                _ if token.number == 1 => {
+                    report(
+                        self.journal,
+                        &clock(),
+                        &token,
+                        Outcome::Failed,
+                        Some("it broke"),
+                    )
+                    .unwrap();
+                }
+                _ => {
+                    report(self.journal, &clock(), &token, Outcome::Done, None).unwrap();
+                }
+            }
+            Ok(Output {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit: Exit::Code(0),
+            })
+        }
+    }
+
+    #[test]
+    fn a_resolver_that_retries_with_reset_tree_resets_before_the_next_attempt_and_says_so() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        let commands = ResolverResetTreeCommands { journal: &journal };
+        let git = FakeGit {
+            head: Some("deadbeef".to_owned()),
+            ..FakeGit::default()
+        };
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &git,
+            &test_provider(),
+            &FakeSessionLog::default(),
+            &FakeRunLock::free(),
+            context_with_max_attempts(3),
+        )
+        .unwrap();
+        assert_eq!(
+            report,
+            RunReport {
+                attempted: vec![Attempted {
+                    id: TaskId(1),
+                    status: TaskStatus::Done,
+                    reason: None,
+                }],
+                end: RunEnd::Completed,
+            }
+        );
+        // The working tree was reset, through the git port, to the commit this attempt
+        // started from, before the next attempt was ever begun.
+        assert_eq!(
+            git.reset_tree_calls.borrow().as_slice(),
+            [(Path::new("/work/proj").to_path_buf(), "deadbeef".to_owned())]
+        );
+        // The resolve step's own line carries why.
+        let attempts = crate::attempt::all_attempts(&journal, TaskId(1)).unwrap();
+        let resolve_step = attempts[0]
+            .steps
+            .iter()
+            .find(|step| step.name == RESOLVE_STEP)
+            .expect("a resolve step between the two attempts");
+        let end = resolve_step.ended.as_ref().unwrap();
+        assert_eq!(
+            end.reason.as_deref(),
+            Some("the working tree was reset to the commit this attempt started from")
+        );
     }
 
     /// [`context`] with `max_attempts` set to `n`, so the resolver test suite never relies on

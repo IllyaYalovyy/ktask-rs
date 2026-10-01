@@ -246,6 +246,17 @@ impl Git for GitCli {
         push_ref(dir, remote, &refspec, &description)?;
         confirm_pushed(dir, remote, branch, &local_hash, &description)
     }
+
+    fn reset_tree(&self, dir: &Path, commit: &str) -> Result<(), GitError> {
+        run_git_checked(
+            dir,
+            &["reset", "--hard", commit],
+            &format!("`git reset --hard {commit}`"),
+            GitError::new,
+        )?;
+        run_git_checked(dir, &["clean", "-fd"], "`git clean -fd`", GitError::new)?;
+        Ok(())
+    }
 }
 
 /// Pushes `dir`'s `HEAD` to `refspec` on `remote`, named `description` in its error:
@@ -563,6 +574,33 @@ mod tests {
             GitCli.diff_since(&repo, "0000000000000000000000000000000000000"),
             ""
         );
+    }
+
+    #[test]
+    fn reset_tree_discards_a_later_commit_and_uncommitted_and_untracked_changes() {
+        let repo = repo_with_branch("main");
+        let start = GitCli.head(&repo).unwrap();
+        commit_file(&repo, "committed-after.txt", "mess\n");
+        std::fs::write(repo.join("f"), "changed\n").unwrap();
+        std::fs::write(repo.join("untracked.txt"), "new\n").unwrap();
+
+        GitCli.reset_tree(&repo, &start).unwrap();
+
+        assert_eq!(GitCli.head(&repo), Some(start));
+        assert_eq!(std::fs::read_to_string(repo.join("f")).unwrap(), "x");
+        assert!(!repo.join("committed-after.txt").exists());
+        assert!(!repo.join("untracked.txt").exists());
+    }
+
+    #[test]
+    fn reset_tree_leaves_a_file_already_committed_at_the_target_untouched() {
+        let repo = repo_with_branch("main");
+        let start = GitCli.head(&repo).unwrap();
+        std::fs::write(repo.join("f"), "changed\n").unwrap();
+
+        GitCli.reset_tree(&repo, &start).unwrap();
+
+        assert_eq!(std::fs::read_to_string(repo.join("f")).unwrap(), "x");
     }
 
     #[test]

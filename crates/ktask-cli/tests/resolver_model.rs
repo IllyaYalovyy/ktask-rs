@@ -183,7 +183,7 @@ fn provider_and_model_are_refused_outside_the_retry_outcome() -> Result<()> {
     assert!(
         outcome
             .stderr
-            .contains("does not accept --provider, --model or --same-session"),
+            .contains("does not accept --provider, --model, --same-session or --reset-tree"),
         "{}",
         outcome.stderr
     );

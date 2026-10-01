@@ -73,6 +73,11 @@ pub(super) fn decode_attempt_running(
     })
 }
 
+/// `payload`'s own `key`, as a bool, or `false` when it is missing or not one.
+fn bool_field(payload: &Value, key: &str) -> bool {
+    payload.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
 /// The [`Event::AttemptReported`] an `attempt_reported` row's `payload` decodes to.
 pub(super) fn decode_attempt_reported(
     payload: &Value,
@@ -96,10 +101,8 @@ pub(super) fn decode_attempt_reported(
         .get("retry_model")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let retry_same_session = payload
-        .get("retry_same_session")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let retry_same_session = bool_field(payload, "retry_same_session");
+    let retry_reset_tree = bool_field(payload, "retry_reset_tree");
     Ok(Event::AttemptReported {
         id,
         number,
@@ -107,6 +110,7 @@ pub(super) fn decode_attempt_reported(
         reason,
         retry_model,
         retry_same_session,
+        retry_reset_tree,
         step,
         at,
     })

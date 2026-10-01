@@ -255,6 +255,7 @@ impl QueueState {
         reason: Option<&str>,
         retry_model: Option<&str>,
         retry_same_session: bool,
+        retry_reset_tree: bool,
         at: SystemTime,
     ) -> Result<Event, RecordReportError> {
         self.check_attempt_running(id, number)?;
@@ -265,6 +266,7 @@ impl QueueState {
             reason: reason.map(str::to_owned),
             retry_model: retry_model.map(str::to_owned),
             retry_same_session,
+            retry_reset_tree,
             step: self.current_step(id),
             at,
         })

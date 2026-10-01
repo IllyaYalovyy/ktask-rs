@@ -113,6 +113,16 @@ impl QueueState {
             .unwrap_or(false)
     }
 
+    /// Whether the resolver's `retry` decision for attempt `number` of task `id` asked for the
+    /// working tree to be reset before the task's next attempt begins. `false` when it named
+    /// none, or reported something other than `retry`.
+    pub(crate) fn retry_reset_tree_of(&self, id: TaskId, number: u32) -> bool {
+        self.retry_reset_trees
+            .get(&(id, number))
+            .copied()
+            .unwrap_or(false)
+    }
+
     /// The session the provider reported for attempt `number` of task `id`'s implementation
     /// step. `None` when it reported none, or the attempt has not run it yet.
     pub(crate) fn session_of(&self, id: TaskId, number: u32) -> Option<String> {

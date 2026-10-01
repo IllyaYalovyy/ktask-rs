@@ -268,7 +268,7 @@ pub fn report(
     outcome: Outcome,
     reason: Option<&str>,
 ) -> Result<(), ReportError> {
-    report_impl(journal, clock, token, outcome, reason, None, false)
+    report_impl(journal, clock, token, outcome, reason, None, false, false)
 }
 
 /// Use case: records the resolver's `retry` decision for the attempt `token` names, carrying
@@ -276,7 +276,8 @@ pub fn report(
 /// [`report`] with [`Outcome::Retry`], but with nowhere else for `model` to be given.
 /// `same_session` asks the task's next attempt to resume this attempt's own session instead of
 /// starting fresh; `provider_supports_resume` is whatever the project's configured provider
-/// reports for itself.
+/// reports for itself. `reset_tree` asks the working tree to be returned to the commit this
+/// attempt started from before the task's next attempt begins.
 ///
 /// # Errors
 ///
@@ -285,6 +286,7 @@ pub fn report(
 /// unknown or has ended; when `same_session` is asked for a provider that does not support
 /// resuming at all ([`ReportError::ResumeNotSupported`]); or when `same_session` is asked and
 /// this attempt reported no session to continue ([`ReportError::NoSessionRecorded`]).
+#[allow(clippy::too_many_arguments)]
 pub fn report_retry(
     journal: &impl Journal,
     clock: &impl Clock,
@@ -292,6 +294,7 @@ pub fn report_retry(
     model: Option<&str>,
     same_session: bool,
     provider_supports_resume: bool,
+    reset_tree: bool,
 ) -> Result<(), ReportError> {
     if same_session {
         if !provider_supports_resume {
@@ -311,11 +314,14 @@ pub fn report_retry(
         None,
         model,
         same_session,
+        reset_tree,
     )
 }
 
 /// [`report`] and [`report_retry`]'s shared work: both are this, differing only in whether
-/// `retry_model` is ever anything but `None`, and `retry_same_session` ever `true`.
+/// `retry_model` is ever anything but `None`, and `retry_same_session` and `retry_reset_tree`
+/// ever `true`.
+#[allow(clippy::too_many_arguments)]
 fn report_impl(
     journal: &impl Journal,
     clock: &impl Clock,
@@ -324,6 +330,7 @@ fn report_impl(
     reason: Option<&str>,
     retry_model: Option<&str>,
     retry_same_session: bool,
+    retry_reset_tree: bool,
 ) -> Result<(), ReportError> {
     let blank = reason.is_none_or(|reason| reason.trim().is_empty());
     if outcome.needs_reason() && blank {
@@ -349,6 +356,7 @@ fn report_impl(
         reason,
         retry_model,
         retry_same_session,
+        retry_reset_tree,
     )?;
     Ok(())
 }
@@ -684,7 +692,7 @@ mod tests {
         let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
         let token = AttemptToken::new("proj", TaskId(1), 1);
         assert_eq!(
-            report_retry(&journal, &clock(), &token, Some("opus"), false, true),
+            report_retry(&journal, &clock(), &token, Some("opus"), false, true, false),
             Ok(())
         );
         assert_eq!(
@@ -695,7 +703,7 @@ mod tests {
         let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
         let token = AttemptToken::new("proj", TaskId(1), 1);
         assert_eq!(
-            report_retry(&journal, &clock(), &token, None, false, true),
+            report_retry(&journal, &clock(), &token, None, false, true, false),
             Ok(())
         );
         assert_eq!(
@@ -705,10 +713,35 @@ mod tests {
     }
 
     #[test]
+    fn a_retry_with_reset_tree_records_it_and_a_retry_without_records_false() {
+        let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+        assert_eq!(
+            report_retry(&journal, &clock(), &token, None, false, true, true),
+            Ok(())
+        );
+        assert_eq!(
+            crate::attempt::last_retry_reset_tree(&journal, TaskId(1), 1),
+            Ok(true)
+        );
+
+        let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+        assert_eq!(
+            report_retry(&journal, &clock(), &token, None, false, true, false),
+            Ok(())
+        );
+        assert_eq!(
+            crate::attempt::last_retry_reset_tree(&journal, TaskId(1), 1),
+            Ok(false)
+        );
+    }
+
+    #[test]
     fn retry_same_session_without_a_recorded_session_is_refused_naming_it() {
         let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
         let token = AttemptToken::new("proj", TaskId(1), 1);
-        let error = report_retry(&journal, &clock(), &token, None, true, true).unwrap_err();
+        let error = report_retry(&journal, &clock(), &token, None, true, true, false).unwrap_err();
         assert_eq!(error, ReportError::NoSessionRecorded);
         assert!(
             error
@@ -727,7 +760,7 @@ mod tests {
         let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
         let token = AttemptToken::new("proj", TaskId(1), 1);
         crate::attempt::record_session(&journal, &clock(), TaskId(1), 1, "a-session").unwrap();
-        let error = report_retry(&journal, &clock(), &token, None, true, false).unwrap_err();
+        let error = report_retry(&journal, &clock(), &token, None, true, false, false).unwrap_err();
         assert_eq!(error, ReportError::ResumeNotSupported);
         assert!(error.to_string().contains("does not support resuming"));
     }
@@ -738,7 +771,7 @@ mod tests {
         let token = AttemptToken::new("proj", TaskId(1), 1);
         crate::attempt::record_session(&journal, &clock(), TaskId(1), 1, "a-session").unwrap();
         assert_eq!(
-            report_retry(&journal, &clock(), &token, None, true, true),
+            report_retry(&journal, &clock(), &token, None, true, true, false),
             Ok(())
         );
         assert_eq!(
@@ -752,7 +785,7 @@ mod tests {
         let journal = journal_with_a_running_step(crate::IMPLEMENTATION);
         let token = AttemptToken::new("proj", TaskId(1), 1);
         let error =
-            report_retry(&journal, &clock(), &token, Some("opus"), false, true).unwrap_err();
+            report_retry(&journal, &clock(), &token, Some("opus"), false, true, false).unwrap_err();
         assert_eq!(
             error,
             ReportError::WrongStep {

@@ -77,6 +77,10 @@ pub enum Event {
         /// Whether the resolver's `retry` decision asked the task's next attempt to resume
         /// this attempt's own session. Always `false` for every outcome but `retry`.
         retry_same_session: bool,
+        /// Whether the resolver's `retry` decision asked the working tree to be reset to the
+        /// commit this attempt started from before the task's next attempt begins. Always
+        /// `false` for every outcome but `retry`.
+        retry_reset_tree: bool,
         /// The step that was open when this was reported — so a later step's own report of
         /// the same attempt never reads back as this one's. `None` when no step was open,
         /// which only happens ahead of the pipeline itself ever beginning one.

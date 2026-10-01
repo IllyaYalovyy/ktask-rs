@@ -78,10 +78,13 @@ pub(crate) struct FakeGit {
     pub(crate) diff: String,
     pub(crate) commit_all: Option<Result<Option<String>, CommitAllError>>,
     pub(crate) push: Option<Result<String, PushError>>,
+    pub(crate) reset_tree: Option<Result<(), GitError>>,
 
     pub(crate) pull_rebase_calls: RefCell<u32>,
     pub(crate) commit_all_calls: RefCell<u32>,
     pub(crate) push_calls: RefCell<u32>,
+    /// Every `(dir, commit)` [`Git::reset_tree`] was called with, in order.
+    pub(crate) reset_tree_calls: RefCell<Vec<(PathBuf, String)>>,
 }
 
 impl Git for FakeGit {
@@ -145,6 +148,13 @@ impl Git for FakeGit {
         self.push
             .clone()
             .unwrap_or_else(|| Ok("0000000".to_owned()))
+    }
+
+    fn reset_tree(&self, dir: &Path, commit: &str) -> Result<(), GitError> {
+        self.reset_tree_calls
+            .borrow_mut()
+            .push((dir.to_path_buf(), commit.to_owned()));
+        self.reset_tree.clone().unwrap_or(Ok(()))
     }
 }
 

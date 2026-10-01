@@ -69,8 +69,10 @@ pub(crate) trait Step {
 /// What running one [`Step`] produced.
 pub(crate) enum StepOutcome {
     /// It passed. `reason` is `Some` for a step with something worth recording even though it
-    /// passed (the commit step's hash, say, or "nothing was changed"); `None` for a step
-    /// (implementation, review, test) that says nothing beyond passing.
+    /// passed (the commit step's hash, say, "nothing was changed", or the resolve step's own
+    /// note that `retry --reset-tree` reset the working tree); `None` for a step
+    /// (implementation, review, test) that says nothing beyond passing, and for a resolve step
+    /// whose `retry` did not ask for the tree to be reset.
     Passed {
         /// How long it took.
         duration: Duration,

@@ -37,11 +37,16 @@ pub(crate) struct Args {
     /// session, or the configured provider does not support resuming one at all
     #[arg(long)]
     same_session: bool,
+    /// Return the working tree to the commit this attempt started from before the task's next
+    /// attempt begins, discarding every file it created or changed; only valid with the
+    /// `retry` outcome
+    #[arg(long)]
+    reset_tree: bool,
 }
 
-/// Checks `args.provider`, `args.model` and `args.same_session` against `outcome`: with
-/// `retry`, a named provider must be a known one; with anything else, none of the three may be
-/// given at all.
+/// Checks `args.provider`, `args.model`, `args.same_session` and `args.reset_tree` against
+/// `outcome`: with `retry`, a named provider must be a known one; with anything else, none of
+/// the four may be given at all.
 fn check_provider_and_model(outcome: Outcome, args: &Args) -> Result<(), Failure> {
     if outcome == Outcome::Retry {
         if let Some(provider) = &args.provider {
@@ -49,11 +54,11 @@ fn check_provider_and_model(outcome: Outcome, args: &Args) -> Result<(), Failure
         }
         return Ok(());
     }
-    if args.provider.is_some() || args.model.is_some() || args.same_session {
+    if args.provider.is_some() || args.model.is_some() || args.same_session || args.reset_tree {
         return Err(Failure {
             message: format!(
-                "outcome {outcome} does not accept --provider, --model or --same-session: only \
-                 retry does"
+                "outcome {outcome} does not accept --provider, --model, --same-session or \
+                 --reset-tree: only retry does"
             ),
             code: 2,
         });
@@ -61,9 +66,9 @@ fn check_provider_and_model(outcome: Outcome, args: &Args) -> Result<(), Failure
     Ok(())
 }
 
-/// Records `args.outcome` (and `args.reason`, or — for `retry` — `args.model` and
-/// `args.same_session`) for the attempt `token` names, as the step currently running for it
-/// allows.
+/// Records `args.outcome` (and `args.reason`, or — for `retry` — `args.model`,
+/// `args.same_session` and `args.reset_tree`) for the attempt `token` names, as the step
+/// currently running for it allows.
 fn record(
     journal: &impl ktask_core::Journal,
     token: &AttemptToken,
@@ -78,6 +83,7 @@ fn record(
             args.model.as_deref(),
             args.same_session,
             echo::PROVIDER.supports_resume,
+            args.reset_tree,
         )
     } else {
         ktask_core::report(

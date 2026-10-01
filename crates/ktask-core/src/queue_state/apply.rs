@@ -151,6 +151,7 @@ impl QueueState {
             reason,
             retry_model,
             retry_same_session,
+            retry_reset_tree,
             step,
             ..
         } = event
@@ -173,6 +174,8 @@ impl QueueState {
         }
         self.retry_same_sessions
             .insert((*id, *number), *retry_same_session);
+        self.retry_reset_trees
+            .insert((*id, *number), *retry_reset_tree);
     }
 
     /// Applies a [`Event::AttemptSessionRecorded`]: records the session against the attempt it

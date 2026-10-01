@@ -489,6 +489,7 @@ mod tests {
                 reason: Some("it broke".to_owned()),
                 retry_model: None,
                 retry_same_session: false,
+                retry_reset_tree: false,
                 step: None,
                 at: at(12),
             },
@@ -542,6 +543,29 @@ mod tests {
                 reason: None,
                 retry_model: Some("opus".to_owned()),
                 retry_same_session: true,
+                retry_reset_tree: false,
+                step: Some("resolve".to_owned()),
+                at: at(10),
+            },
+        );
+        assert_eq!(journal.events().unwrap()[1..], [reported]);
+    }
+
+    #[test]
+    fn a_retry_report_with_reset_tree_round_trips() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "a", Placement::End);
+        let reported = append(
+            &journal,
+            Event::AttemptReported {
+                id: TaskId(1),
+                number: 1,
+                outcome: Outcome::Retry,
+                reason: None,
+                retry_model: None,
+                retry_same_session: false,
+                retry_reset_tree: true,
                 step: Some("resolve".to_owned()),
                 at: at(10),
             },
@@ -631,6 +655,7 @@ mod tests {
                 reason: None,
                 retry_model: None,
                 retry_same_session: false,
+                retry_reset_tree: false,
                 step: Some("implementation".to_owned()),
                 at: at(2),
             },
@@ -819,6 +844,7 @@ mod tests {
                 reason: None,
                 retry_model: None,
                 retry_same_session: false,
+                retry_reset_tree: false,
                 step: None,
                 at: at(4),
             },
