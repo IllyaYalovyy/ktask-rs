@@ -52,6 +52,9 @@ enum Command {
     /// Answer the question a blocked task's attempt asked, and send it back to pending, so
     /// the next attempt's own prompt carries both
     Answer(commands::answer::Args),
+    /// Mark a task that ended failed, failed-unknown or blocked done by hand, recording why —
+    /// work finished outside the tool
+    Done(commands::done::Args),
     /// List the queue in order, without the tasks that were removed
     List(commands::list::Args),
     /// Open the terminal interface on the project's queue
@@ -109,6 +112,7 @@ fn dispatch(
         Command::Remove(args) => commands::remove::run(args, project, stdout),
         Command::Retry(args) => commands::retry::run(args, project, stdout),
         Command::Answer(args) => commands::answer::run(args, project, stdout),
+        Command::Done(args) => commands::done::run(args, project, stdout),
         Command::List(args) => commands::list::run(args, project, stdout),
         Command::Tui(args) => {
             commands::tui::run(args, project)?;

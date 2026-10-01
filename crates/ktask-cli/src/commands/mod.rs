@@ -3,6 +3,7 @@
 
 pub(crate) mod add;
 pub(crate) mod answer;
+pub(crate) mod done;
 pub(crate) mod import;
 pub(crate) mod list;
 pub(crate) mod project;

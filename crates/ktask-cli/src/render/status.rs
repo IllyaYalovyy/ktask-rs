@@ -2,6 +2,7 @@
 
 use std::io::Write;
 
+use jiff::Timestamp;
 use ktask_core::StatusEntry;
 use serde::Serialize;
 
@@ -29,6 +30,13 @@ struct AttemptJson<'a> {
     steps: Vec<StepJson<'a>>,
 }
 
+/// The reason and when a task was sealed `done` by hand, as `status --json` shows it.
+#[derive(Debug, Serialize)]
+struct DoneMarkJson<'a> {
+    reason: &'a str,
+    at: String,
+}
+
 /// One task as `status --json` shows it.
 #[derive(Debug, Serialize)]
 struct StatusJson<'a> {
@@ -37,6 +45,7 @@ struct StatusJson<'a> {
     status: &'static str,
     attempt: AttemptJson<'a>,
     history: Vec<AttemptJson<'a>>,
+    done_by_user: Option<DoneMarkJson<'a>>,
 }
 
 /// `line` as a [`StepJson`].
@@ -79,42 +88,71 @@ fn attempt_json(line: &ktask_core::AttemptLine) -> AttemptJson<'_> {
     }
 }
 
+/// `mark`, timestamped, as a [`DoneMarkJson`].
+fn done_mark_json(mark: &ktask_core::DoneMark) -> Result<DoneMarkJson<'_>, String> {
+    let at = Timestamp::try_from(mark.at).map_err(|e| format!("bad done time: {e}"))?;
+    Ok(DoneMarkJson {
+        reason: &mark.reason,
+        at: at.to_string(),
+    })
+}
+
 /// Writes `entries` as a JSON array.
 fn status_json(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), String> {
-    let shown: Vec<_> = entries
+    let shown = entries
         .iter()
-        .map(|entry| StatusJson {
-            id: entry.task.0,
-            title: &entry.title,
-            status: ktask_core::displayed_status(entry.status, Some(entry.attempt.outcome)),
-            attempt: attempt_json(&entry.attempt),
-            history: entry.history.iter().map(attempt_json).collect(),
+        .map(|entry| {
+            Ok(StatusJson {
+                id: entry.task.0,
+                title: &entry.title,
+                status: ktask_core::displayed_status(entry.status, Some(entry.attempt.outcome)),
+                attempt: attempt_json(&entry.attempt),
+                history: entry.history.iter().map(attempt_json).collect(),
+                done_by_user: entry
+                    .done_by_user
+                    .as_ref()
+                    .map(done_mark_json)
+                    .transpose()?,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
     serde_json::to_writer(&mut *out, &shown).map_err(|e| e.to_string())?;
     writeln!(out).map_err(|e| e.to_string())
 }
 
-/// Writes `entries`: for every task, one `#ID<TAB>status<TAB>title` line, followed by one
-/// indented line per step its attempt has run so far, in order — step, provider (`-` for a
-/// step the tool ran itself, which names none), time spent, outcome, and the reason when it
-/// did not succeed.
+/// Writes one line saying `entry`'s task was sealed done by hand, with the reason and when,
+/// when it was.
+fn write_done_mark_line(out: &mut impl Write, entry: &StatusEntry) -> Result<(), String> {
+    let Some(mark) = &entry.done_by_user else {
+        return Ok(());
+    };
+    let at = Timestamp::try_from(mark.at).map_err(|e| format!("bad done time: {e}"))?;
+    writeln!(out, "\tmarked done by the user: {} (at {at})", mark.reason).map_err(|e| e.to_string())
+}
+
+/// Writes `entries`: for every task, one `#ID<TAB>status<TAB>title` line — followed, for a
+/// task sealed done by hand, by one line naming the reason and when — then one indented line
+/// per step its attempt has run so far, in order — step, provider (`-` for a step the tool ran
+/// itself, which names none), time spent, outcome, and the reason when it did not succeed.
 fn status_text(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), String> {
-    entries
-        .iter()
-        .try_for_each(|entry| {
-            let status = ktask_core::displayed_status(entry.status, Some(entry.attempt.outcome));
-            writeln!(out, "#{}\t{}\t{}", entry.task, status, entry.title)?;
-            entry.history.iter().try_for_each(|attempt| {
+    for entry in entries {
+        let status = ktask_core::displayed_status(entry.status, Some(entry.attempt.outcome));
+        writeln!(out, "#{}\t{}\t{}", entry.task, status, entry.title).map_err(|e| e.to_string())?;
+        write_done_mark_line(out, entry)?;
+        entry
+            .history
+            .iter()
+            .try_for_each(|attempt| {
                 write_step_lines(
                     out,
                     &attempt.steps,
                     &format!("attempt {}: ", attempt.number),
                 )
-            })?;
-            write_step_lines(out, &entry.attempt.steps, "")
-        })
-        .map_err(|e: std::io::Error| e.to_string())
+            })
+            .map_err(|e: std::io::Error| e.to_string())?;
+        write_step_lines(out, &entry.attempt.steps, "").map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Writes one indented line per step of `steps`, in order — step (named with `prefix` ahead of

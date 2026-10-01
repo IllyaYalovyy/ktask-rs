@@ -37,6 +37,7 @@ fn empty_queue() -> QueueView {
         tasks: Vec::new(),
         attempts: HashMap::new(),
         history: HashMap::new(),
+        done_by_user: HashMap::new(),
     }
 }
 
@@ -54,6 +55,7 @@ impl Application for PanicTestApplication {
     type RemoveError = String;
     type RetryError = String;
     type AnswerError = String;
+    type DoneError = String;
     type AddProblem = String;
     type SettingsError = String;
     type SaveSettingError = String;
@@ -86,6 +88,10 @@ impl Application for PanicTestApplication {
     }
 
     fn answer_task(&self, _id: TaskId, _text: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn done_task(&self, _id: TaskId, _reason: &str) -> Result<(), String> {
         Ok(())
     }
 

@@ -11,9 +11,9 @@ use ktask_adapters::{
     TomlSettingsStore,
 };
 use ktask_core::{
-    AddError, AnswerError, CancelError, ForgetError, Import, JournalError, Placement, Project,
-    QueueView, RegisterError, RegistryError, RetryError, RunReport, SetSettingError, SettingView,
-    SettingsError, TaskDraft, TaskId,
+    AddError, AnswerError, CancelError, DoneError, ForgetError, Import, JournalError, Placement,
+    Project, QueueView, RegisterError, RegistryError, RetryError, RunReport, SetSettingError,
+    SettingView, SettingsError, TaskDraft, TaskId,
 };
 use ktask_tui::Application;
 
@@ -182,6 +182,7 @@ impl Application for CliApplication {
     type RemoveError = NeedsProject<CancelError>;
     type RetryError = NeedsProject<RetryError>;
     type AnswerError = NeedsProject<AnswerError>;
+    type DoneError = NeedsProject<DoneError>;
     type AddProblem = NeedsProject<AddError>;
     type SettingsError = NeedsProject<SettingsError>;
     type SaveSettingError = NeedsProject<SetSettingError>;
@@ -215,6 +216,12 @@ impl Application for CliApplication {
     fn answer_task(&self, id: TaskId, text: &str) -> Result<(), Self::AnswerError> {
         self.with_context(|context| {
             ktask_core::answer_task(&context.journal, &SystemClock, id, text)
+        })
+    }
+
+    fn done_task(&self, id: TaskId, reason: &str) -> Result<(), Self::DoneError> {
+        self.with_context(|context| {
+            ktask_core::done_task(&context.journal, &SystemClock, id, reason)
         })
     }
 
