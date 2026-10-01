@@ -68,7 +68,7 @@ impl Step for Review {
     ) -> Result<StepOutcome, RunError> {
         let diff = diff_since(deps.git, context, state.start_commit.as_deref());
         let prompt = build_review_prompt(state.task, state.token, context.binary_path, &diff);
-        run_agent_step(deps, context, state, REVIEW_STEP, &prompt)
+        run_agent_step(deps, context, state, REVIEW_STEP, None, &prompt)
     }
 }
 
@@ -144,6 +144,7 @@ mod tests {
             committed: None,
             exit_code: None,
             failure: None,
+            requested_model: None,
         };
         assert!(!Review.enabled(context, &state));
     }

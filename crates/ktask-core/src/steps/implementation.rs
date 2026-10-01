@@ -204,6 +204,10 @@ impl Step for Implementation {
         true
     }
 
+    fn model(&self, _context: RunContext<'_>, state: &PipelineState<'_>) -> Option<String> {
+        state.requested_model.clone()
+    }
+
     fn run(
         &self,
         deps: &Deps<'_>,
@@ -223,7 +227,15 @@ impl Step for Implementation {
             &earlier,
             &diff,
         );
-        run_agent_step(deps, context, state, IMPLEMENTATION, &prompt)
+        let model = self.model(context, state);
+        run_agent_step(
+            deps,
+            context,
+            state,
+            IMPLEMENTATION,
+            model.as_deref(),
+            &prompt,
+        )
     }
 }
 
@@ -495,8 +507,51 @@ mod tests {
             committed: None,
             exit_code: None,
             failure: None,
+            requested_model: None,
         };
         assert!(Implementation.enabled(context, &state));
         assert_eq!(Implementation.name(), IMPLEMENTATION);
+    }
+
+    #[test]
+    fn the_implementation_step_names_the_models_requested_model_when_it_has_one() {
+        let context = RunContext {
+            project_name: "proj",
+            project_dir: Path::new("/work/proj"),
+            binary_path: Path::new("/opt/ktask-rs/bin/ktask-rs"),
+            attempt_timeout: std::time::Duration::from_secs(60),
+            health_check_command: None,
+            tracked_branch: None,
+            disabled_steps: &[],
+            max_attempts: 1,
+            resolver_model: "",
+        };
+        let task = Task {
+            id: TaskId(1),
+            position: 1,
+            title: "a".to_owned(),
+            body: String::new(),
+            criteria: vec![],
+            kind: TaskKind::Agent,
+            links: vec![],
+            status: TaskStatus::Running,
+            created_at: at(1),
+        };
+        let token = AttemptToken::new("proj", TaskId(1), 2);
+        let mut state = PipelineState {
+            task: &task,
+            token: &token,
+            start_commit: None,
+            committed: None,
+            exit_code: None,
+            failure: None,
+            requested_model: None,
+        };
+        assert_eq!(Implementation.model(context, &state), None);
+        state.requested_model = Some("opus".to_owned());
+        assert_eq!(
+            Implementation.model(context, &state),
+            Some("opus".to_owned())
+        );
     }
 }

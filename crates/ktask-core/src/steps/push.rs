@@ -132,6 +132,7 @@ mod tests {
             committed: Some("abc1234".to_owned()),
             exit_code: None,
             failure: None,
+            requested_model: None,
         };
         let commands = crate::fakes::FakeCommands::returning(Ok(crate::Output {
             stdout: Vec::new(),
@@ -216,6 +217,7 @@ mod tests {
             committed: Some("abc1234".to_owned()),
             exit_code: None,
             failure: None,
+            requested_model: None,
         };
         assert!(!Push.enabled(ctx, &state));
     }
@@ -231,6 +233,7 @@ mod tests {
             committed: None,
             exit_code: None,
             failure: None,
+            requested_model: None,
         };
         assert!(!Push.enabled(context(), &state));
     }
@@ -248,6 +251,7 @@ mod tests {
             committed: Some("abc1234".to_owned()),
             exit_code: None,
             failure: None,
+            requested_model: None,
         };
         assert!(!Push.enabled(ctx, &state));
     }

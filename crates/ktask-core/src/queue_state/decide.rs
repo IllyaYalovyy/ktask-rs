@@ -252,6 +252,7 @@ impl QueueState {
         number: u32,
         outcome: Outcome,
         reason: Option<&str>,
+        retry_model: Option<&str>,
         at: SystemTime,
     ) -> Result<Event, RecordReportError> {
         self.check_attempt_running(id, number)?;
@@ -260,6 +261,7 @@ impl QueueState {
             number,
             outcome,
             reason: reason.map(str::to_owned),
+            retry_model: retry_model.map(str::to_owned),
             step: self.current_step(id),
             at,
         })

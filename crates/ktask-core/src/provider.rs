@@ -34,6 +34,9 @@ pub struct StepCall<'a> {
     pub attempt: u32,
     /// The step's name.
     pub step: &'a str,
+    /// The model this step runs with, when it has one — `None` for a step with no model
+    /// configured, and for every step but the resolve and implementation steps.
+    pub model: Option<&'a str>,
 }
 
 /// A provider: a name it is known by, and a pure function from a prompt and a [`StepCall`] to
@@ -128,6 +131,7 @@ mod tests {
             token,
             attempt,
             step,
+            model: None,
         }
     }
 

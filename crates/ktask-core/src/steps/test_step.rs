@@ -68,7 +68,7 @@ impl Step for Test {
     ) -> Result<StepOutcome, RunError> {
         let diff = diff_since(deps.git, context, state.start_commit.as_deref());
         let prompt = build_test_prompt(state.task, state.token, context.binary_path, &diff);
-        run_agent_step(deps, context, state, TEST_STEP, &prompt)
+        run_agent_step(deps, context, state, TEST_STEP, None, &prompt)
     }
 }
 
@@ -142,6 +142,7 @@ mod tests {
             committed: None,
             exit_code: None,
             failure: None,
+            requested_model: None,
         };
         assert!(!Test.enabled(context, &state));
     }

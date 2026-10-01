@@ -164,11 +164,16 @@ fn decode_attempt_reported(
         .get("step")
         .and_then(Value::as_str)
         .map(str::to_owned);
+    let retry_model = payload
+        .get("retry_model")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     Ok(Event::AttemptReported {
         id,
         number,
         outcome,
         reason,
+        retry_model,
         step,
         at,
     })

@@ -73,9 +73,10 @@ pub(crate) fn begin_attempt(
     decide_and_append(journal, |state| state.decide_begin_attempt(id, at, None))
 }
 
-/// Use case: records `outcome` (and `reason`) for attempt `number` of task `id`. A later
-/// report for the same running attempt is recorded the same way and stands as the current
-/// one; both stay in the journal.
+/// Use case: records `outcome` (and `reason`) for attempt `number` of task `id`, and
+/// `retry_model` — the model the resolver named for the task's next attempt, when `outcome` is
+/// `retry` and it named one. A later report for the same running attempt is recorded the same
+/// way and stands as the current one; both stay in the journal.
 ///
 /// # Errors
 ///
@@ -88,11 +89,12 @@ pub(crate) fn record_report(
     number: u32,
     outcome: Outcome,
     reason: Option<&str>,
+    retry_model: Option<&str>,
 ) -> Result<(), RecordReportError> {
     let at = clock.now();
     decide_and_append(journal, |state| {
         state
-            .decide_record_report(id, number, outcome, reason, at)
+            .decide_record_report(id, number, outcome, reason, retry_model, at)
             .map(|event| (vec![event], ()))
     })
 }
@@ -251,6 +253,20 @@ pub(crate) fn last_report(
     number: u32,
 ) -> Result<Option<(Outcome, Option<String>)>, JournalError> {
     read_and_query(journal, |state| state.report_of(id, number))
+}
+
+/// The model the resolver named for task `id`'s next attempt, with its `retry` decision for
+/// attempt `number`. `None` when it named none, or reported something other than `retry`.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub(crate) fn last_retry_model(
+    journal: &dyn Journal,
+    id: TaskId,
+    number: u32,
+) -> Result<Option<String>, JournalError> {
+    read_and_query(journal, |state| state.retry_model_of(id, number))
 }
 
 /// The outcome and reason reported while step `step` of attempt `number` of task `id` was

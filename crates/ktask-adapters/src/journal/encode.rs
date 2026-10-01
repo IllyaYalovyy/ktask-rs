@@ -72,6 +72,7 @@ fn attempt_reported_payload(event: &Event) -> String {
         number,
         outcome,
         reason,
+        retry_model,
         step,
         ..
     } = event
@@ -82,6 +83,7 @@ fn attempt_reported_payload(event: &Event) -> String {
         "number": number,
         "outcome": outcome.as_str(),
         "reason": reason,
+        "retry_model": retry_model,
         "step": step,
     })
     .to_string()

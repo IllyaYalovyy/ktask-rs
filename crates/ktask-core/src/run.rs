@@ -250,7 +250,14 @@ fn attempt_task(
         Ok(step) => pre_steps.extend(step),
         Err(end) => return Ok(Some(end)),
     }
-    let result = steps::run_one_attempt(deps, context, task, &pre_steps, &steps::default_steps())?;
+    let result = steps::run_one_attempt(
+        deps,
+        context,
+        task,
+        &pre_steps,
+        &steps::default_steps(),
+        None,
+    )?;
     let status = result.status;
     attempted.push(result);
     Ok((status != TaskStatus::Done).then_some(RunEnd::Stopped {

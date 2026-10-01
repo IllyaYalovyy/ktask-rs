@@ -59,7 +59,8 @@ fn append_diff(prompt: &mut String, diff: &str) {
 }
 
 /// Appends the exact `report` command, run through `binary_path`, for each possible decision
-/// of attempt `token`.
+/// of attempt `token` — `retry` takes an optional `--model <name>`, to hand the task's next
+/// attempt to a different model when this one keeps failing a cheaper one.
 fn append_reporting(prompt: &mut String, token: &AttemptToken, binary_path: &Path) {
     let binary = binary_path.display();
     let _ = write!(
@@ -67,7 +68,7 @@ fn append_reporting(prompt: &mut String, token: &AttemptToken, binary_path: &Pat
         "\n## Reporting\n\n\
          You may change files. When you are done, run exactly one of these, with the decision \
          that fits:\n\n\
-         \x20\x20\x20\x20{binary} report --token {token} retry\n\
+         \x20\x20\x20\x20{binary} report --token {token} retry [--model <name>]\n\
          \x20\x20\x20\x20{binary} report --token {token} stop --reason \"<why>\"\n"
     );
 }
@@ -118,7 +119,7 @@ impl Step for Resolve {
         true
     }
 
-    fn model(&self, context: RunContext<'_>) -> Option<String> {
+    fn model(&self, context: RunContext<'_>, _state: &PipelineState<'_>) -> Option<String> {
         (!context.resolver_model.is_empty()).then(|| context.resolver_model.to_owned())
     }
 
@@ -148,7 +149,15 @@ impl Step for Resolve {
             current_reason.as_deref(),
             &diff,
         );
-        run_agent_step(deps, context, state, RESOLVE_STEP, &prompt)
+        let model = self.model(context, state);
+        run_agent_step(
+            deps,
+            context,
+            state,
+            RESOLVE_STEP,
+            model.as_deref(),
+            &prompt,
+        )
     }
 }
 
@@ -246,7 +255,8 @@ pub(crate) fn resolve_and_continue(
         end_reason.as_deref(),
     )?;
     if retried {
-        return retry_the_task(deps, context, task, steps);
+        let requested_model = crate::attempt::last_retry_model(deps.journal, task.id, number)?;
+        return retry_the_task(deps, context, task, steps, requested_model);
     }
     Ok(Attempted {
         id: task.id,
@@ -256,8 +266,9 @@ pub(crate) fn resolve_and_continue(
 }
 
 /// Sends `task` back to `pending`, the resolver's own `retry` decision, and begins its next
-/// attempt at the implementation step at once — never the sync or health-check gates, which run
-/// only once, ahead of a task's very first attempt.
+/// attempt at the implementation step at once — with `requested_model`, when the resolver named
+/// one — never the sync or health-check gates, which run only once, ahead of a task's very
+/// first attempt.
 ///
 /// # Errors
 ///
@@ -267,9 +278,10 @@ fn retry_the_task(
     context: RunContext<'_>,
     task: &Task,
     steps: &[Box<dyn Step>],
+    requested_model: Option<String>,
 ) -> Result<Attempted, RunError> {
     retry_for_resolver(deps, task.id)?;
-    super::run_one_attempt(deps, context, task, &[], steps)
+    super::run_one_attempt(deps, context, task, &[], steps, requested_model)
 }
 
 #[cfg(test)]
@@ -352,12 +364,13 @@ mod tests {
             committed: None,
             exit_code: None,
             failure: None,
+            requested_model: None,
         };
         assert!(Resolve.enabled(context, &state));
         assert_eq!(Resolve.name(), RESOLVE_STEP);
-        assert_eq!(Resolve.model(context), Some("opus".to_owned()));
+        assert_eq!(Resolve.model(context, &state), Some("opus".to_owned()));
         let mut empty = context;
         empty.resolver_model = "";
-        assert_eq!(Resolve.model(empty), None);
+        assert_eq!(Resolve.model(empty, &state), None);
     }
 }

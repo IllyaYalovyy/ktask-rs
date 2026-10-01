@@ -95,6 +95,13 @@ impl QueueState {
             .cloned()
     }
 
+    /// The model the resolver named for task `id`'s next attempt, with its `retry` decision
+    /// for attempt `number`. `None` when it named none, or reported something other than
+    /// `retry`.
+    pub(crate) fn retry_model_of(&self, id: TaskId, number: u32) -> Option<String> {
+        self.retry_models.get(&(id, number)).cloned()
+    }
+
     /// The answer recorded for attempt `number` of task `id`, when it was answered: exactly
     /// the attempt that was `blocked` when [`crate::answer_task`] was called. `None` when it
     /// never was.

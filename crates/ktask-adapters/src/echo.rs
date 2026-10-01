@@ -1,6 +1,6 @@
-//! The `echo` provider: a built-in [`Provider`] value that uses no model and no tokens. It
-//! runs the first fenced `bash` code block of a prompt with `bash`, passing the token, attempt
-//! number and step name as positional arguments.
+//! The `echo` provider: a built-in [`Provider`] value that uses no tokens. It runs the first
+//! fenced `bash` code block of a prompt with `bash`, passing the token, attempt number, step
+//! name and model as positional arguments.
 
 use ktask_core::{Provider, ProviderCommand, StepCall};
 
@@ -14,7 +14,9 @@ pub const PROVIDER: Provider = Provider {
 };
 
 /// Turns `prompt` into the command that runs its first fenced `bash` code block with `bash`,
-/// passing `call.token` as `$1`, `call.attempt` as `$2` and `call.step` as `$3`.
+/// passing `call.token` as `$1`, `call.attempt` as `$2`, `call.step` as `$3` and `call.model`
+/// (empty when it is `None`) as `$4` — so a scripted prompt can prove to a test which model it
+/// was run with.
 ///
 /// # Errors
 ///
@@ -30,6 +32,7 @@ fn command(prompt: &str, call: StepCall<'_>) -> Result<ProviderCommand, String> 
             call.token.to_owned(),
             call.attempt.to_string(),
             call.step.to_owned(),
+            call.model.unwrap_or_default().to_owned(),
         ],
         stdin: block.into_bytes(),
     })
@@ -66,6 +69,7 @@ mod tests {
             token,
             attempt,
             step,
+            model: None,
         }
     }
 
@@ -86,8 +90,30 @@ mod tests {
         let prompt = "before\n```bash\necho hi\n```\nafter\n";
         let built = command(prompt, call("the-token", 3, "implementation")).unwrap();
         assert_eq!(built.program, "bash");
-        assert_eq!(built.args, vec!["-s", "the-token", "3", "implementation"]);
+        assert_eq!(
+            built.args,
+            vec!["-s", "the-token", "3", "implementation", ""]
+        );
         assert_eq!(built.stdin, b"echo hi\n");
+    }
+
+    #[test]
+    fn the_model_is_passed_as_a_fourth_positional_arg_when_there_is_one() {
+        let prompt = "```bash\necho hi\n```\n";
+        let built = command(
+            prompt,
+            StepCall {
+                token: "the-token",
+                attempt: 3,
+                step: "implementation",
+                model: Some("opus"),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            built.args,
+            vec!["-s", "the-token", "3", "implementation", "opus"]
+        );
     }
 
     #[test]

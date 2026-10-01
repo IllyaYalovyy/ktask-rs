@@ -178,6 +178,7 @@ mod tests {
             committed: None,
             exit_code: None,
             failure: None,
+            requested_model: None,
         };
         let commands = crate::fakes::FakeCommands::returning(Ok(crate::Output {
             stdout: Vec::new(),
@@ -287,6 +288,7 @@ mod tests {
             committed: None,
             exit_code: None,
             failure: None,
+            requested_model: None,
         };
         assert!(!Commit.enabled(ctx, &state));
     }

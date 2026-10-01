@@ -70,6 +70,10 @@ pub enum Event {
         outcome: Outcome,
         /// Why, when the outcome needs a reason.
         reason: Option<String>,
+        /// The model the resolver named for the task's next attempt, when `outcome` is
+        /// `retry` and it named one. `None` for every other outcome, and for a `retry` that
+        /// named none.
+        retry_model: Option<String>,
         /// The step that was open when this was reported — so a later step's own report of
         /// the same attempt never reads back as this one's. `None` when no step was open,
         /// which only happens ahead of the pipeline itself ever beginning one.

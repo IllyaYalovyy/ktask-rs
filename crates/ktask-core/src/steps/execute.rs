@@ -85,7 +85,7 @@ pub(crate) fn run_one_step(
         state.task.id,
         state.token.number,
         step.name(),
-        step.model(context).as_deref(),
+        step.model(context, state).as_deref(),
     )?;
     let (duration, exit_code, status, reason, reported) =
         outcome_fields(step.run(deps, context, state)?);

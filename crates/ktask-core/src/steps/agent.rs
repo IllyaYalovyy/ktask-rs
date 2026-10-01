@@ -1,6 +1,8 @@
 //! Turns what running a provider produced into a [`StepOutcome`] — the one piece shared by the
 //! implementation, review and test steps, none of which otherwise names the others.
 
+use std::time::Duration;
+
 use crate::steps::{Deps, INTERRUPTED, PipelineState, StepOutcome};
 use crate::{
     AttemptToken, Exit, Journal, Outcome, Output, ProviderRunError, RunContext, RunError, StepCall,
@@ -103,36 +105,10 @@ fn agent_outcome(
     })
 }
 
-/// Runs `prompt` through `deps`'s provider for `state`'s attempt's step `step`, timing it, and
-/// turns what came back into a [`StepOutcome`].
-///
-/// # Errors
-///
-/// Fails when the journal cannot be read.
-pub(crate) fn run_agent_step(
-    deps: &Deps<'_>,
-    context: RunContext<'_>,
-    state: &mut PipelineState<'_>,
-    step: &'static str,
-    prompt: &str,
-) -> Result<StepOutcome, RunError> {
-    let started = deps.clock.now();
-    let result = run_provider(
-        deps.commands,
-        deps.provider,
-        prompt,
-        StepCall {
-            token: &state.token.to_string(),
-            attempt: state.token.number,
-            step,
-        },
-        context.project_dir,
-        context.attempt_timeout,
-    );
-    let duration = deps.clock.now().duration_since(started).unwrap_or_default();
-    let outcome = agent_outcome(deps.journal, state.task, state.token, step, result)?;
-    state.exit_code = outcome.exit_code;
-    Ok(if outcome.status == TaskStatus::Done {
+/// `outcome`, timed at `duration`, as the [`StepOutcome`] it ended at: `Passed` for `done`,
+/// `Ended` for anything else.
+fn to_step_outcome(duration: Duration, outcome: AgentOutcome) -> StepOutcome {
+    if outcome.status == TaskStatus::Done {
         StepOutcome::Passed {
             duration,
             exit_code: outcome.exit_code,
@@ -147,5 +123,40 @@ pub(crate) fn run_agent_step(
             reason: outcome.reason,
             reported: outcome.reported,
         }
-    })
+    }
+}
+
+/// Runs `prompt` through `deps`'s provider for `state`'s attempt's step `step`, with `model` —
+/// the model this step runs with, when it has one, passed to the provider alongside the token,
+/// attempt number and step name — timing it, and turns what came back into a [`StepOutcome`].
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub(crate) fn run_agent_step(
+    deps: &Deps<'_>,
+    context: RunContext<'_>,
+    state: &mut PipelineState<'_>,
+    step: &'static str,
+    model: Option<&str>,
+    prompt: &str,
+) -> Result<StepOutcome, RunError> {
+    let started = deps.clock.now();
+    let result = run_provider(
+        deps.commands,
+        deps.provider,
+        prompt,
+        StepCall {
+            token: &state.token.to_string(),
+            attempt: state.token.number,
+            step,
+            model,
+        },
+        context.project_dir,
+        context.attempt_timeout,
+    );
+    let duration = deps.clock.now().duration_since(started).unwrap_or_default();
+    let outcome = agent_outcome(deps.journal, state.task, state.token, step, result)?;
+    state.exit_code = outcome.exit_code;
+    Ok(to_step_outcome(duration, outcome))
 }

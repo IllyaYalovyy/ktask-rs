@@ -255,6 +255,37 @@ pub fn report(
     outcome: Outcome,
     reason: Option<&str>,
 ) -> Result<(), ReportError> {
+    report_impl(journal, clock, token, outcome, reason, None)
+}
+
+/// Use case: records the resolver's `retry` decision for the attempt `token` names, carrying
+/// `model` — the model it named for the task's next attempt, when it named one — the same as
+/// [`report`] with [`Outcome::Retry`], but with nowhere else for `model` to be given.
+///
+/// # Errors
+///
+/// Fails, recording nothing, when `retry` does not belong to the step currently running for
+/// this attempt — only the resolve step accepts it — or when the journal reports the attempt
+/// is unknown or has ended.
+pub fn report_retry(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    token: &AttemptToken,
+    model: Option<&str>,
+) -> Result<(), ReportError> {
+    report_impl(journal, clock, token, Outcome::Retry, None, model)
+}
+
+/// [`report`] and [`report_retry`]'s shared work: both are this, differing only in whether
+/// `retry_model` is ever anything but `None`.
+fn report_impl(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    token: &AttemptToken,
+    outcome: Outcome,
+    reason: Option<&str>,
+    retry_model: Option<&str>,
+) -> Result<(), ReportError> {
     let blank = reason.is_none_or(|reason| reason.trim().is_empty());
     if outcome.needs_reason() && blank {
         return Err(ReportError::ReasonRequired(outcome));
@@ -270,7 +301,15 @@ pub fn report(
             expected: expected.to_vec(),
         });
     }
-    crate::attempt::record_report(journal, clock, token.task, token.number, outcome, reason)?;
+    crate::attempt::record_report(
+        journal,
+        clock,
+        token.task,
+        token.number,
+        outcome,
+        reason,
+        retry_model,
+    )?;
     Ok(())
 }
 
@@ -597,6 +636,52 @@ mod tests {
         assert_eq!(
             report(&journal, &clock(), &token, Outcome::Accepted, None),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn a_retry_with_a_model_records_it_and_a_retry_with_none_records_none() {
+        let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+        assert_eq!(
+            report_retry(&journal, &clock(), &token, Some("opus")),
+            Ok(())
+        );
+        assert_eq!(
+            crate::attempt::last_retry_model(&journal, TaskId(1), 1),
+            Ok(Some("opus".to_owned()))
+        );
+
+        let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+        assert_eq!(report_retry(&journal, &clock(), &token, None), Ok(()));
+        assert_eq!(
+            crate::attempt::last_retry_model(&journal, TaskId(1), 1),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn a_retry_outside_the_resolve_step_is_refused_the_same_as_report_would() {
+        let journal = journal_with_a_running_step(crate::IMPLEMENTATION);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+        let error = report_retry(&journal, &clock(), &token, Some("opus")).unwrap_err();
+        assert_eq!(
+            error,
+            ReportError::WrongStep {
+                outcome: Outcome::Retry,
+                step: crate::IMPLEMENTATION.to_owned(),
+                expected: vec![
+                    Outcome::Done,
+                    Outcome::Failed,
+                    Outcome::NeedsInput,
+                    Outcome::TooLarge
+                ],
+            }
+        );
+        assert_eq!(
+            crate::attempt::last_retry_model(&journal, TaskId(1), 1),
+            Ok(None)
         );
     }
 

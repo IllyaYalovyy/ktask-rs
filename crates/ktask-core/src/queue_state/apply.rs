@@ -140,13 +140,15 @@ impl QueueState {
     }
 
     /// Applies a [`Event::AttemptReported`]: records the report against the attempt it names,
-    /// and against its step too, when it names one.
+    /// and against its step too, when it names one; records or clears the model it named for
+    /// the task's next attempt, when it is a `retry`.
     pub(super) fn apply_attempt_reported(&mut self, event: &Event) {
         let Event::AttemptReported {
             id,
             number,
             outcome,
             reason,
+            retry_model,
             step,
             ..
         } = event
@@ -158,6 +160,14 @@ impl QueueState {
         if let Some(step) = step {
             self.step_reports
                 .insert((*id, *number, step.clone()), (*outcome, reason.clone()));
+        }
+        match retry_model {
+            Some(model) => {
+                self.retry_models.insert((*id, *number), model.clone());
+            }
+            None => {
+                self.retry_models.remove(&(*id, *number));
+            }
         }
     }
 

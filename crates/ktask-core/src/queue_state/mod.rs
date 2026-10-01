@@ -50,6 +50,9 @@ pub(crate) struct QueueState {
     attempts: HashMap<TaskId, Vec<AttemptFold>>,
     reports: HashMap<(TaskId, u32), (Outcome, Option<String>)>,
     step_reports: HashMap<(TaskId, u32, String), (Outcome, Option<String>)>,
+    /// The model the resolver named for an attempt's own retry decision, when it named one:
+    /// [`QueueState::retry_model_of`].
+    retry_models: HashMap<(TaskId, u32), String>,
     /// The most recent gate stop recorded for each task, cleared once a later attempt for it
     /// actually begins: [`QueueState::gate_stop_of`].
     gate_stops: HashMap<TaskId, (String, String)>,
@@ -307,8 +310,15 @@ mod tests {
                         Outcome::NeedsInput,
                         Outcome::TooLarge,
                     ][rng.below(4)];
-                    let result =
-                        crate::attempt::record_report(journal, clock, id, 1, outcome, Some("why"));
+                    let result = crate::attempt::record_report(
+                        journal,
+                        clock,
+                        id,
+                        1,
+                        outcome,
+                        Some("why"),
+                        None,
+                    );
                     if status == TaskStatus::Running {
                         assert_eq!(result, Ok(()));
                     } else {
