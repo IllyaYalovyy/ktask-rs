@@ -37,6 +37,20 @@ fn mirror_task_added(
     Ok(())
 }
 
+/// Sets the `tasks` cache row for `id` to `status`, inside `transaction` — every kind of event
+/// that settles a task at one fixed status and nothing else shares this.
+fn set_status(
+    transaction: &Transaction<'_>,
+    id: i64,
+    status: TaskStatus,
+) -> Result<(), rusqlite::Error> {
+    transaction.execute(
+        "UPDATE tasks SET status = ?2 WHERE id = ?1",
+        (id, status.as_str()),
+    )?;
+    Ok(())
+}
+
 /// Mirrors `event` into the `tasks` cache, inside `transaction`.
 pub(super) fn mirror(transaction: &Transaction<'_>, event: &Event) -> Result<(), rusqlite::Error> {
     let task_id = |id: TaskId| i64::try_from(id.0).unwrap_or(i64::MAX);
@@ -45,10 +59,7 @@ pub(super) fn mirror(transaction: &Transaction<'_>, event: &Event) -> Result<(),
             mirror_task_added(transaction, task_id(*id), draft, *at)?;
         }
         Event::TaskCancelled { id, .. } => {
-            transaction.execute(
-                "UPDATE tasks SET status = ?2 WHERE id = ?1",
-                (task_id(*id), TaskStatus::Cancelled.as_str()),
-            )?;
+            set_status(transaction, task_id(*id), TaskStatus::Cancelled)?;
         }
         Event::AttemptStarted { id, number, .. } => {
             transaction.execute(
@@ -64,16 +75,13 @@ pub(super) fn mirror(transaction: &Transaction<'_>, event: &Event) -> Result<(),
             // Carries no status change of its own: a gate stop leaves the task pending.
         }
         Event::AttemptEnded { id, status, .. } => {
-            transaction.execute(
-                "UPDATE tasks SET status = ?2 WHERE id = ?1",
-                (task_id(*id), status.as_str()),
-            )?;
+            set_status(transaction, task_id(*id), *status)?;
         }
         Event::TaskRetried { id, .. } | Event::TaskAnswered { id, .. } => {
-            transaction.execute(
-                "UPDATE tasks SET status = ?2 WHERE id = ?1",
-                (task_id(*id), TaskStatus::Pending.as_str()),
-            )?;
+            set_status(transaction, task_id(*id), TaskStatus::Pending)?;
+        }
+        Event::TaskDoneByUser { id, .. } => {
+            set_status(transaction, task_id(*id), TaskStatus::Done)?;
         }
     }
     Ok(())
