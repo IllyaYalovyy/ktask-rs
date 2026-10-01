@@ -19,6 +19,8 @@ pub trait Application {
     type LoadError: Display;
     /// Why [`remove_task`](Application::remove_task) failed.
     type RemoveError: Display;
+    /// Why [`retry_task`](Application::retry_task) refused to retry a task.
+    type RetryError: Display;
     /// One reason [`add_task`](Application::add_task) refused the task.
     type AddProblem: Display;
     /// Why [`load_settings`](Application::load_settings) failed.
@@ -52,6 +54,16 @@ pub trait Application {
     /// Fails, changing nothing, when there is no such task, when it is running, or when it is
     /// cancelled already.
     fn remove_task(&self, id: TaskId) -> Result<(), Self::RemoveError>;
+
+    /// Sends the task numbered `id` — the operator pressed the key that asks for it — back to
+    /// `pending`, so the next run picks it up again: every earlier attempt stays in its
+    /// history, and the next one takes the next number.
+    ///
+    /// # Errors
+    ///
+    /// Fails, changing nothing, when there is no such task, or its status is not `failed`,
+    /// `failed-unknown` or `blocked`.
+    fn retry_task(&self, id: TaskId) -> Result<(), Self::RetryError>;
 
     /// Adds `draft` to the queue at `placement`, giving its number, or every rule it broke,
     /// so all of them can be put right at once.

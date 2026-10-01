@@ -10,32 +10,30 @@ use crate::registration_screen::{self, RegistrationScreen};
 use crate::settings::{self, SettingsScreen};
 use crate::task_form::{self, TaskFormScreen};
 
-use super::{App, Event, Tried, added};
+use super::{App, Event, Tried, added, handled};
 
 /// `event`, applied to the settings screen when it owns it — a key or Ctrl-letter while it is
 /// open, or how its own load, save or refusal came back — or handed back for the next screen
 /// to try, unchanged.
 pub(super) fn try_settings(app: App, event: Event) -> Tried {
     match event {
-        Event::Key(key) if app.settings.is_some() => {
-            Tried::Handled(on_settings(app, |s| s.key(key)))
-        }
+        Event::Key(key) if app.settings.is_some() => handled(on_settings(app, |s| s.key(key))),
         Event::Ctrl(letter) if app.settings.is_some() => {
-            Tried::Handled(on_settings(app, |s| s.ctrl(letter)))
+            handled(on_settings(app, |s| s.ctrl(letter)))
         }
-        Event::SettingsLoaded(views) => Tried::Handled(App {
+        Event::SettingsLoaded(views) => handled(App {
             settings: Some(SettingsScreen::new(&views)),
             ..app
         }),
-        Event::SettingSaved => Tried::Handled(App {
+        Event::SettingSaved => handled(App {
             settings: None,
             ..app
         }),
-        Event::SettingRejected(message) => Tried::Handled(App {
+        Event::SettingRejected(message) => handled(App {
             settings: app.settings.map(|s| s.rejected(message)),
             ..app
         }),
-        other => Tried::Unhandled(app, other),
+        other => Tried::Unhandled(Box::new(app), Box::new(other)),
     }
 }
 
@@ -43,16 +41,14 @@ pub(super) fn try_settings(app: App, event: Event) -> Tried {
 /// or how its own submission came back — or handed back for the next screen to try, unchanged.
 pub(super) fn try_form(app: App, event: Event) -> Tried {
     match event {
-        Event::Key(key) if app.form.is_some() => Tried::Handled(on_form(app, |f| f.key(key))),
-        Event::Ctrl(letter) if app.form.is_some() => {
-            Tried::Handled(on_form(app, |f| f.ctrl(letter)))
-        }
-        Event::Added(id) => Tried::Handled(added(app, id)),
-        Event::Rejected(problems) => Tried::Handled(App {
+        Event::Key(key) if app.form.is_some() => handled(on_form(app, |f| f.key(key))),
+        Event::Ctrl(letter) if app.form.is_some() => handled(on_form(app, |f| f.ctrl(letter))),
+        Event::Added(id) => handled(added(app, id)),
+        Event::Rejected(problems) => handled(App {
             form: app.form.map(|f| f.rejected(problems)),
             ..app
         }),
-        other => Tried::Unhandled(app, other),
+        other => Tried::Unhandled(Box::new(app), Box::new(other)),
     }
 }
 
@@ -60,11 +56,9 @@ pub(super) fn try_form(app: App, event: Event) -> Tried {
 /// open — or handed back for the next screen to try, unchanged.
 pub(super) fn try_import(app: App, event: Event) -> Tried {
     match event {
-        Event::Key(key) if app.import.is_some() => Tried::Handled(on_import(app, |i| i.key(key))),
-        Event::Ctrl(letter) if app.import.is_some() => {
-            Tried::Handled(on_import(app, |i| i.ctrl(letter)))
-        }
-        other => Tried::Unhandled(app, other),
+        Event::Key(key) if app.import.is_some() => handled(on_import(app, |i| i.key(key))),
+        Event::Ctrl(letter) if app.import.is_some() => handled(on_import(app, |i| i.ctrl(letter))),
+        other => Tried::Unhandled(Box::new(app), Box::new(other)),
     }
 }
 
@@ -73,28 +67,26 @@ pub(super) fn try_import(app: App, event: Event) -> Tried {
 /// unchanged.
 pub(super) fn try_projects(app: App, event: Event) -> Tried {
     match event {
-        Event::Key(key) if app.projects.is_some() => {
-            Tried::Handled(on_projects(app, |p| p.key(key)))
-        }
-        Event::ProjectsLoaded(projects) => Tried::Handled(open_projects(app, projects)),
-        Event::ProjectSwitched(view) => Tried::Handled(App {
+        Event::Key(key) if app.projects.is_some() => handled(on_projects(app, |p| p.key(key))),
+        Event::ProjectsLoaded(projects) => handled(open_projects(app, projects)),
+        Event::ProjectSwitched(view) => handled(App {
             projects: None,
             queue: Queue::replaced(view),
             ..app
         }),
-        Event::ProjectSwitchFailed(message) => Tried::Handled(App {
+        Event::ProjectSwitchFailed(message) => handled(App {
             projects: app.projects.map(|p| p.switch_failed(message)),
             ..app
         }),
-        Event::ProjectForgotten(projects) => Tried::Handled(App {
+        Event::ProjectForgotten(projects) => handled(App {
             projects: app.projects.map(|p| p.forgotten(projects)),
             ..app
         }),
-        Event::ProjectForgetFailed(message) => Tried::Handled(App {
+        Event::ProjectForgetFailed(message) => handled(App {
             projects: app.projects.map(|p| p.forget_failed(message)),
             ..app
         }),
-        other => Tried::Unhandled(app, other),
+        other => Tried::Unhandled(Box::new(app), Box::new(other)),
     }
 }
 
@@ -104,21 +96,21 @@ pub(super) fn try_projects(app: App, event: Event) -> Tried {
 pub(super) fn try_registration(app: App, event: Event) -> Tried {
     match event {
         Event::Key(key) if app.registration.is_some() => {
-            Tried::Handled(on_registration(app, |r| r.key(key)))
+            handled(on_registration(app, |r| r.key(key)))
         }
         Event::Ctrl(letter) if app.registration.is_some() => {
-            Tried::Handled(on_registration(app, |r| r.ctrl(letter)))
+            handled(on_registration(app, |r| r.ctrl(letter)))
         }
-        Event::Registered(view) => Tried::Handled(App {
+        Event::Registered(view) => handled(App {
             registration: None,
             queue: Queue::replaced(view),
             ..app
         }),
-        Event::RegistrationFailed(message) => Tried::Handled(App {
+        Event::RegistrationFailed(message) => handled(App {
             registration: app.registration.map(|r| r.rejected(message)),
             ..app
         }),
-        other => Tried::Unhandled(app, other),
+        other => Tried::Unhandled(Box::new(app), Box::new(other)),
     }
 }
 

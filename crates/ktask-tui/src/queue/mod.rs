@@ -3,37 +3,16 @@
 //! refusal to start. This is what shows once nothing else — the task form, the import form,
 //! settings, the project picker or the registration screen — covers it.
 
-use ktask_core::{AppendError, CancelError, Placement, QueueView, TaskId, TaskStatus};
+use ktask_core::{Placement, QueueView, TaskId, TaskStatus};
 use ratatui::crossterm::event::KeyCode;
 
 mod message;
+mod refusal;
 mod render;
+mod view_queries;
 
-/// Why a key was refused at once, without asking or opening anything: the same reason, in the
-/// same words, that `ktask-rs remove` or `ktask-rs add` gives for the same situation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Refusal {
-    /// `d` on the selected task, which is running: `ktask-rs remove` would refuse it too.
-    Running(TaskId),
-    /// `d` on the selected task, which is cancelled already: `ktask-rs remove` would refuse
-    /// it too.
-    AlreadyCancelled(TaskId),
-    /// `o` or `O` next to the selected task, which is cancelled: `ktask-rs add` would refuse
-    /// a task placed next to it too.
-    NextToCancelled(TaskId),
-}
-
-impl Refusal {
-    /// The message shown for this refusal, word for word what the CLI command it mirrors
-    /// would print.
-    pub(crate) fn message(self) -> String {
-        match self {
-            Self::Running(id) => CancelError::Running(id).to_string(),
-            Self::AlreadyCancelled(id) => CancelError::AlreadyCancelled(id).to_string(),
-            Self::NextToCancelled(id) => AppendError::CancelledTask(id).to_string(),
-        }
-    }
-}
+pub(crate) use refusal::Refusal;
+use view_queries::{cancelled, is_running, removable, reselect};
 
 /// What a key on the queue screen asks the rest of the application to do — open another
 /// screen, or leave something for the loop to carry out — when it is not something the queue
@@ -52,6 +31,9 @@ pub(crate) enum Request {
     OpenProjects,
     /// Remove this task, confirmed already.
     Remove(TaskId),
+    /// Retry this task: it is `failed`, `failed-unknown` or `blocked` already, so this needs
+    /// no confirmation.
+    Retry(TaskId),
     /// Leave every screen.
     Quit,
 }
@@ -129,6 +111,10 @@ impl Queue {
         let refused = self.refused.filter(|refusal| match refusal {
             Refusal::Running(id) => is_running(&queue, *id),
             Refusal::AlreadyCancelled(id) | Refusal::NextToCancelled(id) => cancelled(&queue, *id),
+            Refusal::NotRetryable(id, status) => queue
+                .tasks
+                .iter()
+                .any(|task| task.id == *id && task.status == *status),
         });
         Self {
             view: Some(queue),
@@ -254,6 +240,7 @@ impl Queue {
             KeyCode::Char('o') => this.open_form_next_to(Placement::After),
             KeyCode::Char('O') => this.open_form_next_to(Placement::Before),
             KeyCode::Char('d') => (this.press_d(), None),
+            KeyCode::Char('t') => this.press_t(),
             KeyCode::Char('r') => (this, Some(Request::StartRun)),
             KeyCode::Char('i') => (this, Some(Request::OpenImport)),
             KeyCode::Char('s') => (this, Some(Request::OpenSettings)),
@@ -313,6 +300,37 @@ impl Queue {
         }
     }
 
+    /// The screen after `t` on the selected task: retries it at once — no confirmation, since
+    /// a retry is not destructive — when it is `failed`, `failed-unknown` or `blocked`, and
+    /// otherwise refuses at once, naming its status, in the same words `ktask-rs retry` would;
+    /// with nothing selected, changes nothing.
+    fn press_t(self) -> (Self, Option<Request>) {
+        let Some(id) = self.selected else {
+            return (self, None);
+        };
+        let Some(view) = &self.view else {
+            return (self, None);
+        };
+        let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
+            return (self, None);
+        };
+        if matches!(
+            task.status,
+            TaskStatus::Failed | TaskStatus::FailedUnknown | TaskStatus::Blocked
+        ) {
+            (self, Some(Request::Retry(id)))
+        } else {
+            let status = task.status;
+            (
+                Self {
+                    refused: Some(Refusal::NotRetryable(id, status)),
+                    ..self
+                },
+                None,
+            )
+        }
+    }
+
     /// The screen with the selection moved to the index `target` picks, given the index it is
     /// at and how many tasks there are. It stays inside the list.
     fn select(self, target: impl FnOnce(usize, usize) -> usize) -> Self {
@@ -342,57 +360,13 @@ impl Queue {
     }
 }
 
-/// Whether `view` shows the task `id` and it can still be removed: a cancelled or a running
-/// one cannot.
-fn removable(view: &QueueView, id: TaskId) -> bool {
-    view.tasks
-        .iter()
-        .any(|task| task.id == id && !cancelled(view, id) && !is_running(view, id))
-}
-
-/// Whether `view` shows the task `id` as running.
-fn is_running(view: &QueueView, id: TaskId) -> bool {
-    view.tasks
-        .iter()
-        .any(|task| task.id == id && task.status == TaskStatus::Running)
-}
-
-/// Whether `view` shows the task `id` as cancelled.
-fn cancelled(view: &QueueView, id: TaskId) -> bool {
-    view.tasks
-        .iter()
-        .any(|task| task.id == id && task.status == TaskStatus::Cancelled)
-}
-
-/// The task to keep selected once `queue` replaces `previous`, given the selection it had: the
-/// same task if it is still there, otherwise the one that took its place in the list, or the
-/// last.
-fn reselect(
-    previous: Option<&QueueView>,
-    selected: Option<TaskId>,
-    queue: &QueueView,
-) -> Option<TaskId> {
-    let index = match (previous, selected) {
-        (Some(_), Some(id)) if queue.tasks.iter().any(|task| task.id == id) => {
-            return Some(id);
-        }
-        (Some(old), Some(id)) => old.tasks.iter().position(|task| task.id == id),
-        _ => None,
-    };
-    let last = queue.tasks.len().checked_sub(1)?;
-    queue
-        .tasks
-        .get(index.unwrap_or(0).min(last))
-        .map(|task| task.id)
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::SystemTime;
 
-    use ktask_core::{Project, StatusSummary, Task, TaskKind};
+    use ktask_core::{Project, RetryError, StatusSummary, Task, TaskKind};
 
     use super::*;
 
@@ -420,6 +394,7 @@ mod tests {
             summary: StatusSummary::default(),
             tasks: ids.iter().map(|id| task(*id)).collect(),
             attempts: HashMap::new(),
+            history: HashMap::new(),
         }
     }
 
@@ -584,6 +559,84 @@ mod tests {
             "task 1 is already cancelled"
         );
         assert_eq!(queue.view, Some(view));
+    }
+
+    #[test]
+    fn t_on_a_failed_a_failed_unknown_or_a_blocked_task_requests_a_retry_at_once() {
+        for status in [
+            TaskStatus::Failed,
+            TaskStatus::FailedUnknown,
+            TaskStatus::Blocked,
+        ] {
+            let mut view = queue_of(&[1, 2]);
+            view.tasks[0].status = status;
+            let queue = Queue::default().loaded(view.clone());
+
+            let (queue, request) = queue.key(KeyCode::Char('t'));
+
+            assert_eq!(request, Some(Request::Retry(TaskId(1))), "{status}");
+            assert_eq!(queue.refused, None, "{status}");
+            assert_eq!(queue.view, Some(view), "{status}");
+        }
+    }
+
+    #[test]
+    fn t_on_a_pending_a_running_or_a_done_task_refuses_without_asking_naming_its_status() {
+        for status in [TaskStatus::Pending, TaskStatus::Running, TaskStatus::Done] {
+            let mut view = queue_of(&[1, 2]);
+            view.tasks[0].status = status;
+            let queue = Queue::default().loaded(view.clone());
+
+            let (queue, request) = queue.key(KeyCode::Char('t'));
+
+            assert_eq!(request, None, "{status}");
+            assert_eq!(
+                queue.refused,
+                Some(Refusal::NotRetryable(TaskId(1), status)),
+                "{status}"
+            );
+            assert_eq!(queue.view, Some(view), "{status}");
+        }
+    }
+
+    #[test]
+    fn t_on_a_cancelled_task_refuses_too_in_the_same_words_as_ktask_rs_retry() {
+        let mut view = queue_of(&[1, 2]);
+        view.tasks[0].status = TaskStatus::Cancelled;
+        let queue = Queue::default().loaded(view);
+
+        let (queue, request) = queue.key(KeyCode::Char('t'));
+
+        assert_eq!(request, None);
+        assert_eq!(
+            queue.refused,
+            Some(Refusal::NotRetryable(TaskId(1), TaskStatus::Cancelled))
+        );
+        assert_eq!(
+            Refusal::NotRetryable(TaskId(1), TaskStatus::Cancelled).message(),
+            RetryError::NotRetryable {
+                id: TaskId(1),
+                status: TaskStatus::Cancelled
+            }
+            .to_string()
+        );
+    }
+
+    #[test]
+    fn t_with_nothing_selected_requests_and_refuses_nothing() {
+        let (queue, request) = loaded(&[]).key(KeyCode::Char('t'));
+        assert_eq!(request, None);
+        assert_eq!(queue.refused, None);
+    }
+
+    #[test]
+    fn the_not_retryable_refusal_is_dismissed_by_the_next_key_that_is_not_t_again() {
+        let queue = press(loaded(&[1, 2]), &[KeyCode::Char('t')]);
+        assert_eq!(
+            queue.refused,
+            Some(Refusal::NotRetryable(TaskId(1), TaskStatus::Pending))
+        );
+        assert_eq!(press(queue, &[KeyCode::Char('j')]).refused, None);
     }
 
     #[test]

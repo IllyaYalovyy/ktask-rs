@@ -87,6 +87,7 @@ mod tests {
                 summary: StatusSummary::default(),
                 tasks: vec![],
                 attempts: std::collections::HashMap::new(),
+                history: std::collections::HashMap::new(),
             }),
         )
     }

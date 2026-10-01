@@ -12,8 +12,8 @@ use ktask_adapters::{
 };
 use ktask_core::{
     AddError, CancelError, ForgetError, Import, JournalError, Placement, Project, QueueView,
-    RegisterError, RegistryError, RunReport, SetSettingError, SettingView, SettingsError,
-    TaskDraft, TaskId,
+    RegisterError, RegistryError, RetryError, RunReport, SetSettingError, SettingView,
+    SettingsError, TaskDraft, TaskId,
 };
 use ktask_tui::Application;
 
@@ -180,6 +180,7 @@ impl CliApplication {
 impl Application for CliApplication {
     type LoadError = NeedsProject<JournalError>;
     type RemoveError = NeedsProject<CancelError>;
+    type RetryError = NeedsProject<RetryError>;
     type AddProblem = NeedsProject<AddError>;
     type SettingsError = NeedsProject<SettingsError>;
     type SaveSettingError = NeedsProject<SetSettingError>;
@@ -204,6 +205,10 @@ impl Application for CliApplication {
 
     fn remove_task(&self, id: TaskId) -> Result<(), Self::RemoveError> {
         self.with_context(|context| ktask_core::remove_task(&context.journal, &SystemClock, id))
+    }
+
+    fn retry_task(&self, id: TaskId) -> Result<(), Self::RetryError> {
+        self.with_context(|context| ktask_core::retry_task(&context.journal, &SystemClock, id))
     }
 
     fn add_task(

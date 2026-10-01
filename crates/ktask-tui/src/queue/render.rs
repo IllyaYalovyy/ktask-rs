@@ -17,7 +17,7 @@ use super::Queue;
 /// question, a form or another screen is up are that context's own — shown there, in its own
 /// question line or footer — and left out of this key map, so no key map here shows a key
 /// that does not work in the context it is shown in, and no key is listed twice.
-const KEYS: [(&str, &str); 16] = [
+const KEYS: [(&str, &str); 17] = [
     ("j, Down", "select the next task"),
     ("k, Up", "select the previous task"),
     ("g", "select the first task"),
@@ -27,6 +27,10 @@ const KEYS: [(&str, &str); 16] = [
     ("o", "add a task below the selected one, written in a form"),
     ("O", "add a task above the selected one, written in a form"),
     ("d", "remove the selected task, after asking"),
+    (
+        "t",
+        "retry the selected task, once it is failed, failed-unknown or blocked",
+    ),
     (
         "r",
         "start executing the queue, exactly as `ktask-rs run` does",
@@ -188,7 +192,7 @@ fn task_lines(
             break;
         }
         let attempt = view.attempts.get(&task.id);
-        let steps = attempt.map_or_else(Vec::new, |attempt| step_lines(&attempt.steps, width));
+        let steps = task_step_lines(view, task.id, attempt, width);
         if !steps.is_empty() && remaining < 2 {
             break;
         }
@@ -205,17 +209,48 @@ fn task_lines(
 }
 
 /// How many lines each task in `view.tasks` takes: one for the task itself, plus one per step
-/// its attempt, if any, has run so far.
+/// of every earlier attempt it has, oldest first, plus one per step its current attempt, if
+/// any, has run so far.
 fn block_heights(view: &QueueView) -> Vec<usize> {
     view.tasks
         .iter()
         .map(|task| {
-            1 + view
+            let current = view
                 .attempts
                 .get(&task.id)
-                .map_or(0, |attempt| attempt.steps.len())
+                .map_or(0, |attempt| attempt.steps.len());
+            let history: usize = view.history.get(&task.id).map_or(0, |attempts| {
+                attempts.iter().map(|attempt| attempt.steps.len()).sum()
+            });
+            1 + history + current
         })
         .collect()
+}
+
+/// Every step line task `id` shows: one earlier attempt's own steps after another, oldest
+/// first, each step named with its attempt's number ahead of it so it reads apart from the
+/// current attempt's own, which carries none; `current`, the current attempt's steps, last —
+/// "the next run adds attempt N+1 under" the ones already there.
+fn task_step_lines(
+    view: &QueueView,
+    id: TaskId,
+    current: Option<&AttemptLine>,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if let Some(history) = view.history.get(&id) {
+        for attempt in history {
+            lines.extend(step_lines_named(
+                &attempt.steps,
+                width,
+                &format!("attempt {}: ", attempt.number),
+            ));
+        }
+    }
+    if let Some(attempt) = current {
+        lines.extend(step_lines_named(&attempt.steps, width, ""));
+    }
+    lines
 }
 
 /// The width each of a task line's leading four columns needs to hold every task's own value
@@ -251,17 +286,21 @@ impl Columns {
 }
 
 /// One line per step of `steps`, in order — the same lines `status` prints for the same
-/// attempt, from the same use case: step, provider (`-` for a step the tool ran itself, which
-/// names none), time spent, outcome, and the reason when there is one, cut to fit `width`
-/// with a trailing `…` when it does not.
-fn step_lines(steps: &[StepLine], width: usize) -> Vec<Line<'static>> {
+/// attempt, from the same use case: step (named with `label` ahead of it, so an earlier
+/// attempt's own steps read apart from the current one's, which carries none), provider (`-`
+/// for a step the tool ran itself, which names none), time spent, outcome, and the reason when
+/// there is one, cut to fit `width` with a trailing `…` when it does not.
+fn step_lines_named(steps: &[StepLine], width: usize, label: &str) -> Vec<Line<'static>> {
     steps
         .iter()
         .map(|step| {
             let provider = step.provider.as_deref().unwrap_or("-");
             let seconds = step.time_spent.as_secs();
             let outcome = step.outcome;
-            let prefix = format!("      {} · {provider} · {seconds}s · {outcome}", step.step);
+            let prefix = format!(
+                "      {label}{} · {provider} · {seconds}s · {outcome}",
+                step.step
+            );
             let text = step.reason.as_deref().map_or_else(
                 || prefix.clone(),
                 |reason| {
@@ -364,6 +403,7 @@ mod tests {
             summary: StatusSummary::default(),
             tasks: ids.iter().map(|id| task(*id)).collect(),
             attempts: HashMap::new(),
+            history: HashMap::new(),
         }
     }
 
@@ -404,6 +444,7 @@ mod tests {
             summary,
             tasks,
             attempts,
+            history: HashMap::new(),
         })
     }
 
@@ -472,7 +513,7 @@ mod tests {
         let rows = drawn(&queue, 60, 20);
         let screen = rows.join("\n");
         for key in [
-            "j, Down", "k, Up", "g ", "G ", "a ", "d ", "r ", "i ", "s ", "? ", "Esc", "q ",
+            "j, Down", "k, Up", "g ", "G ", "a ", "d ", "t ", "r ", "i ", "s ", "? ", "Esc", "q ",
         ] {
             assert!(screen.contains(key), "{key:?} in\n{screen}");
         }
@@ -558,5 +599,42 @@ mod tests {
         let queue = loaded_with_attempts(vec![task], attempts);
         let rows = drawn(&queue, 60, 8);
         assert_eq!(row(&rows, 4), "      implementation · echo · 3s · done");
+    }
+
+    #[test]
+    fn a_retried_tasks_earlier_attempt_shows_above_its_current_one_named_with_its_number() {
+        let task = task_named(1, "first", TaskKind::Agent);
+        let mut attempts = HashMap::new();
+        attempts.insert(task.id, attempt("echo", 5, AttemptOutcome::Running));
+        let mut history = HashMap::new();
+        history.insert(
+            task.id,
+            vec![attempt(
+                "echo",
+                9,
+                AttemptOutcome::Reported(Outcome::Failed),
+            )],
+        );
+        let project = Project {
+            name: "app".to_owned(),
+            path: PathBuf::from("/work/app"),
+            registered_at: SystemTime::UNIX_EPOCH,
+        };
+        let queue = Queue::default().loaded(QueueView {
+            project,
+            summary: StatusSummary {
+                running: 1,
+                ..StatusSummary::default()
+            },
+            tasks: vec![task],
+            attempts,
+            history,
+        });
+        let rows = drawn(&queue, 60, 8);
+        assert_eq!(
+            row(&rows, 4),
+            "      attempt 1: implementation · echo · 9s · failed"
+        );
+        assert_eq!(row(&rows, 5), "      implementation · echo · 5s · running");
     }
 }

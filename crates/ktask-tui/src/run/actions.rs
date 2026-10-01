@@ -14,12 +14,18 @@ use crate::{App, Event, update};
 use super::Wake;
 use super::report_text::{import_text, report_text};
 
-/// Removes or adds the task `app` has pending, if either, through `application`: `(app, true)`
-/// when one was, `(app, false)`, unchanged, otherwise.
+/// Removes, retries or adds the task `app` has pending, if any, through `application`:
+/// `(app, true)` when one was, `(app, false)`, unchanged, otherwise.
 fn handle_task_action(mut app: App, application: &impl Application) -> Result<(App, bool), String> {
     if let Some(id) = app.removal.take() {
         application
             .remove_task(id)
+            .map_err(|error| error.to_string())?;
+        return Ok((app, true));
+    }
+    if let Some(id) = app.retrial.take() {
+        application
+            .retry_task(id)
             .map_err(|error| error.to_string())?;
         return Ok((app, true));
     }
@@ -134,9 +140,9 @@ macro_rules! or_return_handled {
     }};
 }
 
-/// Tries registering the current directory, removing or adding a task, loading or saving a
-/// setting, and loading, switching or forgetting a project, in that order: the first one `app`
-/// has pending wins. `(app, true)` when one did, `(app, false)` otherwise.
+/// Tries registering the current directory, removing, retrying or adding a task, loading or
+/// saving a setting, and loading, switching or forgetting a project, in that order: the first
+/// one `app` has pending wins. `(app, true)` when one did, `(app, false)` otherwise.
 fn try_background_actions(app: App, application: &impl Application) -> Result<(App, bool), String> {
     let app = or_return_handled!(handle_registration_action(app, application));
     let app = or_return_handled!(handle_task_action(app, application)?);
@@ -227,6 +233,7 @@ mod tests {
     struct Fake {
         add: RefCell<Vec<Result<TaskId, Vec<Failure>>>>,
         remove: RefCell<Vec<Result<(), Failure>>>,
+        retry: RefCell<Vec<Result<(), Failure>>>,
         settings: RefCell<Vec<Result<Vec<SettingView>, Failure>>>,
         save_setting: RefCell<Vec<Result<SettingView, Failure>>>,
         import: RefCell<Vec<Result<Import, Failure>>>,
@@ -247,12 +254,14 @@ mod tests {
             tasks: Vec::new(),
             summary: StatusSummary::default(),
             attempts: std::collections::HashMap::new(),
+            history: std::collections::HashMap::new(),
         }
     }
 
     impl Application for Fake {
         type LoadError = Failure;
         type RemoveError = Failure;
+        type RetryError = Failure;
         type AddProblem = Failure;
         type SettingsError = Failure;
         type SaveSettingError = Failure;
@@ -269,6 +278,10 @@ mod tests {
 
         fn remove_task(&self, _id: TaskId) -> Result<(), Failure> {
             self.remove.borrow_mut().remove(0)
+        }
+
+        fn retry_task(&self, _id: TaskId) -> Result<(), Failure> {
+            self.retry.borrow_mut().remove(0)
         }
 
         fn add_task(

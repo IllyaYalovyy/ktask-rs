@@ -36,6 +36,7 @@ fn empty_queue() -> QueueView {
         summary: StatusSummary::default(),
         tasks: Vec::new(),
         attempts: HashMap::new(),
+        history: HashMap::new(),
     }
 }
 
@@ -51,6 +52,7 @@ const NOT_SUPPORTED: &str = "not supported in this test binary";
 impl Application for PanicTestApplication {
     type LoadError = String;
     type RemoveError = String;
+    type RetryError = String;
     type AddProblem = String;
     type SettingsError = String;
     type SaveSettingError = String;
@@ -75,6 +77,10 @@ impl Application for PanicTestApplication {
     }
 
     fn remove_task(&self, _id: TaskId) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn retry_task(&self, _id: TaskId) -> Result<(), String> {
         Ok(())
     }
 

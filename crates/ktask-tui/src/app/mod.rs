@@ -40,6 +40,8 @@ pub struct App {
     pub(crate) setting_submission: Option<(&'static str, String)>,
     /// The task whose removal was confirmed, for the loop to carry out.
     pub(crate) removal: Option<TaskId>,
+    /// The task the operator asked to retry, for the loop to carry out.
+    pub(crate) retrial: Option<TaskId>,
     /// Set when the operator asked to start executing the pending tasks.
     pub(crate) run_requested: Option<()>,
     /// Set when the operator asked to open the settings screen.
@@ -133,24 +135,24 @@ pub fn update(app: App, event: Event) -> App {
 /// them owns reaches the queue, or changes nothing.
 fn dispatch(app: App, event: Event) -> App {
     let (app, event) = match try_settings(app, event) {
-        Tried::Handled(app) => return app,
-        Tried::Unhandled(app, event) => (app, event),
+        Tried::Handled(app) => return *app,
+        Tried::Unhandled(app, event) => (*app, *event),
     };
     let (app, event) = match try_form(app, event) {
-        Tried::Handled(app) => return app,
-        Tried::Unhandled(app, event) => (app, event),
+        Tried::Handled(app) => return *app,
+        Tried::Unhandled(app, event) => (*app, *event),
     };
     let (app, event) = match try_import(app, event) {
-        Tried::Handled(app) => return app,
-        Tried::Unhandled(app, event) => (app, event),
+        Tried::Handled(app) => return *app,
+        Tried::Unhandled(app, event) => (*app, *event),
     };
     let (app, event) = match try_projects(app, event) {
-        Tried::Handled(app) => return app,
-        Tried::Unhandled(app, event) => (app, event),
+        Tried::Handled(app) => return *app,
+        Tried::Unhandled(app, event) => (*app, *event),
     };
     let (app, event) = match try_registration(app, event) {
-        Tried::Handled(app) => return app,
-        Tried::Unhandled(app, event) => (app, event),
+        Tried::Handled(app) => return *app,
+        Tried::Unhandled(app, event) => (*app, *event),
     };
     match event {
         Event::RunMessage(text) => App {
@@ -166,12 +168,20 @@ fn dispatch(app: App, event: Event) -> App {
     }
 }
 
+/// [`Tried::Handled`] of `app`, boxing it.
+fn handled(app: App) -> Tried {
+    Tried::Handled(Box::new(app))
+}
+
 /// What trying an event against one screen made of it: the app it produced, or, when the
 /// event was not one that screen owns, the app and the event handed back unhandled for the
 /// next screen to try in its turn.
 enum Tried {
-    Handled(App),
-    Unhandled(App, Event),
+    // Boxed: `App` itself is large — it carries the queue's own view and every screen's own
+    // state — so without indirection here, passing a `Tried` around (every screen's own
+    // `try_*` returns one) would copy it on the stack each time.
+    Handled(Box<App>),
+    Unhandled(Box<App>, Box<Event>),
 }
 
 /// The app after Ctrl-C: it quits from every screen, except that a first Ctrl-C in a task form
@@ -220,6 +230,10 @@ fn on_queue(app: App, f: impl FnOnce(Queue) -> (Queue, Option<queue::Request>)) 
         },
         Some(queue::Request::Remove(id)) => App {
             removal: Some(id),
+            ..app
+        },
+        Some(queue::Request::Retry(id)) => App {
+            retrial: Some(id),
             ..app
         },
         Some(queue::Request::Quit) => App { quit: true, ..app },
@@ -275,6 +289,7 @@ mod tests {
             summary: StatusSummary::default(),
             tasks: ids.iter().map(|id| task(*id)).collect(),
             attempts: std::collections::HashMap::new(),
+            history: std::collections::HashMap::new(),
         }
     }
 
