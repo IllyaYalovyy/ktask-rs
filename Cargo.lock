@@ -877,6 +877,7 @@ dependencies = [
 name = "ktask-tui"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "ktask-core",
  "ratatui",
  "signal-hook 0.4.4",

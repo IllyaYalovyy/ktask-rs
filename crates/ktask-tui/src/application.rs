@@ -23,6 +23,8 @@ pub trait Application {
     type RetryError: Display;
     /// Why [`answer_task`](Application::answer_task) refused to answer a task.
     type AnswerError: Display;
+    /// Why [`done_task`](Application::done_task) refused to mark a task done.
+    type DoneError: Display;
     /// One reason [`add_task`](Application::add_task) refused the task.
     type AddProblem: Display;
     /// Why [`load_settings`](Application::load_settings) failed.
@@ -76,6 +78,16 @@ pub trait Application {
     /// Fails, changing nothing, when there is no such task, its status is not `blocked`, or
     /// `text` is empty or only whitespace.
     fn answer_task(&self, id: TaskId, text: &str) -> Result<(), Self::AnswerError>;
+
+    /// Marks the task numbered `id` `done` — the operator submitted the done form for it —
+    /// with `reason`, after it ended `failed`, `failed-unknown` or `blocked`: work finished
+    /// outside the tool, recorded as finished instead of removed or left failed.
+    ///
+    /// # Errors
+    ///
+    /// Fails, changing nothing, when there is no such task, its status is not `failed`,
+    /// `failed-unknown` or `blocked`, or `reason` is empty or only whitespace.
+    fn done_task(&self, id: TaskId, reason: &str) -> Result<(), Self::DoneError>;
 
     /// Adds `draft` to the queue at `placement`, giving its number, or every rule it broke,
     /// so all of them can be put right at once.

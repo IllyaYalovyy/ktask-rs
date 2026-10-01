@@ -3,9 +3,10 @@
 //! refusal to start. This is what shows once nothing else — the task form, the import form,
 //! settings, the project picker or the registration screen — covers it.
 
-use ktask_core::{Placement, QueueView, TaskId, TaskStatus};
+use ktask_core::{Placement, QueueView, TaskId};
 use ratatui::crossterm::event::KeyCode;
 
+mod actions;
 mod message;
 mod refusal;
 mod render;
@@ -36,6 +37,8 @@ pub(crate) enum Request {
     Retry(TaskId),
     /// Open the answer form for this task, with the question its attempt asked.
     OpenAnswer(TaskId, String),
+    /// Open the done form for this task, to mark it done by hand.
+    OpenDone(TaskId),
     /// Leave every screen.
     Quit,
 }
@@ -113,7 +116,9 @@ impl Queue {
         let refused = self.refused.filter(|refusal| match refusal {
             Refusal::Running(id) => is_running(&queue, *id),
             Refusal::AlreadyCancelled(id) | Refusal::NextToCancelled(id) => cancelled(&queue, *id),
-            Refusal::NotRetryable(id, status) | Refusal::NotBlocked(id, status) => queue
+            Refusal::NotRetryable(id, status)
+            | Refusal::NotBlocked(id, status)
+            | Refusal::NotDoneable(id, status) => queue
                 .tasks
                 .iter()
                 .any(|task| task.id == *id && task.status == *status),
@@ -176,33 +181,6 @@ impl Queue {
         }
     }
 
-    /// The screen once the removal it asks about is confirmed, and the request for the loop to
-    /// carry it out: the selection moves to the task after the one removed, or the one before
-    /// it when it was the last, so that it is already there when the queue is loaded again.
-    fn confirm_removal(self) -> (Self, Option<Request>) {
-        let Some(id) = self.confirming else {
-            return (self, None);
-        };
-        let neighbour = self.view.as_ref().and_then(|view| {
-            let index = view.tasks.iter().position(|task| task.id == id)?;
-            let next = view.tasks.get(index + 1);
-            next.or_else(|| {
-                index
-                    .checked_sub(1)
-                    .and_then(|before| view.tasks.get(before))
-            })
-            .map(|task| task.id)
-        });
-        (
-            Self {
-                confirming: None,
-                selected: neighbour.or(self.selected),
-                ..self
-            },
-            Some(Request::Remove(id)),
-        )
-    }
-
     /// A key while the key map is open: while it is open, only `?` or Esc, to close it, answer.
     fn help_key(self, key: KeyCode) -> Self {
         match key {
@@ -244,6 +222,7 @@ impl Queue {
             KeyCode::Char('d') => (this.press_d(), None),
             KeyCode::Char('t') => this.press_t(),
             KeyCode::Char('A') => this.press_answer(),
+            KeyCode::Char('D') => this.press_done(),
             KeyCode::Char('r') => (this, Some(Request::StartRun)),
             KeyCode::Char('i') => (this, Some(Request::OpenImport)),
             KeyCode::Char('s') => (this, Some(Request::OpenSettings)),
@@ -252,140 +231,6 @@ impl Queue {
             KeyCode::Char('G') => (this.select(|_, len| len.saturating_sub(1)), None),
             _ => (this, None),
         }
-    }
-
-    /// The screen with an empty form asked for, for a task that goes next to the selected one
-    /// the way `beside` says; at the end when nothing is selected. Refuses at once, without
-    /// asking for the form, when the selected task is cancelled.
-    fn open_form_next_to(self, beside: fn(TaskId) -> Placement) -> (Self, Option<Request>) {
-        let Some(id) = self.selected else {
-            return (self, Some(Request::OpenForm(Placement::End)));
-        };
-        if self.view.as_ref().is_some_and(|view| cancelled(view, id)) {
-            return (
-                Self {
-                    refused: Some(Refusal::NextToCancelled(id)),
-                    ..self
-                },
-                None,
-            );
-        }
-        (self, Some(Request::OpenForm(beside(id))))
-    }
-
-    /// The screen after `d` on the selected task: it asks to confirm removing it when it can
-    /// be removed, and otherwise refuses at once, naming why — running, or cancelled already —
-    /// without asking; with nothing selected, changes nothing.
-    fn press_d(self) -> Self {
-        let Some(id) = self.selected else {
-            return self;
-        };
-        let Some(view) = &self.view else {
-            return self;
-        };
-        if removable(view, id) {
-            Self {
-                confirming: Some(id),
-                ..self
-            }
-        } else if is_running(view, id) {
-            Self {
-                refused: Some(Refusal::Running(id)),
-                ..self
-            }
-        } else if cancelled(view, id) {
-            Self {
-                refused: Some(Refusal::AlreadyCancelled(id)),
-                ..self
-            }
-        } else {
-            self
-        }
-    }
-
-    /// The screen after `t` on the selected task: retries it at once — no confirmation, since
-    /// a retry is not destructive — when it is `failed`, `failed-unknown` or `blocked`, and
-    /// otherwise refuses at once, naming its status, in the same words `ktask-rs retry` would;
-    /// with nothing selected, changes nothing.
-    fn press_t(self) -> (Self, Option<Request>) {
-        let Some(id) = self.selected else {
-            return (self, None);
-        };
-        let Some(view) = &self.view else {
-            return (self, None);
-        };
-        let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
-            return (self, None);
-        };
-        if matches!(
-            task.status,
-            TaskStatus::Failed | TaskStatus::FailedUnknown | TaskStatus::Blocked
-        ) {
-            (self, Some(Request::Retry(id)))
-        } else {
-            let status = task.status;
-            (
-                Self {
-                    refused: Some(Refusal::NotRetryable(id, status)),
-                    ..self
-                },
-                None,
-            )
-        }
-    }
-
-    /// The screen after `A` on the selected task: opens the answer form, with the question
-    /// its attempt asked, when it is `blocked`, and otherwise refuses at once, naming its
-    /// status, in the same words `ktask-rs answer` would; with nothing selected, changes
-    /// nothing.
-    fn press_answer(self) -> (Self, Option<Request>) {
-        let Some(id) = self.selected else {
-            return (self, None);
-        };
-        let Some(view) = &self.view else {
-            return (self, None);
-        };
-        let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
-            return (self, None);
-        };
-        if task.status == TaskStatus::Blocked {
-            let question = view
-                .attempts
-                .get(&id)
-                .and_then(|attempt| attempt.reason.clone())
-                .unwrap_or_default();
-            (self, Some(Request::OpenAnswer(id, question)))
-        } else {
-            let status = task.status;
-            (
-                Self {
-                    refused: Some(Refusal::NotBlocked(id, status)),
-                    ..self
-                },
-                None,
-            )
-        }
-    }
-
-    /// The screen with the selection moved to the index `target` picks, given the index it is
-    /// at and how many tasks there are. It stays inside the list.
-    fn select(self, target: impl FnOnce(usize, usize) -> usize) -> Self {
-        let Some(view) = &self.view else {
-            return self;
-        };
-        let Some(last) = view.tasks.len().checked_sub(1) else {
-            return self;
-        };
-        let index = view
-            .tasks
-            .iter()
-            .position(|task| Some(task.id) == self.selected)
-            .unwrap_or(0);
-        let selected = view
-            .tasks
-            .get(target(index, view.tasks.len()).min(last))
-            .map(|task| task.id);
-        Self { selected, ..self }
     }
 
     /// What the frame's bottom border says while the queue screen is showing, whichever of its
@@ -403,8 +248,8 @@ mod tests {
     use std::time::SystemTime;
 
     use ktask_core::{
-        AnswerError, AttemptLine, AttemptOutcome, Outcome, Project, RetryError, StatusSummary,
-        Task, TaskKind,
+        AnswerError, AttemptLine, AttemptOutcome, DoneError, Outcome, Project, RetryError,
+        StatusSummary, Task, TaskKind, TaskStatus,
     };
 
     use super::*;
@@ -434,6 +279,7 @@ mod tests {
             tasks: ids.iter().map(|id| task(*id)).collect(),
             attempts: HashMap::new(),
             history: HashMap::new(),
+            done_by_user: HashMap::new(),
         }
     }
 
@@ -745,6 +591,73 @@ mod tests {
         assert_eq!(
             Refusal::NotBlocked(TaskId(1), TaskStatus::Pending).message(),
             AnswerError::NotBlocked {
+                id: TaskId(1),
+                status: TaskStatus::Pending
+            }
+            .to_string()
+        );
+    }
+
+    #[test]
+    fn capital_d_on_a_failed_a_failed_unknown_or_a_blocked_task_opens_the_done_form() {
+        for status in [
+            TaskStatus::Failed,
+            TaskStatus::FailedUnknown,
+            TaskStatus::Blocked,
+        ] {
+            let mut view = queue_of(&[1, 2]);
+            view.tasks[0].status = status;
+            let queue = Queue::default().loaded(view.clone());
+
+            let (queue, request) = queue.key(KeyCode::Char('D'));
+
+            assert_eq!(request, Some(Request::OpenDone(TaskId(1))), "{status}");
+            assert_eq!(queue.refused, None, "{status}");
+            assert_eq!(queue.view, Some(view), "{status}");
+        }
+    }
+
+    #[test]
+    fn capital_d_on_a_task_that_cannot_be_marked_done_refuses_naming_its_status() {
+        for status in [TaskStatus::Pending, TaskStatus::Running, TaskStatus::Done] {
+            let mut view = queue_of(&[1, 2]);
+            view.tasks[0].status = status;
+            let queue = Queue::default().loaded(view.clone());
+
+            let (queue, request) = queue.key(KeyCode::Char('D'));
+
+            assert_eq!(request, None, "{status}");
+            assert_eq!(
+                queue.refused,
+                Some(Refusal::NotDoneable(TaskId(1), status)),
+                "{status}"
+            );
+            assert_eq!(queue.view, Some(view), "{status}");
+        }
+    }
+
+    #[test]
+    fn capital_d_with_nothing_selected_requests_and_refuses_nothing() {
+        let (queue, request) = loaded(&[]).key(KeyCode::Char('D'));
+        assert_eq!(request, None);
+        assert_eq!(queue.refused, None);
+    }
+
+    #[test]
+    fn the_not_doneable_refusal_is_dismissed_by_the_next_key_that_is_not_capital_d_again() {
+        let queue = press(loaded(&[1, 2]), &[KeyCode::Char('D')]);
+        assert_eq!(
+            queue.refused,
+            Some(Refusal::NotDoneable(TaskId(1), TaskStatus::Pending))
+        );
+        assert_eq!(press(queue, &[KeyCode::Char('j')]).refused, None);
+    }
+
+    #[test]
+    fn the_not_doneable_refusal_is_worded_as_ktask_rs_done_would() {
+        assert_eq!(
+            Refusal::NotDoneable(TaskId(1), TaskStatus::Pending).message(),
+            DoneError::NotDoneable {
                 id: TaskId(1),
                 status: TaskStatus::Pending
             }

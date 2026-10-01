@@ -7,6 +7,7 @@ use ratatui::widgets::{Block, Widget};
 
 use crate::App;
 use crate::answer_screen::AnswerScreen;
+use crate::done_screen::DoneScreen;
 use crate::import_screen::ImportScreen;
 use crate::queue::Queue;
 use crate::registration_screen::RegistrationScreen;
@@ -20,6 +21,8 @@ fn footer_keys(app: &App) -> &'static str {
         form.footer_keys()
     } else if app.answer.is_some() {
         AnswerScreen::footer_keys()
+    } else if app.done.is_some() {
+        DoneScreen::footer_keys()
     } else if app.import.is_some() {
         ImportScreen::footer_keys()
     } else if let Some(projects) = &app.projects {
@@ -49,6 +52,9 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     }
     if let Some(answer) = &app.answer {
         return Some(answer.draw(inner, buf));
+    }
+    if let Some(done) = &app.done {
+        return Some(done.draw(inner, buf));
     }
     if let Some(import) = &app.import {
         return Some(import.draw(inner, buf));
@@ -94,6 +100,7 @@ mod tests {
                 tasks: vec![],
                 attempts: std::collections::HashMap::new(),
                 history: std::collections::HashMap::new(),
+                done_by_user: std::collections::HashMap::new(),
             }),
         )
     }

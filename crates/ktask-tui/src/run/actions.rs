@@ -14,8 +14,8 @@ use crate::{App, Event, update};
 use super::Wake;
 use super::report_text::{import_text, report_text};
 
-/// Removes, retries or adds the task `app` has pending, if any, through `application`:
-/// `(app, true)` when one was, `(app, false)`, unchanged, otherwise.
+/// Removes, retries, answers, marks done or adds the task `app` has pending, if any, through
+/// `application`: `(app, true)` when one was, `(app, false)`, unchanged, otherwise.
 fn handle_task_action(mut app: App, application: &impl Application) -> Result<(App, bool), String> {
     if let Some(id) = app.removal.take() {
         application
@@ -32,6 +32,12 @@ fn handle_task_action(mut app: App, application: &impl Application) -> Result<(A
     if let Some((id, text)) = app.answer_submission.take() {
         application
             .answer_task(id, &text)
+            .map_err(|error| error.to_string())?;
+        return Ok((app, true));
+    }
+    if let Some((id, reason)) = app.done_submission.take() {
+        application
+            .done_task(id, &reason)
             .map_err(|error| error.to_string())?;
         return Ok((app, true));
     }
@@ -241,6 +247,7 @@ mod tests {
         remove: RefCell<Vec<Result<(), Failure>>>,
         retry: RefCell<Vec<Result<(), Failure>>>,
         answer: RefCell<Vec<Result<(), Failure>>>,
+        done: RefCell<Vec<Result<(), Failure>>>,
         settings: RefCell<Vec<Result<Vec<SettingView>, Failure>>>,
         save_setting: RefCell<Vec<Result<SettingView, Failure>>>,
         import: RefCell<Vec<Result<Import, Failure>>>,
@@ -262,6 +269,7 @@ mod tests {
             summary: StatusSummary::default(),
             attempts: std::collections::HashMap::new(),
             history: std::collections::HashMap::new(),
+            done_by_user: std::collections::HashMap::new(),
         }
     }
 
@@ -270,6 +278,7 @@ mod tests {
         type RemoveError = Failure;
         type RetryError = Failure;
         type AnswerError = Failure;
+        type DoneError = Failure;
         type AddProblem = Failure;
         type SettingsError = Failure;
         type SaveSettingError = Failure;
@@ -294,6 +303,10 @@ mod tests {
 
         fn answer_task(&self, _id: TaskId, _text: &str) -> Result<(), Failure> {
             self.answer.borrow_mut().remove(0)
+        }
+
+        fn done_task(&self, _id: TaskId, _reason: &str) -> Result<(), Failure> {
+            self.done.borrow_mut().remove(0)
         }
 
         fn add_task(
@@ -431,6 +444,35 @@ mod tests {
 
         assert!(handled);
         assert!(app.answer_submission.is_none());
+    }
+
+    #[test]
+    fn marking_a_task_done_that_fails_propagates_the_error_types_own_message() {
+        let fake = Fake::default();
+        *fake.done.borrow_mut() = vec![Err(Failure("task 1 is pending".to_owned()))];
+        let app = App {
+            done_submission: Some((TaskId(1), "fixed by hand".to_owned())),
+            ..App::default()
+        };
+
+        let error = handle_task_action(app, &fake).unwrap_err();
+
+        assert_eq!(error, "failed: task 1 is pending");
+    }
+
+    #[test]
+    fn a_successful_done_marking_leaves_nothing_pending() {
+        let fake = Fake::default();
+        *fake.done.borrow_mut() = vec![Ok(())];
+        let app = App {
+            done_submission: Some((TaskId(1), "fixed by hand".to_owned())),
+            ..App::default()
+        };
+
+        let (app, handled) = handle_task_action(app, &fake).unwrap();
+
+        assert!(handled);
+        assert!(app.done_submission.is_none());
     }
 
     #[test]

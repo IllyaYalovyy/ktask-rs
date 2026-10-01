@@ -1,7 +1,9 @@
 //! Drawing the queue screen: the header, the question or notice line, the key map, the task
 //! list, and, above it when there is one, the last run's or import's own report.
 
-use ktask_core::{AttemptLine, QueueView, StepLine, Task, TaskId, TaskStatus, displayed_status};
+use ktask_core::{
+    AttemptLine, DoneMark, QueueView, StepLine, Task, TaskId, TaskStatus, displayed_status,
+};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -17,7 +19,7 @@ use super::Queue;
 /// question, a form or another screen is up are that context's own — shown there, in its own
 /// question line or footer — and left out of this key map, so no key map here shows a key
 /// that does not work in the context it is shown in, and no key is listed twice.
-const KEYS: [(&str, &str); 18] = [
+const KEYS: [(&str, &str); 19] = [
     ("j, Down", "select the next task"),
     ("k, Up", "select the previous task"),
     ("g", "select the first task"),
@@ -34,6 +36,10 @@ const KEYS: [(&str, &str); 18] = [
     (
         "A",
         "answer the selected task's question, once it is blocked",
+    ),
+    (
+        "D",
+        "mark the selected task done by hand, once it is failed, failed-unknown or blocked",
     ),
     (
         "r",
@@ -212,9 +218,9 @@ fn task_lines(
     lines
 }
 
-/// How many lines each task in `view.tasks` takes: one for the task itself, plus one per step
-/// of every earlier attempt it has, oldest first, plus one per step its current attempt, if
-/// any, has run so far.
+/// How many lines each task in `view.tasks` takes: one for the task itself, plus one when it
+/// was marked done by hand, plus one per step of every earlier attempt it has, oldest first,
+/// plus one per step its current attempt, if any, has run so far.
 fn block_heights(view: &QueueView) -> Vec<usize> {
     view.tasks
         .iter()
@@ -226,15 +232,32 @@ fn block_heights(view: &QueueView) -> Vec<usize> {
             let history: usize = view.history.get(&task.id).map_or(0, |attempts| {
                 attempts.iter().map(|attempt| attempt.steps.len()).sum()
             });
-            1 + history + current
+            let done_mark = usize::from(view.done_by_user.contains_key(&task.id));
+            1 + done_mark + history + current
         })
         .collect()
 }
 
-/// Every step line task `id` shows: one earlier attempt's own steps after another, oldest
-/// first, each step named with its attempt's number ahead of it so it reads apart from the
-/// current attempt's own, which carries none; `current`, the current attempt's steps, last —
-/// "the next run adds attempt N+1 under" the ones already there.
+/// The reason and when task `id` was marked done by hand, as one dimmed line — shown ahead of
+/// its attempt's own steps, since it is not one of them.
+fn done_mark_line(mark: &DoneMark, width: usize) -> Line<'static> {
+    let prefix = "      marked done by the user: ";
+    let at = jiff::Timestamp::try_from(mark.at)
+        .map(|at| at.to_string())
+        .unwrap_or_default();
+    let suffix = format!(" (at {at})");
+    let budget = width.saturating_sub(prefix.chars().count() + suffix.chars().count());
+    Line::styled(
+        format!("{prefix}{}{suffix}", elide(&mark.reason, budget)),
+        Style::new().add_modifier(Modifier::DIM),
+    )
+}
+
+/// Every step line task `id` shows: the reason and when it was marked done by hand, when it
+/// was, then one earlier attempt's own steps after another, oldest first, each step named with
+/// its attempt's number ahead of it so it reads apart from the current attempt's own, which
+/// carries none; `current`, the current attempt's steps, last — "the next run adds attempt
+/// N+1 under" the ones already there.
 fn task_step_lines(
     view: &QueueView,
     id: TaskId,
@@ -242,6 +265,9 @@ fn task_step_lines(
     width: usize,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
+    if let Some(mark) = view.done_by_user.get(&id) {
+        lines.push(done_mark_line(mark, width));
+    }
     if let Some(history) = view.history.get(&id) {
         for attempt in history {
             lines.extend(step_lines_named(
@@ -408,6 +434,7 @@ mod tests {
             tasks: ids.iter().map(|id| task(*id)).collect(),
             attempts: HashMap::new(),
             history: HashMap::new(),
+            done_by_user: HashMap::new(),
         }
     }
 
@@ -449,6 +476,7 @@ mod tests {
             tasks,
             attempts,
             history: HashMap::new(),
+            done_by_user: HashMap::new(),
         })
     }
 
@@ -514,10 +542,11 @@ mod tests {
     fn the_key_map_lists_every_key_of_the_queue_screen_instead_of_the_queue() {
         use ratatui::crossterm::event::KeyCode::Char;
         let queue = press(loaded(&[1]), &[Char('?')]);
-        let rows = drawn(&queue, 60, 20);
+        let rows = drawn(&queue, 60, 22);
         let screen = rows.join("\n");
         for key in [
-            "j, Down", "k, Up", "g ", "G ", "a ", "d ", "t ", "r ", "i ", "s ", "? ", "Esc", "q ",
+            "j, Down", "k, Up", "g ", "G ", "a ", "d ", "t ", "A ", "D ", "r ", "i ", "s ", "? ",
+            "Esc", "q ",
         ] {
             assert!(screen.contains(key), "{key:?} in\n{screen}");
         }
@@ -606,6 +635,52 @@ mod tests {
     }
 
     #[test]
+    fn a_task_marked_done_by_the_user_shows_the_reason_and_when_above_its_attempts_own_steps() {
+        let task = {
+            let mut task = task_named(1, "first", TaskKind::Agent);
+            task.status = TaskStatus::Done;
+            task
+        };
+        let mut attempts = HashMap::new();
+        attempts.insert(
+            task.id,
+            attempt("echo", 3, AttemptOutcome::Reported(Outcome::Failed)),
+        );
+        let mut done_by_user = HashMap::new();
+        done_by_user.insert(
+            task.id,
+            DoneMark {
+                reason: "fixed by hand".to_owned(),
+                at: SystemTime::UNIX_EPOCH + Duration::from_mins(15),
+            },
+        );
+        let project = Project {
+            name: "app".to_owned(),
+            path: PathBuf::from("/work/app"),
+            registered_at: SystemTime::UNIX_EPOCH,
+        };
+        let queue = Queue::default().loaded(QueueView {
+            project,
+            summary: StatusSummary {
+                done: 1,
+                ..StatusSummary::default()
+            },
+            tasks: vec![task],
+            attempts,
+            history: HashMap::new(),
+            done_by_user,
+        });
+        let rows = drawn(&queue, 100, 8);
+        assert_eq!(row(&rows, 3), ">1  #10  done  agent  first");
+        let line = row(&rows, 4);
+        assert!(
+            line.contains("marked done by the user: fixed by hand (at"),
+            "{line}"
+        );
+        assert_eq!(row(&rows, 5), "      implementation · echo · 3s · failed");
+    }
+
+    #[test]
     fn a_retried_tasks_earlier_attempt_shows_above_its_current_one_named_with_its_number() {
         let task = task_named(1, "first", TaskKind::Agent);
         let mut attempts = HashMap::new();
@@ -633,6 +708,7 @@ mod tests {
             tasks: vec![task],
             attempts,
             history,
+            done_by_user: HashMap::new(),
         });
         let rows = drawn(&queue, 60, 8);
         assert_eq!(

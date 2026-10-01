@@ -4,6 +4,7 @@
 use ktask_core::Project;
 
 use crate::answer_screen::{self, AnswerScreen};
+use crate::done_screen::{self, DoneScreen};
 use crate::import_screen::{self, ImportScreen};
 use crate::projects::{self, ProjectsScreen};
 use crate::queue::Queue;
@@ -60,6 +61,44 @@ pub(super) fn try_answer(app: App, event: Event) -> Tried {
         Event::Key(key) if app.answer.is_some() => handled(on_answer(app, |a| a.key(key))),
         Event::Ctrl(letter) if app.answer.is_some() => handled(on_answer(app, |a| a.ctrl(letter))),
         other => Tried::Unhandled(Box::new(app), Box::new(other)),
+    }
+}
+
+/// `event`, applied to the done form when it owns it — a key or Ctrl-letter while it is
+/// open — or handed back for the next screen to try, unchanged.
+pub(super) fn try_done(app: App, event: Event) -> Tried {
+    match event {
+        Event::Key(key) if app.done.is_some() => handled(on_done(app, |d| d.key(key))),
+        Event::Ctrl(letter) if app.done.is_some() => handled(on_done(app, |d| d.ctrl(letter))),
+        other => Tried::Unhandled(Box::new(app), Box::new(other)),
+    }
+}
+
+/// The app with `f`'s answer applied to the done form, when it is open: closed either way —
+/// [`done_screen::Request::Close`] asks nothing of the loop, and unlike every other form,
+/// [`done_screen::Request::Submit`] closes the form too, leaving the task and the typed reason
+/// for the loop to record.
+fn on_done(
+    app: App,
+    f: impl FnOnce(DoneScreen) -> (DoneScreen, Option<done_screen::Request>),
+) -> App {
+    let Some(screen) = app.done else {
+        return app;
+    };
+    let task = screen.task();
+    let (screen, request) = f(screen);
+    let app = App {
+        done: Some(screen),
+        ..app
+    };
+    match request {
+        Some(done_screen::Request::Close) => App { done: None, ..app },
+        Some(done_screen::Request::Submit(text)) => App {
+            done: None,
+            done_submission: Some((task, text)),
+            ..app
+        },
+        None => app,
     }
 }
 

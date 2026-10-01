@@ -8,6 +8,7 @@ use ktask_core::{Placement, Project, QueueView, SettingView, TaskDraft, TaskId};
 use ratatui::crossterm::event::KeyCode;
 
 use crate::answer_screen::AnswerScreen;
+use crate::done_screen::DoneScreen;
 use crate::import_screen::ImportScreen;
 use crate::projects::ProjectsScreen;
 use crate::queue::{self, Queue};
@@ -17,7 +18,9 @@ use crate::task_form::TaskFormScreen;
 
 mod screens;
 
-use screens::{try_answer, try_form, try_import, try_projects, try_registration, try_settings};
+use screens::{
+    try_answer, try_done, try_form, try_import, try_projects, try_registration, try_settings,
+};
 
 /// Everything the terminal interface shows and remembers. Which screen is open is decided by
 /// which of `form`, `import`, `settings`, `projects` and `registration` is `Some` — at most
@@ -29,6 +32,7 @@ pub struct App {
     pub(crate) queue: Queue,
     pub(crate) form: Option<TaskFormScreen>,
     pub(crate) answer: Option<AnswerScreen>,
+    pub(crate) done: Option<DoneScreen>,
     pub(crate) import: Option<ImportScreen>,
     pub(crate) settings: Option<SettingsScreen>,
     pub(crate) projects: Option<ProjectsScreen>,
@@ -46,6 +50,8 @@ pub struct App {
     pub(crate) retrial: Option<TaskId>,
     /// The task and text the answer form was submitted with, for the loop to record.
     pub(crate) answer_submission: Option<(TaskId, String)>,
+    /// The task and reason the done form was submitted with, for the loop to record.
+    pub(crate) done_submission: Option<(TaskId, String)>,
     /// Set when the operator asked to start executing the pending tasks.
     pub(crate) run_requested: Option<()>,
     /// Set when the operator asked to open the settings screen.
@@ -134,34 +140,32 @@ pub fn update(app: App, event: Event) -> App {
     dispatch(app, event)
 }
 
+/// Every screen that might own an event reaching [`dispatch`], tried in this order, the first
+/// match winning.
+const SCREENS: [fn(App, Event) -> Tried; 7] = [
+    try_settings,
+    try_form,
+    try_answer,
+    try_done,
+    try_import,
+    try_projects,
+    try_registration,
+];
+
 /// The app after `event`, once it is known to be neither `Loaded` nor a first Ctrl-C: tried
-/// against each screen that might own it, in turn, the first match winning; an event none of
-/// them owns reaches the queue, or changes nothing.
+/// against each of [`SCREENS`] in turn, the first match winning; an event none of them owns
+/// reaches the queue, or changes nothing.
 fn dispatch(app: App, event: Event) -> App {
-    let (app, event) = match try_settings(app, event) {
-        Tried::Handled(app) => return *app,
-        Tried::Unhandled(app, event) => (*app, *event),
-    };
-    let (app, event) = match try_form(app, event) {
-        Tried::Handled(app) => return *app,
-        Tried::Unhandled(app, event) => (*app, *event),
-    };
-    let (app, event) = match try_answer(app, event) {
-        Tried::Handled(app) => return *app,
-        Tried::Unhandled(app, event) => (*app, *event),
-    };
-    let (app, event) = match try_import(app, event) {
-        Tried::Handled(app) => return *app,
-        Tried::Unhandled(app, event) => (*app, *event),
-    };
-    let (app, event) = match try_projects(app, event) {
-        Tried::Handled(app) => return *app,
-        Tried::Unhandled(app, event) => (*app, *event),
-    };
-    let (app, event) = match try_registration(app, event) {
-        Tried::Handled(app) => return *app,
-        Tried::Unhandled(app, event) => (*app, *event),
-    };
+    let (mut app, mut event) = (app, event);
+    for screen in SCREENS {
+        match screen(app, event) {
+            Tried::Handled(app) => return *app,
+            Tried::Unhandled(unhandled_app, unhandled_event) => {
+                app = *unhandled_app;
+                event = *unhandled_event;
+            }
+        }
+    }
     match event {
         Event::RunMessage(text) => App {
             queue: app.queue.run_message(text),
@@ -218,45 +222,72 @@ fn on_queue(app: App, f: impl FnOnce(Queue) -> (Queue, Option<queue::Request>)) 
     apply_queue_request(app, request)
 }
 
+/// `app` with `request` carried out, when `request` opens another screen over the queue — the
+/// app and `request` handed back, unchanged, when it asks for something else, for
+/// [`apply_queue_request`] to carry out itself; pulled out of it so that function stays within
+/// the workspace's function-length limit.
+fn open_screen_for_request(
+    app: App,
+    request: queue::Request,
+) -> Result<App, Box<(App, queue::Request)>> {
+    match request {
+        queue::Request::OpenForm(placement) => Ok(App {
+            form: Some(TaskFormScreen::new(placement)),
+            ..app
+        }),
+        queue::Request::OpenImport => Ok(App {
+            import: Some(ImportScreen::new()),
+            ..app
+        }),
+        queue::Request::OpenAnswer(id, question) => Ok(App {
+            answer: Some(AnswerScreen::new(id, question)),
+            ..app
+        }),
+        queue::Request::OpenDone(id) => Ok(App {
+            done: Some(DoneScreen::new(id)),
+            ..app
+        }),
+        other => Err(Box::new((app, other))),
+    }
+}
+
 /// The app with `request`, when the queue left one, carried out: opens the screen or sets the
 /// mailbox field it asks for — pulled out of [`on_queue`] so that function stays within the
 /// workspace's function-length limit.
 fn apply_queue_request(app: App, request: Option<queue::Request>) -> App {
+    let Some(request) = request else {
+        return app;
+    };
+    let (app, request) = match open_screen_for_request(app, request) {
+        Ok(app) => return app,
+        Err(pair) => *pair,
+    };
     match request {
-        Some(queue::Request::OpenForm(placement)) => App {
-            form: Some(TaskFormScreen::new(placement)),
-            ..app
-        },
-        Some(queue::Request::OpenImport) => App {
-            import: Some(ImportScreen::new()),
-            ..app
-        },
-        Some(queue::Request::StartRun) => App {
+        queue::Request::StartRun => App {
             run_requested: Some(()),
             ..app
         },
-        Some(queue::Request::OpenSettings) => App {
+        queue::Request::OpenSettings => App {
             settings_requested: Some(()),
             ..app
         },
-        Some(queue::Request::OpenProjects) => App {
+        queue::Request::OpenProjects => App {
             projects_requested: Some(()),
             ..app
         },
-        Some(queue::Request::Remove(id)) => App {
+        queue::Request::Remove(id) => App {
             removal: Some(id),
             ..app
         },
-        Some(queue::Request::Retry(id)) => App {
+        queue::Request::Retry(id) => App {
             retrial: Some(id),
             ..app
         },
-        Some(queue::Request::OpenAnswer(id, question)) => App {
-            answer: Some(AnswerScreen::new(id, question)),
-            ..app
-        },
-        Some(queue::Request::Quit) => App { quit: true, ..app },
-        None => app,
+        queue::Request::Quit => App { quit: true, ..app },
+        queue::Request::OpenForm(_)
+        | queue::Request::OpenImport
+        | queue::Request::OpenAnswer(..)
+        | queue::Request::OpenDone(_) => unreachable!("handled by open_screen_for_request above"),
     }
 }
 
@@ -309,6 +340,7 @@ mod tests {
             tasks: ids.iter().map(|id| task(*id)).collect(),
             attempts: std::collections::HashMap::new(),
             history: std::collections::HashMap::new(),
+            done_by_user: std::collections::HashMap::new(),
         }
     }
 
