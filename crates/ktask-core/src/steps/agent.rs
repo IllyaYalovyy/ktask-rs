@@ -2,13 +2,36 @@
 //! implementation, review and test steps, none of which otherwise names the others.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::steps::{Deps, INTERRUPTED, PipelineState, StepOutcome};
 use crate::{
     AttemptToken, Exit, IMPLEMENTATION, Journal, Outcome, Output, ProviderRunError, Resume,
     RunContext, RunError, StepCall, Task, TaskStatus, run_provider,
 };
+
+/// How long an attempt waits before trying again when its provider's own message said its
+/// usage limit was hit but named no reset time of its own.
+const DEFAULT_LIMIT_BACKOFF: Duration = Duration::from_mins(5);
+
+/// Operating-system error phrases worth keeping verbatim in the reason when the provider never
+/// got the chance to report anything of its own — otherwise lost the moment `report` reads
+/// back nothing, leaving only the uninformative "exited with code N and reported nothing".
+/// [`super::known_cause`] keys its own disk-full and file-slots-full causes on exactly these.
+const KNOWN_OS_ERROR_PHRASES: [&str; 2] = ["No space left on device", "Too many open files"];
+
+/// The first of [`KNOWN_OS_ERROR_PHRASES`] found in `output`'s own standard output or standard
+/// error, when there is one.
+fn known_os_error(output: &Output) -> Option<&'static str> {
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    KNOWN_OS_ERROR_PHRASES
+        .into_iter()
+        .find(|phrase| text.contains(phrase))
+}
 
 /// What a step that ran a provider ended at: its exit code (`None` when the provider could not
 /// be run at all, or was killed), the resulting status, the reason when it is not `done`, and
@@ -46,10 +69,12 @@ fn exit_code_or_unreported(output: &Output) -> Result<i32, AgentOutcome> {
 }
 
 /// The status and reason a step's own `report`, when it made one, ends at; `exit_code` names
-/// what the provider itself exited at, for the one case there is no report at all.
+/// what the provider itself exited at, and `output` is searched for a known operating-system
+/// error phrase to keep, for the one case there is no report at all.
 fn status_and_reason(
     report: Option<(Outcome, Option<String>)>,
     exit_code: i32,
+    output: &Output,
 ) -> (TaskStatus, Option<String>) {
     match report {
         Some((Outcome::Done | Outcome::Approved | Outcome::Accepted, _)) => {
@@ -67,12 +92,15 @@ fn status_and_reason(
         Some((Outcome::Supersede, reason)) => (TaskStatus::Superseded, reason),
         Some((Outcome::NeedsInput, reason)) => (TaskStatus::Blocked, reason),
         Some((Outcome::Retry, reason)) => (TaskStatus::Done, reason),
-        None => (
-            TaskStatus::FailedUnknown,
-            Some(format!(
-                "the provider exited with code {exit_code} and reported nothing"
-            )),
-        ),
+        None => {
+            let reason = match known_os_error(output) {
+                Some(phrase) => format!(
+                    "the provider exited with code {exit_code} and reported nothing: {phrase}"
+                ),
+                None => format!("the provider exited with code {exit_code} and reported nothing"),
+            };
+            (TaskStatus::FailedUnknown, Some(reason))
+        }
     }
 }
 
@@ -99,7 +127,7 @@ fn agent_outcome(
     };
     let report = crate::attempt::report_of_step(journal, task.id, token.number, step)?;
     let reported = report.as_ref().map(|(outcome, _)| *outcome);
-    let (status, reason) = status_and_reason(report, exit_code);
+    let (status, reason) = status_and_reason(report, exit_code, &output);
     Ok(AgentOutcome {
         exit_code: Some(exit_code),
         status,
@@ -240,8 +268,25 @@ pub(crate) fn run_agent_step(
         context.attempt_timeout,
     );
     let duration = deps.clock.now().duration_since(started).unwrap_or_default();
+    if let Some(until) = limit_wait(deps, &result) {
+        return Ok(StepOutcome::Waiting { duration, until });
+    }
     maybe_record_session(deps, context, state, step, prompt, &result)?;
     let outcome = agent_outcome(deps.journal, state.task, state.token, step, result)?;
     state.exit_code = outcome.exit_code;
     Ok(to_step_outcome(duration, outcome))
+}
+
+/// The time to wait until before running this step again, when `result`'s own output says the
+/// provider's usage limit was hit: the message's own reset time, or [`DEFAULT_LIMIT_BACKOFF`]
+/// from now when it named none. `None` when the provider could not even be run, or its output
+/// says no such thing.
+fn limit_wait(deps: &Deps<'_>, result: &Result<Output, ProviderRunError>) -> Option<SystemTime> {
+    let output = result.as_ref().ok()?;
+    let signal = (deps.provider.detect_limit)(output)?;
+    Some(
+        signal
+            .reset_at
+            .unwrap_or_else(|| deps.clock.now() + DEFAULT_LIMIT_BACKOFF),
+    )
 }

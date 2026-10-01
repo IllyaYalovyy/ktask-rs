@@ -147,6 +147,7 @@ mod tests {
             failure: None,
             requested_model: None,
             requested_session: None,
+            known_cause: false,
         };
         assert!(!Review.enabled(context, &state));
     }

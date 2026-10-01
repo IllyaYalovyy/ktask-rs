@@ -21,6 +21,7 @@ mod resolve;
 mod run;
 mod sessions;
 mod settings;
+mod sleep;
 mod status;
 mod steps;
 mod task;
@@ -37,7 +38,9 @@ pub use journal::{
 };
 pub use lock::{RunLock, RunLockError};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
-pub use provider::{Provider, ProviderCommand, ProviderRunError, Resume, StepCall, run_provider};
+pub use provider::{
+    LimitSignal, Provider, ProviderCommand, ProviderRunError, Resume, StepCall, run_provider,
+};
 pub use queue::{QueueView, StatusSummary, queue_view};
 pub use register::{RegisterError, register_project};
 pub use report::{
@@ -57,6 +60,7 @@ pub use settings::{
     SettingView, Settings, SettingsError, SettingsStore, TRACKED_BRANCH, effective_attempt_timeout,
     effective_max_attempts, effective_resolver_provider, set_setting, show_settings, step_enabled,
 };
+pub use sleep::Sleep;
 pub use status::{
     AttemptLine, AttemptOutcome, COMMIT_STEP, DoneMark, HEALTH_CHECK_STEP, IMPLEMENTATION,
     PUSH_STEP, RESOLVE_STEP, REVIEW_STEP, SYNC_STEP, StatusEntry, StepLine, TEST_STEP,

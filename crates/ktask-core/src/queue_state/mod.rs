@@ -38,6 +38,9 @@ struct AttemptFold {
     start_commit: Option<String>,
     provider: Option<String>,
     session: Option<String>,
+    /// The step name and time of the most recent [`Event::AttemptWaiting`] not yet superseded
+    /// by a later event for this attempt: [`QueueState::attempt_from_fold`].
+    waiting: Option<(String, SystemTime)>,
     ended: Option<AttemptEnd>,
     steps: Vec<StepFold>,
 }
@@ -88,6 +91,7 @@ impl QueueState {
             Event::TaskCancelled { .. } => self.apply_task_cancelled(event),
             Event::AttemptStarted { .. } => self.apply_attempt_started(event),
             Event::AttemptRunning { .. } => self.apply_attempt_running(event),
+            Event::AttemptWaiting { .. } => self.apply_attempt_waiting(event),
             Event::AttemptReported { .. } => self.apply_attempt_reported(event),
             Event::AttemptSessionRecorded { .. } => self.apply_attempt_session_recorded(event),
             Event::AttemptEnded { .. } => self.apply_attempt_ended(event),

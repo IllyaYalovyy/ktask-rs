@@ -8,7 +8,7 @@ use crate::{
     AppendConflict, Clock, CommandSpec, Commands, CommandsError, CommitAllError, Event, Git,
     GitError, Journal, JournalError, Output, Project, ProjectRegistry, PullRebase, PullRebaseError,
     PushError, RegistryError, RunLock, RunLockError, SessionLog, SessionLogError, Settings,
-    SettingsError, SettingsStore, TaskDraft, TaskKind,
+    SettingsError, SettingsStore, Sleep, TaskDraft, TaskKind,
 };
 
 /// An in-memory registry that can be told to fail.
@@ -329,6 +329,19 @@ impl SettingsStore for FakeSettingsStore {
         }
         *self.settings.borrow_mut() = settings.clone();
         Ok(())
+    }
+}
+
+/// A sleep that records every duration it was asked to wait for, instead of actually
+/// blocking — so a test proves what a step asked to wait for without taking the time.
+#[derive(Debug, Default)]
+pub(crate) struct FakeSleep {
+    pub(crate) calls: RefCell<Vec<Duration>>,
+}
+
+impl Sleep for FakeSleep {
+    fn sleep(&self, duration: Duration) {
+        self.calls.borrow_mut().push(duration);
     }
 }
 

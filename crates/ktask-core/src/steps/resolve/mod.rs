@@ -430,6 +430,7 @@ mod tests {
             failure: None,
             requested_model: None,
             requested_session: None,
+            known_cause: false,
         };
         assert!(Resolve.enabled(context, &state));
         assert_eq!(Resolve.name(), RESOLVE_STEP);

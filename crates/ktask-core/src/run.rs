@@ -13,7 +13,7 @@ use crate::pick::{Pick, end_when_nothing_left, pick_next_task};
 use crate::steps::{self, INTERRUPTED};
 use crate::{
     BeginAttemptError, Clock, Commands, Git, Journal, JournalError, Provider, RecordReportError,
-    RunLock, RunLockError, SessionLog, TaskId, TaskStatus,
+    RunLock, RunLockError, SessionLog, Sleep, TaskId, TaskStatus,
 };
 
 pub use crate::steps::implementation::{build_prompt, implementation_prompt};
@@ -288,6 +288,7 @@ fn attempt_task(
 /// # Errors
 ///
 /// Fails when the journal cannot be read or written.
+#[allow(clippy::too_many_arguments)]
 fn attempt_loop(
     journal: &impl Journal,
     clock: &impl Clock,
@@ -295,6 +296,7 @@ fn attempt_loop(
     git: &impl Git,
     provider: &Provider,
     session_log: &impl SessionLog,
+    sleep: &impl Sleep,
     context: RunContext<'_>,
 ) -> Result<RunReport, RunError> {
     let deps = steps::Deps {
@@ -304,6 +306,7 @@ fn attempt_loop(
         git,
         provider,
         session_log,
+        sleep,
     };
     run_attempt_loop(deps, journal, context)
 }
@@ -364,6 +367,7 @@ pub fn run_queue(
     git: &impl Git,
     provider: &Provider,
     session_log: &impl SessionLog,
+    sleep: &impl Sleep,
     lock: &impl RunLock,
     context: RunContext<'_>,
 ) -> Result<RunReport, RunError> {
@@ -385,6 +389,7 @@ pub fn run_queue(
         git,
         provider,
         session_log,
+        sleep,
         context,
     )
 }
@@ -396,14 +401,15 @@ mod tests {
     use std::time::SystemTime;
 
     use crate::fakes::{
-        FakeClock, FakeCommands, FakeGit, FakeJournal, FakeRunLock, FakeSessionLog, at, draft,
+        FakeClock, FakeCommands, FakeGit, FakeJournal, FakeRunLock, FakeSessionLog, FakeSleep, at,
+        draft,
     };
     use crate::{
         AttemptRun, AttemptToken, COMMIT_STEP, CommandSpec, Commands, CommandsError,
-        CommitAllError, Event, Exit, HEALTH_CHECK_STEP, IMPLEMENTATION, Outcome, Output, PUSH_STEP,
-        Placement, Provider, ProviderCommand, PullRebase, PullRebaseError, RESOLVE_STEP,
-        REVIEW_STEP, SYNC_STEP, TEST_STEP, TaskDraft, TaskId, TaskKind, TaskStatus, add_task,
-        report, report_retry, report_supersede,
+        CommitAllError, Event, Exit, HEALTH_CHECK_STEP, IMPLEMENTATION, LimitSignal, Outcome,
+        Output, PUSH_STEP, Placement, Provider, ProviderCommand, PullRebase, PullRebaseError,
+        RESOLVE_STEP, REVIEW_STEP, SYNC_STEP, TEST_STEP, TaskDraft, TaskId, TaskKind, TaskStatus,
+        add_task, report, report_retry, report_supersede,
     };
 
     use super::*;
@@ -433,6 +439,7 @@ mod tests {
             },
             supports_resume: false,
             read_session: |_| None,
+            detect_limit: |_| None,
         }
     }
 
@@ -472,6 +479,7 @@ mod tests {
             &FakeGit::default(),
             provider,
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context(timeout),
         )
@@ -668,6 +676,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -720,6 +729,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -764,6 +774,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -815,6 +826,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -845,6 +857,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -889,6 +902,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -918,6 +932,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -973,6 +988,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -1012,6 +1028,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -1045,6 +1062,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -1078,6 +1096,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -1111,6 +1130,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -1153,6 +1173,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1194,6 +1215,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1226,6 +1248,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1257,6 +1280,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1294,6 +1318,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1333,6 +1358,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1373,6 +1399,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1409,6 +1436,7 @@ mod tests {
             &failing_git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1435,6 +1463,7 @@ mod tests {
             &passing_git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -1501,6 +1530,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -1577,6 +1607,7 @@ mod tests {
             },
             supports_resume: false,
             read_session: |_| None,
+            detect_limit: |_| None,
         };
         let commands = ReportingCommands {
             journal: &journal,
@@ -1907,6 +1938,7 @@ mod tests {
             &git_with_diff(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -1938,6 +1970,7 @@ mod tests {
             &git_with_diff(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -2072,6 +2105,7 @@ mod tests {
             command: |_, _| Err("cannot build it".to_owned()),
             supports_resume: false,
             read_session: |_| None,
+            detect_limit: |_| None,
         };
         let commands = commands_ok(Exit::Code(0));
         let report = run(&journal, &commands, &refusing, Duration::from_secs(60)).unwrap();
@@ -2102,6 +2136,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(42)),
         )
@@ -2196,6 +2231,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &lock,
             context(Duration::from_secs(60)),
         )
@@ -2543,6 +2579,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -2567,6 +2604,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -2612,6 +2650,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -2651,6 +2690,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -2693,6 +2733,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -2713,7 +2754,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unconfigured_git_identity_refuses_the_commit_and_ends_the_task_failed() {
+    fn an_unconfigured_git_identity_is_a_known_cause_the_task_stays_pending_over() {
         let journal = journal_of_abc();
         let commands = ReportingCommands {
             journal: &journal,
@@ -2731,6 +2772,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -2739,12 +2781,12 @@ mod tests {
             report.end,
             RunEnd::Stopped {
                 id: TaskId(1),
-                status: TaskStatus::Failed,
+                status: TaskStatus::Pending,
             }
         );
         assert_eq!(
             crate::list_all_tasks(&journal).unwrap()[0].status,
-            TaskStatus::Failed
+            TaskStatus::Pending
         );
         let reason = report.attempted[0].reason.as_deref().unwrap();
         assert!(
@@ -2753,6 +2795,15 @@ mod tests {
         );
         assert!(reason.contains("user.name"), "{reason}");
         assert!(reason.contains("user.email"), "{reason}");
+        // No resolver ran over it: no resolve step was ever recorded for this attempt.
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert!(
+            !attempt.steps.iter().any(|step| step.name == RESOLVE_STEP),
+            "{:?}",
+            attempt.steps
+        );
     }
 
     #[test]
@@ -2776,6 +2827,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context(Duration::from_secs(60)),
         )
@@ -2820,6 +2872,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -2841,7 +2894,7 @@ mod tests {
     }
 
     #[test]
-    fn a_push_the_git_port_refuses_ends_the_task_failed_with_its_reason() {
+    fn an_unreachable_remote_on_push_is_a_known_cause_the_task_stays_pending_over() {
         let journal = journal_of_abc();
         let commands = ReportingCommands {
             journal: &journal,
@@ -2864,6 +2917,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -2872,13 +2926,18 @@ mod tests {
             report.end,
             RunEnd::Stopped {
                 id: TaskId(1),
-                status: TaskStatus::Failed,
+                status: TaskStatus::Pending,
             }
+        );
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Pending
         );
         let reason = report.attempted[0].reason.as_deref().unwrap();
         assert!(reason.contains("git push"), "{reason}");
         assert!(reason.contains("exited with code 128"), "{reason}");
         assert!(reason.contains("could not read from remote"), "{reason}");
+        assert!(reason.contains("make the remote reachable"), "{reason}");
     }
 
     #[test]
@@ -2900,6 +2959,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_tracking(Duration::from_secs(60)),
         )
@@ -2941,6 +3001,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -2984,6 +3045,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -3123,6 +3185,7 @@ mod tests {
             &git,
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_with_max_attempts(3),
         )
@@ -3183,6 +3246,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             ctx,
         )
@@ -3241,6 +3305,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_with_max_attempts(3),
         )
@@ -3292,6 +3357,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_with_max_attempts(3),
         )
@@ -3381,6 +3447,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_with_max_attempts(3),
         )
@@ -3437,6 +3504,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_with_max_attempts(3),
         )
@@ -3472,6 +3540,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_with_max_attempts(1),
         )
@@ -3555,6 +3624,7 @@ mod tests {
             &FakeGit::default(),
             &test_provider(),
             &FakeSessionLog::default(),
+            &FakeSleep::default(),
             &FakeRunLock::free(),
             context_with_max_attempts(3),
         )
@@ -3582,6 +3652,166 @@ mod tests {
                 .any(|step| step.name == RESOLVE_STEP),
             "{:?}",
             attempts[2].steps
+        );
+    }
+
+    /// The fixed bytes [`LimitThenDoneCommands`]'s first invocation answers with, and
+    /// [`detect_fixed_limit`] recognises.
+    const LIMIT_SIGNAL_STDOUT: &[u8] = b"LIMIT";
+
+    /// A provider whose own output names this fixed reset time, in [`LimitThenDoneCommands`]'s
+    /// own first answer.
+    fn limit_reset_at() -> SystemTime {
+        at(12_345)
+    }
+
+    /// [`Provider::detect_limit`] for a provider whose own fixed output names
+    /// [`LIMIT_SIGNAL_STDOUT`].
+    fn detect_fixed_limit(output: &Output) -> Option<LimitSignal> {
+        (output.stdout == LIMIT_SIGNAL_STDOUT).then(|| LimitSignal {
+            reset_at: Some(limit_reset_at()),
+        })
+    }
+
+    /// A commands port whose very first invocation answers with [`LIMIT_SIGNAL_STDOUT`] and no
+    /// report at all, as a provider that hit its usage limit would; every later invocation
+    /// reports whatever its own step expects and succeeds.
+    struct LimitThenDoneCommands<'a> {
+        journal: &'a FakeJournal,
+        calls: RefCell<u32>,
+    }
+
+    impl Commands for LimitThenDoneCommands<'_> {
+        fn run(&self, spec: &CommandSpec) -> Result<Output, CommandsError> {
+            *self.calls.borrow_mut() += 1;
+            if *self.calls.borrow() == 1 {
+                return Ok(Output {
+                    stdout: LIMIT_SIGNAL_STDOUT.to_vec(),
+                    stderr: Vec::new(),
+                    exit: Exit::Code(1),
+                });
+            }
+            let token: AttemptToken = spec
+                .args
+                .iter()
+                .find_map(|arg| arg.parse().ok())
+                .expect("one arg is the attempt token");
+            let step = crate::attempt::current_step(self.journal, token.task).unwrap();
+            let outcome = match step.as_deref() {
+                Some(REVIEW_STEP) => Outcome::Approved,
+                Some(TEST_STEP) => Outcome::Accepted,
+                _ => Outcome::Done,
+            };
+            report(self.journal, &clock(), &token, outcome, None).unwrap();
+            Ok(Output {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                exit: Exit::Code(0),
+            })
+        }
+    }
+
+    #[test]
+    fn a_providers_own_limit_message_waits_for_its_reset_then_runs_the_same_attempt_again() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        let commands = LimitThenDoneCommands {
+            journal: &journal,
+            calls: RefCell::new(0),
+        };
+        let provider = Provider {
+            name: "limited",
+            command: |_prompt, call| {
+                Ok(ProviderCommand {
+                    program: "run-it".to_owned(),
+                    args: vec![call.token.to_owned()],
+                    stdin: Vec::new(),
+                })
+            },
+            supports_resume: false,
+            read_session: |_| None,
+            detect_limit: detect_fixed_limit,
+        };
+        let sleep = FakeSleep::default();
+        let mut ctx = context(Duration::from_secs(60));
+        ctx.disabled_steps = &[REVIEW_STEP, TEST_STEP];
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &commands,
+            &FakeGit::default(),
+            &provider,
+            &FakeSessionLog::default(),
+            &sleep,
+            &FakeRunLock::free(),
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(report.end, RunEnd::Completed);
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Done
+        );
+        // It slept exactly once, for what was left of the wait the provider's own message
+        // named — `clock()` never advances, so this is the whole span.
+        let waited = sleep.calls.borrow().clone();
+        assert_eq!(
+            waited,
+            vec![limit_reset_at().duration_since(clock().now()).unwrap()]
+        );
+        // The same attempt ran again: still attempt 1, never a second one.
+        let attempts = crate::attempt::all_attempts(&journal, TaskId(1)).unwrap();
+        assert_eq!(attempts.len(), 1, "{attempts:?}");
+        assert_eq!(*commands.calls.borrow(), 2);
+        assert!(
+            crate::attempt::last_attempt(&journal, TaskId(1))
+                .unwrap()
+                .unwrap()
+                .waiting_until
+                .is_none(),
+            "the wait is cleared once the step it was for ends"
+        );
+    }
+
+    #[test]
+    fn a_program_not_found_exit_code_is_a_known_cause_the_task_stays_pending_over() {
+        let journal = journal_of_abc();
+        let commands = commands_ok(Exit::Code(127));
+        let report = run(
+            &journal,
+            &commands,
+            &test_provider(),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        assert_eq!(
+            report,
+            RunReport {
+                attempted: vec![Attempted {
+                    id: TaskId(1),
+                    status: TaskStatus::Pending,
+                    reason: report.attempted[0].reason.clone(),
+                }],
+                end: RunEnd::Stopped {
+                    id: TaskId(1),
+                    status: TaskStatus::Pending,
+                },
+            }
+        );
+        let reason = report.attempted[0].reason.as_deref().unwrap();
+        assert!(reason.contains("could not be found"), "{reason}");
+        assert!(reason.contains("PATH"), "{reason}");
+        assert_eq!(
+            crate::list_all_tasks(&journal).unwrap()[0].status,
+            TaskStatus::Pending
+        );
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        assert!(
+            !attempt.steps.iter().any(|step| step.name == RESOLVE_STEP),
+            "no resolver ran over a known cause: {:?}",
+            attempt.steps
         );
     }
 }

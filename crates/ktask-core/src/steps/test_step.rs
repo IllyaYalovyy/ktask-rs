@@ -145,6 +145,7 @@ mod tests {
             failure: None,
             requested_model: None,
             requested_session: None,
+            known_cause: false,
         };
         assert!(!Test.enabled(context, &state));
     }

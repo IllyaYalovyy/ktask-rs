@@ -152,6 +152,31 @@ pub(crate) fn record_session(
     })
 }
 
+/// Use case: records that attempt `number` of task `id` is waiting on step `step`, until
+/// `until`, before it runs again — a provider's own usage limit, met without a model and
+/// without spending the task an attempt.
+///
+/// # Errors
+///
+/// Fails, recording nothing, when no attempt numbered `number` is running for this task, or
+/// when the journal cannot be read or written.
+pub(crate) fn record_waiting(
+    journal: &dyn Journal,
+    clock: &dyn Clock,
+    id: TaskId,
+    number: u32,
+    step: &str,
+    until: SystemTime,
+) -> Result<(), RecordReportError> {
+    let at = clock.now();
+    let step = step.to_owned();
+    decide_and_append(journal, move |state| {
+        state
+            .decide_record_waiting(id, number, step.clone(), until, at)
+            .map(|event| (vec![event], ()))
+    })
+}
+
 /// Use case: begins the next attempt at the pending task numbered `id` and, in the same
 /// append, marks it running with `provider` — for a caller (the `run` use case) that always
 /// knows its provider up front, so "begun" and "running" are never visible apart, one journal

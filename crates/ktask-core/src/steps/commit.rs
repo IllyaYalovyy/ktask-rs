@@ -181,6 +181,7 @@ mod tests {
             failure: None,
             requested_model: None,
             requested_session: None,
+            known_cause: false,
         };
         let commands = crate::fakes::FakeCommands::returning(Ok(crate::Output {
             stdout: Vec::new(),
@@ -192,8 +193,10 @@ mod tests {
             command: |_, _| unreachable!("the commit step never runs a provider"),
             supports_resume: false,
             read_session: |_| None,
+            detect_limit: |_| None,
         };
         let session_log = crate::fakes::FakeSessionLog::default();
+        let sleep = crate::fakes::FakeSleep::default();
         let deps = Deps {
             journal: &crate::fakes::FakeJournal::default(),
             clock: &StoppedClock,
@@ -201,6 +204,7 @@ mod tests {
             git,
             provider: &provider,
             session_log: &session_log,
+            sleep: &sleep,
         };
         Commit.run(&deps, context(), &mut state).unwrap()
     }
@@ -217,6 +221,7 @@ mod tests {
                 assert_eq!(reason, Some("committed as abc1234".to_owned()));
             }
             StepOutcome::Ended { reason, .. } => panic!("expected Passed, got Ended({reason:?})"),
+            StepOutcome::Waiting { .. } => panic!("expected Passed, got Waiting"),
         }
     }
 
@@ -232,6 +237,7 @@ mod tests {
                 assert_eq!(reason, Some("nothing was changed".to_owned()));
             }
             StepOutcome::Ended { reason, .. } => panic!("expected Passed, got Ended({reason:?})"),
+            StepOutcome::Waiting { .. } => panic!("expected Passed, got Waiting"),
         }
     }
 
@@ -254,6 +260,7 @@ mod tests {
                 assert!(reason.contains("user.email"), "{reason}");
             }
             StepOutcome::Passed { .. } => panic!("expected Ended"),
+            StepOutcome::Waiting { .. } => panic!("expected Ended, got Waiting"),
         }
     }
 
@@ -278,6 +285,7 @@ mod tests {
                 );
             }
             StepOutcome::Passed { .. } => panic!("expected Ended"),
+            StepOutcome::Waiting { .. } => panic!("expected Ended, got Waiting"),
         }
     }
 
@@ -296,6 +304,7 @@ mod tests {
             failure: None,
             requested_model: None,
             requested_session: None,
+            known_cause: false,
         };
         assert!(!Commit.enabled(ctx, &state));
     }

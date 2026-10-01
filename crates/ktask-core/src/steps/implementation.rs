@@ -510,6 +510,7 @@ mod tests {
             failure: None,
             requested_model: None,
             requested_session: None,
+            known_cause: false,
         };
         assert!(Implementation.enabled(context, &state));
         assert_eq!(Implementation.name(), IMPLEMENTATION);
@@ -550,6 +551,7 @@ mod tests {
             failure: None,
             requested_model: None,
             requested_session: None,
+            known_cause: false,
         };
         assert_eq!(Implementation.model(context, &state), None);
         state.requested_model = Some("opus".to_owned());

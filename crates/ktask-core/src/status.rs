@@ -184,6 +184,7 @@ fn step_lines(
                 step.model.as_deref(),
                 session,
                 step.started_at,
+                attempt.waiting_until,
                 clock,
                 run_alive,
             ),
@@ -224,6 +225,7 @@ fn current_step_line(
             None,
             attempt.session.as_deref(),
             attempt.started_at,
+            attempt.waiting_until,
             clock,
             run_alive,
         ),
@@ -502,6 +504,43 @@ mod tests {
             displayed_status(entries[0].status, Some(entries[0].attempt.outcome)),
             "interrupted"
         );
+    }
+
+    #[test]
+    fn an_attempt_waiting_on_its_providers_limit_shows_a_live_countdown() {
+        let journal = journal_with_a_started_attempt();
+        crate::attempt::begin_step(&journal, &clock(100), TaskId(1), 1, IMPLEMENTATION, None)
+            .unwrap();
+        crate::attempt::record_waiting(
+            &journal,
+            &clock(100),
+            TaskId(1),
+            1,
+            IMPLEMENTATION,
+            at(200),
+        )
+        .unwrap();
+
+        // At second 130, 70 of the 100 seconds until the reset at second 200 are left — read
+        // fresh from the clock, not frozen when the wait began.
+        let entries = status(&journal, &clock(130), &a_live_run()).unwrap();
+        assert_eq!(entries[0].attempt.outcome, AttemptOutcome::Waiting);
+        let reason = entries[0].attempt.reason.as_deref().unwrap();
+        assert!(reason.contains("70s"), "{reason}");
+        assert_eq!(entries[0].attempt.steps.len(), 1);
+        assert_eq!(entries[0].attempt.steps[0].outcome, AttemptOutcome::Waiting);
+
+        // A later read, further along, shows less of it left.
+        let later = status(&journal, &clock(190), &a_live_run()).unwrap();
+        assert!(
+            later[0].attempt.reason.as_deref().unwrap().contains("10s"),
+            "{:?}",
+            later[0].attempt.reason
+        );
+
+        // A run that is not alive shows interrupted instead, the wait notwithstanding.
+        let not_alive = status(&journal, &clock(130), &no_run()).unwrap();
+        assert_eq!(not_alive[0].attempt.outcome, AttemptOutcome::Interrupted);
     }
 
     /// The `AttemptLine` of the sole task in a queue built with [`journal_with_a_started_attempt`],

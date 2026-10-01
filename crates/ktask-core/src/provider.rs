@@ -5,7 +5,7 @@
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::{CommandSpec, Commands, CommandsError, Output};
 
@@ -54,9 +54,20 @@ pub struct StepCall<'a> {
     pub resume: Option<Resume<'a>>,
 }
 
+/// What a provider's own output said about having hit its usage limit: the reset time it
+/// named, when it named one at all. `None` for a provider whose own message never names a
+/// time, or named one [`crate::steps::agent`] could not parse — either way the attempt waits
+/// out the resolve role's own default back-off instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LimitSignal {
+    /// The time the provider's own message says its limit resets at.
+    pub reset_at: Option<SystemTime>,
+}
+
 /// A provider: a name it is known by, a pure function from a prompt and a [`StepCall`] to the
-/// [`ProviderCommand`] that runs it, whether it supports resuming a session at all, and how a
-/// session id is read back from what it produced.
+/// [`ProviderCommand`] that runs it, whether it supports resuming a session at all, how a
+/// session id is read back from what it produced, and how a message saying its usage limit was
+/// hit is recognised.
 #[derive(Debug, Clone, Copy)]
 pub struct Provider {
     /// The name the provider is known by.
@@ -75,6 +86,10 @@ pub struct Provider {
     /// reported none — no session is recorded for this invocation at all, the common case for
     /// a provider that never reports one, or a prompt that was never meant to.
     pub read_session: fn(output: &Output) -> Option<String>,
+    /// Reads whether what this invocation produced says its usage limit was hit, and the reset
+    /// time it named, when it named one. `None` when it says no such thing at all: the
+    /// invocation's own exit code and report, if it made one, are judged as usual.
+    pub detect_limit: fn(output: &Output) -> Option<LimitSignal>,
 }
 
 /// Why running a provider failed — never for the command's own exit code, which is a normal
@@ -149,6 +164,7 @@ mod tests {
             command,
             supports_resume: false,
             read_session: |_| None,
+            detect_limit: |_| None,
         }
     }
 

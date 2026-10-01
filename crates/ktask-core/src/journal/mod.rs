@@ -88,6 +88,22 @@ pub enum Event {
         /// When.
         at: SystemTime,
     },
+    /// A step's own provider said its usage limit was hit: the attempt is waiting until
+    /// `until` before it runs the same step again, never beginning a fresh one over it.
+    /// Superseded by whatever [`Event::StepEnded`] or [`Event::AttemptEnded`] comes next for
+    /// the same attempt, the moment the wait is over.
+    AttemptWaiting {
+        /// The task attempted.
+        id: TaskId,
+        /// The attempt's number.
+        number: u32,
+        /// The step waiting to run again.
+        step: String,
+        /// The time it waits until.
+        until: SystemTime,
+        /// When this was recorded — not the same as `until`, the time it waits for.
+        at: SystemTime,
+    },
     /// The provider reported the session this attempt ran its implementation step in —
     /// recorded once the provider has run, whether or not it went on to succeed.
     AttemptSessionRecorded {
@@ -281,6 +297,10 @@ pub struct Attempt {
     /// [`crate::attempt::record_session`] has recorded one. `None` when it reported none, or
     /// has not run yet.
     pub session: Option<String>,
+    /// The time the attempt's current step waits until before it runs again, once
+    /// [`crate::attempt::record_waiting`] has recorded one — cleared the moment that step, or
+    /// the attempt itself, ends. `None` when nothing is waiting.
+    pub waiting_until: Option<SystemTime>,
     /// How it ended, once [`crate::attempt::end_attempt`] has recorded it; `None` while it runs.
     pub ended: Option<AttemptEnd>,
     /// Every step run so far, in the order they were started.

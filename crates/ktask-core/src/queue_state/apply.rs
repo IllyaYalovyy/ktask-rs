@@ -65,6 +65,7 @@ impl QueueState {
             start_commit: start_commit.clone(),
             provider: None,
             session: None,
+            waiting: None,
             ended: None,
             steps: Vec::new(),
         });
@@ -137,6 +138,24 @@ impl QueueState {
         };
         if let Some(attempt) = self.attempt_mut(*id, *number) {
             attempt.provider = Some(provider.clone());
+        }
+    }
+
+    /// Applies a [`Event::AttemptWaiting`]: records the step and time the attempt it names is
+    /// waiting on, superseding whatever it was waiting on before.
+    pub(super) fn apply_attempt_waiting(&mut self, event: &Event) {
+        let Event::AttemptWaiting {
+            id,
+            number,
+            step,
+            until,
+            ..
+        } = event
+        else {
+            return;
+        };
+        if let Some(attempt) = self.attempt_mut(*id, *number) {
+            attempt.waiting = Some((step.clone(), *until));
         }
     }
 
@@ -213,6 +232,7 @@ impl QueueState {
             task.status = *status;
         }
         if let Some(attempt) = self.attempt_mut(*id, *number) {
+            attempt.waiting = None;
             attempt.ended = Some(AttemptEnd {
                 duration: *duration,
                 status: *status,
@@ -236,6 +256,7 @@ impl QueueState {
             return;
         };
         if let Some(attempt) = self.attempt_mut(*id, *number) {
+            attempt.waiting = None;
             attempt.steps.push(StepFold {
                 name: step.clone(),
                 model: model.clone(),
@@ -261,20 +282,24 @@ impl QueueState {
         else {
             return;
         };
-        if let Some(attempt) = self.attempt_mut(*id, *number)
-            && let Some(current) = attempt
-                .steps
-                .iter_mut()
-                .rev()
-                .find(|fold| fold.name == *step && fold.ended.is_none())
-        {
-            current.ended = Some(AttemptEnd {
-                duration: *duration,
-                status: *status,
-                reason: reason.clone(),
-                reported: *reported,
-            });
-        }
+        let Some(attempt) = self.attempt_mut(*id, *number) else {
+            return;
+        };
+        attempt.waiting = None;
+        let Some(current) = attempt
+            .steps
+            .iter_mut()
+            .rev()
+            .find(|fold| fold.name == *step && fold.ended.is_none())
+        else {
+            return;
+        };
+        current.ended = Some(AttemptEnd {
+            duration: *duration,
+            status: *status,
+            reason: reason.clone(),
+            reported: *reported,
+        });
     }
 
     /// Where a task placed at `placement` goes, if `placement` names a task — the caller

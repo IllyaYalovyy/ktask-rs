@@ -27,6 +27,9 @@ pub enum AttemptOutcome {
     /// A command-kind step that runs inside the attempt itself — the commit step, today — did
     /// not succeed: `reason` on its line says why.
     Failed,
+    /// The provider's own message said its usage limit was hit: the step waits for its reset
+    /// before running again — `reason` on its line says how much longer.
+    Waiting,
 }
 
 impl AttemptOutcome {
@@ -40,6 +43,7 @@ impl AttemptOutcome {
             Self::Interrupted => "interrupted",
             Self::Passed => "passed",
             Self::Failed => TaskStatus::Failed.as_str(),
+            Self::Waiting => "waiting",
         }
     }
 }

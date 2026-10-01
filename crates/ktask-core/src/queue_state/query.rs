@@ -47,6 +47,7 @@ impl QueueState {
             start_commit: fold.start_commit.clone(),
             provider: fold.provider.clone(),
             session: fold.session.clone(),
+            waiting_until: fold.waiting.as_ref().map(|(_, until)| *until),
             ended: fold.ended.clone(),
             steps: fold
                 .steps

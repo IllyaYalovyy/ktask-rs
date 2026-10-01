@@ -2,7 +2,7 @@
 //! has not ended yet — [`super::status`]'s own lowest-level work, pulled out of it so that
 //! file stays within the workspace's function-length limit.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::{AttemptEnd, Clock, Outcome, Task, TaskStatus};
 
@@ -75,22 +75,38 @@ pub(super) fn step_session(name: &str, session: Option<&str>) -> Option<String> 
     }
 }
 
+/// How much longer a step waiting until `until` has left, read fresh against `clock` every
+/// time: `until` itself, when it has already passed — the wait is over, and the step is about
+/// to run again the moment the run gets back to it.
+fn remaining(until: SystemTime, clock: &impl Clock) -> Duration {
+    until.duration_since(clock.now()).unwrap_or_default()
+}
+
 /// The still-running step line for a step named `name`, started at `started_at`: its elapsed
-/// time so far, and whether it shows `running` or `interrupted` depending on `run_alive`.
+/// time so far, and whether it shows `running`, `waiting` (when `waiting_until` names a time
+/// not yet passed) or `interrupted` depending on `run_alive`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn running_step(
     name: &str,
     provider: Option<&str>,
     model: Option<&str>,
     session: Option<&str>,
-    started_at: std::time::SystemTime,
+    started_at: SystemTime,
+    waiting_until: Option<SystemTime>,
     clock: &impl Clock,
     run_alive: bool,
 ) -> StepLine {
     let elapsed = clock.now().duration_since(started_at).unwrap_or_default();
-    let outcome = if run_alive {
-        AttemptOutcome::Running
-    } else {
-        AttemptOutcome::Interrupted
+    let (outcome, reason) = match (run_alive, waiting_until) {
+        (false, _) => (AttemptOutcome::Interrupted, None),
+        (true, Some(until)) => (
+            AttemptOutcome::Waiting,
+            Some(format!(
+                "the provider's usage limit was hit; resumes in {}s",
+                remaining(until, clock).as_secs()
+            )),
+        ),
+        (true, None) => (AttemptOutcome::Running, None),
     };
     StepLine {
         step: name.to_owned(),
@@ -99,7 +115,7 @@ pub(super) fn running_step(
         session: step_session(name, session),
         time_spent: elapsed,
         outcome,
-        reason: None,
+        reason,
     }
 }
 

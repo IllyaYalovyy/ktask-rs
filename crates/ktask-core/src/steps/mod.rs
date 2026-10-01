@@ -12,13 +12,14 @@ pub(crate) mod commit;
 mod execute;
 pub(crate) mod health_check;
 pub(crate) mod implementation;
+mod known_cause;
 pub(crate) mod push;
 pub(crate) mod resolve;
 pub(crate) mod review;
 pub(crate) mod sync;
 pub(crate) mod test_step;
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 pub(crate) use agent::run_agent_step;
 pub(crate) use execute::{record_pre_steps, run_one_step};
@@ -26,7 +27,7 @@ pub(crate) use execute::{record_pre_steps, run_one_step};
 use crate::run::Attempted;
 use crate::{
     AttemptToken, Clock, Commands, Git, Journal, Outcome, Provider, RunContext, RunError,
-    SessionLog, Task, TaskStatus,
+    SessionLog, Sleep, Task, TaskStatus,
 };
 
 /// The reason recorded for an attempt a killed run left running, found still running when the
@@ -99,6 +100,17 @@ pub(crate) enum StepOutcome {
         /// one.
         reported: Option<Outcome>,
     },
+    /// The provider's own output said its usage limit was hit: the step neither passed nor
+    /// ended the attempt. [`execute::run_one_step`] records this as a wait, sleeps until
+    /// `until`, then runs the step itself again — never beginning a fresh step, so the
+    /// attempt's own number never moves for it, exactly as a hand-driven retry would.
+    Waiting {
+        /// How long the provider ran before its output showed the limit.
+        duration: Duration,
+        /// The time to wait until before trying again: the provider's own message named it, or
+        /// the resolve role's own default back-off when it did not.
+        until: SystemTime,
+    },
 }
 
 /// The two ports a step's own logic may reach the outside world through, plus the provider and
@@ -112,6 +124,7 @@ pub(crate) struct Deps<'a> {
     pub(crate) git: &'a dyn Git,
     pub(crate) provider: &'a Provider,
     pub(crate) session_log: &'a dyn SessionLog,
+    pub(crate) sleep: &'a dyn Sleep,
 }
 
 /// What is common to every step of one attempt: the task and the token identifying it, the
@@ -141,6 +154,11 @@ pub(crate) struct PipelineState<'a> {
     /// The session the resolver's `retry --same-session` decision asked this attempt to
     /// resume. `None` for a task's first attempt, and for a retry that did not ask for it.
     pub(crate) requested_session: Option<String>,
+    /// Set by [`execute::run_one_step`] when the step that stopped the attempt matched one of
+    /// [`known_cause`]'s own known causes: the run stops without ever reaching the resolver,
+    /// and the task returns to `pending` rather than ending `failed` or `failed-unknown` —
+    /// [`finish_attempt`]'s own job to act on, once `run_attempt_steps` returns.
+    pub(crate) known_cause: bool,
 }
 
 /// One step that already ran and passed before the attempt it belongs to was even begun — the
@@ -252,10 +270,8 @@ fn end_attempt_plainly(
     })
 }
 
-/// Builds the pipeline state for attempt `number`, walks `steps` through it, and ends the
-/// attempt with the outcome they left it at — or, when it ended `failed` or `failed-unknown`
-/// with attempts still left, hands it to [`resolve::resolve_and_continue`] instead —
-/// `pre_duration` already spent on its pre-steps.
+/// Builds the pipeline state for attempt `number`, walks `steps` through it, and ends it, or
+/// hands it to the resolver — `pre_duration` already spent on its pre-steps.
 ///
 /// # Errors
 ///
@@ -282,12 +298,52 @@ fn finish_attempt(
         failure: None,
         requested_model,
         requested_session,
+        known_cause: false,
     };
     let (steps_duration, status, reason) = run_attempt_steps(&deps, context, &mut state, steps)?;
     let duration = pre_duration + steps_duration;
-    if resolve::resolver_eligible(status, number, context.max_attempts) {
+    end_or_resolve(
+        deps, context, task, number, duration, &mut state, status, reason, steps,
+    )
+}
+
+/// Ends attempt `number` with what its steps left it at — `pending`, without ever reaching the
+/// resolver and never weighed against `max_attempts`, when [`PipelineState::known_cause`] says
+/// the tool recognised the failure on its own; otherwise the resolver's own job when it is
+/// still eligible, [`known_cause::real_attempt_count`] rather than `number` itself judging
+/// that, so a known cause's own attempt is never one of the task's. [`finish_attempt`]'s own
+/// tail, pulled out of it so it stays within the workspace's function-length limit.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read or written.
+#[allow(clippy::too_many_arguments)]
+fn end_or_resolve(
+    deps: Deps<'_>,
+    context: RunContext<'_>,
+    task: &Task,
+    number: u32,
+    duration: Duration,
+    state: &mut PipelineState<'_>,
+    status: TaskStatus,
+    reason: Option<String>,
+    steps: &[Box<dyn Step>],
+) -> Result<Attempted, RunError> {
+    if state.known_cause {
+        return end_attempt_plainly(
+            deps,
+            task,
+            number,
+            duration,
+            state.exit_code,
+            TaskStatus::Pending,
+            reason,
+        );
+    }
+    let real_number = known_cause::real_attempt_count(deps.journal, task.id, number)?;
+    if resolve::resolver_eligible(status, real_number, context.max_attempts) {
         return resolve::resolve_and_continue(
-            deps, context, task, number, duration, &mut state, status, reason, steps,
+            deps, context, task, number, duration, state, status, reason, steps,
         );
     }
     end_attempt_plainly(
@@ -341,7 +397,9 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::fakes::{FakeClock, FakeCommands, FakeGit, FakeJournal, FakeSessionLog, at, draft};
+    use crate::fakes::{
+        FakeClock, FakeCommands, FakeGit, FakeJournal, FakeSessionLog, FakeSleep, at, draft,
+    };
     use crate::{Exit, Output, Placement, ProviderCommand, TaskId, add_task, list_all_tasks};
 
     fn clock() -> FakeClock {
@@ -375,6 +433,7 @@ mod tests {
             },
             supports_resume: false,
             read_session: |_| None,
+            detect_limit: |_| None,
         }
     }
 
@@ -443,11 +502,12 @@ mod tests {
             status: TaskStatus::Done,
             pass_reason: None,
         })];
-        let (clock, git, provider, session_log) = (
+        let (clock, git, provider, session_log, sleep) = (
             clock(),
             FakeGit::default(),
             test_provider(),
             FakeSessionLog::default(),
+            FakeSleep::default(),
         );
         let deps = Deps {
             journal: &journal,
@@ -456,6 +516,7 @@ mod tests {
             git: &git,
             provider: &provider,
             session_log: &session_log,
+            sleep: &sleep,
         };
         let attempted = run_one_attempt(
             deps,
@@ -501,11 +562,12 @@ mod tests {
                 pass_reason: None,
             }),
         ];
-        let (clock, git, provider, session_log) = (
+        let (clock, git, provider, session_log, sleep) = (
             clock(),
             FakeGit::default(),
             test_provider(),
             FakeSessionLog::default(),
+            FakeSleep::default(),
         );
         let deps = Deps {
             journal: &journal,
@@ -514,6 +576,7 @@ mod tests {
             git: &git,
             provider: &provider,
             session_log: &session_log,
+            sleep: &sleep,
         };
         let attempted = run_one_attempt(
             deps,
@@ -549,11 +612,12 @@ mod tests {
             status: TaskStatus::Done,
             pass_reason: Some("something worth noting"),
         })];
-        let (clock, git, provider, session_log) = (
+        let (clock, git, provider, session_log, sleep) = (
             clock(),
             FakeGit::default(),
             test_provider(),
             FakeSessionLog::default(),
+            FakeSleep::default(),
         );
         let deps = Deps {
             journal: &journal,
@@ -562,6 +626,7 @@ mod tests {
             git: &git,
             provider: &provider,
             session_log: &session_log,
+            sleep: &sleep,
         };
         let attempted = run_one_attempt(
             deps,

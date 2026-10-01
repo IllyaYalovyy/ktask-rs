@@ -271,6 +271,30 @@ impl QueueState {
         })
     }
 
+    /// The command "record that attempt `number` of task `id` is waiting on step `step` until
+    /// `until`": the event it produces, or the reason it cannot be recorded.
+    ///
+    /// # Errors
+    ///
+    /// Fails, deciding nothing, when no attempt numbered `number` is running for this task.
+    pub(crate) fn decide_record_waiting(
+        &self,
+        id: TaskId,
+        number: u32,
+        step: String,
+        until: SystemTime,
+        at: SystemTime,
+    ) -> Result<Event, RecordReportError> {
+        self.check_attempt_running(id, number)?;
+        Ok(Event::AttemptWaiting {
+            id,
+            number,
+            step,
+            until,
+            at,
+        })
+    }
+
     /// The command "end attempt `number` of task `id` with `run`": the event it produces, or
     /// the reason it cannot end.
     ///

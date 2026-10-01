@@ -135,6 +135,7 @@ mod tests {
             failure: None,
             requested_model: None,
             requested_session: None,
+            known_cause: false,
         };
         let commands = crate::fakes::FakeCommands::returning(Ok(crate::Output {
             stdout: Vec::new(),
@@ -146,8 +147,10 @@ mod tests {
             command: |_, _| unreachable!("the push step never runs a provider"),
             supports_resume: false,
             read_session: |_| None,
+            detect_limit: |_| None,
         };
         let session_log = crate::fakes::FakeSessionLog::default();
+        let sleep = crate::fakes::FakeSleep::default();
         let deps = Deps {
             journal: &FakeJournal::default(),
             clock: &StoppedClock,
@@ -155,6 +158,7 @@ mod tests {
             git,
             provider: &provider,
             session_log: &session_log,
+            sleep: &sleep,
         };
         Push.run(&deps, context(), &mut state).unwrap()
     }
@@ -170,6 +174,7 @@ mod tests {
                 assert_eq!(reason, Some("pushed abcdef1 to origin/main".to_owned()));
             }
             StepOutcome::Ended { reason, .. } => panic!("expected Passed, got Ended({reason:?})"),
+            StepOutcome::Waiting { .. } => panic!("expected Passed, got Waiting"),
         }
     }
 
@@ -187,6 +192,7 @@ mod tests {
                 assert!(reason.contains("run again"), "{reason}");
             }
             StepOutcome::Passed { .. } => panic!("expected Ended"),
+            StepOutcome::Waiting { .. } => panic!("expected Ended, got Waiting"),
         }
     }
 
@@ -207,6 +213,7 @@ mod tests {
                 assert!(reason.contains("exited with code 128"), "{reason}");
             }
             StepOutcome::Passed { .. } => panic!("expected Ended"),
+            StepOutcome::Waiting { .. } => panic!("expected Ended, got Waiting"),
         }
     }
 
@@ -225,6 +232,7 @@ mod tests {
             failure: None,
             requested_model: None,
             requested_session: None,
+            known_cause: false,
         };
         assert!(!Push.enabled(ctx, &state));
     }
@@ -242,6 +250,7 @@ mod tests {
             failure: None,
             requested_model: None,
             requested_session: None,
+            known_cause: false,
         };
         assert!(!Push.enabled(context(), &state));
     }
@@ -261,6 +270,7 @@ mod tests {
             failure: None,
             requested_model: None,
             requested_session: None,
+            known_cause: false,
         };
         assert!(!Push.enabled(ctx, &state));
     }
