@@ -46,6 +46,8 @@ mod run_cleanup;
 mod same_session;
 #[path = "tui/settings.rs"]
 mod settings;
+#[path = "tui/skip.rs"]
+mod skip;
 mod support;
 #[path = "support/tracked_branch.rs"]
 mod tracked_branch;

@@ -1,9 +1,10 @@
 //! M4-04 on the real binary: after an attempt ends `failed` or `failed-unknown`, the tool runs
 //! a resolver — an agent in the resolve role — before anything else happens. `retry` starts a
-//! fresh attempt; `stop` ends the task `failed` with the resolver's own reason; a resolver that
-//! reports nothing ends the task `failed-unknown`; `max-attempts` caps how many attempts get a
-//! resolver at all; and `ktask-rs report` only accepts `retry` or `stop` while the resolve step
-//! is the one running, never otherwise.
+//! fresh attempt; `stop` ends the task `failed` with the resolver's own reason; `skip` ends the
+//! task `skipped` with the resolver's own reason and the run goes on to the next task
+//! (M4-07); a resolver that reports nothing ends the task `failed-unknown`; `max-attempts`
+//! caps how many attempts get a resolver at all; and `ktask-rs report` only accepts `retry`,
+//! `stop` or `skip` while the resolve step is the one running, never otherwise.
 
 #[path = "support/repo.rs"]
 mod repo;
@@ -79,6 +80,13 @@ fn failing_once_body(reason: &str, resolve_branch: &str) -> String {
     )
 }
 
+/// A bash block for a task that simply succeeds: the implementation step reports `done` at
+/// once, and the review and test steps, if ever reached, approve and accept.
+fn succeeding_body() -> String {
+    "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
+        .to_owned()
+}
+
 #[test]
 fn a_retry_decision_starts_a_second_attempt_and_the_resolution_shows_between_the_two() -> Result<()>
 {
@@ -135,6 +143,103 @@ fn a_stop_decision_ends_the_task_failed_with_the_resolvers_own_reason_not_the_at
             "\timplementation\techo\t0s\tfailed\tit broke",
             "\tresolve\techo\t0s\tstop\tnot worth retrying",
         ]
+    );
+    Ok(())
+}
+
+#[test]
+fn a_skip_decision_ends_the_task_skipped_with_the_resolvers_own_reason_and_the_run_moves_on_to_the_next_task()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task(
+        "a",
+        &failing_once_body(
+            "it broke",
+            "ktask-rs report --token \"$1\" skip --reason \"no longer relevant\"",
+        ),
+    )?;
+    fixture.add_agent_task("b", &succeeding_body())?;
+
+    let outcome = fixture.run_the_queue()?;
+
+    // Unlike `stop`, `skip` does not stop the run: task b is attempted and finishes.
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stdout);
+    assert_eq!(
+        fixture.status_lines()?,
+        [
+            "#1\tskipped\ta",
+            "\timplementation\techo\t0s\tfailed\tit broke",
+            "\tresolve\techo\t0s\tskip\tno longer relevant",
+            "#2\tdone\tb",
+            "\timplementation\techo\t0s\tdone",
+            "\treview\techo\t0s\tapproved",
+            "\ttesting\techo\t0s\taccepted",
+            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn skip_without_a_reason_is_refused_and_the_task_stays_running_its_attempt() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let skip_stderr = fixture.work.join("skip-stderr");
+    let skip_exit = fixture.work.join("skip-exit");
+    fixture.add_agent_task(
+        "a",
+        &failing_once_body(
+            "it broke",
+            &format!(
+                "ktask-rs report --token \"$1\" skip 2> \"{}\"; echo $? > \"{}\"\n  \
+                 ktask-rs report --token \"$1\" stop --reason \"skip was refused\"",
+                skip_stderr.display(),
+                skip_exit.display(),
+            ),
+        ),
+    )?;
+
+    let outcome = fixture.run_the_queue()?;
+
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stdout);
+    let exit: i32 = std::fs::read_to_string(&skip_exit)?.trim().parse()?;
+    assert_eq!(exit, 2);
+    let stderr = std::fs::read_to_string(&skip_stderr)?;
+    assert!(stderr.contains("needs a reason"), "{stderr}");
+    // The refused `skip` recorded nothing: the task ended through the `stop` that followed it.
+    assert_eq!(
+        fixture.status_lines()?,
+        [
+            "#1\tfailed\ta",
+            "\timplementation\techo\t0s\tfailed\tit broke",
+            "\tresolve\techo\t0s\tstop\tskip was refused",
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn list_hides_a_skipped_task_the_same_as_a_cancelled_one_and_all_shows_it() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add_agent_task(
+        "a",
+        &failing_once_body(
+            "it broke",
+            "ktask-rs report --token \"$1\" skip --reason \"no longer relevant\"",
+        ),
+    )?;
+    fixture.add_agent_task("b", &succeeding_body())?;
+    let outcome = fixture.run_the_queue()?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stdout);
+
+    let hidden = fixture.run(&["list"])?;
+    assert_eq!(hidden.code, Some(0), "{}", hidden.stderr);
+    assert_eq!(hidden.stdout, "1\t#2\tdone\tagent\tb\n");
+
+    let all = fixture.run(&["list", "--all"])?;
+    assert_eq!(all.code, Some(0), "{}", all.stderr);
+    assert_eq!(
+        all.stdout,
+        "1\t#1\tskipped\tagent\ta\n2\t#2\tdone\tagent\tb\n"
     );
     Ok(())
 }
