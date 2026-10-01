@@ -47,6 +47,30 @@ pub(crate) struct Args {
     json: bool,
 }
 
+/// The [`RunContext`] `run` hands `run_queue`, built from `project`'s own directory and name,
+/// `binary_path`, `args` and `settings`, and `settings`' own steps switched off, held in
+/// `disabled` since `RunContext` only borrows them.
+fn run_context<'a>(
+    project: &'a ktask_core::Project,
+    binary_path: &'a std::path::Path,
+    args: &Args,
+    settings: &'a Settings,
+    disabled: &'a [&'static str],
+    resolver_model: &'a str,
+) -> RunContext<'a> {
+    RunContext {
+        project_name: &project.name,
+        project_dir: &project.path,
+        binary_path,
+        attempt_timeout: ktask_core::effective_attempt_timeout(settings, args.attempt_timeout),
+        health_check_command: settings.health_check_command.as_deref(),
+        tracked_branch: settings.tracked_branch.as_deref(),
+        disabled_steps: disabled,
+        max_attempts: ktask_core::effective_max_attempts(settings),
+        resolver_model,
+    }
+}
+
 /// Runs the pending tasks of the resolved project in queue order, one attempt each with the
 /// `echo` provider, until one stops it; renders what happened and maps it to an exit code.
 pub(crate) fn run(
@@ -60,8 +84,16 @@ pub(crate) fn run(
     let journal = open_journal(&project)?;
     let lock = FileRunLock::new(run_lock_file(&project)?);
     let binary_path = current_exe()?;
-    let attempt_timeout = ktask_core::effective_attempt_timeout(&settings, args.attempt_timeout);
+    let resolver_model = settings.resolver_model.clone().unwrap_or_default();
     let disabled = disabled_steps(&settings);
+    let context = run_context(
+        &project,
+        &binary_path,
+        args,
+        &settings,
+        &disabled,
+        &resolver_model,
+    );
     let report = ktask_core::run_queue(
         &journal,
         &SystemClock,
@@ -69,15 +101,7 @@ pub(crate) fn run(
         &GitCli,
         &echo::PROVIDER,
         &lock,
-        RunContext {
-            project_name: &project.name,
-            project_dir: &project.path,
-            binary_path: &binary_path,
-            attempt_timeout,
-            health_check_command: settings.health_check_command.as_deref(),
-            tracked_branch: settings.tracked_branch.as_deref(),
-            disabled_steps: &disabled,
-        },
+        context,
     )?;
     let stopped = render::run(&report, args.json, stdout)?;
     Ok(if stopped {

@@ -327,8 +327,12 @@ fn step_lines_named(steps: &[StepLine], width: usize, label: &str) -> Vec<Line<'
             let provider = step.provider.as_deref().unwrap_or("-");
             let seconds = step.time_spent.as_secs();
             let outcome = step.outcome;
+            let shown_provider = step.model.as_deref().map_or_else(
+                || provider.to_owned(),
+                |model| format!("{provider} ({model})"),
+            );
             let prefix = format!(
-                "      {label}{} · {provider} · {seconds}s · {outcome}",
+                "      {label}{} · {shown_provider} · {seconds}s · {outcome}",
                 step.step
             );
             let text = step.reason.as_deref().map_or_else(
@@ -598,12 +602,14 @@ mod tests {
             number: 1,
             step: IMPLEMENTATION.to_owned(),
             provider: Some(provider.to_owned()),
+            model: None,
             time_spent: Duration::from_secs(seconds),
             outcome,
             reason: None,
             steps: vec![StepLine {
                 step: IMPLEMENTATION.to_owned(),
                 provider: Some(provider.to_owned()),
+                model: None,
                 time_spent: Duration::from_secs(seconds),
                 outcome,
                 reason: None,

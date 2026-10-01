@@ -53,6 +53,9 @@ fn label(name: &str) -> &'static str {
         "step-testing" => "Testing step (on/off)",
         "step-commit" => "Commit step (on/off)",
         "step-push" => "Push step (on/off)",
+        "max-attempts" => "Max attempts",
+        "resolver-provider" => "Resolver provider",
+        "resolver-model" => "Resolver model",
         _ => "Attempt timeout, in seconds",
     }
 }
@@ -361,6 +364,32 @@ mod tests {
             .fold(screen, |screen, c| screen.key(KeyCode::Char(c)).0);
         assert_eq!(screen.value(), "cargo test");
         assert_eq!(screen.fields[0].text.text(), "14400");
+    }
+
+    #[test]
+    fn max_attempts_and_resolver_settings_show_their_own_labels_not_the_fallback() {
+        let views = vec![
+            SettingView {
+                name: "max-attempts",
+                value: "3".to_owned(),
+                is_default: true,
+            },
+            SettingView {
+                name: "resolver-provider",
+                value: "echo".to_owned(),
+                is_default: true,
+            },
+            SettingView {
+                name: "resolver-model",
+                value: String::new(),
+                is_default: true,
+            },
+        ];
+        let screen = SettingsScreen::new(&views);
+        let (rows, _) = drawn(&screen, 60, 12);
+        assert_eq!(row(&rows, 2), "Max attempts (default):");
+        assert_eq!(row(&rows, 5), "Resolver provider (default):");
+        assert_eq!(row(&rows, 8), "Resolver model (default):");
     }
 
     #[test]

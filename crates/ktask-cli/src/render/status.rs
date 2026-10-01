@@ -11,6 +11,7 @@ use serde::Serialize;
 struct StepJson<'a> {
     step: &'a str,
     provider: Option<&'a str>,
+    model: Option<&'a str>,
     time_spent_seconds: u64,
     outcome: &'static str,
     reason: Option<&'a str>,
@@ -24,6 +25,7 @@ struct AttemptJson<'a> {
     number: u32,
     step: &'a str,
     provider: Option<&'a str>,
+    model: Option<&'a str>,
     time_spent_seconds: u64,
     outcome: &'static str,
     reason: Option<&'a str>,
@@ -53,6 +55,7 @@ fn step_json(line: &ktask_core::StepLine) -> StepJson<'_> {
     StepJson {
         step: &line.step,
         provider: line.provider.as_deref(),
+        model: line.model.as_deref(),
         time_spent_seconds: line.time_spent.as_secs(),
         outcome: line.outcome.as_str(),
         reason: line.reason.as_deref(),
@@ -81,6 +84,7 @@ fn attempt_json(line: &ktask_core::AttemptLine) -> AttemptJson<'_> {
         number: line.number,
         step: &line.step,
         provider: line.provider.as_deref(),
+        model: line.model.as_deref(),
         time_spent_seconds: line.time_spent.as_secs(),
         outcome: line.outcome.as_str(),
         reason: line.reason.as_deref(),
@@ -157,8 +161,9 @@ fn status_text(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
 
 /// Writes one indented line per step of `steps`, in order — step (named with `prefix` ahead of
 /// it, so an earlier attempt's own steps read apart from the current one's, which carries none)
-/// provider (`-` for a step the tool ran itself, which names none), time spent, outcome, and
-/// the reason when it did not succeed.
+/// provider (`-` for a step the tool ran itself, which names none), the model, for the resolve
+/// step, when the project has set one, time spent, outcome, and the reason when it did not
+/// succeed.
 fn write_step_lines(
     out: &mut impl Write,
     steps: &[ktask_core::StepLine],
@@ -167,16 +172,20 @@ fn write_step_lines(
     steps.iter().try_for_each(|step| {
         let provider = step.provider.as_deref().unwrap_or("-");
         let seconds = step.time_spent.as_secs();
+        let name = match &step.model {
+            Some(model) => format!("{}\t{model}", step.step),
+            None => step.step.clone(),
+        };
         match &step.reason {
             Some(reason) => writeln!(
                 out,
-                "\t{prefix}{}\t{provider}\t{seconds}s\t{}\t{reason}",
-                step.step, step.outcome
+                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}\t{reason}",
+                step.outcome
             ),
             None => writeln!(
                 out,
-                "\t{prefix}{}\t{provider}\t{seconds}s\t{}",
-                step.step, step.outcome
+                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}",
+                step.outcome
             ),
         }
     })
