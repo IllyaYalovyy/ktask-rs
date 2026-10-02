@@ -622,6 +622,24 @@ fn status_and_its_options_are_in_the_help() -> Result<()> {
     Ok(())
 }
 
+/// `status --help` must not undersell what `status` shows: a retried task's earlier, failed
+/// attempts stay visible under its current one (proved end to end by
+/// `a_second_run_after_retry_adds_attempt_two_under_the_first_in_status_and_the_task_builds_on_it`
+/// in `tests/retry.rs`) — not just its "most recent attempt", the claim this help text used
+/// to make before that history was added.
+#[test]
+fn status_help_does_not_undersell_the_history_it_keeps() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let help = fixture.run(&["status", "--help"])?;
+    assert_eq!(help.code, Some(0), "{}", help.stderr);
+    assert!(
+        !help.stdout.contains("most recent attempt"),
+        "status shows every attempt a retried task had, not only its most recent one: {}",
+        help.stdout
+    );
+    Ok(())
+}
+
 #[test]
 fn status_works_from_a_subdirectory_and_with_project_from_any_directory() -> Result<()> {
     let fixture = Fixture::new()?;

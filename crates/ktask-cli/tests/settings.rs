@@ -575,3 +575,49 @@ fn an_empty_resolver_provider_or_resolver_model_is_refused_and_changes_nothing()
     assert_eq!(shown.stdout, DEFAULTS);
     Ok(())
 }
+
+/// The setting names `settings set --help` lists in its `NAME` argument's own help line —
+/// parsed out instead of hard-coded, so this test fails exactly when that list and what
+/// `settings` actually shows fall out of step, in either direction. `None` when no such line
+/// is there to parse.
+fn settings_named_in_set_help(help: &str) -> Option<Vec<String>> {
+    let line = help
+        .lines()
+        .find(|line| line.contains("The setting to change:"))?;
+    let list = line.split("The setting to change:").nth(1)?;
+    Some(
+        list.replace(" or ", ", ")
+            .split(',')
+            .map(|name| name.trim().to_owned())
+            .collect(),
+    )
+}
+
+/// The setting names a fresh project's `settings` actually shows, in order.
+fn settings_named_by_settings(fixture: &Fixture) -> Result<Vec<String>> {
+    let shown = fixture.run(&["settings"])?;
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    Ok(shown
+        .stdout
+        .lines()
+        .map(|line| line.split('\t').next().unwrap_or_default().to_owned())
+        .collect())
+}
+
+#[test]
+fn settings_set_help_names_exactly_the_settings_settings_shows() -> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let help = fixture.run(&["settings", "set", "--help"])?;
+    assert_eq!(help.code, Some(0), "{}", help.stderr);
+    let named_in_help =
+        settings_named_in_set_help(&help.stdout).expect("a line naming the settings");
+    let shown_by_settings = settings_named_by_settings(&fixture)?;
+
+    assert_eq!(
+        named_in_help, shown_by_settings,
+        "`settings set --help` must name exactly the settings `settings` shows, in the same \
+         order, or it lies about one that does not exist or is missing one that does"
+    );
+    Ok(())
+}

@@ -20,7 +20,7 @@ pub(crate) struct Args {
     json: bool,
 }
 
-/// Prints every task that was attempted, with its most recent attempt. A task the journal
+/// Prints every task that was attempted, with every attempt it has had. A task the journal
 /// still calls `running` is shown `interrupted` at once when no run is alive to finish it,
 /// rather than waiting for the next `run` to reconcile it.
 pub(crate) fn run(

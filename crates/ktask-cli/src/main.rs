@@ -66,11 +66,10 @@ enum Command {
         #[command(subcommand)]
         command: commands::provider::Command,
     },
-    /// A project's settings: the attempt time limit, so far — shows every setting, or
-    /// changes one with `settings set`
+    /// A project's settings — shows every setting, or changes one with `settings set`
     Settings(commands::settings::Args),
-    /// What ran and how it ended: every task that was attempted, with its most recent
-    /// attempt
+    /// What ran and how it ended: every task that was attempted, with every attempt it has
+    /// had
     Status(commands::status::Args),
     /// State the outcome of an attempt; the token names its project, task and attempt, so
     /// this works from any directory
