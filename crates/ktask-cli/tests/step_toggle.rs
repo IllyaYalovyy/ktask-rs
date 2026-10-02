@@ -31,6 +31,16 @@ fn with_nested_ktask_rs_on_path(command: &mut Command) {
     }
 }
 
+/// `name`, the first tab-separated field of a `status` step line, with its leading
+/// `attempt N: ` stripped — every step line carries one, but these tests are about which
+/// steps ran, not which attempt they belong to.
+fn strip_attempt_prefix(name: &str) -> String {
+    match name.split_once(": ") {
+        Some((prefix, rest)) if prefix.starts_with("attempt ") => rest.to_owned(),
+        _ => name.to_owned(),
+    }
+}
+
 /// A bash block that reports `outcome` for the implementation step and, for whatever step
 /// `$3` names next, approves the review step and accepts the testing step — so a task meant
 /// to succeed end to end still does, whether or not review or testing are switched off.
@@ -152,11 +162,12 @@ impl Fixture {
             .lines()
             .filter(|line| line.starts_with('\t'))
             .map(|line| {
-                line.trim_start_matches('\t')
-                    .split('\t')
-                    .next()
-                    .unwrap_or("")
-                    .to_owned()
+                strip_attempt_prefix(
+                    line.trim_start_matches('\t')
+                        .split('\t')
+                        .next()
+                        .unwrap_or(""),
+                )
             })
             .collect())
     }
@@ -230,11 +241,12 @@ impl TrackedFixture {
             .lines()
             .filter(|line| line.starts_with('\t'))
             .map(|line| {
-                line.trim_start_matches('\t')
-                    .split('\t')
-                    .next()
-                    .unwrap_or("")
-                    .to_owned()
+                strip_attempt_prefix(
+                    line.trim_start_matches('\t')
+                        .split('\t')
+                        .next()
+                        .unwrap_or(""),
+                )
             })
             .collect())
     }

@@ -169,8 +169,8 @@ fn t_retries_a_failed_task_at_once_with_no_question_and_a_second_run_shows_the_e
         "the earlier attempt shows above the current one, named with its own number: {lines:?}"
     );
     assert!(
-        !implementation_lines[1].contains("attempt"),
-        "the current attempt's own line carries no attempt-number prefix: {lines:?}"
+        implementation_lines[1].contains("attempt 2:"),
+        "the current attempt's own line carries its own number too: {lines:?}"
     );
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);

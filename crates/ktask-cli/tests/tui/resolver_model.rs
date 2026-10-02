@@ -95,14 +95,15 @@ fn the_queue_screen_shows_the_retried_attempts_model_beside_its_provider() -> Re
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("implementation · echo (other)")),
-        "the current attempt's implementation line should show the model it ran with: {lines:?}"
+            .any(|line| line.contains("attempt 2: implementation · echo (other)")),
+        "the current attempt's own line is named with its own number too, and shows the \
+         model it ran with: {lines:?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("resolve · echo") && line.contains("retry")),
-        "{lines:?}"
+            .any(|line| line.contains("attempt 1: resolve · echo") && line.contains("retry")),
+        "the resolution line between the two attempts says which attempt it resolved: {lines:?}"
     );
 
     terminal.send("q")?;

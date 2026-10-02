@@ -159,10 +159,10 @@ fn with_reset_tree_the_failed_attempts_changes_are_gone_before_the_next_attempt_
             "\tattempt 1: implementation\techo\t0s\tfailed\tit broke",
             "\tattempt 1: resolve\techo\t0s\tretry\tthe working tree was reset to the commit \
              this attempt started from",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 2: implementation\techo\t0s\tdone",
+            "\tattempt 2: review\techo\t0s\tapproved",
+            "\tattempt 2: testing\techo\t0s\taccepted",
+            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())

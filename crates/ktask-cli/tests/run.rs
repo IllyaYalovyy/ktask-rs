@@ -1089,10 +1089,10 @@ fn an_approving_review_carries_the_task_on_as_done_and_the_review_line_shows_it(
         status.stdout.lines().collect::<Vec<_>>(),
         [
             "#1\tdone\ta",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tapproved",
+            "\tattempt 1: testing\techo\t0s\taccepted",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
@@ -1125,8 +1125,8 @@ fn a_reviewer_that_requests_changes_ends_the_task_failed_with_the_findings_as_th
         status_lines.stdout.lines().collect::<Vec<_>>(),
         [
             "#1\tfailed\ta",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tchanges-requested\tfix the thing",
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tchanges-requested\tfix the thing",
         ]
     );
     Ok(())
@@ -1246,10 +1246,10 @@ fn an_accepting_tester_carries_the_task_on_as_done_and_the_testing_line_shows_it
         status.stdout.lines().collect::<Vec<_>>(),
         [
             "#1\tdone\ta",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tapproved",
+            "\tattempt 1: testing\techo\t0s\taccepted",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
@@ -1282,9 +1282,9 @@ fn a_tester_that_rejects_ends_the_task_failed_with_what_failed_as_the_reason_and
         status_lines.stdout.lines().collect::<Vec<_>>(),
         [
             "#1\tfailed\ta",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\trejected\tthe login button does nothing",
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tapproved",
+            "\tattempt 1: testing\techo\t0s\trejected\tthe login button does nothing",
         ]
     );
     let json = fixture.run(&["status", "--json"])?;

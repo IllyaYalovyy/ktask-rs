@@ -105,10 +105,10 @@ fn a_retry_decision_starts_a_second_attempt_and_the_resolution_shows_between_the
             "#1\tdone\ta",
             "\tattempt 1: implementation\techo\t0s\tfailed\tit broke",
             "\tattempt 1: resolve\techo\t0s\tretry",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 2: implementation\techo\t0s\tdone",
+            "\tattempt 2: review\techo\t0s\tapproved",
+            "\tattempt 2: testing\techo\t0s\taccepted",
+            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
@@ -140,8 +140,8 @@ fn a_stop_decision_ends_the_task_failed_with_the_resolvers_own_reason_not_the_at
         fixture.status_lines()?,
         [
             "#1\tfailed\ta",
-            "\timplementation\techo\t0s\tfailed\tit broke",
-            "\tresolve\techo\t0s\tstop\tnot worth retrying",
+            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke",
+            "\tattempt 1: resolve\techo\t0s\tstop\tnot worth retrying",
         ]
     );
     Ok(())
@@ -168,13 +168,13 @@ fn a_skip_decision_ends_the_task_skipped_with_the_resolvers_own_reason_and_the_r
         fixture.status_lines()?,
         [
             "#1\tskipped\ta",
-            "\timplementation\techo\t0s\tfailed\tit broke",
-            "\tresolve\techo\t0s\tskip\tno longer relevant",
+            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke",
+            "\tattempt 1: resolve\techo\t0s\tskip\tno longer relevant",
             "#2\tdone\tb",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tapproved",
+            "\tattempt 1: testing\techo\t0s\taccepted",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
@@ -210,8 +210,8 @@ fn skip_without_a_reason_is_refused_and_the_task_stays_running_its_attempt() -> 
         fixture.status_lines()?,
         [
             "#1\tfailed\ta",
-            "\timplementation\techo\t0s\tfailed\tit broke",
-            "\tresolve\techo\t0s\tstop\tskip was refused",
+            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke",
+            "\tattempt 1: resolve\techo\t0s\tstop\tskip was refused",
         ]
     );
     Ok(())
@@ -287,23 +287,23 @@ fn a_supersede_decision_replaces_the_task_with_the_new_ones_and_the_run_continue
         fixture.status_lines()?,
         [
             "#1\tsuperseded\ttoo large",
-            "\timplementation\techo\t0s\tfailed\tit broke",
-            "\tresolve\techo\t0s\tsupersede\tsuperseded by 3 tasks: 2, 3, 4",
+            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke",
+            "\tattempt 1: resolve\techo\t0s\tsupersede\tsuperseded by 3 tasks: 2, 3, 4",
             "#2\tdone\tpart one",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tapproved",
+            "\tattempt 1: testing\techo\t0s\taccepted",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
             "#3\tdone\tpart two",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tapproved",
+            "\tattempt 1: testing\techo\t0s\taccepted",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
             "#4\tdone\tpart three",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tapproved",
+            "\tattempt 1: testing\techo\t0s\taccepted",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
 
@@ -366,8 +366,8 @@ fn an_invalid_tasks_file_is_refused_with_the_same_messages_import_gives_and_chan
         fixture.status_lines()?,
         [
             "#1\tfailed\ttoo large",
-            "\timplementation\techo\t0s\tfailed\tit broke",
-            "\tresolve\techo\t0s\tstop\tsupersede was refused",
+            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke",
+            "\tattempt 1: resolve\techo\t0s\tstop\tsupersede was refused",
         ]
     );
     let all = fixture.run(&["list", "--all"])?;
@@ -432,8 +432,8 @@ fn a_resolver_that_reports_nothing_ends_the_task_failed_unknown_with_what_was_ob
         fixture.status_lines()?,
         [
             "#1\tfailed-unknown\ta",
-            "\timplementation\techo\t0s\tfailed\tit broke",
-            "\tresolve\techo\t0s\tfailed-unknown\tthe provider exited with code 0 and reported nothing",
+            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke",
+            "\tattempt 1: resolve\techo\t0s\tfailed-unknown\tthe provider exited with code 0 and reported nothing",
         ]
     );
     Ok(())
@@ -455,7 +455,7 @@ fn with_max_attempts_1_the_resolver_never_runs_and_the_task_ends_failed_at_once(
         fixture.status_lines()?,
         [
             "#1\tfailed\ta",
-            "\timplementation\techo\t0s\tfailed\tit broke",
+            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke",
         ]
     );
     Ok(())
@@ -482,7 +482,7 @@ fn with_max_attempts_3_the_third_failure_ends_the_task_without_a_resolution_line
             "\tattempt 1: resolve\techo\t0s\tretry",
             "\tattempt 2: implementation\techo\t0s\tfailed\tit broke",
             "\tattempt 2: resolve\techo\t0s\tretry",
-            "\timplementation\techo\t0s\tfailed\tit broke",
+            "\tattempt 3: implementation\techo\t0s\tfailed\tit broke",
         ]
     );
     Ok(())

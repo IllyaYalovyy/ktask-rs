@@ -238,7 +238,8 @@ fn a_second_run_after_retry_adds_attempt_two_under_the_first_in_status_and_the_t
     assert_eq!(history[0]["reason"], "first try");
 
     // The same history shows in the plain-text form too, the earlier attempt's steps named
-    // with its own number ahead of them, the current attempt's own steps under it.
+    // with its own number ahead of them, the current attempt's own steps under it, named with
+    // its own number the same way.
     let text = fixture.run(&["status"])?;
     assert_eq!(text.code, Some(0), "{}", text.stderr);
     assert!(
@@ -253,8 +254,8 @@ fn a_second_run_after_retry_adds_attempt_two_under_the_first_in_status_and_the_t
         .collect();
     assert_eq!(implementation_lines.len(), 2, "{implementation_lines:?}");
     assert!(
-        !implementation_lines[1].contains("attempt"),
-        "the current attempt's own line carries no attempt-number prefix: {implementation_lines:?}"
+        implementation_lines[1].contains("attempt 2:"),
+        "the current attempt's own line carries its own number too: {implementation_lines:?}"
     );
     Ok(())
 }

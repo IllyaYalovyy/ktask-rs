@@ -149,7 +149,10 @@ fn a_limit_message_waits_for_its_reset_then_runs_the_same_attempt_again() -> Res
         .iter()
         .find(|line| line.contains("\twaiting\t"))
         .expect("a waiting step line");
-    assert!(step_line.starts_with("\timplementation\t"), "{step_line}");
+    assert!(
+        step_line.starts_with("\tattempt 1: implementation\t"),
+        "{step_line}"
+    );
     assert!(step_line.contains("usage limit"), "{step_line}");
 
     // Waits for the run, started in the background, to finish on its own.
@@ -174,9 +177,8 @@ fn a_limit_message_waits_for_its_reset_then_runs_the_same_attempt_again() -> Res
         "{}",
         final_status.stdout
     );
-    assert_eq!(
-        final_status.stdout.matches("attempt").count(),
-        0,
+    assert!(
+        !final_status.stdout.contains("attempt 2"),
         "no earlier attempt is shown: the same attempt 1 just ran twice: {}",
         final_status.stdout
     );

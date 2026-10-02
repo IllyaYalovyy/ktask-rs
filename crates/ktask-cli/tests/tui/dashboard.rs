@@ -15,7 +15,7 @@ use super::support::{Result, Sandbox};
 use super::tracked_branch::cloned_repository;
 
 const ROWS: u16 = 24;
-const COLS: u16 = 110;
+const COLS: u16 = 120;
 
 /// Puts the directory of the `ktask-rs` under test on `command`'s `PATH`, ahead of whatever
 /// is already there, so a task's own bash block — standing in for what a real agent would

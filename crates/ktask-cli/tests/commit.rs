@@ -198,10 +198,10 @@ fn a_task_that_changes_and_adds_files_gets_one_commit_holding_them_and_the_line_
         status.stdout.lines().collect::<Vec<_>>(),
         [
             "#1\tdone\tDo the thing",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            &format!("\tcommit\t-\t0s\tpassed\tcommitted as {hash}"),
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tapproved",
+            "\tattempt 1: testing\techo\t0s\taccepted",
+            &format!("\tattempt 1: commit\t-\t0s\tpassed\tcommitted as {hash}"),
         ]
     );
 
@@ -246,10 +246,10 @@ fn a_task_that_changes_nothing_makes_no_commit_the_line_says_so_and_the_task_car
         status.stdout.lines().collect::<Vec<_>>(),
         [
             "#1\tdone\ta",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tapproved",
+            "\tattempt 1: testing\techo\t0s\taccepted",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
@@ -278,7 +278,7 @@ fn an_unconfigured_git_identity_is_a_known_cause_the_task_stays_pending_over() -
     let lines: Vec<&str> = status.stdout.lines().collect();
     assert_eq!(lines[0], "#1\tpending\ta");
     assert!(
-        lines[4].starts_with("\tcommit\t-\t0s\tfailed\t"),
+        lines[4].starts_with("\tattempt 1: commit\t-\t0s\tfailed\t"),
         "{}",
         lines[4]
     );
@@ -288,7 +288,9 @@ fn an_unconfigured_git_identity_is_a_known_cause_the_task_stays_pending_over() -
         lines[4]
     );
     assert!(
-        !lines.iter().any(|line| line.starts_with("\tresolve\t")),
+        !lines
+            .iter()
+            .any(|line| line.starts_with("\tattempt 1: resolve\t")),
         "no resolver ran over a known cause: {lines:?}"
     );
 
@@ -332,7 +334,7 @@ fn a_commit_git_itself_refuses_ends_the_task_failed_with_what_git_said() -> Resu
     let lines: Vec<&str> = status.stdout.lines().collect();
     assert_eq!(lines[0], "#1\tfailed\ta");
     assert!(
-        lines[4].starts_with("\tcommit\t-\t0s\tfailed\t"),
+        lines[4].starts_with("\tattempt 1: commit\t-\t0s\tfailed\t"),
         "{}",
         lines[4]
     );

@@ -277,12 +277,12 @@ fn a_pushed_commit_lands_on_the_remote_its_line_says_so_and_the_task_ends_done()
         lines,
         [
             "#1\tdone\ta".to_owned(),
-            "\tsync\t-\t0s\tpassed\tnothing new".to_owned(),
-            "\timplementation\techo\t0s\tdone".to_owned(),
-            "\treview\techo\t0s\tapproved".to_owned(),
-            "\ttesting\techo\t0s\taccepted".to_owned(),
-            format!("\tcommit\t-\t0s\tpassed\tcommitted as {short}"),
-            format!("\tpush\t-\t0s\tpassed\tpushed {short} to origin/main"),
+            "\tattempt 1: sync\t-\t0s\tpassed\tnothing new".to_owned(),
+            "\tattempt 1: implementation\techo\t0s\tdone".to_owned(),
+            "\tattempt 1: review\techo\t0s\tapproved".to_owned(),
+            "\tattempt 1: testing\techo\t0s\taccepted".to_owned(),
+            format!("\tattempt 1: commit\t-\t0s\tpassed\tcommitted as {short}"),
+            format!("\tattempt 1: push\t-\t0s\tpassed\tpushed {short} to origin/main"),
         ]
     );
     Ok(())
@@ -300,7 +300,7 @@ fn a_push_rejected_because_the_remote_moved_on_ends_the_task_failed_and_the_comm
     // Wait until the sync step has passed — proving the remote was reachable and unchanged
     // then — before anyone else's work lands on it.
     let lines = fixture.wait_for_status_lines(2)?;
-    assert_eq!(lines[1], "\tsync\t-\t0s\tpassed\tnothing new");
+    assert_eq!(lines[1], "\tattempt 1: sync\t-\t0s\tpassed\tnothing new");
 
     fixture.push_new_commit_from_seed("upstream.txt")?;
     std::fs::write(&go, "")?;
@@ -313,7 +313,7 @@ fn a_push_rejected_because_the_remote_moved_on_ends_the_task_failed_and_the_comm
     let lines: Vec<&str> = stdout.stdout.lines().collect();
     let push_line = lines
         .iter()
-        .find(|line| line.starts_with("\tpush\t"))
+        .find(|line| line.starts_with("\tattempt 1: push\t"))
         .expect("a push line");
     assert!(push_line.contains("has moved on"), "{push_line}");
     assert!(push_line.contains("run again"), "{push_line}");
@@ -342,7 +342,7 @@ fn a_push_that_cannot_reach_the_remote_is_a_known_cause_the_task_stays_pending_o
 
     let mut child = fixture.spawn_the_queue()?;
     let lines = fixture.wait_for_status_lines(2)?;
-    assert_eq!(lines[1], "\tsync\t-\t0s\tpassed\tnothing new");
+    assert_eq!(lines[1], "\tattempt 1: sync\t-\t0s\tpassed\tnothing new");
 
     fixture.break_the_remote()?;
     std::fs::write(&go, "")?;
@@ -355,7 +355,7 @@ fn a_push_that_cannot_reach_the_remote_is_a_known_cause_the_task_stays_pending_o
     let lines: Vec<&str> = stdout.stdout.lines().collect();
     let push_line = lines
         .iter()
-        .find(|line| line.starts_with("\tpush\t"))
+        .find(|line| line.starts_with("\tattempt 1: push\t"))
         .expect("a push line");
     assert!(push_line.contains("git push"), "{push_line}");
     assert!(
@@ -363,7 +363,9 @@ fn a_push_that_cannot_reach_the_remote_is_a_known_cause_the_task_stays_pending_o
         "{push_line}"
     );
     assert!(
-        !lines.iter().any(|line| line.starts_with("\tresolve\t")),
+        !lines
+            .iter()
+            .any(|line| line.starts_with("\tattempt 1: resolve\t")),
         "no resolver ran over a known cause: {lines:?}"
     );
 
@@ -395,11 +397,11 @@ fn a_task_with_nothing_to_commit_has_no_push_line_and_ends_done() -> Result<()> 
         status.stdout.lines().collect::<Vec<_>>(),
         [
             "#1\tdone\ta",
-            "\tsync\t-\t0s\tpassed\tnothing new",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 1: sync\t-\t0s\tpassed\tnothing new",
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tapproved",
+            "\tattempt 1: testing\techo\t0s\taccepted",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     assert!(

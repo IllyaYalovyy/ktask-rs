@@ -247,10 +247,10 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
         outcome.stdout.lines().collect::<Vec<_>>(),
         [
             "#1\tdone\ta",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tapproved",
+            "\tattempt 1: testing\techo\t0s\taccepted",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
 
@@ -261,12 +261,12 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
         outcome.stdout.lines().collect::<Vec<_>>(),
         [
             "#1\tdone\tx",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tapproved",
+            "\tattempt 1: testing\techo\t0s\taccepted",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
             "#2\tfailed\tb",
-            "\timplementation\techo\t0s\tfailed\tit broke",
+            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke",
         ]
     );
 
@@ -277,12 +277,12 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
         outcome.stdout.lines().collect::<Vec<_>>(),
         [
             "#1\tdone\tx",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tapproved",
+            "\tattempt 1: testing\techo\t0s\taccepted",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
             "#2\tfailed\tc",
-            "\timplementation\techo\t0s\ttoo-large\tsplit me",
+            "\tattempt 1: implementation\techo\t0s\ttoo-large\tsplit me",
         ]
     );
 
@@ -293,12 +293,12 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
         outcome.stdout.lines().collect::<Vec<_>>(),
         [
             "#1\tdone\tx",
-            "\timplementation\techo\t0s\tdone",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 1: implementation\techo\t0s\tdone",
+            "\tattempt 1: review\techo\t0s\tapproved",
+            "\tattempt 1: testing\techo\t0s\taccepted",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
             "#2\tblocked\td",
-            "\timplementation\techo\t0s\tneeds-input\twhich path?",
+            "\tattempt 1: implementation\techo\t0s\tneeds-input\twhich path?",
         ]
     );
 
@@ -308,13 +308,16 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
     let lines: Vec<&str> = outcome.stdout.lines().collect();
     assert_eq!(lines.len(), 7, "{lines:#?}");
     assert_eq!(lines[0], "#1\tdone\tx");
-    assert_eq!(lines[1], "\timplementation\techo\t0s\tdone");
-    assert_eq!(lines[2], "\treview\techo\t0s\tapproved");
-    assert_eq!(lines[3], "\ttesting\techo\t0s\taccepted");
-    assert_eq!(lines[4], "\tcommit\t-\t0s\tpassed\tnothing was changed");
+    assert_eq!(lines[1], "\tattempt 1: implementation\techo\t0s\tdone");
+    assert_eq!(lines[2], "\tattempt 1: review\techo\t0s\tapproved");
+    assert_eq!(lines[3], "\tattempt 1: testing\techo\t0s\taccepted");
+    assert_eq!(
+        lines[4],
+        "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed"
+    );
     assert_eq!(lines[5], "#2\tfailed-unknown\te");
     assert!(
-        lines[6].starts_with("\timplementation\techo\t0s\tfailed-unknown\t"),
+        lines[6].starts_with("\tattempt 1: implementation\techo\t0s\tfailed-unknown\t"),
         "{}",
         lines[6]
     );
@@ -521,7 +524,12 @@ fn while_a_run_is_in_progress_the_running_task_shows_its_elapsed_time_so_far() -
     assert_eq!(lines.len(), 2, "{lines:#?}");
     let fields: Vec<&str> = lines[1].split('\t').collect();
     assert_eq!(fields.len(), 5, "{}", lines[1]);
-    assert_eq!(&fields[..3], ["", "implementation", "echo"], "{}", lines[1]);
+    assert_eq!(
+        &fields[..3],
+        ["", "attempt 1: implementation", "echo"],
+        "{}",
+        lines[1]
+    );
     assert_eq!(fields[4], "running");
     let seconds: u64 = fields[3].strip_suffix('s').unwrap().parse().unwrap();
     assert!((1..10).contains(&seconds), "{seconds}");

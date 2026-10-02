@@ -131,10 +131,10 @@ fn a_resumed_attempt_reads_the_earlier_transcript_and_the_session_stays_the_same
             "#1\tdone\ta",
             "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\tsession:carried-over",
             "\tattempt 1: resolve\techo\t0s\tretry",
-            "\timplementation\techo\t0s\tdone\tsession:carried-over",
-            "\treview\techo\t0s\tapproved",
-            "\ttesting\techo\t0s\taccepted",
-            "\tcommit\t-\t0s\tpassed\tnothing was changed",
+            "\tattempt 2: implementation\techo\t0s\tdone\tsession:carried-over",
+            "\tattempt 2: review\techo\t0s\tapproved",
+            "\tattempt 2: testing\techo\t0s\taccepted",
+            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
