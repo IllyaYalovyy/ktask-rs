@@ -1,6 +1,9 @@
 //! M4-09: the echo provider's own fixed limit line makes the queue screen show the countdown
 //! while the run waits out its reset, exactly as `status` does, then the same attempt runs
 //! again and finishes.
+//!
+//! B-31: once it is done, the queue screen still says the attempt hit the limit, how long it
+//! waited, and when it resumed.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -109,6 +112,18 @@ fn the_queue_screen_shows_the_limit_countdown_then_the_task_done() -> Result<()>
             .is_some_and(|line| line.starts_with(">1  #1  done"))
     })?;
     assert!(screen.contains("done 1"), "{screen}");
+    // The done attempt's own step line still says it hit the limit, how long it waited, and
+    // when it resumed — not only while the countdown above was still live.
+    let lines = lines_inside_frame(&screen);
+    let step_line = lines
+        .iter()
+        .find(|line| line.contains("implementation"))
+        .expect("the implementation step line");
+    assert!(
+        step_line.contains("hit the usage limit: waited"),
+        "{step_line}"
+    );
+    assert!(step_line.contains("resumed"), "{step_line}");
 
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);

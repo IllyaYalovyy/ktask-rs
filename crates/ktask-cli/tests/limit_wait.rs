@@ -1,6 +1,9 @@
 //! M4-09: the echo provider's own fixed limit line makes the task wait until the reset it
 //! names, showing the countdown in `status` while it waits, then runs the very same attempt
 //! again rather than starting a new one.
+//!
+//! B-31: once it has resumed and the attempt is done, `status` and `status --json` still say
+//! the attempt hit the limit, how long it waited, and when it resumed.
 
 #[path = "support/repo.rs"]
 mod repo;
@@ -181,6 +184,40 @@ fn a_limit_message_waits_for_its_reset_then_runs_the_same_attempt_again() -> Res
         !final_status.stdout.contains("attempt 2"),
         "no earlier attempt is shown: the same attempt 1 just ran twice: {}",
         final_status.stdout
+    );
+    // Long after it resumed, `status` still says the done attempt hit the limit, how long it
+    // waited, and when it resumed — not only while the countdown above was still live.
+    let implementation_line = final_status
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("\tattempt 1: implementation\t"))
+        .expect("the implementation step line");
+    assert!(
+        implementation_line.contains("hit the usage limit: waited"),
+        "{implementation_line}"
+    );
+    assert!(
+        implementation_line.contains("resumed at"),
+        "{implementation_line}"
+    );
+
+    let json_status = fixture.run(&["status", "--json"])?;
+    assert_eq!(json_status.code, Some(0), "{}", json_status.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&json_status.stdout)?;
+    let steps = parsed[0]["attempt"]["steps"]
+        .as_array()
+        .expect("a steps array");
+    let implementation = steps
+        .iter()
+        .find(|step| step["step"] == "implementation")
+        .expect("the implementation step");
+    let waited_seconds = implementation["limit_wait"]["waited_seconds"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("no limit_wait.waited_seconds in {implementation}"));
+    assert!(waited_seconds >= 1, "{implementation}");
+    assert!(
+        implementation["limit_wait"]["resumed_at"].is_string(),
+        "{implementation}"
     );
     Ok(())
 }
