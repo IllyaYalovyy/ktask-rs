@@ -238,6 +238,7 @@ impl QueueState {
                 status: *status,
                 reason: reason.clone(),
                 reported: None,
+                limit_wait: None,
             });
         }
     }
@@ -277,6 +278,7 @@ impl QueueState {
             status,
             reason,
             reported,
+            limit_wait,
             ..
         } = event
         else {
@@ -299,6 +301,7 @@ impl QueueState {
             status: *status,
             reason: reason.clone(),
             reported: *reported,
+            limit_wait: *limit_wait,
         });
     }
 

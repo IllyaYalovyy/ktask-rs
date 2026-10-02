@@ -6,8 +6,8 @@ use std::time::SystemTime;
 
 use super::{
     AnswerError, AppendError, AttemptRun, BeginAttemptError, CancelError, DoneError, Event,
-    Outcome, Placement, QueueState, RecordReportError, RetryError, Task, TaskDraft, TaskId,
-    TaskStatus,
+    LimitWait, Outcome, Placement, QueueState, RecordReportError, RetryError, Task, TaskDraft,
+    TaskId, TaskStatus,
 };
 
 impl QueueState {
@@ -345,11 +345,13 @@ impl QueueState {
     }
 
     /// The command "end step `step` of attempt `number` of task `id` with `run`, having
-    /// reported `reported`": the event it produces, or the reason it cannot end.
+    /// reported `reported`, and having waited for its provider's usage limit for `limit_wait`,
+    /// when it did": the event it produces, or the reason it cannot end.
     ///
     /// # Errors
     ///
     /// Fails, deciding nothing, when no attempt numbered `number` is running for this task.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn decide_end_step(
         &self,
         id: TaskId,
@@ -357,6 +359,7 @@ impl QueueState {
         step: &str,
         run: AttemptRun<'_>,
         reported: Option<Outcome>,
+        limit_wait: Option<LimitWait>,
         at: SystemTime,
     ) -> Result<Event, RecordReportError> {
         self.check_attempt_running(id, number)?;
@@ -369,6 +372,7 @@ impl QueueState {
             status: run.status,
             reason: run.reason.map(str::to_owned),
             reported,
+            limit_wait,
             at,
         })
     }

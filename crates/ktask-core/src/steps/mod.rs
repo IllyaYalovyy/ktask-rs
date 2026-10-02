@@ -598,6 +598,103 @@ mod tests {
         assert_eq!(attempt.steps[0].name, "one");
     }
 
+    /// A step whose provider reports its usage limit was hit once, then passes — stands in for
+    /// what [`agent::run_agent_step`] itself does on a real one, without running a real
+    /// provider.
+    struct WaitsOnce {
+        waited: std::cell::Cell<bool>,
+    }
+
+    impl Step for WaitsOnce {
+        fn name(&self) -> &'static str {
+            "extra"
+        }
+
+        fn enabled(&self, _context: RunContext<'_>, _state: &PipelineState<'_>) -> bool {
+            true
+        }
+
+        fn run(
+            &self,
+            _deps: &Deps<'_>,
+            _context: RunContext<'_>,
+            _state: &mut PipelineState<'_>,
+        ) -> Result<StepOutcome, RunError> {
+            Ok(if self.waited.replace(true) {
+                StepOutcome::Passed {
+                    duration: Duration::from_secs(5),
+                    exit_code: Some(0),
+                    reason: None,
+                    reported: None,
+                }
+            } else {
+                StepOutcome::Waiting {
+                    duration: Duration::from_secs(2),
+                    until: at(1_030),
+                }
+            })
+        }
+    }
+
+    #[test]
+    fn a_step_that_waits_for_its_providers_limit_folds_the_wait_into_its_duration_and_records_it() {
+        let journal = FakeJournal::default();
+        let task = task_a(&journal);
+        let commands = FakeCommands::returning(Ok(Output {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            exit: Exit::Code(0),
+        }));
+        let steps: Vec<Box<dyn Step>> = vec![Box::new(WaitsOnce {
+            waited: std::cell::Cell::new(false),
+        })];
+        let (clock, git, provider, session_log, sleep) = (
+            clock(),
+            FakeGit::default(),
+            test_provider(),
+            FakeSessionLog::default(),
+            FakeSleep::default(),
+        );
+        let deps = Deps {
+            journal: &journal,
+            clock: &clock,
+            commands: &commands,
+            git: &git,
+            provider: &provider,
+            session_log: &session_log,
+            sleep: &sleep,
+        };
+        let attempted = run_one_attempt(
+            deps,
+            context(Duration::from_secs(60)),
+            &task,
+            &[],
+            &steps,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(attempted.status, TaskStatus::Done);
+        let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
+            .unwrap()
+            .unwrap();
+        // One attempt only: the wait never began a fresh one.
+        assert_eq!(attempt.number, 1);
+        assert_eq!(attempt.steps.len(), 1, "{:?}", attempt.steps);
+        let end = attempt.steps[0].ended.as_ref().unwrap();
+        // The 2s the provider ran before reporting the limit, the 30s waited out, and the 5s
+        // the step then actually took — all three counted in the step's own duration, so the
+        // wait is counted in the task's own time even though it spent no attempt on it.
+        assert_eq!(end.duration, Duration::from_secs(37));
+        assert_eq!(
+            end.limit_wait,
+            Some(crate::LimitWait {
+                waited: Duration::from_secs(30),
+                resumed_at: at(1_030),
+            })
+        );
+    }
+
     #[test]
     fn a_passing_step_never_leaks_its_own_reason_into_the_attempts() {
         let journal = FakeJournal::default();

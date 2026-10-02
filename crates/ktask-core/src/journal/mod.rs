@@ -167,6 +167,10 @@ pub enum Event {
         /// `status` which collapses several outcomes into one; `None` for a step the tool
         /// records as already passed, which no agent ever reports an outcome for.
         reported: Option<Outcome>,
+        /// Set when the step waited at least once for its provider's usage limit before it
+        /// ended: how long it waited, in total, and when it last resumed. `None` when it never
+        /// waited.
+        limit_wait: Option<LimitWait>,
         /// When.
         at: SystemTime,
     },
@@ -262,6 +266,23 @@ pub struct AttemptEnd {
     /// health-check steps — that the tool records as already passed, which no agent ever
     /// reports an outcome for.
     pub reported: Option<Outcome>,
+    /// Set when this step waited at least once for its provider's usage limit before it ended.
+    /// `None` for the attempt's own ending, which carries no step of its own, and for a step
+    /// that never waited.
+    pub limit_wait: Option<LimitWait>,
+}
+
+/// How long a step waited, in total, for its provider's own usage limit, and when it last
+/// resumed after the most recent of those waits — shown alongside the step's own outcome once
+/// it has ended, so a limit hit while it ran is never lost once the wait is over, unlike
+/// [`crate::Attempt::waiting_until`], which only shows while the wait is still live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LimitWait {
+    /// How long the step waited, in total, across every time its provider's usage limit was
+    /// hit before it ended.
+    pub waited: Duration,
+    /// When it last resumed running, after the most recent of those waits.
+    pub resumed_at: SystemTime,
 }
 
 /// One step of an attempt, as [`crate::attempt::last_attempt`] reports it: the pipeline every

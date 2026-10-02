@@ -10,8 +10,8 @@ use std::time::SystemTime;
 use crate::journal::AttemptRun;
 use crate::queue_state::decide_and_append;
 use crate::{
-    BeginAttemptError, Clock, Event, Journal, JournalError, Outcome, RecordReportError, Task,
-    TaskDraft, TaskId,
+    BeginAttemptError, Clock, Event, Journal, JournalError, LimitWait, Outcome, RecordReportError,
+    Task, TaskDraft, TaskId,
 };
 
 mod query;
@@ -261,12 +261,14 @@ pub(crate) fn begin_step(
 /// which collapses several outcomes (`failed` and `too-large`, say) into one
 /// [`crate::TaskStatus`] — so the step's own display can tell them apart later; `None` for a
 /// step the tool records as already passed (the sync and health-check steps), which no agent
-/// ever reports an outcome for.
+/// ever reports an outcome for. `limit_wait` is how long this step waited, in total, for its
+/// provider's usage limit, and when it last resumed, when it waited at all.
 ///
 /// # Errors
 ///
 /// Fails, recording nothing, when no attempt numbered `number` is running for this task, or
 /// when the journal cannot be read or written.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn end_step(
     journal: &dyn Journal,
     clock: &dyn Clock,
@@ -275,11 +277,12 @@ pub(crate) fn end_step(
     step: &str,
     run: AttemptRun<'_>,
     reported: Option<Outcome>,
+    limit_wait: Option<LimitWait>,
 ) -> Result<(), RecordReportError> {
     let at = clock.now();
     decide_and_append(journal, |state| {
         state
-            .decide_end_step(id, number, step, run, reported, at)
+            .decide_end_step(id, number, step, run, reported, limit_wait, at)
             .map(|event| (vec![event], ()))
     })
 }

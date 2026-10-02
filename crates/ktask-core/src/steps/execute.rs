@@ -4,7 +4,9 @@
 
 use std::time::{Duration, SystemTime};
 
-use crate::{AttemptRun, Clock, Journal, Outcome, RunContext, RunError, TaskId, TaskStatus};
+use crate::{
+    AttemptRun, Clock, Journal, LimitWait, Outcome, RunContext, RunError, TaskId, TaskStatus,
+};
 
 use super::known_cause::KnownCause;
 use super::{Deps, PipelineState, PreStep, Step, StepOutcome};
@@ -35,6 +37,7 @@ fn record_passed_step(
             status: TaskStatus::Done,
             reason,
         },
+        None,
         None,
     )?;
     Ok(())
@@ -91,7 +94,9 @@ fn classify_known_cause(
 
 /// Records that `state`'s attempt is waiting on step `step` until `until`, then sleeps for
 /// what is left of that wait — [`run_one_step`]'s own work for a [`StepOutcome::Waiting`],
-/// pulled out of it so it stays within the workspace's function-length limit.
+/// pulled out of it so it stays within the workspace's function-length limit. Returns how long
+/// it actually waited, so the step's own duration counts it, and [`run_one_step`] can fold it
+/// into the [`LimitWait`] it records for the step once it ends.
 ///
 /// # Errors
 ///
@@ -101,7 +106,7 @@ fn wait_for_limit(
     state: &PipelineState<'_>,
     step: &str,
     until: SystemTime,
-) -> Result<(), RunError> {
+) -> Result<Duration, RunError> {
     crate::attempt::record_waiting(
         deps.journal,
         deps.clock,
@@ -112,13 +117,15 @@ fn wait_for_limit(
     )?;
     let wait = until.duration_since(deps.clock.now()).unwrap_or_default();
     deps.sleep.sleep(wait);
-    Ok(())
+    Ok(wait)
 }
 
 /// Ends step `step` with `outcome`, timed at `waited_so_far` (every earlier `Waiting`'s own
-/// duration) plus `outcome`'s own — enriching its reason and setting
-/// [`PipelineState::known_cause`] first, when it matches one of [`super::known_cause`]'s own
-/// known causes. [`run_one_step`]'s own tail, pulled out of it so it stays within the
+/// duration, the time actually spent waiting out its provider's usage limit included) plus
+/// `outcome`'s own — enriching its reason and setting [`PipelineState::known_cause`] first,
+/// when it matches one of [`super::known_cause`]'s own known causes — and recording
+/// `limit_wait` against it, when the step waited for its provider's usage limit at least once
+/// before it ended. [`run_one_step`]'s own tail, pulled out of it so it stays within the
 /// workspace's function-length limit.
 ///
 /// # Errors
@@ -130,6 +137,7 @@ fn end_one_step(
     step: &str,
     waited_so_far: Duration,
     outcome: StepOutcome,
+    limit_wait: Option<LimitWait>,
 ) -> Result<(Duration, TaskStatus, Option<String>), RunError> {
     let (duration, exit_code, status, mut reason, reported) = outcome_fields(outcome);
     let total = waited_so_far + duration;
@@ -150,6 +158,7 @@ fn end_one_step(
             reason: reason.as_deref(),
         },
         reported,
+        limit_wait,
     )?;
     Ok((total, status, reason))
 }
@@ -157,8 +166,9 @@ fn end_one_step(
 /// Begins `step`, already known enabled, then runs it — sleeping out and running it again, as
 /// many times as it reports [`StepOutcome::Waiting`], never beginning a fresh step over it — and
 /// ends it once it either passes or ends the attempt: its total duration (the time actually
-/// spent running it, any waits excluded), the status it ended at, and, when that is not `done`,
-/// why.
+/// spent running it, plus every wait for its provider's usage limit — counted in the task's own
+/// time, even though it spent no attempt on it), the status it ended at, and, when that is not
+/// `done`, why.
 ///
 /// # Errors
 ///
@@ -178,13 +188,20 @@ pub(crate) fn run_one_step(
         step.model(context, state).as_deref(),
     )?;
     let mut total = Duration::ZERO;
+    let mut limit_wait: Option<LimitWait> = None;
     loop {
         match step.run(deps, context, state)? {
             StepOutcome::Waiting { duration, until } => {
                 total += duration;
-                wait_for_limit(deps, state, step.name(), until)?;
+                let waited = wait_for_limit(deps, state, step.name(), until)?;
+                total += waited;
+                let waited_so_far = limit_wait.map_or(Duration::ZERO, |wait| wait.waited);
+                limit_wait = Some(LimitWait {
+                    waited: waited_so_far + waited,
+                    resumed_at: until,
+                });
             }
-            outcome => return end_one_step(deps, state, step.name(), total, outcome),
+            outcome => return end_one_step(deps, state, step.name(), total, outcome, limit_wait),
         }
     }
 }

@@ -116,6 +116,7 @@ pub(super) fn running_step(
         time_spent: elapsed,
         outcome,
         reason,
+        limit_wait: None,
     }
 }
 
@@ -132,6 +133,7 @@ pub(super) fn gate_stop_entry(task: Task, step: String, reason: String) -> Statu
         time_spent: Duration::ZERO,
         outcome: AttemptOutcome::Failed,
         reason: Some(reason),
+        limit_wait: None,
     };
     StatusEntry {
         task: task.id,
@@ -146,6 +148,7 @@ pub(super) fn gate_stop_entry(task: Task, step: String, reason: String) -> Statu
             time_spent: Duration::ZERO,
             outcome: line.outcome,
             reason: line.reason.clone(),
+            limit_wait: None,
             steps: vec![line],
         },
         history: Vec::new(),

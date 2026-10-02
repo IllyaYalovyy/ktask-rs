@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use crate::journal::{AttemptRun, Event};
+use crate::journal::{AttemptRun, Event, LimitWait};
 use crate::{
     AnswerError, AppendConflict, AppendError, Attempt, AttemptEnd, BeginAttemptError, CancelError,
     DoneError, Journal, JournalError, Outcome, Placement, RecordReportError, RetryError, Step,

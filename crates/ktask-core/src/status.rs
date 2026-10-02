@@ -3,7 +3,8 @@
 use std::time::{Duration, SystemTime};
 
 use crate::{
-    Clock, Journal, JournalError, Outcome, RunLock, Task, TaskId, TaskStatus, list_all_tasks,
+    Clock, Journal, JournalError, LimitWait, Outcome, RunLock, Task, TaskId, TaskStatus,
+    list_all_tasks,
 };
 
 mod lines;
@@ -67,12 +68,16 @@ pub struct StepLine {
     pub outcome: AttemptOutcome,
     /// Why, when the outcome is not a success.
     pub reason: Option<String>,
+    /// Set once this step has ended, when it waited at least once for its provider's usage
+    /// limit before it did: how long it waited, in total, and when it last resumed. `None`
+    /// while it still runs, and for a step that never waited.
+    pub limit_wait: Option<LimitWait>,
 }
 
-/// One task's attempt, as `status` shows it. `step`, `time_spent`, `outcome` and `reason`
-/// carry the most recently started or ended step — the same single line `status` and the
-/// queue screen showed before an attempt could run more than one — and `steps` carries every
-/// step run so far, in order, for a caller that wants the full history.
+/// One task's attempt, as `status` shows it. `step`, `time_spent`, `outcome`, `reason` and
+/// `limit_wait` carry the most recently started or ended step — the same single line `status`
+/// and the queue screen showed before an attempt could run more than one — and `steps` carries
+/// every step run so far, in order, for a caller that wants the full history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttemptLine {
     /// The attempt's number.
@@ -95,6 +100,10 @@ pub struct AttemptLine {
     pub outcome: AttemptOutcome,
     /// Why, when the most recent step's outcome is not a success.
     pub reason: Option<String>,
+    /// Set once the most recent step has ended, when it waited at least once for its
+    /// provider's usage limit before it did. `None` while it still runs, and for a step that
+    /// never waited.
+    pub limit_wait: Option<LimitWait>,
     /// Every step run so far, in the order they were started.
     pub steps: Vec<StepLine>,
 }
@@ -176,6 +185,7 @@ fn step_lines(
                     time_spent: end.duration,
                     outcome,
                     reason,
+                    limit_wait: end.limit_wait,
                 }
             }
             None => running_step(
@@ -217,6 +227,7 @@ fn current_step_line(
                 time_spent: end.duration,
                 outcome,
                 reason,
+                limit_wait: end.limit_wait,
             }
         }
         None => running_step(
@@ -256,6 +267,7 @@ fn attempt_line(
         time_spent: current.time_spent,
         outcome: current.outcome,
         reason: current.reason,
+        limit_wait: current.limit_wait,
         steps,
     }
 }
@@ -448,6 +460,7 @@ mod tests {
                     time_spent: Duration::from_secs(30),
                     outcome: AttemptOutcome::Running,
                     reason: None,
+                    limit_wait: None,
                     steps: vec![StepLine {
                         step: IMPLEMENTATION.to_owned(),
                         provider: Some("echo".to_owned()),
@@ -456,6 +469,7 @@ mod tests {
                         time_spent: Duration::from_secs(30),
                         outcome: AttemptOutcome::Running,
                         reason: None,
+                        limit_wait: None,
                     }],
                 },
                 history: vec![],
@@ -486,6 +500,7 @@ mod tests {
                     time_spent: Duration::from_secs(30),
                     outcome: AttemptOutcome::Interrupted,
                     reason: None,
+                    limit_wait: None,
                     steps: vec![StepLine {
                         step: IMPLEMENTATION.to_owned(),
                         provider: Some("echo".to_owned()),
@@ -494,6 +509,7 @@ mod tests {
                         time_spent: Duration::from_secs(30),
                         outcome: AttemptOutcome::Interrupted,
                         reason: None,
+                        limit_wait: None,
                     }],
                 },
                 history: vec![],
@@ -541,6 +557,71 @@ mod tests {
         // A run that is not alive shows interrupted instead, the wait notwithstanding.
         let not_alive = status(&journal, &clock(130), &no_run()).unwrap();
         assert_eq!(not_alive[0].attempt.outcome, AttemptOutcome::Interrupted);
+    }
+
+    #[test]
+    fn once_resumed_the_step_that_waited_for_a_limit_still_shows_it_after_it_passes() {
+        let journal = journal_with_a_started_attempt();
+        crate::attempt::begin_step(&journal, &clock(100), TaskId(1), 1, IMPLEMENTATION, None)
+            .unwrap();
+        crate::attempt::record_waiting(
+            &journal,
+            &clock(100),
+            TaskId(1),
+            1,
+            IMPLEMENTATION,
+            at(200),
+        )
+        .unwrap();
+        crate::attempt::end_step(
+            &journal,
+            &clock(205),
+            TaskId(1),
+            1,
+            IMPLEMENTATION,
+            AttemptRun {
+                duration: Duration::from_secs(105),
+                exit_code: Some(0),
+                status: TaskStatus::Done,
+                reason: None,
+            },
+            Some(Outcome::Done),
+            Some(LimitWait {
+                waited: Duration::from_secs(100),
+                resumed_at: at(200),
+            }),
+        )
+        .unwrap();
+        crate::attempt::end_attempt(
+            &journal,
+            TaskId(1),
+            1,
+            AttemptRun {
+                duration: Duration::from_secs(105),
+                exit_code: Some(0),
+                status: TaskStatus::Done,
+                reason: None,
+            },
+            clock(205).0,
+        )
+        .unwrap();
+
+        // Long after the wait is over and the task is done, the step — and so the attempt's
+        // own flat line — still carries what it waited for and when it resumed: not only
+        // while the countdown above was still live.
+        let entries = status(&journal, &clock(400), &no_run()).unwrap();
+        let expected = Some(LimitWait {
+            waited: Duration::from_secs(100),
+            resumed_at: at(200),
+        });
+        assert_eq!(
+            entries[0].attempt.outcome,
+            AttemptOutcome::Reported(Outcome::Done)
+        );
+        assert_eq!(entries[0].attempt.limit_wait, expected);
+        assert_eq!(entries[0].attempt.steps[0].limit_wait, expected);
+        // The wait is folded into the step's own recorded time, not shown on the side.
+        assert_eq!(entries[0].attempt.time_spent, Duration::from_secs(105));
     }
 
     /// The `AttemptLine` of the sole task in a queue built with [`journal_with_a_started_attempt`],
@@ -890,6 +971,7 @@ mod tests {
             status: TaskStatus::Failed,
             reason: Some("git identity is not configured".to_owned()),
             reported: None,
+            limit_wait: None,
         };
         assert_eq!(
             step_outcome(COMMIT_STEP, &end, None, None),
@@ -938,6 +1020,7 @@ mod tests {
                 reason: None,
             },
             None,
+            None,
         )
         .unwrap();
         crate::attempt::begin_step(&journal, &clock(104), TaskId(1), 1, IMPLEMENTATION, None)
@@ -957,6 +1040,7 @@ mod tests {
                     time_spent: Duration::from_secs(4),
                     outcome: AttemptOutcome::Passed,
                     reason: None,
+                    limit_wait: None,
                 },
                 StepLine {
                     step: IMPLEMENTATION.to_owned(),
@@ -966,6 +1050,7 @@ mod tests {
                     time_spent: Duration::from_secs(6),
                     outcome: AttemptOutcome::Running,
                     reason: None,
+                    limit_wait: None,
                 },
             ]
         );
@@ -1028,6 +1113,7 @@ mod tests {
                 time_spent: Duration::ZERO,
                 outcome: AttemptOutcome::Failed,
                 reason: Some("uncommitted changes; commit or stash".to_owned()),
+                limit_wait: None,
             }]
         );
     }
