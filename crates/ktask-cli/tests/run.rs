@@ -20,7 +20,6 @@ use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant};
 
-use ktask_core::{AttemptToken, Task, TaskId, TaskKind, TaskStatus};
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use repo::{git_repository, scratch};
@@ -1006,85 +1005,58 @@ fn the_implementation_review_test_and_commit_steps_each_record_exactly_one_start
     Ok(())
 }
 
-/// A prediction: the first task added to a fresh project, run once, gets this token — good
-/// enough to build the exact prompt `ktask-rs run` will build for it, ahead of adding it.
-fn first_attempt_token() -> AttemptToken {
-    AttemptToken::new("my-app", TaskId(1), 1)
-}
-
-/// A minimal task, only as far as `ktask_core::build_prompt` cares: its title and criteria,
-/// nothing about its body, which the caller supplies separately.
-fn task_named(title: &str) -> Task {
-    Task {
-        id: TaskId(1),
-        position: 1,
-        title: title.to_owned(),
-        body: String::new(),
-        criteria: vec!["it works".to_owned()],
-        kind: TaskKind::Agent,
-        links: vec![],
-        status: TaskStatus::Running,
-        created_at: std::time::SystemTime::now(),
-    }
-}
-
 #[test]
 fn the_report_command_the_prompt_gives_the_agent_is_the_full_path_and_works_with_no_path_at_all()
 -> Result<()> {
-    // Builds, ahead of adding the task, the exact prompt `ktask-rs run` will build for its
-    // one attempt, and pulls the `done` command out of it — the line a real agent, not
-    // `echo`, would read and run verbatim.
-    let binary_path = PathBuf::from(env!("CARGO_BIN_EXE_ktask-rs"));
-    let token = first_attempt_token();
-    let prompt = ktask_core::build_prompt(&task_named("a"), &token, &binary_path);
-    let done_line = prompt
-        .lines()
-        .find(|line| line.trim_start().ends_with(" done"))
-        .expect("the prompt names a done command")
-        .trim();
-    assert!(
-        done_line.starts_with(binary_path.to_str().unwrap()),
-        "{done_line}"
-    );
-    // Same proof, for the review step's own prompt and its `approved` command.
-    let review_prompt = ktask_core::build_review_prompt(&task_named("a"), &token, &binary_path, "");
-    let approved_line = review_prompt
-        .lines()
-        .find(|line| line.trim_start().ends_with(" approved"))
-        .expect("the review prompt names an approved command")
-        .trim();
-    assert!(
-        approved_line.starts_with(binary_path.to_str().unwrap()),
-        "{approved_line}"
-    );
-    // Same proof again, for the test step's own prompt and its `accepted` command.
-    let test_prompt = ktask_core::build_test_prompt(&task_named("a"), &token, &binary_path, "");
-    let accepted_line = test_prompt
-        .lines()
-        .find(|line| line.trim_start().ends_with(" accepted"))
-        .expect("the test prompt names an accepted command")
-        .trim();
-    assert!(
-        accepted_line.starts_with(binary_path.to_str().unwrap()),
-        "{accepted_line}"
-    );
-
-    // The task's body runs one exact line or another, depending on the step, with its own
-    // `PATH` blanked out first — proving each line is a complete, self-sufficient command that
-    // in no way depends on `ktask-rs` being found on `PATH`, unlike the bare
-    // `ktask-rs report ...` other tests here use.
+    // Each step reads its own real prompt from the file path it receives as `$7`, pulls out
+    // the one line ending in the outcome it is meant to report — `approved` for review,
+    // `accepted` for testing, `done` for implementation — blanks its own `PATH`, then runs
+    // that line verbatim. This proves the report line a real prompt gives an agent for each
+    // step is a complete, self-sufficient command using the binary's full path, not merely
+    // `ktask-rs`, against what the running system actually wrote — not a prediction from
+    // `ktask_core::build_prompt` and friends called directly.
     let fixture = Fixture::new()?;
     fixture.add_agent_task(
         "a",
-        &format!(
-            "```bash\nPATH=\nif [ \"$3\" = \"review\" ]; then\n  {approved_line}\nelif [ \"$3\" = \"testing\" ]; then\n  {accepted_line}\nelse\n  {done_line}\nfi\n```\n"
-        ),
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  LINE=$(grep -E ' approved$' \"$7\")\nelif [ \"$3\" = \"testing\" ]; then\n  LINE=$(grep -E ' accepted$' \"$7\")\nelse\n  LINE=$(grep -E ' done$' \"$7\")\nfi\nPATH=\neval \"$LINE\"\n```\n",
     )?;
 
     let outcome = fixture.run_the_queue(&["run"])?;
 
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     assert_eq!(fixture.task_status(1)?, "done");
+    Ok(())
+}
+
+#[test]
+fn the_prompt_scratch_file_lives_under_the_state_directory_and_is_removed_once_the_step_has_run()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    let seen_path_file = fixture.work.join("prompt-path-seen");
+    fixture.add_agent_task(
+        "a",
+        &format!(
+            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelse\n  printf '%s' \"$7\" > {seen_path_file}\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+            seen_path_file = seen_path_file.display(),
+        ),
+    )?;
+
+    let outcome = fixture.run_the_queue(&["run"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+
+    let prompt_path = PathBuf::from(std::fs::read_to_string(&seen_path_file)?);
+    let project_state_dir = fixture.journal().parent().unwrap().to_path_buf();
+    assert!(
+        prompt_path.starts_with(&project_state_dir),
+        "{} should live under {}",
+        prompt_path.display(),
+        project_state_dir.display()
+    );
+    assert!(
+        !prompt_path.exists(),
+        "{} should have been removed once the step ran",
+        prompt_path.display()
+    );
     Ok(())
 }
 

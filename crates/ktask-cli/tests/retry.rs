@@ -9,8 +9,6 @@ mod support;
 
 use std::path::PathBuf;
 
-use ktask_adapters::{GitCli, SqliteJournal};
-use ktask_core::{AttemptToken, RunContext, Task, TaskId, TaskKind, TaskStatus};
 use repo::{git_repository, scratch};
 use serde_json::Value;
 use support::{Outcome, Result, Sandbox};
@@ -40,18 +38,25 @@ fn body_that_fails_once_then_succeeds() -> String {
     "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ -f retried.marker ]; then\n  ktask-rs report --token \"$1\" done\nelse\n  touch retried.marker\n  ktask-rs report --token \"$1\" failed --reason \"first try\"\nfi\n```\n".to_owned()
 }
 
-/// A bash block whose implementation step commits a real change to the working tree, then
-/// reports `outcome` with `--reason`: for a task whose later, retried attempt should see a
-/// non-empty diff of what it changed so far.
-fn body_that_commits_then_reports(outcome: &str, reason: &str) -> String {
+/// A bash block whose implementation step commits a real change and fails on attempt 1, with
+/// reason `reason`; on attempt 2, copies the whole prompt it was given — read from the file
+/// path it receives as `$7` — to `prompt_copy`, so the test can read back what the running
+/// system actually told the agent, not merely what a prompt-building function predicts it
+/// would; the review and test steps, when reached, approve and accept.
+fn body_that_fails_once_then_copies_its_prompt(
+    reason: &str,
+    prompt_copy: &std::path::Path,
+) -> String {
     format!(
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  echo hello > changed.txt\n  git add changed.txt\n  git -c user.name=t -c user.email=t@t commit -q -m wip\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nfi\n```\n"
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$2\" = \"1\" ]; then\n  echo hello > changed.txt\n  git add changed.txt\n  git -c user.name=t -c user.email=t@t commit -q -m wip\n  ktask-rs report --token \"$1\" failed --reason \"{reason}\"\nelse\n  cp \"$7\" \"{prompt_copy}\"\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+        prompt_copy = prompt_copy.display(),
     )
 }
 
 /// A sandbox with a git repository called `my-app`.
 struct Fixture {
     sandbox: Sandbox,
+    work: PathBuf,
     repository: PathBuf,
     _keep: TempDir,
 }
@@ -71,6 +76,7 @@ impl Fixture {
         sandbox.run(&repository, &["settings", "set", "max-attempts", "1"])?;
         Ok(Self {
             sandbox,
+            work,
             repository,
             _keep: keep,
         })
@@ -328,54 +334,29 @@ fn retry_and_id_are_in_the_help() -> Result<()> {
     Ok(())
 }
 
-/// A minimal task, only as far as [`ktask_core::implementation_prompt`] cares: its title and
-/// criteria.
-fn task_named(id: u64, title: &str) -> Task {
-    Task {
-        id: TaskId(id),
-        position: 1,
-        title: title.to_owned(),
-        body: String::new(),
-        criteria: vec!["it works".to_owned()],
-        kind: TaskKind::Agent,
-        links: vec![],
-        status: TaskStatus::Pending,
-        created_at: std::time::SystemTime::now(),
-    }
-}
-
 #[test]
 fn a_retried_tasks_second_attempt_prompt_names_the_firsts_outcome_reason_and_the_diff() -> Result<()>
 {
     let fixture = Fixture::new()?;
     fixture.initial_commit()?;
-    fixture.add_agent_task("a", &body_that_commits_then_reports("failed", "it broke"))?;
+    let prompt_copy = fixture.work.join("attempt-2-prompt.txt");
+    fixture.add_agent_task(
+        "a",
+        &body_that_fails_once_then_copies_its_prompt("it broke", &prompt_copy),
+    )?;
 
-    let run = fixture.run(&["run"])?;
-    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    let first = fixture.run(&["run"])?;
+    assert_eq!(first.code, Some(1), "{}", first.stderr);
     fixture.run(&["retry", "1"])?;
 
-    // Builds, ahead of running attempt 2, the exact prompt `ktask-rs run` will build for it —
-    // the same technique `the_report_command_the_prompt_gives_the_agent_is_the_full_path_...`
-    // in `tests/run.rs` uses, since the `echo` provider only ever runs a task's own fenced
-    // `bash` block and never sees the rest of its prompt itself.
-    let journal = SqliteJournal::open(&fixture.journal())?;
-    let token = AttemptToken::new("my-app", TaskId(1), 2);
-    let context = RunContext {
-        project_name: "my-app",
-        project_dir: &fixture.repository,
-        binary_path: std::path::Path::new(env!("CARGO_BIN_EXE_ktask-rs")),
-        attempt_timeout: std::time::Duration::from_secs(60),
-        health_check_command: None,
-        tracked_branch: None,
-        disabled_steps: &[],
-        max_attempts: 3,
-        resolver_model: "",
-        sessions_dir: std::path::Path::new("/state/sessions"),
-    };
-    let prompt =
-        ktask_core::implementation_prompt(&journal, &GitCli, context, &task_named(1, "a"), &token)?;
+    // Attempt 2's own script read its real prompt from the file path it was given as `$7` and
+    // copied it here — this is what the running system actually told the agent, not a
+    // prediction from `ktask_core::implementation_prompt` called directly.
+    let second = fixture.run(&["run"])?;
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    assert_eq!(fixture.task_status(1)?, "done");
 
+    let prompt = std::fs::read_to_string(&prompt_copy)?;
     assert!(prompt.contains("## Earlier attempts"), "{prompt}");
     assert!(prompt.contains("attempt 1: failed — it broke"), "{prompt}");
     assert!(

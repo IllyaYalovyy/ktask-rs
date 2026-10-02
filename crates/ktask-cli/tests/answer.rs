@@ -9,8 +9,6 @@ mod support;
 
 use std::path::PathBuf;
 
-use ktask_adapters::{GitCli, SqliteJournal};
-use ktask_core::{AttemptToken, RunContext, Task, TaskId, TaskKind, TaskStatus};
 use repo::{git_repository, scratch};
 use serde_json::Value;
 use support::{Outcome, Result, Sandbox};
@@ -25,9 +23,25 @@ fn body_that_asks_then(question: &str, outcome: &str) -> String {
     )
 }
 
+/// Like [`body_that_asks_then`], except once it finds `asked.marker` it first copies the whole
+/// prompt it was given — read from the file path it receives as `$7` — to `prompt_copy`, so the
+/// test can read back what the running system actually told the agent, not merely what a
+/// prompt-building function predicts it would.
+fn body_that_asks_then_copies_its_prompt(
+    question: &str,
+    outcome: &str,
+    prompt_copy: &std::path::Path,
+) -> String {
+    format!(
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ -f asked.marker ]; then\n  cp \"$7\" \"{prompt_copy}\"\n  ktask-rs report --token \"$1\" {outcome}\nelse\n  touch asked.marker\n  ktask-rs report --token \"$1\" needs-input --reason \"{question}\"\nfi\n```\n",
+        prompt_copy = prompt_copy.display(),
+    )
+}
+
 /// A sandbox with a git repository called `my-app`.
 struct Fixture {
     sandbox: Sandbox,
+    work: PathBuf,
     repository: PathBuf,
     _keep: TempDir,
 }
@@ -47,6 +61,7 @@ impl Fixture {
         sandbox.run(&repository, &["settings", "set", "max-attempts", "1"])?;
         Ok(Self {
             sandbox,
+            work,
             repository,
             _keep: keep,
         })
@@ -170,45 +185,26 @@ fn a_second_run_after_answering_continues_and_the_prompt_carries_the_question_an
 -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.configure_git_identity()?;
-    fixture.add_agent_task("a", &body_that_asks_then("which path?", "done"))?;
+    let prompt_copy = fixture.work.join("attempt-2-prompt.txt");
+    fixture.add_agent_task(
+        "a",
+        &body_that_asks_then_copies_its_prompt("which path?", "done", &prompt_copy),
+    )?;
     fixture.run(&["run"])?;
     assert_eq!(fixture.task_status(1)?, "blocked");
 
     fixture.run(&["answer", "1", "the left one"])?;
 
-    // Builds, ahead of running attempt 2, the exact prompt `ktask-rs run` will build for it.
-    let journal = SqliteJournal::open(&fixture.journal())?;
-    let token = AttemptToken::new("my-app", TaskId(1), 2);
-    let context = RunContext {
-        project_name: "my-app",
-        project_dir: &fixture.repository,
-        binary_path: std::path::Path::new(env!("CARGO_BIN_EXE_ktask-rs")),
-        attempt_timeout: std::time::Duration::from_secs(60),
-        health_check_command: None,
-        tracked_branch: None,
-        disabled_steps: &[],
-        max_attempts: 3,
-        resolver_model: "",
-        sessions_dir: std::path::Path::new("/state/sessions"),
-    };
-    let task = Task {
-        id: TaskId(1),
-        position: 1,
-        title: "a".to_owned(),
-        body: String::new(),
-        criteria: vec!["it works".to_owned()],
-        kind: TaskKind::Agent,
-        links: vec![],
-        status: TaskStatus::Pending,
-        created_at: std::time::SystemTime::now(),
-    };
-    let prompt = ktask_core::implementation_prompt(&journal, &GitCli, context, &task, &token)?;
-    assert!(prompt.contains("which path?"), "{prompt}");
-    assert!(prompt.contains("the left one"), "{prompt}");
-
     let second = fixture.run(&["run"])?;
     assert_eq!(second.code, Some(0), "{}", second.stderr);
     assert_eq!(fixture.task_status(1)?, "done");
+
+    // Attempt 2's own script read its real prompt from the file path it was given as `$7` and
+    // copied it here — this is what the running system actually told the agent, not a
+    // prediction from `ktask_core::implementation_prompt` called directly.
+    let prompt = std::fs::read_to_string(&prompt_copy)?;
+    assert!(prompt.contains("which path?"), "{prompt}");
+    assert!(prompt.contains("the left one"), "{prompt}");
     Ok(())
 }
 
