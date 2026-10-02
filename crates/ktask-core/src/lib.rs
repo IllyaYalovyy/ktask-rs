@@ -50,7 +50,7 @@ pub use report::{
 pub use resolve::{Resolution, ResolveError, resolve_project};
 pub use run::{
     Attempted, RunContext, RunEnd, RunError, RunReport, SyncProblem, build_prompt,
-    build_review_prompt, build_test_prompt, implementation_prompt, run_queue,
+    build_review_prompt, build_test_prompt, run_queue,
 };
 pub use sessions::{SessionLog, SessionLogError};
 pub use settings::{

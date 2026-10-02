@@ -25,8 +25,9 @@ impl fmt::Display for SessionLogError {
 
 impl Error for SessionLogError {}
 
-/// Port: appends to a session's transcript, under the tool's own state directory — never the
-/// project's working tree.
+/// Port: keeps a step's own files under the tool's own state directory — never the project's
+/// working tree: a session's transcript, appended to, and a step's own whole prompt, written
+/// fresh for the step and removed once it has run.
 pub trait SessionLog {
     /// Appends `content` to the transcript at `path`, creating its parent directory first when
     /// it does not exist yet.
@@ -36,4 +37,21 @@ pub trait SessionLog {
     /// Fails when the parent directory cannot be created, or the file cannot be opened or
     /// written.
     fn append(&self, path: &Path, content: &[u8]) -> Result<(), SessionLogError>;
+
+    /// Writes `prompt` to `path`, creating its parent directory first when it does not exist
+    /// yet, replacing whatever was there before — a step's whole prompt, so a provider whose
+    /// own script or command line only ever sees part of it can still read everything it said.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the parent directory cannot be created, or the file cannot be written.
+    fn write_prompt(&self, path: &Path, prompt: &str) -> Result<(), SessionLogError>;
+
+    /// Removes the prompt scratch file at `path`, once the step it was written for has run.
+    /// Does nothing, successfully, when it is already gone.
+    ///
+    /// # Errors
+    ///
+    /// Fails when `path` exists but cannot be removed.
+    fn remove_prompt(&self, path: &Path) -> Result<(), SessionLogError>;
 }

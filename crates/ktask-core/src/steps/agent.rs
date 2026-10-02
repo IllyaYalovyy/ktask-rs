@@ -163,6 +163,13 @@ fn session_transcript_path(sessions_dir: &Path, session: &str) -> PathBuf {
     sessions_dir.join(format!("{session}.log"))
 }
 
+/// Where the whole prompt handed to step `step` of attempt `token` is written, under
+/// `sessions_dir` — the tool's own state directory, never the project's working tree — a
+/// scratch file for this one call, removed once it has run.
+fn prompt_scratch_path(sessions_dir: &Path, token: &AttemptToken, step: &str) -> PathBuf {
+    sessions_dir.join(format!("{}-{}-{step}.prompt", token.task, token.number))
+}
+
 /// The session and transcript path the implementation step of `state`'s attempt is told to
 /// resume, when `state.requested_session` names one and `step` is the implementation step.
 /// `None` for every other step, and for an attempt with nothing to resume.
@@ -228,17 +235,63 @@ fn maybe_record_session(
     record_session(deps, context, state, prompt, output, &session)
 }
 
-/// Runs `prompt` through `deps`'s provider for `state`'s attempt's step `step`, with `model` —
-/// the model this step runs with, when it has one, passed to the provider alongside the token,
-/// attempt number and step name — timing it, and turns what came back into a [`StepOutcome`].
-/// For the implementation step only: when `state.requested_session` names one, the provider is
-/// told to resume it; whatever session the provider's own `read_session` reads back from what
-/// it produced — `None` when it reported none at all — is recorded against the attempt, with
-/// its own transcript kept under `context.sessions_dir`.
+/// Writes `prompt` to its own scratch file under `context.sessions_dir`, runs it through
+/// `deps`'s provider for step `step` of `state`'s attempt, with `model` and `resume` passed
+/// alongside the token, attempt number and step name, and the scratch file's own path — so a
+/// provider whose own script or command line only ever sees part of its prompt can still read
+/// everything it said — then removes the scratch file again, whatever running it produced.
+/// Returns how long it took and what it produced.
 ///
 /// # Errors
 ///
-/// Fails when the journal cannot be read.
+/// Fails when `prompt`'s scratch file cannot be written to or removed from
+/// `context.sessions_dir`.
+fn run_prompt(
+    deps: &Deps<'_>,
+    context: RunContext<'_>,
+    state: &PipelineState<'_>,
+    step: &'static str,
+    model: Option<&str>,
+    prompt: &str,
+    resume: Option<Resume<'_>>,
+) -> Result<(Duration, Result<Output, ProviderRunError>), RunError> {
+    let prompt_path = prompt_scratch_path(context.sessions_dir, state.token, step);
+    deps.session_log
+        .write_prompt(&prompt_path, prompt)
+        .map_err(|error| RunError::Other(error.to_string()))?;
+    let started = deps.clock.now();
+    let result = run_provider(
+        deps.commands,
+        deps.provider,
+        prompt,
+        StepCall {
+            token: &state.token.to_string(),
+            attempt: state.token.number,
+            step,
+            model,
+            resume,
+            prompt_path: &prompt_path,
+        },
+        context.project_dir,
+        context.attempt_timeout,
+    );
+    let duration = deps.clock.now().duration_since(started).unwrap_or_default();
+    deps.session_log
+        .remove_prompt(&prompt_path)
+        .map_err(|error| RunError::Other(error.to_string()))?;
+    Ok((duration, result))
+}
+
+/// Runs `prompt` through `deps`'s provider for `state`'s attempt's step `step`, with `model` —
+/// the model this step runs with, when it has one — and turns what came back into a
+/// [`StepOutcome`]. For the implementation step only: when `state.requested_session` names one,
+/// the provider is told to resume it; whatever session the provider's own `read_session` reads
+/// back from what it produced — `None` when it reported none at all — is recorded against the
+/// attempt, with its own transcript kept under `context.sessions_dir`.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read, or [`run_prompt`] fails.
 pub(crate) fn run_agent_step(
     deps: &Deps<'_>,
     context: RunContext<'_>,
@@ -252,22 +305,7 @@ pub(crate) fn run_agent_step(
         session,
         transcript_path,
     });
-    let started = deps.clock.now();
-    let result = run_provider(
-        deps.commands,
-        deps.provider,
-        prompt,
-        StepCall {
-            token: &state.token.to_string(),
-            attempt: state.token.number,
-            step,
-            model,
-            resume,
-        },
-        context.project_dir,
-        context.attempt_timeout,
-    );
-    let duration = deps.clock.now().duration_since(started).unwrap_or_default();
+    let (duration, result) = run_prompt(deps, context, state, step, model, prompt, resume)?;
     if let Some(until) = limit_wait(deps, &result) {
         return Ok(StepOutcome::Waiting { duration, until });
     }

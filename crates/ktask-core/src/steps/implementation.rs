@@ -161,37 +161,6 @@ pub fn build_prompt(task: &Task, token: &AttemptToken, binary_path: &std::path::
     build_prompt_with_history(task, token, binary_path, &[], "")
 }
 
-/// The exact prompt the implementation step would hand its provider right now for attempt
-/// `token` of `task`: read fresh from `journal` and `git`, not from a run in progress — for a
-/// caller, such as a test, that wants to predict what a real agent (one that is handed the
-/// whole prompt, unlike the `echo` provider, which only runs its first fenced `bash` block)
-/// would be shown for an attempt that has not started yet.
-///
-/// # Errors
-///
-/// Fails when the journal cannot be read.
-pub fn implementation_prompt(
-    journal: &impl Journal,
-    git: &impl crate::Git,
-    context: RunContext<'_>,
-    task: &Task,
-    token: &AttemptToken,
-) -> Result<String, JournalError> {
-    let earlier = earlier_attempts(journal, task.id, token.number)?;
-    let diff = if earlier.is_empty() {
-        String::new()
-    } else {
-        diff_since_first_attempt(journal, git, context, task.id)?
-    };
-    Ok(build_prompt_with_history(
-        task,
-        token,
-        context.binary_path,
-        &earlier,
-        &diff,
-    ))
-}
-
 /// The implementation step of a task's attempt.
 pub(crate) struct Implementation;
 

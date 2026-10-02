@@ -65,10 +65,11 @@ fn detect_limit(output: &Output) -> Option<LimitSignal> {
 /// Turns `prompt` into the command that runs its first fenced `bash` code block with `bash`,
 /// passing `call.token` as `$1`, `call.attempt` as `$2`, `call.step` as `$3`, the session
 /// `call.resume` names to continue (empty when it is `None`) as `$4`, the path of that
-/// session's transcript (empty when `call.resume` is `None`) as `$5`, and `call.model` (empty
-/// when it is `None`) as `$6` — so a scripted prompt can prove to a test which session and
-/// model it was run with, and read back what an earlier invocation under the same session
-/// wrote.
+/// session's transcript (empty when `call.resume` is `None`) as `$5`, `call.model` (empty when
+/// it is `None`) as `$6`, and the path of `call.prompt_path` — the whole prompt this call runs,
+/// not only the block run here — as `$7`, so a scripted prompt can prove to a test which
+/// session and model it was run with, read back what an earlier invocation under the same
+/// session wrote, and read everything its own prompt said, not only the block chosen to run.
 ///
 /// # Errors
 ///
@@ -94,6 +95,7 @@ fn command(prompt: &str, call: StepCall<'_>) -> Result<ProviderCommand, String> 
             resume_session,
             resume_transcript,
             call.model.unwrap_or_default().to_owned(),
+            call.prompt_path.display().to_string(),
         ],
         stdin: block.into_bytes(),
     })
@@ -123,6 +125,8 @@ fn first_bash_block(prompt: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     fn call<'a>(token: &'a str, attempt: u32, step: &'a str) -> StepCall<'a> {
@@ -132,6 +136,7 @@ mod tests {
             step,
             model: None,
             resume: None,
+            prompt_path: Path::new("/state/prompts/the-prompt.prompt"),
         }
     }
 
@@ -154,7 +159,16 @@ mod tests {
         assert_eq!(built.program, "bash");
         assert_eq!(
             built.args,
-            vec!["-s", "the-token", "3", "implementation", "", "", ""]
+            vec![
+                "-s",
+                "the-token",
+                "3",
+                "implementation",
+                "",
+                "",
+                "",
+                "/state/prompts/the-prompt.prompt",
+            ]
         );
         assert_eq!(built.stdin, b"echo hi\n");
     }
@@ -170,19 +184,27 @@ mod tests {
                 step: "implementation",
                 model: Some("opus"),
                 resume: None,
+                prompt_path: Path::new("/state/prompts/the-prompt.prompt"),
             },
         )
         .unwrap();
         assert_eq!(
             built.args,
-            vec!["-s", "the-token", "3", "implementation", "", "", "opus"]
+            vec![
+                "-s",
+                "the-token",
+                "3",
+                "implementation",
+                "",
+                "",
+                "opus",
+                "/state/prompts/the-prompt.prompt",
+            ]
         );
     }
 
     #[test]
     fn a_resumed_invocation_gets_the_session_and_transcript_path_as_the_fourth_and_fifth_args() {
-        use std::path::Path;
-
         let prompt = "```bash\necho hi\n```\n";
         let built = command(
             prompt,
@@ -195,6 +217,7 @@ mod tests {
                     session: "the-session",
                     transcript_path: Path::new("/state/sessions/the-session.log"),
                 }),
+                prompt_path: Path::new("/state/prompts/the-prompt.prompt"),
             },
         )
         .unwrap();
@@ -208,6 +231,7 @@ mod tests {
                 "the-session",
                 "/state/sessions/the-session.log",
                 "",
+                "/state/prompts/the-prompt.prompt",
             ]
         );
     }

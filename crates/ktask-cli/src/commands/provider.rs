@@ -57,26 +57,60 @@ pub(crate) fn run(
     check_known(provider)?;
     let prompt = read_prompt()?;
     let dir = current_dir()?;
+    let output = run_echo(&prompt, token, *attempt, step, &dir, *timeout_ms)?;
+    render::provider_output(&output, stdout, &mut io::stderr())?;
+    exit_code(&output, provider, *timeout_ms)
+}
+
+/// Writes `prompt` to its own scratch file, runs the `echo` provider on it for `token`,
+/// `attempt` and `step` in `dir` with `timeout_ms`, then removes the scratch file again,
+/// whatever running it produced — `provider run` works on no project, so it has no state
+/// directory of its own to keep the file under, unlike a real attempt's own steps.
+fn run_echo(
+    prompt: &str,
+    token: &str,
+    attempt: u32,
+    step: &str,
+    dir: &std::path::Path,
+    timeout_ms: u64,
+) -> Result<ktask_core::Output, Failure> {
+    let prompt_path = write_prompt_scratch(prompt)?;
     let output = ktask_core::run_provider(
         &ProcessCommands,
         &echo::PROVIDER,
-        &prompt,
+        prompt,
         ktask_core::StepCall {
             token,
-            attempt: *attempt,
+            attempt,
             step,
             model: None,
             resume: None,
+            prompt_path: &prompt_path,
         },
-        &dir,
-        Duration::from_millis(*timeout_ms),
+        dir,
+        Duration::from_millis(timeout_ms),
     )
     .map_err(|error| match error {
         ProviderRunError::Build(message) => Failure { message, code: 2 },
         ProviderRunError::Commands(_) => Failure::from(error.to_string()),
+    });
+    let _ = std::fs::remove_file(&prompt_path);
+    output
+}
+
+/// Writes `prompt` to a scratch file of its own under the system's temporary directory.
+fn write_prompt_scratch(prompt: &str) -> Result<std::path::PathBuf, Failure> {
+    let path = std::env::temp_dir().join(format!(
+        "ktask-rs-provider-run-{}.prompt",
+        std::process::id()
+    ));
+    std::fs::write(&path, prompt).map_err(|e| {
+        format!(
+            "cannot write the prompt scratch file {}: {e}",
+            path.display()
+        )
     })?;
-    render::provider_output(&output, stdout, &mut io::stderr())?;
-    exit_code(&output, provider, *timeout_ms)
+    Ok(path)
 }
 
 /// Rejects any provider name other than the one built-in `echo` provider — shared with

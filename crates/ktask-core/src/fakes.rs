@@ -246,10 +246,14 @@ impl Commands for FakeCommands {
 }
 
 /// An in-memory session log: remembers every `(path, content)` [`SessionLog::append`] was
-/// called with, in order, so a test can see exactly what a step wrote and where.
+/// called with, every prompt [`SessionLog::write_prompt`] wrote, and every path
+/// [`SessionLog::remove_prompt`] removed, each in order, so a test can see exactly what a step
+/// wrote and where.
 #[derive(Debug, Default)]
 pub(crate) struct FakeSessionLog {
     pub(crate) appended: RefCell<Vec<(PathBuf, Vec<u8>)>>,
+    pub(crate) prompts_written: RefCell<Vec<(PathBuf, String)>>,
+    pub(crate) prompts_removed: RefCell<Vec<PathBuf>>,
 }
 
 impl SessionLog for FakeSessionLog {
@@ -257,6 +261,18 @@ impl SessionLog for FakeSessionLog {
         self.appended
             .borrow_mut()
             .push((path.to_owned(), content.to_owned()));
+        Ok(())
+    }
+
+    fn write_prompt(&self, path: &Path, prompt: &str) -> Result<(), SessionLogError> {
+        self.prompts_written
+            .borrow_mut()
+            .push((path.to_owned(), prompt.to_owned()));
+        Ok(())
+    }
+
+    fn remove_prompt(&self, path: &Path) -> Result<(), SessionLogError> {
+        self.prompts_removed.borrow_mut().push(path.to_owned());
         Ok(())
     }
 }

@@ -16,7 +16,7 @@ use crate::{
     RunLock, RunLockError, SessionLog, Sleep, TaskId, TaskStatus,
 };
 
-pub use crate::steps::implementation::{build_prompt, implementation_prompt};
+pub use crate::steps::implementation::build_prompt;
 pub use crate::steps::review::build_review_prompt;
 pub use crate::steps::sync::SyncProblem;
 pub use crate::steps::test_step::build_test_prompt;

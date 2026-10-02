@@ -52,6 +52,11 @@ pub struct StepCall<'a> {
     /// --same-session` named one for this attempt. `None` for a fresh session, and for every
     /// step but the implementation step.
     pub resume: Option<Resume<'a>>,
+    /// Where this call's own whole prompt was written, under the tool's own state directory —
+    /// passed to a provider's script or command line as a positional argument, so one whose
+    /// own script or command line only ever sees part of its prompt can still read everything
+    /// it said.
+    pub prompt_path: &'a Path,
 }
 
 /// What a provider's own output said about having hit its usage limit: the reset time it
@@ -175,6 +180,7 @@ mod tests {
             step,
             model: None,
             resume: None,
+            prompt_path: Path::new("/state/prompts/the-prompt.prompt"),
         }
     }
 
