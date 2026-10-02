@@ -48,6 +48,18 @@ fn step_line(step: &StepLine, width: usize, label: &str) -> Line<'static> {
             format!("{prefix}: {}", elide(reason, budget))
         },
     );
+    let text = match &step.limit_wait {
+        Some(wait) => {
+            let resumed = jiff::Timestamp::try_from(wait.resumed_at)
+                .map(|at| at.to_string())
+                .unwrap_or_default();
+            format!(
+                "{text} · hit the usage limit: waited {}s, resumed {resumed}",
+                wait.waited.as_secs()
+            )
+        }
+        None => text,
+    };
     Line::styled(text, Style::new().add_modifier(Modifier::DIM))
 }
 

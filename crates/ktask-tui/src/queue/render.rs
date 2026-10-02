@@ -585,6 +585,7 @@ mod tests {
             time_spent: Duration::from_secs(seconds),
             outcome,
             reason: None,
+            limit_wait: None,
             steps: vec![StepLine {
                 step: IMPLEMENTATION.to_owned(),
                 provider: Some(provider.to_owned()),
@@ -593,6 +594,7 @@ mod tests {
                 time_spent: Duration::from_secs(seconds),
                 outcome,
                 reason: None,
+                limit_wait: None,
             }],
         }
     }
