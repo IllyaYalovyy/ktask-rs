@@ -157,7 +157,7 @@ impl Journal for SqliteJournal {
 mod tests {
     use std::time::SystemTime;
 
-    use ktask_core::{Outcome, Placement, TaskDraft, TaskId, TaskKind, TaskStatus};
+    use ktask_core::{LimitWait, Outcome, Placement, TaskDraft, TaskId, TaskKind, TaskStatus};
     use serde_json::Value;
     use tempfile::TempDir;
 
@@ -618,10 +618,47 @@ mod tests {
                 status: TaskStatus::Done,
                 reason: None,
                 reported: Some(Outcome::Done),
+                limit_wait: None,
                 at: at(11),
             },
         );
         assert_eq!(journal.events().unwrap()[1..], [started, ended]);
+    }
+
+    #[test]
+    fn a_step_ended_event_with_a_limit_wait_round_trips() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "a", Placement::End);
+        append(
+            &journal,
+            Event::StepStarted {
+                id: TaskId(1),
+                number: 1,
+                step: "implementation".to_owned(),
+                model: None,
+                at: at(10),
+            },
+        );
+        let ended = append(
+            &journal,
+            Event::StepEnded {
+                id: TaskId(1),
+                number: 1,
+                step: "implementation".to_owned(),
+                duration: Duration::from_secs(135),
+                exit_code: Some(0),
+                status: TaskStatus::Done,
+                reason: None,
+                reported: Some(Outcome::Done),
+                limit_wait: Some(LimitWait {
+                    waited: Duration::from_secs(100),
+                    resumed_at: at(100),
+                }),
+                at: at(135),
+            },
+        );
+        assert_eq!(journal.events().unwrap()[2], ended);
     }
 
     #[test]

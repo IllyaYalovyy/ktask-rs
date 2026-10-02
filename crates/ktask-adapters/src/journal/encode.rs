@@ -3,7 +3,7 @@
 
 use std::time::SystemTime;
 
-use ktask_core::{Event, Outcome, Placement, TaskDraft, TaskId};
+use ktask_core::{Event, LimitWait, Outcome, Placement, TaskDraft, TaskId};
 use serde_json::Value;
 
 use super::{
@@ -156,6 +156,18 @@ fn step_started_payload(event: &Event) -> String {
     serde_json::json!({ "number": number, "step": step, "model": model }).to_string()
 }
 
+/// The `limit_wait_seconds` and `limit_resumed_at` a `step_ended` row's payload carries `wait`
+/// as, when the step it names waited for its provider's usage limit at least once before it
+/// ended.
+fn limit_wait_fields(wait: Option<&LimitWait>) -> (Option<u64>, Option<i64>) {
+    wait.map_or((None, None), |wait| {
+        (
+            Some(wait.waited.as_secs()),
+            Some(to_seconds(wait.resumed_at)),
+        )
+    })
+}
+
 /// The payload a `step_ended` row is written with.
 fn step_ended_payload(event: &Event) -> String {
     let Event::StepEnded {
@@ -166,11 +178,13 @@ fn step_ended_payload(event: &Event) -> String {
         status,
         reason,
         reported,
+        limit_wait,
         ..
     } = event
     else {
         unreachable!("only called for Event::StepEnded")
     };
+    let (limit_wait_seconds, limit_resumed_at) = limit_wait_fields(limit_wait.as_ref());
     serde_json::json!({
         "number": number,
         "step": step,
@@ -179,6 +193,8 @@ fn step_ended_payload(event: &Event) -> String {
         "status": status.as_str(),
         "reason": reason,
         "reported": reported.map(Outcome::as_str),
+        "limit_wait_seconds": limit_wait_seconds,
+        "limit_resumed_at": limit_resumed_at,
     })
     .to_string()
 }

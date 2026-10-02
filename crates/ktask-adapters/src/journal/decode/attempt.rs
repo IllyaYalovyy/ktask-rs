@@ -4,7 +4,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use ktask_core::{Event, JournalError, Outcome, TaskId, TaskStatus};
+use ktask_core::{Event, JournalError, LimitWait, Outcome, TaskId, TaskStatus};
 use serde_json::Value;
 
 /// The [`Event::AttemptStarted`] an `attempt_started` row's `payload` decodes to.
@@ -212,6 +212,17 @@ pub(super) fn decode_step_started(
     })
 }
 
+/// The [`LimitWait`] a `step_ended` row's `payload` carries, when it names one: its step waited
+/// for its provider's usage limit at least once before it ended.
+fn decode_limit_wait(payload: &Value) -> Option<LimitWait> {
+    let waited = payload.get("limit_wait_seconds").and_then(Value::as_u64)?;
+    let resumed_at = payload.get("limit_resumed_at").and_then(Value::as_i64)?;
+    Some(LimitWait {
+        waited: Duration::from_secs(waited),
+        resumed_at: super::from_seconds(resumed_at),
+    })
+}
+
 /// The [`Event::StepEnded`] a `step_ended` row's `payload` decodes to.
 pub(super) fn decode_step_ended(
     payload: &Value,
@@ -242,6 +253,7 @@ pub(super) fn decode_step_ended(
         status,
         reason,
         reported,
+        limit_wait: decode_limit_wait(payload),
         at,
     })
 }
