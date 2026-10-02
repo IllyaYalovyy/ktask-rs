@@ -9,10 +9,10 @@ use ratatui::text::Line;
 use crate::widgets::elide;
 
 /// One line per step of `steps`, in order — the same lines `status` prints for the same
-/// attempt, from the same use case: step (named with `label` ahead of it, so an earlier
-/// attempt's own steps read apart from the current one's, which carries none), provider (`-`
-/// for a step the tool ran itself, which names none), time spent, outcome, and the reason when
-/// there is one, cut to fit `width` with a trailing `…` when it does not.
+/// attempt, from the same use case: step (named with `label` ahead of it, so every step line
+/// says which attempt it belongs to), provider (`-` for a step the tool ran itself, which names
+/// none), time spent, outcome, and the reason when there is one, cut to fit `width` with a
+/// trailing `…` when it does not.
 pub(super) fn step_lines_named(
     steps: &[StepLine],
     width: usize,

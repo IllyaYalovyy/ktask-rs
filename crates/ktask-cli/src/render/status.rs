@@ -151,20 +151,32 @@ fn status_text(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
             .history
             .iter()
             .try_for_each(|attempt| {
-                write_step_lines(
-                    out,
-                    &attempt.steps,
-                    &format!("attempt {}: ", attempt.number),
-                )
+                write_step_lines(out, &attempt.steps, &attempt_label(attempt.number))
             })
             .map_err(|e: std::io::Error| e.to_string())?;
-        write_step_lines(out, &entry.attempt.steps, "").map_err(|e| e.to_string())?;
+        write_step_lines(
+            out,
+            &entry.attempt.steps,
+            &attempt_label(entry.attempt.number),
+        )
+        .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
+/// `attempt {number}: `, ahead of every step line of a real attempt, so each says which
+/// attempt it belongs to, the current attempt included — `""` for the synthetic attempt
+/// number `0` a gate stop before any attempt ever began carries, which belongs to none.
+fn attempt_label(number: u32) -> String {
+    if number == 0 {
+        String::new()
+    } else {
+        format!("attempt {number}: ")
+    }
+}
+
 /// Writes one indented line per step of `steps`, in order — step (named with `prefix` ahead of
-/// it, so an earlier attempt's own steps read apart from the current one's, which carries none)
+/// it, so every step line says which attempt it belongs to, the current attempt included)
 /// provider (`-` for a step the tool ran itself, which names none), the model, for the resolve
 /// step, when the project has set one, time spent, outcome, and the reason when it did not
 /// succeed.

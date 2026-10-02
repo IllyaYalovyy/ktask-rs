@@ -260,11 +260,22 @@ fn done_mark_line(mark: &DoneMark, width: usize) -> Line<'static> {
     )
 }
 
+/// `attempt {number}: `, ahead of every step line of a real attempt, so each says which
+/// attempt it belongs to, the current attempt included — `""` for the synthetic attempt
+/// number `0` a gate stop before any attempt ever began carries, which belongs to none.
+fn attempt_label(number: u32) -> String {
+    if number == 0 {
+        String::new()
+    } else {
+        format!("attempt {number}: ")
+    }
+}
+
 /// Every step line task `id` shows: the reason and when it was marked done by hand, when it
 /// was, then one earlier attempt's own steps after another, oldest first, each step named with
-/// its attempt's number ahead of it so it reads apart from the current attempt's own, which
-/// carries none; `current`, the current attempt's steps, last — "the next run adds attempt
-/// N+1 under" the ones already there.
+/// its attempt's number ahead of it, then `current`, the current attempt's steps, last, named
+/// with its own number too, the same way — "the next run adds attempt N+1 under" the ones
+/// already there.
 fn task_step_lines(
     view: &QueueView,
     id: TaskId,
@@ -280,12 +291,16 @@ fn task_step_lines(
             lines.extend(step_lines_named(
                 &attempt.steps,
                 width,
-                &format!("attempt {}: ", attempt.number),
+                &attempt_label(attempt.number),
             ));
         }
     }
     if let Some(attempt) = current {
-        lines.extend(step_lines_named(&attempt.steps, width, ""));
+        lines.extend(step_lines_named(
+            &attempt.steps,
+            width,
+            &attempt_label(attempt.number),
+        ));
     }
     lines
 }
@@ -588,7 +603,10 @@ mod tests {
         attempts.insert(TaskId(10), attempt("echo", 12, AttemptOutcome::Running));
         let queue = loaded_with_attempts(vec![task_named(1, "first", TaskKind::Agent)], attempts);
         let rows = drawn(&queue, 60, 8);
-        assert_eq!(row(&rows, 4), "      implementation · echo · 12s · running");
+        assert_eq!(
+            row(&rows, 4),
+            "      attempt 1: implementation · echo · 12s · running"
+        );
     }
 
     #[test]
@@ -602,7 +620,10 @@ mod tests {
         task.status = TaskStatus::Done;
         let queue = loaded_with_attempts(vec![task], attempts);
         let rows = drawn(&queue, 60, 8);
-        assert_eq!(row(&rows, 4), "      implementation · echo · 3s · done");
+        assert_eq!(
+            row(&rows, 4),
+            "      attempt 1: implementation · echo · 3s · done"
+        );
     }
 
     #[test]
@@ -648,14 +669,23 @@ mod tests {
             line.contains("marked done by the user: fixed by hand (at"),
             "{line}"
         );
-        assert_eq!(row(&rows, 5), "      implementation · echo · 3s · failed");
+        assert_eq!(
+            row(&rows, 5),
+            "      attempt 1: implementation · echo · 3s · failed"
+        );
     }
 
     #[test]
     fn a_retried_tasks_earlier_attempt_shows_above_its_current_one_named_with_its_number() {
         let task = task_named(1, "first", TaskKind::Agent);
         let mut attempts = HashMap::new();
-        attempts.insert(task.id, attempt("echo", 5, AttemptOutcome::Running));
+        attempts.insert(
+            task.id,
+            AttemptLine {
+                number: 2,
+                ..attempt("echo", 5, AttemptOutcome::Running)
+            },
+        );
         let mut history = HashMap::new();
         history.insert(
             task.id,
@@ -686,6 +716,9 @@ mod tests {
             row(&rows, 4),
             "      attempt 1: implementation · echo · 9s · failed"
         );
-        assert_eq!(row(&rows, 5), "      implementation · echo · 5s · running");
+        assert_eq!(
+            row(&rows, 5),
+            "      attempt 2: implementation · echo · 5s · running"
+        );
     }
 }
