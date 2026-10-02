@@ -6,6 +6,14 @@ use jiff::Timestamp;
 use ktask_core::StatusEntry;
 use serde::Serialize;
 
+/// How long a step waited, in total, for its provider's usage limit, and when it last resumed,
+/// as `status --json` shows it.
+#[derive(Debug, Serialize)]
+struct LimitWaitJson {
+    waited_seconds: u64,
+    resumed_at: String,
+}
+
 /// One step of a task's attempt as `status --json` shows it.
 #[derive(Debug, Serialize)]
 struct StepJson<'a> {
@@ -16,6 +24,7 @@ struct StepJson<'a> {
     time_spent_seconds: u64,
     outcome: &'static str,
     reason: Option<&'a str>,
+    limit_wait: Option<LimitWaitJson>,
 }
 
 /// One task's attempt as `status --json` shows it: the current — most recent — step's own
@@ -31,6 +40,7 @@ struct AttemptJson<'a> {
     time_spent_seconds: u64,
     outcome: &'static str,
     reason: Option<&'a str>,
+    limit_wait: Option<LimitWaitJson>,
     steps: Vec<StepJson<'a>>,
 }
 
@@ -52,9 +62,19 @@ struct StatusJson<'a> {
     done_by_user: Option<DoneMarkJson<'a>>,
 }
 
+/// `wait`, timestamped, as a [`LimitWaitJson`].
+fn limit_wait_json(wait: &ktask_core::LimitWait) -> Result<LimitWaitJson, String> {
+    let resumed_at = Timestamp::try_from(wait.resumed_at)
+        .map_err(|e| format!("bad limit-wait resume time: {e}"))?;
+    Ok(LimitWaitJson {
+        waited_seconds: wait.waited.as_secs(),
+        resumed_at: resumed_at.to_string(),
+    })
+}
+
 /// `line` as a [`StepJson`].
-fn step_json(line: &ktask_core::StepLine) -> StepJson<'_> {
-    StepJson {
+fn step_json(line: &ktask_core::StepLine) -> Result<StepJson<'_>, String> {
+    Ok(StepJson {
         step: &line.step,
         provider: line.provider.as_deref(),
         model: line.model.as_deref(),
@@ -62,7 +82,8 @@ fn step_json(line: &ktask_core::StepLine) -> StepJson<'_> {
         time_spent_seconds: line.time_spent.as_secs(),
         outcome: line.outcome.as_str(),
         reason: line.reason.as_deref(),
-    }
+        limit_wait: line.limit_wait.as_ref().map(limit_wait_json).transpose()?,
+    })
 }
 
 /// Writes `entries`: for every task that was attempted, one `#ID<TAB>status<TAB>title` line
@@ -82,8 +103,8 @@ pub(crate) fn status(
 }
 
 /// `line` as an [`AttemptJson`].
-fn attempt_json(line: &ktask_core::AttemptLine) -> AttemptJson<'_> {
-    AttemptJson {
+fn attempt_json(line: &ktask_core::AttemptLine) -> Result<AttemptJson<'_>, String> {
+    Ok(AttemptJson {
         number: line.number,
         step: &line.step,
         provider: line.provider.as_deref(),
@@ -92,8 +113,13 @@ fn attempt_json(line: &ktask_core::AttemptLine) -> AttemptJson<'_> {
         time_spent_seconds: line.time_spent.as_secs(),
         outcome: line.outcome.as_str(),
         reason: line.reason.as_deref(),
-        steps: line.steps.iter().map(step_json).collect(),
-    }
+        limit_wait: line.limit_wait.as_ref().map(limit_wait_json).transpose()?,
+        steps: line
+            .steps
+            .iter()
+            .map(step_json)
+            .collect::<Result<Vec<_>, String>>()?,
+    })
 }
 
 /// `mark`, timestamped, as a [`DoneMarkJson`].
@@ -114,8 +140,12 @@ fn status_json(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
                 id: entry.task.0,
                 title: &entry.title,
                 status: ktask_core::displayed_status(entry.status, Some(entry.attempt.outcome)),
-                attempt: attempt_json(&entry.attempt),
-                history: entry.history.iter().map(attempt_json).collect(),
+                attempt: attempt_json(&entry.attempt)?,
+                history: entry
+                    .history
+                    .iter()
+                    .map(attempt_json)
+                    .collect::<Result<Vec<_>, String>>()?,
                 done_by_user: entry
                     .done_by_user
                     .as_ref()
@@ -175,11 +205,27 @@ fn attempt_label(number: u32) -> String {
     }
 }
 
+/// `wait`, as the trailing tab field a step's own text line carries it with, when it waited for
+/// its provider's usage limit at least once before it ended: how long, in total, and when it
+/// last resumed.
+fn limit_wait_suffix(wait: Option<&ktask_core::LimitWait>) -> String {
+    wait.map_or_else(String::new, |wait| {
+        let resumed = Timestamp::try_from(wait.resumed_at)
+            .map(|at| at.to_string())
+            .unwrap_or_default();
+        format!(
+            "\thit the usage limit: waited {}s, resumed at {resumed}",
+            wait.waited.as_secs()
+        )
+    })
+}
+
 /// Writes one indented line per step of `steps`, in order — step (named with `prefix` ahead of
 /// it, so every step line says which attempt it belongs to, the current attempt included)
 /// provider (`-` for a step the tool ran itself, which names none), the model, for the resolve
-/// step, when the project has set one, time spent, outcome, and the reason when it did not
-/// succeed.
+/// step, when the project has set one, time spent, outcome, the reason when it did not succeed,
+/// and, when it waited at least once for its provider's usage limit before it ended, how long
+/// and when it last resumed.
 fn write_step_lines(
     out: &mut impl Write,
     steps: &[ktask_core::StepLine],
@@ -196,15 +242,16 @@ fn write_step_lines(
             .session
             .as_deref()
             .map_or_else(String::new, |session| format!("\tsession:{session}"));
+        let limit_wait = limit_wait_suffix(step.limit_wait.as_ref());
         match &step.reason {
             Some(reason) => writeln!(
                 out,
-                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}\t{reason}{session}",
+                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}\t{reason}{session}{limit_wait}",
                 step.outcome
             ),
             None => writeln!(
                 out,
-                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{session}",
+                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{session}{limit_wait}",
                 step.outcome
             ),
         }
