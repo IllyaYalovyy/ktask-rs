@@ -166,9 +166,10 @@ fn a_passing_health_check_is_the_first_line_with_its_time_and_passed_and_the_tas
     let mut child = fixture.spawn_the_queue(&["run"])?;
     let lines = fixture.wait_for_status_lines(3)?;
 
-    assert_eq!(lines[0], "#1\trunning\ta");
+    assert_eq!(lines[0], "#1\trunning\ta\tusage none");
     assert!(
-        lines[1].starts_with("\tattempt 1: health check\t-\t") && lines[1].ends_with("\tpassed"),
+        lines[1].starts_with("\tattempt 1: health check\t-\t")
+            && lines[1].ends_with("\tpassed\tusage none"),
         "{lines:?}"
     );
     assert!(
@@ -226,7 +227,7 @@ fn a_failing_health_check_stops_the_run_before_any_attempt_and_the_task_stays_pe
     // did not start, in the run's own words, and the task is still pending.
     let status = fixture.run(&["status"])?;
     let lines: Vec<_> = status.stdout.lines().collect();
-    assert_eq!(lines[0], "#1\tpending\ta");
+    assert_eq!(lines[0], "#1\tpending\ta\tusage none");
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(
         lines[1].starts_with("\thealth check\t-\t0s\tfailed\t"),
@@ -260,9 +261,10 @@ fn once_a_later_run_gets_past_the_health_check_the_earlier_stop_is_no_longer_cur
     let status = fixture.run(&["status"])?;
     assert!(!status.stdout.contains("failed"), "{}", status.stdout);
     let lines: Vec<_> = status.stdout.lines().collect();
-    assert_eq!(lines[0], "#1\tdone\ta");
+    assert_eq!(lines[0], "#1\tdone\ta\tusage none");
     assert!(
-        lines[1].starts_with("\tattempt 1: health check\t-\t") && lines[1].ends_with("\tpassed"),
+        lines[1].starts_with("\tattempt 1: health check\t-\t")
+            && lines[1].ends_with("\tpassed\tusage none"),
         "{}",
         lines[1]
     );
@@ -301,11 +303,11 @@ fn no_health_check_command_set_skips_the_step_and_leaves_no_line() -> Result<()>
     assert_eq!(
         outcome.stdout.lines().collect::<Vec<_>>(),
         [
-            "#1\tdone\ta",
-            "\tattempt 1: implementation\techo\t0s\tdone",
-            "\tattempt 1: review\techo\t0s\tapproved",
-            "\tattempt 1: testing\techo\t0s\taccepted",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
+            "#1\tdone\ta\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
+            "\tattempt 1: review\techo\t0s\tapproved\tusage none",
+            "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
         ]
     );
     Ok(())

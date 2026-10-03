@@ -26,6 +26,9 @@ struct StepJson<'a> {
     outcome: &'static str,
     reason: Option<String>,
     limit_wait: Option<LimitWaitJson>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cost_usd: Option<String>,
 }
 
 /// The live output state for a running provider attempt as `status --json` shows it.
@@ -53,6 +56,9 @@ struct AttemptJson<'a> {
     limit_wait: Option<LimitWaitJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_activity: Option<OutputActivityJson>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cost_usd: Option<String>,
     steps: Vec<StepJson<'a>>,
 }
 
@@ -107,7 +113,14 @@ fn step_json(line: &ktask_core::StepLine) -> Result<StepJson<'_>, String> {
         outcome: presentation::outcome(line.outcome),
         reason: presentation::reason_for(line.reason.as_deref(), line.waiting_for),
         limit_wait: line.limit_wait.as_ref().map(limit_wait_json).transpose()?,
+        input_tokens: line.usage.input_tokens,
+        output_tokens: line.usage.output_tokens,
+        cost_usd: cost_usd(line.usage.cost_microusd),
     })
+}
+
+fn cost_usd(microusd: Option<u64>) -> Option<String> {
+    microusd.map(|value| format!("{}.{:06}", value / 1_000_000, value % 1_000_000))
 }
 
 /// Writes `entries`: for every task that was attempted, one `#ID<TAB>status<TAB>title` line
@@ -139,6 +152,9 @@ fn attempt_json(line: &ktask_core::AttemptLine) -> Result<AttemptJson<'_>, Strin
         reason: presentation::reason_for(line.reason.as_deref(), line.waiting_for),
         limit_wait: line.limit_wait.as_ref().map(limit_wait_json).transpose()?,
         output_activity: line.output_activity.as_ref().map(output_activity_json),
+        input_tokens: line.usage.input_tokens,
+        output_tokens: line.usage.output_tokens,
+        cost_usd: cost_usd(line.usage.cost_microusd),
         steps: line
             .steps
             .iter()
@@ -200,7 +216,15 @@ fn write_done_mark_line(out: &mut impl Write, entry: &StatusEntry) -> Result<(),
 fn status_text(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), String> {
     for entry in entries {
         let status = presentation::task_status(entry.status, Some(entry.attempt.outcome));
-        writeln!(out, "#{}\t{}\t{}", entry.task, status, entry.title).map_err(|e| e.to_string())?;
+        writeln!(
+            out,
+            "#{}\t{}\t{}\t{}",
+            entry.task,
+            status,
+            entry.title,
+            presentation::usage_text(entry.attempt.usage)
+        )
+        .map_err(|e| e.to_string())?;
         write_done_mark_line(out, entry)?;
         entry
             .history
@@ -265,6 +289,7 @@ fn write_step_lines(
         };
         let session = session_field(step.session.as_deref());
         let limit_wait = limit_wait_suffix(step.limit_wait.as_ref());
+        let usage = format!("\t{}", presentation::usage_text(step.usage));
         let activity = if index + 1 == steps.len() {
             activity.map_or_else(String::new, |value| {
                 let text = presentation::activity(value);
@@ -276,12 +301,12 @@ fn write_step_lines(
         match presentation::reason(step) {
             Some(reason) => writeln!(
                 out,
-                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}\t{reason}{session}{limit_wait}{activity}",
+                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}\t{reason}{session}{limit_wait}{usage}{activity}",
                 presentation::outcome(step.outcome)
             ),
             None => writeln!(
                 out,
-                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{session}{limit_wait}{activity}",
+                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{session}{limit_wait}{usage}{activity}",
                 presentation::outcome(step.outcome)
             ),
         }

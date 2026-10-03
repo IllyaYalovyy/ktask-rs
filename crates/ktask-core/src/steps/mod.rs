@@ -159,6 +159,10 @@ pub(crate) struct PipelineState<'a> {
     /// and the task returns to `pending` rather than ending `failed` or `failed-unknown` —
     /// [`finish_attempt`]'s own job to act on, once `run_attempt_steps` returns.
     pub(crate) known_cause: bool,
+    /// Usage reported by the provider while the current step ran.
+    pub(crate) usage: crate::Usage,
+    /// Model reported by the provider while the current step ran.
+    pub(crate) used_model: Option<String>,
 }
 
 /// One step that already ran and passed before the attempt it belongs to was even begun — the
@@ -299,6 +303,8 @@ fn finish_attempt(
         requested_model,
         requested_session,
         known_cause: false,
+        usage: crate::Usage::default(),
+        used_model: None,
     };
     let (steps_duration, status, reason) = run_attempt_steps(&deps, context, &mut state, steps)?;
     let duration = pre_duration + steps_duration;
@@ -436,6 +442,7 @@ mod tests {
             read_session: std::sync::Arc::new(|_| None),
             detect_limit: std::sync::Arc::new(|_| None),
             parse_output: std::sync::Arc::new(|output| output),
+            read_usage: std::sync::Arc::new(|_| crate::ProviderUsage::default()),
         }
     }
 

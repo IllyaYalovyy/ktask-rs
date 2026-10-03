@@ -1,7 +1,9 @@
 //! The shared words and indicators that ktask interfaces use to present status facts.
 
 use jiff::Timestamp;
-use ktask_core::{AttemptOutcome, DoneMark, LimitWait, OutputActivity, StepLine, TaskStatus};
+use ktask_core::{
+    AttemptOutcome, DoneMark, LimitWait, OutputActivity, StepLine, TaskStatus, Usage,
+};
 
 /// The words and indicator for live provider output.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +97,26 @@ pub fn attempt_label(number: u32) -> String {
 #[must_use]
 pub fn session_suffix(session: Option<&str>) -> String {
     session.map_or_else(String::new, |session| format!("session:{session}"))
+}
+
+/// The common compact account of provider usage. `none` is explicit: an absent figure is
+/// different from zero usage, and is what the echo provider intentionally reports.
+#[must_use]
+pub fn usage_text(usage: Usage) -> String {
+    if usage.is_none() {
+        return "usage none".to_owned();
+    }
+    let input = usage
+        .input_tokens
+        .map_or_else(|| "?".to_owned(), |n| n.to_string());
+    let output = usage
+        .output_tokens
+        .map_or_else(|| "?".to_owned(), |n| n.to_string());
+    let cost = usage.cost_microusd.map_or_else(
+        || "cost ?".to_owned(),
+        |microusd| format!("cost ${}.{:06}", microusd / 1_000_000, microusd % 1_000_000),
+    );
+    format!("tokens in {input} out {output} {cost}")
 }
 
 /// The common provider-limit account for a completed step.

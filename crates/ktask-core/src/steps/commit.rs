@@ -186,6 +186,8 @@ mod tests {
             requested_model: None,
             requested_session: None,
             known_cause: false,
+            usage: crate::Usage::default(),
+            used_model: None,
         };
         let commands = crate::fakes::FakeCommands::returning(Ok(crate::Output {
             stdout: Vec::new(),
@@ -201,6 +203,7 @@ mod tests {
             read_session: std::sync::Arc::new(|_| None),
             detect_limit: std::sync::Arc::new(|_| None),
             parse_output: std::sync::Arc::new(|output| output),
+            read_usage: std::sync::Arc::new(|_| crate::ProviderUsage::default()),
         };
         let session_log = crate::fakes::FakeSessionLog::default();
         let sleep = crate::fakes::FakeSleep::default();
@@ -312,6 +315,8 @@ mod tests {
             requested_model: None,
             requested_session: None,
             known_cause: false,
+            usage: crate::Usage::default(),
+            used_model: None,
         };
         assert!(!Commit.enabled(ctx, &state));
     }

@@ -28,7 +28,7 @@ fn claude() -> ProviderDefinition {
         denied_tools: vec!["--disallowedTools".to_owned(), "{denied-tools}".to_owned()],
         parser: ProviderParser::ClaudeStreamJson,
         session_id: Some("result.session_id".to_owned()),
-        usage: Some("result.usage".to_owned()),
+        usage: Some("usage".to_owned()),
         limit_message: Some("rate limit".to_owned()),
     }
 }

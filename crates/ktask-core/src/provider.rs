@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use crate::{CommandSpec, Commands, CommandsError, Output};
+use crate::{CommandSpec, Commands, CommandsError, Output, Usage};
 
 /// The program, arguments and standard input a provider decided to run a prompt with —
 /// everything about the command except where it runs and how long it may run, which the
@@ -70,6 +70,15 @@ pub struct LimitSignal {
     pub reset_at: Option<SystemTime>,
 }
 
+/// Usage and model facts a provider reported for one invocation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderUsage {
+    /// The provider's token and cost figures.
+    pub usage: Usage,
+    /// The model the provider says it actually used.
+    pub model: Option<String>,
+}
+
 /// A provider: a name it is known by, a pure function from a prompt and a [`StepCall`] to the
 /// [`ProviderCommand`] that runs it, whether it supports resuming a session at all, how a
 /// session id is read back from what it produced, and how a message saying its usage limit was
@@ -96,6 +105,8 @@ pub struct Provider {
     /// time it named, when it named one. `None` when it says no such thing at all: the
     /// invocation's own exit code and report, if it made one, are judged as usual.
     pub detect_limit: Arc<LimitDetector>,
+    /// Reads reported token, cost and model facts from normalized output.
+    pub read_usage: Arc<UsageReader>,
     /// Normalizes a provider's captured output before the rest of the runner reads it.
     pub parse_output: Arc<OutputParser>,
 }
@@ -109,6 +120,8 @@ pub type CommandBuilder =
 pub type SessionReader = dyn Fn(&Output) -> Option<String> + Send + Sync;
 /// Detects a provider usage-limit message in normalized output.
 pub type LimitDetector = dyn Fn(&Output) -> Option<LimitSignal> + Send + Sync;
+/// Reads provider usage facts from normalized output.
+pub type UsageReader = dyn Fn(&Output) -> ProviderUsage + Send + Sync;
 /// Converts a provider's captured output to the normalized form consumed by the runner.
 pub type OutputParser = dyn Fn(Output) -> Output + Send + Sync;
 
@@ -196,6 +209,7 @@ mod tests {
             supports_resume: false,
             read_session: Arc::new(|_| None),
             detect_limit: Arc::new(|_| None),
+            read_usage: Arc::new(|_| ProviderUsage::default()),
             parse_output: Arc::new(|output| output),
         }
     }

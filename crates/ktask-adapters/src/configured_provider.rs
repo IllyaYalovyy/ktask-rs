@@ -2,13 +2,17 @@
 
 use std::sync::Arc;
 
-use ktask_core::{Output, Provider, ProviderCommand, ProviderDefinition, ProviderParser, StepCall};
+use ktask_core::{
+    Output, Provider, ProviderCommand, ProviderDefinition, ProviderParser, ProviderUsage, StepCall,
+    Usage,
+};
 
 /// Turns a named effective provider definition into the value the core runner executes.
 #[must_use]
 pub fn configured_provider(name: &str, definition: &ProviderDefinition) -> Provider {
     let command_definition = definition.clone();
     let session_definition = definition.clone();
+    let usage_definition = definition.clone();
     let parser = definition.parser;
     Provider {
         name: name.to_owned(),
@@ -16,6 +20,7 @@ pub fn configured_provider(name: &str, definition: &ProviderDefinition) -> Provi
         supports_resume: !definition.resume.is_empty(),
         read_session: Arc::new(move |output| read_session(&session_definition, output)),
         detect_limit: Arc::new(|_| None),
+        read_usage: Arc::new(move |output| read_usage(&usage_definition, output)),
         parse_output: Arc::new(move |output| parse_output(parser, output)),
     }
 }
@@ -81,13 +86,100 @@ fn claude_event_text(event: &serde_json::Value) -> String {
     let mut text = Vec::new();
     collect_text(event, &mut text);
     let text = text.join("");
-    if event.get("session_id").is_some() && !text.is_empty() {
+    if (event.get("session_id").is_some() || event.get("usage").is_some()) && !text.is_empty() {
         format!("{text}\n{event}")
     } else if text.is_empty() {
         event.to_string()
     } else {
         text
     }
+}
+
+/// Reads the configured JSON usage object from a streamed provider result. A provider that has
+/// no configured usage path, such as `echo`, deliberately reports no figures.
+fn read_usage(definition: &ProviderDefinition, output: &Output) -> ProviderUsage {
+    let Some(path) = definition.usage.as_deref() else {
+        return ProviderUsage::default();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find_map(|event| usage_in_event(&event, path))
+        .unwrap_or_default()
+}
+
+fn usage_in_event(event: &serde_json::Value, path: &str) -> Option<ProviderUsage> {
+    let usage = json_path(event, path)?;
+    let input_tokens = number(usage, &["input_tokens", "inputTokens"]);
+    let output_tokens = number(usage, &["output_tokens", "outputTokens"]);
+    let cost_microusd = cost(usage);
+    let model = string(usage, &["model", "model_name", "modelName"])
+        .or_else(|| string(event, &["model", "model_name", "modelName"]));
+    Some(ProviderUsage {
+        usage: Usage {
+            input_tokens,
+            output_tokens,
+            cost_microusd,
+        },
+        model,
+    })
+}
+
+fn json_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    path.split('.')
+        .filter(|part| !part.is_empty())
+        .try_fold(value, |value, part| value.get(part))
+}
+
+fn number(value: &serde_json::Value, names: &[&str]) -> Option<u64> {
+    names
+        .iter()
+        .find_map(|name| value.get(name))
+        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+}
+
+fn string(value: &serde_json::Value, names: &[&str]) -> Option<String> {
+    names
+        .iter()
+        .find_map(|name| value.get(*name)?.as_str().map(str::to_owned))
+}
+
+fn cost(value: &serde_json::Value) -> Option<u64> {
+    ["cost_usd", "costUsd", "cost"]
+        .iter()
+        .find_map(|name| value.get(*name))
+        .and_then(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| value.as_number().map(ToString::to_string))
+        })
+        .and_then(|value| decimal_microusd(&value))
+}
+
+/// Parses a non-negative decimal USD value into millionths exactly, rounding only beyond the
+/// sixth decimal place. Provider costs are money, so a binary float would make persistence
+/// depend on an implementation detail of the parser.
+fn decimal_microusd(value: &str) -> Option<u64> {
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let whole = whole.parse::<u64>().ok()?.checked_mul(1_000_000)?;
+    let mut fraction = fraction.chars().take(6).collect::<String>();
+    fraction.extend(std::iter::repeat_n(
+        '0',
+        6_usize.saturating_sub(fraction.len()),
+    ));
+    let fraction = fraction.parse::<u64>().ok()?;
+    let rounded = value
+        .split_once('.')
+        .and_then(|(_, decimals)| decimals.as_bytes().get(6))
+        .is_some_and(|digit| *digit >= b'5');
+    whole.checked_add(fraction)?.checked_add(u64::from(rounded))
 }
 
 fn collect_text(value: &serde_json::Value, found: &mut Vec<String>) {
@@ -152,5 +244,37 @@ mod tests {
         for expected in ["working", " now", "finished", "\"type\":\"future\""] {
             assert!(text.contains(expected), "{text}");
         }
+    }
+
+    #[test]
+    fn a_configured_usage_event_reports_tokens_cost_and_the_model_used() {
+        let definition = ProviderDefinition {
+            command: "agent".to_owned(),
+            args: vec![],
+            prompt: vec![],
+            model: vec![],
+            resume: vec![],
+            denied_tools: vec![],
+            parser: ProviderParser::ClaudeStreamJson,
+            session_id: None,
+            usage: Some("result.usage".to_owned()),
+            limit_message: None,
+        };
+        let output = parse_claude_stream(Output {
+            stdout: br#"{"type":"result","result":{"usage":{"input_tokens":12,"output_tokens":34,"cost_usd":0.056789,"model":"asked"}}}"#.to_vec(),
+            stderr: vec![],
+            exit: Exit::Code(0),
+        });
+        assert_eq!(
+            read_usage(&definition, &output),
+            ProviderUsage {
+                usage: Usage {
+                    input_tokens: Some(12),
+                    output_tokens: Some(34),
+                    cost_microusd: Some(56_789),
+                },
+                model: Some("asked".to_owned()),
+            }
+        );
     }
 }

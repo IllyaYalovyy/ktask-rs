@@ -194,10 +194,10 @@ fn new_commits_are_taken_in_and_held_in_the_directory_before_anything_else_runs(
     let mut child = fixture.spawn_the_queue(&["run"])?;
     let lines = fixture.wait_for_status_lines(2)?;
 
-    assert_eq!(lines[0], "#1\trunning\ta");
+    assert_eq!(lines[0], "#1\trunning\ta\tusage none");
     assert_eq!(
         lines[1],
-        "\tattempt 1: sync\t-\t0s\tpassed\ttook in 1 commit from origin/main"
+        "\tattempt 1: sync\t-\t0s\tpassed\ttook in 1 commit from origin/main\tusage none"
     );
     // The new commit's file is already in the working tree, before the task's own step ever
     // started.
@@ -226,16 +226,25 @@ fn several_new_commits_are_counted_and_pluralised() -> Result<()> {
     assert_eq!(
         lines[0..2],
         [
-            "#1\tdone\ta",
-            "\tattempt 1: sync\t-\t0s\tpassed\ttook in 2 commits from origin/main",
+            "#1\tdone\ta\tusage none",
+            "\tattempt 1: sync\t-\t0s\tpassed\ttook in 2 commits from origin/main\tusage none",
         ]
     );
-    assert_eq!(lines[2], "\tattempt 1: implementation\techo\t0s\tdone");
-    assert_eq!(lines[3], "\tattempt 1: review\techo\t0s\tapproved");
-    assert_eq!(lines[4], "\tattempt 1: testing\techo\t0s\taccepted");
+    assert_eq!(
+        lines[2],
+        "\tattempt 1: implementation\techo\t0s\tdone\tusage none"
+    );
+    assert_eq!(
+        lines[3],
+        "\tattempt 1: review\techo\t0s\tapproved\tusage none"
+    );
+    assert_eq!(
+        lines[4],
+        "\tattempt 1: testing\techo\t0s\taccepted\tusage none"
+    );
     assert_eq!(
         lines[5],
-        "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed"
+        "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none"
     );
     assert!(fixture.repository.join("one.txt").is_file());
     assert!(fixture.repository.join("two.txt").is_file());
@@ -255,12 +264,12 @@ fn nothing_new_says_so_and_the_task_carries_on() -> Result<()> {
     assert_eq!(
         status.stdout.lines().collect::<Vec<_>>(),
         [
-            "#1\tdone\ta",
-            "\tattempt 1: sync\t-\t0s\tpassed\tnothing new",
-            "\tattempt 1: implementation\techo\t0s\tdone",
-            "\tattempt 1: review\techo\t0s\tapproved",
-            "\tattempt 1: testing\techo\t0s\taccepted",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
+            "#1\tdone\ta\tusage none",
+            "\tattempt 1: sync\t-\t0s\tpassed\tnothing new\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
+            "\tattempt 1: review\techo\t0s\tapproved\tusage none",
+            "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
         ]
     );
     Ok(())
@@ -294,11 +303,11 @@ fn no_tracked_branch_set_skips_the_step_and_leaves_no_line() -> Result<()> {
     assert_eq!(
         status.stdout.lines().collect::<Vec<_>>(),
         [
-            "#1\tdone\ta",
-            "\tattempt 1: implementation\techo\t0s\tdone",
-            "\tattempt 1: review\techo\t0s\tapproved",
-            "\tattempt 1: testing\techo\t0s\taccepted",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
+            "#1\tdone\ta\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
+            "\tattempt 1: review\techo\t0s\tapproved\tusage none",
+            "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
         ]
     );
     Ok(())
@@ -332,7 +341,7 @@ fn uncommitted_changes_stop_the_run_before_the_task_starts_and_say_what_is_expec
     // words, against the task's still-pending status.
     let status = fixture.run(&["status"])?;
     let lines: Vec<_> = status.stdout.lines().collect();
-    assert_eq!(lines[0], "#1\tpending\ta");
+    assert_eq!(lines[0], "#1\tpending\ta\tusage none");
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(
         lines[1].starts_with("\tsync\t-\t0s\tfailed\t"),
@@ -372,10 +381,10 @@ fn once_a_later_run_gets_past_the_sync_the_earlier_stop_is_no_longer_current() -
     let status = fixture.run(&["status"])?;
     assert!(!status.stdout.contains("failed"), "{}", status.stdout);
     let lines: Vec<_> = status.stdout.lines().collect();
-    assert_eq!(lines[0], "#1\tdone\ta");
+    assert_eq!(lines[0], "#1\tdone\ta\tusage none");
     assert!(
         lines[1].starts_with("\tattempt 1: sync\t-\t")
-            && lines[1].ends_with("\tpassed\tnothing new"),
+            && lines[1].ends_with("\tpassed\tnothing new\tusage none"),
         "{}",
         lines[1]
     );
@@ -421,7 +430,7 @@ fn an_unreachable_remote_stops_the_run_and_says_what_is_expected() -> Result<()>
 
     let status = fixture.run(&["status"])?;
     let lines: Vec<_> = status.stdout.lines().collect();
-    assert_eq!(lines[0], "#1\tpending\ta");
+    assert_eq!(lines[0], "#1\tpending\ta\tusage none");
     assert!(
         lines[1].starts_with("\tsync\t-\t0s\tfailed\t"),
         "{}",
@@ -482,7 +491,7 @@ fn a_rebase_conflict_is_undone_leaving_the_directory_exactly_as_it_was() -> Resu
 
     let ktask_status = fixture.run(&["status"])?;
     let lines: Vec<_> = ktask_status.stdout.lines().collect();
-    assert_eq!(lines[0], "#1\tpending\ta");
+    assert_eq!(lines[0], "#1\tpending\ta\tusage none");
     assert!(
         lines[1].starts_with("\tsync\t-\t0s\tfailed\t"),
         "{}",

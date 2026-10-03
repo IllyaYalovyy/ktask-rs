@@ -33,21 +33,15 @@ fn step_lines(
         .steps
         .iter()
         .map(|step| match &step.ended {
-            Some(end) => {
-                let own_report = end.reported.map(|outcome| (outcome, end.reason.clone()));
-                let (outcome, reason) = step_outcome(&step.name, end, own_report, answer);
-                StepLine {
-                    step: step.name.clone(),
-                    provider: step_provider(&step.name, provider),
-                    model: step.model.clone(),
-                    session: step_session(&step.name, session),
-                    time_spent: end.duration,
-                    outcome,
-                    reason,
-                    waiting_for: None,
-                    limit_wait: end.limit_wait,
-                }
-            }
+            Some(end) => ended_step_line(
+                &step.name,
+                step.model.as_deref(),
+                provider,
+                session,
+                end,
+                end.reported.map(|outcome| (outcome, end.reason.clone())),
+                answer,
+            ),
             None => running_step(
                 &step.name,
                 provider,
@@ -60,6 +54,35 @@ fn step_lines(
             ),
         })
         .collect()
+}
+
+/// A recorded provider or command step as one status line. A provider-reported model wins over
+/// the requested one because it describes what actually ran.
+fn ended_step_line(
+    name: &str,
+    requested_model: Option<&str>,
+    provider: Option<&str>,
+    session: Option<&str>,
+    end: &crate::AttemptEnd,
+    reported: Option<(Outcome, Option<String>)>,
+    answer: Option<&str>,
+) -> StepLine {
+    let (outcome, reason) = step_outcome(name, end, reported, answer);
+    StepLine {
+        step: name.to_owned(),
+        provider: step_provider(name, provider),
+        model: end
+            .used_model
+            .clone()
+            .or_else(|| requested_model.map(str::to_owned)),
+        session: step_session(name, session),
+        time_spent: end.duration,
+        outcome,
+        reason,
+        waiting_for: None,
+        limit_wait: end.limit_wait,
+        usage: end.usage,
+    }
 }
 
 /// The current step line: the last of `steps` when there is one, else a fallback for the
@@ -77,20 +100,15 @@ fn current_step_line(
         return last.clone();
     }
     let fallback = match &attempt.ended {
-        Some(end) => {
-            let (outcome, reason) = step_outcome(IMPLEMENTATION, end, reported, answer);
-            StepLine {
-                step: IMPLEMENTATION.to_owned(),
-                provider: step_provider(IMPLEMENTATION, attempt.provider.as_deref()),
-                model: None,
-                session: step_session(IMPLEMENTATION, attempt.session.as_deref()),
-                time_spent: end.duration,
-                outcome,
-                reason,
-                waiting_for: None,
-                limit_wait: end.limit_wait,
-            }
-        }
+        Some(end) => ended_step_line(
+            IMPLEMENTATION,
+            None,
+            attempt.provider.as_deref(),
+            attempt.session.as_deref(),
+            end,
+            reported,
+            answer,
+        ),
         None => running_step(
             IMPLEMENTATION,
             attempt.provider.as_deref(),
@@ -144,6 +162,9 @@ fn attempt_line(
         waiting_for: current.waiting_for,
         limit_wait: current.limit_wait,
         output_activity,
+        usage: steps.iter().fold(crate::Usage::default(), |total, step| {
+            total.plus(step.usage)
+        }),
         steps,
     }
 }
@@ -385,6 +406,7 @@ mod tests {
                     reason: None,
                     waiting_for: None,
                     limit_wait: None,
+                    usage: crate::Usage::default(),
                     output_activity: None,
                     steps: vec![StepLine {
                         step: IMPLEMENTATION.to_owned(),
@@ -396,6 +418,7 @@ mod tests {
                         reason: None,
                         waiting_for: None,
                         limit_wait: None,
+                        usage: crate::Usage::default(),
                     }],
                 },
                 history: vec![],
@@ -468,6 +491,7 @@ mod tests {
                     reason: None,
                     waiting_for: None,
                     limit_wait: None,
+                    usage: crate::Usage::default(),
                     output_activity: None,
                     steps: vec![StepLine {
                         step: IMPLEMENTATION.to_owned(),
@@ -479,6 +503,7 @@ mod tests {
                         reason: None,
                         waiting_for: None,
                         limit_wait: None,
+                        usage: crate::Usage::default(),
                     }],
                 },
                 history: vec![],
@@ -557,6 +582,8 @@ mod tests {
                 waited: Duration::from_secs(100),
                 resumed_at: at(200),
             }),
+            crate::Usage::default(),
+            None,
         )
         .unwrap();
         crate::attempt::end_attempt(
@@ -941,6 +968,8 @@ mod tests {
             reason: Some("git identity is not configured".to_owned()),
             reported: None,
             limit_wait: None,
+            usage: crate::Usage::default(),
+            used_model: None,
         };
         assert_eq!(
             step_outcome(COMMIT_STEP, &end, None, None),
@@ -990,6 +1019,8 @@ mod tests {
             },
             None,
             None,
+            crate::Usage::default(),
+            None,
         )
         .unwrap();
         crate::attempt::begin_step(&journal, &clock(104), TaskId(1), 1, IMPLEMENTATION, None)
@@ -1011,6 +1042,7 @@ mod tests {
                     reason: None,
                     waiting_for: None,
                     limit_wait: None,
+                    usage: crate::Usage::default(),
                 },
                 StepLine {
                     step: IMPLEMENTATION.to_owned(),
@@ -1022,6 +1054,7 @@ mod tests {
                     reason: None,
                     waiting_for: None,
                     limit_wait: None,
+                    usage: crate::Usage::default(),
                 },
             ]
         );
@@ -1086,6 +1119,7 @@ mod tests {
                 reason: Some("uncommitted changes; commit or stash".to_owned()),
                 waiting_for: None,
                 limit_wait: None,
+                usage: crate::Usage::default(),
             }]
         );
     }

@@ -278,11 +278,15 @@ pub(crate) fn end_step(
     run: AttemptRun<'_>,
     reported: Option<Outcome>,
     limit_wait: Option<LimitWait>,
+    usage: crate::Usage,
+    used_model: Option<&str>,
 ) -> Result<(), RecordReportError> {
     let at = clock.now();
     decide_and_append(journal, |state| {
         state
-            .decide_end_step(id, number, step, run, reported, limit_wait, at)
+            .decide_end_step(
+                id, number, step, run, reported, limit_wait, usage, used_model, at,
+            )
             .map(|event| (vec![event], ()))
     })
 }

@@ -82,12 +82,13 @@ fn step_text(step: &StepLine, width: usize, label: &str) -> String {
             format!("{prefix}: {}", elide(&reason, budget))
         },
     );
-    match &step.limit_wait {
+    let text = match &step.limit_wait {
         Some(wait) => {
             format!("{text} · {}", presentation::queue_limit_wait_text(wait))
         }
         None => text,
-    }
+    };
+    format!("{text} · {}", presentation::usage_text(step.usage))
 }
 
 /// `lines`, kept to at most `budget`: shown in full when they already fit; otherwise the

@@ -39,6 +39,8 @@ fn record_passed_step(
         },
         None,
         None,
+        crate::Usage::default(),
+        None,
     )?;
     Ok(())
 }
@@ -145,6 +147,8 @@ fn end_one_step(
         reason = Some(message);
         state.known_cause = true;
     }
+    let usage = std::mem::take(&mut state.usage);
+    let used_model = state.used_model.take();
     crate::attempt::end_step(
         deps.journal,
         deps.clock,
@@ -159,6 +163,8 @@ fn end_one_step(
         },
         reported,
         limit_wait,
+        usage,
+        used_model.as_deref(),
     )?;
     Ok((total, status, reason))
 }

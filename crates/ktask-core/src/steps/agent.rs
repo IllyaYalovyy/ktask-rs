@@ -315,7 +315,19 @@ pub(crate) fn run_agent_step(
         return Ok(StepOutcome::Waiting { duration, until });
     }
     maybe_record_session(deps, context, state, step, prompt, &result)?;
-    let outcome = agent_outcome(deps.journal, state.task, state.token, step, result)?;
+    let facts = result.as_ref().map_or_else(
+        |_| crate::ProviderUsage::default(),
+        |output| (deps.provider.read_usage)(output),
+    );
+    state.usage = facts.usage;
+    state.used_model.clone_from(&facts.model);
+    let mut outcome = agent_outcome(deps.journal, state.task, state.token, step, result)?;
+    if let (Some(asked), Some(used)) = (model, facts.model.as_deref())
+        && asked != used
+    {
+        outcome.status = TaskStatus::Failed;
+        outcome.reason = Some(format!("asked for {asked}, the provider used {used}"));
+    }
     state.exit_code = outcome.exit_code;
     Ok(to_step_outcome(duration, outcome))
 }

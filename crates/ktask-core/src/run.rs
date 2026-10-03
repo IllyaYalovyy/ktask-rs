@@ -443,6 +443,7 @@ mod tests {
             read_session: std::sync::Arc::new(|_| None),
             detect_limit: std::sync::Arc::new(|_| None),
             parse_output: std::sync::Arc::new(|output| output),
+            read_usage: std::sync::Arc::new(|_| crate::ProviderUsage::default()),
         }
     }
 
@@ -1613,6 +1614,7 @@ mod tests {
             read_session: std::sync::Arc::new(|_| None),
             detect_limit: std::sync::Arc::new(|_| None),
             parse_output: std::sync::Arc::new(|output| output),
+            read_usage: std::sync::Arc::new(|_| crate::ProviderUsage::default()),
         };
         let commands = ReportingCommands {
             journal: &journal,
@@ -2112,6 +2114,7 @@ mod tests {
             read_session: std::sync::Arc::new(|_| None),
             detect_limit: std::sync::Arc::new(|_| None),
             parse_output: std::sync::Arc::new(|output| output),
+            read_usage: std::sync::Arc::new(|_| crate::ProviderUsage::default()),
         };
         let commands = commands_ok(Exit::Code(0));
         let report = run(&journal, &commands, &refusing, Duration::from_secs(60)).unwrap();
@@ -3738,6 +3741,7 @@ mod tests {
             read_session: std::sync::Arc::new(|_| None),
             detect_limit: std::sync::Arc::new(detect_fixed_limit),
             parse_output: std::sync::Arc::new(|output| output),
+            read_usage: std::sync::Arc::new(|_| crate::ProviderUsage::default()),
         };
         let sleep = FakeSleep::default();
         let mut ctx = context(Duration::from_secs(60));

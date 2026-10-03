@@ -35,6 +35,7 @@ pub fn provider() -> Provider {
         supports_resume: true,
         read_session: Arc::new(read_session),
         detect_limit: Arc::new(detect_limit),
+        read_usage: Arc::new(|_| ktask_core::ProviderUsage::default()),
         parse_output: Arc::new(|output| output),
     }
 }

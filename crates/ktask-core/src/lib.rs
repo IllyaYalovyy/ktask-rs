@@ -27,6 +27,7 @@ mod sleep;
 mod status;
 mod steps;
 mod task;
+mod usage;
 
 pub use clock::Clock;
 pub use commands::{CommandSpec, Commands, CommandsError, Exit, Output};
@@ -43,7 +44,7 @@ pub use output::{AttemptOutput, NoAttemptOutput, OutputError, sanitize_output, s
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
 pub use provider::{
     CommandBuilder, LimitDetector, LimitSignal, OutputParser, Provider, ProviderCommand,
-    ProviderRunError, Resume, SessionReader, StepCall, run_provider,
+    ProviderRunError, ProviderUsage, Resume, SessionReader, StepCall, UsageReader, run_provider,
 };
 pub use providers::{
     ProviderDefinition, ProviderOverride, ProviderParser, ProviderView, provider_field_source,
@@ -83,6 +84,7 @@ pub use task::{
     AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, acknowledge_task, add_task,
     answer_task, done_task, list_all_tasks, list_tasks, remove_task, retry_task,
 };
+pub use usage::Usage;
 
 #[cfg(test)]
 mod fakes;

@@ -1088,11 +1088,11 @@ fn an_approving_review_carries_the_task_on_as_done_and_the_review_line_shows_it(
     assert_eq!(
         status.stdout.lines().collect::<Vec<_>>(),
         [
-            "#1\tdone\ta",
-            "\tattempt 1: implementation\techo\t0s\tdone",
-            "\tattempt 1: review\techo\t0s\tapproved",
-            "\tattempt 1: testing\techo\t0s\taccepted",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
+            "#1\tdone\ta\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
+            "\tattempt 1: review\techo\t0s\tapproved\tusage none",
+            "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
         ]
     );
     Ok(())
@@ -1124,9 +1124,9 @@ fn a_reviewer_that_requests_changes_ends_the_task_failed_with_the_findings_as_th
     assert_eq!(
         status_lines.stdout.lines().collect::<Vec<_>>(),
         [
-            "#1\tfailed\ta",
-            "\tattempt 1: implementation\techo\t0s\tdone",
-            "\tattempt 1: review\techo\t0s\tchanges-requested\tfix the thing",
+            "#1\tfailed\ta\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
+            "\tattempt 1: review\techo\t0s\tchanges-requested\tfix the thing\tusage none",
         ]
     );
     Ok(())
@@ -1245,11 +1245,11 @@ fn an_accepting_tester_carries_the_task_on_as_done_and_the_testing_line_shows_it
     assert_eq!(
         status.stdout.lines().collect::<Vec<_>>(),
         [
-            "#1\tdone\ta",
-            "\tattempt 1: implementation\techo\t0s\tdone",
-            "\tattempt 1: review\techo\t0s\tapproved",
-            "\tattempt 1: testing\techo\t0s\taccepted",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
+            "#1\tdone\ta\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
+            "\tattempt 1: review\techo\t0s\tapproved\tusage none",
+            "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
         ]
     );
     Ok(())
@@ -1281,10 +1281,10 @@ fn a_tester_that_rejects_ends_the_task_failed_with_what_failed_as_the_reason_and
     assert_eq!(
         status_lines.stdout.lines().collect::<Vec<_>>(),
         [
-            "#1\tfailed\ta",
-            "\tattempt 1: implementation\techo\t0s\tdone",
-            "\tattempt 1: review\techo\t0s\tapproved",
-            "\tattempt 1: testing\techo\t0s\trejected\tthe login button does nothing",
+            "#1\tfailed\ta\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
+            "\tattempt 1: review\techo\t0s\tapproved\tusage none",
+            "\tattempt 1: testing\techo\t0s\trejected\tthe login button does nothing\tusage none",
         ]
     );
     let json = fixture.run(&["status", "--json"])?;
@@ -1402,7 +1402,7 @@ fn recorded_claude_stream_json_runs_the_task_with_its_model() -> Result<()> {
     select_claude(&fixture)?;
     fixture.add_agent_task("a", "do the recorded work")?;
     let claude = claude_script(
-        "[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-sonnet-5 ] || exit 9\nprompt=$(cat)\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"recorded-session\"}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"working\"}]}}' '{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\" now\"}}' '{\"type\":\"result\",\"result\":\"finished\",\"session_id\":\"recorded-session\",\"usage\":{\"input_tokens\":1}}' '{\"type\":\"future-event\",\"value\":7}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
+        "[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-sonnet-5 ] || exit 9\nprompt=$(cat)\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"recorded-session\"}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"working\"}]}}' '{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\" now\"}}' '{\"type\":\"result\",\"result\":\"finished\",\"session_id\":\"recorded-session\",\"usage\":{\"input_tokens\":12,\"output_tokens\":34,\"cost_usd\":0.056789,\"model\":\"claude-sonnet-5\"}}' '{\"type\":\"future-event\",\"value\":7}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
     )?;
     let outcome = fixture
         .sandbox
@@ -1415,6 +1415,47 @@ fn recorded_claude_stream_json_runs_the_task_with_its_model() -> Result<()> {
     let status = fixture.run(&["status"])?;
     assert!(
         status.stdout.contains("claude-sonnet-5\tclaude"),
+        "{}",
+        status.stdout
+    );
+    assert!(
+        status.stdout.contains("tokens in 12 out 34 cost $0.056789"),
+        "{}",
+        status.stdout
+    );
+    let status_json: serde_json::Value =
+        serde_json::from_str(&fixture.run(&["status", "--json"])?.stdout)?;
+    assert_eq!(status_json[0]["attempt"]["input_tokens"], 12);
+    assert_eq!(status_json[0]["attempt"]["output_tokens"], 34);
+    assert_eq!(status_json[0]["attempt"]["cost_usd"], "0.056789");
+    assert_eq!(
+        status_json[0]["attempt"]["steps"][0]["model"],
+        "claude-sonnet-5"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_provider_reported_model_mismatch_fails_the_attempt_with_both_model_names() -> Result<()> {
+    let fixture = Fixture::new()?;
+    select_claude(&fixture)?;
+    fixture.add_agent_task("a", "do the recorded work")?;
+    let claude = claude_script(
+        "prompt=$(cat)\nprintf '%s\\n' '{\"type\":\"result\",\"result\":\"finished\",\"usage\":{\"model\":\"different-model\"}}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
+    )?;
+    let outcome = fixture
+        .sandbox
+        .run_with(&fixture.repository, &["run"], |command| {
+            with_dir_first_on_path(command, claude.path());
+        })?;
+
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stderr);
+    assert_eq!(fixture.task_status(1)?, "failed");
+    let status = fixture.run(&["status"])?;
+    assert!(
+        status
+            .stdout
+            .contains("failed\tasked for claude-sonnet-5, the provider used different-model"),
         "{}",
         status.stdout
     );

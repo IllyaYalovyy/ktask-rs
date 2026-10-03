@@ -150,6 +150,8 @@ mod tests {
             requested_model: None,
             requested_session: None,
             known_cause: false,
+            usage: crate::Usage::default(),
+            used_model: None,
         };
         assert!(!Test.enabled(context, &state));
     }

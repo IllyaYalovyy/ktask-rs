@@ -2,7 +2,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use crate::{LimitWait, TaskId, TaskStatus};
+use crate::{LimitWait, TaskId, TaskStatus, Usage};
 
 use super::AttemptOutcome;
 
@@ -27,6 +27,8 @@ pub struct StepLine {
     pub waiting_for: Option<Duration>,
     /// The provider-limit wait recorded after the step resumed.
     pub limit_wait: Option<LimitWait>,
+    /// Provider token and cost figures, or none for a provider that reported no usage.
+    pub usage: Usage,
 }
 
 /// One task attempt, including its current step and every step it has run.
@@ -56,6 +58,8 @@ pub struct AttemptLine {
     pub output_activity: Option<OutputActivity>,
     /// Every started step, in order.
     pub steps: Vec<StepLine>,
+    /// Total provider usage across every completed step in this attempt.
+    pub usage: Usage,
 }
 
 /// What an append-only provider output stream says about a running attempt.

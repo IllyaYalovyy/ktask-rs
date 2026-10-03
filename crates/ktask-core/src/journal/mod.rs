@@ -4,6 +4,8 @@ use std::error::Error;
 use std::fmt;
 use std::time::{Duration, SystemTime};
 
+use crate::Usage;
+
 use crate::{Outcome, Placement, TaskDraft, TaskId, TaskStatus};
 
 mod errors;
@@ -171,6 +173,10 @@ pub enum Event {
         /// ended: how long it waited, in total, and when it last resumed. `None` when it never
         /// waited.
         limit_wait: Option<LimitWait>,
+        /// Token and cost figures reported by the provider, when it reported any.
+        usage: Usage,
+        /// The model the provider says it used, when it said one.
+        used_model: Option<String>,
         /// When.
         at: SystemTime,
     },
@@ -280,6 +286,10 @@ pub struct AttemptEnd {
     /// `None` for the attempt's own ending, which carries no step of its own, and for a step
     /// that never waited.
     pub limit_wait: Option<LimitWait>,
+    /// Token and cost figures the provider reported for this step.
+    pub usage: Usage,
+    /// The model the provider says it used for this step.
+    pub used_model: Option<String>,
 }
 
 /// How long a step waited, in total, for its provider's own usage limit, and when it last

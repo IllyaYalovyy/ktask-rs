@@ -179,6 +179,8 @@ fn step_ended_payload(event: &Event) -> String {
         reason,
         reported,
         limit_wait,
+        usage,
+        used_model,
         ..
     } = event
     else {
@@ -195,6 +197,10 @@ fn step_ended_payload(event: &Event) -> String {
         "reported": reported.map(Outcome::as_str),
         "limit_wait_seconds": limit_wait_seconds,
         "limit_resumed_at": limit_resumed_at,
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "cost_microusd": usage.cost_microusd,
+        "used_model": used_model,
     })
     .to_string()
 }

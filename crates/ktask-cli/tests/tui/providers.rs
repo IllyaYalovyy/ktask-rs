@@ -53,7 +53,7 @@ fn v_shows_the_same_provider_list_and_definition_the_cli_shows_then_returns_to_t
             && text.contains("denied-tools: --disallowedTools {denied-tools} (built-in)")
             && text.contains("parser: claude-stream-json (built-in)")
             && text.contains("session-id: result.session_id (built-in)")
-            && text.contains("usage: result.usage (built-in)")
+            && text.contains("usage: usage (built-in)")
             && text.contains("limit-message: rate limit (built-in)")
     })?;
     terminal.send(ESC)?;

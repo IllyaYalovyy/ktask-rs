@@ -121,19 +121,21 @@ impl Queue {
                 view.project.name.clone(),
                 Style::new().add_modifier(Modifier::BOLD),
             ),
-            Line::from(format!(
-                "pending {} running {} done {} failed {} blocked {} unknown {} cancelled {} \
+            Line::from(
+                format!(
+                    "pending {} running {} done {} failed {} blocked {} unknown {} cancelled {} \
                  skipped {} superseded {}",
-                summary.pending,
-                summary.running,
-                summary.done,
-                summary.failed,
-                summary.blocked,
-                summary.failed_unknown,
-                summary.cancelled,
-                summary.skipped,
-                summary.superseded
-            )),
+                    summary.pending,
+                    summary.running,
+                    summary.done,
+                    summary.failed,
+                    summary.blocked,
+                    summary.failed_unknown,
+                    summary.cancelled,
+                    summary.skipped,
+                    summary.superseded
+                ) + &format!(" · {}", presentation::usage_text(queue_usage(view))),
+            ),
             self.question_line(view, width),
         ]
     }
@@ -162,6 +164,22 @@ impl Queue {
             Line::styled(refusal.message(), Style::new().add_modifier(Modifier::BOLD))
         })
     }
+}
+
+fn queue_usage(view: &QueueView) -> ktask_core::Usage {
+    view.attempts
+        .values()
+        .fold(ktask_core::Usage::default(), |total, attempt| {
+            total.plus(attempt.usage)
+        })
+        .plus(
+            view.history
+                .values()
+                .flatten()
+                .fold(ktask_core::Usage::default(), |total, attempt| {
+                    total.plus(attempt.usage)
+                }),
+        )
 }
 
 /// `message` — the last run's or import's own results, one per line — windowed to the
@@ -581,6 +599,7 @@ mod tests {
             waiting_for: None,
             limit_wait: None,
             output_activity: None,
+            usage: ktask_core::Usage::default(),
             steps: vec![StepLine {
                 step: IMPLEMENTATION.to_owned(),
                 provider: Some(provider.to_owned()),
@@ -591,6 +610,7 @@ mod tests {
                 reason: None,
                 waiting_for: None,
                 limit_wait: None,
+                usage: ktask_core::Usage::default(),
             }],
         }
     }
@@ -603,7 +623,7 @@ mod tests {
         let rows = drawn(&queue, 60, 8);
         assert_eq!(
             row(&rows, 4),
-            "      attempt 1: implementation · echo · 12s · running"
+            "      attempt 1: implementation · echo · 12s · running · usa"
         );
     }
 
@@ -620,7 +640,7 @@ mod tests {
         let rows = drawn(&queue, 60, 8);
         assert_eq!(
             row(&rows, 4),
-            "      attempt 1: implementation · echo · 3s · done"
+            "      attempt 1: implementation · echo · 3s · done · usage n"
         );
     }
 
@@ -669,7 +689,7 @@ mod tests {
         );
         assert_eq!(
             row(&rows, 5),
-            "      attempt 1: implementation · echo · 3s · failed"
+            "      attempt 1: implementation · echo · 3s · failed · usage none"
         );
     }
 
@@ -712,11 +732,11 @@ mod tests {
         let rows = drawn(&queue, 60, 8);
         assert_eq!(
             row(&rows, 4),
-            "      attempt 1: implementation · echo · 9s · failed"
+            "      attempt 1: implementation · echo · 9s · failed · usage"
         );
         assert_eq!(
             row(&rows, 5),
-            "      attempt 2: implementation · echo · 5s · running"
+            "      attempt 2: implementation · echo · 5s · running · usag"
         );
     }
 }

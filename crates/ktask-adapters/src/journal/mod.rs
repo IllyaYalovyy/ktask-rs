@@ -637,6 +637,8 @@ mod tests {
                 reason: None,
                 reported: Some(Outcome::Done),
                 limit_wait: None,
+                usage: ktask_core::Usage::default(),
+                used_model: None,
                 at: at(11),
             },
         );
@@ -673,6 +675,8 @@ mod tests {
                     waited: Duration::from_secs(100),
                     resumed_at: at(100),
                 }),
+                usage: ktask_core::Usage::default(),
+                used_model: None,
                 at: at(135),
             },
         );

@@ -271,18 +271,18 @@ fn a_pushed_commit_lands_on_the_remote_its_line_says_so_and_the_task_ends_done()
     let status = fixture.run(&["status"])?;
     assert_eq!(status.code, Some(0), "{}", status.stderr);
     let lines: Vec<&str> = status.stdout.lines().collect();
-    assert_eq!(lines[0], "#1\tdone\ta");
+    assert_eq!(lines[0], "#1\tdone\ta\tusage none");
     let short = &hash[..7];
     assert_eq!(
         lines,
         [
-            "#1\tdone\ta".to_owned(),
-            "\tattempt 1: sync\t-\t0s\tpassed\tnothing new".to_owned(),
-            "\tattempt 1: implementation\techo\t0s\tdone".to_owned(),
-            "\tattempt 1: review\techo\t0s\tapproved".to_owned(),
-            "\tattempt 1: testing\techo\t0s\taccepted".to_owned(),
-            format!("\tattempt 1: commit\t-\t0s\tpassed\tcommitted as {short}"),
-            format!("\tattempt 1: push\t-\t0s\tpassed\tpushed {short} to origin/main"),
+            "#1\tdone\ta\tusage none".to_owned(),
+            "\tattempt 1: sync\t-\t0s\tpassed\tnothing new\tusage none".to_owned(),
+            "\tattempt 1: implementation\techo\t0s\tdone\tusage none".to_owned(),
+            "\tattempt 1: review\techo\t0s\tapproved\tusage none".to_owned(),
+            "\tattempt 1: testing\techo\t0s\taccepted\tusage none".to_owned(),
+            format!("\tattempt 1: commit\t-\t0s\tpassed\tcommitted as {short}\tusage none"),
+            format!("\tattempt 1: push\t-\t0s\tpassed\tpushed {short} to origin/main\tusage none"),
         ]
     );
     Ok(())
@@ -300,7 +300,10 @@ fn a_push_rejected_because_the_remote_moved_on_ends_the_task_failed_and_the_comm
     // Wait until the sync step has passed — proving the remote was reachable and unchanged
     // then — before anyone else's work lands on it.
     let lines = fixture.wait_for_status_lines(2)?;
-    assert_eq!(lines[1], "\tattempt 1: sync\t-\t0s\tpassed\tnothing new");
+    assert_eq!(
+        lines[1],
+        "\tattempt 1: sync\t-\t0s\tpassed\tnothing new\tusage none"
+    );
 
     fixture.push_new_commit_from_seed("upstream.txt")?;
     std::fs::write(&go, "")?;
@@ -342,7 +345,10 @@ fn a_push_that_cannot_reach_the_remote_is_a_known_cause_the_task_stays_pending_o
 
     let mut child = fixture.spawn_the_queue()?;
     let lines = fixture.wait_for_status_lines(2)?;
-    assert_eq!(lines[1], "\tattempt 1: sync\t-\t0s\tpassed\tnothing new");
+    assert_eq!(
+        lines[1],
+        "\tattempt 1: sync\t-\t0s\tpassed\tnothing new\tusage none"
+    );
 
     fixture.break_the_remote()?;
     std::fs::write(&go, "")?;
@@ -396,12 +402,12 @@ fn a_task_with_nothing_to_commit_has_no_push_line_and_ends_done() -> Result<()> 
     assert_eq!(
         status.stdout.lines().collect::<Vec<_>>(),
         [
-            "#1\tdone\ta",
-            "\tattempt 1: sync\t-\t0s\tpassed\tnothing new",
-            "\tattempt 1: implementation\techo\t0s\tdone",
-            "\tattempt 1: review\techo\t0s\tapproved",
-            "\tattempt 1: testing\techo\t0s\taccepted",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
+            "#1\tdone\ta\tusage none",
+            "\tattempt 1: sync\t-\t0s\tpassed\tnothing new\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
+            "\tattempt 1: review\techo\t0s\tapproved\tusage none",
+            "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
         ]
     );
     assert!(

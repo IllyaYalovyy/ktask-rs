@@ -135,6 +135,7 @@ mod tests {
             reason: None,
             waiting_for: None,
             limit_wait: None,
+            usage: crate::Usage::default(),
             output_activity: None,
             steps: vec![],
         }

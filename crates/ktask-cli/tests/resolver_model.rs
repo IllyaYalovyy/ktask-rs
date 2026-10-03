@@ -104,13 +104,13 @@ fn retry_with_a_model_hands_the_next_attempt_the_model_and_the_provider_runs_wit
     assert_eq!(
         fixture.status_lines()?,
         [
-            "#1\tdone\ta",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke",
-            "\tattempt 1: resolve\techo\t0s\tretry",
-            "\tattempt 2: implementation\tother\techo\t0s\tdone",
-            "\tattempt 2: review\techo\t0s\tapproved",
-            "\tattempt 2: testing\techo\t0s\taccepted",
-            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed",
+            "#1\tdone\ta\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\tusage none",
+            "\tattempt 1: resolve\techo\t0s\tretry\tusage none",
+            "\tattempt 2: implementation\tother\techo\t0s\tdone\tusage none",
+            "\tattempt 2: review\techo\t0s\tapproved\tusage none",
+            "\tattempt 2: testing\techo\t0s\taccepted\tusage none",
+            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
         ]
     );
     Ok(())
@@ -135,7 +135,9 @@ fn retry_with_a_known_provider_is_accepted_and_the_attempt_still_shows_it() -> R
     assert_eq!(std::fs::read_to_string(&model_file)?, "stronger");
     let lines = fixture.status_lines()?;
     assert!(
-        lines.contains(&"\tattempt 2: implementation\tstronger\techo\t0s\tdone".to_owned()),
+        lines.contains(
+            &"\tattempt 2: implementation\tstronger\techo\t0s\tdone\tusage none".to_owned()
+        ),
         "{lines:?}"
     );
     Ok(())

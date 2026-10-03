@@ -559,6 +559,7 @@ mod tests {
             waiting_for: None,
             limit_wait: None,
             output_activity: None,
+            usage: ktask_core::Usage::default(),
             steps: vec![],
         }
     }

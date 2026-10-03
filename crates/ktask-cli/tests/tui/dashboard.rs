@@ -272,22 +272,22 @@ fn a_run_started_elsewhere_shows_pending_then_running_with_elapsed_time_increasi
     assert_eq!(lines[4], ">1  #1  done  agent  a");
     // Every step the attempt ran shows, in order — not only the last, `commit`.
     assert!(
-        lines[5].contains("implementation · echo") && lines[5].ends_with("done"),
+        lines[5].contains("implementation · echo") && lines[5].ends_with("done · usage none"),
         "{}",
         lines[5]
     );
     assert!(
-        lines[6].contains("review · echo") && lines[6].ends_with("approved"),
+        lines[6].contains("review · echo") && lines[6].ends_with("approved · usage none"),
         "{}",
         lines[6]
     );
     assert!(
-        lines[7].contains("testing · echo") && lines[7].ends_with("accepted"),
+        lines[7].contains("testing · echo") && lines[7].ends_with("accepted · usage none"),
         "{}",
         lines[7]
     );
     assert!(
-        lines[8].contains("commit · -") && lines[8].ends_with("nothing was changed"),
+        lines[8].contains("commit · -") && lines[8].ends_with("nothing was changed · usage none"),
         "{}",
         lines[8]
     );
@@ -369,22 +369,23 @@ fn a_task_that_changes_a_file_gets_a_real_commit_and_the_dashboard_shows_its_sho
     assert_eq!(lines[4], ">1  #1  done  agent  a");
     // Every step shows, in order — the commit line is the fourth, not the only one.
     assert!(
-        lines[5].contains("implementation · echo") && lines[5].ends_with("done"),
+        lines[5].contains("implementation · echo") && lines[5].ends_with("done · usage none"),
         "{}",
         lines[5]
     );
     assert!(
-        lines[6].contains("review · echo") && lines[6].ends_with("approved"),
+        lines[6].contains("review · echo") && lines[6].ends_with("approved · usage none"),
         "{}",
         lines[6]
     );
     assert!(
-        lines[7].contains("testing · echo") && lines[7].ends_with("accepted"),
+        lines[7].contains("testing · echo") && lines[7].ends_with("accepted · usage none"),
         "{}",
         lines[7]
     );
     assert!(
-        lines[8].contains("commit · -") && lines[8].ends_with(&format!("committed as {hash}")),
+        lines[8].contains("commit · -")
+            && lines[8].ends_with(&format!("committed as {hash} · usage none")),
         "{} (expected hash {hash})",
         lines[8]
     );
@@ -471,7 +472,8 @@ fn a_run_killed_outright_shows_the_task_interrupted_at_once_with_no_next_run() -
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">1  #1  interrupted  agent  a");
     assert!(
-        lines[5].contains("implementation · echo") && lines[5].ends_with("interrupted"),
+        lines[5].contains("implementation · echo")
+            && lines[5].ends_with("interrupted · usage none"),
         "{}",
         lines[5]
     );
@@ -489,7 +491,7 @@ fn a_run_killed_outright_shows_the_task_interrupted_at_once_with_no_next_run() -
 /// baseline for a queue of one or two tasks, none cancelled or skipped.
 fn summary(done: u32, failed: u32, blocked: u32, unknown: u32) -> String {
     format!(
-        "pending 0 running 0 done {done} failed {failed} blocked {blocked} unknown {unknown} cancelled 0 skipped 0 superseded 0"
+        "pending 0 running 0 done {done} failed {failed} blocked {blocked} unknown {unknown} cancelled 0 skipped 0 superseded 0 · usage none"
     )
 }
 
@@ -509,22 +511,22 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     assert_eq!(lines[4], ">1  #1  done  agent  a");
     // All four steps of the successful attempt show, in order.
     assert!(
-        lines[5].contains("implementation") && lines[5].ends_with("done"),
+        lines[5].contains("implementation") && lines[5].ends_with("done · usage none"),
         "{}",
         lines[5]
     );
     assert!(
-        lines[6].contains("review") && lines[6].ends_with("approved"),
+        lines[6].contains("review") && lines[6].ends_with("approved · usage none"),
         "{}",
         lines[6]
     );
     assert!(
-        lines[7].contains("testing") && lines[7].ends_with("accepted"),
+        lines[7].contains("testing") && lines[7].ends_with("accepted · usage none"),
         "{}",
         lines[7]
     );
     assert!(
-        lines[8].contains("commit") && lines[8].ends_with("nothing was changed"),
+        lines[8].contains("commit") && lines[8].ends_with("nothing was changed · usage none"),
         "{}",
         lines[8]
     );
@@ -544,12 +546,16 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     // to match it.
     assert_eq!(lines[4], ">1  #1  done    agent  x");
     // `x`'s four finished steps stay above `b`'s own header and single failed step.
-    assert!(lines[5].contains("implementation") && lines[5].ends_with("done"));
-    assert!(lines[6].contains("review") && lines[6].ends_with("approved"));
-    assert!(lines[7].contains("testing") && lines[7].ends_with("accepted"));
+    assert!(lines[5].contains("implementation") && lines[5].ends_with("done · usage none"));
+    assert!(lines[6].contains("review") && lines[6].ends_with("approved · usage none"));
+    assert!(lines[7].contains("testing") && lines[7].ends_with("accepted · usage none"));
     assert!(lines[8].contains("commit"));
     assert_eq!(lines[9], " 2  #2  failed  agent  b");
-    assert!(lines[10].ends_with("failed: it broke"), "{}", lines[10]);
+    assert!(
+        lines[10].ends_with("failed: it broke · usage none"),
+        "{}",
+        lines[10]
+    );
     assert_eq!(lines[2], summary(1, 1, 0, 0));
     drop(terminal);
 
@@ -564,7 +570,11 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">1  #1  done    agent  x");
     assert_eq!(lines[9], " 2  #2  failed  agent  c");
-    assert!(lines[10].ends_with("too-large: split me"), "{}", lines[10]);
+    assert!(
+        lines[10].ends_with("too-large: split me · usage none"),
+        "{}",
+        lines[10]
+    );
     assert_eq!(lines[2], summary(1, 1, 0, 0));
     drop(terminal);
 
@@ -585,7 +595,7 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     assert_eq!(lines[4], ">1  #1  done     agent  x");
     assert_eq!(lines[9], " 2  #2  blocked  agent  d");
     assert!(
-        lines[10].ends_with("needs-input: which path?"),
+        lines[10].ends_with("needs-input: which path? · usage none"),
         "{}",
         lines[10]
     );
@@ -630,12 +640,13 @@ fn a_changes_requested_review_shows_its_own_outcome_and_findings() -> Result<()>
     assert_eq!(lines[4], ">1  #1  failed  agent  a");
     // The implementation step that passed stays visible above the review that failed it.
     assert!(
-        lines[5].contains("implementation · echo") && lines[5].ends_with("done"),
+        lines[5].contains("implementation · echo") && lines[5].ends_with("done · usage none"),
         "{}",
         lines[5]
     );
     assert!(
-        lines[6].contains("review · echo") && lines[6].ends_with("changes-requested: needs docs"),
+        lines[6].contains("review · echo")
+            && lines[6].ends_with("changes-requested: needs docs · usage none"),
         "{}",
         lines[6]
     );
@@ -662,17 +673,18 @@ fn a_rejecting_tester_shows_its_own_outcome_and_what_failed() -> Result<()> {
     assert_eq!(lines[4], ">1  #1  failed  agent  a");
     // The implementation and review steps that passed stay visible above the tester's own.
     assert!(
-        lines[5].contains("implementation · echo") && lines[5].ends_with("done"),
+        lines[5].contains("implementation · echo") && lines[5].ends_with("done · usage none"),
         "{}",
         lines[5]
     );
     assert!(
-        lines[6].contains("review · echo") && lines[6].ends_with("approved"),
+        lines[6].contains("review · echo") && lines[6].ends_with("approved · usage none"),
         "{}",
         lines[6]
     );
     assert!(
-        lines[7].contains("testing · echo") && lines[7].ends_with("rejected: login is broken"),
+        lines[7].contains("testing · echo")
+            && lines[7].ends_with("rejected: login is broken · usage none"),
         "{}",
         lines[7]
     );
@@ -835,24 +847,24 @@ fn a_task_that_commits_and_pushes_shows_the_dashboard_its_push_line() -> Result<
     // commit, then push last.
     assert!(lines[5].contains("sync · -"), "{}", lines[5]);
     assert!(
-        lines[6].contains("implementation · echo") && lines[6].ends_with("done"),
+        lines[6].contains("implementation · echo") && lines[6].ends_with("done · usage none"),
         "{}",
         lines[6]
     );
     assert!(
-        lines[7].contains("review · echo") && lines[7].ends_with("approved"),
+        lines[7].contains("review · echo") && lines[7].ends_with("approved · usage none"),
         "{}",
         lines[7]
     );
     assert!(
-        lines[8].contains("testing · echo") && lines[8].ends_with("accepted"),
+        lines[8].contains("testing · echo") && lines[8].ends_with("accepted · usage none"),
         "{}",
         lines[8]
     );
     assert!(lines[9].contains("commit · -"), "{}", lines[9]);
     assert!(
         lines[10].contains("push · -")
-            && lines[10].ends_with(&format!("pushed {hash} to origin/main")),
+            && lines[10].ends_with(&format!("pushed {hash} to origin/main · usage none")),
         "{} (expected hash {hash})",
         lines[10]
     );
@@ -896,18 +908,17 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
         "the health check passed with the implementation still running above it",
         |screen| {
             let lines = lines_inside_frame(&screen.contents());
-            lines
-                .get(5)
-                .is_some_and(|line| line.contains("health check") && line.ends_with("passed"))
-                && lines
-                    .get(6)
-                    .is_some_and(|line| line.contains("implementation") && line.contains("running"))
+            lines.get(5).is_some_and(|line| {
+                line.contains("health check") && line.ends_with("passed · usage none")
+            }) && lines
+                .get(6)
+                .is_some_and(|line| line.contains("implementation") && line.contains("running"))
         },
     )?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">1  #1  running  agent  a");
     assert!(
-        lines[5].contains("health check · -") && lines[5].ends_with("passed"),
+        lines[5].contains("health check · -") && lines[5].ends_with("passed · usage none"),
         "{}",
         lines[5]
     );
@@ -932,12 +943,12 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
     })?;
     let lines = lines_inside_frame(&screen);
     assert!(
-        lines[5].contains("health check · -") && lines[5].ends_with("passed"),
+        lines[5].contains("health check · -") && lines[5].ends_with("passed · usage none"),
         "{}",
         lines[5]
     );
     assert!(
-        lines[6].contains("implementation · echo") && lines[6].ends_with("done"),
+        lines[6].contains("implementation · echo") && lines[6].ends_with("done · usage none"),
         "{}",
         lines[6]
     );
@@ -985,7 +996,7 @@ fn a_failing_health_check_gate_shows_on_the_queue_screen_pending_and_clears_once
     assert!(!screen.contains("exited with code 1"), "{screen}");
     let lines = lines_inside_frame(&screen);
     assert!(
-        lines[5].contains("health check · -") && lines[5].ends_with("passed"),
+        lines[5].contains("health check · -") && lines[5].ends_with("passed · usage none"),
         "{}",
         lines[5]
     );

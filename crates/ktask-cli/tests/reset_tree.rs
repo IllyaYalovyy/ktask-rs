@@ -155,14 +155,14 @@ fn with_reset_tree_the_failed_attempts_changes_are_gone_before_the_next_attempt_
     assert_eq!(
         fixture.status_lines()?,
         [
-            "#1\tdone\ta",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke",
+            "#1\tdone\ta\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\tusage none",
             "\tattempt 1: resolve\techo\t0s\tretry\tthe working tree was reset to the commit \
-             this attempt started from",
-            "\tattempt 2: implementation\techo\t0s\tdone",
-            "\tattempt 2: review\techo\t0s\tapproved",
-            "\tattempt 2: testing\techo\t0s\taccepted",
-            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed",
+             this attempt started from\tusage none",
+            "\tattempt 2: implementation\techo\t0s\tdone\tusage none",
+            "\tattempt 2: review\techo\t0s\tapproved\tusage none",
+            "\tattempt 2: testing\techo\t0s\taccepted\tusage none",
+            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
         ]
     );
     Ok(())
@@ -185,7 +185,7 @@ fn without_reset_tree_the_failed_attempts_changes_are_still_there() -> Result<()
     // The resolution line carries no reason: nothing was reset to say anything about.
     assert_eq!(
         fixture.status_lines()?[2],
-        "\tattempt 1: resolve\techo\t0s\tretry"
+        "\tattempt 1: resolve\techo\t0s\tretry\tusage none"
     );
     Ok(())
 }

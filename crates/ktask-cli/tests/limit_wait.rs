@@ -147,7 +147,7 @@ fn a_limit_message_waits_for_its_reset_then_runs_the_same_attempt_again() -> Res
         stdout.contains("\twaiting\t")
     })?;
     let lines: Vec<&str> = waiting.lines().collect();
-    assert_eq!(lines[0], "#1\trunning\ta");
+    assert_eq!(lines[0], "#1\trunning\ta\tusage none");
     let step_line = lines
         .iter()
         .find(|line| line.contains("\twaiting\t"))
@@ -176,7 +176,7 @@ fn a_limit_message_waits_for_its_reset_then_runs_the_same_attempt_again() -> Res
     let final_status = fixture.run(&["status"])?;
     assert_eq!(
         final_status.stdout.lines().next(),
-        Some("#1\tdone\ta"),
+        Some("#1\tdone\ta\tusage none"),
         "{}",
         final_status.stdout
     );

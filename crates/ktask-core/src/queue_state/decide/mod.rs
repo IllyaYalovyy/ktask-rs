@@ -347,6 +347,8 @@ impl QueueState {
         run: AttemptRun<'_>,
         reported: Option<Outcome>,
         limit_wait: Option<LimitWait>,
+        usage: crate::Usage,
+        used_model: Option<&str>,
         at: SystemTime,
     ) -> Result<Event, RecordReportError> {
         self.check_attempt_running(id, number)?;
@@ -360,6 +362,8 @@ impl QueueState {
             reason: run.reason.map(str::to_owned),
             reported,
             limit_wait,
+            usage,
+            used_model: used_model.map(str::to_owned),
             at,
         })
     }

@@ -128,13 +128,13 @@ fn a_resumed_attempt_reads_the_earlier_transcript_and_the_session_stays_the_same
     assert_eq!(
         fixture.status_lines()?,
         [
-            "#1\tdone\ta",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\tsession:carried-over",
-            "\tattempt 1: resolve\techo\t0s\tretry",
-            "\tattempt 2: implementation\techo\t0s\tdone\tsession:carried-over",
-            "\tattempt 2: review\techo\t0s\tapproved",
-            "\tattempt 2: testing\techo\t0s\taccepted",
-            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed",
+            "#1\tdone\ta\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\tsession:carried-over\tusage none",
+            "\tattempt 1: resolve\techo\t0s\tretry\tusage none",
+            "\tattempt 2: implementation\techo\t0s\tdone\tsession:carried-over\tusage none",
+            "\tattempt 2: review\techo\t0s\tapproved\tusage none",
+            "\tattempt 2: testing\techo\t0s\taccepted\tusage none",
+            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
         ]
     );
     Ok(())
