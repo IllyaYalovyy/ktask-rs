@@ -73,7 +73,7 @@ fn step_text(step: &StepLine, width: usize, label: &str) -> String {
             format!("{prefix}: {}", elide(reason, budget))
         },
     );
-    let text = match &step.limit_wait {
+    match &step.limit_wait {
         Some(wait) => {
             let resumed = jiff::Timestamp::try_from(wait.resumed_at)
                 .map(|at| at.to_string())
@@ -84,8 +84,7 @@ fn step_text(step: &StepLine, width: usize, label: &str) -> String {
             )
         }
         None => text,
-    };
-    text
+    }
 }
 
 /// `lines`, kept to at most `budget`: shown in full when they already fit; otherwise the
