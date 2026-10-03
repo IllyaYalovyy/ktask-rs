@@ -5,6 +5,7 @@
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use crate::{CommandSpec, Commands, CommandsError, Output};
@@ -73,16 +74,16 @@ pub struct LimitSignal {
 /// [`ProviderCommand`] that runs it, whether it supports resuming a session at all, how a
 /// session id is read back from what it produced, and how a message saying its usage limit was
 /// hit is recognised.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone)]
 pub struct Provider {
     /// The name the provider is known by.
-    pub name: &'static str,
+    pub name: String,
     /// Turns a prompt and a [`StepCall`] into the command that runs it.
     ///
     /// # Errors
     ///
     /// Fails when the prompt cannot be turned into a command to run.
-    pub command: fn(prompt: &str, call: StepCall<'_>) -> Result<ProviderCommand, String>,
+    pub command: Arc<CommandBuilder>,
     /// Whether this provider can be told to resume a session at all — a `retry
     /// --same-session` naming a provider that cannot is refused rather than silently started
     /// fresh.
@@ -90,11 +91,34 @@ pub struct Provider {
     /// Reads the session this invocation ran in back out of what it produced. `None` when it
     /// reported none — no session is recorded for this invocation at all, the common case for
     /// a provider that never reports one, or a prompt that was never meant to.
-    pub read_session: fn(output: &Output) -> Option<String>,
+    pub read_session: Arc<SessionReader>,
     /// Reads whether what this invocation produced says its usage limit was hit, and the reset
     /// time it named, when it named one. `None` when it says no such thing at all: the
     /// invocation's own exit code and report, if it made one, are judged as usual.
-    pub detect_limit: fn(output: &Output) -> Option<LimitSignal>,
+    pub detect_limit: Arc<LimitDetector>,
+    /// Normalizes a provider's captured output before the rest of the runner reads it.
+    pub parse_output: Arc<OutputParser>,
+}
+
+/// The pure pieces a provider supplies. `Arc` makes a provider a value whose implementation
+/// can be built from a project's configuration, while keeping the runner independent of any
+/// particular CLI.
+pub type CommandBuilder =
+    dyn for<'a> Fn(&str, StepCall<'a>) -> Result<ProviderCommand, String> + Send + Sync;
+/// Reads a provider session identifier from normalized output.
+pub type SessionReader = dyn Fn(&Output) -> Option<String> + Send + Sync;
+/// Detects a provider usage-limit message in normalized output.
+pub type LimitDetector = dyn Fn(&Output) -> Option<LimitSignal> + Send + Sync;
+/// Converts a provider's captured output to the normalized form consumed by the runner.
+pub type OutputParser = dyn Fn(Output) -> Output + Send + Sync;
+
+impl fmt::Debug for Provider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Provider")
+            .field("name", &self.name)
+            .field("supports_resume", &self.supports_resume)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Why running a provider failed — never for the command's own exit code, which is a normal
@@ -147,7 +171,7 @@ pub fn run_provider(
         stdin: built.stdin,
         timeout,
     };
-    Ok(commands.run(&spec)?)
+    Ok((provider.parse_output)(commands.run(&spec)?))
 }
 
 #[cfg(test)]
@@ -165,11 +189,12 @@ mod tests {
         command: fn(&str, StepCall<'_>) -> Result<ProviderCommand, String>,
     ) -> Provider {
         Provider {
-            name: "test",
-            command,
+            name: "test".to_owned(),
+            command: Arc::new(command),
             supports_resume: false,
-            read_session: |_| None,
-            detect_limit: |_| None,
+            read_session: Arc::new(|_| None),
+            detect_limit: Arc::new(|_| None),
+            parse_output: Arc::new(|output| output),
         }
     }
 

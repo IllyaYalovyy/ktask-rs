@@ -189,11 +189,14 @@ mod tests {
             exit: crate::Exit::Code(0),
         }));
         let provider = crate::Provider {
-            name: "test",
-            command: |_, _| unreachable!("the commit step never runs a provider"),
+            name: "test".to_owned(),
+            command: std::sync::Arc::new(|_, _| {
+                unreachable!("the commit step never runs a provider")
+            }),
             supports_resume: false,
-            read_session: |_| None,
-            detect_limit: |_| None,
+            read_session: std::sync::Arc::new(|_| None),
+            detect_limit: std::sync::Arc::new(|_| None),
+            parse_output: std::sync::Arc::new(|output| output),
         };
         let session_log = crate::fakes::FakeSessionLog::default();
         let sleep = crate::fakes::FakeSleep::default();

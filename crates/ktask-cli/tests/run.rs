@@ -1371,3 +1371,84 @@ fn a_tester_past_its_time_limit_is_killed_and_ends_the_task_failed_unknown() -> 
     );
     Ok(())
 }
+
+/// Installs the hermetic `claude` executable used by the Claude provider tests. It receives
+/// the real prompt on stdin, emits a representative stream-json transcript, then executes the
+/// exact `report ... done` command the prompt gave it.
+fn claude_script(script: &str) -> Result<TempDir> {
+    let dir = TempDir::new()?;
+    let path = dir.path().join("claude");
+    std::fs::write(&path, format!("#!/bin/sh\n{script}\n"))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+    Ok(dir)
+}
+
+fn select_claude(fixture: &Fixture) -> Result<()> {
+    for (name, value) in [
+        ("resolver-provider", "claude"),
+        ("resolver-model", "claude-sonnet-5"),
+        ("step-review", "off"),
+        ("step-testing", "off"),
+    ] {
+        let outcome = fixture.run(&["settings", "set", name, value])?;
+        assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    }
+    Ok(())
+}
+
+#[test]
+fn recorded_claude_stream_json_runs_the_task_with_its_model() -> Result<()> {
+    let fixture = Fixture::new()?;
+    select_claude(&fixture)?;
+    fixture.add_agent_task("a", "do the recorded work")?;
+    let claude = claude_script(
+        "[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-sonnet-5 ] || exit 9\nprompt=$(cat)\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"recorded-session\"}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"working\"}]}}' '{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\" now\"}}' '{\"type\":\"result\",\"result\":\"finished\",\"session_id\":\"recorded-session\",\"usage\":{\"input_tokens\":1}}' '{\"type\":\"future-event\",\"value\":7}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
+    )?;
+    let outcome = fixture
+        .sandbox
+        .run_with(&fixture.repository, &["run"], |command| {
+            with_dir_first_on_path(command, claude.path());
+        })?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(fixture.task_status(1)?, "done");
+    assert_eq!(fixture.attempt_running_provider(1, 1)?, "claude");
+    let status = fixture.run(&["status"])?;
+    assert!(
+        status.stdout.contains("claude-sonnet-5\tclaude"),
+        "{}",
+        status.stdout
+    );
+    Ok(())
+}
+
+#[test]
+fn a_claude_error_or_timeout_keeps_the_exit_reason() -> Result<()> {
+    for (script, timeout, expected_exit, expected_reason) in [
+        ("cat >/dev/null\nexit 7", None, Some(7), "reported nothing"),
+        ("cat >/dev/null\nsleep 30", Some("1"), None, "time limit"),
+    ] {
+        let fixture = Fixture::new()?;
+        select_claude(&fixture)?;
+        fixture.add_agent_task("a", "do work")?;
+        let claude = claude_script(script)?;
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_ktask-rs"));
+        command.args(["run"]);
+        if let Some(timeout) = timeout {
+            command.args(["--attempt-timeout", timeout]);
+        }
+        fixture.sandbox.isolate(&mut command, &fixture.repository);
+        with_dir_first_on_path(&mut command, claude.path());
+        let output = command.output()?;
+        assert_eq!(output.status.code(), Some(1));
+        let (_, exit_code, status, reason) = fixture.attempt_ended(1)?;
+        assert_eq!(exit_code, expected_exit);
+        assert_eq!(status, "failed-unknown");
+        assert!(
+            reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains(expected_reason)
+        );
+    }
+    Ok(())
+}

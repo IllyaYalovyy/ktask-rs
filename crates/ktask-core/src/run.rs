@@ -424,8 +424,8 @@ mod tests {
     /// tests to see what `run` passed it, without this being any particular real provider.
     fn test_provider() -> Provider {
         Provider {
-            name: "test",
-            command: |prompt, call| {
+            name: "test".to_owned(),
+            command: std::sync::Arc::new(|prompt, call| {
                 Ok(ProviderCommand {
                     program: "run-it".to_owned(),
                     args: vec![
@@ -436,10 +436,11 @@ mod tests {
                     ],
                     stdin: prompt.as_bytes().to_vec(),
                 })
-            },
+            }),
             supports_resume: false,
-            read_session: |_| None,
-            detect_limit: |_| None,
+            read_session: std::sync::Arc::new(|_| None),
+            detect_limit: std::sync::Arc::new(|_| None),
+            parse_output: std::sync::Arc::new(|output| output),
         }
     }
 
@@ -1597,17 +1598,18 @@ mod tests {
         // layout (the token first, no placeholder flag), and a name of its own — proving
         // `run` works with any [`Provider`] value, not one it recognizes by name.
         let other = Provider {
-            name: "other",
-            command: |_prompt, call| {
+            name: "other".to_owned(),
+            command: std::sync::Arc::new(|_prompt, call| {
                 Ok(ProviderCommand {
                     program: "printf".to_owned(),
                     args: vec![call.token.to_owned(), format!("attempt={}", call.attempt)],
                     stdin: Vec::new(),
                 })
-            },
+            }),
             supports_resume: false,
-            read_session: |_| None,
-            detect_limit: |_| None,
+            read_session: std::sync::Arc::new(|_| None),
+            detect_limit: std::sync::Arc::new(|_| None),
+            parse_output: std::sync::Arc::new(|output| output),
         };
         let commands = ReportingCommands {
             journal: &journal,
@@ -2101,11 +2103,12 @@ mod tests {
     fn a_provider_that_cannot_build_a_command_ends_the_task_failed_unknown() {
         let journal = journal_of_abc();
         let refusing = Provider {
-            name: "refusing",
-            command: |_, _| Err("cannot build it".to_owned()),
+            name: "refusing".to_owned(),
+            command: std::sync::Arc::new(|_, _| Err("cannot build it".to_owned())),
             supports_resume: false,
-            read_session: |_| None,
-            detect_limit: |_| None,
+            read_session: std::sync::Arc::new(|_| None),
+            detect_limit: std::sync::Arc::new(|_| None),
+            parse_output: std::sync::Arc::new(|output| output),
         };
         let commands = commands_ok(Exit::Code(0));
         let report = run(&journal, &commands, &refusing, Duration::from_secs(60)).unwrap();
@@ -3720,17 +3723,18 @@ mod tests {
             calls: RefCell::new(0),
         };
         let provider = Provider {
-            name: "limited",
-            command: |_prompt, call| {
+            name: "limited".to_owned(),
+            command: std::sync::Arc::new(|_prompt, call| {
                 Ok(ProviderCommand {
                     program: "run-it".to_owned(),
                     args: vec![call.token.to_owned()],
                     stdin: Vec::new(),
                 })
-            },
+            }),
             supports_resume: false,
-            read_session: |_| None,
-            detect_limit: detect_fixed_limit,
+            read_session: std::sync::Arc::new(|_| None),
+            detect_limit: std::sync::Arc::new(detect_fixed_limit),
+            parse_output: std::sync::Arc::new(|output| output),
         };
         let sleep = FakeSleep::default();
         let mut ctx = context(Duration::from_secs(60));

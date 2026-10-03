@@ -7,11 +7,12 @@ use std::process::ExitCode;
 use std::path::Path;
 
 use ktask_adapters::{
-    FileRunLock, FileSessionLog, GitCli, ProcessCommands, RealSleep, SystemClock, echo,
+    FileRunLock, FileSessionLog, GitCli, ProcessCommands, RealSleep, SystemClock,
+    builtin_providers, configured_provider, echo,
 };
 use ktask_core::{
     COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, RunReport, SYNC_STEP,
-    Settings, TEST_STEP,
+    Settings, TEST_STEP, effective_resolver_provider, show_providers,
 };
 
 use crate::context::{
@@ -79,6 +80,21 @@ fn run_context<'a>(
     }
 }
 
+/// Builds the configured implementation provider selected for this project.
+fn selected_provider(settings: &Settings) -> Result<ktask_core::Provider, Failure> {
+    let provider_name = effective_resolver_provider(settings);
+    let provider = show_providers(settings, &builtin_providers())
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|candidate| candidate.name == provider_name)
+        .ok_or_else(|| format!("unknown provider {provider_name:?}"))?;
+    Ok(if provider.name == echo::NAME {
+        echo::provider()
+    } else {
+        configured_provider(&provider.name, &provider.definition)
+    })
+}
+
 /// Resolves the project and its settings, builds the context `ktask_core::run_queue` needs,
 /// and runs it with the real adapters — [`run`]'s own work, pulled out of it so it stays
 /// within the workspace's function-length limit.
@@ -101,12 +117,13 @@ fn execute(args: &Args, project: Option<&str>) -> Result<RunReport, Failure> {
         &resolver_model,
         &sessions_dir,
     );
+    let provider = selected_provider(&settings)?;
     Ok(ktask_core::run_queue(
         &journal,
         &SystemClock,
         &ProcessCommands,
         &GitCli,
-        &echo::PROVIDER,
+        &provider,
         &FileSessionLog,
         &RealSleep,
         &lock,

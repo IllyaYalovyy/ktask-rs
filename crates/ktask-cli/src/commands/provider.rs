@@ -156,7 +156,7 @@ fn run_echo(
     let prompt_path = write_prompt_scratch(prompt)?;
     let output = ktask_core::run_provider(
         &ProcessCommands,
-        &echo::PROVIDER,
+        &echo::provider(),
         prompt,
         ktask_core::StepCall {
             token,

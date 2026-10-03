@@ -40,7 +40,8 @@ pub use journal::{
 pub use lock::{RunLock, RunLockError};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
 pub use provider::{
-    LimitSignal, Provider, ProviderCommand, ProviderRunError, Resume, StepCall, run_provider,
+    CommandBuilder, LimitDetector, LimitSignal, OutputParser, Provider, ProviderCommand,
+    ProviderRunError, Resume, SessionReader, StepCall, run_provider,
 };
 pub use providers::{
     ProviderDefinition, ProviderOverride, ProviderParser, ProviderView, provider_field_source,

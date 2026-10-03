@@ -137,7 +137,7 @@ fn record(
             token,
             args.model.as_deref(),
             args.same_session,
-            echo::PROVIDER.supports_resume,
+            echo::provider().supports_resume,
             args.reset_tree,
         )
     } else {

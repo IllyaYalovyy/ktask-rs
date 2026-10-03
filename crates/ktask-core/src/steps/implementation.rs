@@ -173,8 +173,10 @@ impl Step for Implementation {
         true
     }
 
-    fn model(&self, _context: RunContext<'_>, state: &PipelineState<'_>) -> Option<String> {
-        state.requested_model.clone()
+    fn model(&self, context: RunContext<'_>, state: &PipelineState<'_>) -> Option<String> {
+        state.requested_model.clone().or_else(|| {
+            (!context.resolver_model.is_empty()).then(|| context.resolver_model.to_owned())
+        })
     }
 
     fn run(

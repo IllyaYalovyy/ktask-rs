@@ -6,6 +6,7 @@
 //! `KTASK_SESSION: <id>`; a script that never prints one gets no session recorded at all,
 //! exactly as before this existed.
 
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use ktask_core::{LimitSignal, Output, Provider, ProviderCommand, StepCall};
@@ -27,13 +28,16 @@ const LIMIT_PREFIX: &str = "KTASK_LIMIT: ";
 /// one, and where its transcript lives, as positional arguments; it reads the session an
 /// invocation ran in back from its own standard output, and whether that output says its
 /// usage limit was hit.
-pub const PROVIDER: Provider = Provider {
-    name: NAME,
-    command,
-    supports_resume: true,
-    read_session,
-    detect_limit,
-};
+pub fn provider() -> Provider {
+    Provider {
+        name: NAME.to_owned(),
+        command: Arc::new(command),
+        supports_resume: true,
+        read_session: Arc::new(read_session),
+        detect_limit: Arc::new(detect_limit),
+        parse_output: Arc::new(|output| output),
+    }
+}
 
 /// The session a script reported running in, when its standard output has a line `KTASK_
 /// SESSION: <id>` — the first one, when there is more than one. `None` when it reported none.
@@ -252,7 +256,7 @@ mod tests {
 
     #[test]
     fn the_provider_is_named_echo() {
-        assert_eq!(PROVIDER.name, NAME);
+        assert_eq!(provider().name, NAME);
         assert_eq!(NAME, "echo");
     }
 

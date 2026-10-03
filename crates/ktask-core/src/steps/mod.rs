@@ -375,7 +375,7 @@ pub(crate) fn run_one_attempt(
         deps.journal,
         deps.clock,
         task.id,
-        deps.provider.name,
+        &deps.provider.name,
         start_commit.as_deref(),
     )?;
     let pre_duration = record_pre_steps(deps.journal, deps.clock, task.id, number, pre_steps)?;
@@ -423,17 +423,18 @@ mod tests {
 
     fn test_provider() -> Provider {
         Provider {
-            name: "test",
-            command: |_prompt, _call| {
+            name: "test".to_owned(),
+            command: std::sync::Arc::new(|_prompt, _call| {
                 Ok(ProviderCommand {
                     program: "true".to_owned(),
                     args: vec![],
                     stdin: vec![],
                 })
-            },
+            }),
             supports_resume: false,
-            read_session: |_| None,
-            detect_limit: |_| None,
+            read_session: std::sync::Arc::new(|_| None),
+            detect_limit: std::sync::Arc::new(|_| None),
+            parse_output: std::sync::Arc::new(|output| output),
         }
     }
 

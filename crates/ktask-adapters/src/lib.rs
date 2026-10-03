@@ -5,6 +5,7 @@
 //! code stays inside one module of this crate. See docs/ARCHITECTURE.md.
 
 mod clock;
+mod configured_provider;
 pub mod echo;
 mod git;
 mod input;
@@ -20,6 +21,7 @@ mod state;
 mod watch;
 
 pub use clock::SystemClock;
+pub use configured_provider::configured_provider;
 pub use git::GitCli;
 pub use input::read_text;
 pub use journal::SqliteJournal;
