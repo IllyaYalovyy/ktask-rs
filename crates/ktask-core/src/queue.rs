@@ -114,10 +114,7 @@ pub fn queue_view(
         .iter()
         .map(|entry| (entry.task, entry.attempt.clone()))
         .collect();
-    let done_by_user: HashMap<TaskId, DoneMark> = entries
-        .iter()
-        .filter_map(|entry| entry.done_by_user.clone().map(|mark| (entry.task, mark)))
-        .collect();
+    let done_by_user = done_marks(journal, &tasks)?;
     let history: HashMap<TaskId, Vec<AttemptLine>> = entries
         .into_iter()
         .filter(|entry| !entry.history.is_empty())
@@ -135,6 +132,23 @@ pub fn queue_view(
         history,
         done_by_user,
     })
+}
+
+/// The manual-done record for each task that has one. `status` has an entry only for a task
+/// with an attempt or a gate stop, so a task marked done before its first run must be read here
+/// instead.
+fn done_marks(
+    journal: &impl Journal,
+    tasks: &[Task],
+) -> Result<HashMap<TaskId, DoneMark>, JournalError> {
+    tasks
+        .iter()
+        .filter_map(|task| {
+            crate::attempt::done_mark_of(journal, task.id)
+                .transpose()
+                .map(|mark| mark.map(|(reason, at)| (task.id, DoneMark { reason, at })))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -401,6 +415,31 @@ mod tests {
             view.done_by_user.get(&TaskId(1)),
             Some(&DoneMark {
                 reason: "fixed by hand".to_owned(),
+                at: at(5),
+            })
+        );
+    }
+
+    #[test]
+    fn a_task_marked_done_before_its_first_attempt_carries_the_reason_and_when() {
+        let journal = FakeJournal::default();
+        let clock = FakeClock(at(0));
+        add_task(&journal, &clock, &draft("a"), Placement::End).unwrap();
+        crate::done_task(
+            &journal,
+            &FakeClock(at(5)),
+            TaskId(1),
+            "finished before its run",
+        )
+        .unwrap();
+
+        let view = queue_view(project("app", 10), &journal, &clock, &no_run(), false).unwrap();
+
+        assert_eq!(view.tasks[0].status, TaskStatus::Done);
+        assert_eq!(
+            view.done_by_user.get(&TaskId(1)),
+            Some(&DoneMark {
+                reason: "finished before its run".to_owned(),
                 at: at(5),
             })
         );
