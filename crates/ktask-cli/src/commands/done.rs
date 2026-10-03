@@ -1,5 +1,4 @@
-//! `ktask-rs done`: mark a task that ended `failed`, `failed-unknown` or `blocked` `done` by
-//! hand, recording why.
+//! `ktask-rs done`: mark any task `done` by hand, recording why.
 
 use std::io::Write;
 use std::process::ExitCode;

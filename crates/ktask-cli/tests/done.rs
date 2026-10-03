@@ -1,6 +1,5 @@
-//! `ktask-rs done` on the real binary: marking a task that ended `failed`, `failed-unknown` or
-//! `blocked` done by hand, recording the reason and when, and letting the next run continue
-//! past it.
+//! `ktask-rs done` on the real binary: marking any task done by hand, recording the reason and
+//! when, and letting the next run continue past it.
 
 #[path = "support/repo.rs"]
 mod repo;
@@ -202,16 +201,18 @@ fn done_on_a_blocked_or_a_failed_unknown_task_works_too() -> Result<()> {
 }
 
 #[test]
-fn done_on_a_pending_a_running_or_an_already_done_task_is_refused_naming_its_status() -> Result<()>
-{
+fn done_on_a_pending_task_succeeds_before_it_is_run() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add_agent_task("a", &reporting_body_with_reason("done", "n/a"))?;
-    fixture.assert_refused("1", &["--reason", "x"], &["task 1 is pending"])?;
+    let done = fixture.run(&["done", "1", "--reason", "finished before its run"])?;
+
+    assert_eq!(done.code, Some(0), "{}", done.stderr);
+    assert_eq!(done.stdout, "task 1 is done\n");
+    assert_eq!(fixture.task_status(1)?, "done");
 
     let run = fixture.run(&["run"])?;
     assert_eq!(run.code, Some(0), "{}", run.stderr);
-    assert_eq!(fixture.task_status(1)?, "done");
-    fixture.assert_refused("1", &["--reason", "x"], &["task 1 is done"])?;
+    assert!(run.stdout.contains("nothing is pending"), "{}", run.stdout);
     Ok(())
 }
 

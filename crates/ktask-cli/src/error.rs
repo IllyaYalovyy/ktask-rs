@@ -170,7 +170,7 @@ impl From<DoneError> for Failure {
                 message: format!("{error}; `ktask-rs list --all` shows every task"),
                 code: 2,
             },
-            DoneError::NotDoneable { .. } | DoneError::EmptyReason => Self {
+            DoneError::EmptyReason => Self {
                 message: error.to_string(),
                 code: 2,
             },
