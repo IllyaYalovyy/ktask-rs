@@ -44,11 +44,24 @@ fn footer_keys(app: &App) -> &'static str {
 
 /// Draws `app` over the whole of `area`, and returns where the cursor goes when it is shown.
 pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
+    // The queue has one more shortcut than fits below a separate `Keys` heading in a 24-row
+    // terminal. Put that heading in the frame title while the map is open, leaving every
+    // shortcut visible in the inner area.
+    let title = if app.queue.help_open() {
+        " ktask-rs · Keys "
+    } else {
+        " ktask-rs "
+    };
     let block = Block::bordered()
-        .title(" ktask-rs ")
+        .title(title)
         .title_bottom(footer_keys(app));
     let inner = block.inner(area);
     block.render(area, buf);
+    draw_screen(app, inner, buf)
+}
+
+/// Draws the foremost screen, or the queue when no overlay is open.
+fn draw_screen(app: &App, inner: Rect, buf: &mut Buffer) -> Option<Position> {
     if let Some(registration) = &app.registration {
         return Some(registration.draw(inner, buf));
     }

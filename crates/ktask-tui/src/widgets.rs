@@ -41,6 +41,22 @@ pub(crate) fn key_map(keys: &[(&str, &str)], area: Rect, buf: &mut Buffer) {
     Paragraph::new(lines).render(area, buf);
 }
 
+/// Draws just the entries of a key map. Screens whose frame title already says `Keys` use this
+/// when every row matters, so a complete map still fits in a normally sized terminal.
+pub(crate) fn key_map_entries(keys: &[(&str, &str)], area: Rect, buf: &mut Buffer) {
+    let width = keys
+        .iter()
+        .map(|(key, _)| key.chars().count())
+        .max()
+        .unwrap_or(0);
+    Paragraph::new(
+        keys.iter()
+            .map(|(key, does)| Line::from(format!("{key:<width$}  {does}")))
+            .collect::<Vec<_>>(),
+    )
+    .render(area, buf);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

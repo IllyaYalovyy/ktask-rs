@@ -9,7 +9,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget};
 
 use crate::scroll::first_shown;
-use crate::widgets::{elide, key_map};
+use crate::widgets::{elide, key_map_entries};
 
 use super::Queue;
 
@@ -71,7 +71,7 @@ impl Queue {
             return;
         };
         if self.help {
-            key_map(self.help_keys(), area, buf);
+            key_map_entries(self.help_keys(), area, buf);
             return;
         }
         let [header, notice, list] = Layout::vertical([
