@@ -152,9 +152,8 @@ impl Queue {
         }
     }
 
-    /// The screen after `D` on the selected task: opens the done form when it is `failed`,
-    /// `failed-unknown` or `blocked`, and otherwise refuses at once, naming its status, in the
-    /// same words `ktask-rs done` would; with nothing selected, changes nothing.
+    /// The screen after `D` on the selected task: opens the done form for any selected task;
+    /// with nothing selected, changes nothing.
     pub(super) fn press_done(self) -> (Self, Option<Request>) {
         let Some(id) = self.selected else {
             return (self, None);
@@ -162,24 +161,10 @@ impl Queue {
         let Some(view) = &self.view else {
             return (self, None);
         };
-        let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
+        if !view.tasks.iter().any(|task| task.id == id) {
             return (self, None);
-        };
-        if matches!(
-            task.status,
-            TaskStatus::Failed | TaskStatus::FailedUnknown | TaskStatus::Blocked
-        ) {
-            (self, Some(Request::OpenDone(id)))
-        } else {
-            let status = task.status;
-            (
-                Self {
-                    refused: Some(Refusal::NotDoneable(id, status)),
-                    ..self
-                },
-                None,
-            )
         }
+        (self, Some(Request::OpenDone(id)))
     }
 
     /// The screen after `H` on the selected task: opens the acknowledgement form only for a

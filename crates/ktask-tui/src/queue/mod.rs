@@ -119,9 +119,7 @@ impl Queue {
         let refused = self.refused.filter(|refusal| match refusal {
             Refusal::Running(id) => is_running(&queue, *id),
             Refusal::AlreadyCancelled(id) | Refusal::NextToCancelled(id) => cancelled(&queue, *id),
-            Refusal::NotRetryable(id, status)
-            | Refusal::NotBlocked(id, status)
-            | Refusal::NotDoneable(id, status) => queue
+            Refusal::NotRetryable(id, status) | Refusal::NotBlocked(id, status) => queue
                 .tasks
                 .iter()
                 .any(|task| task.id == *id && task.status == *status),
@@ -256,8 +254,8 @@ mod tests {
     use std::time::SystemTime;
 
     use ktask_core::{
-        AnswerError, AttemptLine, AttemptOutcome, DoneError, Outcome, Project, RetryError,
-        StatusSummary, Task, TaskKind, TaskStatus,
+        AnswerError, AttemptLine, AttemptOutcome, Outcome, Project, RetryError, StatusSummary,
+        Task, TaskKind, TaskStatus,
     };
 
     use super::*;
@@ -610,11 +608,17 @@ mod tests {
     }
 
     #[test]
-    fn capital_d_on_a_failed_a_failed_unknown_or_a_blocked_task_opens_the_done_form() {
+    fn capital_d_on_any_selected_task_opens_the_done_form() {
         for status in [
+            TaskStatus::Pending,
+            TaskStatus::Running,
+            TaskStatus::Done,
             TaskStatus::Failed,
             TaskStatus::FailedUnknown,
             TaskStatus::Blocked,
+            TaskStatus::Cancelled,
+            TaskStatus::Skipped,
+            TaskStatus::Superseded,
         ] {
             let mut view = queue_of(&[1, 2]);
             view.tasks[0].status = status;
@@ -629,51 +633,10 @@ mod tests {
     }
 
     #[test]
-    fn capital_d_on_a_task_that_cannot_be_marked_done_refuses_naming_its_status() {
-        for status in [TaskStatus::Pending, TaskStatus::Running, TaskStatus::Done] {
-            let mut view = queue_of(&[1, 2]);
-            view.tasks[0].status = status;
-            let queue = Queue::default().loaded(view.clone());
-
-            let (queue, request) = queue.key(KeyCode::Char('D'));
-
-            assert_eq!(request, None, "{status}");
-            assert_eq!(
-                queue.refused,
-                Some(Refusal::NotDoneable(TaskId(1), status)),
-                "{status}"
-            );
-            assert_eq!(queue.view, Some(view), "{status}");
-        }
-    }
-
-    #[test]
     fn capital_d_with_nothing_selected_requests_and_refuses_nothing() {
         let (queue, request) = loaded(&[]).key(KeyCode::Char('D'));
         assert_eq!(request, None);
         assert_eq!(queue.refused, None);
-    }
-
-    #[test]
-    fn the_not_doneable_refusal_is_dismissed_by_the_next_key_that_is_not_capital_d_again() {
-        let queue = press(loaded(&[1, 2]), &[KeyCode::Char('D')]);
-        assert_eq!(
-            queue.refused,
-            Some(Refusal::NotDoneable(TaskId(1), TaskStatus::Pending))
-        );
-        assert_eq!(press(queue, &[KeyCode::Char('j')]).refused, None);
-    }
-
-    #[test]
-    fn the_not_doneable_refusal_is_worded_as_ktask_rs_done_would() {
-        assert_eq!(
-            Refusal::NotDoneable(TaskId(1), TaskStatus::Pending).message(),
-            DoneError::NotDoneable {
-                id: TaskId(1),
-                status: TaskStatus::Pending
-            }
-            .to_string()
-        );
     }
 
     #[test]

@@ -1,6 +1,5 @@
-//! `D` on the queue screen: opens the done form for the selected task, through the same use
-//! case `ktask-rs done` runs, and refuses, in the same words, when the task's status is not
-//! `failed`, `failed-unknown` or `blocked`.
+//! `D` on the queue screen: opens the done form for any selected task, through the same use
+//! case `ktask-rs done` runs.
 
 use std::path::PathBuf;
 
@@ -90,14 +89,6 @@ fn selected_row(screen: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The header's question line — where a refusal is shown at once, without asking.
-fn header_line(screen: &str) -> String {
-    lines_inside_frame(screen)
-        .get(3)
-        .cloned()
-        .unwrap_or_default()
-}
-
 #[test]
 fn capital_d_opens_the_done_form_and_ctrl_s_marks_it_done_showing_the_reason_and_when() -> Result<()>
 {
@@ -172,43 +163,31 @@ fn esc_closes_the_done_form_and_marks_nothing_done() -> Result<()> {
 }
 
 #[test]
-fn capital_d_on_a_pending_task_refuses_without_asking_in_the_same_words_as_ktask_rs_done()
--> Result<()> {
+fn capital_d_on_a_pending_task_opens_the_done_form_and_marks_it_done() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add_agent_task("a", &reporting_body_with_reason("failed", "it broke"))?;
     let mut terminal = fixture.open()?;
-    let before = terminal.screen();
 
     terminal.send("D")?;
 
-    let screen = terminal.wait_for("the refusal", |screen| {
-        screen.contents().contains("task 1 is pending")
+    let screen = terminal.wait_for("the done form", |screen| {
+        screen.contents().contains("Mark task #1 done")
     })?;
-    assert!(
-        header_line(&screen).contains("task 1 is pending"),
-        "{}",
-        header_line(&screen)
-    );
-    assert_eq!(
-        selected_row(&screen),
-        selected_row(&before),
-        "the refusal changed nothing about the task list"
-    );
+    assert_eq!(lines_inside_frame(&screen)[1], "Mark task #1 done");
+    terminal.send("finished before its run")?;
+    terminal.send(SUBMIT)?;
 
-    // The same words the CLI gives for marking the same task done.
-    let cli_refusal = fixture.sandbox.run(
-        &fixture.repository,
-        &["done", "1", "--reason", "an attempt"],
-    )?;
-    assert_eq!(cli_refusal.code, Some(2));
-    assert!(
-        cli_refusal.stderr.contains(&header_line(&screen)),
-        "{}",
-        cli_refusal.stderr
-    );
+    terminal.wait_for("the pending task shown done", |screen| {
+        selected_row(&screen.contents()).starts_with(">1  #1  done")
+            && screen.contents().contains("finished before its run")
+    })?;
 
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
+
+    let run = fixture.sandbox.run(&fixture.repository, &["run"])?;
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(run.stdout.contains("nothing is pending"), "{}", run.stdout);
     Ok(())
 }
 

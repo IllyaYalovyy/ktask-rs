@@ -82,13 +82,12 @@ pub trait Application {
     fn answer_task(&self, id: TaskId, text: &str) -> Result<(), Self::AnswerError>;
 
     /// Marks the task numbered `id` `done` — the operator submitted the done form for it —
-    /// with `reason`, after it ended `failed`, `failed-unknown` or `blocked`: work finished
-    /// outside the tool, recorded as finished instead of removed or left failed.
+    /// with `reason`: work finished outside the tool, recorded as finished.
     ///
     /// # Errors
     ///
-    /// Fails, changing nothing, when there is no such task, its status is not `failed`,
-    /// `failed-unknown` or `blocked`, or `reason` is empty or only whitespace.
+    /// Fails, changing nothing, when there is no such task or `reason` is empty or only
+    /// whitespace.
     fn done_task(&self, id: TaskId, reason: &str) -> Result<(), Self::DoneError>;
 
     /// Acknowledges a pending human task, recording `message` when it is not blank.

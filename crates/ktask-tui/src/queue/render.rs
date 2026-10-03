@@ -39,10 +39,7 @@ const KEYS: [(&str, &str); 20] = [
         "A",
         "answer the selected task's question, once it is blocked",
     ),
-    (
-        "D",
-        "mark the selected task done by hand, once it is failed, failed-unknown or blocked",
-    ),
+    ("D", "mark the selected task done by hand"),
     ("H", "acknowledge the selected human task"),
     (
         "r",
