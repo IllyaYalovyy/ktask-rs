@@ -2,7 +2,10 @@
 //! attempt changed.
 
 use crate::steps::{Deps, PipelineState, Step, StepOutcome};
-use crate::{COMMIT_STEP, CommitAllError, Git, RunContext, RunError, Task, TaskStatus};
+use crate::{CommitAllError, Git, RunContext, RunError, Task, TaskStatus};
+
+/// The journal name of the commit step.
+pub const COMMIT_STEP: &str = "commit";
 
 /// Why the commit step refuses when the project directory has changes but git has not been
 /// told whose they are, and what is expected of the operator because of it.

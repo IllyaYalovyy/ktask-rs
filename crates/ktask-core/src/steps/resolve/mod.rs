@@ -7,7 +7,10 @@ use std::time::Duration;
 use crate::run::Attempted;
 use crate::steps::implementation::earlier_attempts;
 use crate::steps::{Deps, PipelineState, Step, StepOutcome, run_agent_step, run_one_step};
-use crate::{AttemptRun, Journal, RESOLVE_STEP, RunContext, RunError, Task, TaskId, TaskStatus};
+use crate::{AttemptRun, Journal, RunContext, RunError, Task, TaskId, TaskStatus};
+
+/// The journal name of the resolve step.
+pub const RESOLVE_STEP: &str = "resolve";
 
 mod prompt;
 

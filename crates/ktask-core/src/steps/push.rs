@@ -3,7 +3,10 @@
 
 use crate::settings::split_tracked_branch;
 use crate::steps::{Deps, PipelineState, Step, StepOutcome};
-use crate::{Git, PUSH_STEP, PushError, RunContext, RunError, TaskStatus};
+use crate::{Git, PushError, RunContext, RunError, TaskStatus};
+
+/// The journal name of the push step.
+pub const PUSH_STEP: &str = "push";
 
 /// What pushing the commit step's commit to the project's tracked branch, and confirming the
 /// remote holds it, found and did.

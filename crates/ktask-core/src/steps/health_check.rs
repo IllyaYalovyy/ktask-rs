@@ -9,9 +9,12 @@ use std::time::Duration;
 use crate::run::RunEnd;
 use crate::steps::INTERRUPTED;
 use crate::{
-    Clock, CommandSpec, Commands, CommandsError, Exit, HEALTH_CHECK_STEP, Journal, Output,
-    RunContext, RunError, TaskId,
+    Clock, CommandSpec, Commands, CommandsError, Exit, Journal, Output, RunContext, RunError,
+    TaskId,
 };
+
+/// The journal name of the health-check step.
+pub const HEALTH_CHECK_STEP: &str = "health check";
 
 /// How many lines of a failing health check's combined output are shown to the operator.
 const OUTPUT_TAIL_LINES: usize = 20;

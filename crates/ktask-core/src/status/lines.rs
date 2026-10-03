@@ -6,10 +6,8 @@ use std::time::{Duration, SystemTime};
 
 use crate::{AttemptEnd, Clock, Outcome, Task, TaskStatus};
 
-use super::{
-    AttemptLine, AttemptOutcome, IMPLEMENTATION, RESOLVE_STEP, REVIEW_STEP, StatusEntry, StepLine,
-    TEST_STEP,
-};
+use super::{AttemptLine, AttemptOutcome, StatusEntry, StepLine};
+use crate::{IMPLEMENTATION, RESOLVE_STEP, REVIEW_STEP, TEST_STEP};
 
 /// The outcome and reason shown for the implementation step ended at `end`, given what the
 /// agent itself reported for it, when it reported anything at all; `answer`, when the report
@@ -75,13 +73,6 @@ pub(super) fn step_session(name: &str, session: Option<&str>) -> Option<String> 
     }
 }
 
-/// How much longer a step waiting until `until` has left, read fresh against `clock` every
-/// time: `until` itself, when it has already passed — the wait is over, and the step is about
-/// to run again the moment the run gets back to it.
-fn remaining(until: SystemTime, clock: &(impl Clock + ?Sized)) -> Duration {
-    until.duration_since(clock.now()).unwrap_or_default()
-}
-
 /// The still-running step line for a step named `name`, started at `started_at`: its elapsed
 /// time so far, and whether it shows `running`, `waiting` (when `waiting_until` names a time
 /// not yet passed) or `interrupted` depending on `run_alive`.
@@ -99,13 +90,7 @@ pub(super) fn running_step(
     let elapsed = clock.now().duration_since(started_at).unwrap_or_default();
     let (outcome, reason) = match (run_alive, waiting_until) {
         (false, _) => (AttemptOutcome::Interrupted, None),
-        (true, Some(until)) => (
-            AttemptOutcome::Waiting,
-            Some(format!(
-                "the provider's usage limit was hit; resumes in {}s",
-                remaining(until, clock).as_secs()
-            )),
-        ),
+        (true, Some(_)) => (AttemptOutcome::Waiting, None),
         (true, None) => (AttemptOutcome::Running, None),
     };
     StepLine {
@@ -116,6 +101,9 @@ pub(super) fn running_step(
         time_spent: elapsed,
         outcome,
         reason,
+        waiting_for: (run_alive && outcome == AttemptOutcome::Waiting)
+            .then(|| waiting_until.and_then(|until| until.duration_since(clock.now()).ok()))
+            .flatten(),
         limit_wait: None,
     }
 }
@@ -133,6 +121,7 @@ pub(super) fn gate_stop_entry(task: Task, step: String, reason: String) -> Statu
         time_spent: Duration::ZERO,
         outcome: AttemptOutcome::Failed,
         reason: Some(reason),
+        waiting_for: None,
         limit_wait: None,
     };
     StatusEntry {
@@ -148,6 +137,7 @@ pub(super) fn gate_stop_entry(task: Task, step: String, reason: String) -> Statu
             time_spent: Duration::ZERO,
             outcome: line.outcome,
             reason: line.reason.clone(),
+            waiting_for: None,
             limit_wait: None,
             output_activity: None,
             steps: vec![line],

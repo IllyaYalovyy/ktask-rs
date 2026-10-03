@@ -5,7 +5,10 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::steps::{Deps, PipelineState, Step, StepOutcome, diff_since, run_agent_step};
-use crate::{AttemptToken, REVIEW_STEP, RunContext, RunError, Task};
+use crate::{AttemptToken, RunContext, RunError, Task};
+
+/// The journal name of the review step.
+pub const REVIEW_STEP: &str = "review";
 
 /// The prompt for the review step of attempt `token` of `task`: its title, body and acceptance
 /// criteria, the diff the implementation step made — `diff`, empty when there was nothing to

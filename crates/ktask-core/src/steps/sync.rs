@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use crate::run::RunEnd;
 use crate::settings::split_tracked_branch;
-use crate::{
-    Clock, Git, Journal, PullRebase, PullRebaseError, RunContext, RunError, SYNC_STEP, TaskId,
-};
+use crate::{Clock, Git, Journal, PullRebase, PullRebaseError, RunContext, RunError, TaskId};
+
+/// The journal name of the sync step.
+pub const SYNC_STEP: &str = "sync";
 
 /// Why the sync ahead of a task's health check refused to run it.
 #[derive(Debug, Clone, PartialEq, Eq)]

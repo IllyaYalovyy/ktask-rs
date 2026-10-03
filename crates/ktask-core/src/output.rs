@@ -133,6 +133,7 @@ mod tests {
             time_spent: Duration::ZERO,
             outcome: AttemptOutcome::Passed,
             reason: None,
+            waiting_for: None,
             limit_wait: None,
             output_activity: None,
             steps: vec![],

@@ -2,9 +2,10 @@
 //! the one step of the seven that cannot be switched off.
 
 use crate::steps::{Deps, PipelineState, Step, StepOutcome, diff_since, run_agent_step};
-use crate::{
-    AttemptToken, IMPLEMENTATION, Journal, JournalError, RunContext, RunError, Task, TaskId,
-};
+use crate::{AttemptToken, Journal, JournalError, RunContext, RunError, Task, TaskId};
+
+/// The journal name of the implementation step.
+pub const IMPLEMENTATION: &str = "implementation";
 
 /// One earlier attempt at the task this prompt is for, as [`earlier_attempts`] reads it back:
 /// its number, and what it ended at in the agent's own words when it reported one, or the

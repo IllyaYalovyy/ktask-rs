@@ -71,9 +71,13 @@ pub use settings::{
 };
 pub use sleep::Sleep;
 pub use status::{
-    AttemptLine, AttemptOutcome, COMMIT_STEP, DoneMark, HEALTH_CHECK_STEP, IMPLEMENTATION,
-    OutputActivity, PUSH_STEP, RESOLVE_STEP, REVIEW_STEP, SYNC_STEP, StatusEntry, StepLine,
-    TEST_STEP, displayed_status, status, status_with_output,
+    AttemptLine, AttemptOutcome, DoneMark, OutputActivity, StatusEntry, StepLine, status,
+    status_with_output,
+};
+pub use steps::{
+    commit::COMMIT_STEP, health_check::HEALTH_CHECK_STEP, implementation::IMPLEMENTATION,
+    push::PUSH_STEP, resolve::RESOLVE_STEP, review::REVIEW_STEP, sync::SYNC_STEP,
+    test_step::TEST_STEP,
 };
 pub use task::{
     AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, acknowledge_task, add_task,
