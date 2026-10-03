@@ -4,6 +4,8 @@
 //! `tui/retry.rs`; answering one is in `tui/answer.rs`; marking one done by hand is in
 //! `tui/done.rs`.
 
+#[path = "tui/ack.rs"]
+mod ack;
 #[path = "tui/add.rs"]
 mod add;
 #[path = "tui/answer.rs"]

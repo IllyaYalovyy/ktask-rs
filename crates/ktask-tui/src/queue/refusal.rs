@@ -2,7 +2,8 @@
 //! identically to the CLI command it mirrors.
 
 use ktask_core::{
-    AnswerError, AppendError, CancelError, DoneError, RetryError, TaskId, TaskStatus,
+    AcknowledgeError, AnswerError, AppendError, CancelError, DoneError, RetryError, TaskId,
+    TaskKind, TaskStatus,
 };
 
 /// Why a key was refused at once, without asking or opening anything: the same reason, in the
@@ -27,6 +28,8 @@ pub(crate) enum Refusal {
     /// `D` on the selected task, whose status is not `failed`, `failed-unknown` or `blocked`:
     /// `ktask-rs done` would refuse it too, naming the same status.
     NotDoneable(TaskId, TaskStatus),
+    /// `H` on a task other than a pending human task: `ktask-rs ack` would refuse it too.
+    NotAcknowledgeable(TaskId, TaskKind, TaskStatus),
 }
 
 impl Refusal {
@@ -40,6 +43,9 @@ impl Refusal {
             Self::NotRetryable(id, status) => RetryError::NotRetryable { id, status }.to_string(),
             Self::NotBlocked(id, status) => AnswerError::NotBlocked { id, status }.to_string(),
             Self::NotDoneable(id, status) => DoneError::NotDoneable { id, status }.to_string(),
+            Self::NotAcknowledgeable(id, kind, status) => {
+                AcknowledgeError::NotAcknowledgeable { id, kind, status }.to_string()
+            }
         }
     }
 }

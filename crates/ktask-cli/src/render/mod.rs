@@ -162,6 +162,11 @@ pub(crate) fn done(id: TaskId, out: &mut impl Write) -> Result<(), String> {
     writeln!(out, "task {id} is done").map_err(|e| e.to_string())
 }
 
+/// Writes the line telling that a human task was acknowledged and is now done.
+pub(crate) fn acknowledged(id: TaskId, out: &mut impl Write) -> Result<(), String> {
+    writeln!(out, "acknowledged task {id}; it is done").map_err(|e| e.to_string())
+}
+
 /// Writes the line telling that `outcome` has just been recorded for the attempt `token`
 /// names.
 pub(crate) fn reported(

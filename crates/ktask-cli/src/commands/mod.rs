@@ -1,6 +1,7 @@
 //! One module per command: each reads its arguments, calls the use case, and renders the
 //! result.
 
+pub(crate) mod ack;
 pub(crate) mod add;
 pub(crate) mod answer;
 pub(crate) mod done;

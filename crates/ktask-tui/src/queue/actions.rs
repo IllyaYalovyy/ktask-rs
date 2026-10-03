@@ -182,6 +182,31 @@ impl Queue {
         }
     }
 
+    /// The screen after `H` on the selected task: opens the acknowledgement form only for a
+    /// pending human task. Every other selected task is refused in the same words as the CLI.
+    pub(super) fn press_acknowledge(self) -> (Self, Option<Request>) {
+        let Some(id) = self.selected else {
+            return (self, None);
+        };
+        let Some(view) = &self.view else {
+            return (self, None);
+        };
+        let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
+            return (self, None);
+        };
+        if task.kind == ktask_core::TaskKind::Human && task.status == TaskStatus::Pending {
+            (self, Some(Request::OpenAcknowledge(id)))
+        } else {
+            (
+                Self {
+                    refused: Some(Refusal::NotAcknowledgeable(id, task.kind, task.status)),
+                    ..self
+                },
+                None,
+            )
+        }
+    }
+
     /// The screen with the selection moved to the index `target` picks, given the index it is
     /// at and how many tasks there are. It stays inside the list.
     pub(super) fn select(self, target: impl FnOnce(usize, usize) -> usize) -> Self {

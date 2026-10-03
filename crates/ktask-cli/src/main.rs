@@ -36,6 +36,8 @@ enum Command {
     },
     /// Add a task, at the end of the queue unless told where, and print its ID
     Add(commands::add::Args),
+    /// Acknowledge a pending human task and mark it done
+    Ack(commands::ack::Args),
     /// Add the tasks of a JSON array, in order and all or none, and print their IDs
     ///
     /// Each task has the authored fields `list --json` prints: title, body, criteria, kind
@@ -107,6 +109,7 @@ fn dispatch(
     match command {
         Command::Project { command } => commands::project::run(command, project, stdout),
         Command::Add(args) => commands::add::run(args, project, stdout),
+        Command::Ack(args) => commands::ack::run(args, project, stdout),
         Command::Import(args) => commands::import::run(args, project, stdout),
         Command::Remove(args) => commands::remove::run(args, project, stdout),
         Command::Retry(args) => commands::retry::run(args, project, stdout),

@@ -41,6 +41,12 @@ fn handle_task_action(mut app: App, application: &impl Application) -> Result<(A
             .map_err(|error| error.to_string())?;
         return Ok((app, true));
     }
+    if let Some((id, message)) = app.acknowledge_submission.take() {
+        application
+            .acknowledge_task(id, (!message.trim().is_empty()).then_some(message.as_str()))
+            .map_err(|error| error.to_string())?;
+        return Ok((app, true));
+    }
     if let Some((draft, placement)) = app.submission.take() {
         let added = match application.add_task(&draft, placement) {
             Ok(id) => Event::Added(id),
@@ -248,6 +254,7 @@ mod tests {
         retry: RefCell<Vec<Result<(), Failure>>>,
         answer: RefCell<Vec<Result<(), Failure>>>,
         done: RefCell<Vec<Result<(), Failure>>>,
+        acknowledge: RefCell<Vec<Result<(), Failure>>>,
         settings: RefCell<Vec<Result<Vec<SettingView>, Failure>>>,
         save_setting: RefCell<Vec<Result<SettingView, Failure>>>,
         import: RefCell<Vec<Result<Import, Failure>>>,
@@ -279,6 +286,7 @@ mod tests {
         type RetryError = Failure;
         type AnswerError = Failure;
         type DoneError = Failure;
+        type AcknowledgeError = Failure;
         type AddProblem = Failure;
         type SettingsError = Failure;
         type SaveSettingError = Failure;
@@ -307,6 +315,10 @@ mod tests {
 
         fn done_task(&self, _id: TaskId, _reason: &str) -> Result<(), Failure> {
             self.done.borrow_mut().remove(0)
+        }
+
+        fn acknowledge_task(&self, _id: TaskId, _message: Option<&str>) -> Result<(), Failure> {
+            self.acknowledge.borrow_mut().remove(0)
         }
 
         fn add_task(

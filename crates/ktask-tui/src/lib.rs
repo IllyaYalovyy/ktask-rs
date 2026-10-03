@@ -8,6 +8,7 @@
 //! own drawing. [`app`] only decides which one is open and carries out what it asks for;
 //! [`render`] only draws the frame shared by every screen and lets the open one draw itself.
 
+mod ack_screen;
 mod answer_screen;
 mod app;
 mod application;

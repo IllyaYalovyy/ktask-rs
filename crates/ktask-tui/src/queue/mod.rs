@@ -39,6 +39,8 @@ pub(crate) enum Request {
     OpenAnswer(TaskId, String),
     /// Open the done form for this task, to mark it done by hand.
     OpenDone(TaskId),
+    /// Open the acknowledgement form for this pending human task.
+    OpenAcknowledge(TaskId),
     /// Leave every screen.
     Quit,
 }
@@ -123,6 +125,10 @@ impl Queue {
                 .tasks
                 .iter()
                 .any(|task| task.id == *id && task.status == *status),
+            Refusal::NotAcknowledgeable(id, kind, status) => queue
+                .tasks
+                .iter()
+                .any(|task| task.id == *id && task.kind == *kind && task.status == *status),
         });
         Self {
             view: Some(queue),
@@ -223,6 +229,7 @@ impl Queue {
             KeyCode::Char('d') => (this.press_d(), None),
             KeyCode::Char('t') => this.press_t(),
             KeyCode::Char('A') => this.press_answer(),
+            KeyCode::Char('H') => this.press_acknowledge(),
             KeyCode::Char('D') => this.press_done(),
             KeyCode::Char('r') => (this, Some(Request::StartRun)),
             KeyCode::Char('i') => (this, Some(Request::OpenImport)),

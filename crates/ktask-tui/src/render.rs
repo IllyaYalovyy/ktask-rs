@@ -6,6 +6,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::widgets::{Block, Widget};
 
 use crate::App;
+use crate::ack_screen::AckScreen;
 use crate::answer_screen::AnswerScreen;
 use crate::done_screen::DoneScreen;
 use crate::import_screen::ImportScreen;
@@ -23,6 +24,8 @@ fn footer_keys(app: &App) -> &'static str {
         AnswerScreen::footer_keys()
     } else if app.done.is_some() {
         DoneScreen::footer_keys()
+    } else if app.acknowledge.is_some() {
+        AckScreen::footer_keys()
     } else if app.import.is_some() {
         ImportScreen::footer_keys()
     } else if let Some(projects) = &app.projects {
@@ -55,6 +58,9 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     }
     if let Some(done) = &app.done {
         return Some(done.draw(inner, buf));
+    }
+    if let Some(acknowledge) = &app.acknowledge {
+        return Some(acknowledge.draw(inner, buf));
     }
     if let Some(import) = &app.import {
         return Some(import.draw(inner, buf));

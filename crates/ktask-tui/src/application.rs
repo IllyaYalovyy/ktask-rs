@@ -25,6 +25,8 @@ pub trait Application {
     type AnswerError: Display;
     /// Why [`done_task`](Application::done_task) refused to mark a task done.
     type DoneError: Display;
+    /// Why [`acknowledge_task`](Application::acknowledge_task) refused a human task.
+    type AcknowledgeError: Display;
     /// One reason [`add_task`](Application::add_task) refused the task.
     type AddProblem: Display;
     /// Why [`load_settings`](Application::load_settings) failed.
@@ -88,6 +90,17 @@ pub trait Application {
     /// Fails, changing nothing, when there is no such task, its status is not `failed`,
     /// `failed-unknown` or `blocked`, or `reason` is empty or only whitespace.
     fn done_task(&self, id: TaskId, reason: &str) -> Result<(), Self::DoneError>;
+
+    /// Acknowledges a pending human task, recording `message` when it is not blank.
+    ///
+    /// # Errors
+    ///
+    /// Fails, changing nothing, when `id` does not name a pending human task.
+    fn acknowledge_task(
+        &self,
+        id: TaskId,
+        message: Option<&str>,
+    ) -> Result<(), Self::AcknowledgeError>;
 
     /// Adds `draft` to the queue at `placement`, giving its number, or every rule it broke,
     /// so all of them can be put right at once.

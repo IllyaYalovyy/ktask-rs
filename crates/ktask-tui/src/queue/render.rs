@@ -21,7 +21,7 @@ use lines::{step_lines_named, windowed};
 /// question, a form or another screen is up are that context's own — shown there, in its own
 /// question line or footer — and left out of this key map, so no key map here shows a key
 /// that does not work in the context it is shown in, and no key is listed twice.
-const KEYS: [(&str, &str); 19] = [
+const KEYS: [(&str, &str); 20] = [
     ("j, Down", "select the next task"),
     ("k, Up", "select the previous task"),
     ("g", "select the first task"),
@@ -43,6 +43,7 @@ const KEYS: [(&str, &str); 19] = [
         "D",
         "mark the selected task done by hand, once it is failed, failed-unknown or blocked",
     ),
+    ("H", "acknowledge the selected human task"),
     (
         "r",
         "start executing the queue, exactly as `ktask-rs run` does",

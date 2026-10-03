@@ -7,6 +7,7 @@
 use ktask_core::{Placement, Project, QueueView, SettingView, TaskDraft, TaskId};
 use ratatui::crossterm::event::KeyCode;
 
+use crate::ack_screen::AckScreen;
 use crate::answer_screen::AnswerScreen;
 use crate::done_screen::DoneScreen;
 use crate::import_screen::ImportScreen;
@@ -19,7 +20,8 @@ use crate::task_form::TaskFormScreen;
 mod screens;
 
 use screens::{
-    try_answer, try_done, try_form, try_import, try_projects, try_registration, try_settings,
+    try_acknowledge, try_answer, try_done, try_form, try_import, try_projects, try_registration,
+    try_settings,
 };
 
 /// Everything the terminal interface shows and remembers. Which screen is open is decided by
@@ -33,6 +35,7 @@ pub struct App {
     pub(crate) form: Option<TaskFormScreen>,
     pub(crate) answer: Option<AnswerScreen>,
     pub(crate) done: Option<DoneScreen>,
+    pub(crate) acknowledge: Option<AckScreen>,
     pub(crate) import: Option<ImportScreen>,
     pub(crate) settings: Option<SettingsScreen>,
     pub(crate) projects: Option<ProjectsScreen>,
@@ -52,6 +55,8 @@ pub struct App {
     pub(crate) answer_submission: Option<(TaskId, String)>,
     /// The task and reason the done form was submitted with, for the loop to record.
     pub(crate) done_submission: Option<(TaskId, String)>,
+    /// The task and optional message the acknowledgement form was submitted with.
+    pub(crate) acknowledge_submission: Option<(TaskId, String)>,
     /// Set when the operator asked to start executing the pending tasks.
     pub(crate) run_requested: Option<()>,
     /// Set when the operator asked to open the settings screen.
@@ -142,11 +147,12 @@ pub fn update(app: App, event: Event) -> App {
 
 /// Every screen that might own an event reaching [`dispatch`], tried in this order, the first
 /// match winning.
-const SCREENS: [fn(App, Event) -> Tried; 7] = [
+const SCREENS: [fn(App, Event) -> Tried; 8] = [
     try_settings,
     try_form,
     try_answer,
     try_done,
+    try_acknowledge,
     try_import,
     try_projects,
     try_registration,
@@ -247,6 +253,10 @@ fn open_screen_for_request(
             done: Some(DoneScreen::new(id)),
             ..app
         }),
+        queue::Request::OpenAcknowledge(id) => Ok(App {
+            acknowledge: Some(AckScreen::new(id)),
+            ..app
+        }),
         other => Err(Box::new((app, other))),
     }
 }
@@ -287,7 +297,10 @@ fn apply_queue_request(app: App, request: Option<queue::Request>) -> App {
         queue::Request::OpenForm(_)
         | queue::Request::OpenImport
         | queue::Request::OpenAnswer(..)
-        | queue::Request::OpenDone(_) => unreachable!("handled by open_screen_for_request above"),
+        | queue::Request::OpenDone(_)
+        | queue::Request::OpenAcknowledge(_) => {
+            unreachable!("handled by open_screen_for_request above")
+        }
     }
 }
 

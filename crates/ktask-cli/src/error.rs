@@ -2,8 +2,8 @@
 //! one place, so a command module only ever produces a [`Failure`].
 
 use ktask_core::{
-    AddError, AnswerError, CancelError, DoneError, ForgetError, ImportError, RegisterError,
-    ReportError, ResolveError, RetryError, RunError, SetSettingError,
+    AcknowledgeError, AddError, AnswerError, CancelError, DoneError, ForgetError, ImportError,
+    RegisterError, ReportError, ResolveError, RetryError, RunError, SetSettingError,
 };
 
 /// Why a command failed, and the exit code to report it with.
@@ -139,6 +139,22 @@ impl From<AnswerError> for Failure {
                 code: 2,
             },
             AnswerError::NotBlocked { .. } | AnswerError::EmptyAnswer => Self {
+                message: error.to_string(),
+                code: 2,
+            },
+        }
+    }
+}
+
+impl From<AcknowledgeError> for Failure {
+    fn from(error: AcknowledgeError) -> Self {
+        match error {
+            AcknowledgeError::Journal(_) => Self::from(error.to_string()),
+            AcknowledgeError::UnknownTask(_) => Self {
+                message: format!("{error}; `ktask-rs list --all` shows every task"),
+                code: 2,
+            },
+            AcknowledgeError::NotAcknowledgeable { .. } => Self {
                 message: error.to_string(),
                 code: 2,
             },

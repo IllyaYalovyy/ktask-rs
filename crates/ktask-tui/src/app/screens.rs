@@ -3,6 +3,7 @@
 
 use ktask_core::Project;
 
+use crate::ack_screen::{self, AckScreen};
 use crate::answer_screen::{self, AnswerScreen};
 use crate::done_screen::{self, DoneScreen};
 use crate::import_screen::{self, ImportScreen};
@@ -71,6 +72,47 @@ pub(super) fn try_done(app: App, event: Event) -> Tried {
         Event::Key(key) if app.done.is_some() => handled(on_done(app, |d| d.key(key))),
         Event::Ctrl(letter) if app.done.is_some() => handled(on_done(app, |d| d.ctrl(letter))),
         other => Tried::Unhandled(Box::new(app), Box::new(other)),
+    }
+}
+
+/// `event`, applied to the acknowledgement form when it owns it.
+pub(super) fn try_acknowledge(app: App, event: Event) -> Tried {
+    match event {
+        Event::Key(key) if app.acknowledge.is_some() => {
+            handled(on_acknowledge(app, |screen| screen.key(key)))
+        }
+        Event::Ctrl(letter) if app.acknowledge.is_some() => {
+            handled(on_acknowledge(app, |screen| screen.ctrl(letter)))
+        }
+        other => Tried::Unhandled(Box::new(app), Box::new(other)),
+    }
+}
+
+/// Carries an acknowledgement submission to the loop, or closes its form.
+fn on_acknowledge(
+    app: App,
+    f: impl FnOnce(AckScreen) -> (AckScreen, Option<ack_screen::Request>),
+) -> App {
+    let Some(screen) = app.acknowledge else {
+        return app;
+    };
+    let task = screen.task();
+    let (screen, request) = f(screen);
+    let app = App {
+        acknowledge: Some(screen),
+        ..app
+    };
+    match request {
+        Some(ack_screen::Request::Close) => App {
+            acknowledge: None,
+            ..app
+        },
+        Some(ack_screen::Request::Submit(text)) => App {
+            acknowledge: None,
+            acknowledge_submission: Some((task, text)),
+            ..app
+        },
+        None => app,
     }
 }
 

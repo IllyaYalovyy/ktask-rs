@@ -11,9 +11,9 @@ use ktask_adapters::{
     TomlSettingsStore,
 };
 use ktask_core::{
-    AddError, AnswerError, CancelError, DoneError, ForgetError, Import, JournalError, Placement,
-    Project, QueueView, RegisterError, RegistryError, RetryError, RunReport, SetSettingError,
-    SettingView, SettingsError, TaskDraft, TaskId,
+    AcknowledgeError, AddError, AnswerError, CancelError, DoneError, ForgetError, Import,
+    JournalError, Placement, Project, QueueView, RegisterError, RegistryError, RetryError,
+    RunReport, SetSettingError, SettingView, SettingsError, TaskDraft, TaskId,
 };
 use ktask_tui::Application;
 
@@ -183,6 +183,7 @@ impl Application for CliApplication {
     type RetryError = NeedsProject<RetryError>;
     type AnswerError = NeedsProject<AnswerError>;
     type DoneError = NeedsProject<DoneError>;
+    type AcknowledgeError = NeedsProject<AcknowledgeError>;
     type AddProblem = NeedsProject<AddError>;
     type SettingsError = NeedsProject<SettingsError>;
     type SaveSettingError = NeedsProject<SetSettingError>;
@@ -222,6 +223,16 @@ impl Application for CliApplication {
     fn done_task(&self, id: TaskId, reason: &str) -> Result<(), Self::DoneError> {
         self.with_context(|context| {
             ktask_core::done_task(&context.journal, &SystemClock, id, reason)
+        })
+    }
+
+    fn acknowledge_task(
+        &self,
+        id: TaskId,
+        message: Option<&str>,
+    ) -> Result<(), Self::AcknowledgeError> {
+        self.with_context(|context| {
+            ktask_core::acknowledge_task(&context.journal, &SystemClock, id, message)
         })
     }
 
