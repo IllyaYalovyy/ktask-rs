@@ -18,11 +18,13 @@ use crate::registration_screen::RegistrationScreen;
 use crate::settings::SettingsScreen;
 use crate::task_form::TaskFormScreen;
 
+mod provider_screen;
 mod screens;
 
+use provider_screen::try_providers;
 use screens::{
-    try_acknowledge, try_answer, try_done, try_form, try_import, try_projects, try_providers,
-    try_registration, try_settings,
+    try_acknowledge, try_answer, try_done, try_form, try_import, try_projects, try_registration,
+    try_settings,
 };
 
 /// Everything the terminal interface shows and remembers. Which screen is open is decided by
