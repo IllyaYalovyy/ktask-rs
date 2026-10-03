@@ -13,6 +13,7 @@ mod lock;
 mod pick;
 mod project;
 mod provider;
+mod providers;
 mod queue;
 mod queue_state;
 mod register;
@@ -41,6 +42,10 @@ pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
 pub use provider::{
     LimitSignal, Provider, ProviderCommand, ProviderRunError, Resume, StepCall, run_provider,
 };
+pub use providers::{
+    ProviderDefinition, ProviderOverride, ProviderParser, ProviderView, provider_field_source,
+    provider_fields, provider_views,
+};
 pub use queue::{QueueView, StatusSummary, queue_view};
 pub use register::{RegisterError, register_project};
 pub use report::{
@@ -58,7 +63,8 @@ pub use settings::{
     HEALTH_CHECK, MAX_ATTEMPTS, RESOLVER_MODEL, RESOLVER_PROVIDER, STEP_COMMIT, STEP_HEALTH_CHECK,
     STEP_IMPLEMENTATION, STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING, SetSettingError,
     SettingView, Settings, SettingsError, SettingsStore, TRACKED_BRANCH, effective_attempt_timeout,
-    effective_max_attempts, effective_resolver_provider, set_setting, show_settings, step_enabled,
+    effective_max_attempts, effective_resolver_provider, set_setting, show_providers,
+    show_settings, step_enabled,
 };
 pub use sleep::Sleep;
 pub use status::{

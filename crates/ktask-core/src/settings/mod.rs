@@ -1,11 +1,12 @@
 //! A project's settings: kept once per project instead of given on every run.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::{Git, GitError};
+use crate::{Git, GitError, ProviderDefinition, ProviderOverride, ProviderView, provider_views};
 
 mod specs;
 
@@ -98,6 +99,22 @@ pub struct Settings {
     pub resolver_provider: Option<String>,
     /// The model the resolve step runs with, when the project has set one.
     pub resolver_model: Option<String>,
+    /// Per-project additions to, and field replacements for, the provider catalogue.
+    pub providers: BTreeMap<String, ProviderOverride>,
+}
+
+/// Use case: the provider catalogue after this project's definitions have overlaid the
+/// built-ins. Kept alongside settings because that is the persisted configuration layer.
+///
+/// # Errors
+///
+/// Returns the field-specific provider definition error when settings contain an incomplete
+/// project provider.
+pub fn show_providers(
+    settings: &Settings,
+    builtins: &BTreeMap<String, ProviderDefinition>,
+) -> Result<Vec<ProviderView>, SettingsError> {
+    provider_views(builtins, &settings.providers).map_err(SettingsError::new)
 }
 
 /// Whether a step whose own setting is `value` runs: on unless the project explicitly
@@ -401,6 +418,7 @@ mod tests {
             max_attempts: Some(5),
             resolver_provider: Some("claude".to_owned()),
             resolver_model: Some("opus".to_owned()),
+            ..Settings::default()
         });
         assert_eq!(
             show_settings(&store),

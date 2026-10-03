@@ -3,8 +3,10 @@
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 
-use ktask_core::{Settings, SettingsError, SettingsStore};
+use crate::builtin_providers;
+use ktask_core::{ProviderOverride, Settings, SettingsError, SettingsStore, show_providers};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// The TOML shape of a project's settings file: only the settings a project has changed
 /// from their default are present.
@@ -34,6 +36,8 @@ struct SettingsFile {
     resolver_provider: Option<String>,
     #[serde(rename = "resolver-model", skip_serializing_if = "Option::is_none")]
     resolver_model: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    providers: BTreeMap<String, ProviderOverride>,
 }
 
 impl From<Settings> for SettingsFile {
@@ -51,6 +55,7 @@ impl From<Settings> for SettingsFile {
             max_attempts: settings.max_attempts,
             resolver_provider: settings.resolver_provider,
             resolver_model: settings.resolver_model,
+            providers: settings.providers,
         }
     }
 }
@@ -70,6 +75,7 @@ impl From<SettingsFile> for Settings {
             max_attempts: file.max_attempts,
             resolver_provider: file.resolver_provider,
             resolver_model: file.resolver_model,
+            providers: file.providers,
         }
     }
 }
@@ -105,7 +111,10 @@ impl SettingsStore for TomlSettingsStore {
         };
         let file: SettingsFile = toml::from_str(&text)
             .map_err(|error| failed("cannot parse the settings file", &self.path, &error))?;
-        Ok(file.into())
+        let settings: Settings = file.into();
+        show_providers(&settings, &builtin_providers())
+            .map_err(|error| failed("invalid provider settings in", &self.path, &error))?;
+        Ok(settings)
     }
 
     fn save(&self, settings: &Settings) -> Result<(), SettingsError> {
@@ -152,6 +161,7 @@ mod tests {
             max_attempts: Some(5),
             resolver_provider: Some("claude".to_owned()),
             resolver_model: Some("opus".to_owned()),
+            providers: BTreeMap::new(),
         };
         store.save(&settings).unwrap();
         assert_eq!(store.load(), Ok(settings.clone()));
