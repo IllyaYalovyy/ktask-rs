@@ -82,6 +82,11 @@ impl Queue {
         self.show_cancelled
     }
 
+    /// Whether the queue's key map is covering the task list.
+    pub(crate) fn help_open(&self) -> bool {
+        self.help
+    }
+
     /// The name of the project whose queue is on show, when one is.
     pub(crate) fn project_name(&self) -> Option<&str> {
         self.view.as_ref().map(|view| view.project.name.as_str())
@@ -219,12 +224,8 @@ impl Queue {
                 },
                 None,
             ),
-            KeyCode::Char('j') | KeyCode::Down => {
-                (this.select(|index, _| index.saturating_add(1)), None)
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                (this.select(|index, _| index.saturating_sub(1)), None)
-            }
+            KeyCode::Char('j') | KeyCode::Down => (this.select_next(), None),
+            KeyCode::Char('k') | KeyCode::Up => (this.select_previous(), None),
             KeyCode::Char('n') => (this, Some(Request::OpenForm(Placement::End))),
             KeyCode::Char('o') => this.open_form_next_to(Placement::After),
             KeyCode::Char('O') => this.open_form_next_to(Placement::Before),
@@ -232,10 +233,7 @@ impl Queue {
             KeyCode::Char('t') => this.press_t(),
             KeyCode::Char('A') => this.press_answer(),
             KeyCode::Char('H') => this.press_acknowledge(),
-            KeyCode::Char('l') => match this.selected {
-                Some(id) => (this, Some(Request::OpenOutput(id))),
-                None => (this, None),
-            },
+            KeyCode::Char('l') => this.open_output(),
             KeyCode::Char('D') => this.press_done(),
             KeyCode::Char('r') => (this, Some(Request::StartRun)),
             KeyCode::Char('i') => (this, Some(Request::OpenImport)),
@@ -245,6 +243,24 @@ impl Queue {
             KeyCode::Char('g') => (this.select(|_, _| 0), None),
             KeyCode::Char('G') => (this.select(|_, len| len.saturating_sub(1)), None),
             _ => (this, None),
+        }
+    }
+
+    /// Selects the following visible task, stopping at the last one.
+    fn select_next(self) -> Self {
+        self.select(|index, _| index.saturating_add(1))
+    }
+
+    /// Selects the preceding visible task, stopping at the first one.
+    fn select_previous(self) -> Self {
+        self.select(|index, _| index.saturating_sub(1))
+    }
+
+    /// Requests the selected task's output when there is a selection.
+    fn open_output(self) -> (Self, Option<Request>) {
+        match self.selected {
+            Some(id) => (self, Some(Request::OpenOutput(id))),
+            None => (self, None),
         }
     }
 

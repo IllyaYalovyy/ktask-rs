@@ -19,9 +19,11 @@ use crate::registration_screen::RegistrationScreen;
 use crate::settings::SettingsScreen;
 use crate::task_form::TaskFormScreen;
 
+mod output;
 mod provider_screen;
 mod screens;
 
+use output::try_output;
 use provider_screen::try_providers;
 use screens::{
     try_acknowledge, try_answer, try_done, try_form, try_import, try_projects, try_registration,
@@ -161,7 +163,7 @@ pub fn update(app: App, event: Event) -> App {
 /// Every screen that might own an event reaching [`dispatch`], tried in this order, the first
 /// match winning.
 const SCREENS: [fn(App, Event) -> Tried; 10] = [
-    screens::try_output,
+    try_output,
     try_settings,
     try_providers,
     try_form,

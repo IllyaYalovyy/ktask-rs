@@ -1,6 +1,7 @@
 //! `ktask-rs output`: retained provider bytes for one task attempt.
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -28,11 +29,25 @@ pub(crate) struct Args {
     project: Option<String>,
 }
 
+/// The selected attempt's output file and whether it is still receiving bytes.
+struct SelectedAttempt {
+    path: PathBuf,
+    lock: FileRunLock,
+    running: bool,
+}
+
 pub(crate) fn run(
     args: &Args,
     project: Option<&str>,
     stdout: &mut impl Write,
 ) -> Result<ExitCode, Failure> {
+    let selected = select(args, project)?;
+    write_output(&selected, args.follow, stdout)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Resolves the selected attempt and its append-only output file.
+fn select(args: &Args, project: Option<&str>) -> Result<SelectedAttempt, Failure> {
     let registry = open_registry()?;
     let selected = merge_project(project, args.project.as_deref())?;
     let (project, _) = resolve(&registry, selected.as_deref())?;
@@ -50,15 +65,30 @@ pub(crate) fn run(
         .find(|entry| entry.task == task)
         .is_some_and(|entry| entry.attempt.number == number && entry.status == TaskStatus::Running);
     let path = outputs_dir_file(&project)?.join(format!("{}-{number}.log", args.id));
+    Ok(SelectedAttempt {
+        path,
+        lock,
+        running: following_running_attempt,
+    })
+}
+
+/// Writes the output already present, and appended bytes while this selected attempt runs.
+fn write_output(
+    selected: &SelectedAttempt,
+    follow: bool,
+    stdout: &mut impl Write,
+) -> Result<(), Failure> {
     let mut offset = 0;
     loop {
-        let bytes = match std::fs::read(&path) {
+        let bytes = match std::fs::read(&selected.path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(error) => {
-                return Err(
-                    format!("cannot read attempt output {}: {error}", path.display()).into(),
-                );
+                return Err(format!(
+                    "cannot read attempt output {}: {error}",
+                    selected.path.display()
+                )
+                .into());
             }
         };
         let appended = bytes.get(offset..).unwrap_or(bytes.as_slice());
@@ -70,11 +100,11 @@ pub(crate) fn run(
             stdout.flush().map_err(|e| e.to_string())?;
             offset = bytes.len();
         }
-        if !args.follow
-            || !following_running_attempt
-            || !lock.in_progress().map_err(|e| e.to_string())?
+        if !follow
+            || !selected.running
+            || !selected.lock.in_progress().map_err(|e| e.to_string())?
         {
-            return Ok(ExitCode::SUCCESS);
+            return Ok(());
         }
         std::thread::sleep(Duration::from_millis(100));
     }

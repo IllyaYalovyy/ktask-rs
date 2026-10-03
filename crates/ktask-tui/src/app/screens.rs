@@ -7,7 +7,6 @@ use crate::ack_screen::{self, AckScreen};
 use crate::answer_screen::{self, AnswerScreen};
 use crate::done_screen::{self, DoneScreen};
 use crate::import_screen::{self, ImportScreen};
-use crate::output_screen;
 use crate::projects::{self, ProjectsScreen};
 use crate::queue::Queue;
 use crate::registration_screen::{self, RegistrationScreen};
@@ -15,33 +14,6 @@ use crate::settings::{self, SettingsScreen};
 use crate::task_form::{self, TaskFormScreen};
 
 use super::{App, Event, Tried, added, handled};
-
-/// Handles the read-only output overlay. Closing it only changes this interface process.
-pub(super) fn try_output(app: App, event: Event) -> Tried {
-    match event {
-        Event::Key(key) if app.output.is_some() => {
-            let Some(screen) = app.output else {
-                unreachable!()
-            };
-            let (screen, request) = screen.key(key);
-            handled(match request {
-                Some(output_screen::Request::Close) => App {
-                    output: None,
-                    ..app
-                },
-                None => App {
-                    output: Some(screen),
-                    ..app
-                },
-            })
-        }
-        Event::OutputLoaded(text) => handled(App {
-            output: app.output.map(|screen| screen.refreshed(text)),
-            ..app
-        }),
-        other => Tried::Unhandled(Box::new(app), Box::new(other)),
-    }
-}
 
 /// `event`, applied to the settings screen when it owns it — a key or Ctrl-letter while it is
 /// open, or how its own load, save or refusal came back — or handed back for the next screen
