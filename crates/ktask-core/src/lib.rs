@@ -14,6 +14,7 @@ mod output;
 mod pick;
 mod project;
 mod provider;
+mod provider_check;
 mod providers;
 mod queue;
 mod queue_state;
@@ -45,6 +46,9 @@ pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
 pub use provider::{
     CommandBuilder, LimitDetector, LimitSignal, OutputParser, Provider, ProviderCommand,
     ProviderRunError, ProviderUsage, Resume, SessionReader, StepCall, UsageReader, run_provider,
+};
+pub use provider_check::{
+    ProbeCall, ProviderCheck, ProviderCheckItem, ProviderCheckKind, ProviderProbe, check_provider,
 };
 pub use providers::{
     ProviderDefinition, ProviderOverride, ProviderParser, ProviderView, provider_field_source,

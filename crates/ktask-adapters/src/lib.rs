@@ -13,6 +13,7 @@ mod input;
 mod journal;
 mod lock;
 mod process;
+mod provider_probe;
 mod providers;
 mod registry;
 mod sessions;
@@ -32,6 +33,7 @@ pub use process::{
     EXEC_TIED_TO_PARENT_MARKER, KILL_GROUP_IF_ORPHANED_MARKER, ProcessCommands,
     exec_tied_to_parent, kill_group_if_orphaned,
 };
+pub use provider_probe::ProcessProviderProbe;
 pub use providers::builtin_providers;
 pub use registry::SqliteRegistry;
 pub use sessions::FileSessionLog;
