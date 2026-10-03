@@ -15,6 +15,7 @@ mod application;
 mod done_screen;
 mod import_screen;
 mod projects;
+mod providers;
 mod queue;
 mod registration_screen;
 mod render;

@@ -30,6 +30,8 @@ mod navigate;
 mod no_leftover_processes;
 #[path = "tui/projects.rs"]
 mod projects;
+#[path = "tui/providers.rs"]
+mod providers;
 #[path = "support/pty.rs"]
 mod pty;
 #[path = "tui/register.rs"]

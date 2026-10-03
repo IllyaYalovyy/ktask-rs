@@ -79,6 +79,20 @@ fn handle_settings_action(
     Ok((app, false))
 }
 
+/// Loads the provider catalogue when the queue asked to open it.
+fn handle_providers_action(
+    mut app: App,
+    application: &impl Application,
+) -> Result<(App, bool), String> {
+    if app.providers_requested.take().is_some() {
+        let providers = application
+            .load_providers()
+            .map_err(|error| error.to_string())?;
+        return Ok((update(app, Event::ProvidersLoaded(providers)), true));
+    }
+    Ok((app, false))
+}
+
 /// Loads the project picker, switches to the project `app` has pending, or forgets the one its
 /// confirmation named, whichever `app` has pending, through `application`: `(app, true)` when
 /// one was, `(app, false)`, unchanged, otherwise.
@@ -165,6 +179,7 @@ fn try_background_actions(app: App, application: &impl Application) -> Result<(A
     let app = or_return_handled!(handle_registration_action(app, application));
     let app = or_return_handled!(handle_task_action(app, application)?);
     let app = or_return_handled!(handle_settings_action(app, application)?);
+    let app = or_return_handled!(handle_providers_action(app, application)?);
     handle_projects_action(app, application)
 }
 
@@ -218,8 +233,8 @@ mod tests {
     use std::fmt;
 
     use ktask_core::{
-        ATTEMPT_TIMEOUT, Import, Placement, Project, QueueView, RunEnd, RunReport, SettingView,
-        StatusSummary, TaskDraft, TaskId, TaskStatus,
+        ATTEMPT_TIMEOUT, Import, Placement, Project, ProviderView, QueueView, RunEnd, RunReport,
+        SettingView, StatusSummary, TaskDraft, TaskId, TaskStatus,
     };
 
     use super::{
@@ -257,6 +272,7 @@ mod tests {
         acknowledge: RefCell<Vec<Result<(), Failure>>>,
         settings: RefCell<Vec<Result<Vec<SettingView>, Failure>>>,
         save_setting: RefCell<Vec<Result<SettingView, Failure>>>,
+        providers: RefCell<Vec<Result<Vec<ProviderView>, Failure>>>,
         import: RefCell<Vec<Result<Import, Failure>>>,
         projects: RefCell<Vec<Result<Vec<Project>, Failure>>>,
         switch: RefCell<Vec<Result<QueueView, Failure>>>,
@@ -290,6 +306,7 @@ mod tests {
         type AddProblem = Failure;
         type SettingsError = Failure;
         type SaveSettingError = Failure;
+        type ProvidersError = Failure;
         type ProjectsError = Failure;
         type SwitchError = Failure;
         type ForgetError = Failure;
@@ -335,6 +352,10 @@ mod tests {
 
         fn save_setting(&self, _name: &str, _value: &str) -> Result<SettingView, Failure> {
             self.save_setting.borrow_mut().remove(0)
+        }
+
+        fn load_providers(&self) -> Result<Vec<ProviderView>, Failure> {
+            self.providers.borrow_mut().remove(0)
         }
 
         fn import(&self, _path: &str) -> Result<Import, Failure> {

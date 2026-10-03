@@ -8,6 +8,7 @@ use crate::answer_screen::{self, AnswerScreen};
 use crate::done_screen::{self, DoneScreen};
 use crate::import_screen::{self, ImportScreen};
 use crate::projects::{self, ProjectsScreen};
+use crate::providers::ProvidersScreen;
 use crate::queue::Queue;
 use crate::registration_screen::{self, RegistrationScreen};
 use crate::settings::{self, SettingsScreen};
@@ -34,6 +35,27 @@ pub(super) fn try_settings(app: App, event: Event) -> Tried {
         }),
         Event::SettingRejected(message) => handled(App {
             settings: app.settings.map(|s| s.rejected(message)),
+            ..app
+        }),
+        other => Tried::Unhandled(Box::new(app), Box::new(other)),
+    }
+}
+
+/// `event`, applied to the read-only providers screen when it owns it.
+pub(super) fn try_providers(mut app: App, event: Event) -> Tried {
+    match event {
+        Event::Key(key) if app.providers.is_some() => {
+            let Some(screen) = app.providers.take() else {
+                return handled(app);
+            };
+            let (screen, close) = screen.key(key);
+            if !close {
+                app.providers = Some(screen);
+            }
+            handled(app)
+        }
+        Event::ProvidersLoaded(providers) => handled(App {
+            providers: Some(ProvidersScreen::new(providers)),
             ..app
         }),
         other => Tried::Unhandled(Box::new(app), Box::new(other)),

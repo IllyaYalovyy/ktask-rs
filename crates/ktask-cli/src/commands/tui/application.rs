@@ -8,12 +8,12 @@ use std::sync::{Mutex, PoisonError};
 
 use ktask_adapters::{
     FileJournalWatch, FileRunLock, GitCli, SqliteJournal, SqliteRegistry, SystemClock,
-    TomlSettingsStore,
+    TomlSettingsStore, builtin_providers,
 };
 use ktask_core::{
     AcknowledgeError, AddError, AnswerError, CancelError, DoneError, ForgetError, Import,
-    JournalError, Placement, Project, QueueView, RegisterError, RegistryError, RetryError,
-    RunReport, SetSettingError, SettingView, SettingsError, TaskDraft, TaskId,
+    JournalError, Placement, Project, ProviderView, QueueView, RegisterError, RegistryError,
+    RetryError, RunReport, SetSettingError, SettingView, SettingsError, TaskDraft, TaskId,
 };
 use ktask_tui::Application;
 
@@ -187,6 +187,7 @@ impl Application for CliApplication {
     type AddProblem = NeedsProject<AddError>;
     type SettingsError = NeedsProject<SettingsError>;
     type SaveSettingError = NeedsProject<SetSettingError>;
+    type ProvidersError = NeedsProject<SettingsError>;
     type ProjectsError = RegistryError;
     type SwitchError = SwitchProjectError;
     type ForgetError = ForgetProjectError;
@@ -263,6 +264,13 @@ impl Application for CliApplication {
                 name,
                 value,
             )
+        })
+    }
+
+    fn load_providers(&self) -> Result<Vec<ProviderView>, Self::ProvidersError> {
+        self.with_context(|context| {
+            let settings = ktask_core::SettingsStore::load(&context.settings_store)?;
+            ktask_core::show_providers(&settings, &builtin_providers())
         })
     }
 

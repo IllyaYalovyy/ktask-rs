@@ -21,7 +21,7 @@ use lines::{step_lines_named, windowed};
 /// question, a form or another screen is up are that context's own — shown there, in its own
 /// question line or footer — and left out of this key map, so no key map here shows a key
 /// that does not work in the context it is shown in, and no key is listed twice.
-const KEYS: [(&str, &str); 20] = [
+const KEYS: [(&str, &str); 21] = [
     ("j, Down", "select the next task"),
     ("k, Up", "select the previous task"),
     ("g", "select the first task"),
@@ -50,6 +50,7 @@ const KEYS: [(&str, &str); 20] = [
         "import the tasks of a JSON file, asked for by its path",
     ),
     ("s", "open the project's settings"),
+    ("v", "open the project's providers"),
     ("p", "work on another registered project's queue"),
     ("?", "show or hide this key map"),
     ("Esc", "close this key map"),

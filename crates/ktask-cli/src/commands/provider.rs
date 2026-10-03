@@ -5,10 +5,12 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::Subcommand;
-use ktask_adapters::{ProcessCommands, echo};
-use ktask_core::ProviderRunError;
+use ktask_adapters::{ProcessCommands, builtin_providers, echo};
+use ktask_core::{
+    ProviderRunError, ProviderView, provider_field_source, provider_fields, show_providers,
+};
 
-use crate::context::{current_dir, reject_project};
+use crate::context::{current_dir, open_registry, reject_project, resolve};
 use crate::error::Failure;
 use crate::render;
 
@@ -19,6 +21,21 @@ const DEFAULT_ECHO_TIMEOUT_MS: u64 = 300_000;
 /// `ktask-rs provider`'s subcommands.
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
+    /// List every built-in provider and this project's additions
+    List {
+        /// Print a JSON array instead of one provider name per line
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one provider's complete effective definition
+    Show {
+        /// The provider to show
+        #[arg(value_name = "NAME")]
+        name: String,
+        /// Print a JSON object instead of one field per line
+        #[arg(long)]
+        json: bool,
+    },
     /// Run a provider on a prompt read from standard input, and print what it produced
     Run {
         /// The provider to run: currently only `echo`
@@ -46,20 +63,82 @@ pub(crate) fn run(
     project: Option<&str>,
     stdout: &mut impl Write,
 ) -> Result<ExitCode, Failure> {
-    reject_project(project)?;
-    let Command::Run {
-        provider,
-        token,
-        attempt,
-        step,
-        timeout_ms,
-    } = command;
-    check_known(provider)?;
-    let prompt = read_prompt()?;
-    let dir = current_dir()?;
-    let output = run_echo(&prompt, token, *attempt, step, &dir, *timeout_ms)?;
-    render::provider_output(&output, stdout, &mut io::stderr())?;
-    exit_code(&output, provider, *timeout_ms)
+    match command {
+        Command::List { json } => list(project, *json, stdout),
+        Command::Show { name, json } => show(project, name, *json, stdout),
+        Command::Run {
+            provider,
+            token,
+            attempt,
+            step,
+            timeout_ms,
+        } => {
+            reject_project(project)?;
+            check_known(provider)?;
+            let prompt = read_prompt()?;
+            let dir = current_dir()?;
+            let output = run_echo(&prompt, token, *attempt, step, &dir, *timeout_ms)?;
+            render::provider_output(&output, stdout, &mut io::stderr())?;
+            exit_code(&output, provider, *timeout_ms)
+        }
+    }
+}
+
+/// Reads the effective catalogue for the selected project. The same settings validation all
+/// project commands use happens before a catalogue is rendered.
+fn providers(project: Option<&str>) -> Result<Vec<ProviderView>, Failure> {
+    let registry = open_registry()?;
+    let (_project, settings) = resolve(&registry, project)?;
+    show_providers(&settings, &builtin_providers()).map_err(|error| error.to_string().into())
+}
+
+fn list(project: Option<&str>, json: bool, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
+    let providers = providers(project)?;
+    if json {
+        let names: Vec<&str> = providers
+            .iter()
+            .map(|provider| provider.name.as_str())
+            .collect();
+        let names = serde_json::to_string(&names).map_err(|error| error.to_string())?;
+        writeln!(stdout, "{names}").map_err(|error| error.to_string())?;
+    } else {
+        for provider in providers {
+            writeln!(stdout, "{}", provider.name).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn show(
+    project: Option<&str>,
+    name: &str,
+    json: bool,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
+    let provider = providers(project)?
+        .into_iter()
+        .find(|provider| provider.name == name)
+        .ok_or_else(|| Failure {
+            message: format!("unknown provider {name:?}"),
+            code: 2,
+        })?;
+    let definition = &provider.definition;
+    if json {
+        let value = serde_json::json!({
+            "name": provider.name, "command": definition.command, "args": definition.args,
+            "prompt": definition.prompt, "model": definition.model, "resume": definition.resume,
+            "denied-tools": definition.denied_tools, "parser": definition.parser.to_string(),
+            "session-id": definition.session_id, "usage": definition.usage,
+            "limit-message": definition.limit_message, "overridden": provider.overridden,
+        });
+        writeln!(stdout, "{value}").map_err(|error| error.to_string())?;
+    } else {
+        for (field, value) in provider_fields(&provider) {
+            let source = provider_field_source(&provider, field);
+            writeln!(stdout, "{field}\t{value}\t{source}").map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Writes `prompt` to its own scratch file, runs the `echo` provider on it for `token`,

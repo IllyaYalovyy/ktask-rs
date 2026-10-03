@@ -28,6 +28,8 @@ pub(crate) enum Request {
     StartRun,
     /// Open the project's settings.
     OpenSettings,
+    /// Open the project's provider catalogue.
+    OpenProviders,
     /// Open the registered-projects picker.
     OpenProjects,
     /// Remove this task, confirmed already.
@@ -232,6 +234,7 @@ impl Queue {
             KeyCode::Char('r') => (this, Some(Request::StartRun)),
             KeyCode::Char('i') => (this, Some(Request::OpenImport)),
             KeyCode::Char('s') => (this, Some(Request::OpenSettings)),
+            KeyCode::Char('v') => (this, Some(Request::OpenProviders)),
             KeyCode::Char('p') => (this, Some(Request::OpenProjects)),
             KeyCode::Char('g') => (this.select(|_, _| 0), None),
             KeyCode::Char('G') => (this.select(|_, len| len.saturating_sub(1)), None),

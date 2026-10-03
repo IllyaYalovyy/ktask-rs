@@ -4,7 +4,7 @@
 //! is open, and carries out what an open screen asks for: opening another one, or leaving
 //! something for the loop in [`crate::run`] to do.
 
-use ktask_core::{Placement, Project, QueueView, SettingView, TaskDraft, TaskId};
+use ktask_core::{Placement, Project, ProviderView, QueueView, SettingView, TaskDraft, TaskId};
 use ratatui::crossterm::event::KeyCode;
 
 use crate::ack_screen::AckScreen;
@@ -12,6 +12,7 @@ use crate::answer_screen::AnswerScreen;
 use crate::done_screen::DoneScreen;
 use crate::import_screen::ImportScreen;
 use crate::projects::ProjectsScreen;
+use crate::providers::ProvidersScreen;
 use crate::queue::{self, Queue};
 use crate::registration_screen::RegistrationScreen;
 use crate::settings::SettingsScreen;
@@ -20,8 +21,8 @@ use crate::task_form::TaskFormScreen;
 mod screens;
 
 use screens::{
-    try_acknowledge, try_answer, try_done, try_form, try_import, try_projects, try_registration,
-    try_settings,
+    try_acknowledge, try_answer, try_done, try_form, try_import, try_projects, try_providers,
+    try_registration, try_settings,
 };
 
 /// Everything the terminal interface shows and remembers. Which screen is open is decided by
@@ -38,6 +39,7 @@ pub struct App {
     pub(crate) acknowledge: Option<AckScreen>,
     pub(crate) import: Option<ImportScreen>,
     pub(crate) settings: Option<SettingsScreen>,
+    pub(crate) providers: Option<ProvidersScreen>,
     pub(crate) projects: Option<ProjectsScreen>,
     pub(crate) registration: Option<RegistrationScreen>,
     /// The task the form was submitted with and where it goes, for the loop to add, answered
@@ -61,6 +63,7 @@ pub struct App {
     pub(crate) run_requested: Option<()>,
     /// Set when the operator asked to open the settings screen.
     pub(crate) settings_requested: Option<()>,
+    pub(crate) providers_requested: Option<()>,
     /// Set when the operator asked to open the project picker.
     pub(crate) projects_requested: Option<()>,
     /// The name of the project the picker was submitted with, for the loop to switch to.
@@ -100,6 +103,8 @@ pub enum Event {
     ImportMessage(String, Option<TaskId>),
     /// The project's settings were loaded: the settings screen opens on these values.
     SettingsLoaded(Vec<SettingView>),
+    /// The provider catalogue was loaded.
+    ProvidersLoaded(Vec<ProviderView>),
     /// The settings screen's submission was saved: it closes.
     SettingSaved,
     /// The settings screen's submission was refused, for this reason: it stays open and
@@ -147,8 +152,9 @@ pub fn update(app: App, event: Event) -> App {
 
 /// Every screen that might own an event reaching [`dispatch`], tried in this order, the first
 /// match winning.
-const SCREENS: [fn(App, Event) -> Tried; 8] = [
+const SCREENS: [fn(App, Event) -> Tried; 9] = [
     try_settings,
+    try_providers,
     try_form,
     try_answer,
     try_done,
@@ -279,6 +285,10 @@ fn apply_queue_request(app: App, request: Option<queue::Request>) -> App {
         },
         queue::Request::OpenSettings => App {
             settings_requested: Some(()),
+            ..app
+        },
+        queue::Request::OpenProviders => App {
+            providers_requested: Some(()),
             ..app
         },
         queue::Request::OpenProjects => App {

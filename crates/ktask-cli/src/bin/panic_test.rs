@@ -10,8 +10,8 @@ use std::sync::{Mutex, PoisonError};
 use std::time::SystemTime;
 
 use ktask_core::{
-    Import, JournalError, JournalWatch, Placement, Project, QueueView, RunReport, SettingView,
-    StatusSummary, TaskDraft, TaskId,
+    Import, JournalError, JournalWatch, Placement, Project, ProviderView, QueueView, RunReport,
+    SettingView, StatusSummary, TaskDraft, TaskId,
 };
 use ktask_tui::Application;
 
@@ -60,6 +60,7 @@ impl Application for PanicTestApplication {
     type AddProblem = String;
     type SettingsError = String;
     type SaveSettingError = String;
+    type ProvidersError = String;
     type ProjectsError = String;
     type SwitchError = String;
     type ForgetError = String;
@@ -109,6 +110,10 @@ impl Application for PanicTestApplication {
     }
 
     fn save_setting(&self, _name: &str, _value: &str) -> Result<SettingView, String> {
+        Err(NOT_SUPPORTED.to_owned())
+    }
+
+    fn load_providers(&self) -> Result<Vec<ProviderView>, String> {
         Err(NOT_SUPPORTED.to_owned())
     }
 

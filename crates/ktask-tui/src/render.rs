@@ -18,6 +18,8 @@ use crate::settings::SettingsScreen;
 fn footer_keys(app: &App) -> &'static str {
     if app.settings.is_some() {
         SettingsScreen::footer_keys()
+    } else if let Some(providers) = &app.providers {
+        providers.footer_keys()
     } else if let Some(form) = &app.form {
         form.footer_keys()
     } else if app.answer.is_some() {
@@ -49,6 +51,10 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     }
     if let Some(settings) = &app.settings {
         return Some(settings.draw(inner, buf));
+    }
+    if let Some(providers) = &app.providers {
+        providers.draw(inner, buf);
+        return None;
     }
     if let Some(form) = &app.form {
         return form.draw(inner, buf);

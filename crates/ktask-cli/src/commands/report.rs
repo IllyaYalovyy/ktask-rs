@@ -3,8 +3,10 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use ktask_adapters::{SystemClock, echo, read_text};
-use ktask_core::{AttemptToken, Outcome};
+use ktask_adapters::{
+    SystemClock, TomlSettingsStore, builtin_providers, echo, read_text, settings_path,
+};
+use ktask_core::{AttemptToken, Outcome, SettingsStore};
 
 use crate::context::{open_journal, open_registry, reject_project, resolve};
 use crate::error::Failure;
@@ -55,9 +57,6 @@ pub(crate) struct Args {
 /// the four may be given at all.
 fn check_provider_and_model(outcome: Outcome, args: &Args) -> Result<(), Failure> {
     if outcome == Outcome::Retry {
-        if let Some(provider) = &args.provider {
-            super::provider::check_known(provider)?;
-        }
         return Ok(());
     }
     if args.provider.is_some() || args.model.is_some() || args.same_session || args.reset_tree {
@@ -70,6 +69,41 @@ fn check_provider_and_model(outcome: Outcome, args: &Args) -> Result<(), Failure
         });
     }
     Ok(())
+}
+
+/// Refuses a retry provider before the token is resolved, by reading only its project's
+/// settings path. This preserves the command's normal argument-error precedence while still
+/// accepting project-defined names.
+fn check_defined_provider(token: &AttemptToken, provider: Option<&str>) -> Result<(), Failure> {
+    let Some(provider) = provider else {
+        return Ok(());
+    };
+    let path = settings_path(
+        std::env::var_os("XDG_STATE_HOME"),
+        std::env::var_os("HOME"),
+        &token.project,
+    )
+    .ok_or_else(|| {
+        "cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path"
+            .to_owned()
+    })?;
+    let settings = TomlSettingsStore::new(path)
+        .load()
+        .map_err(|error| error.to_string())?;
+    let providers = ktask_core::show_providers(&settings, &builtin_providers())
+        .map_err(|error| error.to_string())?;
+    if providers.iter().any(|known| known.name == provider) {
+        return Ok(());
+    }
+    let names = providers
+        .into_iter()
+        .map(|known| known.name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(Failure {
+        message: format!("unknown provider {provider:?}; known providers: {names}"),
+        code: 2,
+    })
 }
 
 /// Checks `args.tasks` against `outcome`: `supersede` needs it, every other outcome refuses it.
@@ -135,6 +169,7 @@ pub(crate) fn run(
         .parse()
         .map_err(|message| Failure { message, code: 2 })?;
     check_provider_and_model(outcome, args)?;
+    check_defined_provider(&token, args.provider.as_deref())?;
     check_tasks_flag(outcome, args)?;
     // Read before anything is registered or opened, so that a missing file changes nothing.
     let tasks_json = args

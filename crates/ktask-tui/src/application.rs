@@ -10,7 +10,7 @@
 use std::fmt::Display;
 
 use ktask_core::{
-    Import, Placement, Project, QueueView, RunReport, SettingView, TaskDraft, TaskId,
+    Import, Placement, Project, ProviderView, QueueView, RunReport, SettingView, TaskDraft, TaskId,
 };
 
 /// Every use case the terminal interface calls, named the way the operator invokes them.
@@ -33,6 +33,8 @@ pub trait Application {
     type SettingsError: Display;
     /// Why [`save_setting`](Application::save_setting) refused the value.
     type SaveSettingError: Display;
+    /// Why the provider catalogue could not be read.
+    type ProvidersError: Display;
     /// Why [`load_projects`](Application::load_projects) failed.
     type ProjectsError: Display;
     /// Why [`switch_project`](Application::switch_project) failed.
@@ -127,6 +129,13 @@ pub trait Application {
     /// Fails, changing nothing, when `name` is not a known setting or `value` is not one it
     /// accepts.
     fn save_setting(&self, name: &str, value: &str) -> Result<SettingView, Self::SaveSettingError>;
+
+    /// Every effective provider definition for the active project.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the active project's provider settings cannot be read or are invalid.
+    fn load_providers(&self) -> Result<Vec<ProviderView>, Self::ProvidersError>;
 
     /// Imports the tasks of the file `path` names into the queue, at its end: the tasks added,
     /// in order, and how many cancelled ones were left out — the same typed result

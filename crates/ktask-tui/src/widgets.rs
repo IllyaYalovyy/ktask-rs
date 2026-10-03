@@ -30,10 +30,10 @@ pub(crate) fn key_map(keys: &[(&str, &str)], area: Rect, buf: &mut Buffer) {
         .map(|(key, _)| key.chars().count())
         .max()
         .unwrap_or(0);
-    let mut lines = vec![
-        Line::styled("Keys", Style::new().add_modifier(Modifier::BOLD)),
-        Line::default(),
-    ];
+    let mut lines = vec![Line::styled(
+        "Keys",
+        Style::new().add_modifier(Modifier::BOLD),
+    )];
     lines.extend(
         keys.iter()
             .map(|(key, does)| Line::from(format!("{key:<width$}  {does}"))),

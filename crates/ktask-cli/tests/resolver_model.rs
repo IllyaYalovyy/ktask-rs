@@ -153,16 +153,19 @@ fn retry_with_an_unknown_provider_is_refused_naming_the_known_ones() -> Result<(
         "my-app/1/1",
         "retry",
         "--provider",
-        "claude",
+        "not-a-provider",
     ])?;
 
     assert_eq!(outcome.code, Some(2), "{}", outcome.stdout);
     assert!(
-        outcome.stderr.contains("unknown provider \"claude\""),
+        outcome
+            .stderr
+            .contains("unknown provider \"not-a-provider\""),
         "{}",
         outcome.stderr
     );
     assert!(outcome.stderr.contains("echo"), "{}", outcome.stderr);
+    assert!(outcome.stderr.contains("claude"), "{}", outcome.stderr);
     Ok(())
 }
 
