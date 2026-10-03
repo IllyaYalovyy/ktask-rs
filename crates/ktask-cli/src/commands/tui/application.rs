@@ -11,10 +11,9 @@ use ktask_adapters::{
     SqliteRegistry, SystemClock, TomlSettingsStore, builtin_providers,
 };
 use ktask_core::{
-    AcknowledgeError, AddError, AnswerError, CancelError, DoneError, ForgetError, Import,
-    JournalError, Placement, Project, ProviderCheck, ProviderView, QueueView, RegisterError,
-    RegistryError, RetryError, RunReport, SetSettingError, SettingView, SettingsError, TaskDraft,
-    TaskId,
+    AcknowledgeError, AddError, AnswerError, CancelError, DoneError, Import, JournalError,
+    Placement, Project, ProviderCheck, ProviderView, QueueView, RegistryError, RetryError,
+    RunReport, SetSettingError, SettingView, SettingsError, TaskDraft, TaskId,
 };
 use ktask_tui::Application;
 
@@ -22,26 +21,11 @@ use crate::context::{
     journal_file, open_settings_store, outputs_dir_file, run_lock_file, state_root,
 };
 
+use super::errors::{
+    ForgetProjectError, OpenProjectError, RegisterProjectError, SwitchProjectError,
+};
 use super::process::{RunRefusal as ProcessRefusal, start_run};
 use super::{ImportProblem, Start, import_into};
-
-/// Why opening a project's state failed: an environment problem — the same kind every other
-/// command already reports as text, since there is no further structure to it — or the journal
-/// could not be used, keeping that error's own meaning until it is shown.
-#[derive(Debug)]
-pub(super) enum OpenProjectError {
-    Environment(String),
-    Journal(JournalError),
-}
-
-impl fmt::Display for OpenProjectError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Environment(message) => f.write_str(message),
-            Self::Journal(error) => error.fmt(f),
-        }
-    }
-}
 
 /// Everything wired to whichever project is active: its journal, run lock and settings —
 /// reopened fresh each time the operator switches to another one, or once the current directory
@@ -112,56 +96,6 @@ impl<E: fmt::Display> fmt::Display for NeedsProject<E> {
         match self {
             Self::NoProject => f.write_str("no project is open yet"),
             Self::Failed(error) => error.fmt(f),
-        }
-    }
-}
-
-/// Why [`CliApplication::switch_project`] failed.
-#[derive(Debug)]
-pub(super) enum SwitchProjectError {
-    List(RegistryError),
-    Unknown(String),
-    Open(OpenProjectError),
-}
-
-impl fmt::Display for SwitchProjectError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::List(error) => error.fmt(f),
-            Self::Unknown(name) => write!(f, "unknown project {name:?}"),
-            Self::Open(error) => error.fmt(f),
-        }
-    }
-}
-
-/// Why [`CliApplication::forget_project`] failed.
-#[derive(Debug)]
-pub(super) enum ForgetProjectError {
-    Forget(ForgetError),
-    List(RegistryError),
-}
-
-impl fmt::Display for ForgetProjectError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Forget(error) => error.fmt(f),
-            Self::List(error) => error.fmt(f),
-        }
-    }
-}
-
-/// Why [`CliApplication::register`] failed.
-#[derive(Debug)]
-pub(super) enum RegisterProjectError {
-    Register(RegisterError),
-    Open(OpenProjectError),
-}
-
-impl fmt::Display for RegisterProjectError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Register(error) => error.fmt(f),
-            Self::Open(error) => error.fmt(f),
         }
     }
 }

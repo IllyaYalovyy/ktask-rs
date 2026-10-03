@@ -11,6 +11,7 @@ use crate::context::{current_dir, current_exe, merge_project, open_registry, res
 use crate::error::Failure;
 
 mod application;
+mod errors;
 mod process;
 
 /// Why importing through the file the import form was submitted with added nothing: it could
