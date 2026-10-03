@@ -54,7 +54,9 @@ fn v_shows_the_same_provider_list_and_definition_the_cli_shows_then_returns_to_t
             && text.contains("parser: claude-stream-json (built-in)")
             && text.contains("session-id: result.session_id (built-in)")
             && text.contains("usage: usage (built-in)")
-            && text.contains("limit-message: rate limit (built-in)")
+            && text.contains(
+                "limit-message: (?i)Claude AI usage limit reached\\|(?<reset>[0-9]+) (built-in)",
+            )
     })?;
     terminal.send(ESC)?;
     terminal.wait_for("the providers list after claude", |screen| {

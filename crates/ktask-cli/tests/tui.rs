@@ -10,6 +10,8 @@ mod ack;
 mod add;
 #[path = "tui/answer.rs"]
 mod answer;
+#[path = "tui/claude_resilience.rs"]
+mod claude_resilience;
 #[path = "tui/dashboard.rs"]
 mod dashboard;
 #[path = "tui/done.rs"]
