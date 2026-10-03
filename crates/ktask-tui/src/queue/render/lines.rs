@@ -40,6 +40,17 @@ fn step_line(
     label: &str,
     activity: Option<&OutputActivity>,
 ) -> Line<'static> {
+    let text = step_text(step, width, label);
+    let text = match activity {
+        Some(activity) => format!("{text} · {} {}", activity.indicator(), activity.message()),
+        None => text,
+    };
+    Line::styled(text, Style::new().add_modifier(Modifier::DIM))
+}
+
+/// The non-live part of one queue step line, including its optional failure reason and limit
+/// wait, before [`step_line`] adds provider-output activity.
+fn step_text(step: &StepLine, width: usize, label: &str) -> String {
     let provider = step.provider.as_deref().unwrap_or("-");
     let seconds = step.time_spent.as_secs();
     let outcome = step.outcome;
@@ -74,11 +85,7 @@ fn step_line(
         }
         None => text,
     };
-    let text = match activity {
-        Some(activity) => format!("{text} · {} {}", activity.indicator(), activity.message()),
-        None => text,
-    };
-    Line::styled(text, Style::new().add_modifier(Modifier::DIM))
+    text
 }
 
 /// `lines`, kept to at most `budget`: shown in full when they already fit; otherwise the
