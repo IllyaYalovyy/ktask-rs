@@ -556,6 +556,7 @@ mod tests {
             time_spent: std::time::Duration::from_secs(1),
             outcome: AttemptOutcome::Reported(Outcome::NeedsInput),
             reason: Some(reason.to_owned()),
+            waiting_for: None,
             limit_wait: None,
             output_activity: None,
             steps: vec![],

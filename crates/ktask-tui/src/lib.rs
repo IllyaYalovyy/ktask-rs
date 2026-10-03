@@ -31,3 +31,5 @@ pub use app::{App, Event, update};
 pub use application::Application;
 pub use render::render;
 pub use run::{Start, run};
+/// Shared status presentation for the CLI and TUI.
+pub mod presentation;

@@ -4,6 +4,7 @@ use std::io::Write;
 
 use jiff::Timestamp;
 use ktask_core::StatusEntry;
+use ktask_tui::presentation;
 use serde::Serialize;
 
 /// How long a step waited, in total, for its provider's usage limit, and when it last resumed,
@@ -23,7 +24,7 @@ struct StepJson<'a> {
     session: Option<&'a str>,
     time_spent_seconds: u64,
     outcome: &'static str,
-    reason: Option<&'a str>,
+    reason: Option<String>,
     limit_wait: Option<LimitWaitJson>,
 }
 
@@ -48,7 +49,7 @@ struct AttemptJson<'a> {
     session: Option<&'a str>,
     time_spent_seconds: u64,
     outcome: &'static str,
-    reason: Option<&'a str>,
+    reason: Option<String>,
     limit_wait: Option<LimitWaitJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_activity: Option<OutputActivityJson>,
@@ -103,8 +104,8 @@ fn step_json(line: &ktask_core::StepLine) -> Result<StepJson<'_>, String> {
         model: line.model.as_deref(),
         session: line.session.as_deref(),
         time_spent_seconds: line.time_spent.as_secs(),
-        outcome: line.outcome.as_str(),
-        reason: line.reason.as_deref(),
+        outcome: presentation::outcome(line.outcome),
+        reason: presentation::reason_for(line.reason.as_deref(), line.waiting_for),
         limit_wait: line.limit_wait.as_ref().map(limit_wait_json).transpose()?,
     })
 }
@@ -134,8 +135,8 @@ fn attempt_json(line: &ktask_core::AttemptLine) -> Result<AttemptJson<'_>, Strin
         model: line.model.as_deref(),
         session: line.session.as_deref(),
         time_spent_seconds: line.time_spent.as_secs(),
-        outcome: line.outcome.as_str(),
-        reason: line.reason.as_deref(),
+        outcome: presentation::outcome(line.outcome),
+        reason: presentation::reason_for(line.reason.as_deref(), line.waiting_for),
         limit_wait: line.limit_wait.as_ref().map(limit_wait_json).transpose()?,
         output_activity: line.output_activity.as_ref().map(output_activity_json),
         steps: line
@@ -163,7 +164,7 @@ fn status_json(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
             Ok(StatusJson {
                 id: entry.task.0,
                 title: &entry.title,
-                status: ktask_core::displayed_status(entry.status, Some(entry.attempt.outcome)),
+                status: presentation::task_status(entry.status, Some(entry.attempt.outcome)),
                 attempt: attempt_json(&entry.attempt)?,
                 history: entry
                     .history
@@ -188,8 +189,8 @@ fn write_done_mark_line(out: &mut impl Write, entry: &StatusEntry) -> Result<(),
     let Some(mark) = &entry.done_by_user else {
         return Ok(());
     };
-    let at = Timestamp::try_from(mark.at).map_err(|e| format!("bad done time: {e}"))?;
-    writeln!(out, "\tmarked done by the user: {} (at {at})", mark.reason).map_err(|e| e.to_string())
+    Timestamp::try_from(mark.at).map_err(|e| format!("bad done time: {e}"))?;
+    writeln!(out, "\t{}", presentation::done_mark_text(mark)).map_err(|e| e.to_string())
 }
 
 /// Writes `entries`: for every task, one `#ID<TAB>status<TAB>title` line — followed, for a
@@ -198,20 +199,25 @@ fn write_done_mark_line(out: &mut impl Write, entry: &StatusEntry) -> Result<(),
 /// itself, which names none), time spent, outcome, and the reason when it did not succeed.
 fn status_text(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), String> {
     for entry in entries {
-        let status = ktask_core::displayed_status(entry.status, Some(entry.attempt.outcome));
+        let status = presentation::task_status(entry.status, Some(entry.attempt.outcome));
         writeln!(out, "#{}\t{}\t{}", entry.task, status, entry.title).map_err(|e| e.to_string())?;
         write_done_mark_line(out, entry)?;
         entry
             .history
             .iter()
             .try_for_each(|attempt| {
-                write_step_lines(out, &attempt.steps, &attempt_label(attempt.number), None)
+                write_step_lines(
+                    out,
+                    &attempt.steps,
+                    &presentation::attempt_label(attempt.number),
+                    None,
+                )
             })
             .map_err(|e: std::io::Error| e.to_string())?;
         write_step_lines(
             out,
             &entry.attempt.steps,
-            &attempt_label(entry.attempt.number),
+            &presentation::attempt_label(entry.attempt.number),
             entry.attempt.output_activity.as_ref(),
         )
         .map_err(|e| e.to_string())?;
@@ -219,29 +225,12 @@ fn status_text(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
     Ok(())
 }
 
-/// `attempt {number}: `, ahead of every step line of a real attempt, so each says which
-/// attempt it belongs to, the current attempt included — `""` for the synthetic attempt
-/// number `0` a gate stop before any attempt ever began carries, which belongs to none.
-fn attempt_label(number: u32) -> String {
-    if number == 0 {
-        String::new()
-    } else {
-        format!("attempt {number}: ")
-    }
-}
-
 /// `wait`, as the trailing tab field a step's own text line carries it with, when it waited for
 /// its provider's usage limit at least once before it ended: how long, in total, and when it
 /// last resumed.
 fn limit_wait_suffix(wait: Option<&ktask_core::LimitWait>) -> String {
     wait.map_or_else(String::new, |wait| {
-        let resumed = Timestamp::try_from(wait.resumed_at)
-            .map(|at| at.to_string())
-            .unwrap_or_default();
-        format!(
-            "\thit the usage limit: waited {}s, resumed at {resumed}",
-            wait.waited.as_secs()
-        )
+        format!("\t{}", presentation::limit_wait_text(wait))
     })
 }
 
@@ -264,28 +253,31 @@ fn write_step_lines(
             Some(model) => format!("{}\t{model}", step.step),
             None => step.step.clone(),
         };
-        let session = step
-            .session
-            .as_deref()
-            .map_or_else(String::new, |session| format!("\tsession:{session}"));
+        let session = presentation::session_suffix(step.session.as_deref());
+        let session = if session.is_empty() {
+            String::new()
+        } else {
+            format!("\t{session}")
+        };
         let limit_wait = limit_wait_suffix(step.limit_wait.as_ref());
         let activity = if index + 1 == steps.len() {
             activity.map_or_else(String::new, |value| {
-                format!("\t{} {}", value.indicator(), value.message())
+                let text = presentation::activity(value);
+                format!("\t{} {}", text.indicator, text.message)
             })
         } else {
             String::new()
         };
-        match &step.reason {
+        match presentation::reason(step) {
             Some(reason) => writeln!(
                 out,
                 "\t{prefix}{name}\t{provider}\t{seconds}s\t{}\t{reason}{session}{limit_wait}{activity}",
-                step.outcome
+                presentation::outcome(step.outcome)
             ),
             None => writeln!(
                 out,
                 "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{session}{limit_wait}{activity}",
-                step.outcome
+                presentation::outcome(step.outcome)
             ),
         }
     })

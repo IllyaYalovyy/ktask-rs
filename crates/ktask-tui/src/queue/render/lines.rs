@@ -2,6 +2,7 @@
 //! of them to fit — [`super`]'s own lowest-level work, pulled out of it so that file stays
 //! within the workspace's file-length limit.
 
+use crate::presentation;
 use ktask_core::{OutputActivity, StepLine};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
@@ -42,7 +43,13 @@ fn step_line(
 ) -> Line<'static> {
     let text = step_text(step, width, label);
     let text = match activity {
-        Some(activity) => format!("{text} · {} {}", activity.indicator(), activity.message()),
+        Some(activity) => {
+            let activity_text = presentation::activity(activity);
+            format!(
+                "{text} · {} {}",
+                activity_text.indicator, activity_text.message
+            )
+        }
         None => text,
     };
     Line::styled(text, Style::new().add_modifier(Modifier::DIM))
@@ -53,35 +60,31 @@ fn step_line(
 fn step_text(step: &StepLine, width: usize, label: &str) -> String {
     let provider = step.provider.as_deref().unwrap_or("-");
     let seconds = step.time_spent.as_secs();
-    let outcome = step.outcome;
+    let outcome = presentation::outcome(step.outcome);
     let shown_provider = step.model.as_deref().map_or_else(
         || provider.to_owned(),
         |model| format!("{provider} ({model})"),
     );
-    let session = step
-        .session
-        .as_deref()
-        .map_or_else(String::new, |session| format!(" · session:{session}"));
+    let session = presentation::session_suffix(step.session.as_deref());
+    let session = if session.is_empty() {
+        String::new()
+    } else {
+        format!(" · {session}")
+    };
     let prefix = format!(
         "      {label}{} · {shown_provider} · {seconds}s · {outcome}{session}",
         step.step
     );
-    let text = step.reason.as_deref().map_or_else(
+    let text = presentation::reason(step).map_or_else(
         || prefix.clone(),
         |reason| {
             let budget = width.saturating_sub(prefix.chars().count() + 2);
-            format!("{prefix}: {}", elide(reason, budget))
+            format!("{prefix}: {}", elide(&reason, budget))
         },
     );
     match &step.limit_wait {
         Some(wait) => {
-            let resumed = jiff::Timestamp::try_from(wait.resumed_at)
-                .map(|at| at.to_string())
-                .unwrap_or_default();
-            format!(
-                "{text} · hit the usage limit: waited {}s, resumed {resumed}",
-                wait.waited.as_secs()
-            )
+            format!("{text} · {}", presentation::queue_limit_wait_text(wait))
         }
         None => text,
     }

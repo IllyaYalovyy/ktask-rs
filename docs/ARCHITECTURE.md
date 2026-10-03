@@ -6,7 +6,7 @@
 ktask-core      domain + use cases. No I/O. Depends on nothing in this workspace.
 ktask-adapters  SQLite journal, git CLI, subprocess runner, provider CLIs, clock, filesystem.
 ktask-cli       binary `ktask-rs`: argument parsing, wiring, exit codes.
-ktask-tui       terminal interface.
+ktask-tui       terminal interface, including the shared status presentation module.
 ```
 
 Dependencies point inward only: `adapters`, `cli` and `tui` depend on `core`; `core`
@@ -50,6 +50,10 @@ run, status, everything — is a single use-case function in `core`. The CLI com
 TUI key that do the same thing call the same function with the same arguments. Frontends
 parse input and render output; they contain no logic of their own, and nothing is
 implemented twice.
+
+Core returns typed facts. The operator-facing status words and indicators for those facts live
+in the TUI crate's presentation module, which both frontends call; each frontend owns only its
+layout.
 
 - **TUI**: `update(App, Event) -> App` and `render(&App)` are pure. One thin loop owns the
   terminal and feeds events (keys, resize, journal events, loaded data) into `update`.

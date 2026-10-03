@@ -1,7 +1,8 @@
 //! Drawing the queue screen: the header, the question or notice line, the key map, the task
 //! list, and, above it when there is one, the last run's or import's own report.
 
-use ktask_core::{AttemptLine, DoneMark, QueueView, Task, TaskId, TaskStatus, displayed_status};
+use crate::presentation;
+use ktask_core::{AttemptLine, DoneMark, QueueView, Task, TaskId, TaskStatus};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -248,11 +249,8 @@ fn block_heights(view: &QueueView) -> Vec<usize> {
 /// The reason and when task `id` was marked done by hand, as one dimmed line — shown ahead of
 /// its attempt's own steps, since it is not one of them.
 fn done_mark_line(mark: &DoneMark, width: usize) -> Line<'static> {
-    let prefix = "      marked done by the user: ";
-    let at = jiff::Timestamp::try_from(mark.at)
-        .map(|at| at.to_string())
-        .unwrap_or_default();
-    let suffix = format!(" (at {at})");
+    let prefix = format!("      {}", presentation::done_mark_prefix());
+    let suffix = presentation::done_mark_suffix(mark);
     let budget = width.saturating_sub(prefix.chars().count() + suffix.chars().count());
     Line::styled(
         format!("{prefix}{}{suffix}", elide(&mark.reason, budget)),
@@ -263,14 +261,6 @@ fn done_mark_line(mark: &DoneMark, width: usize) -> Line<'static> {
 /// `attempt {number}: `, ahead of every step line of a real attempt, so each says which
 /// attempt it belongs to, the current attempt included — `""` for the synthetic attempt
 /// number `0` a gate stop before any attempt ever began carries, which belongs to none.
-fn attempt_label(number: u32) -> String {
-    if number == 0 {
-        String::new()
-    } else {
-        format!("attempt {number}: ")
-    }
-}
-
 /// Every step line task `id` shows: the reason and when it was marked done by hand, when it
 /// was, then one earlier attempt's own steps after another, oldest first, each step named with
 /// its attempt's number ahead of it, then `current`, the current attempt's steps, last, named
@@ -291,7 +281,7 @@ fn task_step_lines(
             lines.extend(step_lines_named(
                 &attempt.steps,
                 width,
-                &attempt_label(attempt.number),
+                &presentation::attempt_label(attempt.number),
                 None,
             ));
         }
@@ -300,7 +290,7 @@ fn task_step_lines(
         lines.extend(step_lines_named(
             &attempt.steps,
             width,
-            &attempt_label(attempt.number),
+            &presentation::attempt_label(attempt.number),
             attempt.output_activity.as_ref(),
         ));
     }
@@ -327,7 +317,8 @@ impl Columns {
         };
         for task in &view.tasks {
             let attempt = view.attempts.get(&task.id);
-            let status = displayed_status(task.status, attempt.map(|attempt| attempt.outcome));
+            let status =
+                presentation::task_status(task.status, attempt.map(|attempt| attempt.outcome));
             columns.position = columns
                 .position
                 .max(task.position.to_string().chars().count());
@@ -364,7 +355,7 @@ fn task_line(
     }
     let position = task.position.to_string();
     let id = format!("#{}", task.id);
-    let status = displayed_status(task.status, attempt.map(|attempt| attempt.outcome));
+    let status = presentation::task_status(task.status, attempt.map(|attempt| attempt.outcome));
     let kind = task.kind.to_string();
     let prefix = format!(
         "{marker}{position:>pw$}  {id:<iw$}  {status:<sw$}  {kind:<kw$}  ",
@@ -587,6 +578,7 @@ mod tests {
             time_spent: Duration::from_secs(seconds),
             outcome,
             reason: None,
+            waiting_for: None,
             limit_wait: None,
             output_activity: None,
             steps: vec![StepLine {
@@ -597,6 +589,7 @@ mod tests {
                 time_spent: Duration::from_secs(seconds),
                 outcome,
                 reason: None,
+                waiting_for: None,
                 limit_wait: None,
             }],
         }
