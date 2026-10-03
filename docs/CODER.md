@@ -26,6 +26,24 @@ contradicts them, stop and report the contradiction.
 - **Green.** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`, run in the foreground, all passing.
 
+## Clean code — the goal
+
+Judged by Robert C. Martin's criteria, not by counts:
+
+- **One responsibility per module and per function.** A module is about one thing; if its
+  name needs "and", it is two modules. A function does one thing at one level of detail.
+- **Deep modules behind simple interfaces.** Put the complexity inside; keep what callers
+  see small and typed.
+- **Dependencies point inward.** Core states facts; the words people read are made where
+  they are shown, once, for both interfaces.
+- **No duplication.** Two places that must change together are one place.
+- **Names that say what, not how.** A reader should not need the body to know the intent.
+
+The workspace tests that fail a file past 400 lines or a step naming another are
+**tripwires, not targets**. They say a responsibility has grown; the fix is to separate
+responsibilities. Splitting a file to get under a number, or counting lines as a goal,
+is a defect.
+
 ## Rules
 
 - `core` does no I/O. New outside-world needs become a port, an adapter and a fake.
