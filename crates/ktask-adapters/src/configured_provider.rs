@@ -60,6 +60,10 @@ fn build_command(
     if call.resume.is_some() {
         args.extend(render(&definition.resume, prompt, call));
     }
+    if !definition.denied_tools.is_empty() {
+        args.push("--disallowedTools".to_owned());
+        args.push(definition.denied_tools.join(","));
+    }
     ProviderCommand {
         program: definition.command.clone(),
         args,
@@ -74,7 +78,6 @@ fn render(template: &[String], prompt: &str, call: StepCall<'_>) -> Vec<String> 
             part.replace("{prompt}", prompt)
                 .replace("{model}", call.model.unwrap_or_default())
                 .replace("{session}", call.resume.map_or("", |resume| resume.session))
-                .replace("{denied-tools}", "")
         })
         .collect()
 }

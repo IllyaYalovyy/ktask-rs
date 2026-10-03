@@ -50,7 +50,18 @@ fn v_shows_the_same_provider_list_and_definition_the_cli_shows_then_returns_to_t
             && text.contains("args: --print --output-format stream-json --verbose")
             && text.contains("model: --model {model} (built-in)")
             && text.contains("resume: --resume {session} (built-in)")
-            && text.contains("denied-tools: --disallowedTools {denied-tools} (built-in)")
+            && text.contains("denied-tools: Agent")
+            && [
+                "CronCreate",
+                "CronDelete",
+                "CronList",
+                "Monitor",
+                "ScheduleWakeup",
+                "TaskOutput",
+                "TaskStop (built-in)",
+            ]
+            .iter()
+            .all(|tool| text.contains(tool))
             && text.contains("parser: claude-stream-json (built-in)")
             && text.contains("session-id: result.session_id (built-in)")
             && text.contains("usage: usage (built-in)")

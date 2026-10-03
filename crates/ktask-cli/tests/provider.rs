@@ -280,6 +280,33 @@ fn provider_list_and_show_print_the_complete_built_in_and_project_definitions() 
     }
     assert_eq!(value["command"], "claude");
     assert_eq!(value["parser"], "claude-stream-json");
+    assert_eq!(
+        value["denied-tools"],
+        serde_json::json!([
+            "Agent",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "Monitor",
+            "ScheduleWakeup",
+            "TaskOutput",
+            "TaskStop"
+        ])
+    );
+
+    std::fs::write(
+        &settings,
+        "[providers.claude]\ndenied-tools = [\"ProjectSchedule\", \"ProjectMonitor\"]\n\n[providers.local]\ncommand = \"agent\"\nargs = [\"--prompt\", \"{prompt}\"]\nparser = \"plain\"\nsession-id = \"session:\"\n",
+    )?;
+    let overridden = sandbox.run(&repository, &["provider", "show", "claude"])?;
+    assert_eq!(overridden.code, Some(0), "{}", overridden.stderr);
+    assert!(
+        overridden
+            .stdout
+            .contains("denied-tools\tProjectSchedule ProjectMonitor\tproject\n"),
+        "{}",
+        overridden.stdout
+    );
 
     let local = sandbox.run(&repository, &["provider", "show", "local"])?;
     assert_eq!(local.code, Some(0), "{}", local.stderr);

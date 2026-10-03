@@ -25,8 +25,8 @@ impl fmt::Display for ProviderParser {
 }
 
 /// A complete provider definition. The argument lists are templates: `{prompt}`, `{model}`
-/// and `{session}` are replaced for an invocation; `{denied-tools}` becomes a comma-separated
-/// list. The prompt is also supplied on standard input.
+/// and `{session}` are replaced for an invocation. `denied-tools` is the list passed to a
+/// provider's tool-denial option. The prompt is also supplied on standard input.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderDefinition {
     /// Program found on `PATH`, or an absolute program path.
@@ -43,7 +43,7 @@ pub struct ProviderDefinition {
     /// Arguments appended when an earlier session is resumed.
     #[serde(default)]
     pub resume: Vec<String>,
-    /// Arguments that convey the tool deny list.
+    /// Tool names that must not be available during an unattended invocation.
     #[serde(rename = "denied-tools", default)]
     pub denied_tools: Vec<String>,
     /// The output encoding to parse.
@@ -74,7 +74,7 @@ pub struct ProviderOverride {
     pub model: Option<Vec<String>>,
     /// Replacement resume arguments.
     pub resume: Option<Vec<String>>,
-    /// Replacement denied-tools arguments.
+    /// Replacement tool deny list.
     #[serde(rename = "denied-tools")]
     pub denied_tools: Option<Vec<String>>,
     /// Replacement output parser.

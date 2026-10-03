@@ -4,7 +4,7 @@ use ktask_core::{ProviderView, provider_field_source, provider_fields};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::Rect;
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 /// The catalogue, first as a list and then as one selected definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,7 +68,9 @@ impl ProvidersScreen {
     }
     /// Draws the list or the full selected definition.
     pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(self.lines().join("\n")).render(area, buf);
+        Paragraph::new(self.lines().join("\n"))
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
     }
     fn lines(&self) -> Vec<String> {
         if !self.showing {

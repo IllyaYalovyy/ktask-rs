@@ -1402,7 +1402,7 @@ fn recorded_claude_stream_json_runs_the_task_with_its_model() -> Result<()> {
     select_claude(&fixture)?;
     fixture.add_agent_task("a", "do the recorded work")?;
     let claude = claude_script(
-        "[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-sonnet-5 ] || exit 9\nprompt=$(cat)\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"recorded-session\"}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"working\"}]}}' '{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\" now\"}}' '{\"type\":\"result\",\"result\":\"finished\",\"session_id\":\"recorded-session\",\"usage\":{\"input_tokens\":12,\"output_tokens\":34,\"cost_usd\":0.056789,\"model\":\"claude-sonnet-5\"}}' '{\"type\":\"future-event\",\"value\":7}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
+        "[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-sonnet-5 ] && [ \"$9\" = --disallowedTools ] || exit 9\nfor tool in Agent CronCreate CronDelete CronList Monitor ScheduleWakeup TaskOutput TaskStop; do case \",${10},\" in *\",$tool,\"*) ;; *) exit 9 ;; esac; done\nprompt=$(cat)\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"recorded-session\"}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"working\"}]}}' '{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\" now\"}}' '{\"type\":\"result\",\"result\":\"finished\",\"session_id\":\"recorded-session\",\"usage\":{\"input_tokens\":12,\"output_tokens\":34,\"cost_usd\":0.056789,\"model\":\"claude-sonnet-5\"}}' '{\"type\":\"future-event\",\"value\":7}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
     )?;
     let outcome = fixture
         .sandbox
@@ -1459,6 +1459,34 @@ fn a_provider_reported_model_mismatch_fails_the_attempt_with_both_model_names() 
         "{}",
         status.stdout
     );
+    Ok(())
+}
+
+#[test]
+fn a_project_claude_deny_list_replaces_the_built_in_list() -> Result<()> {
+    let fixture = Fixture::new()?;
+    select_claude(&fixture)?;
+    fixture.add_agent_task("a", "do the recorded work")?;
+    let settings = fixture
+        .sandbox
+        .state_home()
+        .join("ktask-rs/my-app/settings.toml");
+    let mut configured = std::fs::read_to_string(&settings)?;
+    configured.push_str(
+        "\n[providers.claude]\ndenied-tools = [\"ProjectSchedule\", \"ProjectMonitor\"]\n",
+    );
+    std::fs::write(settings, configured)?;
+    let claude = claude_script(
+        "[ \"$9\" = --disallowedTools ] && [ \"${10}\" = ProjectSchedule,ProjectMonitor ] || exit 9\nprompt=$(cat)\nprintf '%s\\n' '{\"type\":\"result\",\"result\":\"finished\"}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
+    )?;
+
+    let outcome = fixture
+        .sandbox
+        .run_with(&fixture.repository, &["run"], |command| {
+            with_dir_first_on_path(command, claude.path());
+        })?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(fixture.task_status(1)?, "done");
     Ok(())
 }
 
