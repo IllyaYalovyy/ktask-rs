@@ -2,8 +2,30 @@
 
 use std::error::Error;
 use std::fmt;
+use std::time::SystemTime;
 
 use crate::{StatusEntry, TaskId};
+
+/// Port: when an attempt's append-only provider output was last written.
+///
+/// An absent value means the provider has not written anything yet, or its retained output is
+/// no longer available. Reading this is deliberately best-effort: an unavailable transcript
+/// must not make status unavailable too.
+pub trait AttemptOutput {
+    /// The most recent write to `task`'s `attempt` output, when there is one.
+    fn last_output_at(&self, task: TaskId, attempt: u32) -> Option<SystemTime>;
+}
+
+/// An output source with no retained output. This keeps callers that only need historical
+/// status independent from the filesystem-backed live-output adapter.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoAttemptOutput;
+
+impl AttemptOutput for NoAttemptOutput {
+    fn last_output_at(&self, _task: TaskId, _attempt: u32) -> Option<SystemTime> {
+        None
+    }
+}
 
 /// Why an attempt's retained output cannot be selected.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +134,7 @@ mod tests {
             outcome: AttemptOutcome::Passed,
             reason: None,
             limit_wait: None,
+            output_activity: None,
             steps: vec![],
         }
     }

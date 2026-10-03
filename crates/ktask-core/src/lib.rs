@@ -39,7 +39,7 @@ pub use journal::{
     LimitWait, RecordReportError, RetryError, Step,
 };
 pub use lock::{RunLock, RunLockError};
-pub use output::{OutputError, sanitize_output, select_attempt};
+pub use output::{AttemptOutput, NoAttemptOutput, OutputError, sanitize_output, select_attempt};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
 pub use provider::{
     CommandBuilder, LimitDetector, LimitSignal, OutputParser, Provider, ProviderCommand,
@@ -49,7 +49,7 @@ pub use providers::{
     ProviderDefinition, ProviderOverride, ProviderParser, ProviderView, provider_field_source,
     provider_fields, provider_views,
 };
-pub use queue::{QueueView, StatusSummary, queue_view};
+pub use queue::{QueueView, StatusSummary, queue_view, queue_view_with_output};
 pub use register::{RegisterError, register_project};
 pub use report::{
     AttemptToken, Outcome, ReportError, Supersede, report, report_retry, report_supersede,
@@ -63,17 +63,17 @@ pub use run::{
 pub use sessions::{SessionLog, SessionLogError};
 pub use settings::{
     ATTEMPT_TIMEOUT, DEFAULT_ATTEMPT_TIMEOUT_SECS, DEFAULT_MAX_ATTEMPTS, DEFAULT_RESOLVER_PROVIDER,
-    HEALTH_CHECK, MAX_ATTEMPTS, RESOLVER_MODEL, RESOLVER_PROVIDER, STEP_COMMIT, STEP_HEALTH_CHECK,
-    STEP_IMPLEMENTATION, STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING, SetSettingError,
-    SettingView, Settings, SettingsError, SettingsStore, TRACKED_BRANCH, effective_attempt_timeout,
-    effective_max_attempts, effective_resolver_provider, set_setting, show_providers,
-    show_settings, step_enabled,
+    DEFAULT_SILENT_AFTER_SECS, HEALTH_CHECK, MAX_ATTEMPTS, RESOLVER_MODEL, RESOLVER_PROVIDER,
+    SILENT_AFTER, STEP_COMMIT, STEP_HEALTH_CHECK, STEP_IMPLEMENTATION, STEP_PUSH, STEP_REVIEW,
+    STEP_SYNC, STEP_TESTING, SetSettingError, SettingView, Settings, SettingsError, SettingsStore,
+    TRACKED_BRANCH, effective_attempt_timeout, effective_max_attempts, effective_resolver_provider,
+    effective_silent_after, set_setting, show_providers, show_settings, step_enabled,
 };
 pub use sleep::Sleep;
 pub use status::{
     AttemptLine, AttemptOutcome, COMMIT_STEP, DoneMark, HEALTH_CHECK_STEP, IMPLEMENTATION,
-    PUSH_STEP, RESOLVE_STEP, REVIEW_STEP, SYNC_STEP, StatusEntry, StepLine, TEST_STEP,
-    displayed_status, status,
+    OutputActivity, PUSH_STEP, RESOLVE_STEP, REVIEW_STEP, SYNC_STEP, StatusEntry, StepLine,
+    TEST_STEP, displayed_status, status, status_with_output,
 };
 pub use task::{
     AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, acknowledge_task, add_task,

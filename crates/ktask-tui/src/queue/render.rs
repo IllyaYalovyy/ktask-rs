@@ -292,6 +292,7 @@ fn task_step_lines(
                 &attempt.steps,
                 width,
                 &attempt_label(attempt.number),
+                None,
             ));
         }
     }
@@ -300,6 +301,7 @@ fn task_step_lines(
             &attempt.steps,
             width,
             &attempt_label(attempt.number),
+            attempt.output_activity.as_ref(),
         ));
     }
     lines
@@ -586,6 +588,7 @@ mod tests {
             outcome,
             reason: None,
             limit_wait: None,
+            output_activity: None,
             steps: vec![StepLine {
                 step: IMPLEMENTATION.to_owned(),
                 provider: Some(provider.to_owned()),

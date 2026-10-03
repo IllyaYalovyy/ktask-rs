@@ -3,9 +3,11 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use ktask_adapters::{FileRunLock, SystemClock};
+use ktask_adapters::{FileAttemptOutput, FileRunLock, SystemClock};
 
-use crate::context::{merge_project, open_journal, open_registry, resolve, run_lock_file};
+use crate::context::{
+    merge_project, open_journal, open_registry, outputs_dir_file, resolve, run_lock_file,
+};
 use crate::error::Failure;
 use crate::render;
 
@@ -30,10 +32,18 @@ pub(crate) fn run(
 ) -> Result<ExitCode, Failure> {
     let registry = open_registry()?;
     let project = merge_project(project, args.project.as_deref())?;
-    let (project, _settings) = resolve(&registry, project.as_deref())?;
+    let (project, settings) = resolve(&registry, project.as_deref())?;
     let journal = open_journal(&project)?;
     let lock = FileRunLock::new(run_lock_file(&project)?);
-    let entries = ktask_core::status(&journal, &SystemClock, &lock).map_err(|e| e.to_string())?;
+    let output = FileAttemptOutput::new(outputs_dir_file(&project)?);
+    let entries = ktask_core::status_with_output(
+        &journal,
+        &SystemClock,
+        &lock,
+        &output,
+        ktask_core::effective_silent_after(&settings),
+    )
+    .map_err(|e| e.to_string())?;
     render::status(&entries, args.json, stdout)?;
     Ok(ExitCode::SUCCESS)
 }

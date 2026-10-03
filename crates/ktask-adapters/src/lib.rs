@@ -4,6 +4,7 @@
 //! Everything that touches the outside world lives here, and platform-specific
 //! code stays inside one module of this crate. See docs/ARCHITECTURE.md.
 
+mod attempt_output;
 mod clock;
 mod configured_provider;
 pub mod echo;
@@ -20,6 +21,7 @@ mod sleep;
 mod state;
 mod watch;
 
+pub use attempt_output::FileAttemptOutput;
 pub use clock::SystemClock;
 pub use configured_provider::configured_provider;
 pub use git::GitCli;

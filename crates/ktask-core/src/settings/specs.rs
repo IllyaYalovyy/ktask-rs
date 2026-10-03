@@ -8,10 +8,10 @@ use std::path::Path;
 use crate::Git;
 
 use super::{
-    ATTEMPT_TIMEOUT, DEFAULT_MAX_ATTEMPTS, DEFAULT_RESOLVER_PROVIDER, HEALTH_CHECK, MAX_ATTEMPTS,
-    RESOLVER_MODEL, RESOLVER_PROVIDER, STEP_COMMIT, STEP_HEALTH_CHECK, STEP_PUSH, STEP_REVIEW,
-    STEP_SYNC, STEP_TESTING, SetSettingError, Settings, TRACKED_BRANCH, split_tracked_branch,
-    step_enabled,
+    ATTEMPT_TIMEOUT, DEFAULT_MAX_ATTEMPTS, DEFAULT_RESOLVER_PROVIDER, DEFAULT_SILENT_AFTER_SECS,
+    HEALTH_CHECK, MAX_ATTEMPTS, RESOLVER_MODEL, RESOLVER_PROVIDER, SILENT_AFTER, STEP_COMMIT,
+    STEP_HEALTH_CHECK, STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING, SetSettingError, Settings,
+    TRACKED_BRANCH, split_tracked_branch, step_enabled,
 };
 
 /// `"on"` or `"off"`, as a step's own switch setting shows it.
@@ -40,6 +40,7 @@ pub(super) struct SettingSpec {
 pub(super) fn setting_specs() -> Vec<SettingSpec> {
     vec![
         attempt_timeout_spec(),
+        silent_after_spec(),
         health_check_spec(),
         tracked_branch_spec(),
         step_toggle_spec(STEP_SYNC, |s| s.sync_step, |s, on| s.sync_step = Some(on)),
@@ -70,6 +71,27 @@ pub(super) fn setting_specs() -> Vec<SettingSpec> {
         resolver_provider_spec(),
         resolver_model_spec(),
     ]
+}
+
+/// [`SILENT_AFTER`]'s description.
+fn silent_after_spec() -> SettingSpec {
+    SettingSpec {
+        name: SILENT_AFTER,
+        get: Box::new(|settings| {
+            (
+                settings
+                    .silent_after_seconds
+                    .unwrap_or(DEFAULT_SILENT_AFTER_SECS)
+                    .to_string(),
+                settings.silent_after_seconds.is_none(),
+            )
+        }),
+        set: Box::new(|settings, value, _git, _dir| {
+            let seconds = parse_positive_seconds(SILENT_AFTER, value)?;
+            settings.silent_after_seconds = Some(seconds);
+            Ok(seconds.to_string())
+        }),
+    }
 }
 
 /// [`ATTEMPT_TIMEOUT`]'s description.
@@ -269,16 +291,21 @@ fn resolver_model_spec() -> SettingSpec {
 /// The attempt-timeout part of [`super::set_setting`]: `value` parsed as a positive whole
 /// number of seconds, or why it was refused.
 fn parse_attempt_timeout(value: &str) -> Result<u64, SetSettingError> {
+    parse_positive_seconds(ATTEMPT_TIMEOUT, value)
+}
+
+/// `name`'s value parsed as a positive whole number of seconds, or why it was refused.
+fn parse_positive_seconds(name: &'static str, value: &str) -> Result<u64, SetSettingError> {
     let seconds: u64 = value
         .trim()
         .parse()
         .map_err(|_| SetSettingError::InvalidValue {
-            name: ATTEMPT_TIMEOUT,
+            name,
             message: format!("{value:?} is not a whole number of seconds"),
         })?;
     if seconds == 0 {
         return Err(SetSettingError::InvalidValue {
-            name: ATTEMPT_TIMEOUT,
+            name,
             message: "must be at least 1 second".to_owned(),
         });
     }

@@ -78,7 +78,7 @@ pub(super) fn step_session(name: &str, session: Option<&str>) -> Option<String> 
 /// How much longer a step waiting until `until` has left, read fresh against `clock` every
 /// time: `until` itself, when it has already passed — the wait is over, and the step is about
 /// to run again the moment the run gets back to it.
-fn remaining(until: SystemTime, clock: &impl Clock) -> Duration {
+fn remaining(until: SystemTime, clock: &(impl Clock + ?Sized)) -> Duration {
     until.duration_since(clock.now()).unwrap_or_default()
 }
 
@@ -93,7 +93,7 @@ pub(super) fn running_step(
     session: Option<&str>,
     started_at: SystemTime,
     waiting_until: Option<SystemTime>,
-    clock: &impl Clock,
+    clock: &(impl Clock + ?Sized),
     run_alive: bool,
 ) -> StepLine {
     let elapsed = clock.now().duration_since(started_at).unwrap_or_default();
@@ -149,6 +149,7 @@ pub(super) fn gate_stop_entry(task: Task, step: String, reason: String) -> Statu
             outcome: line.outcome,
             reason: line.reason.clone(),
             limit_wait: None,
+            output_activity: None,
             steps: vec![line],
         },
         history: Vec::new(),

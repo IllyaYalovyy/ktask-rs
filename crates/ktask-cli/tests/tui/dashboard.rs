@@ -229,7 +229,7 @@ fn a_run_started_elsewhere_shows_pending_then_running_with_elapsed_time_increasi
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">1  #1  running  agent  a");
     assert!(
-        lines[5].contains("implementation · echo") && lines[5].ends_with("running"),
+        lines[5].contains("implementation · echo") && lines[5].contains("running"),
         "{}",
         lines[5]
     );
@@ -299,6 +299,48 @@ fn a_run_started_elsewhere_shows_pending_then_running_with_elapsed_time_increasi
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())
+}
+
+#[test]
+fn the_queue_shows_moving_fresh_output_then_a_stuck_silence_warning() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.cli(&["settings", "set", "silent-after", "1"])?;
+    fixture.add_agent_task(
+        "watch me",
+        "```bash\nif [ \"$3\" = \"implementation\" ]; then\n  for n in 1 2 3 4 5 6 7 8 9 10; do\n    echo working-$n\n    sleep 0.2\n  done\n  sleep 2\n  ktask-rs report --token \"$1\" done\nelif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" accepted\nfi\n```\n",
+    )?;
+    let terminal = fixture.open()?;
+    let mut run = fixture.spawn_run()?;
+
+    let fresh = terminal.wait_for("fresh provider output", |screen| {
+        screen.contents().contains("last output <1s ago")
+    })?;
+    let fresh_line = lines_inside_frame(&fresh)
+        .into_iter()
+        .find(|line| line.contains("last output <1s ago"))
+        .ok_or("fresh output was not on an attempt line")?;
+    let first_indicator = fresh_line
+        .split(" · ")
+        .last()
+        .and_then(|field| field.chars().next())
+        .ok_or("fresh output line had no indicator")?;
+    let moved = terminal.wait_for("the fresh-output indicator to advance", |screen| {
+        lines_inside_frame(&screen.contents()).iter().any(|line| {
+            line.contains("last output <1s ago")
+                && line
+                    .split(" · ")
+                    .last()
+                    .and_then(|field| field.chars().next())
+                    .is_some_and(|indicator| indicator != first_indicator)
+        })
+    })?;
+    assert!(moved.contains("last output <1s ago"));
+    let silent = terminal.wait_for("the stuck silence warning", |screen| {
+        screen.contents().contains("silent for ") && screen.contents().contains("may be stuck")
+    })?;
+    assert!(silent.contains("○ silent for "));
+    assert!(run.wait()?.success());
+    super::navigate::quit(terminal)
 }
 
 #[test]
@@ -857,9 +899,9 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
             lines
                 .get(5)
                 .is_some_and(|line| line.contains("health check") && line.ends_with("passed"))
-                && lines.get(6).is_some_and(|line| {
-                    line.contains("implementation") && line.ends_with("running")
-                })
+                && lines
+                    .get(6)
+                    .is_some_and(|line| line.contains("implementation") && line.contains("running"))
         },
     )?;
     let lines = lines_inside_frame(&screen);
@@ -870,7 +912,7 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
         lines[5]
     );
     assert!(
-        lines[6].contains("implementation · echo") && lines[6].ends_with("running"),
+        lines[6].contains("implementation · echo") && lines[6].contains("running"),
         "{}",
         lines[6]
     );

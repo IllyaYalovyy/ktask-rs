@@ -3,8 +3,8 @@
 use std::time::{Duration, SystemTime};
 
 use crate::{
-    Clock, Journal, JournalError, LimitWait, Outcome, RunLock, Task, TaskId, TaskStatus,
-    list_all_tasks,
+    AttemptOutput, Clock, Journal, JournalError, LimitWait, Outcome, RunLock, Task, TaskId,
+    TaskStatus, list_all_tasks,
 };
 
 mod lines;
@@ -104,8 +104,52 @@ pub struct AttemptLine {
     /// provider's usage limit before it did. `None` while it still runs, and for a step that
     /// never waited.
     pub limit_wait: Option<LimitWait>,
+    /// The live provider-output state for this running attempt. `None` once its current step
+    /// ended, for tool-run steps, and whenever no output source was supplied to `status`.
+    pub output_activity: Option<OutputActivity>,
     /// Every step run so far, in the order they were started.
     pub steps: Vec<StepLine>,
+}
+
+/// What the provider's append-only output says about a running attempt right now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputActivity {
+    /// When provider output was most recently received, when it has written anything yet.
+    pub last_output_at: Option<SystemTime>,
+    /// How long the provider has been silent. Before its first output this is how long the
+    /// current provider step has run.
+    pub silent_for: Duration,
+    /// Whether the last output is recent enough for the live indicator to move.
+    pub active: bool,
+    /// Whether the configured silence threshold has passed.
+    pub may_be_stuck: bool,
+}
+
+impl OutputActivity {
+    /// The activity indicator for this frame: it advances while output is fresh and remains
+    /// still once the provider has gone quiet.
+    #[must_use]
+    pub fn indicator(&self) -> char {
+        const MOVING: [char; 4] = ['◐', '◓', '◑', '◒'];
+        if self.active {
+            let frame = usize::try_from(self.silent_for.subsec_millis() / 200).unwrap_or(0);
+            MOVING.get(frame % MOVING.len()).copied().unwrap_or('○')
+        } else {
+            '○'
+        }
+    }
+
+    /// The operator-facing account of the provider's most recent output.
+    #[must_use]
+    pub fn message(&self) -> String {
+        if self.active {
+            "last output <1s ago".to_owned()
+        } else if self.may_be_stuck {
+            format!("silent for {} s — may be stuck", self.silent_for.as_secs())
+        } else {
+            format!("silent for {} s", self.silent_for.as_secs())
+        }
+    }
 }
 
 /// Who sealed a task `done` by hand, with [`crate::done_task`], instead of an attempt
@@ -164,7 +208,7 @@ pub fn displayed_status(status: TaskStatus, outcome: Option<AttemptOutcome>) -> 
 /// would otherwise overwrite here.
 fn step_lines(
     attempt: &crate::Attempt,
-    clock: &impl Clock,
+    clock: &(impl Clock + ?Sized),
     run_alive: bool,
     answer: Option<&str>,
 ) -> Vec<StepLine> {
@@ -209,7 +253,7 @@ fn current_step_line(
     steps: &mut Vec<StepLine>,
     attempt: &crate::Attempt,
     reported: Option<(Outcome, Option<String>)>,
-    clock: &impl Clock,
+    clock: &(impl Clock + ?Sized),
     run_alive: bool,
     answer: Option<&str>,
 ) -> StepLine {
@@ -252,12 +296,25 @@ fn current_step_line(
 fn attempt_line(
     attempt: &crate::Attempt,
     reported: Option<(Outcome, Option<String>)>,
-    clock: &impl Clock,
+    clock: &(impl Clock + ?Sized),
     run_alive: bool,
     answer: Option<&str>,
+    output: Option<(&dyn AttemptOutput, Duration)>,
+    task: TaskId,
 ) -> AttemptLine {
     let mut steps = step_lines(attempt, clock, run_alive, answer);
     let current = current_step_line(&mut steps, attempt, reported, clock, run_alive, answer);
+    let output_activity = output.and_then(|(output, silent_after)| {
+        output_activity(
+            &current,
+            attempt,
+            clock,
+            run_alive,
+            output,
+            silent_after,
+            task,
+        )
+    });
     AttemptLine {
         number: attempt.number,
         step: current.step,
@@ -268,24 +325,75 @@ fn attempt_line(
         outcome: current.outcome,
         reason: current.reason,
         limit_wait: current.limit_wait,
+        output_activity,
         steps,
     }
 }
 
+/// The live output state for this attempt's current step, when that step is an agent provider
+/// still actively running. No retained bytes yet is deliberately still silence: operators need
+/// to see a provider that started and then said nothing at all.
+fn output_activity(
+    current: &StepLine,
+    attempt: &crate::Attempt,
+    clock: &(impl Clock + ?Sized),
+    run_alive: bool,
+    output: &dyn AttemptOutput,
+    silent_after: Duration,
+    task: TaskId,
+) -> Option<OutputActivity> {
+    if !run_alive || current.outcome != AttemptOutcome::Running || current.provider.is_none() {
+        return None;
+    }
+    let last_output_at = output.last_output_at(task, attempt.number);
+    let since = last_output_at.unwrap_or_else(|| {
+        attempt
+            .steps
+            .iter()
+            .rev()
+            .find(|step| step.ended.is_none())
+            .map_or(attempt.started_at, |step| step.started_at)
+    });
+    let silent_for = clock.now().duration_since(since).unwrap_or_default();
+    Some(OutputActivity {
+        last_output_at,
+        active: silent_for < Duration::from_secs(1),
+        may_be_stuck: silent_for >= silent_after,
+        silent_for,
+    })
+}
+
+/// The per-current-attempt inputs status uses after the journal has supplied them.
+struct CurrentAttempt<'a> {
+    reported: Option<(Outcome, Option<String>)>,
+    clock: &'a dyn Clock,
+    run_alive: bool,
+    answer: Option<&'a str>,
+    output: Option<&'a dyn AttemptOutput>,
+    silent_after: Duration,
+}
+
+/// `task`'s latest `attempt` as its status entry, with the attempt facts already read.
 fn entry_for(
     task: Task,
     attempt: &crate::Attempt,
-    reported: Option<(Outcome, Option<String>)>,
     history: Vec<AttemptLine>,
-    clock: &impl Clock,
-    run_alive: bool,
-    answer: Option<&str>,
+    current: CurrentAttempt<'_>,
 ) -> StatusEntry {
+    let id = task.id;
     StatusEntry {
         task: task.id,
         title: task.title,
         status: task.status,
-        attempt: attempt_line(attempt, reported, clock, run_alive, answer),
+        attempt: attempt_line(
+            attempt,
+            current.reported,
+            current.clock,
+            current.run_alive,
+            current.answer,
+            current.output.map(|output| (output, current.silent_after)),
+            id,
+        ),
         history,
         done_by_user: None,
     }
@@ -302,6 +410,8 @@ fn entry_for_task(
     task: Task,
     clock: &impl Clock,
     run_alive: bool,
+    output: Option<&dyn AttemptOutput>,
+    silent_after: Duration,
 ) -> Result<Option<StatusEntry>, JournalError> {
     let mut attempts = crate::attempt::all_attempts(journal, task.id)?;
     let Some(attempt) = attempts.pop() else {
@@ -322,11 +432,15 @@ fn entry_for_task(
         ..entry_for(
             task,
             &attempt,
-            reported,
             history,
-            clock,
-            run_alive,
-            answer.as_deref(),
+            CurrentAttempt {
+                reported,
+                clock,
+                run_alive,
+                answer: answer.as_deref(),
+                output,
+                silent_after,
+            },
         )
     }))
 }
@@ -350,6 +464,8 @@ fn attempt_history(
             clock,
             false,
             earlier_answer.as_deref(),
+            None,
+            id,
         ));
     }
     Ok(history)
@@ -370,6 +486,35 @@ pub fn status(
     clock: &impl Clock,
     lock: &impl RunLock,
 ) -> Result<Vec<StatusEntry>, JournalError> {
+    status_inner(journal, clock, lock, None, Duration::MAX)
+}
+
+/// Use case: status with live provider-output activity. `output` is a best-effort retained
+/// output source, and `silent_after` is the project setting that decides when silence is
+/// called out as a possible stuck agent.
+///
+/// # Errors
+///
+/// Returns a journal error when the queue cannot be read, or its run lock cannot be checked.
+pub fn status_with_output(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    lock: &impl RunLock,
+    output: &impl AttemptOutput,
+    silent_after: Duration,
+) -> Result<Vec<StatusEntry>, JournalError> {
+    status_inner(journal, clock, lock, Some(output), silent_after)
+}
+
+/// [`status`] and [`status_with_output`]'s common journal read, with `output` present only
+/// for the live-output view.
+fn status_inner(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    lock: &impl RunLock,
+    output: Option<&dyn AttemptOutput>,
+    silent_after: Duration,
+) -> Result<Vec<StatusEntry>, JournalError> {
     let run_alive = match crate::attempt::running(journal)? {
         Some(_) => lock
             .in_progress()
@@ -378,7 +523,8 @@ pub fn status(
     };
     let mut entries = Vec::new();
     for task in list_all_tasks(journal)? {
-        if let Some(entry) = entry_for_task(journal, task, clock, run_alive)? {
+        if let Some(entry) = entry_for_task(journal, task, clock, run_alive, output, silent_after)?
+        {
             entries.push(entry);
         }
     }
@@ -387,7 +533,7 @@ pub fn status(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     use crate::fakes::{FakeClock, FakeJournal, FakeRunLock, at, draft};
     use crate::{AttemptEnd, AttemptRun, Outcome, Placement, TaskId, TaskStatus, add_task, report};
@@ -406,6 +552,14 @@ mod tests {
     /// A lock a live run holds.
     fn a_live_run() -> FakeRunLock {
         FakeRunLock::held_by(Some(4_321))
+    }
+
+    struct OutputAt(SystemTime);
+
+    impl AttemptOutput for OutputAt {
+        fn last_output_at(&self, _task: TaskId, _attempt: u32) -> Option<SystemTime> {
+            Some(self.0)
+        }
     }
 
     #[test]
@@ -461,6 +615,7 @@ mod tests {
                     outcome: AttemptOutcome::Running,
                     reason: None,
                     limit_wait: None,
+                    output_activity: None,
                     steps: vec![StepLine {
                         step: IMPLEMENTATION.to_owned(),
                         provider: Some("echo".to_owned()),
@@ -476,6 +631,55 @@ mod tests {
                 done_by_user: None,
             }]
         );
+    }
+
+    #[test]
+    fn live_output_is_fresh_then_silent_and_called_out_after_the_threshold() {
+        let journal = journal_with_a_started_attempt();
+        let fresh = status_with_output(
+            &journal,
+            &clock(100),
+            &a_live_run(),
+            &OutputAt(at(100)),
+            Duration::from_secs(120),
+        )
+        .unwrap();
+        assert_eq!(
+            fresh[0].attempt.output_activity.as_ref().unwrap().message(),
+            "last output <1s ago"
+        );
+        assert_ne!(
+            fresh[0]
+                .attempt
+                .output_activity
+                .as_ref()
+                .unwrap()
+                .indicator(),
+            status_with_output(
+                &journal,
+                &FakeClock(at(100) + Duration::from_millis(200)),
+                &a_live_run(),
+                &OutputAt(at(100)),
+                Duration::from_secs(120),
+            )
+            .unwrap()[0]
+                .attempt
+                .output_activity
+                .as_ref()
+                .unwrap()
+                .indicator()
+        );
+        let stuck = status_with_output(
+            &journal,
+            &clock(221),
+            &a_live_run(),
+            &OutputAt(at(100)),
+            Duration::from_secs(120),
+        )
+        .unwrap();
+        let activity = stuck[0].attempt.output_activity.as_ref().unwrap();
+        assert_eq!(activity.message(), "silent for 121 s — may be stuck");
+        assert_eq!(activity.indicator(), '○');
     }
 
     #[test]
@@ -501,6 +705,7 @@ mod tests {
                     outcome: AttemptOutcome::Interrupted,
                     reason: None,
                     limit_wait: None,
+                    output_activity: None,
                     steps: vec![StepLine {
                         step: IMPLEMENTATION.to_owned(),
                         provider: Some("echo".to_owned()),

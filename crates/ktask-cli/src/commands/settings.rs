@@ -30,7 +30,7 @@ pub(crate) struct Args {
 pub(crate) enum Command {
     /// Change a setting
     Set {
-        /// The setting to change: attempt-timeout, health-check, tracked-branch,
+        /// The setting to change: attempt-timeout, silent-after, health-check, tracked-branch,
         /// step-sync, step-health-check, step-review, step-testing, step-commit, step-push,
         /// max-attempts, resolver-provider or resolver-model
         #[arg(value_name = "NAME")]

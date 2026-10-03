@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
 
 use ktask_adapters::{
-    FileJournalWatch, FileRunLock, GitCli, SqliteJournal, SqliteRegistry, SystemClock,
-    TomlSettingsStore, builtin_providers,
+    FileAttemptOutput, FileJournalWatch, FileRunLock, GitCli, SqliteJournal, SqliteRegistry,
+    SystemClock, TomlSettingsStore, builtin_providers,
 };
 use ktask_core::{
     AcknowledgeError, AddError, AnswerError, CancelError, DoneError, ForgetError, Import,
@@ -73,17 +73,28 @@ impl ProjectContext {
 /// `project`'s context, opened fresh, with its queue — the two steps that always go together
 /// when the active project changes, whether by switching to another registered one or by
 /// registering the current directory under a name it was asked for.
-fn opened(project: Project) -> Result<(ProjectContext, QueueView), OpenProjectError> {
+fn opened(project: &Project) -> Result<(ProjectContext, QueueView), OpenProjectError> {
     let context = ProjectContext::open(project.clone())?;
-    let view = ktask_core::queue_view(
-        project,
+    let view = queue(&context, false).map_err(OpenProjectError::Journal)?;
+    Ok((context, view))
+}
+
+/// Loads `context`'s queue with the output timestamps and silence threshold that make a
+/// running provider's current activity visible.
+fn queue(context: &ProjectContext, show_cancelled: bool) -> Result<QueueView, JournalError> {
+    let settings = ktask_core::SettingsStore::load(&context.settings_store)
+        .map_err(|error| JournalError::new(error.to_string()))?;
+    let output =
+        FileAttemptOutput::new(outputs_dir_file(&context.project).map_err(JournalError::new)?);
+    ktask_core::queue_view_with_output(
+        context.project.clone(),
         &context.journal,
         &SystemClock,
         &context.lock,
-        false,
+        &output,
+        ktask_core::effective_silent_after(&settings),
+        show_cancelled,
     )
-    .map_err(OpenProjectError::Journal)?;
-    Ok((context, view))
 }
 
 /// Why an action that needs a project open failed: none is open yet — only possible before the
@@ -199,15 +210,7 @@ impl Application for CliApplication {
     type OutputError = NeedsProject<String>;
 
     fn load_queue(&self, show_cancelled: bool) -> Result<QueueView, Self::LoadError> {
-        self.with_context(|context| {
-            ktask_core::queue_view(
-                context.project.clone(),
-                &context.journal,
-                &SystemClock,
-                &context.lock,
-                show_cancelled,
-            )
-        })
+        self.with_context(|context| queue(context, show_cancelled))
     }
 
     fn remove_task(&self, id: TaskId) -> Result<(), Self::RemoveError> {
@@ -293,7 +296,7 @@ impl Application for CliApplication {
             .into_iter()
             .find(|project| project.name == name)
             .ok_or_else(|| SwitchProjectError::Unknown(name.to_owned()))?;
-        let (fresh, view) = opened(project.clone()).map_err(SwitchProjectError::Open)?;
+        let (fresh, view) = opened(&project).map_err(SwitchProjectError::Open)?;
         *self.context.lock().unwrap_or_else(PoisonError::into_inner) = Some(fresh);
         *self
             .active_project
@@ -313,7 +316,7 @@ impl Application for CliApplication {
         let project =
             ktask_core::register_project(&*registry, &GitCli, &SystemClock, &self.cwd, name)
                 .map_err(RegisterProjectError::Register)?;
-        let (fresh, view) = opened(project.clone()).map_err(RegisterProjectError::Open)?;
+        let (fresh, view) = opened(&project).map_err(RegisterProjectError::Open)?;
         *self.context.lock().unwrap_or_else(PoisonError::into_inner) = Some(fresh);
         *self
             .active_project

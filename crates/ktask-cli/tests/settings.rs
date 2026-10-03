@@ -59,7 +59,7 @@ impl Fixture {
 }
 
 /// Every step switch at its default: on — the tail of `settings`' output, whatever the
-/// first three settings show.
+/// first four settings show.
 const STEP_DEFAULTS: &str = "step-sync\ton\tdefault\n\
      step-health-check\ton\tdefault\n\
      step-review\ton\tdefault\n\
@@ -70,10 +70,10 @@ const STEP_DEFAULTS: &str = "step-sync\ton\tdefault\n\
      resolver-provider\techo\tdefault\n\
      resolver-model\t\tdefault\n";
 
-/// The default `settings` output: attempt-timeout at its built-in default, health-check and
-/// tracked-branch unset, every step switch on, max-attempts and the resolver's provider and
-/// model at their built-in defaults.
-const DEFAULTS: &str = "attempt-timeout\t14400\tdefault\nhealth-check\t\tdefault\n\
+/// The default `settings` output: its two time settings at their built-in defaults,
+/// health-check and tracked-branch unset, every step switch on, max-attempts and the resolver's
+/// provider and model at their built-in defaults.
+const DEFAULTS: &str = "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\n\
      tracked-branch\t\tdefault\nstep-sync\ton\tdefault\nstep-health-check\ton\tdefault\n\
      step-review\ton\tdefault\nstep-testing\ton\tdefault\nstep-commit\ton\tdefault\n\
      step-push\ton\tdefault\nmax-attempts\t3\tdefault\nresolver-provider\techo\tdefault\n\
@@ -100,6 +100,7 @@ fn json_carries_the_same() -> Result<()> {
     assert_eq!(
         outcome.stdout,
         "[{\"name\":\"attempt-timeout\",\"value\":\"14400\",\"default\":true},\
+         {\"name\":\"silent-after\",\"value\":\"120\",\"default\":true},\
          {\"name\":\"health-check\",\"value\":\"\",\"default\":true},\
          {\"name\":\"tracked-branch\",\"value\":\"\",\"default\":true},\
          {\"name\":\"step-sync\",\"value\":\"on\",\"default\":true},\
@@ -127,7 +128,7 @@ fn set_changes_the_value_and_it_shows_as_no_longer_the_default() -> Result<()> {
     assert_eq!(
         shown.stdout,
         format!(
-            "attempt-timeout\t3600\tcustom\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
+            "attempt-timeout\t3600\tcustom\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
         )
     );
     assert!(fixture.settings_file().is_file());
@@ -149,6 +150,30 @@ fn set_json_carries_the_same() -> Result<()> {
 }
 
 #[test]
+fn silent_after_is_shown_changed_and_refuses_zero() -> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let set = fixture.run(&["settings", "set", "silent-after", "30"])?;
+    assert_eq!(set.code, Some(0), "{}", set.stderr);
+    assert_eq!(set.stdout, "silent-after\t30\n");
+    assert!(
+        fixture
+            .run(&["settings"])?
+            .stdout
+            .contains("silent-after\t30\tcustom\n")
+    );
+
+    let invalid = fixture.run(&["settings", "set", "silent-after", "0"])?;
+    assert_eq!(invalid.code, Some(2));
+    assert!(
+        invalid
+            .stderr
+            .contains("silent-after: must be at least 1 second")
+    );
+    Ok(())
+}
+
+#[test]
 fn setting_health_check_changes_it_and_it_shows_as_no_longer_the_default() -> Result<()> {
     let fixture = Fixture::new()?;
 
@@ -160,7 +185,7 @@ fn setting_health_check_changes_it_and_it_shows_as_no_longer_the_default() -> Re
     assert_eq!(
         shown.stdout,
         format!(
-            "attempt-timeout\t14400\tdefault\nhealth-check\tcargo test\tcustom\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
+            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\tcargo test\tcustom\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
         )
     );
     Ok(())
@@ -178,7 +203,7 @@ fn a_tracked_branch_naming_an_existing_remote_branch_is_accepted() -> Result<()>
     assert_eq!(
         shown.stdout,
         format!(
-            "attempt-timeout\t14400\tdefault\nhealth-check\t\tdefault\ntracked-branch\torigin/main\tcustom\n{STEP_DEFAULTS}"
+            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\torigin/main\tcustom\n{STEP_DEFAULTS}"
         )
     );
     Ok(())
@@ -274,7 +299,7 @@ fn the_setting_persists_across_commands() -> Result<()> {
     assert_eq!(
         shown.stdout,
         format!(
-            "attempt-timeout\t600\tcustom\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
+            "attempt-timeout\t600\tcustom\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
         )
     );
     Ok(())

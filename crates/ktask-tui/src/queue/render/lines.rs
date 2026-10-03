@@ -2,7 +2,7 @@
 //! of them to fit — [`super`]'s own lowest-level work, pulled out of it so that file stays
 //! within the workspace's file-length limit.
 
-use ktask_core::StepLine;
+use ktask_core::{OutputActivity, StepLine};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 
@@ -17,15 +17,29 @@ pub(super) fn step_lines_named(
     steps: &[StepLine],
     width: usize,
     label: &str,
+    activity: Option<&OutputActivity>,
 ) -> Vec<Line<'static>> {
     steps
         .iter()
-        .map(|step| step_line(step, width, label))
+        .enumerate()
+        .map(|(index, step)| {
+            step_line(
+                step,
+                width,
+                label,
+                (index + 1 == steps.len()).then_some(activity).flatten(),
+            )
+        })
         .collect()
 }
 
 /// `step` as one line, given `width` and `label` — [`step_lines_named`]'s own per-step work.
-fn step_line(step: &StepLine, width: usize, label: &str) -> Line<'static> {
+fn step_line(
+    step: &StepLine,
+    width: usize,
+    label: &str,
+    activity: Option<&OutputActivity>,
+) -> Line<'static> {
     let provider = step.provider.as_deref().unwrap_or("-");
     let seconds = step.time_spent.as_secs();
     let outcome = step.outcome;
@@ -58,6 +72,10 @@ fn step_line(step: &StepLine, width: usize, label: &str) -> Line<'static> {
                 wait.waited.as_secs()
             )
         }
+        None => text,
+    };
+    let text = match activity {
+        Some(activity) => format!("{text} · {} {}", activity.indicator(), activity.message()),
         None => text,
     };
     Line::styled(text, Style::new().add_modifier(Modifier::DIM))

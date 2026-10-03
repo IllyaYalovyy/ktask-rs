@@ -56,6 +56,7 @@ fn label(name: &str) -> &'static str {
         "max-attempts" => "Max attempts",
         "resolver-provider" => "Resolver provider",
         "resolver-model" => "Resolver model",
+        "silent-after" => "Silent after, in seconds",
         _ => "Attempt timeout, in seconds",
     }
 }

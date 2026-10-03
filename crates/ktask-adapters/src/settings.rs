@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 struct SettingsFile {
     #[serde(rename = "attempt-timeout", skip_serializing_if = "Option::is_none")]
     attempt_timeout: Option<u64>,
+    #[serde(rename = "silent-after", skip_serializing_if = "Option::is_none")]
+    silent_after: Option<u64>,
     #[serde(rename = "health-check", skip_serializing_if = "Option::is_none")]
     health_check: Option<String>,
     #[serde(rename = "tracked-branch", skip_serializing_if = "Option::is_none")]
@@ -44,6 +46,7 @@ impl From<Settings> for SettingsFile {
     fn from(settings: Settings) -> Self {
         Self {
             attempt_timeout: settings.attempt_timeout_seconds,
+            silent_after: settings.silent_after_seconds,
             health_check: settings.health_check_command,
             tracked_branch: settings.tracked_branch,
             step_sync: settings.sync_step,
@@ -64,6 +67,7 @@ impl From<SettingsFile> for Settings {
     fn from(file: SettingsFile) -> Self {
         Self {
             attempt_timeout_seconds: file.attempt_timeout,
+            silent_after_seconds: file.silent_after,
             health_check_command: file.health_check,
             tracked_branch: file.tracked_branch,
             sync_step: file.step_sync,
@@ -150,6 +154,7 @@ mod tests {
         let store = TomlSettingsStore::new(path.clone());
         let settings = Settings {
             attempt_timeout_seconds: Some(7_200),
+            silent_after_seconds: Some(90),
             health_check_command: Some("cargo test".to_owned()),
             tracked_branch: Some("origin/main".to_owned()),
             sync_step: Some(false),

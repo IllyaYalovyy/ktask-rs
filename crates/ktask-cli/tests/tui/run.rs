@@ -176,7 +176,7 @@ fn r_starts_the_run_and_the_screen_shows_its_progress_as_it_would_for_a_run_star
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">1  #1  running  agent  a");
     assert!(
-        lines[5].contains("implementation · echo") && lines[5].ends_with("running"),
+        lines[5].contains("implementation · echo") && lines[5].contains("running"),
         "{}",
         lines[5]
     );

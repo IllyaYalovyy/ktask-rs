@@ -27,6 +27,15 @@ struct StepJson<'a> {
     limit_wait: Option<LimitWaitJson>,
 }
 
+/// The live output state for a running provider attempt as `status --json` shows it.
+#[derive(Debug, Serialize)]
+struct OutputActivityJson {
+    last_output_seconds_ago: Option<u64>,
+    silent_for_seconds: u64,
+    active: bool,
+    may_be_stuck: bool,
+}
+
 /// One task's attempt as `status --json` shows it: the current — most recent — step's own
 /// fields, kept flat here for whatever only cares about that, plus `steps`, every step run so
 /// far, in order.
@@ -41,7 +50,21 @@ struct AttemptJson<'a> {
     outcome: &'static str,
     reason: Option<&'a str>,
     limit_wait: Option<LimitWaitJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_activity: Option<OutputActivityJson>,
     steps: Vec<StepJson<'a>>,
+}
+
+/// `activity` in the stable, machine-readable status form.
+fn output_activity_json(activity: &ktask_core::OutputActivity) -> OutputActivityJson {
+    OutputActivityJson {
+        last_output_seconds_ago: activity
+            .last_output_at
+            .map(|_| activity.silent_for.as_secs()),
+        silent_for_seconds: activity.silent_for.as_secs(),
+        active: activity.active,
+        may_be_stuck: activity.may_be_stuck,
+    }
 }
 
 /// The reason and when a task was sealed `done` by hand, as `status --json` shows it.
@@ -114,6 +137,7 @@ fn attempt_json(line: &ktask_core::AttemptLine) -> Result<AttemptJson<'_>, Strin
         outcome: line.outcome.as_str(),
         reason: line.reason.as_deref(),
         limit_wait: line.limit_wait.as_ref().map(limit_wait_json).transpose()?,
+        output_activity: line.output_activity.as_ref().map(output_activity_json),
         steps: line
             .steps
             .iter()
@@ -181,13 +205,14 @@ fn status_text(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
             .history
             .iter()
             .try_for_each(|attempt| {
-                write_step_lines(out, &attempt.steps, &attempt_label(attempt.number))
+                write_step_lines(out, &attempt.steps, &attempt_label(attempt.number), None)
             })
             .map_err(|e: std::io::Error| e.to_string())?;
         write_step_lines(
             out,
             &entry.attempt.steps,
             &attempt_label(entry.attempt.number),
+            entry.attempt.output_activity.as_ref(),
         )
         .map_err(|e| e.to_string())?;
     }
@@ -230,8 +255,9 @@ fn write_step_lines(
     out: &mut impl Write,
     steps: &[ktask_core::StepLine],
     prefix: &str,
+    activity: Option<&ktask_core::OutputActivity>,
 ) -> Result<(), std::io::Error> {
-    steps.iter().try_for_each(|step| {
+    steps.iter().enumerate().try_for_each(|(index, step)| {
         let provider = step.provider.as_deref().unwrap_or("-");
         let seconds = step.time_spent.as_secs();
         let name = match &step.model {
@@ -243,15 +269,22 @@ fn write_step_lines(
             .as_deref()
             .map_or_else(String::new, |session| format!("\tsession:{session}"));
         let limit_wait = limit_wait_suffix(step.limit_wait.as_ref());
+        let activity = if index + 1 == steps.len() {
+            activity.map_or_else(String::new, |value| {
+                format!("\t{} {}", value.indicator(), value.message())
+            })
+        } else {
+            String::new()
+        };
         match &step.reason {
             Some(reason) => writeln!(
                 out,
-                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}\t{reason}{session}{limit_wait}",
+                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}\t{reason}{session}{limit_wait}{activity}",
                 step.outcome
             ),
             None => writeln!(
                 out,
-                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{session}{limit_wait}",
+                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{session}{limit_wait}{activity}",
                 step.outcome
             ),
         }

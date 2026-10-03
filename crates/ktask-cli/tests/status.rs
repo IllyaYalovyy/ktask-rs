@@ -239,6 +239,36 @@ fn failed_unknown_fixture() -> Result<Fixture> {
 }
 
 #[test]
+fn status_shows_fresh_output_then_silence_and_the_stuck_warning() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.run(&["settings", "set", "silent-after", "1"])?;
+    fixture.add_agent_task(
+        "watch me",
+        "```bash\nif [ \"$3\" = \"implementation\" ]; then\n  for n in 1 2 3 4; do\n    echo working-$n\n    sleep 0.2\n  done\n  sleep 2\n  ktask-rs report --token \"$1\" done\nelif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" approved\nelse\n  ktask-rs report --token \"$1\" accepted\nfi\n```\n",
+    )?;
+    let mut run = fixture.spawn_the_queue(&["run"])?;
+
+    wait_until("status to show fresh output", || {
+        fixture
+            .run(&["status"])
+            .is_ok_and(|outcome| outcome.stdout.contains("last output <1s ago"))
+    })?;
+    let silent = wait_until_some("status to call the silence possibly stuck", || {
+        fixture.run(&["status"]).ok().filter(|outcome| {
+            outcome.stdout.contains("silent for ") && outcome.stdout.contains("may be stuck")
+        })
+    })?;
+    assert!(silent.stdout.contains("○ silent for "), "{}", silent.stdout);
+    assert!(
+        silent.stdout.contains("— may be stuck"),
+        "{}",
+        silent.stdout
+    );
+    assert!(run.wait()?.success());
+    Ok(())
+}
+
+#[test]
 fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_line() -> Result<()> {
     let fixture = done_fixture()?;
     let outcome = fixture.run(&["status"])?;
@@ -523,7 +553,7 @@ fn while_a_run_is_in_progress_the_running_task_shows_its_elapsed_time_so_far() -
     assert_eq!(lines[0], "#1\trunning\ta");
     assert_eq!(lines.len(), 2, "{lines:#?}");
     let fields: Vec<&str> = lines[1].split('\t').collect();
-    assert_eq!(fields.len(), 5, "{}", lines[1]);
+    assert_eq!(fields.len(), 6, "{}", lines[1]);
     assert_eq!(
         &fields[..3],
         ["", "attempt 1: implementation", "echo"],
@@ -531,6 +561,7 @@ fn while_a_run_is_in_progress_the_running_task_shows_its_elapsed_time_so_far() -
         lines[1]
     );
     assert_eq!(fields[4], "running");
+    assert!(fields[5].contains("silent for "), "{}", lines[1]);
     let seconds: u64 = fields[3].strip_suffix('s').unwrap().parse().unwrap();
     assert!((1..10).contains(&seconds), "{seconds}");
 
@@ -542,6 +573,7 @@ fn while_a_run_is_in_progress_the_running_task_shows_its_elapsed_time_so_far() -
     assert!((1..10).contains(&seconds), "{seconds}");
     assert_eq!(entries[0]["attempt"]["outcome"], "running");
     assert!(entries[0]["attempt"]["reason"].is_null());
+    assert_eq!(entries[0]["attempt"]["output_activity"]["active"], false);
 
     std::fs::write(&go, "")?;
     let status = child.wait()?;

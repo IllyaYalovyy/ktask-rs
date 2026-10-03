@@ -13,6 +13,9 @@ mod specs;
 /// `run`'s time limit for one attempt when nothing else sets it: four hours.
 pub const DEFAULT_ATTEMPT_TIMEOUT_SECS: u64 = 14_400;
 
+/// How long a running provider may produce no output before its line says it may be stuck.
+pub const DEFAULT_SILENT_AFTER_SECS: u64 = 120;
+
 /// How many attempts a task may have before the resolver is no longer run, when nothing else
 /// sets it.
 pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
@@ -23,6 +26,9 @@ pub const DEFAULT_RESOLVER_PROVIDER: &str = "echo";
 
 /// The attempt time limit setting's name.
 pub const ATTEMPT_TIMEOUT: &str = "attempt-timeout";
+
+/// The silence threshold setting's name.
+pub const SILENT_AFTER: &str = "silent-after";
 
 /// The health-check command setting's name.
 pub const HEALTH_CHECK: &str = "health-check";
@@ -67,6 +73,9 @@ pub const STEP_IMPLEMENTATION: &str = "step-implementation";
 pub struct Settings {
     /// The attempt time limit, in seconds, when the project has set one.
     pub attempt_timeout_seconds: Option<u64>,
+    /// The number of seconds with no provider output before a running attempt is called out as
+    /// possibly stuck, when the project has set one.
+    pub silent_after_seconds: Option<u64>,
     /// The command that proves the code base healthy before a task's implementation, when the
     /// project has set one. `None` means the health-check step is skipped: it is run for no
     /// task, and leaves no line.
@@ -290,6 +299,17 @@ pub fn effective_attempt_timeout(settings: &Settings, cli_override: Option<u64>)
     )
 }
 
+/// The silence threshold a live-status view should use: the project's own setting, else the
+/// built-in two minutes.
+#[must_use]
+pub fn effective_silent_after(settings: &Settings) -> Duration {
+    Duration::from_secs(
+        settings
+            .silent_after_seconds
+            .unwrap_or(DEFAULT_SILENT_AFTER_SECS),
+    )
+}
+
 /// How many attempts a task may have before the resolver is no longer run: the project's own
 /// setting, else the built-in default.
 #[must_use]
@@ -342,6 +362,11 @@ mod tests {
                 SettingView {
                     name: ATTEMPT_TIMEOUT,
                     value: DEFAULT_ATTEMPT_TIMEOUT_SECS.to_string(),
+                    is_default: true,
+                },
+                SettingView {
+                    name: SILENT_AFTER,
+                    value: DEFAULT_SILENT_AFTER_SECS.to_string(),
                     is_default: true,
                 },
                 SettingView {
@@ -407,6 +432,7 @@ mod tests {
     fn stored_values_show_as_not_the_default() {
         let store = FakeSettingsStore::with(Settings {
             attempt_timeout_seconds: Some(7_200),
+            silent_after_seconds: Some(90),
             health_check_command: Some("cargo test".to_owned()),
             tracked_branch: Some("origin/main".to_owned()),
             sync_step: Some(false),
@@ -426,6 +452,11 @@ mod tests {
                 SettingView {
                     name: ATTEMPT_TIMEOUT,
                     value: "7200".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: SILENT_AFTER,
+                    value: "90".to_owned(),
                     is_default: false,
                 },
                 SettingView {
@@ -517,6 +548,27 @@ mod tests {
                 tracked_branch: None,
                 ..Settings::default()
             })
+        );
+    }
+
+    #[test]
+    fn setting_a_valid_silent_after_changes_it_and_refuses_zero() {
+        let store = FakeSettingsStore::with(Settings::default());
+        assert_eq!(
+            set(&store, SILENT_AFTER, "30"),
+            Ok(SettingView {
+                name: SILENT_AFTER,
+                value: "30".to_owned(),
+                is_default: false,
+            })
+        );
+        assert_eq!(
+            effective_silent_after(&store.load().unwrap()),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            set(&store, SILENT_AFTER, "0").unwrap_err().to_string(),
+            "silent-after: must be at least 1 second"
         );
     }
 

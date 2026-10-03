@@ -557,6 +557,7 @@ mod tests {
             outcome: AttemptOutcome::Reported(Outcome::NeedsInput),
             reason: Some(reason.to_owned()),
             limit_wait: None,
+            output_activity: None,
             steps: vec![],
         }
     }

@@ -2,10 +2,13 @@
 
 use std::collections::HashMap;
 
-use crate::status::{AttemptLine, AttemptOutcome, DoneMark, status};
+use std::time::Duration;
+
+use crate::status::{AttemptLine, AttemptOutcome, DoneMark, status_with_output};
 use crate::task::without_hidden_statuses;
 use crate::{
-    Clock, Journal, JournalError, Project, RunLock, Task, TaskId, TaskStatus, list_all_tasks,
+    AttemptOutput, Clock, Journal, JournalError, Project, RunLock, Task, TaskId, TaskStatus,
+    list_all_tasks,
 };
 
 /// How many tasks are in each status.
@@ -108,8 +111,34 @@ pub fn queue_view(
     lock: &impl RunLock,
     show_cancelled: bool,
 ) -> Result<QueueView, JournalError> {
+    queue_view_with_output(
+        project,
+        journal,
+        clock,
+        lock,
+        &crate::NoAttemptOutput,
+        Duration::MAX,
+        show_cancelled,
+    )
+}
+
+/// Use case: the queue with the live output state for its running provider attempt. This is
+/// the view both interfaces use when they can read the project's append-only output files.
+///
+/// # Errors
+///
+/// Returns a journal error when the queue cannot be read, or its run lock cannot be checked.
+pub fn queue_view_with_output(
+    project: Project,
+    journal: &impl Journal,
+    clock: &impl Clock,
+    lock: &impl RunLock,
+    output: &impl AttemptOutput,
+    silent_after: Duration,
+    show_cancelled: bool,
+) -> Result<QueueView, JournalError> {
     let tasks = list_all_tasks(journal)?;
-    let entries = status(journal, clock, lock)?;
+    let entries = status_with_output(journal, clock, lock, output, silent_after)?;
     let attempts: HashMap<TaskId, AttemptLine> = entries
         .iter()
         .map(|entry| (entry.task, entry.attempt.clone()))
@@ -156,7 +185,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::fakes::{FakeClock, FakeJournal, FakeRunLock, at, draft, project};
-    use crate::{AttemptRun, Placement, TaskId, TaskStatus, add_task};
+    use crate::{AttemptRun, Placement, TaskId, TaskStatus, add_task, status};
 
     use super::*;
 
