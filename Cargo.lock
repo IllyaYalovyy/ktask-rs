@@ -837,6 +837,7 @@ dependencies = [
  "ktask-core",
  "nix 0.28.0",
  "notify",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

@@ -1,16 +1,19 @@
 //! The one provider implementation used for definitions read from configuration.
 
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use ktask_core::{
-    Output, Provider, ProviderCommand, ProviderDefinition, ProviderParser, ProviderUsage, StepCall,
-    Usage,
+    LimitSignal, Output, Provider, ProviderCommand, ProviderDefinition, ProviderParser,
+    ProviderUsage, StepCall, Usage,
 };
+use regex::Regex;
 
 /// Turns a named effective provider definition into the value the core runner executes.
 #[must_use]
 pub fn configured_provider(name: &str, definition: &ProviderDefinition) -> Provider {
     let command_definition = definition.clone();
+    let limit_definition = definition.clone();
     let session_definition = definition.clone();
     let usage_definition = definition.clone();
     let parser = definition.parser;
@@ -19,10 +22,29 @@ pub fn configured_provider(name: &str, definition: &ProviderDefinition) -> Provi
         command: Arc::new(move |prompt, call| Ok(build_command(&command_definition, prompt, call))),
         supports_resume: !definition.resume.is_empty(),
         read_session: Arc::new(move |output| read_session(&session_definition, output)),
-        detect_limit: Arc::new(|_| None),
+        detect_limit: Arc::new(move |output| detect_limit(&limit_definition, output)),
         read_usage: Arc::new(move |output| read_usage(&usage_definition, output)),
         parse_output: Arc::new(move |output| parse_output(parser, output)),
     }
+}
+
+/// Matches a configured limit pattern against the provider's normalized output. Patterns may
+/// name their reset time with a `reset` capture containing Unix seconds; a matching message
+/// without that capture is still a limit and uses the runner's ordinary back-off.
+fn detect_limit(definition: &ProviderDefinition, output: &Output) -> Option<LimitSignal> {
+    let pattern = definition.limit_message.as_deref()?;
+    let expression = Regex::new(pattern).ok()?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let matched = expression.captures(&text)?;
+    let reset_at = matched
+        .name("reset")
+        .and_then(|capture| capture.as_str().parse::<u64>().ok())
+        .map(|seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds));
+    Some(LimitSignal { reset_at })
 }
 
 fn build_command(
@@ -275,6 +297,33 @@ mod tests {
                 },
                 model: Some("asked".to_owned()),
             }
+        );
+    }
+
+    #[test]
+    fn a_configured_limit_pattern_reads_the_reset_capture() {
+        let definition = ProviderDefinition {
+            command: "agent".to_owned(),
+            args: vec![],
+            prompt: vec![],
+            model: vec![],
+            resume: vec![],
+            denied_tools: vec![],
+            parser: ProviderParser::Plain,
+            session_id: None,
+            usage: None,
+            limit_message: Some(r"limit\|(?<reset>[0-9]+)".to_owned()),
+        };
+        let output = Output {
+            stdout: b"limit|42".to_vec(),
+            stderr: vec![],
+            exit: Exit::Code(1),
+        };
+        assert_eq!(
+            detect_limit(&definition, &output),
+            Some(LimitSignal {
+                reset_at: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(42)),
+            })
         );
     }
 }

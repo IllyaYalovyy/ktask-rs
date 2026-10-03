@@ -19,6 +19,10 @@ const DEFAULT_LIMIT_BACKOFF: Duration = Duration::from_mins(5);
 /// back nothing, leaving only the uninformative "exited with code N and reported nothing".
 /// [`super::known_cause`] keys its own disk-full and file-slots-full causes on exactly these.
 const KNOWN_OS_ERROR_PHRASES: [&str; 2] = ["No space left on device", "Too many open files"];
+/// Claude Code errors the mechanical known-cause rules can fix without asking a resolver to
+/// rediscover them. Their full text is retained as the step reason when no report was made.
+const KNOWN_CLAUDE_ERROR_PHRASES: [&str; 3] =
+    ["Invalid API key", "Not logged in", "Invalid settings"];
 
 /// The first of [`KNOWN_OS_ERROR_PHRASES`] found in `output`'s own standard output or standard
 /// error, when there is one.
@@ -31,6 +35,21 @@ fn known_os_error(output: &Output) -> Option<&'static str> {
     KNOWN_OS_ERROR_PHRASES
         .into_iter()
         .find(|phrase| text.contains(phrase))
+}
+
+/// The first Claude authentication or settings error from an unreported provider output.
+fn known_claude_error(output: &Output) -> Option<String> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stdout
+        .lines()
+        .chain(stderr.lines())
+        .find(|line| {
+            KNOWN_CLAUDE_ERROR_PHRASES
+                .iter()
+                .any(|phrase| line.contains(phrase))
+        })
+        .map(str::to_owned)
 }
 
 /// What a step that ran a provider ended at: its exit code (`None` when the provider could not
@@ -97,7 +116,9 @@ fn status_and_reason(
                 Some(phrase) => format!(
                     "the provider exited with code {exit_code} and reported nothing: {phrase}"
                 ),
-                None => format!("the provider exited with code {exit_code} and reported nothing"),
+                None => known_claude_error(output).unwrap_or_else(|| {
+                    format!("the provider exited with code {exit_code} and reported nothing")
+                }),
             };
             (TaskStatus::FailedUnknown, Some(reason))
         }

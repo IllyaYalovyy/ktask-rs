@@ -54,7 +54,8 @@ pub struct ProviderDefinition {
     /// The text or event field that carries usage data.
     #[serde(default)]
     pub usage: Option<String>,
-    /// The text or event field that means the provider limit was reached.
+    /// A regular expression that means the provider limit was reached. A `reset` capture,
+    /// when present, is Unix seconds at which the provider says the limit resets.
     #[serde(rename = "limit-message", default)]
     pub limit_message: Option<String>,
 }

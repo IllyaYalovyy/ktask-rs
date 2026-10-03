@@ -29,7 +29,7 @@ fn claude() -> ProviderDefinition {
         parser: ProviderParser::ClaudeStreamJson,
         session_id: Some("result.session_id".to_owned()),
         usage: Some("usage".to_owned()),
-        limit_message: Some("rate limit".to_owned()),
+        limit_message: Some(r"(?i)Claude AI usage limit reached\|(?<reset>[0-9]+)".to_owned()),
     }
 }
 

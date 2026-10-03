@@ -21,6 +21,10 @@ pub(crate) enum KnownCause {
     GitIdentityMissing,
     /// The project's tracked remote could not be reached.
     RemoteUnreachable,
+    /// Claude Code needs its operator to authenticate again.
+    ClaudeAuthentication,
+    /// Claude Code rejected one of its settings files.
+    ClaudeConfiguration,
 }
 
 /// The phrase an operating system error names a full disk with, verbatim, on Linux.
@@ -40,6 +44,8 @@ const REMOTE_UNREACHABLE_PHRASES: [&str; 6] = [
     "connection refused",
     "connection timed out",
 ];
+const CLAUDE_AUTHENTICATION_PHRASES: [&str; 2] = ["invalid api key", "not logged in"];
+const CLAUDE_CONFIGURATION_PHRASE: &str = "invalid settings";
 
 impl KnownCause {
     /// What matches `exit_code` and `reason` against every known cause, in the order checked:
@@ -61,6 +67,15 @@ impl KnownCause {
             return Some(Self::GitIdentityMissing);
         }
         let lower = reason.to_lowercase();
+        if CLAUDE_AUTHENTICATION_PHRASES
+            .iter()
+            .any(|phrase| lower.contains(phrase))
+        {
+            return Some(Self::ClaudeAuthentication);
+        }
+        if lower.contains(CLAUDE_CONFIGURATION_PHRASE) {
+            return Some(Self::ClaudeConfiguration);
+        }
         REMOTE_UNREACHABLE_PHRASES
             .iter()
             .any(|phrase| lower.contains(phrase))
@@ -88,6 +103,12 @@ impl KnownCause {
             Self::RemoteUnreachable => {
                 format!("{reason}; make the remote reachable, then run again")
             }
+            Self::ClaudeAuthentication => format!(
+                "Claude Code could not authenticate: {reason}; run `claude /login`, then run again"
+            ),
+            Self::ClaudeConfiguration => format!(
+                "Claude Code has invalid settings: {reason}; fix the named Claude Code settings file, then run again"
+            ),
         }
     }
 }
@@ -212,6 +233,21 @@ mod tests {
             None
         );
         assert_eq!(KnownCause::classify(None, None), None);
+    }
+
+    #[test]
+    fn claude_authentication_and_configuration_errors_are_known_causes() {
+        assert_eq!(
+            KnownCause::classify(None, Some("Invalid API key · Please run /login")),
+            Some(KnownCause::ClaudeAuthentication)
+        );
+        assert_eq!(
+            KnownCause::classify(
+                None,
+                Some("Error: Invalid settings at ~/.claude/settings.json")
+            ),
+            Some(KnownCause::ClaudeConfiguration)
+        );
     }
 
     #[test]
