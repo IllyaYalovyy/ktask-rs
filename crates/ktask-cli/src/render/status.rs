@@ -234,6 +234,16 @@ fn limit_wait_suffix(wait: Option<&ktask_core::LimitWait>) -> String {
     })
 }
 
+/// The optional session as its tab-separated status field.
+fn session_field(session: Option<&str>) -> String {
+    let session = presentation::session_suffix(session);
+    if session.is_empty() {
+        String::new()
+    } else {
+        format!("\t{session}")
+    }
+}
+
 /// Writes one indented line per step of `steps`, in order — step (named with `prefix` ahead of
 /// it, so every step line says which attempt it belongs to, the current attempt included)
 /// provider (`-` for a step the tool ran itself, which names none), the model, for the resolve
@@ -253,12 +263,7 @@ fn write_step_lines(
             Some(model) => format!("{}\t{model}", step.step),
             None => step.step.clone(),
         };
-        let session = presentation::session_suffix(step.session.as_deref());
-        let session = if session.is_empty() {
-            String::new()
-        } else {
-            format!("\t{session}")
-        };
+        let session = session_field(step.session.as_deref());
         let limit_wait = limit_wait_suffix(step.limit_wait.as_ref());
         let activity = if index + 1 == steps.len() {
             activity.map_or_else(String::new, |value| {
