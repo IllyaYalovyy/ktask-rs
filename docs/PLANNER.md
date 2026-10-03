@@ -46,3 +46,10 @@ the CLI only.
 - Work with no user-visible result (a refactor, a test repair) is titled by what becomes
   true — **The queue's rules live in one place** — and its first acceptance criterion is
   that behaviour does not change.
+
+## A clean-code violation stops the line
+
+When a review or a tripwire finds a violation of CODER.md's clean-code criteria — a module
+with two responsibilities, prose made in core, duplication between the interfaces — the
+refactoring task is placed **next**, before any further feature. Well-organised code is what
+makes the next feature cheap; a backlog entry is where that is forgotten.
