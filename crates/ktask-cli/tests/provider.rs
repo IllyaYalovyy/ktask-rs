@@ -6,6 +6,7 @@ mod repo;
 mod support;
 
 use std::io::Write as _;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -238,6 +239,125 @@ fn project(sandbox: &Sandbox) -> Result<(TempDir, std::path::PathBuf)> {
     let outcome = sandbox.run(&repository, &["provider", "list"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     Ok((keep, repository))
+}
+
+/// A recorded Claude executable, placed first on the child process's `PATH`.
+fn recorded_claude() -> Result<TempDir> {
+    let dir = TempDir::new()?;
+    let script = dir.path().join("claude");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\n[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-haiku-4-5 ] || exit 9\nprintf '%s\\n' '{\"type\":\"result\",\"result\":\"READY\"}'\n",
+    )?;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
+    Ok(dir)
+}
+
+fn path_with(dir: &Path) -> Result<std::ffi::OsString> {
+    let existing = std::env::var_os("PATH").unwrap_or_default();
+    Ok(std::env::join_paths(
+        std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&existing)),
+    )?)
+}
+
+#[test]
+fn provider_check_exits_one_with_install_advice_when_claude_is_not_on_path() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, repository) = project(&sandbox)?;
+    let outcome = sandbox.run_with(&repository, &["provider", "check", "claude"], |command| {
+        command.env("PATH", "/usr/bin:/bin");
+    })?;
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stderr);
+    assert!(
+        outcome.stdout.contains("command: failed"),
+        "{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("`claude` binary"),
+        "{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome
+            .stdout
+            .contains("npm install -g @anthropic-ai/claude-code"),
+        "{}",
+        outcome.stdout
+    );
+    Ok(())
+}
+
+#[test]
+fn provider_check_reports_every_claude_check_passed_for_recorded_output() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, repository) = project(&sandbox)?;
+    let claude = recorded_claude()?;
+    let path = path_with(claude.path())?;
+    let outcome = sandbox.run_with(&repository, &["provider", "check", "claude"], |command| {
+        command.env("PATH", &path);
+    })?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "Provider: claude\ncommand: passed\nlogin: passed\nsmallest call: passed\n"
+    );
+    let json = sandbox.run_with(
+        &repository,
+        &["provider", "check", "claude", "--json"],
+        |command| {
+            command.env("PATH", &path);
+        },
+    )?;
+    assert_eq!(json.code, Some(0), "{}", json.stderr);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&json.stdout)?,
+        serde_json::json!({
+            "provider": "claude",
+            "checks": [
+                {"name": "command", "passed": true, "advice": null},
+                {"name": "login", "passed": true, "advice": null},
+                {"name": "smallest call", "passed": true, "advice": null},
+            ]
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn provider_check_echo_always_passes_without_a_provider_binary() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, repository) = project(&sandbox)?;
+    let outcome = sandbox.run_with(&repository, &["provider", "check", "echo"], |command| {
+        command.env("PATH", "/usr/bin:/bin");
+    })?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "Provider: echo\ncommand: passed\nlogin: passed\nsmallest call: passed\n"
+    );
+    Ok(())
+}
+
+/// This is intentionally opt-in: it verifies the real binary's readiness path with the
+/// low-cost Claude model, and therefore needs an authenticated operator account.
+#[cfg(feature = "real-provider-tests")]
+#[test]
+fn real_model_provider_check_uses_claudes_cheapest_readiness_model() -> Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_ktask-rs"))
+        .args(["provider", "check", "claude"])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "provider check claude failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("smallest call: passed"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    Ok(())
 }
 
 #[test]

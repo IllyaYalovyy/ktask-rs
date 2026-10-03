@@ -10,7 +10,8 @@
 use std::fmt::Display;
 
 use ktask_core::{
-    Import, Placement, Project, ProviderView, QueueView, RunReport, SettingView, TaskDraft, TaskId,
+    Import, Placement, Project, ProviderCheck, ProviderView, QueueView, RunReport, SettingView,
+    TaskDraft, TaskId,
 };
 
 /// Every use case the terminal interface calls, named the way the operator invokes them.
@@ -35,6 +36,8 @@ pub trait Application {
     type SaveSettingError: Display;
     /// Why the provider catalogue could not be read.
     type ProvidersError: Display;
+    /// Why a provider readiness check could not be started.
+    type ProviderCheckError: Display;
     /// Why [`load_projects`](Application::load_projects) failed.
     type ProjectsError: Display;
     /// Why [`switch_project`](Application::switch_project) failed.
@@ -138,6 +141,13 @@ pub trait Application {
     ///
     /// Fails when the active project's provider settings cannot be read or are invalid.
     fn load_providers(&self) -> Result<Vec<ProviderView>, Self::ProvidersError>;
+
+    /// Checks the selected provider's executable, authentication and smallest possible call.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the provider definition cannot be read or probed.
+    fn check_provider(&self, name: &str) -> Result<ProviderCheck, Self::ProviderCheckError>;
 
     /// Imports the tasks of the file `path` names into the queue, at its end: the tasks added,
     /// in order, and how many cancelled ones were left out — the same typed result

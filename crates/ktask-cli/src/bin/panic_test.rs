@@ -61,6 +61,7 @@ impl Application for PanicTestApplication {
     type SettingsError = String;
     type SaveSettingError = String;
     type ProvidersError = String;
+    type ProviderCheckError = String;
     type ProjectsError = String;
     type SwitchError = String;
     type ForgetError = String;
@@ -115,6 +116,10 @@ impl Application for PanicTestApplication {
     }
 
     fn load_providers(&self) -> Result<Vec<ProviderView>, String> {
+        Err(NOT_SUPPORTED.to_owned())
+    }
+
+    fn check_provider(&self, _name: &str) -> Result<ktask_core::ProviderCheck, String> {
         Err(NOT_SUPPORTED.to_owned())
     }
 

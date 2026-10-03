@@ -90,6 +90,12 @@ fn handle_providers_action(
             .map_err(|error| error.to_string())?;
         return Ok((update(app, Event::ProvidersLoaded(providers)), true));
     }
+    if let Some(name) = app.provider_check_requested.take() {
+        let check = application
+            .check_provider(&name)
+            .map_err(|error| error.to_string())?;
+        return Ok((update(app, Event::ProviderChecked(check)), false));
+    }
     Ok((app, false))
 }
 
@@ -249,8 +255,8 @@ mod tests {
     use std::fmt;
 
     use ktask_core::{
-        ATTEMPT_TIMEOUT, Import, Placement, Project, ProviderView, QueueView, RunEnd, RunReport,
-        SettingView, StatusSummary, TaskDraft, TaskId, TaskStatus,
+        ATTEMPT_TIMEOUT, Import, Placement, Project, ProviderCheck, ProviderView, QueueView,
+        RunEnd, RunReport, SettingView, StatusSummary, TaskDraft, TaskId, TaskStatus,
     };
 
     use super::{
@@ -323,6 +329,7 @@ mod tests {
         type SettingsError = Failure;
         type SaveSettingError = Failure;
         type ProvidersError = Failure;
+        type ProviderCheckError = Failure;
         type ProjectsError = Failure;
         type SwitchError = Failure;
         type ForgetError = Failure;
@@ -373,6 +380,12 @@ mod tests {
 
         fn load_providers(&self) -> Result<Vec<ProviderView>, Failure> {
             self.providers.borrow_mut().remove(0)
+        }
+
+        fn check_provider(&self, _name: &str) -> Result<ProviderCheck, Failure> {
+            Err(Failure(
+                "provider checks are not queued in this fake".to_owned(),
+            ))
         }
 
         fn import(&self, _path: &str) -> Result<Import, Failure> {

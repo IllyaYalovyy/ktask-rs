@@ -7,13 +7,14 @@ use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
 
 use ktask_adapters::{
-    FileAttemptOutput, FileJournalWatch, FileRunLock, GitCli, SqliteJournal, SqliteRegistry,
-    SystemClock, TomlSettingsStore, builtin_providers,
+    FileAttemptOutput, FileJournalWatch, FileRunLock, GitCli, ProcessProviderProbe, SqliteJournal,
+    SqliteRegistry, SystemClock, TomlSettingsStore, builtin_providers,
 };
 use ktask_core::{
     AcknowledgeError, AddError, AnswerError, CancelError, DoneError, ForgetError, Import,
-    JournalError, Placement, Project, ProviderView, QueueView, RegisterError, RegistryError,
-    RetryError, RunReport, SetSettingError, SettingView, SettingsError, TaskDraft, TaskId,
+    JournalError, Placement, Project, ProviderCheck, ProviderView, QueueView, RegisterError,
+    RegistryError, RetryError, RunReport, SetSettingError, SettingView, SettingsError, TaskDraft,
+    TaskId,
 };
 use ktask_tui::Application;
 
@@ -201,6 +202,7 @@ impl Application for CliApplication {
     type SettingsError = NeedsProject<SettingsError>;
     type SaveSettingError = NeedsProject<SetSettingError>;
     type ProvidersError = NeedsProject<SettingsError>;
+    type ProviderCheckError = NeedsProject<String>;
     type ProjectsError = RegistryError;
     type SwitchError = SwitchProjectError;
     type ForgetError = ForgetProjectError;
@@ -277,6 +279,20 @@ impl Application for CliApplication {
         self.with_context(|context| {
             let settings = ktask_core::SettingsStore::load(&context.settings_store)?;
             ktask_core::show_providers(&settings, &builtin_providers())
+        })
+    }
+
+    fn check_provider(&self, name: &str) -> Result<ProviderCheck, Self::ProviderCheckError> {
+        self.with_context(|context| {
+            let settings = ktask_core::SettingsStore::load(&context.settings_store)
+                .map_err(|error| error.to_string())?;
+            let providers = ktask_core::show_providers(&settings, &builtin_providers())
+                .map_err(|error| error.to_string())?;
+            ktask_core::check_provider(
+                &providers,
+                name,
+                &ProcessProviderProbe::new(&context.project.path),
+            )
         })
     }
 

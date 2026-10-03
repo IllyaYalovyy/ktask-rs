@@ -4,7 +4,9 @@
 //! is open, and carries out what an open screen asks for: opening another one, or leaving
 //! something for the loop in [`crate::run`] to do.
 
-use ktask_core::{Placement, Project, ProviderView, QueueView, SettingView, TaskDraft, TaskId};
+use ktask_core::{
+    Placement, Project, ProviderCheck, ProviderView, QueueView, SettingView, TaskDraft, TaskId,
+};
 use ratatui::crossterm::event::KeyCode;
 
 use crate::ack_screen::AckScreen;
@@ -70,6 +72,7 @@ pub struct App {
     /// Set when the operator asked to open the settings screen.
     pub(crate) settings_requested: Option<()>,
     pub(crate) providers_requested: Option<()>,
+    pub(crate) provider_check_requested: Option<String>,
     /// Set when the operator asked to open the project picker.
     pub(crate) projects_requested: Option<()>,
     /// The name of the project the picker was submitted with, for the loop to switch to.
@@ -113,6 +116,8 @@ pub enum Event {
     SettingsLoaded(Vec<SettingView>),
     /// The provider catalogue was loaded.
     ProvidersLoaded(Vec<ProviderView>),
+    /// The selected provider's readiness check completed.
+    ProviderChecked(ProviderCheck),
     /// The settings screen's submission was saved: it closes.
     SettingSaved,
     /// The settings screen's submission was refused, for this reason: it stays open and

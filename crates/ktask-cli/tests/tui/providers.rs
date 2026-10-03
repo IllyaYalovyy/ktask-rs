@@ -1,7 +1,99 @@
 //! The provider catalogue screen, driven through the real terminal binary.
 
 use super::navigate::{ESC, Fixture, ROWS, quit};
+use super::pty::Terminal;
 use super::support::Result;
+
+use std::ffi::OsString;
+use std::os::unix::fs::PermissionsExt as _;
+
+use tempfile::TempDir;
+
+fn recorded_claude() -> Result<TempDir> {
+    let dir = TempDir::new()?;
+    let script = dir.path().join("claude");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\n[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-haiku-4-5 ] || exit 9\nprintf '%s\\n' '{\"type\":\"result\",\"result\":\"READY\"}'\n",
+    )?;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
+    Ok(dir)
+}
+
+fn path_with(dir: &std::path::Path) -> Result<OsString> {
+    let old = std::env::var_os("PATH").unwrap_or_default();
+    Ok(std::env::join_paths(
+        std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&old)),
+    )?)
+}
+
+#[test]
+fn provider_screen_checks_claude_and_shows_the_cli_results_and_missing_binary_advice() -> Result<()>
+{
+    let fixture = Fixture::empty()?;
+    let mut terminal = Terminal::launch_with_path(
+        &fixture.sandbox,
+        &fixture.repository,
+        &["tui"],
+        ROWS,
+        super::COLS,
+        OsString::from("/usr/bin:/bin"),
+    )?;
+    terminal.wait_for("the queue", |screen| {
+        screen.contents().contains("The queue is empty.")
+    })?;
+    terminal.send("v\rc")?;
+    terminal.wait_for("the failed readiness check", |screen| {
+        let text = screen.contents();
+        text.contains("Readiness")
+            && text.contains("command: failed")
+            && text.contains("`claude` binary")
+            && text.contains("npm install -g @anthropic-ai/claude-code")
+    })?;
+    terminal.send(ESC)?;
+    terminal.wait_for("the provider list", |screen| {
+        screen.contents().contains("Providers")
+    })?;
+    terminal.send(ESC)?;
+    terminal.wait_for("the queue", |screen| {
+        screen.contents().contains("The queue is empty.")
+    })?;
+    quit(terminal)
+}
+
+#[test]
+fn provider_screen_shows_all_recorded_claude_checks_as_passed() -> Result<()> {
+    let fixture = Fixture::empty()?;
+    let claude = recorded_claude()?;
+    let mut terminal = Terminal::launch_with_path(
+        &fixture.sandbox,
+        &fixture.repository,
+        &["tui"],
+        ROWS,
+        super::COLS,
+        path_with(claude.path())?,
+    )?;
+    terminal.wait_for("the queue", |screen| {
+        screen.contents().contains("The queue is empty.")
+    })?;
+    terminal.send("v\rc")?;
+    terminal.wait_for("the passed readiness check", |screen| {
+        let text = screen.contents();
+        text.contains("Readiness")
+            && text.contains("command: passed")
+            && text.contains("login: passed")
+            && text.contains("smallest call: passed")
+    })?;
+    terminal.send(ESC)?;
+    terminal.wait_for("the provider list", |screen| {
+        screen.contents().contains("Providers")
+    })?;
+    terminal.send(ESC)?;
+    terminal.wait_for("the queue", |screen| {
+        screen.contents().contains("The queue is empty.")
+    })?;
+    quit(terminal)
+}
 
 #[test]
 fn v_shows_the_same_provider_list_and_definition_the_cli_shows_then_returns_to_the_queue()

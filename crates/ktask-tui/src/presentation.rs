@@ -2,8 +2,35 @@
 
 use jiff::Timestamp;
 use ktask_core::{
-    AttemptOutcome, DoneMark, LimitWait, OutputActivity, StepLine, TaskStatus, Usage,
+    AttemptOutcome, DoneMark, LimitWait, OutputActivity, ProviderCheck, ProviderCheckKind,
+    StepLine, TaskStatus, Usage,
 };
+
+/// The operator-facing label for one provider readiness fact.
+#[must_use]
+pub fn provider_check_name(kind: ProviderCheckKind) -> &'static str {
+    match kind {
+        ProviderCheckKind::Command => "command",
+        ProviderCheckKind::Login => "login",
+        ProviderCheckKind::Call => "smallest call",
+    }
+}
+
+/// The shared operator-facing readiness lines, including the action for each failed check.
+#[must_use]
+pub fn provider_check_lines(check: &ProviderCheck) -> Vec<String> {
+    check
+        .items
+        .iter()
+        .map(|item| {
+            let state = if item.passed { "passed" } else { "failed" };
+            item.advice.as_ref().map_or_else(
+                || format!("{}: {state}", provider_check_name(item.kind)),
+                |advice| format!("{}: {state} — {advice}", provider_check_name(item.kind)),
+            )
+        })
+        .collect()
+}
 
 /// The words and indicator for live provider output.
 #[derive(Debug, Clone, PartialEq, Eq)]

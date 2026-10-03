@@ -5,9 +5,10 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::Subcommand;
-use ktask_adapters::{ProcessCommands, builtin_providers, echo};
+use ktask_adapters::{ProcessCommands, ProcessProviderProbe, builtin_providers, echo};
 use ktask_core::{
-    ProviderRunError, ProviderView, provider_field_source, provider_fields, show_providers,
+    ProviderCheck, ProviderRunError, ProviderView, check_provider, provider_field_source,
+    provider_fields, show_providers,
 };
 
 use crate::context::{current_dir, open_registry, reject_project, resolve};
@@ -33,6 +34,15 @@ pub(crate) enum Command {
         #[arg(value_name = "NAME")]
         name: String,
         /// Print a JSON object instead of one field per line
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check that a provider command, login and smallest call are ready for a run
+    Check {
+        /// The provider to check
+        #[arg(value_name = "NAME")]
+        name: String,
+        /// Print a JSON object instead of the operator-facing check lines
         #[arg(long)]
         json: bool,
     },
@@ -66,6 +76,7 @@ pub(crate) fn run(
     match command {
         Command::List { json } => list(project, *json, stdout),
         Command::Show { name, json } => show(project, name, *json, stdout),
+        Command::Check { name, json } => check(project, name, *json, stdout),
         Command::Run {
             provider,
             token,
@@ -82,6 +93,58 @@ pub(crate) fn run(
             exit_code(&output, provider, *timeout_ms)
         }
     }
+}
+
+/// Runs the shared readiness use case and renders every individual result before returning the
+/// command's success or failure exit status.
+fn check(
+    project: Option<&str>,
+    name: &str,
+    json: bool,
+    stdout: &mut impl Write,
+) -> Result<ExitCode, Failure> {
+    let providers = providers(project)?;
+    let dir = current_dir()?;
+    let result = check_provider(&providers, name, &ProcessProviderProbe::new(dir))
+        .map_err(|message| Failure { message, code: 2 })?;
+    if json {
+        render_check_json(&result, stdout)?;
+    } else {
+        render_check(&result, stdout)?;
+    }
+    Ok(if result.passed() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
+}
+
+/// Emits the machine-readable form of a provider-readiness result.
+fn render_check_json(result: &ProviderCheck, stdout: &mut impl Write) -> Result<(), Failure> {
+    let checks: Vec<serde_json::Value> = result
+        .items
+        .iter()
+        .map(|item| {
+            serde_json::json!({
+                "name": ktask_tui::presentation::provider_check_name(item.kind), "passed": item.passed, "advice": item.advice,
+            })
+        })
+        .collect();
+    writeln!(
+        stdout,
+        "{}",
+        serde_json::json!({ "provider": result.provider, "checks": checks })
+    )
+    .map_err(|error| error.to_string().into())
+}
+
+/// Writes the shared provider-readiness presentation below its command-line heading.
+fn render_check(result: &ProviderCheck, stdout: &mut impl Write) -> Result<(), Failure> {
+    writeln!(stdout, "Provider: {}", result.provider).map_err(|error| error.to_string())?;
+    for line in ktask_tui::presentation::provider_check_lines(result) {
+        writeln!(stdout, "{line}").map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 /// Reads the effective catalogue for the selected project. The same settings validation all

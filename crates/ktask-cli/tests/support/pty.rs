@@ -8,6 +8,7 @@
 //! condition, with a timeout that guards against a hung child, never a fixed sleep. Everything
 //! that is specific to the platform's terminals stays in this file.
 
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
@@ -121,12 +122,48 @@ impl Terminal {
         rows: u16,
         cols: u16,
     ) -> Result<Self> {
+        Self::launch_binary_with_path(bin, sandbox, cwd, args, rows, cols, None)
+    }
+
+    /// Starts `ktask-rs` with `path` substituted into its otherwise hermetic environment.
+    pub(crate) fn launch_with_path(
+        sandbox: &Sandbox,
+        cwd: &Path,
+        args: &[&str],
+        rows: u16,
+        cols: u16,
+        path: OsString,
+    ) -> Result<Self> {
+        Self::launch_binary_with_path(
+            env!("CARGO_BIN_EXE_ktask-rs"),
+            sandbox,
+            cwd,
+            args,
+            rows,
+            cols,
+            Some(path),
+        )
+    }
+
+    /// Starts a binary in the sandbox, optionally replacing its `PATH` for a recorded command.
+    fn launch_binary_with_path(
+        bin: &str,
+        sandbox: &Sandbox,
+        cwd: &Path,
+        args: &[&str],
+        rows: u16,
+        cols: u16,
+        path: Option<OsString>,
+    ) -> Result<Self> {
         let pair = native_pty_system().openpty(size(rows, cols))?;
         let mut command = CommandBuilder::new(bin);
         command.args(args);
         command.env_clear();
         for (name, value) in sandbox.environment() {
             command.env(name, value);
+        }
+        if let Some(path) = path {
+            command.env("PATH", path);
         }
         command.env("TERM", "xterm-256color");
         command.cwd(cwd);
