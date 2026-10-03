@@ -2,7 +2,9 @@
 //! cancelled and skipped ones.
 
 use crate::queue_state::{QueueState, decide_and_append};
-use crate::{AnswerError, CancelError, Clock, DoneError, Journal, JournalError, RetryError};
+use crate::{
+    AcknowledgeError, AnswerError, CancelError, Clock, DoneError, Journal, JournalError, RetryError,
+};
 
 use super::validate::{AddError, draft_problems};
 use super::{Placement, Task, TaskDraft, TaskId, TaskStatus};
@@ -152,6 +154,28 @@ pub fn done_task(
     decide_and_append(journal, |state| {
         state
             .decide_done(id, reason, at)
+            .map(|event| (vec![event], ()))
+    })
+}
+
+/// Use case: acknowledges the pending human task numbered `id`, marking it `done` without
+/// starting an agent attempt. `message`, when present and not blank, is recorded with the
+/// acknowledgement so the operator's action remains auditable.
+///
+/// # Errors
+///
+/// Fails, changing nothing, when there is no such task or it is not a pending human task.
+pub fn acknowledge_task(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    id: TaskId,
+    message: Option<&str>,
+) -> Result<(), AcknowledgeError> {
+    let at = clock.now();
+    let message = message.filter(|text| !text.trim().is_empty());
+    decide_and_append(journal, |state| {
+        state
+            .decide_acknowledge(id, message, at)
             .map(|event| (vec![event], ()))
     })
 }
@@ -760,6 +784,57 @@ mod tests {
         assert_eq!(
             crate::attempt::done_mark_of(&journal, TaskId(1)).unwrap(),
             Some(("finished by hand".to_owned(), clock().now()))
+        );
+    }
+
+    #[test]
+    fn acknowledging_a_pending_human_task_marks_it_done_and_records_its_message() {
+        let journal = FakeJournal::default();
+        let human = TaskDraft {
+            kind: TaskKind::Human,
+            ..draft("approve the design")
+        };
+        add_task(&journal, &clock(), &human, Placement::End).unwrap();
+
+        acknowledge_task(&journal, &clock(), TaskId(1), Some("approved")).unwrap();
+
+        assert_eq!(list_tasks(&journal).unwrap()[0].status, TaskStatus::Done);
+        assert_eq!(
+            journal.events().unwrap().last(),
+            Some(&crate::Event::TaskAcknowledged {
+                id: TaskId(1),
+                message: Some("approved".to_owned()),
+                at: clock().now(),
+            })
+        );
+    }
+
+    #[test]
+    fn acknowledgement_refuses_an_agent_or_a_human_task_that_is_no_longer_pending() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("agent"), Placement::End).unwrap();
+        let human = TaskDraft {
+            kind: TaskKind::Human,
+            ..draft("human")
+        };
+        add_task(&journal, &clock(), &human, Placement::End).unwrap();
+        acknowledge_task(&journal, &clock(), TaskId(2), None).unwrap();
+
+        assert_eq!(
+            acknowledge_task(&journal, &clock(), TaskId(1), None),
+            Err(AcknowledgeError::NotAcknowledgeable {
+                id: TaskId(1),
+                kind: TaskKind::Agent,
+                status: TaskStatus::Pending,
+            })
+        );
+        assert_eq!(
+            acknowledge_task(&journal, &clock(), TaskId(2), None),
+            Err(AcknowledgeError::NotAcknowledgeable {
+                id: TaskId(2),
+                kind: TaskKind::Human,
+                status: TaskStatus::Done,
+            })
         );
     }
 

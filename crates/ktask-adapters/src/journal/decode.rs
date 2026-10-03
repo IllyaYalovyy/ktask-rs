@@ -7,8 +7,8 @@ use serde_json::Value;
 
 use super::{
     ATTEMPT_ENDED, ATTEMPT_REPORTED, ATTEMPT_RUNNING, ATTEMPT_SESSION_RECORDED, ATTEMPT_STARTED,
-    ATTEMPT_WAITING, GATE_FAILED, STEP_ENDED, STEP_STARTED, TASK_ADDED, TASK_ANSWERED,
-    TASK_CANCELLED, TASK_DONE_BY_USER, TASK_RETRIED, failed,
+    ATTEMPT_WAITING, GATE_FAILED, STEP_ENDED, STEP_STARTED, TASK_ACKNOWLEDGED, TASK_ADDED,
+    TASK_ANSWERED, TASK_CANCELLED, TASK_DONE_BY_USER, TASK_RETRIED, failed,
 };
 
 mod attempt;
@@ -160,6 +160,26 @@ fn decode_task_done_by_user(
     Ok(Event::TaskDoneByUser { id, reason, at })
 }
 
+/// The [`Event::TaskAcknowledged`] a `task_acknowledged` row's `payload` decodes to.
+fn decode_task_acknowledged(
+    kind: &str,
+    task_id: i64,
+    id: TaskId,
+    at: SystemTime,
+    payload: &Value,
+) -> Result<Event, JournalError> {
+    let message = match payload.get("message") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| corrupt_event(kind, task_id, "message", "not a string"))?,
+        ),
+    };
+    Ok(Event::TaskAcknowledged { id, message, at })
+}
+
 /// The attempt event an `attempt_started`, `attempt_running`, `attempt_reported`,
 /// `attempt_ended`, `step_started` or `step_ended` row's `payload` decodes to.
 fn decode_attempt_event(
@@ -220,6 +240,8 @@ pub(super) fn decode_event(
         decode_task_answered(kind, task_id, id, at, &payload)
     } else if kind == TASK_DONE_BY_USER {
         decode_task_done_by_user(kind, task_id, id, at, &payload)
+    } else if kind == TASK_ACKNOWLEDGED {
+        decode_task_acknowledged(kind, task_id, id, at, &payload)
     } else {
         decode_attempt_event(kind, task_id, id, at, &payload)
     }

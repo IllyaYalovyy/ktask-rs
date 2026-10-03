@@ -112,6 +112,17 @@ impl QueueState {
         }
     }
 
+    /// Applies a [`Event::TaskAcknowledged`]: a human task needs no agent attempt, so the
+    /// acknowledgement itself settles it as done.
+    pub(super) fn apply_task_acknowledged(&mut self, event: &Event) {
+        let Event::TaskAcknowledged { id, .. } = event else {
+            return;
+        };
+        if let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id) {
+            task.status = TaskStatus::Done;
+        }
+    }
+
     /// Applies a [`Event::GateFailed`]: records it as the task's current gate stop, replacing
     /// whatever it held before.
     pub(super) fn apply_gate_failed(&mut self, event: &Event) {

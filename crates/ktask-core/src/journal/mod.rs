@@ -9,8 +9,8 @@ use crate::{Outcome, Placement, TaskDraft, TaskId, TaskStatus};
 mod errors;
 
 pub use errors::{
-    AnswerError, AppendConflict, AppendError, BeginAttemptError, CancelError, DoneError,
-    RecordReportError, RetryError,
+    AcknowledgeError, AnswerError, AppendConflict, AppendError, BeginAttemptError, CancelError,
+    DoneError, RecordReportError, RetryError,
 };
 
 /// One thing that happened to the queue: what [`Journal::events`] reads and
@@ -211,6 +211,16 @@ pub enum Event {
         id: TaskId,
         /// Why, in the operator's own words.
         reason: String,
+        /// When.
+        at: SystemTime,
+    },
+    /// A pending human task was acknowledged by the operator. An optional message records
+    /// what they said while doing so.
+    TaskAcknowledged {
+        /// The task acknowledged.
+        id: TaskId,
+        /// The optional message from the operator.
+        message: Option<String>,
         /// When.
         at: SystemTime,
     },

@@ -8,8 +8,8 @@ use serde_json::Value;
 
 use super::{
     ATTEMPT_ENDED, ATTEMPT_REPORTED, ATTEMPT_RUNNING, ATTEMPT_SESSION_RECORDED, ATTEMPT_STARTED,
-    ATTEMPT_WAITING, GATE_FAILED, STEP_ENDED, STEP_STARTED, TASK_ADDED, TASK_ANSWERED,
-    TASK_CANCELLED, TASK_DONE_BY_USER, TASK_RETRIED,
+    ATTEMPT_WAITING, GATE_FAILED, STEP_ENDED, STEP_STARTED, TASK_ACKNOWLEDGED, TASK_ADDED,
+    TASK_ANSWERED, TASK_CANCELLED, TASK_DONE_BY_USER, TASK_RETRIED,
 };
 
 pub(super) fn to_seconds(time: SystemTime) -> i64 {
@@ -223,6 +223,14 @@ fn task_done_by_user_payload(event: &Event) -> String {
     serde_json::json!({ "reason": reason }).to_string()
 }
 
+/// The payload a `task_acknowledged` row is written with.
+fn task_acknowledged_payload(event: &Event) -> String {
+    let Event::TaskAcknowledged { message, .. } = event else {
+        unreachable!("only called for Event::TaskAcknowledged")
+    };
+    serde_json::json!({ "message": message }).to_string()
+}
+
 /// The task any `event` carries — every kind of event names one.
 fn event_task_id(event: &Event) -> TaskId {
     match event {
@@ -239,7 +247,8 @@ fn event_task_id(event: &Event) -> TaskId {
         | Event::GateFailed { id, .. }
         | Event::TaskRetried { id, .. }
         | Event::TaskAnswered { id, .. }
-        | Event::TaskDoneByUser { id, .. } => *id,
+        | Event::TaskDoneByUser { id, .. }
+        | Event::TaskAcknowledged { id, .. } => *id,
     }
 }
 
@@ -259,7 +268,8 @@ fn event_at(event: &Event) -> SystemTime {
         | Event::GateFailed { at, .. }
         | Event::TaskRetried { at, .. }
         | Event::TaskAnswered { at, .. }
-        | Event::TaskDoneByUser { at, .. } => *at,
+        | Event::TaskDoneByUser { at, .. }
+        | Event::TaskAcknowledged { at, .. } => *at,
     }
 }
 
@@ -286,6 +296,7 @@ fn event_kind_and_payload(event: &Event) -> (&'static str, String) {
         Event::TaskRetried { .. } => (TASK_RETRIED, "{}".to_owned()),
         Event::TaskAnswered { .. } => (TASK_ANSWERED, task_answered_payload(event)),
         Event::TaskDoneByUser { .. } => (TASK_DONE_BY_USER, task_done_by_user_payload(event)),
+        Event::TaskAcknowledged { .. } => (TASK_ACKNOWLEDGED, task_acknowledged_payload(event)),
     }
 }
 

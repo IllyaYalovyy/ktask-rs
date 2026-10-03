@@ -99,6 +99,7 @@ const GATE_FAILED: &str = "gate_failed";
 const TASK_RETRIED: &str = "task_retried";
 const TASK_ANSWERED: &str = "task_answered";
 const TASK_DONE_BY_USER: &str = "task_done_by_user";
+const TASK_ACKNOWLEDGED: &str = "task_acknowledged";
 
 impl Journal for SqliteJournal {
     fn events(&self) -> Result<Vec<Event>, JournalError> {
@@ -427,6 +428,23 @@ mod tests {
         );
         assert_eq!(journal.events().unwrap()[3], done);
         assert_eq!(cached(&journal, 1), (TaskStatus::Done, 1));
+    }
+
+    #[test]
+    fn an_acknowledgement_round_trips_its_optional_message_and_mirrors_the_task_to_done() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "approval", Placement::End);
+        let acknowledged = append(
+            &journal,
+            Event::TaskAcknowledged {
+                id: TaskId(1),
+                message: Some("approved".to_owned()),
+                at: at(900),
+            },
+        );
+        assert_eq!(journal.events().unwrap()[1], acknowledged);
+        assert_eq!(cached(&journal, 1), (TaskStatus::Done, 0));
     }
 
     #[test]

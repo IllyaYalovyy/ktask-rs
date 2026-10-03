@@ -217,6 +217,45 @@ pub enum DoneError {
     Journal(JournalError),
 }
 
+/// Why a human task was not acknowledged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AcknowledgeError {
+    /// There is no such task.
+    UnknownTask(TaskId),
+    /// The task is not a pending human task.
+    NotAcknowledgeable {
+        /// The task that cannot be acknowledged.
+        id: TaskId,
+        /// Its kind.
+        kind: crate::TaskKind,
+        /// Its current status.
+        status: TaskStatus,
+    },
+    /// The journal could not be used.
+    Journal(JournalError),
+}
+
+impl fmt::Display for AcknowledgeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownTask(id) => write!(f, "there is no task {id}"),
+            Self::NotAcknowledgeable { id, kind, status } => write!(
+                f,
+                "task {id} is a {status} {kind} task: only a pending human task can be acknowledged"
+            ),
+            Self::Journal(error) => error.fmt(f),
+        }
+    }
+}
+
+impl Error for AcknowledgeError {}
+
+impl From<JournalError> for AcknowledgeError {
+    fn from(error: JournalError) -> Self {
+        Self::Journal(error)
+    }
+}
+
 impl fmt::Display for DoneError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

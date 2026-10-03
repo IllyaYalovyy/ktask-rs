@@ -8,7 +8,8 @@ mod use_cases;
 mod validate;
 
 pub use use_cases::{
-    add_task, answer_task, done_task, list_all_tasks, list_tasks, remove_task, retry_task,
+    acknowledge_task, add_task, answer_task, done_task, list_all_tasks, list_tasks, remove_task,
+    retry_task,
 };
 pub(crate) use use_cases::{add_tasks, without_hidden_statuses};
 pub use validate::AddError;

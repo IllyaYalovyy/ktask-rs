@@ -82,7 +82,7 @@ pub(super) fn mirror(transaction: &Transaction<'_>, event: &Event) -> Result<(),
         Event::TaskRetried { id, .. } | Event::TaskAnswered { id, .. } => {
             set_status(transaction, task_id(*id), TaskStatus::Pending)?;
         }
-        Event::TaskDoneByUser { id, .. } => {
+        Event::TaskDoneByUser { id, .. } | Event::TaskAcknowledged { id, .. } => {
             set_status(transaction, task_id(*id), TaskStatus::Done)?;
         }
     }

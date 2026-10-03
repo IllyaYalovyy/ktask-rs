@@ -11,9 +11,9 @@ use std::time::SystemTime;
 
 use crate::journal::{AttemptRun, Event, LimitWait};
 use crate::{
-    AnswerError, AppendConflict, AppendError, Attempt, AttemptEnd, BeginAttemptError, CancelError,
-    DoneError, Journal, JournalError, Outcome, Placement, RecordReportError, RetryError, Step,
-    Task, TaskDraft, TaskId, TaskStatus,
+    AcknowledgeError, AnswerError, AppendConflict, AppendError, Attempt, AttemptEnd,
+    BeginAttemptError, CancelError, DoneError, Journal, JournalError, Outcome, Placement,
+    RecordReportError, RetryError, Step, Task, TaskDraft, TaskId, TaskStatus,
 };
 
 mod apply;
@@ -101,6 +101,7 @@ impl QueueState {
             Event::TaskRetried { .. } => self.apply_task_retried(event),
             Event::TaskAnswered { .. } => self.apply_task_answered(event),
             Event::TaskDoneByUser { .. } => self.apply_task_done_by_user(event),
+            Event::TaskAcknowledged { .. } => self.apply_task_acknowledged(event),
         }
     }
 
