@@ -168,34 +168,21 @@ impl QueueState {
     ///
     /// # Errors
     ///
-    /// Fails, deciding nothing, when there is no such task, or its status is not `failed`,
-    /// `failed-unknown` or `blocked`.
+    /// Fails, deciding nothing, when there is no such task.
     pub(crate) fn decide_done(
         &self,
         id: TaskId,
         reason: &str,
         at: SystemTime,
     ) -> Result<Event, DoneError> {
-        let task = self
-            .tasks
-            .iter()
-            .find(|task| task.id == id)
-            .ok_or(DoneError::UnknownTask(id))?;
-        if matches!(
-            task.status,
-            TaskStatus::Failed | TaskStatus::FailedUnknown | TaskStatus::Blocked
-        ) {
-            Ok(Event::TaskDoneByUser {
-                id,
-                reason: reason.to_owned(),
-                at,
-            })
-        } else {
-            Err(DoneError::NotDoneable {
-                id,
-                status: task.status,
-            })
+        if !self.tasks.iter().any(|task| task.id == id) {
+            return Err(DoneError::UnknownTask(id));
         }
+        Ok(Event::TaskDoneByUser {
+            id,
+            reason: reason.to_owned(),
+            at,
+        })
     }
 
     /// Checks that attempt `number` of task `id` is the one currently running: the caller of

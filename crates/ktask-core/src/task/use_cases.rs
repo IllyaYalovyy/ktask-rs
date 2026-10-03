@@ -131,16 +131,13 @@ pub fn answer_task(
 }
 
 /// Use case: marks the task numbered `id` `done`, by the operator's own hand, with `reason`,
-/// after it ended `failed`, `failed-unknown` or `blocked` — work finished outside the tool,
-/// recorded as finished instead of removed or left failed. Every attempt already recorded for
-/// it stays in the journal; the next run continues past it, the same as any other task already
-/// `done`.
+/// whenever the operator says its work is finished outside the tool. Every attempt already
+/// recorded for it stays in the journal; the next run continues past it, the same as any other
+/// task already `done`.
 ///
 /// # Errors
 ///
-/// Fails, changing nothing, when there is no such task, its status is not `failed`,
-/// `failed-unknown` or `blocked` — `pending`, `running`, `done` and `cancelled` are all
-/// refused, naming the task's own status — or `reason` is empty or only whitespace.
+/// Fails, changing nothing, when there is no such task or `reason` is empty or only whitespace.
 pub fn done_task(
     journal: &impl Journal,
     clock: &impl Clock,
@@ -762,18 +759,43 @@ mod tests {
     }
 
     #[test]
-    fn marking_a_failed_a_blocked_or_a_failed_unknown_task_done_seals_it_done() {
+    fn marking_any_task_done_seals_it_done() {
         for status in [
+            TaskStatus::Pending,
+            TaskStatus::Running,
+            TaskStatus::Done,
             TaskStatus::Failed,
             TaskStatus::Blocked,
             TaskStatus::FailedUnknown,
+            TaskStatus::Cancelled,
+            TaskStatus::Skipped,
+            TaskStatus::Superseded,
         ] {
-            let journal = journal_with_a_task_ended_at(status, Some("why"));
+            let journal = if status == TaskStatus::Pending {
+                let journal = FakeJournal::default();
+                add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+                journal
+            } else if status == TaskStatus::Running {
+                let journal = FakeJournal::default();
+                add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+                crate::attempt::begin_attempt(&journal, &clock(), TaskId(1)).unwrap();
+                journal
+            } else if status == TaskStatus::Cancelled {
+                let journal = FakeJournal::default();
+                add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+                remove_task(&journal, &clock(), TaskId(1)).unwrap();
+                journal
+            } else {
+                journal_with_a_task_ended_at(status, Some("why"))
+            };
             assert_eq!(
                 done_task(&journal, &clock(), TaskId(1), "finished by hand"),
                 Ok(())
             );
-            assert_eq!(list_tasks(&journal).unwrap()[0].status, TaskStatus::Done);
+            assert_eq!(
+                list_all_tasks(&journal).unwrap()[0].status,
+                TaskStatus::Done
+            );
         }
     }
 
@@ -834,39 +856,6 @@ mod tests {
                 id: TaskId(2),
                 kind: TaskKind::Human,
                 status: TaskStatus::Done,
-            })
-        );
-    }
-
-    #[test]
-    fn marking_a_pending_a_running_or_an_already_done_task_done_is_refused_naming_its_status() {
-        let pending = FakeJournal::default();
-        add_task(&pending, &clock(), &draft("a"), Placement::End).unwrap();
-        assert_eq!(
-            done_task(&pending, &clock(), TaskId(1), "finished by hand"),
-            Err(DoneError::NotDoneable {
-                id: TaskId(1),
-                status: TaskStatus::Pending
-            })
-        );
-
-        let running = FakeJournal::default();
-        add_task(&running, &clock(), &draft("a"), Placement::End).unwrap();
-        crate::attempt::begin_attempt(&running, &clock(), TaskId(1)).unwrap();
-        assert_eq!(
-            done_task(&running, &clock(), TaskId(1), "finished by hand"),
-            Err(DoneError::NotDoneable {
-                id: TaskId(1),
-                status: TaskStatus::Running
-            })
-        );
-
-        let done = journal_with_a_task_ended_at(TaskStatus::Done, None);
-        assert_eq!(
-            done_task(&done, &clock(), TaskId(1), "finished by hand"),
-            Err(DoneError::NotDoneable {
-                id: TaskId(1),
-                status: TaskStatus::Done
             })
         );
     }

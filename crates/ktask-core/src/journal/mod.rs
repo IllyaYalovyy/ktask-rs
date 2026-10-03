@@ -204,8 +204,8 @@ pub enum Event {
         /// When.
         at: SystemTime,
     },
-    /// A task that had ended `failed`, `failed-unknown` or `blocked` was marked `done` by the
-    /// operator's own hand, with `reason` — work finished outside the tool.
+    /// A task was marked `done` by the operator's own hand, with `reason` — work finished
+    /// outside the tool.
     TaskDoneByUser {
         /// The task marked done.
         id: TaskId,
