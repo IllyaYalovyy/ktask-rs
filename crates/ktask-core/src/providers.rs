@@ -148,6 +148,21 @@ pub fn provider_views(
     builtins: &BTreeMap<String, ProviderDefinition>,
     overrides: &BTreeMap<String, ProviderOverride>,
 ) -> Result<Vec<ProviderView>, String> {
+    let (definitions, changed) = overlay_definitions(builtins, overrides);
+    definitions
+        .into_iter()
+        .map(|(name, definition)| provider_view(builtins, &changed, name, definition))
+        .collect()
+}
+
+/// Applies every project-supplied patch to a fresh built-in catalogue.
+fn overlay_definitions(
+    builtins: &BTreeMap<String, ProviderDefinition>,
+    overrides: &BTreeMap<String, ProviderOverride>,
+) -> (
+    BTreeMap<String, ProviderDefinition>,
+    BTreeMap<String, BTreeSet<String>>,
+) {
     let mut definitions = builtins.clone();
     let mut changed = BTreeMap::<String, BTreeSet<String>>::new();
     for (name, patch) in overrides {
@@ -172,20 +187,25 @@ pub fn provider_views(
         }
         apply(definition, patch, fields);
     }
-    definitions
-        .into_iter()
-        .map(|(name, definition)| {
-            if definition.command.trim().is_empty() {
-                return Err(format!("providers.{name}.command: must not be empty"));
-            }
-            Ok(ProviderView {
-                overridden: changed.remove(&name).unwrap_or_default(),
-                built_in: builtins.contains_key(&name),
-                name,
-                definition,
-            })
-        })
-        .collect()
+    (definitions, changed)
+}
+
+/// Makes one effective definition renderable, rejecting a new provider with no command.
+fn provider_view(
+    builtins: &BTreeMap<String, ProviderDefinition>,
+    changed: &BTreeMap<String, BTreeSet<String>>,
+    name: String,
+    definition: ProviderDefinition,
+) -> Result<ProviderView, String> {
+    if definition.command.trim().is_empty() {
+        return Err(format!("providers.{name}.command: must not be empty"));
+    }
+    Ok(ProviderView {
+        overridden: changed.get(&name).cloned().unwrap_or_default(),
+        built_in: builtins.contains_key(&name),
+        name,
+        definition,
+    })
 }
 
 fn apply(

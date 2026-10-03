@@ -278,6 +278,11 @@ fn apply_queue_request(app: App, request: Option<queue::Request>) -> App {
         Ok(app) => return app,
         Err(pair) => *pair,
     };
+    apply_queue_mailbox_request(app, &request)
+}
+
+/// Carries out a queue request that does not open one of the queue's overlay screens.
+fn apply_queue_mailbox_request(app: App, request: &queue::Request) -> App {
     match request {
         queue::Request::StartRun => App {
             run_requested: Some(()),
@@ -296,11 +301,11 @@ fn apply_queue_request(app: App, request: Option<queue::Request>) -> App {
             ..app
         },
         queue::Request::Remove(id) => App {
-            removal: Some(id),
+            removal: Some(*id),
             ..app
         },
         queue::Request::Retry(id) => App {
-            retrial: Some(id),
+            retrial: Some(*id),
             ..app
         },
         queue::Request::Quit => App { quit: true, ..app },
