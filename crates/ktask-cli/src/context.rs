@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 use ktask_adapters::{
     GitCli, SqliteJournal, SqliteRegistry, SystemClock, TomlSettingsStore, journal_path,
-    registry_path, run_lock_path, sessions_dir_path, settings_path, state_root_path,
+    outputs_dir_path, registry_path, run_lock_path, sessions_dir_path, settings_path,
+    state_root_path,
 };
 use ktask_core::{Placement, Project, Settings, SettingsStore, TaskId};
 
@@ -105,6 +106,19 @@ pub(crate) fn run_lock_file(project: &Project) -> Result<PathBuf, String> {
 /// Where the session transcripts of `project` live.
 pub(crate) fn sessions_dir_file(project: &Project) -> Result<PathBuf, String> {
     sessions_dir_path(
+        std::env::var_os("XDG_STATE_HOME"),
+        std::env::var_os("HOME"),
+        &project.name,
+    )
+    .ok_or_else(|| {
+        "cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path"
+            .to_owned()
+    })
+}
+
+/// Where the live and retained output of `project`'s attempts lives.
+pub(crate) fn outputs_dir_file(project: &Project) -> Result<PathBuf, String> {
+    outputs_dir_path(
         std::env::var_os("XDG_STATE_HOME"),
         std::env::var_os("HOME"),
         &project.name,

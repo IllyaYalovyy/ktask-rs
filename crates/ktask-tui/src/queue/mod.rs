@@ -43,6 +43,8 @@ pub(crate) enum Request {
     OpenDone(TaskId),
     /// Open the acknowledgement form for this pending human task.
     OpenAcknowledge(TaskId),
+    /// Open the selected task's retained provider output.
+    OpenOutput(TaskId),
     /// Leave every screen.
     Quit,
 }
@@ -230,6 +232,10 @@ impl Queue {
             KeyCode::Char('t') => this.press_t(),
             KeyCode::Char('A') => this.press_answer(),
             KeyCode::Char('H') => this.press_acknowledge(),
+            KeyCode::Char('l') => match this.selected {
+                Some(id) => (this, Some(Request::OpenOutput(id))),
+                None => (this, None),
+            },
             KeyCode::Char('D') => this.press_done(),
             KeyCode::Char('r') => (this, Some(Request::StartRun)),
             KeyCode::Char('i') => (this, Some(Request::OpenImport)),

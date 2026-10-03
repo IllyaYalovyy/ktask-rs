@@ -93,6 +93,20 @@ pub fn sessions_dir_path(
     )
 }
 
+/// The directory containing one append-only output file per attempt.
+#[must_use]
+pub fn outputs_dir_path(
+    xdg_state_home: Option<OsString>,
+    home: Option<OsString>,
+    project: &str,
+) -> Option<PathBuf> {
+    Some(
+        state_directory(xdg_state_home, home)?
+            .join(project)
+            .join("outputs"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;

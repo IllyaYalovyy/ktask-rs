@@ -93,6 +93,21 @@ fn handle_providers_action(
     Ok((app, false))
 }
 
+/// Opens the output overlay on the bytes the selected provider has written so far. The same
+/// action is also used by the refresh path while an attempt is alive.
+fn handle_output_action(
+    mut app: App,
+    application: &impl Application,
+) -> Result<(App, bool), String> {
+    let Some(id) = app.output_requested.take() else {
+        return Ok((app, false));
+    };
+    let text = application
+        .load_output(id)
+        .map_err(|error| error.to_string())?;
+    Ok((update(app, Event::OutputLoaded(text)), false))
+}
+
 /// Loads the project picker, switches to the project `app` has pending, or forgets the one its
 /// confirmation named, whichever `app` has pending, through `application`: `(app, true)` when
 /// one was, `(app, false)`, unchanged, otherwise.
@@ -180,6 +195,7 @@ fn try_background_actions(app: App, application: &impl Application) -> Result<(A
     let app = or_return_handled!(handle_task_action(app, application)?);
     let app = or_return_handled!(handle_settings_action(app, application)?);
     let app = or_return_handled!(handle_providers_action(app, application)?);
+    let app = or_return_handled!(handle_output_action(app, application)?);
     handle_projects_action(app, application)
 }
 
@@ -313,6 +329,7 @@ mod tests {
         type RegisterError = Failure;
         type ImportError = Failure;
         type RunRefusal = Failure;
+        type OutputError = Failure;
 
         fn load_queue(&self, _show_cancelled: bool) -> Result<QueueView, Failure> {
             Ok(empty_queue())
@@ -380,6 +397,10 @@ mod tests {
 
         fn start_run(&self) -> Result<RunReport, Failure> {
             self.start_run.borrow_mut().remove(0)
+        }
+
+        fn load_output(&self, _id: TaskId) -> Result<String, Failure> {
+            Ok(String::new())
         }
     }
 

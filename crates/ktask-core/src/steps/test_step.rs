@@ -123,6 +123,7 @@ mod tests {
             max_attempts: 1,
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
+            outputs_dir: Path::new("/state/outputs"),
         };
         let task = Task {
             id: TaskId(1),

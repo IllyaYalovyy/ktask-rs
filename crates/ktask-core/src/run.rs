@@ -179,6 +179,8 @@ pub struct RunContext<'a> {
     /// Where a provider's session transcripts are kept, under the tool's own state directory
     /// — never the project's working tree.
     pub sessions_dir: &'a Path,
+    /// Where continuously appended output files for attempts are kept.
+    pub outputs_dir: &'a Path,
 }
 
 impl RunContext<'_> {
@@ -464,6 +466,7 @@ mod tests {
             max_attempts: 1,
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
+            outputs_dir: Path::new("/state/outputs"),
         }
     }
 

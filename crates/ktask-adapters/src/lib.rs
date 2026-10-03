@@ -36,6 +36,7 @@ pub use sessions::FileSessionLog;
 pub use settings::TomlSettingsStore;
 pub use sleep::RealSleep;
 pub use state::{
-    journal_path, registry_path, run_lock_path, sessions_dir_path, settings_path, state_root_path,
+    journal_path, outputs_dir_path, registry_path, run_lock_path, sessions_dir_path, settings_path,
+    state_root_path,
 };
 pub use watch::FileJournalWatch;

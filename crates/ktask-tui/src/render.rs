@@ -10,13 +10,16 @@ use crate::ack_screen::AckScreen;
 use crate::answer_screen::AnswerScreen;
 use crate::done_screen::DoneScreen;
 use crate::import_screen::ImportScreen;
+use crate::output_screen::OutputScreen;
 use crate::queue::Queue;
 use crate::registration_screen::RegistrationScreen;
 use crate::settings::SettingsScreen;
 
 /// What the frame's bottom border says for whichever screen is open.
 fn footer_keys(app: &App) -> &'static str {
-    if app.settings.is_some() {
+    if app.output.is_some() {
+        OutputScreen::footer_keys()
+    } else if app.settings.is_some() {
         SettingsScreen::footer_keys()
     } else if let Some(providers) = &app.providers {
         providers.footer_keys()
@@ -48,6 +51,10 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     block.render(area, buf);
     if let Some(registration) = &app.registration {
         return Some(registration.draw(inner, buf));
+    }
+    if let Some(output) = &app.output {
+        output.draw(inner, buf);
+        return None;
     }
     if let Some(settings) = &app.settings {
         return Some(settings.draw(inner, buf));

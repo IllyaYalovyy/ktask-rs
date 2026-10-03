@@ -60,7 +60,7 @@ enum Wake {
 
 /// How often the loop wakes on its own to refresh a running task's elapsed time, while one is
 /// running. Nothing wakes it on a timer otherwise.
-const TICK: Duration = Duration::from_secs(1);
+const TICK: Duration = Duration::from_millis(200);
 
 /// How long a burst of [`Wake::Changed`] is given to settle before it is read: a task's
 /// attempt appends several events close together — its status, then each step's own outcome —
@@ -243,6 +243,23 @@ fn task_running(app: &App) -> bool {
         .is_some_and(|queue| queue.summary.running > 0)
 }
 
+/// Refreshes the output overlay on every running-attempt tick. The file is append-only and
+/// this only reads it, so an independently started run is unaffected by opening or closing
+/// the screen.
+fn refresh_output<A: Application>(app: App, application: &A) -> Result<App, String> {
+    let Some(id) = app
+        .output
+        .as_ref()
+        .map(crate::output_screen::OutputScreen::task)
+    else {
+        return Ok(app);
+    };
+    let text = application
+        .load_output(id)
+        .map_err(|error| error.to_string())?;
+    Ok(update(app, Event::OutputLoaded(text)))
+}
+
 /// What handling one `wake` produces: `None` when the loop should stop; otherwise `app` to
 /// carry on with, a wake drained ahead of its turn while collapsing a burst of
 /// [`Wake::Changed`] for the next call to receive first, and whether the queue is worth
@@ -324,6 +341,9 @@ fn run_loop<A: Application + Send + Sync + 'static>(
         } else {
             new_app
         };
+        if task_running(&app) {
+            app = refresh_output(app, application.as_ref())?;
+        }
     }
 }
 

@@ -162,6 +162,7 @@ pub fn run_provider(
     call: StepCall<'_>,
     dir: &Path,
     timeout: Duration,
+    output_path: Option<&Path>,
 ) -> Result<Output, ProviderRunError> {
     let built = (provider.command)(prompt, call).map_err(ProviderRunError::Build)?;
     let spec = CommandSpec {
@@ -170,6 +171,7 @@ pub fn run_provider(
         dir: dir.to_owned(),
         stdin: built.stdin,
         timeout,
+        output_path: output_path.map(Path::to_owned),
     };
     Ok((provider.parse_output)(commands.run(&spec)?))
 }
@@ -234,6 +236,7 @@ mod tests {
             call("the-token", 3, "implementation"),
             Path::new(DIR),
             TIMEOUT,
+            None,
         )
         .unwrap();
         let spec = commands.last.borrow().clone().unwrap();
@@ -259,6 +262,7 @@ mod tests {
             call("t", 1, "implementation"),
             Path::new(DIR),
             TIMEOUT,
+            None,
         )
         .unwrap_err();
         assert_eq!(error, ProviderRunError::Build("no can do".to_owned()));
@@ -283,6 +287,7 @@ mod tests {
             call("t", 1, "implementation"),
             Path::new(DIR),
             TIMEOUT,
+            None,
         )
         .unwrap_err();
         assert_eq!(error, ProviderRunError::Commands(failure));

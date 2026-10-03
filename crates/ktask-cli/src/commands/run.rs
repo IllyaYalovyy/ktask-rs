@@ -16,8 +16,8 @@ use ktask_core::{
 };
 
 use crate::context::{
-    current_exe, merge_project, open_journal, open_registry, resolve, run_lock_file,
-    sessions_dir_file,
+    current_exe, merge_project, open_journal, open_registry, outputs_dir_file, resolve,
+    run_lock_file, sessions_dir_file,
 };
 use crate::error::Failure;
 use crate::render;
@@ -65,6 +65,7 @@ fn run_context<'a>(
     disabled: &'a [&'static str],
     resolver_model: &'a str,
     sessions_dir: &'a Path,
+    outputs_dir: &'a Path,
 ) -> RunContext<'a> {
     RunContext {
         project_name: &project.name,
@@ -77,6 +78,7 @@ fn run_context<'a>(
         max_attempts: ktask_core::effective_max_attempts(settings),
         resolver_model,
         sessions_dir,
+        outputs_dir,
     }
 }
 
@@ -108,6 +110,7 @@ fn execute(args: &Args, project: Option<&str>) -> Result<RunReport, Failure> {
     let resolver_model = settings.resolver_model.clone().unwrap_or_default();
     let disabled = disabled_steps(&settings);
     let sessions_dir = sessions_dir_file(&project)?;
+    let outputs_dir = outputs_dir_file(&project)?;
     let context = run_context(
         &project,
         &binary_path,
@@ -116,6 +119,7 @@ fn execute(args: &Args, project: Option<&str>) -> Result<RunReport, Failure> {
         &disabled,
         &resolver_model,
         &sessions_dir,
+        &outputs_dir,
     );
     let provider = selected_provider(&settings)?;
     Ok(ktask_core::run_queue(

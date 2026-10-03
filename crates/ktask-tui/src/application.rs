@@ -47,6 +47,8 @@ pub trait Application {
     type ImportError: Display;
     /// Why [`start_run`](Application::start_run) refused to start a run at all.
     type RunRefusal: Display;
+    /// Why retained output could not be loaded.
+    type OutputError: Display;
 
     /// The queue to show, with the cancelled and skipped tasks when `show_cancelled`.
     ///
@@ -191,4 +193,11 @@ pub trait Application {
     /// Fails, attempting nothing, when a run could not even be started at all — another one
     /// already in progress, or no project open yet.
     fn start_run(&self) -> Result<RunReport, Self::RunRefusal>;
+
+    /// The selected task's latest attempt output, sanitised for a terminal frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns the application's output-read error when the task or its state cannot be read.
+    fn load_output(&self, id: TaskId) -> Result<String, Self::OutputError>;
 }

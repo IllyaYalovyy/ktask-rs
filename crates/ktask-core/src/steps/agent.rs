@@ -170,6 +170,10 @@ fn prompt_scratch_path(sessions_dir: &Path, token: &AttemptToken, step: &str) ->
     sessions_dir.join(format!("{}-{}-{step}.prompt", token.task, token.number))
 }
 
+fn attempt_output_path(outputs_dir: &Path, token: &AttemptToken) -> PathBuf {
+    outputs_dir.join(format!("{}-{}.log", token.task, token.number))
+}
+
 /// The session and transcript path the implementation step of `state`'s attempt is told to
 /// resume, when `state.requested_session` names one and `step` is the implementation step.
 /// `None` for every other step, and for an attempt with nothing to resume.
@@ -274,6 +278,7 @@ fn run_prompt(
         },
         context.project_dir,
         context.attempt_timeout,
+        Some(&attempt_output_path(context.outputs_dir, state.token)),
     );
     let duration = deps.clock.now().duration_since(started).unwrap_or_default();
     deps.session_log

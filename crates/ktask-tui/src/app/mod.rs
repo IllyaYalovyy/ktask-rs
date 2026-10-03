@@ -11,6 +11,7 @@ use crate::ack_screen::AckScreen;
 use crate::answer_screen::AnswerScreen;
 use crate::done_screen::DoneScreen;
 use crate::import_screen::ImportScreen;
+use crate::output_screen::OutputScreen;
 use crate::projects::ProjectsScreen;
 use crate::providers::ProvidersScreen;
 use crate::queue::{self, Queue};
@@ -44,6 +45,7 @@ pub struct App {
     pub(crate) providers: Option<ProvidersScreen>,
     pub(crate) projects: Option<ProjectsScreen>,
     pub(crate) registration: Option<RegistrationScreen>,
+    pub(crate) output: Option<OutputScreen>,
     /// The task the form was submitted with and where it goes, for the loop to add, answered
     /// with [`Event::Added`] or [`Event::Rejected`].
     pub(crate) submission: Option<(TaskDraft, Placement)>,
@@ -76,6 +78,8 @@ pub struct App {
     /// The name the registration screen was submitted with, for the loop to register the
     /// current directory under.
     pub(crate) registration_submission: Option<String>,
+    /// The selected task whose output the loop must load.
+    pub(crate) output_requested: Option<TaskId>,
     /// Set when the operator asked to leave.
     pub(crate) quit: bool,
 }
@@ -133,6 +137,8 @@ pub enum Event {
     /// The registration screen's submission registered nothing, for this reason: it stays
     /// open, keeps what was typed, and shows it.
     RegistrationFailed(String),
+    /// The selected task's freshly read, terminal-safe output.
+    OutputLoaded(String),
 }
 
 /// The app after `event` happened to `app`. `Loaded` and a first Ctrl-C are handled here,
@@ -154,7 +160,8 @@ pub fn update(app: App, event: Event) -> App {
 
 /// Every screen that might own an event reaching [`dispatch`], tried in this order, the first
 /// match winning.
-const SCREENS: [fn(App, Event) -> Tried; 9] = [
+const SCREENS: [fn(App, Event) -> Tried; 10] = [
+    screens::try_output,
     try_settings,
     try_providers,
     try_form,
@@ -265,6 +272,11 @@ fn open_screen_for_request(
             acknowledge: Some(AckScreen::new(id)),
             ..app
         }),
+        queue::Request::OpenOutput(id) => Ok(App {
+            output: Some(OutputScreen::new(id)),
+            output_requested: Some(id),
+            ..app
+        }),
         other => Err(Box::new((app, other))),
     }
 }
@@ -315,7 +327,8 @@ fn apply_queue_mailbox_request(app: App, request: &queue::Request) -> App {
         | queue::Request::OpenImport
         | queue::Request::OpenAnswer(..)
         | queue::Request::OpenDone(_)
-        | queue::Request::OpenAcknowledge(_) => {
+        | queue::Request::OpenAcknowledge(_)
+        | queue::Request::OpenOutput(_) => {
             unreachable!("handled by open_screen_for_request above")
         }
     }

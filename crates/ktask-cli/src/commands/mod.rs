@@ -7,6 +7,7 @@ pub(crate) mod answer;
 pub(crate) mod done;
 pub(crate) mod import;
 pub(crate) mod list;
+pub(crate) mod output;
 pub(crate) mod project;
 pub(crate) mod provider;
 pub(crate) mod remove;

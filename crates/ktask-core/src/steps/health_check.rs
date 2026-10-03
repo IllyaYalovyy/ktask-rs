@@ -91,6 +91,7 @@ pub(crate) fn run(
         dir: context.project_dir.to_owned(),
         stdin: Vec::new(),
         timeout: context.attempt_timeout,
+        output_path: None,
     };
     let result = commands.run(&spec);
     let duration = clock.now().duration_since(started).unwrap_or_default();
@@ -177,6 +178,7 @@ mod tests {
             max_attempts: 1,
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
+            outputs_dir: Path::new("/state/outputs"),
         }
     }
 

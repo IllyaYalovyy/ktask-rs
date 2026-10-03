@@ -168,6 +168,7 @@ fn run_echo(
         },
         dir,
         Duration::from_millis(timeout_ms),
+        None,
     )
     .map_err(|error| match error {
         ProviderRunError::Build(message) => Failure { message, code: 2 },

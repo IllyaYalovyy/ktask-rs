@@ -44,6 +44,8 @@ pub struct CommandSpec {
     pub stdin: Vec<u8>,
     /// How long the command may run before it is killed.
     pub timeout: Duration,
+    /// Tool-state file that receives output as it arrives, or `None` for capture-only calls.
+    pub output_path: Option<PathBuf>,
 }
 
 /// How a command ended.

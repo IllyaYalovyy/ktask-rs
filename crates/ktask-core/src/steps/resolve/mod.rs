@@ -420,6 +420,7 @@ mod tests {
             max_attempts: 3,
             resolver_model: "opus",
             sessions_dir: Path::new("/state/sessions"),
+            outputs_dir: Path::new("/state/outputs"),
         };
         let state = PipelineState {
             task: &task(),

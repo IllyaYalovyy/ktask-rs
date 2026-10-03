@@ -10,6 +10,7 @@ mod git;
 mod import;
 mod journal;
 mod lock;
+mod output;
 mod pick;
 mod project;
 mod provider;
@@ -38,6 +39,7 @@ pub use journal::{
     LimitWait, RecordReportError, RetryError, Step,
 };
 pub use lock::{RunLock, RunLockError};
+pub use output::{OutputError, sanitize_output, select_attempt};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
 pub use provider::{
     CommandBuilder, LimitDetector, LimitSignal, OutputParser, Provider, ProviderCommand,

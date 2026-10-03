@@ -17,7 +17,9 @@ use ktask_core::{
 };
 use ktask_tui::Application;
 
-use crate::context::{journal_file, open_settings_store, run_lock_file, state_root};
+use crate::context::{
+    journal_file, open_settings_store, outputs_dir_file, run_lock_file, state_root,
+};
 
 use super::process::{RunRefusal as ProcessRefusal, start_run};
 use super::{ImportProblem, Start, import_into};
@@ -194,6 +196,7 @@ impl Application for CliApplication {
     type RegisterError = RegisterProjectError;
     type ImportError = NeedsProject<ImportProblem>;
     type RunRefusal = NeedsProject<ProcessRefusal>;
+    type OutputError = NeedsProject<String>;
 
     fn load_queue(&self, show_cancelled: bool) -> Result<QueueView, Self::LoadError> {
         self.with_context(|context| {
@@ -329,6 +332,26 @@ impl Application for CliApplication {
             Some(project) => start_run(&self.binary_path, &project).map_err(NeedsProject::Failed),
             None => Err(NeedsProject::NoProject),
         }
+    }
+
+    fn load_output(&self, id: TaskId) -> Result<String, Self::OutputError> {
+        self.with_context(|context| {
+            let entries = ktask_core::status(&context.journal, &SystemClock, &context.lock)
+                .map_err(|error| error.to_string())?;
+            let attempt = ktask_core::select_attempt(&entries, id, None)
+                .map_err(|error| error.to_string())?;
+            let path = outputs_dir_file(&context.project)
+                .map_err(|error| error.clone())?
+                .join(format!("{}-{attempt}.log", id.0));
+            match std::fs::read(&path) {
+                Ok(bytes) => Ok(ktask_core::sanitize_output(&bytes)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+                Err(error) => Err(format!(
+                    "cannot read attempt output {}: {error}",
+                    path.display()
+                )),
+            }
+        })
     }
 }
 

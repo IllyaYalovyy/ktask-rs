@@ -457,3 +457,43 @@ fn the_key_map_lists_r() -> Result<()> {
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())
 }
+
+#[test]
+fn l_opens_live_safe_output_from_an_outside_run_and_esc_leaves_that_run_alone() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let go = fixture.work.join("output-go");
+    let body = format!(
+        "```bash\nif [ \"$3\" = review ]; then ktask-rs report --token \"$1\" approved; elif [ \"$3\" = testing ]; then ktask-rs report --token \"$1\" accepted; else head -c 10000 /dev/zero | tr '\\0' x; printf '\\n'; printf 'before\\033[2J\\ra\\377\\n'; printf 'tui live\\n'; [ -p '{0}' ] || mkfifo '{0}'; read _ < '{0}'; ktask-rs report --token \"$1\" done; fi\n```",
+        go.display()
+    );
+    fixture.add_agent_task("output", &body)?;
+    let mut outside = fixture.spawn_run_outside_the_tui()?;
+    let mut terminal = fixture.open()?;
+    terminal.wait_for("the outside attempt", |screen| {
+        lines_inside_frame(&screen.contents())
+            .iter()
+            .any(|line| line.contains("running"))
+    })?;
+
+    terminal.send("l")?;
+    let screen = terminal.wait_for("the live output screen", |screen| {
+        screen.contents().contains("tui live") && screen.contents().contains("\\x1b[2J")
+    })?;
+    assert!(screen.ends_with('┘'), "{screen}");
+    assert!(
+        !screen.contains("\x1b[2J"),
+        "raw escape reached terminal: {screen:?}"
+    );
+
+    terminal.send("\x1b")?;
+    terminal.wait_for("the queue after closing output", |screen| {
+        lines_inside_frame(&screen.contents())
+            .iter()
+            .any(|line| line.contains("running"))
+    })?;
+    std::fs::write(&go, "go\n")?;
+    assert!(outside.wait()?.success());
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}

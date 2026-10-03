@@ -67,6 +67,7 @@ impl Application for PanicTestApplication {
     type RegisterError = String;
     type ImportError = String;
     type RunRefusal = String;
+    type OutputError = String;
 
     fn load_queue(&self, _show_cancelled: bool) -> Result<QueueView, String> {
         let mut loaded_once = self
@@ -138,6 +139,10 @@ impl Application for PanicTestApplication {
     }
 
     fn start_run(&self) -> Result<RunReport, String> {
+        Err(NOT_SUPPORTED.to_owned())
+    }
+
+    fn load_output(&self, _id: TaskId) -> Result<String, String> {
         Err(NOT_SUPPORTED.to_owned())
     }
 }

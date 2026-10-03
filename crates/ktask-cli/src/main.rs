@@ -72,6 +72,8 @@ enum Command {
     /// What ran and how it ended: every task that was attempted, with every attempt it has
     /// had
     Status(commands::status::Args),
+    /// Print a task attempt's retained provider output
+    Output(commands::output::Args),
     /// State the outcome of an attempt; the token names its project, task and attempt, so
     /// this works from any directory
     Report(commands::report::Args),
@@ -123,6 +125,7 @@ fn dispatch(
         Command::Provider { command } => commands::provider::run(command, project, stdout),
         Command::Settings(args) => commands::settings::run(args, project, stdout),
         Command::Status(args) => commands::status::run(args, project, stdout),
+        Command::Output(args) => commands::output::run(args, project, stdout),
         Command::Report(args) => commands::report::run(args, project, stdout),
     }
 }
