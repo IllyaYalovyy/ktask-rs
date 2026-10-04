@@ -1450,9 +1450,10 @@ fn a_provider_reported_model_mismatch_fails_the_attempt_with_both_model_names() 
     let fixture = Fixture::new()?;
     select_claude(&fixture)?;
     fixture.add_agent_task("a", "do the recorded work")?;
-    let claude = claude_script(
-        "prompt=$(cat)\nprintf '%s\\n' '{\"type\":\"result\",\"result\":\"finished\",\"usage\":{\"model\":\"different-model\"}}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
-    )?;
+    let claude = claude_script(&format!(
+        "prompt=$(cat)\nprintf '%s' '{}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
+        include_str!("../../../test-fixtures/claude/success.jsonl")
+    ))?;
     let outcome = fixture
         .sandbox
         .run_with(&fixture.repository, &["run"], |command| {
@@ -1463,9 +1464,9 @@ fn a_provider_reported_model_mismatch_fails_the_attempt_with_both_model_names() 
     assert_eq!(fixture.task_status(1)?, "failed");
     let status = fixture.run(&["status"])?;
     assert!(
-        status
-            .stdout
-            .contains("failed\tasked for claude-sonnet-5, the provider used different-model"),
+        status.stdout.contains(
+            "failed\tasked for claude-sonnet-5, the provider used claude-haiku-4-5-20251001"
+        ),
         "{}",
         status.stdout
     );
