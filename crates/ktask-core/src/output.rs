@@ -172,6 +172,7 @@ mod tests {
             reason: None,
             waiting_for: None,
             limit_wait: None,
+            limit_warning: None,
             usage: crate::Usage::default(),
             output_activity: None,
             steps: vec![],
@@ -217,6 +218,7 @@ mod tests {
             reason: None,
             waiting_for: None,
             limit_wait: None,
+            limit_warning: None,
             usage: crate::Usage::default(),
         }];
         finished.provider = None;

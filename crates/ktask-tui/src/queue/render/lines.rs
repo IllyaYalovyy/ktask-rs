@@ -74,8 +74,14 @@ fn step_text(step: &StepLine, width: usize, label: &str) -> String {
     } else {
         format!(" · {session}")
     };
+    let limit_warning = step
+        .limit_warning
+        .as_ref()
+        .map_or_else(String::new, |warning| {
+            format!(" · {}", presentation::limit_warning_text(warning))
+        });
     let prefix = format!(
-        "      {label}{} · {shown_provider} · {seconds}s · {outcome}{session}",
+        "      {label}{} · {shown_provider} · {seconds}s · {outcome}{limit_warning}{session}",
         step.step
     );
     let text = presentation::reason(step).map_or_else(

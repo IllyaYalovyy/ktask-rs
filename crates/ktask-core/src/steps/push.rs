@@ -142,6 +142,7 @@ mod tests {
             known_cause: false,
             usage: crate::Usage::default(),
             used_model: None,
+            limit_warning: None,
         };
         let commands = crate::fakes::FakeCommands::returning(Ok(crate::Output {
             stdout: Vec::new(),
@@ -245,6 +246,7 @@ mod tests {
             known_cause: false,
             usage: crate::Usage::default(),
             used_model: None,
+            limit_warning: None,
         };
         assert!(!Push.enabled(ctx, &state));
     }
@@ -265,6 +267,7 @@ mod tests {
             known_cause: false,
             usage: crate::Usage::default(),
             used_model: None,
+            limit_warning: None,
         };
         assert!(!Push.enabled(context(), &state));
     }
@@ -287,6 +290,7 @@ mod tests {
             known_cause: false,
             usage: crate::Usage::default(),
             used_model: None,
+            limit_warning: None,
         };
         assert!(!Push.enabled(ctx, &state));
     }

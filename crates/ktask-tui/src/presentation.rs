@@ -2,8 +2,8 @@
 
 use jiff::Timestamp;
 use ktask_core::{
-    AttemptOutcome, DoneMark, LimitWait, OutputActivity, ProviderCheck, ProviderCheckKind,
-    StepLine, TaskStatus, Usage,
+    AttemptOutcome, DoneMark, LimitWait, LimitWarning, OutputActivity, ProviderCheck,
+    ProviderCheckKind, StepLine, TaskStatus, Usage,
 };
 
 /// The operator-facing label for one provider readiness fact.
@@ -200,6 +200,16 @@ pub fn queue_limit_wait_text(wait: &LimitWait) -> String {
     format!(
         "hit the usage limit: waited {}s, resumed {resumed}",
         wait.waited.as_secs()
+    )
+}
+
+/// The compact fact attached to a completed step when its provider warned that a usage window
+/// is filling up but still accepted the call.
+#[must_use]
+pub fn limit_warning_text(warning: &LimitWarning) -> String {
+    format!(
+        "limit {}% of {}",
+        warning.utilization_percent, warning.window
     )
 }
 

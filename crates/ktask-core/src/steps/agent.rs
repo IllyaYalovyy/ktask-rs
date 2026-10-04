@@ -342,6 +342,7 @@ pub(crate) fn run_agent_step(
     );
     state.usage = facts.usage;
     state.used_model.clone_from(&facts.model);
+    state.limit_warning.clone_from(&facts.limit_warning);
     let mut outcome = agent_outcome(deps.journal, state.task, state.token, step, result)?;
     if let (Some(asked), Some(used)) = (model, facts.model.as_deref())
         && asked != used

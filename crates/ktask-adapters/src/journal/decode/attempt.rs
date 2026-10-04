@@ -4,7 +4,9 @@
 
 use std::time::{Duration, SystemTime};
 
-use ktask_core::{Event, JournalError, LimitWait, Outcome, TaskId, TaskStatus, Usage};
+use ktask_core::{
+    Event, JournalError, LimitWait, LimitWarning, Outcome, TaskId, TaskStatus, Usage,
+};
 use serde_json::Value;
 
 /// The [`Event::AttemptStarted`] an `attempt_started` row's `payload` decodes to.
@@ -223,6 +225,16 @@ fn decode_limit_wait(payload: &Value) -> Option<LimitWait> {
     })
 }
 
+fn decode_limit_warning(payload: &Value) -> Option<LimitWarning> {
+    Some(LimitWarning {
+        window: payload.get("limit_warning_window")?.as_str()?.to_owned(),
+        utilization_percent: u8::try_from(
+            payload.get("limit_warning_utilization_percent")?.as_u64()?,
+        )
+        .ok()?,
+    })
+}
+
 fn decode_usage(payload: &Value) -> Usage {
     Usage {
         input_tokens: payload.get("input_tokens").and_then(Value::as_u64),
@@ -262,6 +274,7 @@ pub(super) fn decode_step_ended(
         reason,
         reported,
         limit_wait: decode_limit_wait(payload),
+        limit_warning: decode_limit_warning(payload),
         usage: decode_usage(payload),
         used_model: payload
             .get("used_model")

@@ -81,6 +81,7 @@ fn ended_step_line(
         reason,
         waiting_for: None,
         limit_wait: end.limit_wait,
+        limit_warning: end.limit_warning.clone(),
         usage: end.usage,
     }
 }
@@ -161,6 +162,7 @@ fn attempt_line(
         reason: current.reason,
         waiting_for: current.waiting_for,
         limit_wait: current.limit_wait,
+        limit_warning: current.limit_warning,
         output_activity,
         usage: steps.iter().fold(crate::Usage::default(), |total, step| {
             total.plus(step.usage)
@@ -406,6 +408,7 @@ mod tests {
                     reason: None,
                     waiting_for: None,
                     limit_wait: None,
+                    limit_warning: None,
                     usage: crate::Usage::default(),
                     output_activity: None,
                     steps: vec![StepLine {
@@ -418,6 +421,7 @@ mod tests {
                         reason: None,
                         waiting_for: None,
                         limit_wait: None,
+                        limit_warning: None,
                         usage: crate::Usage::default(),
                     }],
                 },
@@ -491,6 +495,7 @@ mod tests {
                     reason: None,
                     waiting_for: None,
                     limit_wait: None,
+                    limit_warning: None,
                     usage: crate::Usage::default(),
                     output_activity: None,
                     steps: vec![StepLine {
@@ -503,6 +508,7 @@ mod tests {
                         reason: None,
                         waiting_for: None,
                         limit_wait: None,
+                        limit_warning: None,
                         usage: crate::Usage::default(),
                     }],
                 },
@@ -582,6 +588,7 @@ mod tests {
                 waited: Duration::from_secs(100),
                 resumed_at: at(200),
             }),
+            None,
             crate::Usage::default(),
             None,
         )
@@ -968,6 +975,7 @@ mod tests {
             reason: Some("git identity is not configured".to_owned()),
             reported: None,
             limit_wait: None,
+            limit_warning: None,
             usage: crate::Usage::default(),
             used_model: None,
         };
@@ -1019,6 +1027,7 @@ mod tests {
             },
             None,
             None,
+            None,
             crate::Usage::default(),
             None,
         )
@@ -1042,6 +1051,7 @@ mod tests {
                     reason: None,
                     waiting_for: None,
                     limit_wait: None,
+                    limit_warning: None,
                     usage: crate::Usage::default(),
                 },
                 StepLine {
@@ -1054,6 +1064,7 @@ mod tests {
                     reason: None,
                     waiting_for: None,
                     limit_wait: None,
+                    limit_warning: None,
                     usage: crate::Usage::default(),
                 },
             ]
@@ -1119,6 +1130,7 @@ mod tests {
                 reason: Some("uncommitted changes; commit or stash".to_owned()),
                 waiting_for: None,
                 limit_wait: None,
+                limit_warning: None,
                 usage: crate::Usage::default(),
             }]
         );

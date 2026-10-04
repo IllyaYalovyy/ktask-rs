@@ -47,8 +47,9 @@ pub use output::{
 };
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
 pub use provider::{
-    CommandBuilder, LimitDetector, LimitSignal, OutputParser, Provider, ProviderCommand,
-    ProviderRunError, ProviderUsage, Resume, SessionReader, StepCall, UsageReader, run_provider,
+    CommandBuilder, LimitDetector, LimitSignal, LimitWarning, OutputParser, Provider,
+    ProviderCommand, ProviderRunError, ProviderUsage, Resume, SessionReader, StepCall, UsageReader,
+    run_provider,
 };
 pub use provider_check::{
     ProbeCall, ProviderCheck, ProviderCheckItem, ProviderCheckKind, ProviderProbe, check_provider,

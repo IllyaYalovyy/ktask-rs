@@ -437,6 +437,7 @@ mod tests {
             known_cause: false,
             usage: crate::Usage::default(),
             used_model: None,
+            limit_warning: None,
         };
         assert!(Resolve.enabled(context, &state));
         assert_eq!(Resolve.name(), RESOLVE_STEP);

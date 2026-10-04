@@ -598,6 +598,7 @@ mod tests {
             reason: None,
             waiting_for: None,
             limit_wait: None,
+            limit_warning: None,
             output_activity: None,
             usage: ktask_core::Usage::default(),
             steps: vec![StepLine {
@@ -610,6 +611,7 @@ mod tests {
                 reason: None,
                 waiting_for: None,
                 limit_wait: None,
+                limit_warning: None,
                 usage: ktask_core::Usage::default(),
             }],
         }

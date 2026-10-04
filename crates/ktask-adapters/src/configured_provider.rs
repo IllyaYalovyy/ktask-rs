@@ -143,6 +143,7 @@ fn usage_in_event(event: &serde_json::Value, path: &str) -> Option<ProviderUsage
             cost_microusd,
         },
         model,
+        limit_warning: None,
     })
 }
 
@@ -270,12 +271,13 @@ mod tests {
                     cost_microusd: Some(11_002),
                 },
                 model: Some("claude-haiku-4-5-20251001".to_owned()),
+                limit_warning: None,
             }
         );
     }
 
     #[test]
-    fn recorded_claude_usage_warning_stops_at_ninety_percent() {
+    fn recorded_claude_usage_warning_is_a_usage_fact_not_a_limit() {
         let definition = ProviderDefinition {
             command: "agent".to_owned(),
             args: vec![],
@@ -295,10 +297,12 @@ mod tests {
             stderr: vec![],
             exit: Exit::Code(1),
         };
+        assert_eq!(detect_limit(&definition, &output), None);
         assert_eq!(
-            detect_limit(&definition, &output),
-            Some(LimitSignal {
-                reset_at: Some(SystemTime::UNIX_EPOCH + Duration::from_hours(497_543)),
+            read_usage(&definition, &output).limit_warning,
+            Some(ktask_core::LimitWarning {
+                window: "7 days".to_owned(),
+                utilization_percent: 91,
             })
         );
     }

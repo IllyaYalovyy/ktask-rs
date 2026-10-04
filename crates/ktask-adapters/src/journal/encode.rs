@@ -3,7 +3,7 @@
 
 use std::time::SystemTime;
 
-use ktask_core::{Event, LimitWait, Outcome, Placement, TaskDraft, TaskId};
+use ktask_core::{Event, LimitWait, LimitWarning, Outcome, Placement, TaskDraft, TaskId};
 use serde_json::Value;
 
 use super::{
@@ -168,6 +168,16 @@ fn limit_wait_fields(wait: Option<&LimitWait>) -> (Option<u64>, Option<i64>) {
     })
 }
 
+/// The optional non-blocking provider-limit warning a completed step retains.
+fn limit_warning_fields(warning: Option<&LimitWarning>) -> (Option<&str>, Option<u8>) {
+    warning.map_or((None, None), |warning| {
+        (
+            Some(warning.window.as_str()),
+            Some(warning.utilization_percent),
+        )
+    })
+}
+
 /// The payload a `step_ended` row is written with.
 fn step_ended_payload(event: &Event) -> String {
     let Event::StepEnded {
@@ -179,6 +189,7 @@ fn step_ended_payload(event: &Event) -> String {
         reason,
         reported,
         limit_wait,
+        limit_warning,
         usage,
         used_model,
         ..
@@ -187,6 +198,8 @@ fn step_ended_payload(event: &Event) -> String {
         unreachable!("only called for Event::StepEnded")
     };
     let (limit_wait_seconds, limit_resumed_at) = limit_wait_fields(limit_wait.as_ref());
+    let (limit_warning_window, limit_warning_utilization_percent) =
+        limit_warning_fields(limit_warning.as_ref());
     serde_json::json!({
         "number": number,
         "step": step,
@@ -197,6 +210,8 @@ fn step_ended_payload(event: &Event) -> String {
         "reported": reported.map(Outcome::as_str),
         "limit_wait_seconds": limit_wait_seconds,
         "limit_resumed_at": limit_resumed_at,
+        "limit_warning_window": limit_warning_window,
+        "limit_warning_utilization_percent": limit_warning_utilization_percent,
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
         "cost_microusd": usage.cost_microusd,

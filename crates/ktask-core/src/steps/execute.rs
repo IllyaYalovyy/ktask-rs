@@ -39,6 +39,7 @@ fn record_passed_step(
         },
         None,
         None,
+        None,
         crate::Usage::default(),
         None,
     )?;
@@ -149,6 +150,7 @@ fn end_one_step(
     }
     let usage = std::mem::take(&mut state.usage);
     let used_model = state.used_model.take();
+    let limit_warning = state.limit_warning.take();
     crate::attempt::end_step(
         deps.journal,
         deps.clock,
@@ -163,6 +165,7 @@ fn end_one_step(
         },
         reported,
         limit_wait,
+        limit_warning.as_ref(),
         usage,
         used_model.as_deref(),
     )?;

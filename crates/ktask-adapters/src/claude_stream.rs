@@ -2,17 +2,18 @@
 
 use std::time::{Duration, SystemTime};
 
-use ktask_core::{LimitSignal, Output, ProviderUsage, Usage};
+use ktask_core::{LimitSignal, LimitWarning, Output, ProviderUsage, Usage};
 
-/// Reads a structured limit warning, rejection, or utilization at or above 90%.
+/// Reads a structured rejection, or a rejected result that names a usage limit.
 pub(crate) fn limit(output: &Output) -> Option<LimitSignal> {
     events(output).into_iter().find_map(|event| {
-        let info = (event.get("type")?.as_str() == Some("rate_limit_event"))
-            .then(|| event.get("rate_limit_info"))??;
-        let status = info.get("status")?.as_str()?;
-        (status != "allowed" || utilization(info) >= Some(0.9)).then(|| LimitSignal {
-            reset_at: reset_at(info),
-        })
+        if event.get("type").and_then(serde_json::Value::as_str) == Some("rate_limit_event") {
+            let info = event.get("rate_limit_info")?;
+            return (info.get("status")?.as_str() == Some("rejected")).then(|| LimitSignal {
+                reset_at: reset_at(info),
+            });
+        }
+        result_names_limit(&event).then_some(LimitSignal { reset_at: None })
     })
 }
 
@@ -42,19 +43,50 @@ pub(crate) fn usage(output: &Output) -> ProviderUsage {
     ProviderUsage {
         usage,
         model: model.or_else(|| result.and_then(model_from_usage)),
+        limit_warning: events.iter().find_map(warning),
     }
 }
 
-fn utilization(info: &serde_json::Value) -> Option<f64> {
-    let direct = info.get("utilization").and_then(serde_json::Value::as_f64);
-    let windows = info
-        .get("unifiedWindows")
-        .and_then(serde_json::Value::as_object)
-        .into_iter()
-        .flat_map(|windows| windows.values())
-        .filter_map(|window| window.get("utilization")?.as_f64())
-        .max_by(f64::total_cmp);
-    direct.into_iter().chain(windows).max_by(f64::total_cmp)
+/// True when an error result itself says Claude refused the call for a usage limit. Warnings
+/// are a distinct `rate_limit_event`, so their text cannot make this branch wait.
+fn result_names_limit(event: &serde_json::Value) -> bool {
+    event.get("type").and_then(serde_json::Value::as_str) == Some("result")
+        && event
+            .get("is_error")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        && event
+            .get("result")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|text| text.to_ascii_lowercase().contains("limit"))
+}
+
+/// Reads Claude's explicit `allowed_warning` fact. Its named window makes the warning useful
+/// without assigning any policy threshold to it.
+fn warning(event: &serde_json::Value) -> Option<LimitWarning> {
+    let info = (event.get("type")?.as_str() == Some("rate_limit_event"))
+        .then(|| event.get("rate_limit_info"))??;
+    if info.get("status")?.as_str() != Some("allowed_warning") {
+        return None;
+    }
+    Some(LimitWarning {
+        window: window_name(info.get("rateLimitType")?.as_str()?),
+        utilization_percent: percent(info.get("utilization")?.as_f64()?),
+    })
+}
+
+fn window_name(name: &str) -> String {
+    match name {
+        "five_hour" => "5 hours".to_owned(),
+        "seven_day" => "7 days".to_owned(),
+        _ => name.replace('_', " "),
+    }
+}
+
+fn percent(utilization: f64) -> u8 {
+    format!("{:.0}", (utilization * 100.0).round().clamp(0.0, 100.0))
+        .parse()
+        .unwrap_or(100)
 }
 
 fn reset_at(info: &serde_json::Value) -> Option<SystemTime> {

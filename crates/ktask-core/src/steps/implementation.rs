@@ -486,6 +486,7 @@ mod tests {
             known_cause: false,
             usage: crate::Usage::default(),
             used_model: None,
+            limit_warning: None,
         };
         assert!(Implementation.enabled(context, &state));
         assert_eq!(Implementation.name(), IMPLEMENTATION);
@@ -530,6 +531,7 @@ mod tests {
             known_cause: false,
             usage: crate::Usage::default(),
             used_model: None,
+            limit_warning: None,
         };
         assert_eq!(Implementation.model(context, &state), None);
         state.requested_model = Some("opus".to_owned());

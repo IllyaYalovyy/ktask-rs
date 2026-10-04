@@ -2,7 +2,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use crate::{LimitWait, TaskId, TaskStatus, Usage};
+use crate::{LimitWait, LimitWarning, TaskId, TaskStatus, Usage};
 
 use super::AttemptOutcome;
 
@@ -27,6 +27,8 @@ pub struct StepLine {
     pub waiting_for: Option<Duration>,
     /// The provider-limit wait recorded after the step resumed.
     pub limit_wait: Option<LimitWait>,
+    /// A non-blocking provider-limit warning emitted while the step ran.
+    pub limit_warning: Option<LimitWarning>,
     /// Provider token and cost figures, or none for a provider that reported no usage.
     pub usage: Usage,
 }
@@ -54,6 +56,8 @@ pub struct AttemptLine {
     pub waiting_for: Option<Duration>,
     /// The current step's completed provider-limit wait.
     pub limit_wait: Option<LimitWait>,
+    /// A non-blocking provider-limit warning emitted while the current step ran.
+    pub limit_warning: Option<LimitWarning>,
     /// Live provider-output facts, when they are available.
     pub output_activity: Option<OutputActivity>,
     /// Every started step, in order.

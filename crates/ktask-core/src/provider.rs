@@ -70,6 +70,17 @@ pub struct LimitSignal {
     pub reset_at: Option<SystemTime>,
 }
 
+/// A provider's non-blocking notice that a usage window is filling up. It is retained with the
+/// step that received it so the operator can see it without treating a completed call as a
+/// failed one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LimitWarning {
+    /// The provider's named usage window, in short operator-facing form.
+    pub window: String,
+    /// The portion of that window already used, as a whole percentage.
+    pub utilization_percent: u8,
+}
+
 /// Usage and model facts a provider reported for one invocation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderUsage {
@@ -77,6 +88,8 @@ pub struct ProviderUsage {
     pub usage: Usage,
     /// The model the provider says it actually used.
     pub model: Option<String>,
+    /// A non-blocking provider-limit warning emitted during this invocation.
+    pub limit_warning: Option<LimitWarning>,
 }
 
 /// A provider: a name it is known by, a pure function from a prompt and a [`StepCall`] to the

@@ -1,4 +1,4 @@
-//! Claude's recorded limit resumes the same attempt before the real TUI sees it complete.
+//! Claude's recorded usage warning is visible on the completed attempt in the real TUI.
 
 use std::fmt::Write as _;
 use std::os::unix::fs::PermissionsExt;
@@ -54,16 +54,15 @@ impl Fixture {
                     .success()
             );
         }
-        let calls = repository.join("claude-calls");
         let claude = TempDir::new()?;
         let executable = claude.path().join("claude");
         std::fs::write(
             &executable,
             format!(
-                "#!/bin/sh\ncalls={calls}\nn=$(cat \"$calls\" 2>/dev/null || echo 0)\nprintf '%s' $((n + 1)) > \"$calls\"\nprompt=$(cat)\nif [ \"$n\" = 0 ]; then\n  printf '%s' '{limit}' | sed \"s/1791154800/$(( $(date -u +%s) + 12 ))/\"\n  exit 1\nfi\nprintf '%s' '{success}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
-                calls = calls.display(),
-                limit = include_str!("../../../../test-fixtures/claude/usage-limit.jsonl"),
-                success = include_str!("../../../../test-fixtures/claude/success.jsonl")
+                "#!/bin/sh\nprompt=$(cat)\nprintf '%s' '{success}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
+                success = include_str!(
+                    "../../../../test-fixtures/claude/claude-2.1.283-success-nodeny.jsonl"
+                )
             ),
         )?;
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))?;
@@ -102,7 +101,7 @@ impl Fixture {
 }
 
 #[test]
-fn the_queue_screen_shows_the_same_attempt_done_after_the_recorded_claude_limit() -> Result<()> {
+fn the_queue_screen_shows_a_recorded_claude_warning_without_waiting() -> Result<()> {
     let fixture = Fixture::new()?;
     let mut run = fixture.spawn_run()?;
     let mut terminal =
@@ -116,6 +115,7 @@ fn the_queue_screen_shows_the_same_attempt_done_after_the_recorded_claude_limit(
             .is_some_and(|line| line.starts_with(">1  #1  done"))
     })?;
     assert!(done.contains("claude-haiku-4-5-20251001"), "{done}");
+    assert!(done.contains("limit 93% of 7 days"), "{done}");
     assert!(!done.contains("attempt 2"), "{done}");
     assert!(run.wait()?.success());
     terminal.send("q")?;

@@ -54,10 +54,10 @@ sanitize "$temporary/authentication-failure.jsonl" \
 # warning/rejection event; it is the real warning that causes ktask-rs to pause at >=90% usage.
 jq -ce '
     select(.type == "rate_limit_event")
-    | select(.rate_limit_info.status != "allowed" or .rate_limit_info.utilization >= 0.9)
+    | select(.rate_limit_info.status == "allowed_warning")
     | .session_id = "recorded-session"
     | del(.uuid)
 ' "$temporary/success.jsonl" >"$fixtures/usage-limit.jsonl" || {
-    echo "Claude Code did not emit a real non-allowed or >=90% rate-limit event; fixtures unchanged" >&2
+    echo "Claude Code did not emit a real allowed-warning rate-limit event; fixtures unchanged" >&2
     exit 1
 }

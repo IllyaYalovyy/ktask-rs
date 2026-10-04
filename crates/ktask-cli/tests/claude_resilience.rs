@@ -9,14 +9,11 @@ mod support;
 use std::fmt::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
 
 use repo::{git_repository, scratch};
 use support::{Outcome, Result, Sandbox};
 use tempfile::TempDir;
-
-const TIMEOUT: Duration = Duration::from_secs(10);
 
 struct Fixture {
     sandbox: Sandbox,
@@ -95,82 +92,53 @@ impl Fixture {
         std::fs::write(settings, configured)?;
         Ok(dir)
     }
-
-    fn spawn_run(&self) -> Result<Child> {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_ktask-rs"));
-        command.arg("run");
-        self.sandbox.isolate(&mut command, &self.repository);
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
-        Ok(command.spawn()?)
-    }
-
-    fn wait_for_status(&self, what: &str, condition: impl Fn(&str) -> bool) -> Result<String> {
-        let deadline = Instant::now() + TIMEOUT;
-        loop {
-            let status = self.run(&["status"])?;
-            if condition(&status.stdout) {
-                return Ok(status.stdout);
-            }
-            if Instant::now() >= deadline {
-                return Err(format!("timed out waiting for {what}: {}", status.stdout).into());
-            }
-            std::thread::park_timeout(Duration::from_millis(20));
-        }
-    }
-}
-
-fn wait_for_child(mut child: Child) -> Result<()> {
-    let deadline = Instant::now() + TIMEOUT;
-    loop {
-        if child.try_wait()?.is_some() {
-            let output = child.wait_with_output()?;
-            if output.status.success() {
-                return Ok(());
-            }
-            return Err(format!(
-                "run exited {:?}: {}{}",
-                output.status.code(),
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            )
-            .into());
-        }
-        if Instant::now() >= deadline {
-            return Err("the run did not finish in time".into());
-        }
-        std::thread::park_timeout(Duration::from_millis(20));
-    }
 }
 
 #[test]
-fn a_recorded_claude_limit_waits_for_its_named_reset_without_a_second_attempt() -> Result<()> {
+fn a_recorded_claude_warning_finishes_with_its_usage_and_model() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add()?;
-    let calls = fixture.repository.join("claude-calls");
     let script = format!(
-        "calls={calls}\nn=$(cat \"$calls\" 2>/dev/null || echo 0)\nprintf '%s' $((n + 1)) > \"$calls\"\nprompt=$(cat)\nif [ \"$n\" = 0 ]; then\n  printf '%s' '{limit}' | sed \"s/1791154800/$(( $(date -u +%s) + 5 ))/\"\n  exit 1\nfi\nprintf '%s' '{success}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
-        calls = calls.display(),
-        limit = include_str!("../../../test-fixtures/claude/usage-limit.jsonl"),
-        success = include_str!("../../../test-fixtures/claude/success.jsonl")
+        "prompt=$(cat)\nprintf '%s' '{success}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
+        success = include_str!("../../../test-fixtures/claude/claude-2.1.283-success-nodeny.jsonl")
     );
     let _claude = fixture.install_claude(&script)?;
 
-    let run = fixture.spawn_run()?;
-    let waiting = fixture.wait_for_status("the Claude limit countdown", |text| {
-        text.contains("\twaiting\t") && text.contains("usage limit")
-    })?;
-    assert!(waiting.contains("attempt 1: implementation"), "{waiting}");
-    wait_for_child(run)?;
-
-    assert_eq!(std::fs::read_to_string(calls)?.trim(), "2");
+    let run = fixture.run(&["run"])?;
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
     let status = fixture.run(&["status"])?;
     assert_eq!(
         status.stdout.lines().next(),
-        Some("#1\tdone\tClaude task\ttokens in 10 out 56 cost $0.011002")
+        Some("#1\tdone\tClaude task\ttokens in 9 out 56 cost $0.010677")
     );
     assert!(!status.stdout.contains("attempt 2"), "{}", status.stdout);
     assert!(
-        status.stdout.contains("hit the usage limit: waited"),
+        status
+            .stdout
+            .contains("attempt 1: implementation\tclaude-haiku-4-5-20251001\tclaude\t0s\tdone"),
+        "{}",
+        status.stdout
+    );
+    assert!(
+        status.stdout.contains("limit 93% of 7 days"),
+        "{}",
+        status.stdout
+    );
+    assert!(!status.stdout.contains("waiting"), "{}", status.stdout);
+    let json = fixture.run(&["status", "--json"])?;
+    assert_eq!(json.code, Some(0), "{}", json.stderr);
+    let parsed = serde_json::from_str::<serde_json::Value>(&json.stdout)?;
+    let implementation = parsed[0]["attempt"]["steps"]
+        .as_array()
+        .and_then(|steps| steps.iter().find(|step| step["step"] == "implementation"))
+        .expect("an implementation step");
+    assert_eq!(
+        implementation["limit_warning"],
+        serde_json::json!({ "window": "7 days", "utilization_percent": 93 })
+    );
+    assert_eq!(implementation["model"], "claude-haiku-4-5-20251001");
+    assert!(
+        status.stdout.contains("cost $0.010677"),
         "{}",
         status.stdout
     );

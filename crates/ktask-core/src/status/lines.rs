@@ -114,6 +114,7 @@ pub(super) fn running_step(
             .then(|| waiting_until.and_then(|until| until.duration_since(clock.now()).ok()))
             .flatten(),
         limit_wait: None,
+        limit_warning: None,
         usage: crate::Usage::default(),
     }
 }
@@ -133,6 +134,7 @@ pub(super) fn gate_stop_entry(task: Task, step: String, reason: String) -> Statu
         reason: Some(reason),
         waiting_for: None,
         limit_wait: None,
+        limit_warning: None,
         usage: crate::Usage::default(),
     };
     StatusEntry {
@@ -150,6 +152,7 @@ pub(super) fn gate_stop_entry(task: Task, step: String, reason: String) -> Statu
             reason: line.reason.clone(),
             waiting_for: None,
             limit_wait: None,
+            limit_warning: None,
             output_activity: None,
             usage: crate::Usage::default(),
             steps: vec![line],

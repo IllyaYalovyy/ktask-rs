@@ -250,6 +250,7 @@ impl QueueState {
                 reason: reason.clone(),
                 reported: None,
                 limit_wait: None,
+                limit_warning: None,
                 usage: crate::Usage::default(),
                 used_model: None,
             });
@@ -292,6 +293,7 @@ impl QueueState {
             reason,
             reported,
             limit_wait,
+            limit_warning,
             usage,
             used_model,
             ..
@@ -317,6 +319,7 @@ impl QueueState {
             reason: reason.clone(),
             reported: *reported,
             limit_wait: *limit_wait,
+            limit_warning: limit_warning.clone(),
             usage: *usage,
             used_model: used_model.clone(),
         });

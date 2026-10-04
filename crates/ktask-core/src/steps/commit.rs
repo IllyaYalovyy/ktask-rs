@@ -188,6 +188,7 @@ mod tests {
             known_cause: false,
             usage: crate::Usage::default(),
             used_model: None,
+            limit_warning: None,
         };
         let commands = crate::fakes::FakeCommands::returning(Ok(crate::Output {
             stdout: Vec::new(),
@@ -317,6 +318,7 @@ mod tests {
             known_cause: false,
             usage: crate::Usage::default(),
             used_model: None,
+            limit_warning: None,
         };
         assert!(!Commit.enabled(ctx, &state));
     }

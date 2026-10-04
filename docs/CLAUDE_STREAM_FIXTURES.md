@@ -17,8 +17,8 @@ the real login failure. It removes session IDs, request IDs, timestamps, local p
 lists, and thinking signatures before writing those committed files. The supplied tool-catalogue
 recordings stay verbatim so their `system/init.tools` evidence remains available to tests.
 
-The usage-limit fixture is never invented. The recorder extracts it only if Claude Code emits a
-non-`allowed` event or reports utilization of at least 90%; otherwise it fails and leaves the
-committed fixtures untouched. `ktask-rs` likewise pauses at 90% usage rather than waiting for a
-hard rejection. The retained event uses `rate_limit_info.status` and `resetsAt` exactly as
-emitted by Claude Code.
+The usage-warning fixture is never invented. The recorder extracts it only if Claude Code emits
+an `allowed_warning` event; otherwise it fails and leaves the committed fixtures untouched.
+`ktask-rs` records that warning on the completed step, but waits only for a hard `rejected`
+event or a result error that names the limit. The retained event uses
+`rate_limit_info.status` and `resetsAt` exactly as emitted by Claude Code.

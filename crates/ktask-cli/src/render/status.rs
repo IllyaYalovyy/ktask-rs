@@ -15,6 +15,12 @@ struct LimitWaitJson {
     resumed_at: String,
 }
 
+#[derive(Debug, Serialize)]
+struct LimitWarningJson<'a> {
+    window: &'a str,
+    utilization_percent: u8,
+}
+
 /// One step of a task's attempt as `status --json` shows it.
 #[derive(Debug, Serialize)]
 struct StepJson<'a> {
@@ -26,6 +32,7 @@ struct StepJson<'a> {
     outcome: &'static str,
     reason: Option<String>,
     limit_wait: Option<LimitWaitJson>,
+    limit_warning: Option<LimitWarningJson<'a>>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     cost_usd: Option<String>,
@@ -54,6 +61,7 @@ struct AttemptJson<'a> {
     outcome: &'static str,
     reason: Option<String>,
     limit_wait: Option<LimitWaitJson>,
+    limit_warning: Option<LimitWarningJson<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_activity: Option<OutputActivityJson>,
     input_tokens: Option<u64>,
@@ -102,6 +110,13 @@ fn limit_wait_json(wait: &ktask_core::LimitWait) -> Result<LimitWaitJson, String
     })
 }
 
+fn limit_warning_json(warning: &ktask_core::LimitWarning) -> LimitWarningJson<'_> {
+    LimitWarningJson {
+        window: &warning.window,
+        utilization_percent: warning.utilization_percent,
+    }
+}
+
 /// `line` as a [`StepJson`].
 fn step_json(line: &ktask_core::StepLine) -> Result<StepJson<'_>, String> {
     Ok(StepJson {
@@ -113,6 +128,7 @@ fn step_json(line: &ktask_core::StepLine) -> Result<StepJson<'_>, String> {
         outcome: presentation::outcome(line.outcome),
         reason: presentation::reason_for(line.reason.as_deref(), line.waiting_for),
         limit_wait: line.limit_wait.as_ref().map(limit_wait_json).transpose()?,
+        limit_warning: line.limit_warning.as_ref().map(limit_warning_json),
         input_tokens: line.usage.input_tokens,
         output_tokens: line.usage.output_tokens,
         cost_usd: cost_usd(line.usage.cost_microusd),
@@ -151,6 +167,7 @@ fn attempt_json(line: &ktask_core::AttemptLine) -> Result<AttemptJson<'_>, Strin
         outcome: presentation::outcome(line.outcome),
         reason: presentation::reason_for(line.reason.as_deref(), line.waiting_for),
         limit_wait: line.limit_wait.as_ref().map(limit_wait_json).transpose()?,
+        limit_warning: line.limit_warning.as_ref().map(limit_warning_json),
         output_activity: line.output_activity.as_ref().map(output_activity_json),
         input_tokens: line.usage.input_tokens,
         output_tokens: line.usage.output_tokens,
@@ -258,6 +275,12 @@ fn limit_wait_suffix(wait: Option<&ktask_core::LimitWait>) -> String {
     })
 }
 
+fn limit_warning_suffix(warning: Option<&ktask_core::LimitWarning>) -> String {
+    warning.map_or_else(String::new, |warning| {
+        format!("\t{}", presentation::limit_warning_text(warning))
+    })
+}
+
 /// The optional session as its tab-separated status field.
 fn session_field(session: Option<&str>) -> String {
     let session = presentation::session_suffix(session);
@@ -289,6 +312,7 @@ fn write_step_lines(
         };
         let session = session_field(step.session.as_deref());
         let limit_wait = limit_wait_suffix(step.limit_wait.as_ref());
+        let limit_warning = limit_warning_suffix(step.limit_warning.as_ref());
         let usage = presentation::step_usage_text(step)
             .map(|usage| format!("\t{usage}"))
             .unwrap_or_default();
@@ -303,12 +327,12 @@ fn write_step_lines(
         match presentation::reason(step) {
             Some(reason) => writeln!(
                 out,
-                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}\t{reason}{session}{limit_wait}{usage}{activity}",
+                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}\t{reason}{session}{limit_wait}{limit_warning}{usage}{activity}",
                 presentation::outcome(step.outcome)
             ),
             None => writeln!(
                 out,
-                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{session}{limit_wait}{usage}{activity}",
+                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{session}{limit_wait}{limit_warning}{usage}{activity}",
                 presentation::outcome(step.outcome)
             ),
         }

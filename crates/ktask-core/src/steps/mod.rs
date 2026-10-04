@@ -163,6 +163,8 @@ pub(crate) struct PipelineState<'a> {
     pub(crate) usage: crate::Usage,
     /// Model reported by the provider while the current step ran.
     pub(crate) used_model: Option<String>,
+    /// Non-blocking provider-limit warning emitted while the current step ran.
+    pub(crate) limit_warning: Option<crate::LimitWarning>,
 }
 
 /// One step that already ran and passed before the attempt it belongs to was even begun — the
@@ -305,6 +307,7 @@ fn finish_attempt(
         known_cause: false,
         usage: crate::Usage::default(),
         used_model: None,
+        limit_warning: None,
     };
     let (steps_duration, status, reason) = run_attempt_steps(&deps, context, &mut state, steps)?;
     let duration = pre_duration + steps_duration;
