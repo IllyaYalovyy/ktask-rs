@@ -26,13 +26,19 @@ fn claude() -> ProviderDefinition {
         model: vec!["--model".to_owned(), "{model}".to_owned()],
         resume: vec!["--resume".to_owned(), "{session}".to_owned()],
         denied_tools: vec![
-            "Agent".to_owned(),
+            // Cannot work unattended: creates scheduled work beyond this invocation.
             "CronCreate".to_owned(),
+            // Cannot work unattended: controls scheduled work outside this invocation.
             "CronDelete".to_owned(),
+            // Cannot work unattended: reads schedules that change outside this invocation.
             "CronList".to_owned(),
+            // Cannot work unattended: watches work that outlives this invocation.
             "Monitor".to_owned(),
+            // Cannot work unattended: schedules a wake-up after this invocation ends.
             "ScheduleWakeup".to_owned(),
+            // Cannot work unattended: reads output from work outside this invocation.
             "TaskOutput".to_owned(),
+            // Cannot work unattended: controls work outside this invocation.
             "TaskStop".to_owned(),
         ],
         parser: ProviderParser::ClaudeStreamJson,

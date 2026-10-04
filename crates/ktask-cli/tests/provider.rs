@@ -262,6 +262,59 @@ fn path_with(dir: &Path) -> Result<std::ffi::OsString> {
     )?)
 }
 
+/// Reads the tool catalogue from the `system/init` event a real Claude Code recording emitted.
+fn init_tools(recording: &str) -> Result<Vec<String>> {
+    let init = recording
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .find(|event| event["type"] == "system" && event["subtype"] == "init")
+        .ok_or("recording has no system/init event")?;
+    init["tools"]
+        .as_array()
+        .ok_or("system/init event has no tools array")?
+        .iter()
+        .map(|tool| {
+            tool.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "system/init tool is not a string".into())
+        })
+        .collect()
+}
+
+#[test]
+fn recorded_claude_tool_catalogues_show_that_agent_denying_hides_task() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, repository) = project(&sandbox)?;
+    for (recording, has_task) in [
+        (
+            include_str!("../../../test-fixtures/claude/claude-2.1.283-success-nodeny.jsonl"),
+            true,
+        ),
+        (
+            include_str!("../../../test-fixtures/claude/claude-2.1.283-success-denylist.jsonl"),
+            false,
+        ),
+    ] {
+        let tools = init_tools(recording)?;
+        assert_eq!(
+            tools.iter().any(|tool| tool == "Task"),
+            has_task,
+            "{tools:?}"
+        );
+
+        let claude = recorded_claude(recording, 0)?;
+        let path = path_with(claude.path())?;
+        let outcome =
+            sandbox.run_with(&repository, &["provider", "check", "claude"], |command| {
+                command.env("PATH", &path);
+            })?;
+        assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    }
+    Ok(())
+}
+
 #[test]
 fn provider_check_exits_one_with_install_advice_when_claude_is_not_on_path() -> Result<()> {
     let sandbox = Sandbox::new()?;
@@ -437,7 +490,6 @@ fn provider_list_and_show_print_the_complete_built_in_and_project_definitions() 
     assert_eq!(
         value["denied-tools"],
         serde_json::json!([
-            "Agent",
             "CronCreate",
             "CronDelete",
             "CronList",

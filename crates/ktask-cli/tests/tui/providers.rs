@@ -185,7 +185,7 @@ fn v_shows_the_same_provider_list_and_definition_the_cli_shows_then_returns_to_t
             && text.contains("args: --print --output-format stream-json --verbose")
             && text.contains("model: --model {model} (built-in)")
             && text.contains("resume: --resume {session} (built-in)")
-            && text.contains("denied-tools: Agent")
+            && text.contains("denied-tools: CronCreate")
             && [
                 "CronCreate",
                 "CronDelete",
