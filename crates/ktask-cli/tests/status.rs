@@ -280,7 +280,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
 
@@ -294,7 +294,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
             "#2\tfailed\tb\tusage none",
             "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\tusage none",
         ]
@@ -310,7 +310,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
             "#2\tfailed\tc\tusage none",
             "\tattempt 1: implementation\techo\t0s\ttoo-large\tsplit me\tusage none",
         ]
@@ -326,7 +326,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
             "#2\tblocked\td\tusage none",
             "\tattempt 1: implementation\techo\t0s\tneeds-input\twhich path?\tusage none",
         ]
@@ -352,7 +352,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
     );
     assert_eq!(
         lines[4],
-        "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none"
+        "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed"
     );
     assert_eq!(lines[5], "#2\tfailed-unknown\te\tusage none");
     assert!(

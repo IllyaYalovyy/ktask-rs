@@ -289,7 +289,9 @@ fn write_step_lines(
         };
         let session = session_field(step.session.as_deref());
         let limit_wait = limit_wait_suffix(step.limit_wait.as_ref());
-        let usage = format!("\t{}", presentation::usage_text(step.usage));
+        let usage = presentation::step_usage_text(step)
+            .map(|usage| format!("\t{usage}"))
+            .unwrap_or_default();
         let activity = if index + 1 == steps.len() {
             activity.map_or_else(String::new, |value| {
                 let text = presentation::activity(value);

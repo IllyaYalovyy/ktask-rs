@@ -623,7 +623,7 @@ mod tests {
         let rows = drawn(&queue, 60, 8);
         assert_eq!(
             row(&rows, 4),
-            "      attempt 1: implementation · echo · 12s · running · usa"
+            "      attempt 1: implementation · echo · 12s · running · us…"
         );
     }
 
@@ -640,7 +640,7 @@ mod tests {
         let rows = drawn(&queue, 60, 8);
         assert_eq!(
             row(&rows, 4),
-            "      attempt 1: implementation · echo · 3s · done · usage n"
+            "      attempt 1: implementation · echo · 3s · done · usage …"
         );
     }
 
@@ -732,11 +732,11 @@ mod tests {
         let rows = drawn(&queue, 60, 8);
         assert_eq!(
             row(&rows, 4),
-            "      attempt 1: implementation · echo · 9s · failed · usage"
+            "      attempt 1: implementation · echo · 9s · failed · usag…"
         );
         assert_eq!(
             row(&rows, 5),
-            "      attempt 2: implementation · echo · 5s · running · usag"
+            "      attempt 2: implementation · echo · 5s · running · usa…"
         );
     }
 }

@@ -110,7 +110,7 @@ fn retry_with_a_model_hands_the_next_attempt_the_model_and_the_provider_runs_wit
             "\tattempt 2: implementation\tother\techo\t0s\tdone\tusage none",
             "\tattempt 2: review\techo\t0s\tapproved\tusage none",
             "\tattempt 2: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())

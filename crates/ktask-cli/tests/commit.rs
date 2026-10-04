@@ -201,7 +201,7 @@ fn a_task_that_changes_and_adds_files_gets_one_commit_holding_them_and_the_line_
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
-            &format!("\tattempt 1: commit\t-\t0s\tpassed\tcommitted as {hash}\tusage none"),
+            &format!("\tattempt 1: commit\t-\t0s\tpassed\tcommitted as {hash}"),
         ]
     );
 
@@ -249,7 +249,7 @@ fn a_task_that_changes_nothing_makes_no_commit_the_line_says_so_and_the_task_car
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())

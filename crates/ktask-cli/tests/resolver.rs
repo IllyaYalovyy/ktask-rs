@@ -108,7 +108,7 @@ fn a_retry_decision_starts_a_second_attempt_and_the_resolution_shows_between_the
             "\tattempt 2: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 2: review\techo\t0s\tapproved\tusage none",
             "\tattempt 2: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
@@ -174,7 +174,7 @@ fn a_skip_decision_ends_the_task_skipped_with_the_resolvers_own_reason_and_the_r
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
@@ -293,17 +293,17 @@ fn a_supersede_decision_replaces_the_task_with_the_new_ones_and_the_run_continue
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
             "#3\tdone\tpart two\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
             "#4\tdone\tpart three\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
 

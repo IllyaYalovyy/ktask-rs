@@ -168,8 +168,7 @@ fn a_passing_health_check_is_the_first_line_with_its_time_and_passed_and_the_tas
 
     assert_eq!(lines[0], "#1\trunning\ta\tusage none");
     assert!(
-        lines[1].starts_with("\tattempt 1: health check\t-\t")
-            && lines[1].ends_with("\tpassed\tusage none"),
+        lines[1].starts_with("\tattempt 1: health check\t-\t") && lines[1].ends_with("\tpassed"),
         "{lines:?}"
     );
     assert!(
@@ -263,8 +262,7 @@ fn once_a_later_run_gets_past_the_health_check_the_earlier_stop_is_no_longer_cur
     let lines: Vec<_> = status.stdout.lines().collect();
     assert_eq!(lines[0], "#1\tdone\ta\tusage none");
     assert!(
-        lines[1].starts_with("\tattempt 1: health check\t-\t")
-            && lines[1].ends_with("\tpassed\tusage none"),
+        lines[1].starts_with("\tattempt 1: health check\t-\t") && lines[1].ends_with("\tpassed"),
         "{}",
         lines[1]
     );
@@ -307,7 +305,7 @@ fn no_health_check_command_set_skips_the_step_and_leaves_no_line() -> Result<()>
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())

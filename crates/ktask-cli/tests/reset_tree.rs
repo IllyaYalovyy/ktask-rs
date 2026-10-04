@@ -162,7 +162,7 @@ fn with_reset_tree_the_failed_attempts_changes_are_gone_before_the_next_attempt_
             "\tattempt 2: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 2: review\techo\t0s\tapproved\tusage none",
             "\tattempt 2: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())

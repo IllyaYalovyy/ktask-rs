@@ -1092,7 +1092,7 @@ fn an_approving_review_carries_the_task_on_as_done_and_the_review_line_shows_it(
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
@@ -1249,7 +1249,7 @@ fn an_accepting_tester_carries_the_task_on_as_done_and_the_testing_line_shows_it
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())

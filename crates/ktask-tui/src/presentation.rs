@@ -146,6 +146,13 @@ pub fn usage_text(usage: Usage) -> String {
     format!("tokens in {input} out {output} {cost}")
 }
 
+/// The provider-usage account a step carries. Steps run by ktask itself have no provider, so
+/// they have no provider usage field.
+#[must_use]
+pub fn step_usage_text(step: &StepLine) -> Option<String> {
+    step.provider.as_ref().map(|_| usage_text(step.usage))
+}
+
 /// The common provider-limit account for a completed step.
 #[must_use]
 pub fn limit_wait_text(wait: &LimitWait) -> String {

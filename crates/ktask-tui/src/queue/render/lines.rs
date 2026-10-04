@@ -52,7 +52,10 @@ fn step_line(
         }
         None => text,
     };
-    Line::styled(text, Style::new().add_modifier(Modifier::DIM))
+    Line::styled(
+        elide(&text, width),
+        Style::new().add_modifier(Modifier::DIM),
+    )
 }
 
 /// The non-live part of one queue step line, including its optional failure reason and limit
@@ -88,7 +91,9 @@ fn step_text(step: &StepLine, width: usize, label: &str) -> String {
         }
         None => text,
     };
-    format!("{text} · {}", presentation::usage_text(step.usage))
+    presentation::step_usage_text(step)
+        .map(|usage| format!("{text} · {usage}"))
+        .unwrap_or(text)
 }
 
 /// `lines`, kept to at most `budget`: shown in full when they already fit; otherwise the

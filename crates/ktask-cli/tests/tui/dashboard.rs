@@ -287,7 +287,9 @@ fn a_run_started_elsewhere_shows_pending_then_running_with_elapsed_time_increasi
         lines[7]
     );
     assert!(
-        lines[8].contains("commit · -") && lines[8].ends_with("nothing was changed · usage none"),
+        lines[8].contains("commit · -")
+            && lines[8].ends_with("nothing was changed")
+            && !lines[8].contains("usage"),
         "{}",
         lines[8]
     );
@@ -384,8 +386,7 @@ fn a_task_that_changes_a_file_gets_a_real_commit_and_the_dashboard_shows_its_sho
         lines[7]
     );
     assert!(
-        lines[8].contains("commit · -")
-            && lines[8].ends_with(&format!("committed as {hash} · usage none")),
+        lines[8].contains("commit · -") && lines[8].ends_with(&format!("committed as {hash}")),
         "{} (expected hash {hash})",
         lines[8]
     );
@@ -526,7 +527,9 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
         lines[7]
     );
     assert!(
-        lines[8].contains("commit") && lines[8].ends_with("nothing was changed · usage none"),
+        lines[8].contains("commit")
+            && lines[8].ends_with("nothing was changed")
+            && !lines[8].contains("usage"),
         "{}",
         lines[8]
     );
@@ -864,7 +867,7 @@ fn a_task_that_commits_and_pushes_shows_the_dashboard_its_push_line() -> Result<
     assert!(lines[9].contains("commit · -"), "{}", lines[9]);
     assert!(
         lines[10].contains("push · -")
-            && lines[10].ends_with(&format!("pushed {hash} to origin/main · usage none")),
+            && lines[10].ends_with(&format!("pushed {hash} to origin/main")),
         "{} (expected hash {hash})",
         lines[10]
     );
@@ -909,7 +912,7 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
         |screen| {
             let lines = lines_inside_frame(&screen.contents());
             lines.get(5).is_some_and(|line| {
-                line.contains("health check") && line.ends_with("passed · usage none")
+                line.contains("health check") && line.ends_with("passed") && !line.contains("usage")
             }) && lines
                 .get(6)
                 .is_some_and(|line| line.contains("implementation") && line.contains("running"))
@@ -918,7 +921,9 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">1  #1  running  agent  a");
     assert!(
-        lines[5].contains("health check · -") && lines[5].ends_with("passed · usage none"),
+        lines[5].contains("health check · -")
+            && lines[5].ends_with("passed")
+            && !lines[5].contains("usage"),
         "{}",
         lines[5]
     );
@@ -943,7 +948,9 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
     })?;
     let lines = lines_inside_frame(&screen);
     assert!(
-        lines[5].contains("health check · -") && lines[5].ends_with("passed · usage none"),
+        lines[5].contains("health check · -")
+            && lines[5].ends_with("passed")
+            && !lines[5].contains("usage"),
         "{}",
         lines[5]
     );
@@ -996,7 +1003,9 @@ fn a_failing_health_check_gate_shows_on_the_queue_screen_pending_and_clears_once
     assert!(!screen.contains("exited with code 1"), "{screen}");
     let lines = lines_inside_frame(&screen);
     assert!(
-        lines[5].contains("health check · -") && lines[5].ends_with("passed · usage none"),
+        lines[5].contains("health check · -")
+            && lines[5].ends_with("passed")
+            && !lines[5].contains("usage"),
         "{}",
         lines[5]
     );
@@ -1111,25 +1120,22 @@ fn a_long_failure_reason_on_a_narrow_terminal_is_cut_with_a_trailing_ellipsis() 
     fixture.add_agent_task("a", &reporting_body_with_reason("failed", &long_reason))?;
     fixture.run_the_queue()?;
 
-    let mut terminal = Terminal::launch(&fixture.sandbox, &fixture.repository, &["tui"], 24, 80)?;
-    let screen = terminal.wait_for("a's cut reason", |screen| {
-        let contents = screen.contents();
-        contents.contains("failed: y") && contents.ends_with('┘')
-    })?;
-    let lines = lines_inside_frame(&screen);
-    // The 80-column terminal, minus the frame's one-column border each side, leaves 78 for
-    // the implementation line: comfortable room for its own fixed text, so only the reason
-    // itself needs cutting.
-    assert!(
-        lines[5].contains("implementation · echo") && lines[5].contains("failed: y"),
-        "{}",
-        lines[5]
-    );
-    assert!(lines[5].ends_with('…'), "{}", lines[5]);
-    assert_eq!(lines[5].chars().count(), 78, "{}", lines[5]);
-    assert!(!screen.contains(&long_reason), "{screen}");
+    for cols in [80, 40, 20] {
+        let mut terminal =
+            Terminal::launch(&fixture.sandbox, &fixture.repository, &["tui"], 24, cols)?;
+        let screen = terminal.wait_for("a's cut attempt line", |screen| {
+            lines_inside_frame(&screen.contents())
+                .get(5)
+                .is_some_and(|line| line.ends_with('…'))
+        })?;
+        let lines = lines_inside_frame(&screen);
+        let attempt = &lines[5];
+        assert_eq!(attempt.chars().count(), usize::from(cols - 2), "{attempt}");
+        assert!(attempt.ends_with('…'), "{attempt}");
+        assert!(!screen.contains(&long_reason), "{screen}");
 
-    terminal.send("q")?;
-    assert_eq!(terminal.wait_for_exit()?, 0);
+        terminal.send("q")?;
+        assert_eq!(terminal.wait_for_exit()?, 0);
+    }
     Ok(())
 }

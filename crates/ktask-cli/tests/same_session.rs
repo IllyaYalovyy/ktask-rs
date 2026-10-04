@@ -134,7 +134,7 @@ fn a_resumed_attempt_reads_the_earlier_transcript_and_the_session_stays_the_same
             "\tattempt 2: implementation\techo\t0s\tdone\tsession:carried-over\tusage none",
             "\tattempt 2: review\techo\t0s\tapproved\tusage none",
             "\tattempt 2: testing\techo\t0s\taccepted\tusage none",
-            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed\tusage none",
+            "\tattempt 2: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
     Ok(())
