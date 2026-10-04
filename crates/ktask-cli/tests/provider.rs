@@ -242,14 +242,13 @@ fn project(sandbox: &Sandbox) -> Result<(TempDir, std::path::PathBuf)> {
 }
 
 /// A recorded Claude executable, placed first on the child process's `PATH`.
-fn recorded_claude() -> Result<TempDir> {
+fn recorded_claude(recording: &str, exit_code: u8) -> Result<TempDir> {
     let dir = TempDir::new()?;
     let script = dir.path().join("claude");
     std::fs::write(
         &script,
         format!(
-            "#!/bin/sh\n[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-haiku-4-5 ] || exit 9\nprintf '%s' '{}'\n",
-            include_str!("../../../test-fixtures/claude/success.jsonl")
+            "#!/bin/sh\n[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-haiku-4-5 ] || exit 9\nprintf '%s' '{recording}'\nexit {exit_code}\n"
         ),
     )?;
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
@@ -295,7 +294,10 @@ fn provider_check_exits_one_with_install_advice_when_claude_is_not_on_path() -> 
 fn provider_check_reports_every_claude_check_passed_for_recorded_output() -> Result<()> {
     let sandbox = Sandbox::new()?;
     let (_keep, repository) = project(&sandbox)?;
-    let claude = recorded_claude()?;
+    let claude = recorded_claude(
+        include_str!("../../../test-fixtures/claude/success.jsonl"),
+        0,
+    )?;
     let path = path_with(claude.path())?;
     let outcome = sandbox.run_with(&repository, &["provider", "check", "claude"], |command| {
         command.env("PATH", &path);
@@ -323,6 +325,35 @@ fn provider_check_reports_every_claude_check_passed_for_recorded_output() -> Res
                 {"name": "smallest call", "passed": true, "advice": null},
             ]
         })
+    );
+    Ok(())
+}
+
+#[test]
+fn provider_check_replays_a_claude_failure_as_a_short_result_error_with_a_remedy() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, repository) = project(&sandbox)?;
+    let claude = recorded_claude(
+        include_str!("../../../test-fixtures/claude/authentication-failure.jsonl"),
+        1,
+    )?;
+    let path = path_with(claude.path())?;
+    let outcome = sandbox.run_with(&repository, &["provider", "check", "claude"], |command| {
+        command.env("PATH", &path);
+    })?;
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stderr);
+    let line = outcome
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("smallest call: failed"))
+        .expect("smallest call failure line");
+    assert!(line.contains("Not logged in · Please run /login"), "{line}");
+    assert!(line.contains("fix the provider error"), "{line}");
+    assert!(!line.contains("\"subtype\":\"init\""), "{line}");
+    assert!(
+        line.chars().count() < 200,
+        "{} chars: {line}",
+        line.chars().count()
     );
     Ok(())
 }

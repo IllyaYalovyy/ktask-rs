@@ -69,7 +69,7 @@ impl ProviderProbe for ProcessProviderProbe {
         Ok(ProbeCall {
             succeeded: output.exit == Exit::Code(0),
             authentication_failed: authentication_failure(&text),
-            problem: (output.exit != Exit::Code(0)).then(|| compact_problem(&text, output.exit)),
+            problem: (output.exit != Exit::Code(0)).then(|| probe_problem(definition, &output)),
         })
     }
 }
@@ -101,11 +101,56 @@ fn authentication_failure(text: &str) -> bool {
         .any(|phrase| lower.contains(phrase))
 }
 
-fn compact_problem(text: &str, exit: Exit) -> String {
-    let text = text.trim();
-    if !text.is_empty() {
-        return text.lines().next().unwrap_or_default().to_owned();
+/// Chooses the one concise, operator-facing explanation for a failed probe. Claude's first
+/// stream event is always setup metadata, so only its final result can name the actual error.
+fn probe_problem(definition: &ProviderDefinition, output: &ktask_core::Output) -> String {
+    if definition.parser == ktask_core::ProviderParser::ClaudeStreamJson {
+        if let Some(result) = claude_result_problem(&output.stdout) {
+            return result;
+        }
+        if let Some(stderr) = compact_text(&String::from_utf8_lossy(&output.stderr)) {
+            return stderr;
+        }
+        return exit_problem(output.exit);
     }
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    compact_text(&text).unwrap_or_else(|| exit_problem(output.exit))
+}
+
+/// Reads the human-readable error in Claude's final stream event, never its setup event.
+fn claude_result_problem(stdout: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(stdout).lines().find_map(|line| {
+        let event = serde_json::from_str::<serde_json::Value>(line).ok()?;
+        (event.get("type")?.as_str()? == "result")
+            .then(|| event.get("result")?.as_str())
+            .flatten()
+            .and_then(compact_text)
+    })
+}
+
+/// Keeps readiness advice readable on one line, even when a provider emits a long diagnostic.
+fn compact_text(text: &str) -> Option<String> {
+    const MAX_CHARS: usize = 100;
+
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.is_empty() {
+        return None;
+    }
+    if compact.chars().count() <= MAX_CHARS {
+        return Some(compact);
+    }
+    let shortened = compact
+        .chars()
+        .take(MAX_CHARS.saturating_sub(1))
+        .collect::<String>();
+    Some(format!("{shortened}…"))
+}
+
+fn exit_problem(exit: Exit) -> String {
     match exit {
         Exit::Code(code) => format!("the command exited {code}"),
         Exit::Killed => "the command timed out".to_owned(),
@@ -122,12 +167,22 @@ fn probe_error(error: ProviderRunError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::authentication_failure;
+    use super::{authentication_failure, claude_result_problem};
 
     #[test]
     fn recognizes_recorded_claude_login_errors() {
         assert!(authentication_failure("Invalid API key; please run /login"));
         assert!(authentication_failure("Not logged in"));
         assert!(!authentication_failure("network unavailable"));
+    }
+
+    #[test]
+    fn recorded_claude_failure_uses_its_result_not_its_init_event() {
+        let problem = claude_result_problem(include_bytes!(
+            "../../../test-fixtures/claude/authentication-failure.jsonl"
+        ))
+        .unwrap();
+        assert_eq!(problem, "Not logged in · Please run /login");
+        assert!(!problem.contains("init"));
     }
 }

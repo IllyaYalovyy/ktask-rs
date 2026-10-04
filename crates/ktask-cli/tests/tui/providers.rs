@@ -9,14 +9,13 @@ use std::os::unix::fs::PermissionsExt as _;
 
 use tempfile::TempDir;
 
-fn recorded_claude() -> Result<TempDir> {
+fn recorded_claude(recording: &str, exit_code: u8) -> Result<TempDir> {
     let dir = TempDir::new()?;
     let script = dir.path().join("claude");
     std::fs::write(
         &script,
         format!(
-            "#!/bin/sh\n[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-haiku-4-5 ] || exit 9\nprintf '%s' '{}'\n",
-            include_str!("../../../../test-fixtures/claude/success.jsonl")
+            "#!/bin/sh\n[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-haiku-4-5 ] || exit 9\nprintf '%s' '{recording}'\nexit {exit_code}\n"
         ),
     )?;
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
@@ -67,7 +66,10 @@ fn provider_screen_checks_claude_and_shows_the_cli_results_and_missing_binary_ad
 #[test]
 fn provider_screen_shows_all_recorded_claude_checks_as_passed() -> Result<()> {
     let fixture = Fixture::empty()?;
-    let claude = recorded_claude()?;
+    let claude = recorded_claude(
+        include_str!("../../../../test-fixtures/claude/success.jsonl"),
+        0,
+    )?;
     let mut terminal = Terminal::launch_with_path(
         &fixture.sandbox,
         &fixture.repository,
@@ -86,6 +88,44 @@ fn provider_screen_shows_all_recorded_claude_checks_as_passed() -> Result<()> {
             && text.contains("command: passed")
             && text.contains("login: passed")
             && text.contains("smallest call: passed")
+    })?;
+    terminal.send(ESC)?;
+    terminal.wait_for("the provider list", |screen| {
+        screen.contents().contains("Providers")
+    })?;
+    terminal.send(ESC)?;
+    terminal.wait_for("the queue", |screen| {
+        screen.contents().contains("The queue is empty.")
+    })?;
+    quit(terminal)
+}
+
+#[test]
+fn provider_screen_replays_a_claude_failure_with_its_result_error_and_remedy() -> Result<()> {
+    let fixture = Fixture::empty()?;
+    let claude = recorded_claude(
+        include_str!("../../../../test-fixtures/claude/authentication-failure.jsonl"),
+        1,
+    )?;
+    let mut terminal = Terminal::launch_with_path(
+        &fixture.sandbox,
+        &fixture.repository,
+        &["tui"],
+        ROWS,
+        super::COLS,
+        path_with(claude.path())?,
+    )?;
+    terminal.wait_for("the queue", |screen| {
+        screen.contents().contains("The queue is empty.")
+    })?;
+    terminal.send("v\rc")?;
+    terminal.wait_for("the failed Claude readiness check", |screen| {
+        let text = screen.contents();
+        text.contains("smallest call: failed")
+            && text.contains("Not logged in · Please run")
+            && text.contains("/login), then check again")
+            && text.contains("fix the provider error")
+            && !text.contains("\"subtype\":\"init\"")
     })?;
     terminal.send(ESC)?;
     terminal.wait_for("the provider list", |screen| {
