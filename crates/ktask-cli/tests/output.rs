@@ -5,6 +5,7 @@ mod repo;
 mod support;
 
 use std::io::Read;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -65,6 +66,45 @@ impl Fixture {
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         Ok(command.spawn()?)
     }
+    fn run_with_path(&self, args: &[&str], path: &std::path::Path) -> Result<support::Outcome> {
+        let path = path_with(path)?;
+        self.sandbox.run_with(&self.repository, args, |command| {
+            command.env("PATH", path);
+        })
+    }
+}
+
+fn select_claude(fixture: &Fixture) -> Result<()> {
+    for (name, value) in [
+        ("resolver-provider", "claude"),
+        ("resolver-model", "claude-sonnet-5"),
+        ("step-review", "off"),
+        ("step-testing", "off"),
+    ] {
+        let outcome = fixture.run(&["settings", "set", name, value])?;
+        assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    }
+    Ok(())
+}
+
+/// The fixed stream is a recording: tests replay it through the real Claude provider command,
+/// rather than manufacturing an attempt log behind the binary's back.
+fn recorded_claude() -> Result<tempfile::TempDir> {
+    let dir = tempfile::TempDir::new()?;
+    let path = dir.path().join("claude");
+    std::fs::write(
+        &path,
+        "#!/bin/sh\nprompt=$(cat)\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"recorded\"}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"I will inspect src/lib.rs.\"},{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"sed -n 1,20p src/lib.rs\"}}]}}' '{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"pub fn answer() {}\"}]}}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"thinking\",\"thinking\":\"c2VjcmV0\"}]}}' '{\"type\":\"result\",\"result\":\"Finished the task.\",\"session_id\":\"recorded\",\"usage\":{\"input_tokens\":12,\"output_tokens\":34,\"cost_usd\":0.056789,\"model\":\"claude-sonnet-5\"}}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
+    )?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+    Ok(dir)
+}
+
+fn path_with(directory: &std::path::Path) -> Result<std::ffi::OsString> {
+    let old = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![directory.to_path_buf()];
+    paths.extend(std::env::split_paths(&old));
+    Ok(std::env::join_paths(paths)?)
 }
 
 #[test]
@@ -123,5 +163,34 @@ fn output_follows_live_bytes_and_retains_safe_whole_attempts() -> Result<()> {
     let latest = fixture.run(&["output", "1"])?;
     assert!(first.stdout.contains("live line attempt 1"));
     assert!(latest.stdout.contains("live line attempt 2"));
+    Ok(())
+}
+
+#[test]
+fn output_renders_a_recorded_claude_stream_and_raw_keeps_the_wire_format() -> Result<()> {
+    let fixture = Fixture::new()?;
+    select_claude(&fixture)?;
+    fixture.add("replay the recorded Claude stream")?;
+    let claude = recorded_claude()?;
+    let run = fixture.run_with_path(&["run"], claude.path())?;
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+
+    let shown = fixture.run(&["output", "1"])?;
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    assert_eq!(
+        shown.stdout,
+        "assistant: I will inspect src/lib.rs.\ntool Bash: sed -n 1,20p src/lib.rs\ntool result: pub fn answer() {}\nresult: Finished the task."
+    );
+    assert!(!shown.stdout.contains("{\"type\""), "{}", shown.stdout);
+    assert!(!shown.stdout.contains("c2VjcmV0"), "{}", shown.stdout);
+
+    let raw = fixture.run(&["output", "1", "--raw"])?;
+    assert_eq!(raw.code, Some(0), "{}", raw.stderr);
+    assert!(
+        raw.stdout.contains("{\"type\":\"assistant\""),
+        "{}",
+        raw.stdout
+    );
+    assert!(raw.stdout.contains("c2VjcmV0"), "{}", raw.stdout);
     Ok(())
 }

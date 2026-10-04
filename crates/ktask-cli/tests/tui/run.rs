@@ -6,6 +6,7 @@
 //! above the task list too, which stays visible and keeps the selection under either, and
 //! quitting the screen does not stop a run it started.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
@@ -97,6 +98,17 @@ impl Fixture {
         Ok(())
     }
 
+    fn run_with_path(&self, path: &Path) -> Result<()> {
+        let path = path_with(path)?;
+        let outcome = self
+            .sandbox
+            .run_with(&self.repository, &["run"], |command| {
+                command.env("PATH", path);
+            })?;
+        assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+        Ok(())
+    }
+
     /// Spawns `ktask-rs run` outside the TUI and returns at once, so the caller can hold its
     /// lock while watching the TUI through a run it did not start.
     fn spawn_run_outside_the_tui(&self) -> Result<Child> {
@@ -116,6 +128,40 @@ impl Fixture {
         })?;
         Ok(terminal)
     }
+}
+
+fn select_claude(fixture: &Fixture) -> Result<()> {
+    for (name, value) in [
+        ("resolver-provider", "claude"),
+        ("resolver-model", "claude-sonnet-5"),
+        ("step-review", "off"),
+        ("step-testing", "off"),
+    ] {
+        let outcome = fixture
+            .sandbox
+            .run(&fixture.repository, &["settings", "set", name, value])?;
+        assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    }
+    Ok(())
+}
+
+/// A fixed stream captured in the shape Claude Code writes for the output-format we invoke.
+fn recorded_claude() -> Result<tempfile::TempDir> {
+    let dir = tempfile::TempDir::new()?;
+    let path = dir.path().join("claude");
+    std::fs::write(
+        &path,
+        "#!/bin/sh\nprompt=$(cat)\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"recorded\"}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"I will inspect src/lib.rs.\"},{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"sed -n 1,20p src/lib.rs\"}}]}}' '{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"pub fn answer() {}\"}]}}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"thinking\",\"thinking\":\"c2VjcmV0\"}]}}' '{\"type\":\"result\",\"result\":\"Finished the task.\",\"session_id\":\"recorded\",\"usage\":{\"input_tokens\":12,\"output_tokens\":34,\"cost_usd\":0.056789,\"model\":\"claude-sonnet-5\"}}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
+    )?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+    Ok(dir)
+}
+
+fn path_with(directory: &Path) -> Result<std::ffi::OsString> {
+    let old = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![directory.to_path_buf()];
+    paths.extend(std::env::split_paths(&old));
+    Ok(std::env::join_paths(paths)?)
 }
 
 /// The row at `index`, counting from the top of where the last run's results are shown, one
@@ -493,6 +539,44 @@ fn l_opens_live_safe_output_from_an_outside_run_and_esc_leaves_that_run_alone() 
     })?;
     std::fs::write(&go, "go\n")?;
     assert!(outside.wait()?.success());
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
+fn l_replays_the_same_readable_claude_entries_as_output() -> Result<()> {
+    let fixture = Fixture::new()?;
+    select_claude(&fixture)?;
+    fixture.add_agent_task("recorded", "replay the recorded Claude stream")?;
+    let claude = recorded_claude()?;
+    fixture.run_with_path(claude.path())?;
+    let output = fixture.sandbox.run(&fixture.repository, &["output", "1"])?;
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+
+    let mut terminal = fixture.open()?;
+    terminal.send("l")?;
+    let screen = terminal.wait_for("the readable Claude output", |screen| {
+        output
+            .stdout
+            .lines()
+            .all(|entry| screen.contents().contains(entry))
+    })?;
+    let positions = output
+        .stdout
+        .lines()
+        .map(|entry| screen.find(entry).expect("entry visible on screen"))
+        .collect::<Vec<_>>();
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{screen}"
+    );
+    assert!(!screen.contains("{\"type\""), "{screen}");
+    assert!(!screen.contains("c2VjcmV0"), "{screen}");
+    terminal.send("\x1b")?;
+    terminal.wait_for("the queue after closing output", |screen| {
+        screen.contents().contains("recorded")
+    })?;
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())

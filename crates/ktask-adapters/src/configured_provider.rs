@@ -89,35 +89,11 @@ fn parse_output(parser: ProviderParser, output: Output) -> Output {
     }
 }
 
-fn parse_claude_stream(mut output: Output) -> Output {
-    let raw = output.stdout.clone();
-    let mut text = String::new();
-    for line in String::from_utf8_lossy(&raw).lines() {
-        let rendered = serde_json::from_str::<serde_json::Value>(line)
-            .ok()
-            .map_or_else(|| line.to_owned(), |event| claude_event_text(&event));
-        text.push_str(&rendered);
-        if !rendered.ends_with('\n') {
-            text.push('\n');
-        }
-    }
-    output.stdout = text.into_bytes();
+/// Leaves Claude's structured bytes available to the runner's usage, session and limit
+/// readers. Operator-facing rendering happens from the separately retained raw stream, shared
+/// by `output` and the terminal interface.
+fn parse_claude_stream(output: Output) -> Output {
     output
-}
-
-/// Keeps text from known event shapes, and the full JSON of any shape without text. This makes
-/// new Claude event types visible rather than turning a harmless addition into a failed task.
-fn claude_event_text(event: &serde_json::Value) -> String {
-    let mut text = Vec::new();
-    collect_text(event, &mut text);
-    let text = text.join("");
-    if (event.get("session_id").is_some() || event.get("usage").is_some()) && !text.is_empty() {
-        format!("{text}\n{event}")
-    } else if text.is_empty() {
-        event.to_string()
-    } else {
-        text
-    }
 }
 
 /// Reads the configured JSON usage object from a streamed provider result. A provider that has
@@ -207,29 +183,6 @@ fn decimal_microusd(value: &str) -> Option<u64> {
     whole.checked_add(fraction)?.checked_add(u64::from(rounded))
 }
 
-fn collect_text(value: &serde_json::Value, found: &mut Vec<String>) {
-    match value {
-        serde_json::Value::Object(fields) => {
-            for key in ["text", "result"] {
-                if let Some(serde_json::Value::String(text)) = fields.get(key) {
-                    found.push(text.clone());
-                }
-            }
-            for (key, child) in fields {
-                if key != "text" && key != "result" {
-                    collect_text(child, found);
-                }
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for child in values {
-                collect_text(child, found);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn read_session(definition: &ProviderDefinition, output: &Output) -> Option<String> {
     (definition.parser == ProviderParser::ClaudeStreamJson).then(|| {
         String::from_utf8_lossy(&output.stdout)
@@ -253,7 +206,7 @@ mod tests {
     use ktask_core::Exit;
 
     #[test]
-    fn claude_events_keep_known_text_and_unknown_events() {
+    fn claude_events_remain_available_to_usage_and_session_readers() {
         let output = parse_claude_stream(Output {
             stdout: br#"{"type":"system","subtype":"init","session_id":"s"}
 {"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}

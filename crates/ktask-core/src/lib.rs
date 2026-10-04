@@ -41,7 +41,10 @@ pub use journal::{
     LimitWait, RecordReportError, RetryError, Step,
 };
 pub use lock::{RunLock, RunLockError};
-pub use output::{AttemptOutput, NoAttemptOutput, OutputError, sanitize_output, select_attempt};
+pub use output::{
+    AttemptOutput, NoAttemptOutput, OutputError, attempt_provider, render_provider_output,
+    sanitize_output, select_attempt,
+};
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
 pub use provider::{
     CommandBuilder, LimitDetector, LimitSignal, OutputParser, Provider, ProviderCommand,

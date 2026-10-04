@@ -6,6 +6,8 @@ use std::time::SystemTime;
 
 use crate::{StatusEntry, TaskId};
 
+mod claude;
+
 /// Port: when an attempt's append-only provider output was last written.
 ///
 /// An absent value means the provider has not written anything yet, or its retained output is
@@ -73,6 +75,29 @@ pub fn select_attempt(
     }
 }
 
+/// The last agent provider that wrote retained output for an attempt. A completed command step
+/// may be current after it, so its provider alone is not enough to identify the stream format.
+#[must_use]
+pub fn attempt_provider(entries: &[StatusEntry], task: TaskId, number: u32) -> Option<&str> {
+    let attempt = entries
+        .iter()
+        .find(|entry| entry.task == task)
+        .and_then(|entry| {
+            if entry.attempt.number == number {
+                Some(&entry.attempt)
+            } else {
+                entry.history.iter().find(|older| older.number == number)
+            }
+        })?;
+    attempt.provider.as_deref().or_else(|| {
+        attempt
+            .steps
+            .iter()
+            .rev()
+            .find_map(|step| step.provider.as_deref())
+    })
+}
+
 /// Makes output safe to draw: control bytes are visible, carriage returns become newlines,
 /// invalid UTF-8 is replaced, and a hostile line is wrapped before it dominates a frame.
 #[must_use]
@@ -106,13 +131,25 @@ pub fn sanitize_output(bytes: &[u8]) -> String {
     rendered
 }
 
+/// Renders retained provider bytes into the words an operator reads. Plain providers retain
+/// their own text; structured Claude streams become one short line per visible event.
+#[must_use]
+pub fn render_provider_output(parser: crate::ProviderParser, bytes: &[u8]) -> String {
+    match parser {
+        crate::ProviderParser::Plain => String::from_utf8_lossy(bytes).into_owned(),
+        crate::ProviderParser::ClaudeStreamJson => claude::render(bytes),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use crate::{AttemptLine, AttemptOutcome, StatusEntry, TaskStatus};
 
-    use super::{OutputError, sanitize_output, select_attempt};
+    use super::{
+        OutputError, attempt_provider, render_provider_output, sanitize_output, select_attempt,
+    };
 
     #[test]
     fn controls_invalid_utf8_and_long_lines_are_safe_and_bounded() {
@@ -156,6 +193,44 @@ mod tests {
         assert_eq!(
             select_attempt(&entries, crate::TaskId(8), Some(4)),
             Err(OutputError::UnknownAttempt(crate::TaskId(8), 4))
+        );
+    }
+
+    #[test]
+    fn plain_provider_output_is_left_as_the_provider_wrote_it() {
+        assert_eq!(
+            render_provider_output(crate::ProviderParser::Plain, b"echoed\ntext"),
+            "echoed\ntext"
+        );
+    }
+
+    #[test]
+    fn output_parser_uses_the_last_agent_step_after_a_command_step_finishes() {
+        let mut finished = attempt(1);
+        finished.steps = vec![crate::StepLine {
+            step: "implementation".to_owned(),
+            provider: Some("claude".to_owned()),
+            model: None,
+            session: None,
+            time_spent: Duration::ZERO,
+            outcome: AttemptOutcome::Passed,
+            reason: None,
+            waiting_for: None,
+            limit_wait: None,
+            usage: crate::Usage::default(),
+        }];
+        finished.provider = None;
+        let entries = vec![StatusEntry {
+            task: crate::TaskId(8),
+            title: String::new(),
+            status: TaskStatus::Done,
+            attempt: finished,
+            history: vec![],
+            done_by_user: None,
+        }];
+        assert_eq!(
+            attempt_provider(&entries, crate::TaskId(8), 1),
+            Some("claude")
         );
     }
 }
