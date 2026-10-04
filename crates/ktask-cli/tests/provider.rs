@@ -269,10 +269,13 @@ fn init_tools(recording: &str) -> Result<Vec<String>> {
         .map(serde_json::from_str::<serde_json::Value>)
         .collect::<std::result::Result<Vec<_>, _>>()?
         .into_iter()
-        .find(|event| event["type"] == "system" && event["subtype"] == "init")
+        .find(|event| {
+            event.get("type").and_then(serde_json::Value::as_str) == Some("system")
+                && event.get("subtype").and_then(serde_json::Value::as_str) == Some("init")
+        })
         .ok_or("recording has no system/init event")?;
-    init["tools"]
-        .as_array()
+    init.get("tools")
+        .and_then(serde_json::Value::as_array)
         .ok_or("system/init event has no tools array")?
         .iter()
         .map(|tool| {
