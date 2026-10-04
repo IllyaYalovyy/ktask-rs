@@ -1,9 +1,9 @@
-//! Claude's recorded limit is visible while waiting and after it resumes in the real TUI.
+//! Claude's recorded limit resumes the same attempt before the real TUI sees it complete.
 
 use std::fmt::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 
 use super::pty::{Terminal, lines_inside_frame};
 use super::repo::{git_repository, scratch};
@@ -34,7 +34,7 @@ impl Fixture {
         for (name, value) in [
             ("max-attempts", "1"),
             ("resolver-provider", "claude"),
-            ("resolver-model", "claude-sonnet-5"),
+            ("resolver-model", "claude-haiku-4-5-20251001"),
             ("step-review", "off"),
             ("step-testing", "off"),
         ] {
@@ -60,8 +60,10 @@ impl Fixture {
         std::fs::write(
             &executable,
             format!(
-                "#!/bin/sh\ncalls={calls}\nn=$(cat \"$calls\" 2>/dev/null || echo 0)\nprintf '%s' $((n + 1)) > \"$calls\"\nprompt=$(cat)\nif [ \"$n\" = 0 ]; then\n  printf '{{\"type\":\"result\",\"result\":\"Claude AI usage limit reached|%s\"}}\\n' \"$(( $(date -u +%s) + 2 ))\"\n  exit 1\nfi\nprintf '%s\\n' '{{\"type\":\"result\",\"result\":\"finished\"}}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
-                calls = calls.display()
+                "#!/bin/sh\ncalls={calls}\nn=$(cat \"$calls\" 2>/dev/null || echo 0)\nprintf '%s' $((n + 1)) > \"$calls\"\nprompt=$(cat)\nif [ \"$n\" = 0 ]; then\n  printf '%s' '{limit}' | sed \"s/1791154800/$(( $(date -u +%s) + 12 ))/\"\n  exit 1\nfi\nprintf '%s' '{success}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
+                calls = calls.display(),
+                limit = include_str!("../../../../test-fixtures/claude/usage-limit.jsonl"),
+                success = include_str!("../../../../test-fixtures/claude/success.jsonl")
             ),
         )?;
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))?;
@@ -85,30 +87,37 @@ impl Fixture {
             _claude: claude,
         })
     }
+
+    fn spawn_run(&self) -> Result<Child> {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ktask-rs"));
+        command
+            .arg("run")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        Ok(self
+            .sandbox
+            .isolate(&mut command, &self.repository)
+            .spawn()?)
+    }
 }
 
 #[test]
-fn the_queue_screen_shows_a_recorded_claude_limit_then_the_same_attempt_done() -> Result<()> {
+fn the_queue_screen_shows_the_same_attempt_done_after_the_recorded_claude_limit() -> Result<()> {
     let fixture = Fixture::new()?;
+    let mut run = fixture.spawn_run()?;
     let mut terminal =
         Terminal::launch(&fixture.sandbox, &fixture.repository, &["tui"], ROWS, COLS)?;
     terminal.wait_for("the queue", |screen| {
         screen.contents().contains("Claude task")
     })?;
-    terminal.send("r")?;
-    let waiting = terminal.wait_for("the Claude limit countdown", |screen| {
-        lines_inside_frame(&screen.contents())
-            .iter()
-            .any(|line| line.contains("waiting") && line.contains("usage limit"))
-    })?;
-    assert!(waiting.contains("attempt 1: implementation"), "{waiting}");
     let done = terminal.wait_for("the completed task", |screen| {
         lines_inside_frame(&screen.contents())
             .get(4)
             .is_some_and(|line| line.starts_with(">1  #1  done"))
     })?;
-    assert!(done.contains("hit the usage limit: waited"), "{done}");
+    assert!(done.contains("claude-haiku-4-5-20251001"), "{done}");
     assert!(!done.contains("attempt 2"), "{done}");
+    assert!(run.wait()?.success());
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())

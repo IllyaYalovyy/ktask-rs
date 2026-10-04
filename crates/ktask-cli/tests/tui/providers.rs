@@ -14,7 +14,10 @@ fn recorded_claude() -> Result<TempDir> {
     let script = dir.path().join("claude");
     std::fs::write(
         &script,
-        "#!/bin/sh\n[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-haiku-4-5 ] || exit 9\nprintf '%s\\n' '{\"type\":\"result\",\"result\":\"READY\"}'\n",
+        format!(
+            "#!/bin/sh\n[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-haiku-4-5 ] || exit 9\nprintf '%s' '{}'\n",
+            include_str!("../../../../test-fixtures/claude/success.jsonl")
+        ),
     )?;
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
     Ok(dir)

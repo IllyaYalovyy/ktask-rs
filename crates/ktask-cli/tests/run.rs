@@ -1400,10 +1400,20 @@ fn select_claude(fixture: &Fixture) -> Result<()> {
 fn recorded_claude_stream_json_runs_the_task_with_its_model() -> Result<()> {
     let fixture = Fixture::new()?;
     select_claude(&fixture)?;
+    fixture.run(&[
+        "settings",
+        "set",
+        "resolver-model",
+        "claude-haiku-4-5-20251001",
+    ])?;
     fixture.add_agent_task("a", "do the recorded work")?;
-    let claude = claude_script(
-        "[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-sonnet-5 ] && [ \"$9\" = --disallowedTools ] || exit 9\nfor tool in Agent CronCreate CronDelete CronList Monitor ScheduleWakeup TaskOutput TaskStop; do case \",${10},\" in *\",$tool,\"*) ;; *) exit 9 ;; esac; done\nprompt=$(cat)\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"recorded-session\"}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"working\"}]}}' '{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\" now\"}}' '{\"type\":\"result\",\"result\":\"finished\",\"session_id\":\"recorded-session\",\"usage\":{\"input_tokens\":12,\"output_tokens\":34,\"cost_usd\":0.056789,\"model\":\"claude-sonnet-5\"}}' '{\"type\":\"future-event\",\"value\":7}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
-    )?;
+    let script = [
+        "[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-haiku-4-5-20251001 ] && [ \"$9\" = --disallowedTools ] || exit 9\nfor tool in Agent CronCreate CronDelete CronList Monitor ScheduleWakeup TaskOutput TaskStop; do case \",${10},\" in *\",$tool,\"*) ;; *) exit 9 ;; esac; done",
+        &format!("printf '%s' '{}'", include_str!("../../../test-fixtures/claude/success.jsonl")),
+        "prompt=$(cat)\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
+    ]
+    .join("\n");
+    let claude = claude_script(&script)?;
     let outcome = fixture
         .sandbox
         .run_with(&fixture.repository, &["run"], |command| {
@@ -1414,23 +1424,23 @@ fn recorded_claude_stream_json_runs_the_task_with_its_model() -> Result<()> {
     assert_eq!(fixture.attempt_running_provider(1, 1)?, "claude");
     let status = fixture.run(&["status"])?;
     assert!(
-        status.stdout.contains("claude-sonnet-5\tclaude"),
+        status.stdout.contains("claude-haiku-4-5-20251001\tclaude"),
         "{}",
         status.stdout
     );
     assert!(
-        status.stdout.contains("tokens in 12 out 34 cost $0.056789"),
+        status.stdout.contains("tokens in 10 out 56 cost $0.011002"),
         "{}",
         status.stdout
     );
     let status_json: serde_json::Value =
         serde_json::from_str(&fixture.run(&["status", "--json"])?.stdout)?;
-    assert_eq!(status_json[0]["attempt"]["input_tokens"], 12);
-    assert_eq!(status_json[0]["attempt"]["output_tokens"], 34);
-    assert_eq!(status_json[0]["attempt"]["cost_usd"], "0.056789");
+    assert_eq!(status_json[0]["attempt"]["input_tokens"], 10);
+    assert_eq!(status_json[0]["attempt"]["output_tokens"], 56);
+    assert_eq!(status_json[0]["attempt"]["cost_usd"], "0.011002");
     assert_eq!(
         status_json[0]["attempt"]["steps"][0]["model"],
-        "claude-sonnet-5"
+        "claude-haiku-4-5-20251001"
     );
     Ok(())
 }

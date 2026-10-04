@@ -5,6 +5,7 @@
 //! code stays inside one module of this crate. See docs/ARCHITECTURE.md.
 
 mod attempt_output;
+mod claude_stream;
 mod clock;
 mod configured_provider;
 pub mod echo;

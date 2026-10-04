@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use crate::claude_stream;
 use ktask_core::{
     LimitSignal, Output, Provider, ProviderCommand, ProviderDefinition, ProviderParser,
     ProviderUsage, StepCall, Usage,
@@ -32,6 +33,16 @@ pub fn configured_provider(name: &str, definition: &ProviderDefinition) -> Provi
 /// name their reset time with a `reset` capture containing Unix seconds; a matching message
 /// without that capture is still a limit and uses the runner's ordinary back-off.
 fn detect_limit(definition: &ProviderDefinition, output: &Output) -> Option<LimitSignal> {
+    if definition.parser == ProviderParser::ClaudeStreamJson
+        && let Some(signal) = claude_stream::limit(output)
+    {
+        return Some(signal);
+    }
+    text_limit(definition, output)
+}
+
+/// Falls back to the configured plain-text form for CLIs that do not carry a structured limit.
+fn text_limit(definition: &ProviderDefinition, output: &Output) -> Option<LimitSignal> {
     let pattern = definition.limit_message.as_deref()?;
     let expression = Regex::new(pattern).ok()?;
     let text = format!(
@@ -99,14 +110,23 @@ fn parse_claude_stream(output: Output) -> Output {
 /// Reads the configured JSON usage object from a streamed provider result. A provider that has
 /// no configured usage path, such as `echo`, deliberately reports no figures.
 fn read_usage(definition: &ProviderDefinition, output: &Output) -> ProviderUsage {
+    if definition.parser == ProviderParser::ClaudeStreamJson {
+        return claude_stream::usage(output);
+    }
     let Some(path) = definition.usage.as_deref() else {
         return ProviderUsage::default();
     };
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+    events(output)
+        .into_iter()
         .find_map(|event| usage_in_event(&event, path))
         .unwrap_or_default()
+}
+
+fn events(output: &Output) -> Vec<serde_json::Value> {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
 }
 
 fn usage_in_event(event: &serde_json::Value, path: &str) -> Option<ProviderUsage> {
@@ -161,7 +181,7 @@ fn cost(value: &serde_json::Value) -> Option<u64> {
 /// Parses a non-negative decimal USD value into millionths exactly, rounding only beyond the
 /// sixth decimal place. Provider costs are money, so a binary float would make persistence
 /// depend on an implementation detail of the parser.
-fn decimal_microusd(value: &str) -> Option<u64> {
+pub(crate) fn decimal_microusd(value: &str) -> Option<u64> {
     let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
     if whole.is_empty()
         || !whole.bytes().all(|byte| byte.is_ascii_digit())
@@ -208,24 +228,20 @@ mod tests {
     #[test]
     fn claude_events_remain_available_to_usage_and_session_readers() {
         let output = parse_claude_stream(Output {
-            stdout: br#"{"type":"system","subtype":"init","session_id":"s"}
-{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}
-{"type":"content_block_delta","delta":{"type":"text_delta","text":" now"}}
-{"type":"result","result":"finished","session_id":"s","usage":{"input_tokens":1}}
-{"type":"future","value":7}
-"#
-            .to_vec(),
+            stdout: include_str!("../../../test-fixtures/claude/success.jsonl")
+                .as_bytes()
+                .to_vec(),
             stderr: vec![],
             exit: Exit::Code(0),
         });
         let text = String::from_utf8(output.stdout).unwrap();
-        for expected in ["working", " now", "finished", "\"type\":\"future\""] {
+        for expected in ["KTASK_RECORDING_SUCCESS", "\"total_cost_usd\":0.0110019"] {
             assert!(text.contains(expected), "{text}");
         }
     }
 
     #[test]
-    fn a_configured_usage_event_reports_tokens_cost_and_the_model_used() {
+    fn recorded_claude_success_reports_result_cost_and_assistant_model() {
         let definition = ProviderDefinition {
             command: "agent".to_owned(),
             args: vec![],
@@ -235,11 +251,13 @@ mod tests {
             denied_tools: vec![],
             parser: ProviderParser::ClaudeStreamJson,
             session_id: None,
-            usage: Some("result.usage".to_owned()),
+            usage: Some("usage".to_owned()),
             limit_message: None,
         };
         let output = parse_claude_stream(Output {
-            stdout: br#"{"type":"result","result":{"usage":{"input_tokens":12,"output_tokens":34,"cost_usd":0.056789,"model":"asked"}}}"#.to_vec(),
+            stdout: include_str!("../../../test-fixtures/claude/success.jsonl")
+                .as_bytes()
+                .to_vec(),
             stderr: vec![],
             exit: Exit::Code(0),
         });
@@ -247,17 +265,17 @@ mod tests {
             read_usage(&definition, &output),
             ProviderUsage {
                 usage: Usage {
-                    input_tokens: Some(12),
-                    output_tokens: Some(34),
-                    cost_microusd: Some(56_789),
+                    input_tokens: Some(10),
+                    output_tokens: Some(56),
+                    cost_microusd: Some(11_002),
                 },
-                model: Some("asked".to_owned()),
+                model: Some("claude-haiku-4-5-20251001".to_owned()),
             }
         );
     }
 
     #[test]
-    fn a_configured_limit_pattern_reads_the_reset_capture() {
+    fn recorded_claude_usage_warning_stops_at_ninety_percent() {
         let definition = ProviderDefinition {
             command: "agent".to_owned(),
             args: vec![],
@@ -265,7 +283,36 @@ mod tests {
             model: vec![],
             resume: vec![],
             denied_tools: vec![],
-            parser: ProviderParser::Plain,
+            parser: ProviderParser::ClaudeStreamJson,
+            session_id: None,
+            usage: None,
+            limit_message: Some(r"limit\|(?<reset>[0-9]+)".to_owned()),
+        };
+        let output = Output {
+            stdout: include_str!("../../../test-fixtures/claude/usage-limit.jsonl")
+                .as_bytes()
+                .to_vec(),
+            stderr: vec![],
+            exit: Exit::Code(1),
+        };
+        assert_eq!(
+            detect_limit(&definition, &output),
+            Some(LimitSignal {
+                reset_at: Some(SystemTime::UNIX_EPOCH + Duration::from_hours(497_543)),
+            })
+        );
+    }
+
+    #[test]
+    fn plain_text_limit_remains_a_fallback() {
+        let definition = ProviderDefinition {
+            command: "agent".to_owned(),
+            args: vec![],
+            prompt: vec![],
+            model: vec![],
+            resume: vec![],
+            denied_tools: vec![],
+            parser: ProviderParser::ClaudeStreamJson,
             session_id: None,
             usage: None,
             limit_message: Some(r"limit\|(?<reset>[0-9]+)".to_owned()),

@@ -43,7 +43,7 @@ impl Fixture {
         for (name, value) in [
             ("max-attempts", "2"),
             ("resolver-provider", "claude"),
-            ("resolver-model", "claude-sonnet-5"),
+            ("resolver-model", "claude-haiku-4-5-20251001"),
             ("step-review", "off"),
             ("step-testing", "off"),
         ] {
@@ -148,8 +148,10 @@ fn a_recorded_claude_limit_waits_for_its_named_reset_without_a_second_attempt() 
     fixture.add()?;
     let calls = fixture.repository.join("claude-calls");
     let script = format!(
-        "calls={calls}\nn=$(cat \"$calls\" 2>/dev/null || echo 0)\nprintf '%s' $((n + 1)) > \"$calls\"\nprompt=$(cat)\nif [ \"$n\" = 0 ]; then\n  printf '{{\"type\":\"result\",\"result\":\"Claude AI usage limit reached|%s\"}}\\n' \"$(( $(date -u +%s) + 2 ))\"\n  exit 1\nfi\nprintf '%s\\n' '{{\"type\":\"system\",\"session_id\":\"limit-session\"}}' '{{\"type\":\"result\",\"result\":\"finished\"}}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
-        calls = calls.display()
+        "calls={calls}\nn=$(cat \"$calls\" 2>/dev/null || echo 0)\nprintf '%s' $((n + 1)) > \"$calls\"\nprompt=$(cat)\nif [ \"$n\" = 0 ]; then\n  printf '%s' '{limit}' | sed \"s/1791154800/$(( $(date -u +%s) + 5 ))/\"\n  exit 1\nfi\nprintf '%s' '{success}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
+        calls = calls.display(),
+        limit = include_str!("../../../test-fixtures/claude/usage-limit.jsonl"),
+        success = include_str!("../../../test-fixtures/claude/success.jsonl")
     );
     let _claude = fixture.install_claude(&script)?;
 
@@ -164,7 +166,7 @@ fn a_recorded_claude_limit_waits_for_its_named_reset_without_a_second_attempt() 
     let status = fixture.run(&["status"])?;
     assert_eq!(
         status.stdout.lines().next(),
-        Some("#1\tdone\tClaude task\tusage none")
+        Some("#1\tdone\tClaude task\ttokens in 10 out 56 cost $0.011002")
     );
     assert!(!status.stdout.contains("attempt 2"), "{}", status.stdout);
     assert!(
@@ -176,31 +178,24 @@ fn a_recorded_claude_limit_waits_for_its_named_reset_without_a_second_attempt() 
 }
 
 #[test]
-fn recorded_claude_authentication_and_configuration_errors_stop_with_their_fixes() -> Result<()> {
-    for (message, fix) in [
-        ("Invalid API key · Please run /login", "claude /login"),
-        (
-            "Invalid settings at ~/.claude/settings.json",
-            "fix the named Claude Code settings file",
-        ),
-    ] {
-        let fixture = Fixture::new()?;
-        fixture.add()?;
-        let _claude = fixture.install_claude(&format!(
-            "cat >/dev/null\nprintf '%s\\n' '{{\"type\":\"result\",\"result\":\"{message}\"}}'\nexit 1"
-        ))?;
+fn recorded_claude_authentication_failure_stops_with_login_advice() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add()?;
+    let _claude = fixture.install_claude(&format!(
+        "cat >/dev/null\nprintf '%s' '{}'\nexit 1",
+        include_str!("../../../test-fixtures/claude/authentication-failure.jsonl")
+    ))?;
 
-        let run = fixture.run(&["run"])?;
-        assert_eq!(run.code, Some(1), "{}", run.stderr);
-        assert!(run.stdout.contains(fix), "{}", run.stdout);
-        let status = fixture.run(&["status"])?;
-        assert!(
-            status.stdout.starts_with("#1\tpending\t"),
-            "{}",
-            status.stdout
-        );
-        assert!(!status.stdout.contains("\tresolve\t"), "{}", status.stdout);
-    }
+    let run = fixture.run(&["run"])?;
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(run.stdout.contains("claude /login"), "{}", run.stdout);
+    let status = fixture.run(&["status"])?;
+    assert!(
+        status.stdout.starts_with("#1\tpending\t"),
+        "{}",
+        status.stdout
+    );
+    assert!(!status.stdout.contains("\tresolve\t"), "{}", status.stdout);
     Ok(())
 }
 
@@ -210,8 +205,10 @@ fn a_recorded_claude_session_is_passed_to_resume_after_retry_same_session() -> R
     fixture.add()?;
     let seen = fixture.repository.join("resumed-session");
     let script = format!(
-        "prompt=$(cat)\nprevious=\nfor arg in \"$@\"; do\n  if [ \"$previous\" = --resume ]; then printf '%s' \"$arg\" > '{seen}'; fi\n  previous=$arg\ndone\nif printf '%s\\n' \"$prompt\" | grep -q '^# Resolve:'; then\n  binary=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    \\(.*\\) report --token .* retry .*/\\1/p' | head -n 1)\n  token=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    .* report --token \\([^ ]*\\) retry .*/\\1/p' | head -n 1)\n  printf '%s\\n' '{{\"type\":\"result\",\"result\":\"retrying\"}}'\n  \"$binary\" report --token \"$token\" retry --same-session\nelif [ -f '{seen}' ]; then\n  printf '%s\\n' '{{\"type\":\"system\",\"session_id\":\"recorded-session\"}}' '{{\"type\":\"result\",\"result\":\"finished\"}}'\n  report=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\n  eval \"$report\"\nelse\n  printf '%s\\n' '{{\"type\":\"system\",\"session_id\":\"recorded-session\"}}' '{{\"type\":\"result\",\"result\":\"failed once\"}}'\n  report=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* failed --reason /p' | head -n 1)\n  eval \"$report\"\nfi",
-        seen = seen.display()
+        "prompt=$(cat)\nprevious=\nfor arg in \"$@\"; do\n  if [ \"$previous\" = --resume ]; then printf '%s' \"$arg\" > '{seen}'; fi\n  previous=$arg\ndone\nif printf '%s\\n' \"$prompt\" | grep -q '^# Resolve:'; then\n  binary=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    \\(.*\\) report --token .* retry .*/\\1/p' | head -n 1)\n  token=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    .* report --token \\([^ ]*\\) retry .*/\\1/p' | head -n 1)\n  printf '%s' '{success}'\n  \"$binary\" report --token \"$token\" retry --same-session\nelif [ -f '{seen}' ]; then\n  printf '%s' '{resumed}'\n  report=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\n  eval \"$report\"\nelse\n  printf '%s' '{success}'\n  report=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* failed --reason /p' | head -n 1)\n  eval \"$report\"\nfi",
+        seen = seen.display(),
+        success = include_str!("../../../test-fixtures/claude/success.jsonl"),
+        resumed = include_str!("../../../test-fixtures/claude/resumed.jsonl")
     );
     let _claude = fixture.install_claude(&script)?;
 

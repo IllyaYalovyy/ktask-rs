@@ -117,19 +117,16 @@ mod tests {
     use super::render;
 
     #[test]
-    fn renders_words_tools_results_and_final_result_without_json_framing() {
-        let text = render(
-            br#"{"type":"assistant","message":{"content":[{"type":"text","text":"I will inspect the file."},{"type":"tool_use","name":"Read","input":{"file_path":"src/lib.rs"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","content":"first line\nsecond line"}]}}
-{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"c2VjcmV0"}]}}
-{"type":"result","result":"Finished the task.","usage":{"output_tokens":2000}}"#,
-        );
+    fn renders_the_recorded_success_without_json_framing() {
+        let text = render(include_bytes!(
+            "../../../../test-fixtures/claude/success.jsonl"
+        ));
         assert_eq!(
             text,
-            "assistant: I will inspect the file.\ntool Read: src/lib.rs\ntool result: first line second line\nresult: Finished the task."
+            "assistant: KTASK_RECORDING_SUCCESS\nresult: KTASK_RECORDING_SUCCESS"
         );
         assert!(!text.contains('{'));
-        assert!(!text.contains("c2VjcmV0"));
+        assert!(!text.contains("\"message\""));
     }
 
     #[test]

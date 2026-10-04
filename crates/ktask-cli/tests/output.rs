@@ -87,14 +87,17 @@ fn select_claude(fixture: &Fixture) -> Result<()> {
     Ok(())
 }
 
-/// The fixed stream is a recording: tests replay it through the real Claude provider command,
-/// rather than manufacturing an attempt log behind the binary's back.
+/// Replays the sanitized real recording through the provider command, rather than manufacturing
+/// an attempt log behind the binary's back.
 fn recorded_claude() -> Result<tempfile::TempDir> {
     let dir = tempfile::TempDir::new()?;
     let path = dir.path().join("claude");
     std::fs::write(
         &path,
-        "#!/bin/sh\nprompt=$(cat)\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"recorded\"}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"I will inspect src/lib.rs.\"},{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"sed -n 1,20p src/lib.rs\"}}]}}' '{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"pub fn answer() {}\"}]}}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"thinking\",\"thinking\":\"c2VjcmV0\"}]}}' '{\"type\":\"result\",\"result\":\"Finished the task.\",\"session_id\":\"recorded\",\"usage\":{\"input_tokens\":12,\"output_tokens\":34,\"cost_usd\":0.056789,\"model\":\"claude-sonnet-5\"}}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
+        format!(
+            "#!/bin/sh\nprompt=$(cat)\nprintf '%s' '{}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
+            include_str!("../../../test-fixtures/claude/success.jsonl")
+        ),
     )?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
     Ok(dir)
@@ -170,6 +173,12 @@ fn output_follows_live_bytes_and_retains_safe_whole_attempts() -> Result<()> {
 fn output_renders_a_recorded_claude_stream_and_raw_keeps_the_wire_format() -> Result<()> {
     let fixture = Fixture::new()?;
     select_claude(&fixture)?;
+    fixture.run(&[
+        "settings",
+        "set",
+        "resolver-model",
+        "claude-haiku-4-5-20251001",
+    ])?;
     fixture.add("replay the recorded Claude stream")?;
     let claude = recorded_claude()?;
     let run = fixture.run_with_path(&["run"], claude.path())?;
@@ -179,10 +188,10 @@ fn output_renders_a_recorded_claude_stream_and_raw_keeps_the_wire_format() -> Re
     assert_eq!(shown.code, Some(0), "{}", shown.stderr);
     assert_eq!(
         shown.stdout,
-        "assistant: I will inspect src/lib.rs.\ntool Bash: sed -n 1,20p src/lib.rs\ntool result: pub fn answer() {}\nresult: Finished the task."
+        "assistant: KTASK_RECORDING_SUCCESS\nresult: KTASK_RECORDING_SUCCESS"
     );
     assert!(!shown.stdout.contains("{\"type\""), "{}", shown.stdout);
-    assert!(!shown.stdout.contains("c2VjcmV0"), "{}", shown.stdout);
+    assert!(!shown.stdout.contains("\"message\""), "{}", shown.stdout);
 
     let raw = fixture.run(&["output", "1", "--raw"])?;
     assert_eq!(raw.code, Some(0), "{}", raw.stderr);
@@ -191,6 +200,10 @@ fn output_renders_a_recorded_claude_stream_and_raw_keeps_the_wire_format() -> Re
         "{}",
         raw.stdout
     );
-    assert!(raw.stdout.contains("c2VjcmV0"), "{}", raw.stdout);
+    assert!(
+        raw.stdout.contains("\"total_cost_usd\":0.0110019"),
+        "{}",
+        raw.stdout
+    );
     Ok(())
 }

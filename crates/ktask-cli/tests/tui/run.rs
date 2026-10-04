@@ -145,13 +145,16 @@ fn select_claude(fixture: &Fixture) -> Result<()> {
     Ok(())
 }
 
-/// A fixed stream captured in the shape Claude Code writes for the output-format we invoke.
+/// Replays the sanitized real Claude Code stream through its configured command.
 fn recorded_claude() -> Result<tempfile::TempDir> {
     let dir = tempfile::TempDir::new()?;
     let path = dir.path().join("claude");
     std::fs::write(
         &path,
-        "#!/bin/sh\nprompt=$(cat)\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"recorded\"}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"I will inspect src/lib.rs.\"},{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"sed -n 1,20p src/lib.rs\"}}]}}' '{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"pub fn answer() {}\"}]}}' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"thinking\",\"thinking\":\"c2VjcmV0\"}]}}' '{\"type\":\"result\",\"result\":\"Finished the task.\",\"session_id\":\"recorded\",\"usage\":{\"input_tokens\":12,\"output_tokens\":34,\"cost_usd\":0.056789,\"model\":\"claude-sonnet-5\"}}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
+        format!(
+            "#!/bin/sh\nprompt=$(cat)\nprintf '%s' '{}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
+            include_str!("../../../../test-fixtures/claude/success.jsonl")
+        ),
     )?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
     Ok(dir)
@@ -548,6 +551,15 @@ fn l_opens_live_safe_output_from_an_outside_run_and_esc_leaves_that_run_alone() 
 fn l_replays_the_same_readable_claude_entries_as_output() -> Result<()> {
     let fixture = Fixture::new()?;
     select_claude(&fixture)?;
+    fixture.sandbox.run(
+        &fixture.repository,
+        &[
+            "settings",
+            "set",
+            "resolver-model",
+            "claude-haiku-4-5-20251001",
+        ],
+    )?;
     fixture.add_agent_task("recorded", "replay the recorded Claude stream")?;
     let claude = recorded_claude()?;
     fixture.run_with_path(claude.path())?;
@@ -572,7 +584,7 @@ fn l_replays_the_same_readable_claude_entries_as_output() -> Result<()> {
         "{screen}"
     );
     assert!(!screen.contains("{\"type\""), "{screen}");
-    assert!(!screen.contains("c2VjcmV0"), "{screen}");
+    assert!(!screen.contains("\"message\""), "{screen}");
     terminal.send("\x1b")?;
     terminal.wait_for("the queue after closing output", |screen| {
         screen.contents().contains("recorded")
