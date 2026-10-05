@@ -153,8 +153,8 @@ pub(crate) fn record_session(
 }
 
 /// Use case: records that attempt `number` of task `id` is waiting on step `step`, until
-/// `until`, before it runs again — a provider's own usage limit, met without a model and
-/// without spending the task an attempt.
+/// `until`, before it runs again — a provider limit or a temporary transport failure, met
+/// without a model and without spending the task an attempt.
 ///
 /// # Errors
 ///
@@ -167,12 +167,14 @@ pub(crate) fn record_waiting(
     number: u32,
     step: &str,
     until: SystemTime,
+    reason: &str,
 ) -> Result<(), RecordReportError> {
     let at = clock.now();
     let step = step.to_owned();
+    let reason = reason.to_owned();
     decide_and_append(journal, move |state| {
         state
-            .decide_record_waiting(id, number, step.clone(), until, at)
+            .decide_record_waiting(id, number, step.clone(), until, reason.clone(), at)
             .map(|event| (vec![event], ()))
     })
 }

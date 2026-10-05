@@ -234,6 +234,7 @@ mod tests {
                 prompt: Vec::new(),
                 model: Vec::new(),
                 resume: Vec::new(),
+                resume_command: Vec::new(),
                 denied_tools: Vec::new(),
                 parser: ProviderParser::Plain,
                 session_id: None,

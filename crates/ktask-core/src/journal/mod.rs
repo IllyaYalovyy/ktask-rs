@@ -103,6 +103,8 @@ pub enum Event {
         step: String,
         /// The time it waits until.
         until: SystemTime,
+        /// Why this provider step is waiting before it runs again.
+        reason: String,
         /// When this was recorded — not the same as `until`, the time it waits for.
         at: SystemTime,
     },
@@ -350,6 +352,8 @@ pub struct Attempt {
     /// [`crate::attempt::record_waiting`] has recorded one — cleared the moment that step, or
     /// the attempt itself, ends. `None` when nothing is waiting.
     pub waiting_until: Option<SystemTime>,
+    /// Why the current provider step is waiting, when it is waiting.
+    pub waiting_reason: Option<String>,
     /// How it ended, once [`crate::attempt::end_attempt`] has recorded it; `None` while it runs.
     pub ended: Option<AttemptEnd>,
     /// Every step run so far, in the order they were started.

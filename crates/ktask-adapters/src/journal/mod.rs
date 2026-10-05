@@ -560,6 +560,7 @@ mod tests {
                 number: 1,
                 step: "implementation".to_owned(),
                 until: at(20),
+                reason: "the provider's usage limit was hit".to_owned(),
                 at: at(10),
             },
         );

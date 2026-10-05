@@ -22,6 +22,8 @@ pub struct RunContext<'a> {
     pub disabled_steps: &'a [&'static str],
     /// Maximum agent attempts before resolve stops retrying.
     pub max_attempts: u32,
+    /// Maximum consecutive transport failures retried within one attempt.
+    pub transport_retries: u32,
     /// Used by implementation, review and test steps; empty means no model was selected.
     pub model: &'a str,
     /// Used only by resolve; empty means no model was selected.

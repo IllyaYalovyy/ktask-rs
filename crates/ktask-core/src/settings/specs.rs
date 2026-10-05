@@ -9,9 +9,10 @@ use crate::Git;
 
 use super::{
     ATTEMPT_TIMEOUT, DEFAULT_MAX_ATTEMPTS, DEFAULT_RESOLVER_PROVIDER, DEFAULT_SILENT_AFTER_SECS,
-    HEALTH_CHECK, MAX_ATTEMPTS, RESOLVER_MODEL, RESOLVER_PROVIDER, SILENT_AFTER, STEP_COMMIT,
-    STEP_HEALTH_CHECK, STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING, SetSettingError, Settings,
-    TRACKED_BRANCH, split_tracked_branch, step_enabled,
+    DEFAULT_TRANSPORT_RETRIES, HEALTH_CHECK, MAX_ATTEMPTS, RESOLVER_MODEL, RESOLVER_PROVIDER,
+    SILENT_AFTER, STEP_COMMIT, STEP_HEALTH_CHECK, STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING,
+    SetSettingError, Settings, TRACKED_BRANCH, TRANSPORT_RETRIES, split_tracked_branch,
+    step_enabled,
 };
 
 mod agent;
@@ -70,6 +71,7 @@ pub(super) fn setting_specs() -> Vec<SettingSpec> {
         commit_step_spec(),
         push_step_spec(),
         max_attempts_spec(),
+        transport_retries_spec(),
         agent::provider_spec(),
         agent::model_spec(),
         resolver_provider_spec(),
@@ -249,6 +251,27 @@ fn max_attempts_spec() -> SettingSpec {
             let attempts = parse_max_attempts(value)?;
             settings.max_attempts = Some(attempts);
             Ok(attempts.to_string())
+        }),
+    }
+}
+
+/// [`TRANSPORT_RETRIES`]'s description.
+fn transport_retries_spec() -> SettingSpec {
+    SettingSpec {
+        name: TRANSPORT_RETRIES,
+        get: Box::new(|settings| {
+            (
+                settings
+                    .transport_retries
+                    .unwrap_or(DEFAULT_TRANSPORT_RETRIES)
+                    .to_string(),
+                settings.transport_retries.is_none(),
+            )
+        }),
+        set: Box::new(|settings, value, _git, _dir| {
+            let retries = parse_max_attempts(value)?;
+            settings.transport_retries = Some(retries);
+            Ok(retries.to_string())
         }),
     }
 }

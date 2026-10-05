@@ -41,7 +41,7 @@ struct AttemptFold {
     session: Option<String>,
     /// The step name and time of the most recent [`Event::AttemptWaiting`] not yet superseded
     /// by a later event for this attempt: [`QueueState::attempt_from_fold`].
-    waiting: Option<(String, SystemTime)>,
+    waiting: Option<(String, SystemTime, String)>,
     ended: Option<AttemptEnd>,
     steps: Vec<StepFold>,
 }

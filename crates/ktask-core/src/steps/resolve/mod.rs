@@ -421,6 +421,7 @@ mod tests {
             tracked_branch: None,
             disabled_steps: &[],
             max_attempts: 3,
+            transport_retries: 3,
             model: "",
             resolver_model: "opus",
             sessions_dir: Path::new("/state/sessions"),

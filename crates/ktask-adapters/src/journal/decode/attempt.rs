@@ -98,11 +98,17 @@ pub(super) fn decode_attempt_waiting(
         .and_then(Value::as_i64)
         .map(super::from_seconds)
         .ok_or_else(|| corrupt("until", "missing".to_owned()))?;
+    let reason = payload
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or("the provider's usage limit was hit")
+        .to_owned();
     Ok(Event::AttemptWaiting {
         id,
         number,
         step,
         until,
+        reason,
         at,
     })
 }

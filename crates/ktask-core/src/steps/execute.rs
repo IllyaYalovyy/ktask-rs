@@ -72,7 +72,7 @@ fn outcome_fields(
             reason,
             reported,
         } => (duration, exit_code, status, reason, reported),
-        StepOutcome::Waiting { .. } => {
+        StepOutcome::Waiting { .. } | StepOutcome::TransportFailure { .. } => {
             unreachable!("run_one_step handles Waiting before outcome_fields is ever called")
         }
     }
@@ -109,6 +109,7 @@ fn wait_for_limit(
     state: &PipelineState<'_>,
     step: &str,
     until: SystemTime,
+    reason: &str,
 ) -> Result<Duration, RunError> {
     crate::attempt::record_waiting(
         deps.journal,
@@ -117,6 +118,7 @@ fn wait_for_limit(
         state.token.number,
         step,
         until,
+        reason,
     )?;
     let wait = until.duration_since(deps.clock.now()).unwrap_or_default();
     deps.sleep.sleep(wait);
@@ -204,11 +206,16 @@ pub(crate) fn run_one_step(
     )?;
     let mut total = Duration::ZERO;
     let mut limit_wait: Option<LimitWait> = None;
+    let mut transport_failures: u32 = 0;
     loop {
         match step.run(deps, context, state)? {
-            StepOutcome::Waiting { duration, until } => {
+            StepOutcome::Waiting {
+                duration,
+                until,
+                reason,
+            } => {
                 total += duration;
-                let waited = wait_for_limit(deps, state, step.name(), until)?;
+                let waited = wait_for_limit(deps, state, step.name(), until, &reason)?;
                 total += waited;
                 let waited_so_far = limit_wait.map_or(Duration::ZERO, |wait| wait.waited);
                 limit_wait = Some(LimitWait {
@@ -216,9 +223,41 @@ pub(crate) fn run_one_step(
                     resumed_at: until,
                 });
             }
+            StepOutcome::TransportFailure { duration, reason } => {
+                total += duration;
+                let failures = transport_failures.saturating_add(1);
+                transport_failures = failures;
+                if failures >= context.transport_retries {
+                    let exhausted = StepOutcome::Ended {
+                        duration: Duration::ZERO,
+                        exit_code: state.exit_code,
+                        status: TaskStatus::FailedUnknown,
+                        reason: Some(format!(
+                            "Codex transport failed {failures} consecutive times: {reason}"
+                        )),
+                        reported: None,
+                    };
+                    return end_one_step(deps, state, step.name(), total, exhausted, limit_wait);
+                }
+                let wait = transport_backoff(failures);
+                let until = deps.clock.now() + wait;
+                let waiting = format!(
+                    "Codex transport disconnected; retry {failures} of {} in {}s",
+                    context.transport_retries,
+                    wait.as_secs()
+                );
+                let waited = wait_for_limit(deps, state, step.name(), until, &waiting)?;
+                total += waited;
+            }
             outcome => return end_one_step(deps, state, step.name(), total, outcome, limit_wait),
         }
     }
+}
+
+/// The retry delays for an interrupted Codex stream: growing, but capped so an unattended run
+/// always comes back to the operator in bounded time.
+fn transport_backoff(failure: u32) -> Duration {
+    Duration::from_secs(1_u64 << failure.saturating_sub(1).min(5))
 }
 
 /// Records every one of `pre_steps` as attempt `number` of task `id`'s own first steps, in

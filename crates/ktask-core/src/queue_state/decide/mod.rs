@@ -270,6 +270,7 @@ impl QueueState {
         number: u32,
         step: String,
         until: SystemTime,
+        reason: String,
         at: SystemTime,
     ) -> Result<Event, RecordReportError> {
         self.check_attempt_running(id, number)?;
@@ -278,6 +279,7 @@ impl QueueState {
             number,
             step,
             until,
+            reason,
             at,
         })
     }

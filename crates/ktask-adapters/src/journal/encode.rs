@@ -73,12 +73,13 @@ fn attempt_waiting_payload(event: &Event) -> String {
         number,
         step,
         until,
+        reason,
         ..
     } = event
     else {
         unreachable!("only called for Event::AttemptWaiting")
     };
-    serde_json::json!({ "number": number, "step": step, "until": to_seconds(*until) }).to_string()
+    serde_json::json!({ "number": number, "step": step, "until": to_seconds(*until), "reason": reason }).to_string()
 }
 
 /// The payload an `attempt_reported` row is written with.

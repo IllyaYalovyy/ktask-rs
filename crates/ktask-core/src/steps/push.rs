@@ -101,6 +101,7 @@ mod tests {
             tracked_branch: Some("origin/main"),
             disabled_steps: &[],
             max_attempts: 1,
+            transport_retries: 3,
             model: "",
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
@@ -188,6 +189,7 @@ mod tests {
             }
             StepOutcome::Ended { reason, .. } => panic!("expected Passed, got Ended({reason:?})"),
             StepOutcome::Waiting { .. } => panic!("expected Passed, got Waiting"),
+            StepOutcome::TransportFailure { .. } => panic!("expected Passed, got TransportFailure"),
         }
     }
 
@@ -206,6 +208,7 @@ mod tests {
             }
             StepOutcome::Passed { .. } => panic!("expected Ended"),
             StepOutcome::Waiting { .. } => panic!("expected Ended, got Waiting"),
+            StepOutcome::TransportFailure { .. } => panic!("expected Ended, got TransportFailure"),
         }
     }
 
@@ -227,6 +230,7 @@ mod tests {
             }
             StepOutcome::Passed { .. } => panic!("expected Ended"),
             StepOutcome::Waiting { .. } => panic!("expected Ended, got Waiting"),
+            StepOutcome::TransportFailure { .. } => panic!("expected Ended, got TransportFailure"),
         }
     }
 

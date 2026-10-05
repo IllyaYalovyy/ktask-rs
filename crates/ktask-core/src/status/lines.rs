@@ -93,13 +93,14 @@ pub(super) fn running_step(
     session: Option<&str>,
     started_at: SystemTime,
     waiting_until: Option<SystemTime>,
+    waiting_reason: Option<&str>,
     clock: &(impl Clock + ?Sized),
     run_alive: bool,
 ) -> StepLine {
     let elapsed = clock.now().duration_since(started_at).unwrap_or_default();
     let (outcome, reason) = match (run_alive, waiting_until) {
         (false, _) => (AttemptOutcome::Interrupted, None),
-        (true, Some(_)) => (AttemptOutcome::Waiting, None),
+        (true, Some(_)) => (AttemptOutcome::Waiting, waiting_reason.map(str::to_owned)),
         (true, None) => (AttemptOutcome::Running, None),
     };
     StepLine {

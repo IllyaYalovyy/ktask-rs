@@ -29,6 +29,7 @@ fn claude() -> ProviderDefinition {
         prompt: Vec::new(),
         model: vec!["--model".to_owned(), "{model}".to_owned()],
         resume: vec!["--resume".to_owned(), "{session}".to_owned()],
+        resume_command: Vec::new(),
         denied_tools: vec![
             // Cannot work unattended: creates scheduled work beyond this invocation.
             "CronCreate".to_owned(),
@@ -67,6 +68,12 @@ fn codex() -> ProviderDefinition {
         prompt: vec!["-".to_owned()],
         model: vec!["--model".to_owned(), "{model}".to_owned()],
         resume: Vec::new(),
+        resume_command: vec![
+            "exec".to_owned(),
+            "resume".to_owned(),
+            "{session}".to_owned(),
+            "-".to_owned(),
+        ],
         denied_tools: Vec::new(),
         parser: ProviderParser::CodexJsonl,
         session_id: Some("thread.started.thread_id".to_owned()),
@@ -88,6 +95,7 @@ fn echo() -> ProviderDefinition {
         prompt: Vec::new(),
         model: Vec::new(),
         resume: Vec::new(),
+        resume_command: Vec::new(),
         denied_tools: Vec::new(),
         parser: ProviderParser::Plain,
         session_id: Some("KTASK_SESSION: ".to_owned()),

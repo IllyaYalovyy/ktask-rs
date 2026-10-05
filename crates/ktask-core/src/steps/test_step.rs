@@ -129,6 +129,7 @@ mod tests {
             tracked_branch: None,
             disabled_steps: &[TEST_STEP],
             max_attempts: 1,
+            transport_retries: 3,
             model: "",
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),

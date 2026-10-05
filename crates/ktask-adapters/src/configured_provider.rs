@@ -63,6 +63,13 @@ fn build_command(
     prompt: &str,
     call: StepCall<'_>,
 ) -> ProviderCommand {
+    if call.resume.is_some() && !definition.resume_command.is_empty() {
+        return ProviderCommand {
+            program: definition.command.clone(),
+            args: render(&definition.resume_command, prompt, call),
+            stdin: prompt.as_bytes().to_vec(),
+        };
+    }
     let mut args = render(&definition.args, prompt, call);
     if call.model.is_some() {
         args.extend(render(&definition.model, prompt, call));
@@ -255,6 +262,7 @@ mod tests {
             prompt: vec![],
             model: vec![],
             resume: vec![],
+            resume_command: vec![],
             denied_tools: vec![],
             parser: ProviderParser::ClaudeStreamJson,
             session_id: None,
@@ -290,6 +298,7 @@ mod tests {
             prompt: vec![],
             model: vec![],
             resume: vec![],
+            resume_command: vec![],
             denied_tools: vec![],
             parser: ProviderParser::ClaudeStreamJson,
             session_id: None,
@@ -321,6 +330,7 @@ mod tests {
             prompt: vec![],
             model: vec![],
             resume: vec![],
+            resume_command: vec![],
             denied_tools: vec![],
             parser: ProviderParser::ClaudeStreamJson,
             session_id: None,
@@ -366,6 +376,7 @@ mod tests {
             prompt: vec![],
             model: vec![],
             resume: vec![],
+            resume_command: vec![],
             denied_tools: vec![],
             parser: ProviderParser::ClaudeStreamJson,
             session_id: None,

@@ -12,7 +12,8 @@ use ktask_adapters::{
 };
 use ktask_core::{
     COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, RunReport, SYNC_STEP,
-    Settings, TEST_STEP, effective_provider, effective_resolver_provider, show_providers,
+    Settings, TEST_STEP, effective_provider, effective_resolver_provider,
+    effective_transport_retries, show_providers,
 };
 
 use crate::context::{
@@ -77,6 +78,7 @@ fn run_context<'a>(
         tracked_branch: settings.tracked_branch.as_deref(),
         disabled_steps: disabled,
         max_attempts: ktask_core::effective_max_attempts(settings),
+        transport_retries: effective_transport_retries(settings),
         model,
         resolver_model,
         sessions_dir,

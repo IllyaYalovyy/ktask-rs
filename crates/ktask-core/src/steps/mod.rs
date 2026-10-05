@@ -356,6 +356,7 @@ mod tests {
             tracked_branch: None,
             disabled_steps: &[],
             max_attempts: 1,
+            transport_retries: 3,
             model: "",
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
@@ -577,6 +578,7 @@ mod tests {
                 StepOutcome::Waiting {
                     duration: Duration::from_secs(2),
                     until: at(1_030),
+                    reason: "the provider's usage limit was hit".to_owned(),
                 }
             })
         }

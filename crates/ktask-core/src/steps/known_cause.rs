@@ -25,6 +25,10 @@ pub(crate) enum KnownCause {
     ClaudeAuthentication,
     /// Claude Code rejected one of its settings files.
     ClaudeConfiguration,
+    /// Codex could not keep its stream connected after its configured retries.
+    CodexTransport,
+    /// Codex needs the operator to authenticate.
+    CodexAuthentication,
 }
 
 /// The phrase an operating system error names a full disk with, verbatim, on Linux.
@@ -46,6 +50,9 @@ const REMOTE_UNREACHABLE_PHRASES: [&str; 6] = [
 ];
 const CLAUDE_AUTHENTICATION_PHRASES: [&str; 2] = ["invalid api key", "not logged in"];
 const CLAUDE_CONFIGURATION_PHRASE: &str = "invalid settings";
+const CODEX_TRANSPORT_PHRASE: &str = "codex transport failed";
+const CODEX_AUTHENTICATION_PHRASES: [&str; 2] =
+    ["missing bearer or basic authentication", "401 unauthorized"];
 
 impl KnownCause {
     /// What matches `exit_code` and `reason` against every known cause, in the order checked:
@@ -75,6 +82,15 @@ impl KnownCause {
         }
         if lower.contains(CLAUDE_CONFIGURATION_PHRASE) {
             return Some(Self::ClaudeConfiguration);
+        }
+        if lower.contains(CODEX_TRANSPORT_PHRASE) {
+            return Some(Self::CodexTransport);
+        }
+        if CODEX_AUTHENTICATION_PHRASES
+            .iter()
+            .any(|phrase| lower.contains(phrase))
+        {
+            return Some(Self::CodexAuthentication);
         }
         REMOTE_UNREACHABLE_PHRASES
             .iter()
@@ -109,6 +125,12 @@ impl KnownCause {
             Self::ClaudeConfiguration => format!(
                 "Claude Code has invalid settings: {reason}; fix the named Claude Code settings file, then run again"
             ),
+            Self::CodexTransport => format!(
+                "Codex lost its transport repeatedly: {reason}; check the network and Codex service, then run again"
+            ),
+            Self::CodexAuthentication => {
+                format!("Codex could not authenticate: {reason}; run `codex login`, then run again")
+            }
         }
     }
 }

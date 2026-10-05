@@ -49,6 +49,7 @@ fn step_lines(
                 session,
                 step.started_at,
                 attempt.waiting_until,
+                attempt.waiting_reason.as_deref(),
                 clock,
                 run_alive,
             ),
@@ -117,6 +118,7 @@ fn current_step_line(
             attempt.session.as_deref(),
             attempt.started_at,
             attempt.waiting_until,
+            attempt.waiting_reason.as_deref(),
             clock,
             run_alive,
         ),
@@ -547,6 +549,7 @@ mod tests {
             1,
             IMPLEMENTATION,
             at(200),
+            "the provider's usage limit was hit",
         )
         .unwrap();
 
@@ -590,6 +593,7 @@ mod tests {
             1,
             IMPLEMENTATION,
             at(200),
+            "the provider's usage limit was hit",
         )
         .unwrap();
         crate::attempt::end_step(

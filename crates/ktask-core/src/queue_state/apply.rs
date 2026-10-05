@@ -160,13 +160,14 @@ impl QueueState {
             number,
             step,
             until,
+            reason,
             ..
         } = event
         else {
             return;
         };
         if let Some(attempt) = self.attempt_mut(*id, *number) {
-            attempt.waiting = Some((step.clone(), *until));
+            attempt.waiting = Some((step.clone(), *until, reason.clone()));
         }
     }
 

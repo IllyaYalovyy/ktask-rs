@@ -23,6 +23,10 @@ const KNOWN_OS_ERROR_PHRASES: [&str; 2] = ["No space left on device", "Too many 
 /// rediscover them. Their full text is retained as the step reason when no report was made.
 const KNOWN_CLAUDE_ERROR_PHRASES: [&str; 3] =
     ["Invalid API key", "Not logged in", "Invalid settings"];
+const CODEX_TRANSPORT_FAILURE: &str =
+    "ERROR: stream disconnected before completion: Transport error:";
+const CODEX_AUTHENTICATION_PHRASES: [&str; 2] =
+    ["Missing bearer or basic authentication", "401 Unauthorized"];
 
 /// The first of [`KNOWN_OS_ERROR_PHRASES`] found in `output`'s own standard output or standard
 /// error, when there is one.
@@ -49,6 +53,31 @@ fn known_claude_error(output: &Output) -> Option<String> {
                 .iter()
                 .any(|phrase| line.contains(phrase))
         })
+        .map(str::to_owned)
+}
+
+/// The authentication rejection emitted by a Codex CLI with no credentials.
+fn known_codex_authentication_error(output: &Output) -> Option<String> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stdout
+        .lines()
+        .chain(stderr.lines())
+        .find(|line| {
+            CODEX_AUTHENTICATION_PHRASES
+                .iter()
+                .any(|phrase| line.contains(phrase))
+        })
+        .map(str::to_owned)
+}
+
+/// The terminal error in Codex's recorded reconnect failure, retaining its final diagnostic
+/// rather than treating every reconnect notice as a failed stream.
+fn codex_transport_failure(output: &Output) -> Option<String> {
+    String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .rev()
+        .find(|line| line.starts_with(CODEX_TRANSPORT_FAILURE))
         .map(str::to_owned)
 }
 
@@ -129,6 +158,7 @@ fn status_and_reason(
                 ),
                 None => reported_error(output)
                     .or_else(|| known_claude_error(output))
+                    .or_else(|| known_codex_authentication_error(output))
                     .unwrap_or_else(|| {
                         format!("the provider exited with code {exit_code} and reported nothing")
                     }),
@@ -346,10 +376,17 @@ pub(crate) fn run_agent_step(
         transcript_path,
     });
     let (duration, result) = run_prompt(deps, context, state, step, model, prompt, resume)?;
-    if let Some(until) = limit_wait(deps, step, &result) {
-        return Ok(StepOutcome::Waiting { duration, until });
-    }
     maybe_record_session(deps, context, state, step, prompt, &result)?;
+    if let Some(until) = limit_wait(deps, step, &result) {
+        return Ok(StepOutcome::Waiting {
+            duration,
+            until,
+            reason: "the provider's usage limit was hit".to_owned(),
+        });
+    }
+    if let Some(reason) = result.as_ref().ok().and_then(codex_transport_failure) {
+        return Ok(StepOutcome::TransportFailure { duration, reason });
+    }
     let facts = result.as_ref().map_or_else(
         |_| crate::ProviderUsage::default(),
         |output| (deps.provider_for(step).read_usage)(output),

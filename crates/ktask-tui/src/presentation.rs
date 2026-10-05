@@ -100,14 +100,17 @@ pub fn reason_for(
     reason: Option<&str>,
     waiting_for: Option<std::time::Duration>,
 ) -> Option<String> {
-    reason.map(str::to_owned).or_else(|| {
-        waiting_for.map(|remaining| {
-            format!(
-                "the provider's usage limit was hit; resumes in {}s",
-                remaining.as_secs()
-            )
-        })
-    })
+    match (reason, waiting_for) {
+        (Some(reason), Some(remaining)) => {
+            Some(format!("{reason}; resumes in {}s", remaining.as_secs()))
+        }
+        (Some(reason), None) => Some(reason.to_owned()),
+        (None, Some(remaining)) => Some(format!(
+            "the provider's usage limit was hit; resumes in {}s",
+            remaining.as_secs()
+        )),
+        (None, None) => None,
+    }
 }
 
 /// The common label for a non-synthetic attempt.

@@ -19,6 +19,8 @@ pub const DEFAULT_SILENT_AFTER_SECS: u64 = 120;
 /// How many attempts a task may have before the resolver is no longer run, when nothing else
 /// sets it.
 pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
+/// How many consecutive Codex transport failures are retried before asking the operator.
+pub const DEFAULT_TRANSPORT_RETRIES: u32 = 3;
 
 /// The provider the implementation, review and test steps run with when nothing else sets it.
 pub const DEFAULT_PROVIDER: &str = "echo";
@@ -58,6 +60,8 @@ pub const STEP_PUSH: &str = "step-push";
 
 /// The max-attempts setting's name.
 pub const MAX_ATTEMPTS: &str = "max-attempts";
+/// The number of consecutive Codex transport failures retried in one attempt.
+pub const TRANSPORT_RETRIES: &str = "transport-retries";
 
 /// The provider for implementation, review and test steps.
 pub const PROVIDER: &str = "provider";
@@ -112,6 +116,8 @@ pub struct Settings {
     /// How many attempts a task may have before the resolver is no longer run and it ends
     /// `failed` with its last attempt's own reason, when the project has set one.
     pub max_attempts: Option<u32>,
+    /// How many consecutive temporary provider transport failures are retried in one attempt.
+    pub transport_retries: Option<u32>,
     /// The provider implementation, review and test steps run with, when the project has set
     /// one.
     pub provider: Option<String>,
@@ -338,6 +344,14 @@ pub fn effective_silent_after(settings: &Settings) -> Duration {
 #[must_use]
 pub fn effective_max_attempts(settings: &Settings) -> u32 {
     settings.max_attempts.unwrap_or(DEFAULT_MAX_ATTEMPTS)
+}
+
+/// How many temporary transport failures one attempt retries before it stops pending.
+#[must_use]
+pub fn effective_transport_retries(settings: &Settings) -> u32 {
+    settings
+        .transport_retries
+        .unwrap_or(DEFAULT_TRANSPORT_RETRIES)
 }
 
 /// The provider the resolve step runs with: the project's own setting, else the built-in

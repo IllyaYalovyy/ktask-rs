@@ -34,6 +34,8 @@ struct SettingsFile {
     step_push: Option<bool>,
     #[serde(rename = "max-attempts", skip_serializing_if = "Option::is_none")]
     max_attempts: Option<u32>,
+    #[serde(rename = "transport-retries", skip_serializing_if = "Option::is_none")]
+    transport_retries: Option<u32>,
     #[serde(rename = "provider", skip_serializing_if = "Option::is_none")]
     provider: Option<String>,
     #[serde(rename = "model", skip_serializing_if = "Option::is_none")]
@@ -60,6 +62,7 @@ impl From<Settings> for SettingsFile {
             step_commit: settings.commit_step,
             step_push: settings.push_step,
             max_attempts: settings.max_attempts,
+            transport_retries: settings.transport_retries,
             provider: settings.provider,
             model: settings.model,
             resolver_provider: settings.resolver_provider,
@@ -83,6 +86,7 @@ impl From<SettingsFile> for Settings {
             commit_step: file.step_commit,
             push_step: file.step_push,
             max_attempts: file.max_attempts,
+            transport_retries: file.transport_retries,
             provider: file.provider,
             model: file.model,
             resolver_provider: file.resolver_provider,
@@ -172,6 +176,7 @@ mod tests {
             commit_step: Some(true),
             push_step: Some(false),
             max_attempts: Some(5),
+            transport_retries: Some(4),
             provider: Some("claude".to_owned()),
             model: Some("sonnet".to_owned()),
             resolver_provider: Some("claude".to_owned()),

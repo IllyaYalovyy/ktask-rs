@@ -46,6 +46,10 @@ pub struct ProviderDefinition {
     /// Arguments appended when an earlier session is resumed.
     #[serde(default)]
     pub resume: Vec<String>,
+    /// Complete arguments used instead of the ordinary invocation when resuming. This supports
+    /// CLIs, such as Codex, whose resume subcommand has a different command shape.
+    #[serde(rename = "resume-command", default)]
+    pub resume_command: Vec<String>,
     /// Tool names that must not be available during an unattended invocation.
     #[serde(rename = "denied-tools", default)]
     pub denied_tools: Vec<String>,
@@ -77,6 +81,9 @@ pub struct ProviderOverride {
     pub model: Option<Vec<String>>,
     /// Replacement resume arguments.
     pub resume: Option<Vec<String>>,
+    /// Replacement complete resume invocation arguments.
+    #[serde(rename = "resume-command")]
+    pub resume_command: Option<Vec<String>>,
     /// Replacement tool deny list.
     #[serde(rename = "denied-tools")]
     pub denied_tools: Option<Vec<String>>,
@@ -128,6 +135,7 @@ pub fn provider_fields(provider: &ProviderView) -> Vec<(&'static str, String)> {
         ("prompt", definition.prompt.join(" ")),
         ("model", definition.model.join(" ")),
         ("resume", definition.resume.join(" ")),
+        ("resume-command", definition.resume_command.join(" ")),
         ("denied-tools", definition.denied_tools.join(" ")),
         ("parser", definition.parser.to_string()),
         (
@@ -179,6 +187,7 @@ fn overlay_definitions(
                 prompt: Vec::new(),
                 model: Vec::new(),
                 resume: Vec::new(),
+                resume_command: Vec::new(),
                 denied_tools: Vec::new(),
                 parser: ProviderParser::Plain,
                 session_id: None,
@@ -230,6 +239,7 @@ fn apply(
     replace!(prompt, "prompt");
     replace!(model, "model");
     replace!(resume, "resume");
+    replace!(resume_command, "resume-command");
     replace!(denied_tools, "denied-tools");
     if let Some(value) = patch.parser {
         definition.parser = value;
@@ -271,6 +281,7 @@ mod tests {
                 prompt: Vec::new(),
                 model: Vec::new(),
                 resume: Vec::new(),
+                resume_command: Vec::new(),
                 denied_tools: Vec::new(),
                 parser: ProviderParser::Plain,
                 session_id: None,
