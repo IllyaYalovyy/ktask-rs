@@ -21,8 +21,8 @@ fn mirror_task_added(
     let links = serde_json::json!(draft.links).to_string();
     transaction.execute(
         "INSERT INTO tasks
-             (id, order_key, title, body, criteria, kind, links, status, created_at)
-         VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (id, order_key, title, body, criteria, kind, links, provider, model, status, created_at)
+         VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         (
             task_id,
             &draft.title,
@@ -30,6 +30,8 @@ fn mirror_task_added(
             &criteria,
             draft.kind.as_str(),
             &links,
+            &draft.provider,
+            &draft.model,
             TaskStatus::Pending.as_str(),
             to_seconds(at),
         ),

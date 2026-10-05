@@ -382,8 +382,27 @@ fn task_line(
         sw = columns.status,
         kw = columns.kind,
     );
+    let selection = task
+        .provider
+        .as_deref()
+        .map_or_else(String::new, |provider| {
+            task.model.as_deref().map_or_else(
+                || format!(" · {provider}"),
+                |model| format!(" · {provider} ({model})"),
+            )
+        });
     let budget = width.saturating_sub(prefix.chars().count());
-    Line::styled(format!("{prefix}{}", elide(&task.title, budget)), style)
+    Line::styled(
+        format!(
+            "{prefix}{}{}",
+            elide(
+                &task.title,
+                budget.saturating_sub(selection.chars().count())
+            ),
+            selection
+        ),
+        style,
+    )
 }
 
 #[cfg(test)]
@@ -410,6 +429,8 @@ mod tests {
             criteria: vec!["it works".to_owned()],
             kind: TaskKind::Agent,
             links: vec![],
+            provider: None,
+            model: None,
             status: TaskStatus::Pending,
             created_at: SystemTime::UNIX_EPOCH,
         }
@@ -481,6 +502,8 @@ mod tests {
             criteria: vec!["it works".to_owned()],
             kind,
             links: vec![],
+            provider: None,
+            model: None,
             status: TaskStatus::Pending,
             created_at: SystemTime::UNIX_EPOCH,
         }

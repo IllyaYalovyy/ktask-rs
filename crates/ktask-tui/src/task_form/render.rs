@@ -186,6 +186,23 @@ fn push_fields(sheet: &mut Sheet, form: &Form) {
     sheet.push(format!("{} Body:", mark(Focus::Body)));
     sheet.text("    ", "    ", &form.body, form.focus == Focus::Body);
     push_criteria(sheet, form);
+    if !form.provider.text().is_empty()
+        || !form.model.text().is_empty()
+        || matches!(form.focus, Focus::Provider | Focus::Model)
+    {
+        sheet.text(
+            &format!("{} Provider:  ", mark(Focus::Provider)),
+            "",
+            &form.provider,
+            form.focus == Focus::Provider,
+        );
+        sheet.text(
+            &format!("{} Model:     ", mark(Focus::Model)),
+            "",
+            &form.model,
+            form.focus == Focus::Model,
+        );
+    }
 }
 
 /// Draws `form` over the whole of `area`, asking to discard it when `discard` says so, and

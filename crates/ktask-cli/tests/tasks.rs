@@ -150,6 +150,10 @@ fn every_option_reaches_the_stored_task_and_the_event_that_created_it() -> Resul
         "github:owner/repo#123",
         "--link",
         "https://example.com/a",
+        "--provider",
+        "codex",
+        "--model",
+        "gpt-5",
     ])?;
 
     assert_eq!(added.stdout, "1\n");
@@ -162,6 +166,8 @@ fn every_option_reaches_the_stored_task_and_the_event_that_created_it() -> Resul
     assert_eq!(task["body"], "Some body\nover two lines");
     assert_eq!(task["kind"], "human");
     assert_eq!(task["status"], "pending");
+    assert_eq!(task["provider"], "codex");
+    assert_eq!(task["model"], "gpt-5");
     let criteria: Value = serde_json::from_str(task["criteria"].as_str().unwrap_or_default())?;
     assert_eq!(criteria, json!(["first criterion", "second criterion"]));
     let links: Value = serde_json::from_str(task["links"].as_str().unwrap_or_default())?;
@@ -182,11 +188,29 @@ fn every_option_reaches_the_stored_task_and_the_event_that_created_it() -> Resul
             "criteria": ["first criterion", "second criterion"],
             "kind": "human",
             "links": ["github:owner/repo#123", "https://example.com/a"],
+            "provider": "codex",
+            "model": "gpt-5",
         })
     );
     let listed = fixture.run(&["list"])?;
     assert_eq!(listed.stdout, "1\t#1\tpending\thuman\tFull task\n");
     Ok(())
+}
+
+#[test]
+fn an_unknown_task_provider_is_refused_naming_the_known_providers() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let outcome = fixture.run(&[
+        "add",
+        "--title",
+        "t",
+        "--criterion",
+        "c",
+        "--provider",
+        "unknown",
+    ])?;
+    assert_usage_error(&outcome, &["unknown provider", "claude", "codex", "echo"]);
+    fixture.assert_nothing_added()
 }
 
 #[test]

@@ -35,6 +35,13 @@ pub enum AddError {
     CancelledTask(TaskId),
     /// The journal could not be used.
     Journal(JournalError),
+    /// The task selected a provider the project does not define.
+    UnknownProvider {
+        /// The unknown provider name the task gave.
+        provider: String,
+        /// The project provider names the operator may select instead.
+        known: Vec<String>,
+    },
 }
 
 /// `c` in a readable form that never prints the character itself: `\n`, `\t`, `\x1b`, or
@@ -82,8 +89,23 @@ impl fmt::Display for AddError {
             Self::UnknownTask(id) => write!(f, "there is no task {id}"),
             Self::CancelledTask(id) => write!(f, "task {id} is cancelled"),
             Self::Journal(error) => error.fmt(f),
+            Self::UnknownProvider { provider, known } => write!(
+                f,
+                "unknown provider {provider:?}: known providers are {}",
+                known.join(", ")
+            ),
         }
     }
+}
+
+/// Checks the optional task-level provider against a project's configured catalogue.
+#[must_use]
+pub fn provider_problem(draft: &TaskDraft, known: &[String]) -> Option<AddError> {
+    let provider = draft.provider.as_ref()?;
+    (!known.iter().any(|name| name == provider)).then(|| AddError::UnknownProvider {
+        provider: provider.clone(),
+        known: known.to_vec(),
+    })
 }
 
 impl Error for AddError {}

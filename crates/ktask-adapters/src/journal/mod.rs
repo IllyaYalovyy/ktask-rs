@@ -74,12 +74,23 @@ impl SqliteJournal {
                      criteria TEXT NOT NULL,
                      kind TEXT NOT NULL,
                      links TEXT NOT NULL,
+                     provider TEXT,
+                     model TEXT,
                      status TEXT NOT NULL,
                      created_at INTEGER NOT NULL,
                      attempt_number INTEGER NOT NULL DEFAULT 0
                  )",
             )
             .map_err(|e| failed(&doing, e))?;
+        for column in ["provider", "model"] {
+            let statement = format!("ALTER TABLE tasks ADD COLUMN {column} TEXT");
+            match connection.execute(&statement, []) {
+                Ok(_) => {}
+                Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+                    if message.contains("duplicate column name") => {}
+                Err(error) => return Err(failed(&doing, error)),
+            }
+        }
         Ok(Self { connection })
     }
 }
@@ -171,6 +182,8 @@ mod tests {
             criteria: vec!["first".to_owned(), "sécond".to_owned()],
             kind: TaskKind::Human,
             links: vec!["github:o/r#1".to_owned(), "https://example.com".to_owned()],
+            provider: None,
+            model: None,
         }
     }
 
@@ -1022,6 +1035,8 @@ mod tests {
                         criteria: vec!["c".to_owned()],
                         kind: TaskKind::Agent,
                         links: vec![],
+                        provider: None,
+                        model: None,
                     },
                     placement: Placement::End,
                     at: at(100),

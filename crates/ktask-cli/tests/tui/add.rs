@@ -23,6 +23,8 @@ const END: &str = "\x1b[F";
 pub(crate) const SUBMIT: &str = "\x13";
 const ADD_CRITERION: &str = "\x0e";
 const REMOVE_CRITERION: &str = "\x04";
+const PROVIDER: &str = "\x10";
+const MODEL: &str = "\x0f";
 
 /// The column the text of the title and links fields starts at: the frame, the marker, the
 /// label.
@@ -124,6 +126,20 @@ fn n_opens_an_empty_form_over_the_queue_with_the_cursor_in_the_title() -> Result
     assert!(bottom.contains("Ctrl-N, Ctrl-D criterion"), "{bottom}");
     assert_eq!(listed(&fixture)?.len(), 5);
     Ok(())
+}
+
+#[test]
+fn the_task_form_stores_its_provider_and_model_and_the_queue_shows_them() -> Result<()> {
+    let fixture = Fixture::empty()?;
+    let mut terminal = open_form(&fixture)?;
+    terminal.send(&format!(
+        "T{TAB}{TAB}{TAB}{TAB}c{PROVIDER}codex{MODEL}gpt-5{SUBMIT}"
+    ))?;
+    wait_queue_with(&terminal, "T · codex (gpt-5)")?;
+    let tasks = listed(&fixture)?;
+    assert_eq!(tasks[0]["provider"], "codex");
+    assert_eq!(tasks[0]["model"], "gpt-5");
+    quit(terminal)
 }
 
 #[test]

@@ -10,8 +10,7 @@ use crate::text::TextArea;
 mod render;
 
 /// What the form's frame says at the bottom: the keys that are not typing.
-const FORM_KEYS: &str =
-    " Ctrl-S add · Esc cancel · Tab, Shift-Tab field · Ctrl-N, Ctrl-D criterion ";
+const FORM_KEYS: &str = " Ctrl-S add · Esc cancel · Tab, Shift-Tab field · Ctrl-N, Ctrl-D criterion · Ctrl-P provider · Ctrl-O model ";
 
 /// What the form's frame says at the bottom while it asks to discard the task.
 const DISCARD_KEYS: &str = " y discard · n, Esc keep writing ";
@@ -21,6 +20,8 @@ const DISCARD_KEYS: &str = " y discard · n, Esc keep writing ";
 enum Focus {
     Title,
     Kind,
+    Provider,
+    Model,
     Links,
     Body,
     /// The criterion at this index.
@@ -32,6 +33,8 @@ enum Focus {
 struct Form {
     title: TextArea,
     kind: TaskKind,
+    provider: TextArea,
+    model: TextArea,
     /// Links are written on one line, apart by spaces: a link holds no space.
     links: TextArea,
     body: TextArea,
@@ -50,6 +53,8 @@ impl Form {
         Self {
             title: TextArea::new(false),
             kind: TaskKind::default(),
+            provider: TextArea::new(false),
+            model: TextArea::new(false),
             links: TextArea::new(false),
             body: TextArea::new(true),
             criteria: vec![TextArea::new(false)],
@@ -65,6 +70,8 @@ impl Form {
         !self.title.text().is_empty()
             || !self.body.text().is_empty()
             || !self.links.text().is_empty()
+            || !self.provider.text().is_empty()
+            || !self.model.text().is_empty()
             || self
                 .criteria
                 .iter()
@@ -84,6 +91,8 @@ impl Form {
                 .split_whitespace()
                 .map(str::to_owned)
                 .collect(),
+            provider: (!self.provider.text().is_empty()).then(|| self.provider.text()),
+            model: (!self.model.text().is_empty()).then(|| self.model.text()),
         }
     }
 
@@ -134,6 +143,8 @@ impl Form {
         match self.focus {
             Focus::Title => self.title = self.title.press(key),
             Focus::Links => self.links = self.links.press(key),
+            Focus::Provider => self.provider = self.provider.press(key),
+            Focus::Model => self.model = self.model.press(key),
             Focus::Body => self.body = self.body.press(key),
             Focus::Criterion(index) => {
                 if let Some(criterion) = self.criteria.get_mut(index) {
@@ -314,6 +325,26 @@ impl TaskFormScreen {
                 },
                 None,
             ),
+            'p' => (
+                Self {
+                    form: Form {
+                        focus: Focus::Provider,
+                        ..self.form
+                    },
+                    ..self
+                },
+                None,
+            ),
+            'o' => (
+                Self {
+                    form: Form {
+                        focus: Focus::Model,
+                        ..self.form
+                    },
+                    ..self
+                },
+                None,
+            ),
             _ => (self, None),
         }
     }
@@ -354,6 +385,8 @@ mod tests {
                 criteria: vec![String::new()],
                 kind: TaskKind::Agent,
                 links: vec![],
+                provider: None,
+                model: None,
             }
         );
     }
@@ -373,6 +406,8 @@ mod tests {
                 criteria: vec!["first more".to_owned(), "second".to_owned()],
                 kind: TaskKind::Agent,
                 links: vec!["github:a/b#1".to_owned(), "https://x.io".to_owned()],
+                provider: None,
+                model: None,
             }
         );
     }

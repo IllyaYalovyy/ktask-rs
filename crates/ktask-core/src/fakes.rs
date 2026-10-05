@@ -369,5 +369,7 @@ pub(crate) fn draft(title: &str) -> TaskDraft {
         criteria: vec!["it works".to_owned()],
         kind: TaskKind::Agent,
         links: vec![],
+        provider: None,
+        model: None,
     }
 }

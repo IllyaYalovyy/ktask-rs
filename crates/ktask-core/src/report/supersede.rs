@@ -266,6 +266,8 @@ mod tests {
             criteria: vec!["c".to_owned()],
             kind: crate::TaskKind::default(),
             links: vec![],
+            provider: None,
+            model: None,
             status: TaskStatus::Pending,
             created_at: std::time::SystemTime::UNIX_EPOCH,
         }

@@ -188,6 +188,24 @@ impl Application for CliApplication {
         let Some(context) = guard.as_ref() else {
             return Err(vec![NeedsProject::NoProject]);
         };
+        let settings =
+            ktask_core::SettingsStore::load(&context.settings_store).map_err(|error| {
+                vec![NeedsProject::Failed(AddError::Journal(JournalError::new(
+                    error.to_string(),
+                )))]
+            })?;
+        let known = ktask_core::show_providers(&settings, &builtin_providers())
+            .map_err(|error| {
+                vec![NeedsProject::Failed(AddError::Journal(JournalError::new(
+                    error.to_string(),
+                )))]
+            })?
+            .into_iter()
+            .map(|provider| provider.name)
+            .collect::<Vec<_>>();
+        if let Some(problem) = ktask_core::provider_problem(draft, &known) {
+            return Err(vec![NeedsProject::Failed(problem)]);
+        }
         ktask_core::add_task(&context.journal, &SystemClock, draft, placement)
             .map(|task| task.id)
             .map_err(|errors| errors.into_iter().map(NeedsProject::Failed).collect())
@@ -240,7 +258,7 @@ impl Application for CliApplication {
     }
 
     fn import(&self, path: &str) -> Result<Import, Self::ImportError> {
-        self.with_context(|context| import_into(&context.journal, path))
+        self.with_context(|context| import_into(&context.journal, &context.settings_store, path))
     }
 
     fn load_projects(&self) -> Result<Vec<Project>, Self::ProjectsError> {

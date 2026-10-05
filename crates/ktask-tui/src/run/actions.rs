@@ -432,6 +432,8 @@ mod tests {
             criteria: Vec::new(),
             kind: ktask_core::TaskKind::default(),
             links: Vec::new(),
+            provider: None,
+            model: None,
         }
     }
 
@@ -634,6 +636,8 @@ mod tests {
                 criteria: vec!["it works".to_owned()],
                 kind: ktask_core::TaskKind::Agent,
                 links: vec![],
+                provider: None,
+                model: None,
                 status: TaskStatus::Pending,
                 created_at: std::time::SystemTime::UNIX_EPOCH,
             }],

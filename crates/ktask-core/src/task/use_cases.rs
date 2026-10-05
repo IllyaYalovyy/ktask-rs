@@ -240,6 +240,8 @@ mod tests {
                 "github:owner/repo#12".to_owned(),
                 "https://example.com/x".to_owned(),
             ],
+            provider: None,
+            model: None,
         };
         let task = add_task(&journal, &clock(), &written, Placement::End).unwrap();
         assert_eq!(
@@ -252,6 +254,8 @@ mod tests {
                 criteria: written.criteria,
                 kind: TaskKind::Human,
                 links: written.links,
+                provider: None,
+                model: None,
                 status: TaskStatus::Pending,
                 created_at: at(500),
             }

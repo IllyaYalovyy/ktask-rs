@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use ktask_adapters::SystemClock;
 use ktask_core::{TaskDraft, TaskKind};
 
-use crate::context::{merge_project, open_queue, placement};
+use crate::context::{merge_project, open_journal, open_registry, placement, resolve};
 use crate::error::{Failure, failure_from_add_problems};
 use crate::render;
 
@@ -29,6 +29,12 @@ pub(crate) struct Args {
     /// each link
     #[arg(long, value_name = "REF")]
     link: Vec<String>,
+    /// Use this configured provider for this task's agent steps
+    #[arg(long, value_name = "PROVIDER")]
+    provider: Option<String>,
+    /// Use this model for this task's agent steps
+    #[arg(long, value_name = "MODEL")]
+    model: Option<String>,
     /// Put the task immediately before the task with this ID
     #[arg(long, value_name = "ID", conflicts_with = "after")]
     before: Option<u64>,
@@ -52,9 +58,21 @@ pub(crate) fn run(
         criteria: args.criterion.clone(),
         kind: args.kind.unwrap_or_default(),
         links: args.link.clone(),
+        provider: args.provider.clone(),
+        model: args.model.clone(),
     };
     let project = merge_project(project, args.project.as_deref())?;
-    let journal = open_queue(project.as_deref())?;
+    let registry = open_registry()?;
+    let (project, settings) = resolve(&registry, project.as_deref())?;
+    let known = ktask_core::show_providers(&settings, &ktask_adapters::builtin_providers())
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|provider| provider.name)
+        .collect::<Vec<_>>();
+    if let Some(problem) = ktask_core::provider_problem(&draft, &known) {
+        return Err(problem.into());
+    }
+    let journal = open_journal(&project)?;
     let placement = placement(args.before, args.after);
     let task = ktask_core::add_task(&journal, &SystemClock, &draft, placement)
         .map_err(failure_from_add_problems)?;

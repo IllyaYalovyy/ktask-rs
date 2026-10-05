@@ -5,7 +5,7 @@ use std::fmt;
 
 use serde::Deserialize;
 
-use crate::task::{add_tasks, draft_problems};
+use crate::task::{add_tasks, draft_problems, provider_problem};
 use crate::{AddError, Clock, Journal, Placement, Task, TaskDraft, TaskKind, TaskStatus};
 
 /// A task as the JSON array writes it: the authored fields of `list --json`, plus the
@@ -23,6 +23,8 @@ struct Item {
     criteria: Vec<String>,
     kind: Option<String>,
     links: Vec<String>,
+    provider: Option<String>,
+    model: Option<String>,
     id: Option<serde_json::Value>,
     position: Option<serde_json::Value>,
     status: Option<serde_json::Value>,
@@ -150,6 +152,8 @@ fn read_item(value: serde_json::Value) -> Result<Parsed, Vec<String>> {
         criteria: item.criteria,
         kind,
         links: item.links,
+        provider: item.provider,
+        model: item.model,
     };
     problems.extend(draft_problems(&draft).iter().map(ToString::to_string));
     if problems.is_empty() {
@@ -224,6 +228,42 @@ pub fn import_tasks(
     })
 }
 
+/// Imports tasks after checking every task-level provider against `known_providers`. This is
+/// the same atomic import use case as [`import_tasks`], with the project-owned provider
+/// catalogue supplied by its caller.
+///
+/// # Errors
+///
+/// Returns the parse, validation and journal errors [`import_tasks`] can return, including an
+/// invalid task-level provider.
+pub fn import_tasks_with_providers(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    json: &str,
+    placement: Placement,
+    known_providers: &[String],
+) -> Result<Import, ImportError> {
+    let (drafts, skipped_cancelled) = parse_items(json)?;
+    let invalid = drafts
+        .iter()
+        .enumerate()
+        .filter_map(|(index, draft)| {
+            provider_problem(draft, known_providers).map(|problem| InvalidTask {
+                index: index + 1,
+                problems: vec![problem.to_string()],
+            })
+        })
+        .collect::<Vec<_>>();
+    if !invalid.is_empty() {
+        return Err(ImportError::Invalid(invalid));
+    }
+    let tasks = add_tasks(journal, clock, &drafts, placement).map_err(ImportError::Add)?;
+    Ok(Import {
+        tasks,
+        skipped_cancelled,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::fakes::{FakeClock, FakeJournal, at, draft};
@@ -245,6 +285,8 @@ mod tests {
             criteria: vec!["c".to_owned()],
             kind: TaskKind::default(),
             links: vec![],
+            provider: None,
+            model: None,
             status: TaskStatus::Pending,
             created_at: std::time::SystemTime::UNIX_EPOCH,
         }

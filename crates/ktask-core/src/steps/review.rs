@@ -96,6 +96,8 @@ mod tests {
             criteria: vec!["first thing".to_owned()],
             kind: TaskKind::Agent,
             links: vec![],
+            provider: None,
+            model: None,
             status: TaskStatus::Running,
             created_at: at(1),
         };
@@ -145,6 +147,8 @@ mod tests {
             criteria: vec![],
             kind: TaskKind::Agent,
             links: vec![],
+            provider: None,
+            model: None,
             status: TaskStatus::Running,
             created_at: at(1),
         };

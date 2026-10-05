@@ -16,6 +16,10 @@ struct TaskJson<'a> {
     criteria: &'a [String],
     kind: &'static str,
     links: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<&'a str>,
     status: &'static str,
     created_at: String,
 }
@@ -54,6 +58,8 @@ fn tasks_json(tasks: &[Task], out: &mut impl Write) -> Result<(), String> {
                 criteria: &task.criteria,
                 kind: task.kind.as_str(),
                 links: &task.links,
+                provider: task.provider.as_deref(),
+                model: task.model.as_deref(),
                 status: task.status.as_str(),
                 created_at: created_at.to_string(),
             })

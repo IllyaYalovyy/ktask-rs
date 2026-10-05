@@ -4,6 +4,7 @@
 //! [`crate::steps`] — the sync and health-check gates ahead of an attempt, then the list an
 //! attempt walks.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::time::Duration;
@@ -142,6 +143,37 @@ pub struct RunReport {
     pub end: RunEnd,
 }
 
+/// Providers available for task-level agent-step selections. The resolver remains a project
+/// role setting; a task's provider applies to implementation, review and test.
+#[derive(Clone, Copy)]
+pub struct TaskProviders<'a> {
+    /// Provider used when a task has no override.
+    pub default: &'a Provider,
+    /// Provider used for the resolve role.
+    pub resolver: &'a Provider,
+    /// Every configured provider, keyed by its configured name.
+    pub named: &'a BTreeMap<String, Provider>,
+}
+
+impl fmt::Debug for TaskProviders<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TaskProviders")
+            .field("default", &self.default.name)
+            .field("resolver", &self.resolver.name)
+            .field("named", &self.named.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+impl<'a> TaskProviders<'a> {
+    fn agent_for(&self, task: &crate::Task) -> &'a Provider {
+        task.provider
+            .as_ref()
+            .and_then(|name| self.named.get(name))
+            .unwrap_or(self.default)
+    }
+}
+
 /// Takes `lock` for the whole run, so that two runs of the same project never overlap.
 ///
 /// # Errors
@@ -196,10 +228,19 @@ fn account_for_interrupted_run(
 /// task stays `pending`.
 fn attempt_task(
     deps: steps::Deps<'_>,
+    providers: &TaskProviders<'_>,
     context: RunContext<'_>,
     task: &crate::Task,
     attempted: &mut Vec<Attempted>,
 ) -> Result<Option<RunEnd>, RunError> {
+    let deps = steps::Deps {
+        provider: providers.agent_for(task),
+        ..deps
+    };
+    let context = RunContext {
+        model: task.model.as_deref().unwrap_or(context.model),
+        ..context
+    };
     let mut pre_steps = Vec::new();
     match steps::sync::run_gate(deps.journal, deps.git, deps.clock, context, task.id)? {
         Ok(step) => pre_steps.extend(step),
@@ -248,8 +289,7 @@ fn attempt_loop(
     clock: &impl Clock,
     commands: &impl Commands,
     git: &impl Git,
-    provider: &Provider,
-    resolver_provider: &Provider,
+    providers: &TaskProviders<'_>,
     session_log: &impl SessionLog,
     sleep: &impl Sleep,
     context: RunContext<'_>,
@@ -259,18 +299,19 @@ fn attempt_loop(
         clock,
         commands,
         git,
-        provider,
-        resolver_provider,
+        provider: providers.default,
+        resolver_provider: providers.resolver,
         session_log,
         sleep,
     };
-    run_attempt_loop(deps, journal, context)
+    run_attempt_loop(deps, providers, journal, context)
 }
 
 /// [`attempt_loop`]'s own loop, pulled out of it so building `deps` stays within the
 /// workspace's function-length limit.
 fn run_attempt_loop(
     deps: steps::Deps<'_>,
+    providers: &TaskProviders<'_>,
     journal: &impl Journal,
     context: RunContext<'_>,
 ) -> Result<RunReport, RunError> {
@@ -278,7 +319,7 @@ fn run_attempt_loop(
     loop {
         match pick_next_task(journal)? {
             Pick::Task(task) => {
-                let end = attempt_task(deps, context, &task, &mut attempted)?;
+                let end = attempt_task(deps, providers, context, &task, &mut attempted)?;
                 if let Some(end) = end {
                     return Ok(RunReport { attempted, end });
                 }
@@ -360,6 +401,42 @@ pub fn run_queue_with_resolver(
     lock: &impl RunLock,
     context: RunContext<'_>,
 ) -> Result<RunReport, RunError> {
+    let named = BTreeMap::new();
+    run_queue_with_task_providers(
+        journal,
+        clock,
+        commands,
+        git,
+        TaskProviders {
+            default: provider,
+            resolver: resolver_provider,
+            named: &named,
+        },
+        session_log,
+        sleep,
+        lock,
+        context,
+    )
+}
+
+/// Runs a queue with the project's role providers and its complete configured catalogue, so a
+/// task can select its own agent-step provider.
+///
+/// # Errors
+///
+/// Returns the same lock and journal failures as [`run_queue`].
+#[allow(clippy::too_many_arguments)]
+pub fn run_queue_with_task_providers(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    commands: &impl Commands,
+    git: &impl Git,
+    providers: TaskProviders<'_>,
+    session_log: &impl SessionLog,
+    sleep: &impl Sleep,
+    lock: &impl RunLock,
+    context: RunContext<'_>,
+) -> Result<RunReport, RunError> {
     take_lock(lock)?;
     if let Some(attempted) = account_for_interrupted_run(journal, clock)? {
         let end = RunEnd::Stopped {
@@ -376,8 +453,7 @@ pub fn run_queue_with_resolver(
         clock,
         commands,
         git,
-        provider,
-        resolver_provider,
+        &providers,
         session_log,
         sleep,
         context,

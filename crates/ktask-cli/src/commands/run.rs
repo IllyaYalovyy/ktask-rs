@@ -1,6 +1,7 @@
 //! `ktask-rs run`: run the pending tasks in queue order, one attempt each, until one stops
 //! it.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::ExitCode;
 
@@ -12,7 +13,7 @@ use ktask_adapters::{
 };
 use ktask_core::{
     COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, RunReport, SYNC_STEP,
-    Settings, TEST_STEP, effective_provider, effective_resolver_provider,
+    Settings, TEST_STEP, TaskProviders, effective_provider, effective_resolver_provider,
     effective_transport_retries, show_providers,
 };
 
@@ -87,20 +88,58 @@ fn run_context<'a>(
 }
 
 /// Builds one configured provider selected by this project setting.
-fn selected_provider(
+fn configured_providers(
     settings: &Settings,
-    provider_name: &str,
-) -> Result<ktask_core::Provider, Failure> {
-    let provider = show_providers(settings, &builtin_providers())
-        .map_err(|error| error.to_string())?
+) -> Result<BTreeMap<String, ktask_core::Provider>, Failure> {
+    let views =
+        show_providers(settings, &builtin_providers()).map_err(|error| error.to_string())?;
+    Ok(views
         .into_iter()
-        .find(|candidate| candidate.name == provider_name)
-        .ok_or_else(|| format!("unknown provider {provider_name:?}"))?;
-    Ok(if provider.name == echo::NAME {
-        echo::provider()
-    } else {
-        configured_provider(&provider.name, &provider.definition)
-    })
+        .map(|provider| {
+            let configured = if provider.name == echo::NAME {
+                echo::provider()
+            } else {
+                configured_provider(&provider.name, &provider.definition)
+            };
+            (provider.name, configured)
+        })
+        .collect())
+}
+
+/// Runs with the configured provider catalogue after the project execution context is ready.
+fn run_with_providers(
+    journal: &ktask_adapters::SqliteJournal,
+    settings: &Settings,
+    lock: &FileRunLock,
+    context: RunContext<'_>,
+) -> Result<RunReport, Failure> {
+    let providers = configured_providers(settings)?;
+    let provider = providers
+        .get(effective_provider(settings))
+        .ok_or_else(|| format!("unknown provider {:?}", effective_provider(settings)))?;
+    let resolver = providers
+        .get(effective_resolver_provider(settings))
+        .ok_or_else(|| {
+            format!(
+                "unknown provider {:?}",
+                effective_resolver_provider(settings)
+            )
+        })?;
+    Ok(ktask_core::run_queue_with_task_providers(
+        journal,
+        &SystemClock,
+        &ProcessCommands,
+        &GitCli,
+        TaskProviders {
+            default: provider,
+            resolver,
+            named: &providers,
+        },
+        &FileSessionLog,
+        &RealSleep,
+        lock,
+        context,
+    )?)
 }
 
 /// Resolves the project and its settings, builds the context `ktask_core::run_queue` needs,
@@ -129,20 +168,7 @@ fn execute(args: &Args, project: Option<&str>) -> Result<RunReport, Failure> {
         &sessions_dir,
         &outputs_dir,
     );
-    let provider = selected_provider(&settings, effective_provider(&settings))?;
-    let resolver_provider = selected_provider(&settings, effective_resolver_provider(&settings))?;
-    Ok(ktask_core::run_queue_with_resolver(
-        &journal,
-        &SystemClock,
-        &ProcessCommands,
-        &GitCli,
-        &provider,
-        &resolver_provider,
-        &FileSessionLog,
-        &RealSleep,
-        &lock,
-        context,
-    )?)
+    run_with_providers(&journal, &settings, &lock, context)
 }
 
 /// Runs the pending tasks of the resolved project in queue order, one attempt each with the

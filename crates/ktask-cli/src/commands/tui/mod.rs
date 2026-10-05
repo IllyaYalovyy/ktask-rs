@@ -4,7 +4,9 @@ use std::fmt;
 use std::io::{self, IsTerminal};
 use std::path::Path;
 
-use ktask_adapters::{GitCli, SqliteJournal, SqliteRegistry, SystemClock};
+use ktask_adapters::{
+    GitCli, SqliteJournal, SqliteRegistry, SystemClock, TomlSettingsStore, builtin_providers,
+};
 use ktask_core::{Import, ImportError, Placement, Project, ResolveError};
 
 use crate::context::{current_dir, current_exe, merge_project, open_registry, resolved};
@@ -90,9 +92,20 @@ fn read_file(path: &str) -> Result<String, String> {
 /// Imports the tasks of the file `path` names into `journal`, at the end of the queue, giving
 /// the same typed result `ktask_core::import_tasks` itself gives, for the screen to word as it
 /// shows it.
-fn import_into(journal: &SqliteJournal, path: &str) -> Result<Import, ImportProblem> {
+fn import_into(
+    journal: &SqliteJournal,
+    settings: &TomlSettingsStore,
+    path: &str,
+) -> Result<Import, ImportProblem> {
     let json = read_file(path).map_err(ImportProblem::Read)?;
-    ktask_core::import_tasks(journal, &SystemClock, &json, Placement::End)
+    let settings = ktask_core::SettingsStore::load(settings)
+        .map_err(|error| ImportProblem::Read(error.to_string()))?;
+    let known = ktask_core::show_providers(&settings, &builtin_providers())
+        .map_err(|error| ImportProblem::Read(error.to_string()))?
+        .into_iter()
+        .map(|provider| provider.name)
+        .collect::<Vec<_>>();
+    ktask_core::import_tasks_with_providers(journal, &SystemClock, &json, Placement::End, &known)
         .map_err(ImportProblem::Import)
 }
 

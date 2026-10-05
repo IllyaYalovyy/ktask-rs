@@ -34,7 +34,7 @@ pub use clock::Clock;
 pub use commands::{CommandSpec, Commands, CommandsError, Exit, Output};
 pub use forget::{ForgetError, forget_project};
 pub use git::{CommitAllError, Git, GitError, PullRebase, PullRebaseError, PushError};
-pub use import::{Import, ImportError, InvalidTask, import_tasks};
+pub use import::{Import, ImportError, InvalidTask, import_tasks, import_tasks_with_providers};
 pub use journal::{
     AcknowledgeError, AnswerError, AppendConflict, AppendError, Attempt, AttemptEnd, AttemptRun,
     BeginAttemptError, CancelError, DoneError, Event, Journal, JournalError, JournalWatch,
@@ -66,8 +66,9 @@ pub use report::{
 };
 pub use resolve::{Resolution, ResolveError, resolve_project};
 pub use run::{
-    Attempted, RunContext, RunEnd, RunError, RunReport, SyncProblem, build_prompt,
+    Attempted, RunContext, RunEnd, RunError, RunReport, SyncProblem, TaskProviders, build_prompt,
     build_review_prompt, build_test_prompt, run_queue, run_queue_with_resolver,
+    run_queue_with_task_providers,
 };
 pub use sessions::{SessionLog, SessionLogError};
 pub use settings::{
@@ -92,7 +93,7 @@ pub use steps::{
 };
 pub use task::{
     AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, acknowledge_task, add_task,
-    answer_task, done_task, list_all_tasks, list_tasks, remove_task, retry_task,
+    answer_task, done_task, list_all_tasks, list_tasks, provider_problem, remove_task, retry_task,
 };
 pub use usage::Usage;
 

@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use ktask_adapters::{SystemClock, read_text};
 
-use crate::context::{merge_project, open_queue, placement};
+use crate::context::{merge_project, open_journal, open_registry, placement, resolve};
 use crate::error::Failure;
 use crate::render;
 
@@ -42,12 +42,20 @@ pub(crate) fn run(
     // nothing.
     let json = read_text(&args.file).map_err(|message| Failure { message, code: 2 })?;
     let project = merge_project(project, args.project.as_deref())?;
-    let journal = open_queue(project.as_deref())?;
-    let import = ktask_core::import_tasks(
+    let registry = open_registry()?;
+    let (project, settings) = resolve(&registry, project.as_deref())?;
+    let known = ktask_core::show_providers(&settings, &ktask_adapters::builtin_providers())
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|provider| provider.name)
+        .collect::<Vec<_>>();
+    let journal = open_journal(&project)?;
+    let import = ktask_core::import_tasks_with_providers(
         &journal,
         &SystemClock,
         &json,
         placement(args.before, args.after),
+        &known,
     )?;
     render::imported(&import, stdout).map_err(Failure::from)?;
     Ok(ExitCode::SUCCESS)

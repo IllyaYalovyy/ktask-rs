@@ -127,6 +127,8 @@ mod tests {
             criteria: vec!["it works".to_owned()],
             kind: TaskKind::Agent,
             links: vec![],
+            provider: None,
+            model: None,
             status: TaskStatus::Done,
             created_at: std::time::SystemTime::UNIX_EPOCH,
         }

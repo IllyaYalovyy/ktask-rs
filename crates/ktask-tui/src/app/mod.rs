@@ -374,6 +374,8 @@ mod tests {
             criteria: vec!["it works".to_owned()],
             kind: TaskKind::Agent,
             links: vec![],
+            provider: None,
+            model: None,
             status: TaskStatus::Pending,
             created_at: SystemTime::UNIX_EPOCH,
         }

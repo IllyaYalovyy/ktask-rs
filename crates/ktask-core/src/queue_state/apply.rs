@@ -27,6 +27,8 @@ impl QueueState {
                 criteria: draft.criteria.clone(),
                 kind: draft.kind,
                 links: draft.links.clone(),
+                provider: draft.provider.clone(),
+                model: draft.model.clone(),
                 status: TaskStatus::Pending,
                 created_at: *at,
             },

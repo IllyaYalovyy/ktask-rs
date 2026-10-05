@@ -84,7 +84,25 @@ fn decode_task_draft(
             .parse::<TaskKind>()
             .map_err(|e| corrupt("kind", e))?,
         links: strings("links")?,
+        provider: optional_string(payload, "provider", corrupt)?,
+        model: optional_string(payload, "model", corrupt)?,
     })
+}
+
+/// An optional string written by a newer task event. Missing values keep older journals valid.
+fn optional_string(
+    payload: &Value,
+    name: &str,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Option<String>, JournalError> {
+    match payload.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(str::to_owned)
+            .map(Some)
+            .ok_or_else(|| corrupt(name, "not a string".to_owned())),
+    }
 }
 
 /// The [`Event::TaskAdded`] a `task_added` row's `payload` decodes to.

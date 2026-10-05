@@ -14,6 +14,7 @@ pub use use_cases::{
 pub(crate) use use_cases::{add_tasks, without_hidden_statuses};
 pub use validate::AddError;
 pub(crate) use validate::draft_problems;
+pub use validate::provider_problem;
 
 /// The number a task is known by: assigned once, in order, never reused, never changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -151,6 +152,10 @@ pub struct Task {
     pub kind: TaskKind,
     /// References to related work, each `github:owner/repo#NUMBER` or an `http(s)` URL.
     pub links: Vec<String>,
+    /// The provider this task uses for its agent steps, when it overrides the project setting.
+    pub provider: Option<String>,
+    /// The model this task uses for its agent steps, when it overrides the project setting.
+    pub model: Option<String>,
     /// Where it is in its life.
     pub status: TaskStatus,
     /// When it was added.
@@ -170,6 +175,10 @@ pub struct TaskDraft {
     pub kind: TaskKind,
     /// References to related work.
     pub links: Vec<String>,
+    /// The provider this task uses for its agent steps, when it overrides the project setting.
+    pub provider: Option<String>,
+    /// The model this task uses for its agent steps, when it overrides the project setting.
+    pub model: Option<String>,
 }
 
 /// Where a new task goes in the queue.

@@ -27,19 +27,27 @@ fn task_added_payload(draft: &TaskDraft, placement: Placement) -> String {
         Placement::Before(anchor) => Some(("before", anchor.0)),
         Placement::After(anchor) => Some(("after", anchor.0)),
     };
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "title": draft.title,
         "body": draft.body,
         "criteria": draft.criteria,
         "kind": draft.kind.as_str(),
         "links": draft.links,
+        "provider": draft.provider,
+        "model": draft.model,
     })
     .as_object()
     .cloned()
-    .into_iter()
-    .flatten()
-    .chain(placed.map(|(place, anchor)| (place.to_owned(), anchor.into())))
-    .collect::<serde_json::Map<_, _>>();
+    .unwrap_or_default();
+    if draft.provider.is_none() {
+        payload.remove("provider");
+    }
+    if draft.model.is_none() {
+        payload.remove("model");
+    }
+    if let Some((place, anchor)) = placed {
+        payload.insert(place.to_owned(), anchor.into());
+    }
     Value::Object(payload).to_string()
 }
 
