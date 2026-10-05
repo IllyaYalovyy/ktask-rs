@@ -377,6 +377,11 @@ pub(crate) fn run_agent_step(
     });
     let (duration, result) = run_prompt(deps, context, state, step, model, prompt, resume)?;
     maybe_record_session(deps, context, state, step, prompt, &result)?;
+    if let Ok(output) = &result
+        && let Exit::Code(code) = output.exit
+    {
+        state.exit_code = Some(code);
+    }
     if let Some(until) = limit_wait(deps, step, &result) {
         return Ok(StepOutcome::Waiting {
             duration,

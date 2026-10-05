@@ -1480,8 +1480,8 @@ fn recorded_codex_jsonl_runs_the_task_with_its_requested_model_session_and_usage
 }
 
 #[test]
-fn a_codex_error_or_timeout_keeps_the_observed_exit_reason() -> Result<()> {
-    for (script, timeout, expected_exit, expected_reason) in [
+fn a_codex_transport_failure_is_pending_but_other_errors_keep_their_exit_reason() -> Result<()> {
+    for (script, timeout, expected_exit, expected_status, expected_reason) in [
         (
             format!(
                 "cat >/dev/null\nprintf '%s' '{}' >&2\nexit 7",
@@ -1489,12 +1489,14 @@ fn a_codex_error_or_timeout_keeps_the_observed_exit_reason() -> Result<()> {
             ),
             None,
             Some(7),
+            "pending",
             "stream disconnected before completion",
         ),
         (
             "cat >/dev/null\nsleep 30".to_owned(),
             Some("1"),
             None,
+            "failed-unknown",
             "time limit",
         ),
     ] {
@@ -1513,7 +1515,7 @@ fn a_codex_error_or_timeout_keeps_the_observed_exit_reason() -> Result<()> {
         assert_eq!(output.status.code(), Some(1));
         let (_, exit_code, status, reason) = fixture.attempt_ended(1)?;
         assert_eq!(exit_code, expected_exit);
-        assert_eq!(status, "failed-unknown");
+        assert_eq!(status, expected_status);
         assert!(
             reason
                 .as_deref()

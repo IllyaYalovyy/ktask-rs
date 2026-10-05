@@ -7,6 +7,8 @@ mod support;
 use std::fmt::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use repo::{git_repository, scratch};
 use support::{Outcome, Result, Sandbox};
@@ -75,6 +77,49 @@ impl Fixture {
         );
         std::fs::write(settings, configured)?;
         Ok(dir)
+    }
+
+    fn spawn_run(&self) -> Result<Child> {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ktask-rs"));
+        command
+            .arg("run")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        Ok(self
+            .sandbox
+            .isolate(&mut command, &self.repository)
+            .spawn()?)
+    }
+}
+
+#[test]
+fn status_shows_the_live_codex_transport_backoff_from_the_real_cli() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add()?;
+    let _codex = fixture.install_codex(&format!(
+        "cat >/dev/null\nprintf '%s' '{failure}' >&2\nexit 1",
+        failure = include_str!("../../../test-fixtures/codex/transport-failure-stderr.txt"),
+    ))?;
+    let mut run = fixture.spawn_run()?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let status = fixture.run(&["status"])?;
+        if status
+            .stdout
+            .contains("Codex transport disconnected; retry 1 of 3 in")
+        {
+            run.kill()?;
+            let _ = run.wait()?;
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            run.kill()?;
+            let _ = run.wait()?;
+            return Err(
+                format!("timed out waiting for transport backoff: {}", status.stdout).into(),
+            );
+        }
+        std::thread::park_timeout(Duration::from_millis(20));
     }
 }
 
