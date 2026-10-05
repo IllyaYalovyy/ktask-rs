@@ -160,7 +160,7 @@ fn editing_and_ctrl_s_saves_through_the_same_use_case_settings_set_runs() -> Res
     assert_eq!(
         cli_settings(&fixture)?,
         format!(
-            "attempt-timeout\t7200\tcustom\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t1\tcustom\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
+            "attempt-timeout\t7200\tcustom\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t1\tcustom\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
         )
     );
     quit(terminal)
@@ -209,7 +209,7 @@ fn tabbing_to_max_attempts_and_saving_a_valid_value_works_and_an_invalid_one_is_
     assert_eq!(
         cli_settings(&fixture)?,
         format!(
-            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t5\tcustom\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
+            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t5\tcustom\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
         )
     );
 
@@ -228,7 +228,7 @@ fn tabbing_to_max_attempts_and_saving_a_valid_value_works_and_an_invalid_one_is_
     assert_eq!(
         cli_settings(&fixture)?,
         format!(
-            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t5\tcustom\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
+            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t5\tcustom\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
         )
     );
     quit_from_settings(terminal)
@@ -258,7 +258,7 @@ fn tab_moves_to_the_health_check_field_and_ctrl_s_saves_it_leaving_the_timeout_u
     assert_eq!(
         cli_settings(&fixture)?,
         format!(
-            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\tcargo test\tcustom\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t1\tcustom\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
+            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\tcargo test\tcustom\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t1\tcustom\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
         )
     );
     quit(terminal)
@@ -287,7 +287,7 @@ fn tab_tab_moves_to_the_tracked_branch_field_and_ctrl_s_saves_a_valid_value() ->
     assert_eq!(
         fixture.cli_settings()?,
         format!(
-            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\torigin/main\tcustom\n{STEP_DEFAULTS}max-attempts\t3\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
+            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\torigin/main\tcustom\n{STEP_DEFAULTS}max-attempts\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
         )
     );
     quit(terminal)
@@ -443,7 +443,7 @@ fn switching_commit_off_from_the_settings_screen_shows_the_same_refusal_the_cli_
 const SMALL: u16 = 10;
 
 /// Every setting's own label, in the order the screen shows them.
-const FIELD_LABELS: [&str; 10] = [
+const FIELD_LABELS: [&str; 15] = [
     "Attempt timeout, in seconds",
     "Silent after, in seconds",
     "Health check command",
@@ -454,6 +454,11 @@ const FIELD_LABELS: [&str; 10] = [
     "Testing step (on/off)",
     "Commit step (on/off)",
     "Push step (on/off)",
+    "Max attempts",
+    "Agent provider",
+    "Agent model",
+    "Resolver provider",
+    "Resolver model",
 ];
 
 #[test]
@@ -470,12 +475,43 @@ fn on_a_small_terminal_tab_and_shift_tab_keep_the_focused_field_on_screen() -> R
         terminal.wait_for_text(label)?;
     }
 
-    for label in FIELD_LABELS.into_iter().take(9).rev() {
+    for label in FIELD_LABELS.into_iter().take(14).rev() {
         terminal.send(SHIFT_TAB)?;
         terminal.wait_for_text(label)?;
     }
 
     quit_from_settings(terminal)
+}
+
+#[test]
+fn agent_and_resolver_provider_and_model_fields_are_visible_and_save_through_the_cli_use_case()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    for (tabs, value, expected) in [
+        (11, "claude", "provider\tclaude\tcustom\n"),
+        (12, "agent-model", "model\tagent-model\tcustom\n"),
+        (13, "echo", "resolver-provider\techo\tcustom\n"),
+        (
+            14,
+            "resolver-model",
+            "resolver-model\tresolver-model\tcustom\n",
+        ),
+    ] {
+        let mut terminal = open_settings(&fixture)?;
+        terminal.send(&TAB.repeat(tabs))?;
+        terminal.wait_for("the selected agent setting", |screen| {
+            screen.contents().contains(FIELD_LABELS[tabs])
+        })?;
+        terminal.send(&BACKSPACE.repeat(20))?;
+        terminal.send(value)?;
+        terminal.send(SUBMIT)?;
+        terminal.wait_for("the queue after saving", |screen| {
+            !screen.contents().contains("Settings")
+        })?;
+        assert!(cli_settings(&fixture)?.contains(expected));
+        quit(terminal)?;
+    }
+    Ok(())
 }
 
 #[test]

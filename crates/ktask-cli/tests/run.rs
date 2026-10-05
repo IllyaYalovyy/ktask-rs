@@ -15,6 +15,7 @@ mod repo;
 mod run_cleanup;
 mod support;
 
+use std::fmt::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -1385,8 +1386,8 @@ fn claude_script(script: &str) -> Result<TempDir> {
 
 fn select_claude(fixture: &Fixture) -> Result<()> {
     for (name, value) in [
-        ("resolver-provider", "claude"),
-        ("resolver-model", "claude-sonnet-5"),
+        ("provider", "claude"),
+        ("model", "claude-sonnet-5"),
         ("step-review", "off"),
         ("step-testing", "off"),
     ] {
@@ -1400,12 +1401,7 @@ fn select_claude(fixture: &Fixture) -> Result<()> {
 fn recorded_claude_stream_json_runs_the_task_with_its_model() -> Result<()> {
     let fixture = Fixture::new()?;
     select_claude(&fixture)?;
-    fixture.run(&[
-        "settings",
-        "set",
-        "resolver-model",
-        "claude-haiku-4-5-20251001",
-    ])?;
+    fixture.run(&["settings", "set", "model", "claude-haiku-4-5-20251001"])?;
     fixture.add_agent_task("a", "do the recorded work")?;
     let script = [
         "[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-haiku-4-5-20251001 ] && [ \"$9\" = --disallowedTools ] || exit 9\nfor tool in CronCreate CronDelete CronList Monitor ScheduleWakeup TaskOutput TaskStop; do case \",${10},\" in *\",$tool,\"*) ;; *) exit 9 ;; esac; done\ncase \",${10},\" in *\",Agent,\"*) exit 9 ;; esac",
@@ -1528,6 +1524,61 @@ fn a_claude_error_or_timeout_keeps_the_exit_reason() -> Result<()> {
                 .as_deref()
                 .unwrap_or_default()
                 .contains(expected_reason)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn agent_and_resolver_settings_run_only_their_own_steps_and_status_names_each_actual_provider_and_model()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.run(&["settings", "set", "max-attempts", "2"])?;
+    let seen = fixture.work.join("providers-seen");
+    let runner = fixture.work.join("record-provider");
+    std::fs::write(
+        &runner,
+        format!(
+            "#!/bin/sh\nprompt=$(cat)\ncase \"$prompt\" in\n  '# Review:'*) step=review; outcome=approved ;;\n  '# Test:'*) step=testing; outcome=rejected ;;\n  '# Resolve:'*) step=resolve; outcome=stop ;;\n  *) step=implementation; outcome=done ;;\nesac\nprintf '%s:%s\\n' \"$step\" \"$1\" >> \"{}\"\nreport=$(printf '%s\\n' \"$prompt\" | sed -n \"s/^    //; / report --token .* $outcome/p\" | head -n 1)\neval \"$report\"\n",
+            seen.display()
+        ),
+    )?;
+    std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755))?;
+    let settings = fixture
+        .sandbox
+        .state_home()
+        .join("ktask-rs/my-app/settings.toml");
+    let mut configured = std::fs::read_to_string(&settings)?;
+    let _ = write!(
+        configured,
+        "\nprovider = \"agent\"\nmodel = \"agent-model\"\nresolver-provider = \"resolver\"\nresolver-model = \"resolver-model\"\n\
+         [providers.agent]\ncommand = \"{runner}\"\nmodel = [\"{{model}}\"]\nparser = \"plain\"\n\
+         [providers.resolver]\ncommand = \"{runner}\"\nmodel = [\"{{model}}\"]\nparser = \"plain\"\n",
+        runner = runner.display(),
+    );
+    std::fs::write(&settings, configured)?;
+    fixture.add_agent_task(
+        "separate agent settings",
+        "the configured providers report each pipeline outcome",
+    )?;
+
+    let outcome = fixture.run_the_queue(&["run"])?;
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stderr);
+    assert_eq!(
+        std::fs::read_to_string(seen)?,
+        "implementation:agent-model\nreview:agent-model\ntesting:agent-model\nresolve:resolver-model\n"
+    );
+    let status = fixture.run(&["status"])?;
+    for line in [
+        "implementation\tagent-model\tagent",
+        "review\tagent-model\tagent",
+        "testing\tagent-model\tagent",
+        "resolve\tresolver-model\tresolver",
+    ] {
+        assert!(
+            status.stdout.contains(line),
+            "missing {line:?} in {}",
+            status.stdout
         );
     }
     Ok(())

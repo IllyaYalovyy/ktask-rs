@@ -31,8 +31,6 @@ impl Fixture {
         let repository = git_repository(&sandbox, &work, "my-app")?;
         for (name, value) in [
             ("max-attempts", "1"),
-            ("resolver-provider", "reported"),
-            ("resolver-model", "asked-model"),
             ("step-review", "off"),
             ("step-testing", "off"),
             ("step-push", "off"),
@@ -84,6 +82,12 @@ impl Fixture {
             .append(true)
             .open(settings)?
             .write_all(definition.as_bytes())?;
+        for (name, value) in [("provider", "reported"), ("model", "asked-model")] {
+            let outcome = self
+                .sandbox
+                .run(&self.repository, &["settings", "set", name, value])?;
+            assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+        }
         Ok(())
     }
 

@@ -42,8 +42,8 @@ impl Fixture {
         };
         for (name, value) in [
             ("max-attempts", "2"),
-            ("resolver-provider", "claude"),
-            ("resolver-model", "claude-haiku-4-5-20251001"),
+            ("provider", "claude"),
+            ("model", "claude-haiku-4-5-20251001"),
             ("step-review", "off"),
             ("step-testing", "off"),
         ] {
@@ -248,6 +248,13 @@ fn recorded_claude_authentication_failure_stops_with_login_advice() -> Result<()
 fn a_recorded_claude_session_is_passed_to_resume_after_retry_same_session() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add()?;
+    for (name, value) in [
+        ("resolver-provider", "claude"),
+        ("resolver-model", "claude-haiku-4-5-20251001"),
+    ] {
+        let outcome = fixture.run(&["settings", "set", name, value])?;
+        assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    }
     let seen = fixture.repository.join("resumed-session");
     let script = format!(
         "prompt=$(cat)\nprevious=\nfor arg in \"$@\"; do\n  if [ \"$previous\" = --resume ]; then printf '%s' \"$arg\" > '{seen}'; fi\n  previous=$arg\ndone\nif printf '%s\\n' \"$prompt\" | grep -q '^# Resolve:'; then\n  binary=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    \\(.*\\) report --token .* retry .*/\\1/p' | head -n 1)\n  token=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    .* report --token \\([^ ]*\\) retry .*/\\1/p' | head -n 1)\n  printf '%s' '{success}'\n  \"$binary\" report --token \"$token\" retry --same-session\nelif [ -f '{seen}' ]; then\n  printf '%s' '{resumed}'\n  report=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\n  eval \"$report\"\nelse\n  printf '%s' '{success}'\n  report=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* failed --reason /p' | head -n 1)\n  eval \"$report\"\nfi",

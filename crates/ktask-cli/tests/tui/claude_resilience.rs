@@ -33,8 +33,8 @@ impl Fixture {
         let repository = git_repository(&sandbox, &work, "my-app")?;
         for (name, value) in [
             ("max-attempts", "1"),
-            ("resolver-provider", "claude"),
-            ("resolver-model", "claude-haiku-4-5-20251001"),
+            ("provider", "claude"),
+            ("model", "claude-haiku-4-5-20251001"),
             ("step-review", "off"),
             ("step-testing", "off"),
         ] {

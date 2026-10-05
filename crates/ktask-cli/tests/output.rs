@@ -76,8 +76,8 @@ impl Fixture {
 
 fn select_claude(fixture: &Fixture) -> Result<()> {
     for (name, value) in [
-        ("resolver-provider", "claude"),
-        ("resolver-model", "claude-sonnet-5"),
+        ("provider", "claude"),
+        ("model", "claude-sonnet-5"),
         ("step-review", "off"),
         ("step-testing", "off"),
     ] {
@@ -173,12 +173,7 @@ fn output_follows_live_bytes_and_retains_safe_whole_attempts() -> Result<()> {
 fn output_renders_a_recorded_claude_stream_and_raw_keeps_the_wire_format() -> Result<()> {
     let fixture = Fixture::new()?;
     select_claude(&fixture)?;
-    fixture.run(&[
-        "settings",
-        "set",
-        "resolver-model",
-        "claude-haiku-4-5-20251001",
-    ])?;
+    fixture.run(&["settings", "set", "model", "claude-haiku-4-5-20251001"])?;
     fixture.add("replay the recorded Claude stream")?;
     let claude = recorded_claude()?;
     let run = fixture.run_with_path(&["run"], claude.path())?;

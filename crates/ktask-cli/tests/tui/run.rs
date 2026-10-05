@@ -132,8 +132,8 @@ impl Fixture {
 
 fn select_claude(fixture: &Fixture) -> Result<()> {
     for (name, value) in [
-        ("resolver-provider", "claude"),
-        ("resolver-model", "claude-sonnet-5"),
+        ("provider", "claude"),
+        ("model", "claude-sonnet-5"),
         ("step-review", "off"),
         ("step-testing", "off"),
     ] {
@@ -553,12 +553,7 @@ fn l_replays_the_same_readable_claude_entries_as_output() -> Result<()> {
     select_claude(&fixture)?;
     fixture.sandbox.run(
         &fixture.repository,
-        &[
-            "settings",
-            "set",
-            "resolver-model",
-            "claude-haiku-4-5-20251001",
-        ],
+        &["settings", "set", "model", "claude-haiku-4-5-20251001"],
     )?;
     fixture.add_agent_task("recorded", "replay the recorded Claude stream")?;
     let claude = recorded_claude()?;
