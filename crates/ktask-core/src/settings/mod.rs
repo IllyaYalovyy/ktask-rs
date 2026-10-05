@@ -466,6 +466,11 @@ mod tests {
                     is_default: true,
                 },
                 SettingView {
+                    name: TRANSPORT_RETRIES,
+                    value: DEFAULT_TRANSPORT_RETRIES.to_string(),
+                    is_default: true,
+                },
+                SettingView {
                     name: PROVIDER,
                     value: DEFAULT_PROVIDER.to_owned(),
                     is_default: true,
@@ -503,6 +508,7 @@ mod tests {
             commit_step: Some(false),
             push_step: Some(false),
             max_attempts: Some(5),
+            transport_retries: Some(4),
             provider: Some("claude".to_owned()),
             model: Some("sonnet".to_owned()),
             resolver_provider: Some("claude".to_owned()),
@@ -565,6 +571,11 @@ mod tests {
                 SettingView {
                     name: MAX_ATTEMPTS,
                     value: "5".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: TRANSPORT_RETRIES,
+                    value: "4".to_owned(),
                     is_default: false,
                 },
                 SettingView {
