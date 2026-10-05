@@ -24,7 +24,7 @@ fn record_passed_step(
     duration: Duration,
     reason: Option<&str>,
 ) -> Result<(), RunError> {
-    crate::attempt::begin_step(journal, clock, id, number, step, None)?;
+    crate::attempt::begin_step(journal, clock, id, number, step, None, None)?;
     crate::attempt::end_step(
         journal,
         clock,
@@ -188,12 +188,18 @@ pub(crate) fn run_one_step(
     state: &mut PipelineState<'_>,
     step: &dyn Step,
 ) -> Result<(Duration, TaskStatus, Option<String>), RunError> {
+    let agent_provider = matches!(
+        step.name(),
+        crate::IMPLEMENTATION | crate::REVIEW_STEP | crate::TEST_STEP | crate::RESOLVE_STEP
+    )
+    .then(|| deps.provider_for(step.name()).name.as_str());
     crate::attempt::begin_step(
         deps.journal,
         deps.clock,
         state.task.id,
         state.token.number,
         step.name(),
+        agent_provider,
         step.model(context, state).as_deref(),
     )?;
     let mut total = Duration::ZERO;

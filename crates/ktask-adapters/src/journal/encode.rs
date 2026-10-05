@@ -147,13 +147,15 @@ fn step_started_payload(event: &Event) -> String {
     let Event::StepStarted {
         number,
         step,
+        provider,
         model,
         ..
     } = event
     else {
         unreachable!("only called for Event::StepStarted")
     };
-    serde_json::json!({ "number": number, "step": step, "model": model }).to_string()
+    serde_json::json!({ "number": number, "step": step, "provider": provider, "model": model })
+        .to_string()
 }
 
 /// The `limit_wait_seconds` and `limit_resumed_at` a `step_ended` row's payload carries `wait`

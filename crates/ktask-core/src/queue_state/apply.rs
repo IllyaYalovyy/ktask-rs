@@ -264,6 +264,7 @@ impl QueueState {
             id,
             number,
             step,
+            provider,
             model,
             at,
         } = event
@@ -274,6 +275,7 @@ impl QueueState {
             attempt.waiting = None;
             attempt.steps.push(StepFold {
                 name: step.clone(),
+                provider: provider.clone(),
                 model: model.clone(),
                 started_at: *at,
                 ended: None,

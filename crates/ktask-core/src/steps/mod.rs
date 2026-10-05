@@ -81,8 +81,21 @@ pub(crate) struct Deps<'a> {
     pub(crate) commands: &'a dyn Commands,
     pub(crate) git: &'a dyn Git,
     pub(crate) provider: &'a Provider,
+    /// The provider the resolve step uses; every other agent step uses `provider`.
+    pub(crate) resolver_provider: &'a Provider,
     pub(crate) session_log: &'a dyn SessionLog,
     pub(crate) sleep: &'a dyn Sleep,
+}
+
+impl Deps<'_> {
+    /// The provider that actually runs `step`.
+    pub(crate) fn provider_for(&self, step: &str) -> &Provider {
+        if step == crate::RESOLVE_STEP {
+            self.resolver_provider
+        } else {
+            self.provider
+        }
+    }
 }
 
 /// One step that already ran and passed before the attempt it belongs to was even begun — the
@@ -343,6 +356,7 @@ mod tests {
             tracked_branch: None,
             disabled_steps: &[],
             max_attempts: 1,
+            model: "",
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
             outputs_dir: Path::new("/state/outputs"),
@@ -445,6 +459,7 @@ mod tests {
             commands: &commands,
             git: &git,
             provider: &provider,
+            resolver_provider: &provider,
             session_log: &session_log,
             sleep: &sleep,
         };
@@ -505,6 +520,7 @@ mod tests {
             commands: &commands,
             git: &git,
             provider: &provider,
+            resolver_provider: &provider,
             session_log: &session_log,
             sleep: &sleep,
         };
@@ -591,6 +607,7 @@ mod tests {
             commands: &commands,
             git: &git,
             provider: &provider,
+            resolver_provider: &provider,
             session_log: &session_log,
             sleep: &sleep,
         };
@@ -652,6 +669,7 @@ mod tests {
             commands: &commands,
             git: &git,
             provider: &provider,
+            resolver_provider: &provider,
             session_log: &session_log,
             sleep: &sleep,
         };

@@ -147,6 +147,7 @@ mod tests {
             tracked_branch: None,
             disabled_steps: &[],
             max_attempts: 1,
+            model: "",
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
             outputs_dir: Path::new("/state/outputs"),
@@ -214,6 +215,7 @@ mod tests {
             commands: &commands,
             git,
             provider: &provider,
+            resolver_provider: &provider,
             session_log: &session_log,
             sleep: &sleep,
         };

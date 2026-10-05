@@ -24,6 +24,7 @@ mod query;
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StepFold {
     name: String,
+    provider: Option<String>,
     model: Option<String>,
     started_at: SystemTime,
     ended: Option<AttemptEnd>,

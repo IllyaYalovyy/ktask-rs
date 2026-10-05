@@ -205,10 +205,15 @@ pub(super) fn decode_step_started(
         .get("model")
         .and_then(Value::as_str)
         .map(str::to_owned);
+    let provider = payload
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     Ok(Event::StepStarted {
         id,
         number,
         step,
+        provider,
         model,
         at,
     })

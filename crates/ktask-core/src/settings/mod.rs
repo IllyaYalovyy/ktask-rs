@@ -20,8 +20,10 @@ pub const DEFAULT_SILENT_AFTER_SECS: u64 = 120;
 /// sets it.
 pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
 
-/// The provider the resolve step runs with, when nothing else sets it: the only one this
-/// milestone ships, like every other role.
+/// The provider the implementation, review and test steps run with when nothing else sets it.
+pub const DEFAULT_PROVIDER: &str = "echo";
+
+/// The provider the resolve step runs with, when nothing else sets it.
 pub const DEFAULT_RESOLVER_PROVIDER: &str = "echo";
 
 /// The attempt time limit setting's name.
@@ -56,6 +58,12 @@ pub const STEP_PUSH: &str = "step-push";
 
 /// The max-attempts setting's name.
 pub const MAX_ATTEMPTS: &str = "max-attempts";
+
+/// The provider for implementation, review and test steps.
+pub const PROVIDER: &str = "provider";
+
+/// The model for implementation, review and test steps.
+pub const MODEL: &str = "model";
 
 /// The resolver-provider setting's name.
 pub const RESOLVER_PROVIDER: &str = "resolver-provider";
@@ -104,6 +112,11 @@ pub struct Settings {
     /// How many attempts a task may have before the resolver is no longer run and it ends
     /// `failed` with its last attempt's own reason, when the project has set one.
     pub max_attempts: Option<u32>,
+    /// The provider implementation, review and test steps run with, when the project has set
+    /// one.
+    pub provider: Option<String>,
+    /// The model implementation, review and test steps run with, when the project has set one.
+    pub model: Option<String>,
     /// The provider the resolve step runs with, when the project has set one.
     pub resolver_provider: Option<String>,
     /// The model the resolve step runs with, when the project has set one.
@@ -263,6 +276,7 @@ pub fn set_setting(
     store: &impl SettingsStore,
     git: &impl Git,
     project_dir: &Path,
+    known_providers: &[String],
     name: &str,
     value: &str,
 ) -> Result<SettingView, SetSettingError> {
@@ -280,6 +294,15 @@ pub fn set_setting(
     };
     let mut settings = store.load().map_err(SetSettingError::Store)?;
     let value = (spec.set)(&mut settings, value, git, project_dir)?;
+    if spec.name.ends_with("provider") && !known_providers.iter().any(|known| known == &value) {
+        return Err(SetSettingError::InvalidValue {
+            name: spec.name,
+            message: format!(
+                "unknown provider {value:?}; known providers: {}",
+                known_providers.join(", ")
+            ),
+        });
+    }
     store.save(&settings).map_err(SetSettingError::Store)?;
     Ok(SettingView {
         name: spec.name,
@@ -327,6 +350,13 @@ pub fn effective_resolver_provider(settings: &Settings) -> &str {
         .unwrap_or(DEFAULT_RESOLVER_PROVIDER)
 }
 
+/// The provider implementation, review and test steps run with: the project's own setting,
+/// or the built-in default.
+#[must_use]
+pub fn effective_provider(settings: &Settings) -> &str {
+    settings.provider.as_deref().unwrap_or(DEFAULT_PROVIDER)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::fakes::{FakeGit, FakeSettingsStore};
@@ -350,7 +380,14 @@ mod tests {
         name: &str,
         value: &str,
     ) -> Result<SettingView, SetSettingError> {
-        set_setting(store, &no_git(), dir(), name, value)
+        set_setting(
+            store,
+            &no_git(),
+            dir(),
+            &["claude".to_owned(), "echo".to_owned()],
+            name,
+            value,
+        )
     }
 
     #[test]
@@ -415,6 +452,16 @@ mod tests {
                     is_default: true,
                 },
                 SettingView {
+                    name: PROVIDER,
+                    value: DEFAULT_PROVIDER.to_owned(),
+                    is_default: true,
+                },
+                SettingView {
+                    name: MODEL,
+                    value: String::new(),
+                    is_default: true,
+                },
+                SettingView {
                     name: RESOLVER_PROVIDER,
                     value: DEFAULT_RESOLVER_PROVIDER.to_owned(),
                     is_default: true,
@@ -442,6 +489,8 @@ mod tests {
             commit_step: Some(false),
             push_step: Some(false),
             max_attempts: Some(5),
+            provider: Some("claude".to_owned()),
+            model: Some("sonnet".to_owned()),
             resolver_provider: Some("claude".to_owned()),
             resolver_model: Some("opus".to_owned()),
             ..Settings::default()
@@ -502,6 +551,16 @@ mod tests {
                 SettingView {
                     name: MAX_ATTEMPTS,
                     value: "5".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: PROVIDER,
+                    value: "claude".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: MODEL,
+                    value: "sonnet".to_owned(),
                     is_default: false,
                 },
                 SettingView {
@@ -626,7 +685,15 @@ mod tests {
             remote_branches: vec!["origin/main".to_owned()],
             ..FakeGit::default()
         };
-        let view = set_setting(&store, &git, dir(), TRACKED_BRANCH, "  origin/main  ").unwrap();
+        let view = set_setting(
+            &store,
+            &git,
+            dir(),
+            &["claude".to_owned(), "echo".to_owned()],
+            TRACKED_BRANCH,
+            "  origin/main  ",
+        )
+        .unwrap();
         assert_eq!(
             view,
             SettingView {
@@ -653,7 +720,15 @@ mod tests {
             remote_branches: vec!["origin/main".to_owned()],
             ..FakeGit::default()
         };
-        let error = set_setting(&store, &git, dir(), TRACKED_BRANCH, "main").unwrap_err();
+        let error = set_setting(
+            &store,
+            &git,
+            dir(),
+            &["claude".to_owned(), "echo".to_owned()],
+            TRACKED_BRANCH,
+            "main",
+        )
+        .unwrap_err();
         assert_eq!(
             error,
             SetSettingError::InvalidValue {
@@ -668,8 +743,15 @@ mod tests {
     #[test]
     fn a_tracked_branch_naming_no_existing_remote_branch_is_refused_and_nothing_changes() {
         let store = FakeSettingsStore::with(Settings::default());
-        let error =
-            set_setting(&store, &no_git(), dir(), TRACKED_BRANCH, "origin/main").unwrap_err();
+        let error = set_setting(
+            &store,
+            &no_git(),
+            dir(),
+            &["claude".to_owned(), "echo".to_owned()],
+            TRACKED_BRANCH,
+            "origin/main",
+        )
+        .unwrap_err();
         assert_eq!(
             error,
             SetSettingError::InvalidValue {
@@ -688,7 +770,15 @@ mod tests {
             failure: Some(failure.clone()),
             ..FakeGit::default()
         };
-        let error = set_setting(&store, &git, dir(), TRACKED_BRANCH, "origin/main").unwrap_err();
+        let error = set_setting(
+            &store,
+            &git,
+            dir(),
+            &["claude".to_owned(), "echo".to_owned()],
+            TRACKED_BRANCH,
+            "origin/main",
+        )
+        .unwrap_err();
         assert_eq!(error, SetSettingError::Git(failure));
         assert_eq!(store.load(), Ok(Settings::default()));
     }
@@ -982,6 +1072,35 @@ mod tests {
                 ..Settings::default()
             })
         );
+    }
+
+    #[test]
+    fn setting_an_agent_provider_and_model_changes_and_persists_them() {
+        let store = FakeSettingsStore::with(Settings::default());
+        assert_eq!(set(&store, PROVIDER, "claude").unwrap().value, "claude");
+        assert_eq!(set(&store, MODEL, "sonnet").unwrap().value, "sonnet");
+        assert_eq!(
+            store.load(),
+            Ok(Settings {
+                provider: Some("claude".to_owned()),
+                model: Some("sonnet".to_owned()),
+                ..Settings::default()
+            })
+        );
+    }
+
+    #[test]
+    fn an_unknown_provider_is_refused_with_the_known_names_and_changes_nothing() {
+        let store = FakeSettingsStore::with(Settings::default());
+        let error = set(&store, PROVIDER, "missing").unwrap_err();
+        assert_eq!(
+            error,
+            SetSettingError::InvalidValue {
+                name: PROVIDER,
+                message: "unknown provider \"missing\"; known providers: claude, echo".to_owned(),
+            }
+        );
+        assert_eq!(store.load(), Ok(Settings::default()));
     }
 
     #[test]

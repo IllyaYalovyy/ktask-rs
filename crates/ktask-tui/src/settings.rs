@@ -54,6 +54,8 @@ fn label(name: &str) -> &'static str {
         "step-commit" => "Commit step (on/off)",
         "step-push" => "Push step (on/off)",
         "max-attempts" => "Max attempts",
+        "provider" => "Agent provider",
+        "model" => "Agent model",
         "resolver-provider" => "Resolver provider",
         "resolver-model" => "Resolver model",
         "silent-after" => "Silent after, in seconds",

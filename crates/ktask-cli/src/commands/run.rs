@@ -12,7 +12,7 @@ use ktask_adapters::{
 };
 use ktask_core::{
     COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, RunReport, SYNC_STEP,
-    Settings, TEST_STEP, effective_resolver_provider, show_providers,
+    Settings, TEST_STEP, effective_provider, effective_resolver_provider, show_providers,
 };
 
 use crate::context::{
@@ -63,6 +63,7 @@ fn run_context<'a>(
     args: &Args,
     settings: &'a Settings,
     disabled: &'a [&'static str],
+    model: &'a str,
     resolver_model: &'a str,
     sessions_dir: &'a Path,
     outputs_dir: &'a Path,
@@ -76,15 +77,18 @@ fn run_context<'a>(
         tracked_branch: settings.tracked_branch.as_deref(),
         disabled_steps: disabled,
         max_attempts: ktask_core::effective_max_attempts(settings),
+        model,
         resolver_model,
         sessions_dir,
         outputs_dir,
     }
 }
 
-/// Builds the configured implementation provider selected for this project.
-fn selected_provider(settings: &Settings) -> Result<ktask_core::Provider, Failure> {
-    let provider_name = effective_resolver_provider(settings);
+/// Builds one configured provider selected by this project setting.
+fn selected_provider(
+    settings: &Settings,
+    provider_name: &str,
+) -> Result<ktask_core::Provider, Failure> {
     let provider = show_providers(settings, &builtin_providers())
         .map_err(|error| error.to_string())?
         .into_iter()
@@ -107,6 +111,7 @@ fn execute(args: &Args, project: Option<&str>) -> Result<RunReport, Failure> {
     let journal = open_journal(&project)?;
     let lock = FileRunLock::new(run_lock_file(&project)?);
     let binary_path = current_exe()?;
+    let model = settings.model.clone().unwrap_or_default();
     let resolver_model = settings.resolver_model.clone().unwrap_or_default();
     let disabled = disabled_steps(&settings);
     let sessions_dir = sessions_dir_file(&project)?;
@@ -117,17 +122,20 @@ fn execute(args: &Args, project: Option<&str>) -> Result<RunReport, Failure> {
         args,
         &settings,
         &disabled,
+        &model,
         &resolver_model,
         &sessions_dir,
         &outputs_dir,
     );
-    let provider = selected_provider(&settings)?;
-    Ok(ktask_core::run_queue(
+    let provider = selected_provider(&settings, effective_provider(&settings))?;
+    let resolver_provider = selected_provider(&settings, effective_resolver_provider(&settings))?;
+    Ok(ktask_core::run_queue_with_resolver(
         &journal,
         &SystemClock,
         &ProcessCommands,
         &GitCli,
         &provider,
+        &resolver_provider,
         &FileSessionLog,
         &RealSleep,
         &lock,

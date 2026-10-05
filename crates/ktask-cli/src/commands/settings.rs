@@ -6,7 +6,7 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use clap::Subcommand;
-use ktask_adapters::GitCli;
+use ktask_adapters::{GitCli, builtin_providers};
 
 use crate::context::{merge_project, open_registry, open_settings_store, resolve};
 use crate::error::Failure;
@@ -32,7 +32,7 @@ pub(crate) enum Command {
     Set {
         /// The setting to change: attempt-timeout, silent-after, health-check, tracked-branch,
         /// step-sync, step-health-check, step-review, step-testing, step-commit, step-push,
-        /// max-attempts, resolver-provider or resolver-model
+        /// max-attempts, provider, model, resolver-provider or resolver-model
         #[arg(value_name = "NAME")]
         name: String,
         /// The new value
@@ -93,7 +93,13 @@ fn set(
     let registry = open_registry()?;
     let (project, _settings) = resolve(&registry, project)?;
     let store = open_settings_store(&project)?;
-    let view = ktask_core::set_setting(&store, &GitCli, &project.path, name, value)?;
+    let settings = ktask_core::SettingsStore::load(&store).map_err(|error| error.to_string())?;
+    let providers = ktask_core::show_providers(&settings, &builtin_providers())
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|provider| provider.name)
+        .collect::<Vec<_>>();
+    let view = ktask_core::set_setting(&store, &GitCli, &project.path, &providers, name, value)?;
     render::setting_set(&view, json, stdout)?;
     Ok(ExitCode::SUCCESS)
 }

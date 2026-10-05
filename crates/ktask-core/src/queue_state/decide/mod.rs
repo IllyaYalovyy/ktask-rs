@@ -318,6 +318,7 @@ impl QueueState {
         id: TaskId,
         number: u32,
         step: String,
+        provider: Option<String>,
         model: Option<String>,
         at: SystemTime,
     ) -> Result<Event, RecordReportError> {
@@ -326,6 +327,7 @@ impl QueueState {
             id,
             number,
             step,
+            provider,
             model,
             at,
         })

@@ -175,9 +175,10 @@ impl Step for Implementation {
     }
 
     fn model(&self, context: RunContext<'_>, state: &PipelineState<'_>) -> Option<String> {
-        state.requested_model.clone().or_else(|| {
-            (!context.resolver_model.is_empty()).then(|| context.resolver_model.to_owned())
-        })
+        state
+            .requested_model
+            .clone()
+            .or_else(|| (!context.model.is_empty()).then(|| context.model.to_owned()))
     }
 
     fn run(
@@ -458,6 +459,7 @@ mod tests {
             tracked_branch: None,
             disabled_steps: &[IMPLEMENTATION],
             max_attempts: 1,
+            model: "",
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
             outputs_dir: Path::new("/state/outputs"),
@@ -503,6 +505,7 @@ mod tests {
             tracked_branch: None,
             disabled_steps: &[],
             max_attempts: 1,
+            model: "",
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
             outputs_dir: Path::new("/state/outputs"),

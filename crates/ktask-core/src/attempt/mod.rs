@@ -244,14 +244,23 @@ pub(crate) fn begin_step(
     id: TaskId,
     number: u32,
     step: &str,
+    provider: Option<&str>,
     model: Option<&str>,
 ) -> Result<(), RecordReportError> {
     let at = clock.now();
     let step = step.to_owned();
+    let provider = provider.map(str::to_owned);
     let model = model.map(str::to_owned);
     decide_and_append(journal, move |state| {
         state
-            .decide_begin_step(id, number, step.clone(), model.clone(), at)
+            .decide_begin_step(
+                id,
+                number,
+                step.clone(),
+                provider.clone(),
+                model.clone(),
+                at,
+            )
             .map(|event| (vec![event], ()))
     })
 }

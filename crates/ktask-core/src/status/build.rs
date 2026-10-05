@@ -36,7 +36,7 @@ fn step_lines(
             Some(end) => ended_step_line(
                 &step.name,
                 step.model.as_deref(),
-                provider,
+                step.provider.as_deref().or(provider),
                 session,
                 end,
                 end.reported.map(|outcome| (outcome, end.reason.clone())),
@@ -44,7 +44,7 @@ fn step_lines(
             ),
             None => running_step(
                 &step.name,
-                provider,
+                step.provider.as_deref().or(provider),
                 step.model.as_deref(),
                 session,
                 step.started_at,
@@ -530,8 +530,16 @@ mod tests {
     #[test]
     fn an_attempt_waiting_on_its_providers_limit_shows_a_live_countdown() {
         let journal = journal_with_a_started_attempt();
-        crate::attempt::begin_step(&journal, &clock(100), TaskId(1), 1, IMPLEMENTATION, None)
-            .unwrap();
+        crate::attempt::begin_step(
+            &journal,
+            &clock(100),
+            TaskId(1),
+            1,
+            IMPLEMENTATION,
+            None,
+            None,
+        )
+        .unwrap();
         crate::attempt::record_waiting(
             &journal,
             &clock(100),
@@ -565,8 +573,16 @@ mod tests {
     #[test]
     fn once_resumed_the_step_that_waited_for_a_limit_still_shows_it_after_it_passes() {
         let journal = journal_with_a_started_attempt();
-        crate::attempt::begin_step(&journal, &clock(100), TaskId(1), 1, IMPLEMENTATION, None)
-            .unwrap();
+        crate::attempt::begin_step(
+            &journal,
+            &clock(100),
+            TaskId(1),
+            1,
+            IMPLEMENTATION,
+            None,
+            None,
+        )
+        .unwrap();
         crate::attempt::record_waiting(
             &journal,
             &clock(100),
@@ -1016,8 +1032,16 @@ mod tests {
     #[test]
     fn a_health_check_step_that_already_passed_is_its_own_line_ahead_of_the_current_one() {
         let journal = journal_with_a_started_attempt();
-        crate::attempt::begin_step(&journal, &clock(100), TaskId(1), 1, HEALTH_CHECK_STEP, None)
-            .unwrap();
+        crate::attempt::begin_step(
+            &journal,
+            &clock(100),
+            TaskId(1),
+            1,
+            HEALTH_CHECK_STEP,
+            None,
+            None,
+        )
+        .unwrap();
         crate::attempt::end_step(
             &journal,
             &clock(104),
@@ -1037,8 +1061,16 @@ mod tests {
             None,
         )
         .unwrap();
-        crate::attempt::begin_step(&journal, &clock(104), TaskId(1), 1, IMPLEMENTATION, None)
-            .unwrap();
+        crate::attempt::begin_step(
+            &journal,
+            &clock(104),
+            TaskId(1),
+            1,
+            IMPLEMENTATION,
+            None,
+            None,
+        )
+        .unwrap();
 
         let entries = status(&journal, &clock(110), &a_live_run()).unwrap();
         assert_eq!(

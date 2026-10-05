@@ -178,6 +178,7 @@ mod tests {
             tracked_branch: Some("origin/main"),
             disabled_steps: &[],
             max_attempts: 1,
+            model: "",
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
             outputs_dir: Path::new("/state/outputs"),

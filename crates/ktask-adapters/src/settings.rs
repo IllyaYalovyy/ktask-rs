@@ -34,6 +34,10 @@ struct SettingsFile {
     step_push: Option<bool>,
     #[serde(rename = "max-attempts", skip_serializing_if = "Option::is_none")]
     max_attempts: Option<u32>,
+    #[serde(rename = "provider", skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+    #[serde(rename = "model", skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
     #[serde(rename = "resolver-provider", skip_serializing_if = "Option::is_none")]
     resolver_provider: Option<String>,
     #[serde(rename = "resolver-model", skip_serializing_if = "Option::is_none")]
@@ -56,6 +60,8 @@ impl From<Settings> for SettingsFile {
             step_commit: settings.commit_step,
             step_push: settings.push_step,
             max_attempts: settings.max_attempts,
+            provider: settings.provider,
+            model: settings.model,
             resolver_provider: settings.resolver_provider,
             resolver_model: settings.resolver_model,
             providers: settings.providers,
@@ -77,6 +83,8 @@ impl From<SettingsFile> for Settings {
             commit_step: file.step_commit,
             push_step: file.step_push,
             max_attempts: file.max_attempts,
+            provider: file.provider,
+            model: file.model,
             resolver_provider: file.resolver_provider,
             resolver_model: file.resolver_model,
             providers: file.providers,
@@ -164,6 +172,8 @@ mod tests {
             commit_step: Some(true),
             push_step: Some(false),
             max_attempts: Some(5),
+            provider: Some("claude".to_owned()),
+            model: Some("sonnet".to_owned()),
             resolver_provider: Some("claude".to_owned()),
             resolver_model: Some("opus".to_owned()),
             providers: BTreeMap::new(),

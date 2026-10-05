@@ -67,15 +67,16 @@ pub use report::{
 pub use resolve::{Resolution, ResolveError, resolve_project};
 pub use run::{
     Attempted, RunContext, RunEnd, RunError, RunReport, SyncProblem, build_prompt,
-    build_review_prompt, build_test_prompt, run_queue,
+    build_review_prompt, build_test_prompt, run_queue, run_queue_with_resolver,
 };
 pub use sessions::{SessionLog, SessionLogError};
 pub use settings::{
-    ATTEMPT_TIMEOUT, DEFAULT_ATTEMPT_TIMEOUT_SECS, DEFAULT_MAX_ATTEMPTS, DEFAULT_RESOLVER_PROVIDER,
-    DEFAULT_SILENT_AFTER_SECS, HEALTH_CHECK, MAX_ATTEMPTS, RESOLVER_MODEL, RESOLVER_PROVIDER,
-    SILENT_AFTER, STEP_COMMIT, STEP_HEALTH_CHECK, STEP_IMPLEMENTATION, STEP_PUSH, STEP_REVIEW,
-    STEP_SYNC, STEP_TESTING, SetSettingError, SettingView, Settings, SettingsError, SettingsStore,
-    TRACKED_BRANCH, effective_attempt_timeout, effective_max_attempts, effective_resolver_provider,
+    ATTEMPT_TIMEOUT, DEFAULT_ATTEMPT_TIMEOUT_SECS, DEFAULT_MAX_ATTEMPTS, DEFAULT_PROVIDER,
+    DEFAULT_RESOLVER_PROVIDER, DEFAULT_SILENT_AFTER_SECS, HEALTH_CHECK, MAX_ATTEMPTS, MODEL,
+    PROVIDER, RESOLVER_MODEL, RESOLVER_PROVIDER, SILENT_AFTER, STEP_COMMIT, STEP_HEALTH_CHECK,
+    STEP_IMPLEMENTATION, STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING, SetSettingError,
+    SettingView, Settings, SettingsError, SettingsStore, TRACKED_BRANCH, effective_attempt_timeout,
+    effective_max_attempts, effective_provider, effective_resolver_provider,
     effective_silent_after, set_setting, show_providers, show_settings, step_enabled,
 };
 pub use sleep::Sleep;

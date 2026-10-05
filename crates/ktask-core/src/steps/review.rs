@@ -63,6 +63,10 @@ impl Step for Review {
         context.step_enabled(REVIEW_STEP)
     }
 
+    fn model(&self, context: RunContext<'_>, _state: &PipelineState<'_>) -> Option<String> {
+        (!context.model.is_empty()).then(|| context.model.to_owned())
+    }
+
     fn run(
         &self,
         deps: &Deps<'_>,
@@ -71,7 +75,8 @@ impl Step for Review {
     ) -> Result<StepOutcome, RunError> {
         let diff = diff_since(deps.git, context, state.start_commit.as_deref());
         let prompt = build_review_prompt(state.task, state.token, context.binary_path, &diff);
-        run_agent_step(deps, context, state, REVIEW_STEP, None, &prompt)
+        let model = self.model(context, state);
+        run_agent_step(deps, context, state, REVIEW_STEP, model.as_deref(), &prompt)
     }
 }
 
@@ -126,6 +131,7 @@ mod tests {
             tracked_branch: None,
             disabled_steps: &[REVIEW_STEP],
             max_attempts: 1,
+            model: "",
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
             outputs_dir: Path::new("/state/outputs"),

@@ -143,6 +143,8 @@ pub enum Event {
         number: u32,
         /// The step's name.
         step: String,
+        /// The provider that runs this agent step. `None` for tool-run steps.
+        provider: Option<String>,
         /// The model configured for this step, when it is the resolve step and the project
         /// has set one. `None` for every other step.
         model: Option<String>,
@@ -317,6 +319,8 @@ pub struct LimitWait {
 pub struct Step {
     /// The step's name.
     pub name: String,
+    /// The provider that ran this agent step. `None` for tool-run steps and older journals.
+    pub provider: Option<String>,
     /// The model configured for this step, when it is the resolve step and the project has
     /// set one. `None` for every other step, and for a resolve step with no model configured.
     pub model: Option<String>,

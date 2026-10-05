@@ -14,6 +14,8 @@ use super::{
     TRACKED_BRANCH, split_tracked_branch, step_enabled,
 };
 
+mod agent;
+
 /// `"on"` or `"off"`, as a step's own switch setting shows it.
 fn toggle_value(enabled: bool) -> String {
     (if enabled { "on" } else { "off" }).to_owned()
@@ -68,6 +70,8 @@ pub(super) fn setting_specs() -> Vec<SettingSpec> {
         commit_step_spec(),
         push_step_spec(),
         max_attempts_spec(),
+        agent::provider_spec(),
+        agent::model_spec(),
         resolver_provider_spec(),
         resolver_model_spec(),
     ]

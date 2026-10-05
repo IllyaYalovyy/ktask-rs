@@ -116,8 +116,16 @@ mod tests {
         let journal = FakeJournal::default();
         add_task(&journal, &clock(), &draft("too large"), Placement::End).unwrap();
         crate::attempt::begin_attempt_running(&journal, &clock(), TaskId(1), "test", None).unwrap();
-        crate::attempt::begin_step(&journal, &clock(), TaskId(1), 1, crate::RESOLVE_STEP, None)
-            .unwrap();
+        crate::attempt::begin_step(
+            &journal,
+            &clock(),
+            TaskId(1),
+            1,
+            crate::RESOLVE_STEP,
+            None,
+            None,
+        )
+        .unwrap();
         journal
     }
 
@@ -224,6 +232,7 @@ mod tests {
             TaskId(1),
             1,
             crate::IMPLEMENTATION,
+            None,
             None,
         )
         .unwrap();

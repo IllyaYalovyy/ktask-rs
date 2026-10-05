@@ -6,7 +6,6 @@
 
 use std::error::Error;
 use std::fmt;
-use std::path::Path;
 use std::time::Duration;
 
 use crate::pick::{Pick, end_when_nothing_left, pick_next_task};
@@ -20,6 +19,10 @@ pub use crate::steps::implementation::build_prompt;
 pub use crate::steps::review::build_review_prompt;
 pub use crate::steps::sync::SyncProblem;
 pub use crate::steps::test_step::build_test_prompt;
+
+mod context;
+
+pub use context::RunContext;
 
 /// Why a run could not proceed at all — never for how an attempt itself ended, which is a
 /// normal [`RunReport`].
@@ -139,57 +142,6 @@ pub struct RunReport {
     pub end: RunEnd,
 }
 
-/// Where a run executes: the project's name, carried in every attempt token, the directory
-/// its provider's commands run in, the path of the `ktask-rs` binary that is running it, and
-/// how long one attempt may run before it is killed.
-#[derive(Debug, Clone, Copy)]
-pub struct RunContext<'a> {
-    /// The project's name.
-    pub project_name: &'a str,
-    /// The directory the provider's commands run in.
-    pub project_dir: &'a Path,
-    /// The path of the running `ktask-rs` binary, so the prompt tells an agent exactly which
-    /// one to call back into, whatever is or is not on its `PATH`.
-    pub binary_path: &'a Path,
-    /// How long one attempt may run before it, and everything it started, is killed.
-    pub attempt_timeout: Duration,
-    /// The project's configured health-check command, run in `project_dir` before a task's
-    /// implementation step, subject to `attempt_timeout` the same way. `None` when the
-    /// project has not set one: the step is skipped, and leaves no line.
-    pub health_check_command: Option<&'a str>,
-    /// The project's configured tracked branch, as `"<remote>/<branch>"`, pulled with rebase
-    /// in `project_dir` ahead of the health check. `None` when the project has not set one:
-    /// the step is skipped, and leaves no line.
-    pub tracked_branch: Option<&'a str>,
-    /// The steps the project has switched off, named as [`crate::SYNC_STEP`],
-    /// [`crate::HEALTH_CHECK_STEP`], [`crate::REVIEW_STEP`], [`crate::TEST_STEP`],
-    /// [`crate::COMMIT_STEP`] or [`crate::PUSH_STEP`] — never [`crate::IMPLEMENTATION`], which
-    /// cannot be switched off. A step named here does not run and leaves no line, whatever
-    /// else is configured for it; the sync and health-check steps still only actually run when
-    /// `tracked_branch`, respectively `health_check_command`, is also set, and the push step
-    /// only when the commit step made a commit.
-    pub disabled_steps: &'a [&'static str],
-    /// How many attempts a task may have before the resolver is no longer run and it ends
-    /// `failed` with its last attempt's own reason — the project's `max-attempts` setting, or
-    /// its default.
-    pub max_attempts: u32,
-    /// The project's `resolver-model` setting, recorded against the resolve step when it runs.
-    /// Empty when the project has not set one.
-    pub resolver_model: &'a str,
-    /// Where a provider's session transcripts are kept, under the tool's own state directory
-    /// — never the project's working tree.
-    pub sessions_dir: &'a Path,
-    /// Where continuously appended output files for attempts are kept.
-    pub outputs_dir: &'a Path,
-}
-
-impl RunContext<'_> {
-    /// Whether the step named `step` is switched on: named in `disabled_steps` or not.
-    pub(crate) fn step_enabled(&self, step: &str) -> bool {
-        !self.disabled_steps.contains(&step)
-    }
-}
-
 /// Takes `lock` for the whole run, so that two runs of the same project never overlap.
 ///
 /// # Errors
@@ -297,6 +249,7 @@ fn attempt_loop(
     commands: &impl Commands,
     git: &impl Git,
     provider: &Provider,
+    resolver_provider: &Provider,
     session_log: &impl SessionLog,
     sleep: &impl Sleep,
     context: RunContext<'_>,
@@ -307,6 +260,7 @@ fn attempt_loop(
         commands,
         git,
         provider,
+        resolver_provider,
         session_log,
         sleep,
     };
@@ -373,6 +327,39 @@ pub fn run_queue(
     lock: &impl RunLock,
     context: RunContext<'_>,
 ) -> Result<RunReport, RunError> {
+    run_queue_with_resolver(
+        journal,
+        clock,
+        commands,
+        git,
+        provider,
+        provider,
+        session_log,
+        sleep,
+        lock,
+        context,
+    )
+}
+
+/// Runs a queue with the provider used by implementation, review and test steps, and the
+/// possibly separate provider used only by resolve.
+///
+/// # Errors
+///
+/// Returns the same lock and journal failures as [`run_queue`].
+#[allow(clippy::too_many_arguments)]
+pub fn run_queue_with_resolver(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    commands: &impl Commands,
+    git: &impl Git,
+    provider: &Provider,
+    resolver_provider: &Provider,
+    session_log: &impl SessionLog,
+    sleep: &impl Sleep,
+    lock: &impl RunLock,
+    context: RunContext<'_>,
+) -> Result<RunReport, RunError> {
     take_lock(lock)?;
     if let Some(attempted) = account_for_interrupted_run(journal, clock)? {
         let end = RunEnd::Stopped {
@@ -390,6 +377,7 @@ pub fn run_queue(
         commands,
         git,
         provider,
+        resolver_provider,
         session_log,
         sleep,
         context,
@@ -465,6 +453,7 @@ mod tests {
             tracked_branch: None,
             disabled_steps: &[],
             max_attempts: 1,
+            model: "",
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
             outputs_dir: Path::new("/state/outputs"),

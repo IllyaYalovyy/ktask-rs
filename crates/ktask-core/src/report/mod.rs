@@ -561,7 +561,7 @@ mod tests {
     fn journal_with_a_running_step(step: &str) -> FakeJournal {
         let journal = journal_with_a_pending_task();
         crate::attempt::begin_attempt_running(&journal, &clock(), TaskId(1), "test", None).unwrap();
-        crate::attempt::begin_step(&journal, &clock(), TaskId(1), 1, step, None).unwrap();
+        crate::attempt::begin_step(&journal, &clock(), TaskId(1), 1, step, None, None).unwrap();
         journal
     }
 

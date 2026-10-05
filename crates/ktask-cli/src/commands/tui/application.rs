@@ -203,6 +203,15 @@ impl Application for CliApplication {
                 &context.settings_store,
                 &GitCli,
                 &context.project.path,
+                &ktask_core::show_providers(
+                    &ktask_core::SettingsStore::load(&context.settings_store)
+                        .map_err(SetSettingError::Store)?,
+                    &builtin_providers(),
+                )
+                .map_err(SetSettingError::Store)?
+                .into_iter()
+                .map(|provider| provider.name)
+                .collect::<Vec<_>>(),
                 name,
                 value,
             )

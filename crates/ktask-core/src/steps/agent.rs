@@ -254,7 +254,7 @@ fn maybe_record_session(
     let Ok(output) = result else {
         return Ok(());
     };
-    let Some(session) = (deps.provider.read_session)(output) else {
+    let Some(session) = (deps.provider_for(step).read_session)(output) else {
         return Ok(());
     };
     record_session(deps, context, state, prompt, output, &session)
@@ -287,7 +287,7 @@ fn run_prompt(
     let started = deps.clock.now();
     let result = run_provider(
         deps.commands,
-        deps.provider,
+        deps.provider_for(step),
         prompt,
         StepCall {
             token: &state.token.to_string(),
@@ -332,13 +332,13 @@ pub(crate) fn run_agent_step(
         transcript_path,
     });
     let (duration, result) = run_prompt(deps, context, state, step, model, prompt, resume)?;
-    if let Some(until) = limit_wait(deps, &result) {
+    if let Some(until) = limit_wait(deps, step, &result) {
         return Ok(StepOutcome::Waiting { duration, until });
     }
     maybe_record_session(deps, context, state, step, prompt, &result)?;
     let facts = result.as_ref().map_or_else(
         |_| crate::ProviderUsage::default(),
-        |output| (deps.provider.read_usage)(output),
+        |output| (deps.provider_for(step).read_usage)(output),
     );
     state.usage = facts.usage;
     state.used_model.clone_from(&facts.model);
@@ -358,9 +358,13 @@ pub(crate) fn run_agent_step(
 /// provider's usage limit was hit: the message's own reset time, or [`DEFAULT_LIMIT_BACKOFF`]
 /// from now when it named none. `None` when the provider could not even be run, or its output
 /// says no such thing.
-fn limit_wait(deps: &Deps<'_>, result: &Result<Output, ProviderRunError>) -> Option<SystemTime> {
+fn limit_wait(
+    deps: &Deps<'_>,
+    step: &str,
+    result: &Result<Output, ProviderRunError>,
+) -> Option<SystemTime> {
     let output = result.as_ref().ok()?;
-    let signal = (deps.provider.detect_limit)(output)?;
+    let signal = (deps.provider_for(step).detect_limit)(output)?;
     Some(
         signal
             .reset_at
