@@ -152,7 +152,7 @@ fn a_valid_file_of_three_tasks_adds_all_three_in_order_and_prints_their_ids() ->
     let tasks = json!([
         {"title": "First", "criteria": ["one"]},
         {"title": "Second", "body": "with\na body", "criteria": ["a", "b"], "kind": "human",
-         "links": ["github:owner/repo#7", "https://example.com/x"]},
+         "links": ["github:owner/repo#7", "https://example.com/x"], "provider": "codex", "model": "gpt-5"},
         {"title": "Third", "criteria": ["three"]},
     ]);
 
@@ -187,6 +187,8 @@ fn a_valid_file_of_three_tasks_adds_all_three_in_order_and_prints_their_ids() ->
     let events = fixture.event_payloads()?;
     assert_eq!(events.len(), 3, "one event for each task");
     assert_eq!(events[1]["title"], "Second");
+    assert_eq!(listed[1]["provider"], "codex");
+    assert_eq!(listed[1]["model"], "gpt-5");
     Ok(())
 }
 
@@ -723,6 +725,8 @@ fn the_import_help_describes_the_file_the_placement_and_the_fields() -> Result<(
         "--after",
         "--project",
         "criteria",
+        "provider",
+        "model",
     ] {
         assert!(help.stdout.contains(text), "{text}: {}", help.stdout);
     }

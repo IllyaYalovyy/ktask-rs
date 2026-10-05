@@ -1713,3 +1713,84 @@ fn agent_and_resolver_settings_run_only_their_own_steps_and_status_names_each_ac
     }
     Ok(())
 }
+
+#[test]
+fn recorded_claude_and_codex_runs_mix_project_roles_and_a_tasks_own_provider_and_model()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    for (name, value) in [
+        ("max-attempts", "2"),
+        ("provider", "claude"),
+        ("model", "claude-haiku-4-5-20251001"),
+        ("resolver-provider", "codex"),
+        ("resolver-model", "gpt-5-codex"),
+        ("step-review", "off"),
+        ("step-testing", "off"),
+    ] {
+        let outcome = fixture.run(&["settings", "set", name, value])?;
+        assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    }
+    fixture.add_agent_task("project provider", "first task reaches the resolver")?;
+    let added = fixture.run(&[
+        "add",
+        "--title",
+        "task override",
+        "--criterion",
+        "it works",
+        "--provider",
+        "codex",
+        "--model",
+        "gpt-5-codex",
+    ])?;
+    assert_eq!(added.code, Some(0), "{}", added.stderr);
+
+    let claude = claude_script(&format!(
+        "prompt=$(cat)\nprintf '%s' '{}'\ntoken=$(printf '%s\\n' \"$prompt\" | sed -n 's/.*--token \\([^ ]*\\).*/\\1/p' | head -n 1)\nktask-rs report --token \"$token\" failed --reason recorded",
+        include_str!("../../../test-fixtures/claude/success.jsonl")
+    ))?;
+    let codex = codex_script(&format!(
+        "prompt=$(cat)\nprintf '%s' '{}'\ntoken=$(printf '%s\\n' \"$prompt\" | sed -n 's/.*--token \\([^ ]*\\).*/\\1/p' | head -n 1)\ncase \"$prompt\" in '# Resolve:'*) ktask-rs report --token \"$token\" skip --reason resolved;; *) ktask-rs report --token \"$token\" done;; esac",
+        include_str!("../../../test-fixtures/codex/codex-0.160.0-success.jsonl")
+    ))?;
+    let mut paths = vec![claude.path().to_path_buf(), codex.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let providers_path = std::env::join_paths(paths)?;
+    let outcome = fixture
+        .sandbox
+        .run_with(&fixture.repository, &["run"], |command| {
+            command.env("PATH", &providers_path);
+        })?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+
+    let status = fixture.run(&["status"])?;
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    for line in [
+        "attempt 1: implementation\tclaude-haiku-4-5-20251001\tclaude",
+        "attempt 1: resolve\tgpt-5-codex\tcodex",
+        "attempt 1: implementation\tgpt-5-codex\tcodex",
+    ] {
+        assert!(
+            status.stdout.contains(line),
+            "missing {line:?} in {}",
+            status.stdout
+        );
+    }
+    let raw = fixture.run(&["output", "1", "--attempt", "1", "--raw"])?;
+    assert!(
+        raw.stdout.contains("{\"type\":\"assistant\""),
+        "{}",
+        raw.stdout
+    );
+    assert!(
+        raw.stdout.contains("{\"type\":\"thread.started\""),
+        "{}",
+        raw.stdout
+    );
+    let listed: serde_json::Value =
+        serde_json::from_str(&fixture.run(&["list", "--all", "--json"])?.stdout)?;
+    assert_eq!(listed[1]["provider"], "codex");
+    assert_eq!(listed[1]["model"], "gpt-5-codex");
+    Ok(())
+}
