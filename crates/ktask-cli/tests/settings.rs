@@ -67,18 +67,19 @@ const STEP_DEFAULTS: &str = "step-sync\ton\tdefault\n\
      step-commit\ton\tdefault\n\
      step-push\ton\tdefault\n\
      max-attempts\t3\tdefault\n\
+     transport-retries\t3\tdefault\n\
      provider\techo\tdefault\n\
      model\t\tdefault\n\
      resolver-provider\techo\tdefault\n\
      resolver-model\t\tdefault\n";
 
 /// The default `settings` output: its two time settings at their built-in defaults,
-/// health-check and tracked-branch unset, every step switch on, max-attempts and the resolver's
-/// provider and model at their built-in defaults.
+/// health-check and tracked-branch unset, every step switch on, attempt and transport retry
+/// limits, and the resolver's provider and model at their built-in defaults.
 const DEFAULTS: &str = "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\n\
      tracked-branch\t\tdefault\nstep-sync\ton\tdefault\nstep-health-check\ton\tdefault\n\
      step-review\ton\tdefault\nstep-testing\ton\tdefault\nstep-commit\ton\tdefault\n\
-     step-push\ton\tdefault\nmax-attempts\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\n\
+     step-push\ton\tdefault\nmax-attempts\t3\tdefault\ntransport-retries\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\n\
      resolver-model\t\tdefault\n";
 
 #[test]
@@ -112,6 +113,7 @@ fn json_carries_the_same() -> Result<()> {
          {\"name\":\"step-commit\",\"value\":\"on\",\"default\":true},\
          {\"name\":\"step-push\",\"value\":\"on\",\"default\":true},\
          {\"name\":\"max-attempts\",\"value\":\"3\",\"default\":true},\
+         {\"name\":\"transport-retries\",\"value\":\"3\",\"default\":true},\
          {\"name\":\"provider\",\"value\":\"echo\",\"default\":true},\
          {\"name\":\"model\",\"value\":\"\",\"default\":true},\
          {\"name\":\"resolver-provider\",\"value\":\"echo\",\"default\":true},\
@@ -536,13 +538,17 @@ fn switching_implementation_off_exits_two_naming_why_and_it_is_not_one_of_the_se
 }
 
 #[test]
-fn setting_max_attempts_agent_and_resolver_provider_and_model_changes_and_persists_them()
+fn setting_attempt_and_transport_limits_agent_and_resolver_provider_and_model_changes_and_persists_them()
 -> Result<()> {
     let fixture = Fixture::new()?;
 
     let attempts = fixture.run(&["settings", "set", "max-attempts", "5"])?;
     assert_eq!(attempts.code, Some(0), "{}", attempts.stderr);
     assert_eq!(attempts.stdout, "max-attempts\t5\n");
+
+    let retries = fixture.run(&["settings", "set", "transport-retries", "4"])?;
+    assert_eq!(retries.code, Some(0), "{}", retries.stderr);
+    assert_eq!(retries.stdout, "transport-retries\t4\n");
 
     let provider = fixture.run(&["settings", "set", "provider", "claude"])?;
     assert_eq!(provider.code, Some(0), "{}", provider.stderr);
@@ -569,6 +575,11 @@ fn setting_max_attempts_agent_and_resolver_provider_and_model_changes_and_persis
     assert_eq!(shown.code, Some(0), "{}", shown.stderr);
     assert!(
         shown.stdout.contains("max-attempts\t5\tcustom\n"),
+        "{}",
+        shown.stdout
+    );
+    assert!(
+        shown.stdout.contains("transport-retries\t4\tcustom\n"),
         "{}",
         shown.stdout
     );
@@ -625,6 +636,21 @@ fn max_attempts_refuses_anything_but_a_whole_number_of_at_least_one() -> Result<
         assert_eq!(outcome.code, Some(2), "{value}: {}", outcome.stderr);
     }
     let zero = fixture.run(&["settings", "set", "max-attempts", "0"])?;
+    assert!(zero.stderr.contains("at least 1"), "{}", zero.stderr);
+    let shown = fixture.run(&["settings"])?;
+    assert_eq!(shown.stdout, DEFAULTS);
+    Ok(())
+}
+
+#[test]
+fn transport_retries_refuses_anything_but_a_whole_number_of_at_least_one() -> Result<()> {
+    let fixture = Fixture::new()?;
+
+    for value in ["0", "soon", "1.5", "-1"] {
+        let outcome = fixture.run(&["settings", "set", "transport-retries", value])?;
+        assert_eq!(outcome.code, Some(2), "{value}: {}", outcome.stderr);
+    }
+    let zero = fixture.run(&["settings", "set", "transport-retries", "0"])?;
     assert!(zero.stderr.contains("at least 1"), "{}", zero.stderr);
     let shown = fixture.run(&["settings"])?;
     assert_eq!(shown.stdout, DEFAULTS);

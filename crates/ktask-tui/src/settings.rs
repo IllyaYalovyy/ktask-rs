@@ -54,6 +54,7 @@ fn label(name: &str) -> &'static str {
         "step-commit" => "Commit step (on/off)",
         "step-push" => "Push step (on/off)",
         "max-attempts" => "Max attempts",
+        "transport-retries" => "Transport retries",
         "provider" => "Agent provider",
         "model" => "Agent model",
         "resolver-provider" => "Resolver provider",
@@ -370,10 +371,15 @@ mod tests {
     }
 
     #[test]
-    fn max_attempts_and_resolver_settings_show_their_own_labels_not_the_fallback() {
+    fn retry_and_resolver_settings_show_their_own_labels_not_the_fallback() {
         let views = vec![
             SettingView {
                 name: "max-attempts",
+                value: "3".to_owned(),
+                is_default: true,
+            },
+            SettingView {
+                name: "transport-retries",
                 value: "3".to_owned(),
                 is_default: true,
             },
@@ -389,10 +395,11 @@ mod tests {
             },
         ];
         let screen = SettingsScreen::new(&views);
-        let (rows, _) = drawn(&screen, 60, 12);
+        let (rows, _) = drawn(&screen, 60, 15);
         assert_eq!(row(&rows, 2), "Max attempts (default):");
-        assert_eq!(row(&rows, 5), "Resolver provider (default):");
-        assert_eq!(row(&rows, 8), "Resolver model (default):");
+        assert_eq!(row(&rows, 5), "Transport retries (default):");
+        assert_eq!(row(&rows, 8), "Resolver provider (default):");
+        assert_eq!(row(&rows, 11), "Resolver model (default):");
     }
 
     #[test]
