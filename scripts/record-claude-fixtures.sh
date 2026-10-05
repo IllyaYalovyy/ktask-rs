@@ -50,8 +50,8 @@ sanitize "$temporary/resumed.jsonl" | jq -c 'select(.type != "rate_limit_event")
 sanitize "$temporary/authentication-failure.jsonl" \
     | sed 's/recorded-session/recorded-auth-session/g' >"$fixtures/authentication-failure.jsonl"
 
-# Do not manufacture quota events. This succeeds only when Claude Code itself emitted the
-# warning/rejection event; it is the real warning that causes ktask-rs to pause at >=90% usage.
+# Do not manufacture quota events. This succeeds only when Claude Code itself emitted an
+# allowed-warning event; ktask-rs retains it as a fact and never pauses for the warning.
 jq -ce '
     select(.type == "rate_limit_event")
     | select(.rate_limit_info.status == "allowed_warning")

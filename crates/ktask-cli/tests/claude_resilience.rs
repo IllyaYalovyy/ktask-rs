@@ -9,11 +9,14 @@ mod support;
 use std::fmt::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use repo::{git_repository, scratch};
 use support::{Outcome, Result, Sandbox};
 use tempfile::TempDir;
+
+const TIMEOUT: Duration = Duration::from_secs(10);
 
 struct Fixture {
     sandbox: Sandbox,
@@ -92,6 +95,49 @@ impl Fixture {
         std::fs::write(settings, configured)?;
         Ok(dir)
     }
+
+    fn spawn_run(&self) -> Result<Child> {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ktask-rs"));
+        command
+            .arg("run")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        Ok(self
+            .sandbox
+            .isolate(&mut command, &self.repository)
+            .spawn()?)
+    }
+
+    fn wait_for_status(&self, condition: impl Fn(&str) -> bool) -> Result<String> {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            let status = self.run(&["status"])?;
+            if condition(&status.stdout) {
+                return Ok(status.stdout);
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "timed out waiting for a usage-limit wait: {}",
+                    status.stdout
+                )
+                .into());
+            }
+            std::thread::park_timeout(Duration::from_millis(20));
+        }
+    }
+}
+
+/// Replays one clearly labelled derived refusal through the configured Claude provider, then
+/// terminates the deliberate long wait once its status has been observed.
+fn derived_claude_refusal_wait(script: &str) -> Result<String> {
+    let fixture = Fixture::new()?;
+    fixture.add()?;
+    let _claude = fixture.install_claude(script)?;
+    let mut run = fixture.spawn_run()?;
+    let status = fixture.wait_for_status(|text| text.contains("\twaiting\t"))?;
+    run.kill()?;
+    let _ = run.wait()?;
+    Ok(status)
 }
 
 #[test]
@@ -142,6 +188,37 @@ fn a_recorded_claude_warning_finishes_with_its_usage_and_model() -> Result<()> {
         "{}",
         status.stdout
     );
+    Ok(())
+}
+
+#[test]
+fn a_derived_claude_rejection_waits_for_its_resets_at_time() -> Result<()> {
+    // The recorded reset is now in the past. Keep the fixture itself verbatim, apart from its
+    // labelled status derivation, and move every occurrence of its reset timestamp only while
+    // replaying so the real binary has a future `resetsAt` to wait for.
+    let script = format!(
+        "cat >/dev/null\nprintf '%s' '{recording}' | sed \"s/1791154800/$(( $(date -u +%s) + 30 ))/g\"\nexit 1",
+        recording =
+            include_str!("../../../test-fixtures/claude/claude-2.1.283-derived-rejected.jsonl")
+    );
+    let status = derived_claude_refusal_wait(&script)?;
+    assert!(status.contains("attempt 1: implementation"), "{status}");
+    assert!(status.contains("usage limit"), "{status}");
+    assert!(status.contains("resumes in"), "{status}");
+    Ok(())
+}
+
+#[test]
+fn a_derived_claude_limit_error_result_waits() -> Result<()> {
+    let script = format!(
+        "cat >/dev/null\nprintf '%s\\n' '{recording}' | sed -n '3p'\nexit 1",
+        recording =
+            include_str!("../../../test-fixtures/claude/claude-2.1.283-derived-rejected.jsonl")
+    );
+    let status = derived_claude_refusal_wait(&script)?;
+    assert!(status.contains("attempt 1: implementation"), "{status}");
+    assert!(status.contains("usage limit"), "{status}");
+    assert!(status.contains("resumes in"), "{status}");
     Ok(())
 }
 

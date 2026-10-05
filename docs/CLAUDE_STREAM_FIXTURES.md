@@ -22,3 +22,10 @@ an `allowed_warning` event; otherwise it fails and leaves the committed fixtures
 `ktask-rs` records that warning on the completed step, but waits only for a hard `rejected`
 event or a result error that names the limit. The retained event uses
 `rate_limit_info.status` and `resetsAt` exactly as emitted by Claude Code.
+
+`claude-2.1.283-derived-rejected.jsonl` covers refusals that cannot be safely recorded from
+the owner's exhausted account. Its first line labels its provenance: the real nodeny recording's
+rate-limit event changes only `status` from `allowed_warning` to `rejected`; its real result
+event changes `is_error` and `result` to Claude's documented usage-limit result. No other event
+shape or fixture content is invented. Replay tests retain the fixture's event shape and move its
+already-expired reset timestamp only at runtime, so the real binary can be observed waiting.

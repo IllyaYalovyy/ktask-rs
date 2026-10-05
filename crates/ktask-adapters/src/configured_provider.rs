@@ -308,6 +308,51 @@ mod tests {
     }
 
     #[test]
+    fn derived_claude_refusals_are_usage_limits() {
+        let definition = ProviderDefinition {
+            command: "agent".to_owned(),
+            args: vec![],
+            prompt: vec![],
+            model: vec![],
+            resume: vec![],
+            denied_tools: vec![],
+            parser: ProviderParser::ClaudeStreamJson,
+            session_id: None,
+            usage: None,
+            limit_message: Some(r"(?i)Claude AI usage limit reached\|(?<reset>[0-9]+)".to_owned()),
+        };
+        let fixture =
+            include_str!("../../../test-fixtures/claude/claude-2.1.283-derived-rejected.jsonl");
+        let rejected = Output {
+            stdout: fixture.as_bytes().to_vec(),
+            stderr: vec![],
+            exit: Exit::Code(1),
+        };
+        let rejected_limit = detect_limit(&definition, &rejected).expect("a rejection limit");
+        assert_eq!(
+            rejected_limit
+                .reset_at
+                .and_then(|reset| reset.duration_since(SystemTime::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs()),
+            Some(1_791_154_800)
+        );
+        let result = Output {
+            stdout: fixture
+                .lines()
+                .nth(2)
+                .expect("the derived error result")
+                .as_bytes()
+                .to_vec(),
+            stderr: vec![],
+            exit: Exit::Code(1),
+        };
+        assert_eq!(
+            detect_limit(&definition, &result),
+            Some(LimitSignal { reset_at: None })
+        );
+    }
+
+    #[test]
     fn plain_text_limit_remains_a_fallback() {
         let definition = ProviderDefinition {
             command: "agent".to_owned(),
