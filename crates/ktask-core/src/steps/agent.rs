@@ -4,72 +4,22 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use crate::steps::{Deps, INTERRUPTED, PipelineState, StepOutcome};
+use crate::steps::{Deps, PipelineState, StepOutcome};
 use crate::{
-    AttemptToken, Exit, IMPLEMENTATION, Journal, Outcome, Output, ProviderRunError, Resume,
-    RunContext, RunError, StepCall, Task, TaskStatus, run_provider,
+    AttemptToken, Exit, IMPLEMENTATION, Output, ProviderRunError, Resume, RunContext, RunError,
+    StepCall, TaskStatus, run_provider,
 };
+
+mod outcome;
+
+use outcome::{AgentOutcome, agent_outcome};
 
 /// How long an attempt waits before trying again when its provider's own message said its
 /// usage limit was hit but named no reset time of its own.
 const DEFAULT_LIMIT_BACKOFF: Duration = Duration::from_mins(5);
 
-/// Operating-system error phrases worth keeping verbatim in the reason when the provider never
-/// got the chance to report anything of its own — otherwise lost the moment `report` reads
-/// back nothing, leaving only the uninformative "exited with code N and reported nothing".
-/// [`super::known_cause`] keys its own disk-full and file-slots-full causes on exactly these.
-const KNOWN_OS_ERROR_PHRASES: [&str; 2] = ["No space left on device", "Too many open files"];
-/// Claude Code errors the mechanical known-cause rules can fix without asking a resolver to
-/// rediscover them. Their full text is retained as the step reason when no report was made.
-const KNOWN_CLAUDE_ERROR_PHRASES: [&str; 3] =
-    ["Invalid API key", "Not logged in", "Invalid settings"];
 const CODEX_TRANSPORT_FAILURE: &str =
     "ERROR: stream disconnected before completion: Transport error:";
-const CODEX_AUTHENTICATION_PHRASES: [&str; 2] =
-    ["Missing bearer or basic authentication", "401 Unauthorized"];
-
-/// The first of [`KNOWN_OS_ERROR_PHRASES`] found in `output`'s own standard output or standard
-/// error, when there is one.
-fn known_os_error(output: &Output) -> Option<&'static str> {
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    KNOWN_OS_ERROR_PHRASES
-        .into_iter()
-        .find(|phrase| text.contains(phrase))
-}
-
-/// The first Claude authentication or settings error from an unreported provider output.
-fn known_claude_error(output: &Output) -> Option<String> {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    stdout
-        .lines()
-        .chain(stderr.lines())
-        .find(|line| {
-            KNOWN_CLAUDE_ERROR_PHRASES
-                .iter()
-                .any(|phrase| line.contains(phrase))
-        })
-        .map(str::to_owned)
-}
-
-/// The authentication rejection emitted by a Codex CLI with no credentials.
-fn known_codex_authentication_error(output: &Output) -> Option<String> {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    stdout
-        .lines()
-        .chain(stderr.lines())
-        .find(|line| {
-            CODEX_AUTHENTICATION_PHRASES
-                .iter()
-                .any(|phrase| line.contains(phrase))
-        })
-        .map(str::to_owned)
-}
 
 /// The terminal error in Codex's recorded reconnect failure, retaining its final diagnostic
 /// rather than treating every reconnect notice as a failed stream.
@@ -79,125 +29,6 @@ fn codex_transport_failure(output: &Output) -> Option<String> {
         .rev()
         .find(|line| line.starts_with(CODEX_TRANSPORT_FAILURE))
         .map(str::to_owned)
-}
-
-/// The concise diagnostic conventional CLI providers place on standard error. The runner has
-/// no provider-specific dependency here: any process that writes a line beginning `ERROR:`
-/// keeps that observed reason when it exits before reporting.
-fn reported_error(output: &Output) -> Option<String> {
-    String::from_utf8_lossy(&output.stderr)
-        .lines()
-        .rev()
-        .find(|line| line.starts_with("ERROR:"))
-        .map(str::to_owned)
-}
-
-/// What a step that ran a provider ended at: its exit code (`None` when the provider could not
-/// be run at all, or was killed), the resulting status, the reason when it is not `done`, and
-/// the fine-grained outcome the agent itself reported, when it reported anything.
-struct AgentOutcome {
-    exit_code: Option<i32>,
-    status: TaskStatus,
-    reason: Option<String>,
-    reported: Option<Outcome>,
-}
-
-impl AgentOutcome {
-    /// No report could ever have been read for this step: the provider itself never ran to
-    /// completion, so there is nothing to distinguish beyond `reason`.
-    fn unreported(reason: String) -> Self {
-        Self {
-            exit_code: None,
-            status: TaskStatus::FailedUnknown,
-            reason: Some(reason),
-            reported: None,
-        }
-    }
-}
-
-/// `output`'s own exit code, or the [`AgentOutcome`] to end the step with when it never
-/// produced one: the provider was killed past its time limit, or interrupted.
-fn exit_code_or_unreported(output: &Output) -> Result<i32, AgentOutcome> {
-    match output.exit {
-        Exit::Code(code) => Ok(code),
-        Exit::Killed => Err(AgentOutcome::unreported(
-            "the provider ran past its time limit and was killed".to_owned(),
-        )),
-        Exit::Interrupted => Err(AgentOutcome::unreported(INTERRUPTED.to_owned())),
-    }
-}
-
-/// The status and reason a step's own `report`, when it made one, ends at; `exit_code` names
-/// what the provider itself exited at, and `output` is searched for a known operating-system
-/// error phrase to keep, for the one case there is no report at all.
-fn status_and_reason(
-    report: Option<(Outcome, Option<String>)>,
-    exit_code: i32,
-    output: &Output,
-) -> (TaskStatus, Option<String>) {
-    match report {
-        Some((Outcome::Done | Outcome::Approved | Outcome::Accepted, _)) => {
-            (TaskStatus::Done, None)
-        }
-        Some((
-            Outcome::Failed
-            | Outcome::TooLarge
-            | Outcome::ChangesRequested
-            | Outcome::Rejected
-            | Outcome::Stop,
-            reason,
-        )) => (TaskStatus::Failed, reason),
-        Some((Outcome::Skip, reason)) => (TaskStatus::Skipped, reason),
-        Some((Outcome::Supersede, reason)) => (TaskStatus::Superseded, reason),
-        Some((Outcome::NeedsInput, reason)) => (TaskStatus::Blocked, reason),
-        Some((Outcome::Retry, reason)) => (TaskStatus::Done, reason),
-        None => {
-            let reason = match known_os_error(output) {
-                Some(phrase) => format!(
-                    "the provider exited with code {exit_code} and reported nothing: {phrase}"
-                ),
-                None => reported_error(output)
-                    .or_else(|| known_claude_error(output))
-                    .or_else(|| known_codex_authentication_error(output))
-                    .unwrap_or_else(|| {
-                        format!("the provider exited with code {exit_code} and reported nothing")
-                    }),
-            };
-            (TaskStatus::FailedUnknown, Some(reason))
-        }
-    }
-}
-
-/// What running a provider for step `step` of attempt `token` of `task` ended at, given what
-/// running it produced.
-fn agent_outcome(
-    journal: &dyn Journal,
-    task: &Task,
-    token: &AttemptToken,
-    step: &str,
-    result: Result<Output, ProviderRunError>,
-) -> Result<AgentOutcome, RunError> {
-    let output = match result {
-        Ok(output) => output,
-        Err(error) => {
-            return Ok(AgentOutcome::unreported(format!(
-                "the provider could not run: {error}"
-            )));
-        }
-    };
-    let exit_code = match exit_code_or_unreported(&output) {
-        Ok(code) => code,
-        Err(outcome) => return Ok(outcome),
-    };
-    let report = crate::attempt::report_of_step(journal, task.id, token.number, step)?;
-    let reported = report.as_ref().map(|(outcome, _)| *outcome);
-    let (status, reason) = status_and_reason(report, exit_code, &output);
-    Ok(AgentOutcome {
-        exit_code: Some(exit_code),
-        status,
-        reason,
-        reported,
-    })
 }
 
 /// `outcome`, timed at `duration`, as the [`StepOutcome`] it ended at: `Passed` for `done`,

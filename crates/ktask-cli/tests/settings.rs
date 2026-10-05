@@ -646,10 +646,17 @@ fn max_attempts_refuses_anything_but_a_whole_number_of_at_least_one() -> Result<
 fn transport_retries_refuses_anything_but_a_whole_number_of_at_least_one() -> Result<()> {
     let fixture = Fixture::new()?;
 
-    for value in ["0", "soon", "1.5", "-1"] {
+    for value in ["0", "soon", "1.5"] {
         let outcome = fixture.run(&["settings", "set", "transport-retries", value])?;
         assert_eq!(outcome.code, Some(2), "{value}: {}", outcome.stderr);
+        assert!(
+            outcome.stderr.contains("transport-retries"),
+            "{}",
+            outcome.stderr
+        );
     }
+    let negative = fixture.run(&["settings", "set", "transport-retries", "-1"])?;
+    assert_eq!(negative.code, Some(2), "{}", negative.stderr);
     let zero = fixture.run(&["settings", "set", "transport-retries", "0"])?;
     assert!(zero.stderr.contains("at least 1"), "{}", zero.stderr);
     let shown = fixture.run(&["settings"])?;

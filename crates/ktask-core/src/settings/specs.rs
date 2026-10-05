@@ -8,14 +8,14 @@ use std::path::Path;
 use crate::Git;
 
 use super::{
-    ATTEMPT_TIMEOUT, DEFAULT_MAX_ATTEMPTS, DEFAULT_RESOLVER_PROVIDER, DEFAULT_SILENT_AFTER_SECS,
-    DEFAULT_TRANSPORT_RETRIES, HEALTH_CHECK, MAX_ATTEMPTS, RESOLVER_MODEL, RESOLVER_PROVIDER,
-    SILENT_AFTER, STEP_COMMIT, STEP_HEALTH_CHECK, STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING,
-    SetSettingError, Settings, TRACKED_BRANCH, TRANSPORT_RETRIES, split_tracked_branch,
-    step_enabled,
+    ATTEMPT_TIMEOUT, DEFAULT_RESOLVER_PROVIDER, DEFAULT_SILENT_AFTER_SECS, HEALTH_CHECK,
+    RESOLVER_MODEL, RESOLVER_PROVIDER, SILENT_AFTER, STEP_COMMIT, STEP_HEALTH_CHECK, STEP_PUSH,
+    STEP_REVIEW, STEP_SYNC, STEP_TESTING, SetSettingError, Settings, TRACKED_BRANCH,
+    split_tracked_branch, step_enabled,
 };
 
 mod agent;
+mod retries;
 
 /// `"on"` or `"off"`, as a step's own switch setting shows it.
 fn toggle_value(enabled: bool) -> String {
@@ -70,8 +70,8 @@ pub(super) fn setting_specs() -> Vec<SettingSpec> {
         ),
         commit_step_spec(),
         push_step_spec(),
-        max_attempts_spec(),
-        transport_retries_spec(),
+        retries::max_attempts_spec(),
+        retries::transport_retries_spec(),
         agent::provider_spec(),
         agent::model_spec(),
         resolver_provider_spec(),
@@ -234,48 +234,6 @@ fn push_step_spec() -> SettingSpec {
     }
 }
 
-/// [`MAX_ATTEMPTS`]'s description.
-fn max_attempts_spec() -> SettingSpec {
-    SettingSpec {
-        name: MAX_ATTEMPTS,
-        get: Box::new(|settings| {
-            (
-                settings
-                    .max_attempts
-                    .unwrap_or(DEFAULT_MAX_ATTEMPTS)
-                    .to_string(),
-                settings.max_attempts.is_none(),
-            )
-        }),
-        set: Box::new(|settings, value, _git, _dir| {
-            let attempts = parse_max_attempts(value)?;
-            settings.max_attempts = Some(attempts);
-            Ok(attempts.to_string())
-        }),
-    }
-}
-
-/// [`TRANSPORT_RETRIES`]'s description.
-fn transport_retries_spec() -> SettingSpec {
-    SettingSpec {
-        name: TRANSPORT_RETRIES,
-        get: Box::new(|settings| {
-            (
-                settings
-                    .transport_retries
-                    .unwrap_or(DEFAULT_TRANSPORT_RETRIES)
-                    .to_string(),
-                settings.transport_retries.is_none(),
-            )
-        }),
-        set: Box::new(|settings, value, _git, _dir| {
-            let retries = parse_max_attempts(value)?;
-            settings.transport_retries = Some(retries);
-            Ok(retries.to_string())
-        }),
-    }
-}
-
 /// [`RESOLVER_PROVIDER`]'s description.
 fn resolver_provider_spec() -> SettingSpec {
     SettingSpec {
@@ -349,25 +307,6 @@ fn parse_health_check(value: &str) -> Result<String, SetSettingError> {
         });
     }
     Ok(command.to_owned())
-}
-
-/// The max-attempts part of [`super::set_setting`]: `value` parsed as a whole number of at
-/// least 1, or why it was refused.
-fn parse_max_attempts(value: &str) -> Result<u32, SetSettingError> {
-    let attempts: u32 = value
-        .trim()
-        .parse()
-        .map_err(|_| SetSettingError::InvalidValue {
-            name: MAX_ATTEMPTS,
-            message: format!("{value:?} is not a whole number"),
-        })?;
-    if attempts == 0 {
-        return Err(SetSettingError::InvalidValue {
-            name: MAX_ATTEMPTS,
-            message: "must be at least 1".to_owned(),
-        });
-    }
-    Ok(attempts)
 }
 
 /// `name`'s part of [`super::set_setting`] for a setting that is just a trimmed, non-empty
