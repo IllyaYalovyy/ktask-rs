@@ -1475,11 +1475,7 @@ fn recorded_codex_jsonl_runs_the_task_with_its_requested_model_session_and_usage
     );
     let output = fixture.run(&["output", "1"])?;
     assert_eq!(output.code, Some(0), "{}", output.stderr);
-    assert!(
-        output.stdout.contains("{\"type\":\"turn.started\"}"),
-        "{}",
-        output.stdout
-    );
+    assert_eq!(output.stdout, "turn started\nassistant: OK");
     Ok(())
 }
 

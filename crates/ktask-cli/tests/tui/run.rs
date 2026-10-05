@@ -145,6 +145,21 @@ fn select_claude(fixture: &Fixture) -> Result<()> {
     Ok(())
 }
 
+fn select_codex(fixture: &Fixture) -> Result<()> {
+    for (name, value) in [
+        ("provider", "codex"),
+        ("model", "gpt-5-codex"),
+        ("step-review", "off"),
+        ("step-testing", "off"),
+    ] {
+        let outcome = fixture
+            .sandbox
+            .run(&fixture.repository, &["settings", "set", name, value])?;
+        assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    }
+    Ok(())
+}
+
 /// Replays the sanitized real Claude Code stream through its configured command.
 fn recorded_claude() -> Result<tempfile::TempDir> {
     let dir = tempfile::TempDir::new()?;
@@ -154,6 +169,21 @@ fn recorded_claude() -> Result<tempfile::TempDir> {
         format!(
             "#!/bin/sh\nprompt=$(cat)\nprintf '%s' '{}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
             include_str!("../../../../test-fixtures/claude/success.jsonl")
+        ),
+    )?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+    Ok(dir)
+}
+
+/// Replays the committed Codex stream through its configured command.
+fn recorded_codex() -> Result<tempfile::TempDir> {
+    let dir = tempfile::TempDir::new()?;
+    let path = dir.path().join("codex");
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\nprompt=$(cat)\nprintf '%s' '{}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
+            include_str!("../../../../test-fixtures/codex/codex-0.160.0-success.jsonl")
         ),
     )?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
@@ -580,6 +610,44 @@ fn l_replays_the_same_readable_claude_entries_as_output() -> Result<()> {
     );
     assert!(!screen.contains("{\"type\""), "{screen}");
     assert!(!screen.contains("\"message\""), "{screen}");
+    terminal.send("\x1b")?;
+    terminal.wait_for("the queue after closing output", |screen| {
+        screen.contents().contains("recorded")
+    })?;
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
+fn l_replays_the_same_readable_codex_entries_as_output() -> Result<()> {
+    let fixture = Fixture::new()?;
+    select_codex(&fixture)?;
+    fixture.add_agent_task("recorded", "replay the recorded Codex stream")?;
+    let codex = recorded_codex()?;
+    fixture.run_with_path(codex.path())?;
+    let output = fixture.sandbox.run(&fixture.repository, &["output", "1"])?;
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+
+    let mut terminal = fixture.open()?;
+    terminal.send("l")?;
+    let screen = terminal.wait_for("the readable Codex output", |screen| {
+        output
+            .stdout
+            .lines()
+            .all(|entry| screen.contents().contains(entry))
+    })?;
+    let positions = output
+        .stdout
+        .lines()
+        .map(|entry| screen.find(entry).expect("entry visible on screen"))
+        .collect::<Vec<_>>();
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{screen}"
+    );
+    assert!(!screen.contains("{\"type\""), "{screen}");
+    assert!(!screen.contains("agent_message"), "{screen}");
     terminal.send("\x1b")?;
     terminal.wait_for("the queue after closing output", |screen| {
         screen.contents().contains("recorded")

@@ -87,6 +87,19 @@ fn select_claude(fixture: &Fixture) -> Result<()> {
     Ok(())
 }
 
+fn select_codex(fixture: &Fixture) -> Result<()> {
+    for (name, value) in [
+        ("provider", "codex"),
+        ("model", "gpt-5-codex"),
+        ("step-review", "off"),
+        ("step-testing", "off"),
+    ] {
+        let outcome = fixture.run(&["settings", "set", name, value])?;
+        assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    }
+    Ok(())
+}
+
 /// Replays the sanitized real recording through the provider command, rather than manufacturing
 /// an attempt log behind the binary's back.
 fn recorded_claude() -> Result<tempfile::TempDir> {
@@ -97,6 +110,21 @@ fn recorded_claude() -> Result<tempfile::TempDir> {
         format!(
             "#!/bin/sh\nprompt=$(cat)\nprintf '%s' '{}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
             include_str!("../../../test-fixtures/claude/success.jsonl")
+        ),
+    )?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+    Ok(dir)
+}
+
+/// Replays the committed Codex stream through its configured command.
+fn recorded_codex() -> Result<tempfile::TempDir> {
+    let dir = tempfile::TempDir::new()?;
+    let path = dir.path().join("codex");
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\nprompt=$(cat)\nprintf '%s' '{}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
+            include_str!("../../../test-fixtures/codex/codex-0.160.0-success.jsonl")
         ),
     )?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
@@ -197,6 +225,33 @@ fn output_renders_a_recorded_claude_stream_and_raw_keeps_the_wire_format() -> Re
     );
     assert!(
         raw.stdout.contains("\"total_cost_usd\":0.0110019"),
+        "{}",
+        raw.stdout
+    );
+    Ok(())
+}
+
+#[test]
+fn output_renders_a_recorded_codex_stream_and_raw_keeps_the_wire_format() -> Result<()> {
+    let fixture = Fixture::new()?;
+    select_codex(&fixture)?;
+    fixture.add("replay the recorded Codex stream")?;
+    let codex = recorded_codex()?;
+    let run = fixture.run_with_path(&["run"], codex.path())?;
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+
+    let shown = fixture.run(&["output", "1"])?;
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    assert_eq!(shown.stdout, "turn started\nassistant: OK");
+    assert!(!shown.stdout.contains("{\"type\""), "{}", shown.stdout);
+    assert!(!shown.stdout.contains("agent_message"), "{}", shown.stdout);
+
+    let raw = fixture.run(&["output", "1", "--raw"])?;
+    assert_eq!(raw.code, Some(0), "{}", raw.stderr);
+    assert!(
+        raw.stdout.starts_with(include_str!(
+            "../../../test-fixtures/codex/codex-0.160.0-success.jsonl"
+        )),
         "{}",
         raw.stdout
     );

@@ -2,9 +2,8 @@
 
 use serde_json::Value;
 
-/// Turns a Codex stream into readable entries. Events and completed items that are not yet
-/// understood remain visible as their JSON text, so a newer Codex cannot silently erase the
-/// evidence it emitted.
+/// Turns a Codex stream into readable entries. Each completed item remains visible, including
+/// a newer item kind, without exposing the stream's JSON framing to the operator.
 #[must_use]
 pub(super) fn render(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes)
@@ -18,24 +17,35 @@ fn render_line(line: &str) -> Option<String> {
     let event = serde_json::from_str::<Value>(line).ok()?;
     match event.get("type")?.as_str()? {
         "thread.started" | "turn.completed" => None,
-        "item.completed" => item(event.get("item")?).or_else(|| Some(line.to_owned())),
-        _ => Some(line.to_owned()),
+        "turn.started" => Some("turn started".to_owned()),
+        "item.completed" => item(event.get("item")?),
+        kind => Some(format!("event: {}", readable_kind(kind))),
     }
 }
 
 fn item(item: &Value) -> Option<String> {
-    match item.get("type")?.as_str()? {
+    let kind = item.get("type")?.as_str()?;
+    match kind {
         "agent_message" => item
             .get("text")?
             .as_str()
             .filter(|text| !text.is_empty())
             .map(|text| format!("assistant: {text}")),
-        _ => Some(compact(item)),
+        _ => Some(item_entry(kind, item)),
     }
 }
 
-fn compact(value: &Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
+fn item_entry(kind: &str, item: &Value) -> String {
+    let label = readable_kind(kind);
+    ["text", "command", "path", "file_path"]
+        .into_iter()
+        .find_map(|field| item.get(field).and_then(Value::as_str))
+        .filter(|detail| !detail.is_empty())
+        .map_or_else(|| label.clone(), |detail| format!("{label}: {detail}"))
+}
+
+fn readable_kind(kind: &str) -> String {
+    kind.replace('_', " ")
 }
 
 #[cfg(test)]
@@ -48,17 +58,15 @@ mod tests {
             render(include_bytes!(
                 "../../../../test-fixtures/codex/codex-0.160.0-success.jsonl"
             )),
-            "{\"type\":\"turn.started\"}\nassistant: OK"
+            "turn started\nassistant: OK"
         );
     }
 
     #[test]
-    fn keeps_unknown_events_and_items_as_text() {
+    fn renders_other_items_and_events_as_readable_entries() {
         let stream =
             br#"{"type":"item.completed","item":{"type":"command_execution","command":"pwd"}}
 {"type":"new.event","detail":"still here"}"#;
-        let rendered = render(stream);
-        assert!(rendered.contains("command_execution"), "{rendered}");
-        assert!(rendered.contains("new.event"), "{rendered}");
+        assert_eq!(render(stream), "command execution: pwd\nevent: new.event");
     }
 }
