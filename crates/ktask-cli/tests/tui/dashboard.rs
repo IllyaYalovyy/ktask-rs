@@ -911,11 +911,17 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
         "the health check passed with the implementation still running above it",
         |screen| {
             let lines = lines_inside_frame(&screen.contents());
-            lines.get(5).is_some_and(|line| {
-                line.contains("health check") && line.ends_with("passed") && !line.contains("usage")
-            }) && lines
-                .get(6)
-                .is_some_and(|line| line.contains("implementation") && line.contains("running"))
+            lines
+                .get(4)
+                .is_some_and(|line| line == ">1  #1  running  agent  a")
+                && lines.get(5).is_some_and(|line| {
+                    line.contains("health check")
+                        && line.ends_with("passed")
+                        && !line.contains("usage")
+                })
+                && lines
+                    .get(6)
+                    .is_some_and(|line| line.contains("implementation") && line.contains("running"))
         },
     )?;
     let lines = lines_inside_frame(&screen);
