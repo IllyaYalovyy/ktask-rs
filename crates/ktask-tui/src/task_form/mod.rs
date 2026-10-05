@@ -306,6 +306,11 @@ impl TaskFormScreen {
         if self.discarding {
             return (self, None);
         }
+        self.active_ctrl(letter)
+    }
+
+    /// A Ctrl-letter while the form is active, rather than its discard question.
+    fn active_ctrl(self, letter: char) -> (Self, Option<Request>) {
         match letter {
             's' => {
                 let request = Request::Submit(self.form.draft(), self.form.placement);
@@ -325,27 +330,17 @@ impl TaskFormScreen {
                 },
                 None,
             ),
-            'p' => (
-                Self {
-                    form: Form {
-                        focus: Focus::Provider,
-                        ..self.form
-                    },
-                    ..self
-                },
-                None,
-            ),
-            'o' => (
-                Self {
-                    form: Form {
-                        focus: Focus::Model,
-                        ..self.form
-                    },
-                    ..self
-                },
-                None,
-            ),
+            'p' => (self.focused(Focus::Provider), None),
+            'o' => (self.focused(Focus::Model), None),
             _ => (self, None),
+        }
+    }
+
+    /// Moves focus to one non-criterion field.
+    fn focused(self, focus: Focus) -> Self {
+        Self {
+            form: Form { focus, ..self.form },
+            ..self
         }
     }
 

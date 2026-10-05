@@ -360,17 +360,7 @@ fn task_line(
     columns: &Columns,
     width: usize,
 ) -> Line<'static> {
-    let marker = if selected { '>' } else { ' ' };
-    let mut style = Style::new();
-    if matches!(
-        task.status,
-        TaskStatus::Cancelled | TaskStatus::Skipped | TaskStatus::Superseded
-    ) {
-        style = style.add_modifier(Modifier::DIM);
-    }
-    if selected {
-        style = style.add_modifier(Modifier::REVERSED);
-    }
+    let (marker, style) = task_style(task, selected);
     let position = task.position.to_string();
     let id = format!("#{}", task.id);
     let status = presentation::task_status(task.status, attempt.map(|attempt| attempt.outcome));
@@ -382,15 +372,7 @@ fn task_line(
         sw = columns.status,
         kw = columns.kind,
     );
-    let selection = task
-        .provider
-        .as_deref()
-        .map_or_else(String::new, |provider| {
-            task.model.as_deref().map_or_else(
-                || format!(" · {provider}"),
-                |model| format!(" · {provider} ({model})"),
-            )
-        });
+    let selection = task_selection(task);
     let budget = width.saturating_sub(prefix.chars().count());
     Line::styled(
         format!(
@@ -403,6 +385,31 @@ fn task_line(
         ),
         style,
     )
+}
+
+/// The row marker and emphasis for a task's status and selection.
+fn task_style(task: &Task, selected: bool) -> (char, Style) {
+    let mut style = Style::new();
+    if matches!(
+        task.status,
+        TaskStatus::Cancelled | TaskStatus::Skipped | TaskStatus::Superseded
+    ) {
+        style = style.add_modifier(Modifier::DIM);
+    }
+    if selected {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    (if selected { '>' } else { ' ' }, style)
+}
+
+/// The task-level provider and model selection printed after the title.
+fn task_selection(task: &Task) -> String {
+    match (task.provider.as_deref(), task.model.as_deref()) {
+        (Some(provider), Some(model)) => format!(" · {provider} ({model})"),
+        (Some(provider), None) => format!(" · {provider}"),
+        (None, Some(model)) => format!(" · model: {model}"),
+        (None, None) => String::new(),
+    }
 }
 
 #[cfg(test)]

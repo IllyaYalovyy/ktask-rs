@@ -57,9 +57,16 @@ impl SqliteJournal {
         connection
             .busy_timeout(BUSY_TIMEOUT)
             .map_err(|e| failed(&doing, e))?;
-        connection
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS events (
+        initialize(&connection, &doing)?;
+        Ok(Self { connection })
+    }
+}
+
+/// Creates the journal schema and upgrades older task mirrors with task selection fields.
+fn initialize(connection: &Connection, doing: &str) -> Result<(), JournalError> {
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS events (
                      seq INTEGER PRIMARY KEY AUTOINCREMENT,
                      at INTEGER NOT NULL,
                      kind TEXT NOT NULL,
@@ -80,18 +87,29 @@ impl SqliteJournal {
                      created_at INTEGER NOT NULL,
                      attempt_number INTEGER NOT NULL DEFAULT 0
                  )",
-            )
-            .map_err(|e| failed(&doing, e))?;
-        for column in ["provider", "model"] {
-            let statement = format!("ALTER TABLE tasks ADD COLUMN {column} TEXT");
-            match connection.execute(&statement, []) {
-                Ok(_) => {}
-                Err(rusqlite::Error::SqliteFailure(_, Some(message)))
-                    if message.contains("duplicate column name") => {}
-                Err(error) => return Err(failed(&doing, error)),
-            }
+        )
+        .map_err(|e| failed(doing, e))?;
+    for column in ["provider", "model"] {
+        add_optional_column(connection, doing, column)?;
+    }
+    Ok(())
+}
+
+/// Adds one nullable task-mirror column unless an earlier binary already did.
+fn add_optional_column(
+    connection: &Connection,
+    doing: &str,
+    column: &str,
+) -> Result<(), JournalError> {
+    let statement = format!("ALTER TABLE tasks ADD COLUMN {column} TEXT");
+    match connection.execute(&statement, []) {
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+            if message.contains("duplicate column name") =>
+        {
+            Ok(())
         }
-        Ok(Self { connection })
+        Err(error) => Err(failed(doing, error)),
     }
 }
 

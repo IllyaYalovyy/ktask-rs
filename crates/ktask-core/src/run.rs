@@ -233,29 +233,62 @@ fn attempt_task(
     task: &crate::Task,
     attempted: &mut Vec<Attempted>,
 ) -> Result<Option<RunEnd>, RunError> {
-    let deps = steps::Deps {
-        provider: providers.agent_for(task),
-        ..deps
-    };
+    let deps = task_deps(deps, providers, task);
     let context = RunContext {
         model: task.model.as_deref().unwrap_or(context.model),
         ..context
     };
-    let mut pre_steps = Vec::new();
-    match steps::sync::run_gate(deps.journal, deps.git, deps.clock, context, task.id)? {
-        Ok(step) => pre_steps.extend(step),
+    let pre_steps = match pre_steps(deps, context, task.id)? {
+        Ok(steps) => steps,
         Err(end) => return Ok(Some(end)),
+    };
+    finish_attempt(deps, context, task, &pre_steps, attempted)
+}
+
+/// Replaces the default agent provider with a task's named provider when it has one.
+fn task_deps<'a>(
+    deps: steps::Deps<'a>,
+    providers: &TaskProviders<'a>,
+    task: &crate::Task,
+) -> steps::Deps<'a> {
+    steps::Deps {
+        provider: providers.agent_for(task),
+        ..deps
     }
-    match steps::health_check::run_gate(deps.journal, deps.commands, deps.clock, context, task.id)?
+}
+
+/// Runs the gates that precede an attempt, returning their recorded pre-steps or their stop.
+fn pre_steps(
+    deps: steps::Deps<'_>,
+    context: RunContext<'_>,
+    task_id: TaskId,
+) -> Result<Result<Vec<steps::PreStep>, RunEnd>, RunError> {
+    let mut pre_steps = Vec::new();
+    match steps::sync::run_gate(deps.journal, deps.git, deps.clock, context, task_id)? {
+        Ok(step) => pre_steps.extend(step),
+        Err(end) => return Ok(Err(end)),
+    }
+    match steps::health_check::run_gate(deps.journal, deps.commands, deps.clock, context, task_id)?
     {
         Ok(step) => pre_steps.extend(step),
-        Err(end) => return Ok(Some(end)),
+        Err(end) => return Ok(Err(end)),
     }
+    Ok(Ok(pre_steps))
+}
+
+/// Runs the task's attempt after its gates passed and returns a stopping end when it failed.
+fn finish_attempt(
+    deps: steps::Deps<'_>,
+    context: RunContext<'_>,
+    task: &crate::Task,
+    pre_steps: &[steps::PreStep],
+    attempted: &mut Vec<Attempted>,
+) -> Result<Option<RunEnd>, RunError> {
     let result = steps::run_one_attempt(
         deps,
         context,
         task,
-        &pre_steps,
+        pre_steps,
         &steps::default_steps(),
         None,
         None,
