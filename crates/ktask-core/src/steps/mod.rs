@@ -13,21 +13,25 @@ mod execute;
 pub(crate) mod health_check;
 pub(crate) mod implementation;
 mod known_cause;
+mod outcome;
+mod pipeline_state;
 pub(crate) mod push;
 pub(crate) mod resolve;
 pub(crate) mod review;
 pub(crate) mod sync;
 pub(crate) mod test_step;
 
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 pub(crate) use agent::run_agent_step;
 pub(crate) use execute::{record_pre_steps, run_one_step};
+pub(crate) use outcome::StepOutcome;
+pub(crate) use pipeline_state::PipelineState;
 
 use crate::run::Attempted;
 use crate::{
-    AttemptToken, Clock, Commands, Git, Journal, Outcome, Provider, RunContext, RunError,
-    SessionLog, Sleep, Task, TaskStatus,
+    AttemptToken, Clock, Commands, Git, Journal, Provider, RunContext, RunError, SessionLog, Sleep,
+    Task, TaskStatus,
 };
 
 /// The reason recorded for an attempt a killed run left running, found still running when the
@@ -67,52 +71,6 @@ pub(crate) trait Step {
     ) -> Result<StepOutcome, RunError>;
 }
 
-/// What running one [`Step`] produced.
-pub(crate) enum StepOutcome {
-    /// It passed. `reason` is `Some` for a step with something worth recording even though it
-    /// passed (the commit step's hash, say, "nothing was changed", or the resolve step's own
-    /// note that `retry --reset-tree` reset the working tree); `None` for a step
-    /// (implementation, review, test) that says nothing beyond passing, and for a resolve step
-    /// whose `retry` did not ask for the tree to be reset.
-    Passed {
-        /// How long it took.
-        duration: Duration,
-        /// Its own exit code, when it ran a process.
-        exit_code: Option<i32>,
-        /// What it has to say even though it passed.
-        reason: Option<String>,
-        /// The agent's own fine-grained outcome, when this step ran a provider and it reported
-        /// one.
-        reported: Option<Outcome>,
-    },
-    /// It ended the whole attempt right here: `status` other than `done`, why, and — for a
-    /// step that ran a provider and it reported an outcome of its own — what.
-    Ended {
-        /// How long it took.
-        duration: Duration,
-        /// Its own exit code, when it ran a process.
-        exit_code: Option<i32>,
-        /// What the attempt, and so the task, ends at.
-        status: TaskStatus,
-        /// Why.
-        reason: Option<String>,
-        /// The agent's own fine-grained outcome, when this step ran a provider and it reported
-        /// one.
-        reported: Option<Outcome>,
-    },
-    /// The provider's own output said its usage limit was hit: the step neither passed nor
-    /// ended the attempt. [`execute::run_one_step`] records this as a wait, sleeps until
-    /// `until`, then runs the step itself again — never beginning a fresh step, so the
-    /// attempt's own number never moves for it, exactly as a hand-driven retry would.
-    Waiting {
-        /// How long the provider ran before its output showed the limit.
-        duration: Duration,
-        /// The time to wait until before trying again: the provider's own message named it, or
-        /// the resolve role's own default back-off when it did not.
-        until: SystemTime,
-    },
-}
-
 /// The two ports a step's own logic may reach the outside world through, plus the provider and
 /// the journal every step's recording needs — bundled so a step takes one argument for them
 /// rather than several, and a new one added later costs every existing step nothing.
@@ -125,46 +83,6 @@ pub(crate) struct Deps<'a> {
     pub(crate) provider: &'a Provider,
     pub(crate) session_log: &'a dyn SessionLog,
     pub(crate) sleep: &'a dyn Sleep,
-}
-
-/// What is common to every step of one attempt: the task and the token identifying it, the
-/// commit `HEAD` named before the first step ran (the review and test steps' diff is taken
-/// against this), the commit the commit step made, once it has run, and the exit code the most
-/// recent step that ran a process left — the three a later step may need from an earlier one,
-/// carried here rather than one step reading another's own recorded outcome.
-pub(crate) struct PipelineState<'a> {
-    pub(crate) task: &'a Task,
-    pub(crate) token: &'a AttemptToken,
-    /// `None` when it could not be captured: the review and test steps' diff is then empty
-    /// rather than the run failing over it.
-    pub(crate) start_commit: Option<String>,
-    /// The commit the commit step made, once it has run and there was something to commit.
-    pub(crate) committed: Option<String>,
-    /// The most recent process-running step's own exit code — never touched by a step, such as
-    /// the commit or push step, that runs no process of its own.
-    pub(crate) exit_code: Option<i32>,
-    /// What the step ahead of the resolve step ended at, and why — set right before the
-    /// resolve step is run, so its own prompt can carry this attempt's own outcome alongside
-    /// every earlier attempt's. `None` for every other step.
-    pub(crate) failure: Option<(TaskStatus, Option<String>)>,
-    /// The model the resolver named for this attempt, with the `retry` decision that began
-    /// it. `None` for a task's first attempt, and for a retry that named none — the
-    /// implementation step's own [`Step::model`].
-    pub(crate) requested_model: Option<String>,
-    /// The session the resolver's `retry --same-session` decision asked this attempt to
-    /// resume. `None` for a task's first attempt, and for a retry that did not ask for it.
-    pub(crate) requested_session: Option<String>,
-    /// Set by [`execute::run_one_step`] when the step that stopped the attempt matched one of
-    /// [`known_cause`]'s own known causes: the run stops without ever reaching the resolver,
-    /// and the task returns to `pending` rather than ending `failed` or `failed-unknown` —
-    /// [`finish_attempt`]'s own job to act on, once `run_attempt_steps` returns.
-    pub(crate) known_cause: bool,
-    /// Usage reported by the provider while the current step ran.
-    pub(crate) usage: crate::Usage,
-    /// Model reported by the provider while the current step ran.
-    pub(crate) used_model: Option<String>,
-    /// Non-blocking provider-limit warning emitted while the current step ran.
-    pub(crate) limit_warning: Option<crate::LimitWarning>,
 }
 
 /// One step that already ran and passed before the attempt it belongs to was even begun — the
