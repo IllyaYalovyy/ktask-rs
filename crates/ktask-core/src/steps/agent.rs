@@ -377,11 +377,7 @@ pub(crate) fn run_agent_step(
     });
     let (duration, result) = run_prompt(deps, context, state, step, model, prompt, resume)?;
     maybe_record_session(deps, context, state, step, prompt, &result)?;
-    if let Ok(output) = &result
-        && let Exit::Code(code) = output.exit
-    {
-        state.exit_code = Some(code);
-    }
+    record_exit_code(state, &result);
     if let Some(until) = limit_wait(deps, step, &result) {
         return Ok(StepOutcome::Waiting {
             duration,
@@ -392,6 +388,29 @@ pub(crate) fn run_agent_step(
     if let Some(reason) = result.as_ref().ok().and_then(codex_transport_failure) {
         return Ok(StepOutcome::TransportFailure { duration, reason });
     }
+    let outcome = final_agent_outcome(deps, state, step, model, result)?;
+    Ok(to_step_outcome(duration, outcome))
+}
+
+/// Records the provider's process exit code before a wait or transport retry resumes this same
+/// step, so an exhausted retry keeps the last failed process's code.
+fn record_exit_code(state: &mut PipelineState<'_>, result: &Result<Output, ProviderRunError>) {
+    if let Ok(output) = result
+        && let Exit::Code(code) = output.exit
+    {
+        state.exit_code = Some(code);
+    }
+}
+
+/// Reads a completed provider call's facts, applies them to the attempt, and turns its output
+/// into the final step outcome.
+fn final_agent_outcome(
+    deps: &Deps<'_>,
+    state: &mut PipelineState<'_>,
+    step: &str,
+    model: Option<&str>,
+    result: Result<Output, ProviderRunError>,
+) -> Result<AgentOutcome, RunError> {
     let facts = result.as_ref().map_or_else(
         |_| crate::ProviderUsage::default(),
         |output| (deps.provider_for(step).read_usage)(output),
@@ -407,7 +426,7 @@ pub(crate) fn run_agent_step(
         outcome.reason = Some(format!("asked for {asked}, the provider used {used}"));
     }
     state.exit_code = outcome.exit_code;
-    Ok(to_step_outcome(duration, outcome))
+    Ok(outcome)
 }
 
 /// The time to wait until before running this step again, when `result`'s own output says the

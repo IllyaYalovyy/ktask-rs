@@ -190,6 +190,69 @@ pub(crate) fn run_one_step(
     state: &mut PipelineState<'_>,
     step: &dyn Step,
 ) -> Result<(Duration, TaskStatus, Option<String>), RunError> {
+    begin_one_step(deps, context, state, step)?;
+    finish_started_step(deps, context, state, step)
+}
+
+/// The elapsed work and waits accumulated while one already-started step is rerun.
+#[derive(Default)]
+struct StepRunState {
+    total: Duration,
+    limit_wait: Option<LimitWait>,
+    transport_failures: u32,
+}
+
+/// Repeats the already-started `step` until it ends, preserving all wait and transport retry
+/// state on its one journal entry.
+fn finish_started_step(
+    deps: &Deps<'_>,
+    context: RunContext<'_>,
+    state: &mut PipelineState<'_>,
+    step: &dyn Step,
+) -> Result<(Duration, TaskStatus, Option<String>), RunError> {
+    let mut run = StepRunState::default();
+    loop {
+        let outcome = step.run(deps, context, state)?;
+        if let Some(ended) =
+            process_step_outcome(deps, context, state, step.name(), &mut run, outcome)?
+        {
+            return Ok(ended);
+        }
+    }
+}
+
+/// Acts on one fresh result from an already-started step; `Some` means the step has ended.
+fn process_step_outcome(
+    deps: &Deps<'_>,
+    context: RunContext<'_>,
+    state: &mut PipelineState<'_>,
+    step: &str,
+    run: &mut StepRunState,
+    outcome: StepOutcome,
+) -> Result<Option<(Duration, TaskStatus, Option<String>)>, RunError> {
+    match outcome {
+        StepOutcome::Waiting {
+            duration,
+            until,
+            reason,
+        } => {
+            wait_for_provider_limit(deps, state, step, run, duration, until, &reason).map(|()| None)
+        }
+        StepOutcome::TransportFailure { duration, reason } => {
+            retry_transport_failure(deps, context, state, step, run, duration, &reason)
+        }
+        outcome => end_one_step(deps, state, step, run.total, outcome, run.limit_wait).map(Some),
+    }
+}
+
+/// Appends the start event for `step`, including the provider and model actually selected for
+/// agent steps.
+fn begin_one_step(
+    deps: &Deps<'_>,
+    context: RunContext<'_>,
+    state: &PipelineState<'_>,
+    step: &dyn Step,
+) -> Result<(), RunError> {
     let agent_provider = matches!(
         step.name(),
         crate::IMPLEMENTATION | crate::REVIEW_STEP | crate::TEST_STEP | crate::RESOLVE_STEP
@@ -204,54 +267,88 @@ pub(crate) fn run_one_step(
         agent_provider,
         step.model(context, state).as_deref(),
     )?;
-    let mut total = Duration::ZERO;
-    let mut limit_wait: Option<LimitWait> = None;
-    let mut transport_failures: u32 = 0;
-    loop {
-        match step.run(deps, context, state)? {
-            StepOutcome::Waiting {
-                duration,
-                until,
-                reason,
-            } => {
-                total += duration;
-                let waited = wait_for_limit(deps, state, step.name(), until, &reason)?;
-                total += waited;
-                let waited_so_far = limit_wait.map_or(Duration::ZERO, |wait| wait.waited);
-                limit_wait = Some(LimitWait {
-                    waited: waited_so_far + waited,
-                    resumed_at: until,
-                });
-            }
-            StepOutcome::TransportFailure { duration, reason } => {
-                total += duration;
-                let failures = transport_failures.saturating_add(1);
-                transport_failures = failures;
-                if failures >= context.transport_retries {
-                    let exhausted = StepOutcome::Ended {
-                        duration: Duration::ZERO,
-                        exit_code: state.exit_code,
-                        status: TaskStatus::FailedUnknown,
-                        reason: Some(format!(
-                            "Codex transport failed {failures} consecutive times: {reason}"
-                        )),
-                        reported: None,
-                    };
-                    return end_one_step(deps, state, step.name(), total, exhausted, limit_wait);
-                }
-                let wait = transport_backoff(failures);
-                let until = deps.clock.now() + wait;
-                let waiting = format!(
-                    "Codex transport disconnected; retry {failures} of {} in {}s",
-                    context.transport_retries,
-                    wait.as_secs()
-                );
-                let waited = wait_for_limit(deps, state, step.name(), until, &waiting)?;
-                total += waited;
-            }
-            outcome => return end_one_step(deps, state, step.name(), total, outcome, limit_wait),
-        }
+    Ok(())
+}
+
+/// Waits out one provider usage-limit response and keeps its wait record with prior waits for
+/// the same step.
+fn wait_for_provider_limit(
+    deps: &Deps<'_>,
+    state: &PipelineState<'_>,
+    step: &str,
+    run: &mut StepRunState,
+    duration: Duration,
+    until: SystemTime,
+    reason: &str,
+) -> Result<(), RunError> {
+    run.total += duration;
+    let waited = wait_for_limit(deps, state, step, until, reason)?;
+    run.total += waited;
+    let waited_so_far = run.limit_wait.map_or(Duration::ZERO, |wait| wait.waited);
+    run.limit_wait = Some(LimitWait {
+        waited: waited_so_far + waited,
+        resumed_at: until,
+    });
+    Ok(())
+}
+
+/// Retries one Codex transport failure after its bounded delay, or ends the step when the
+/// configured consecutive-failure limit has been reached.
+fn retry_transport_failure(
+    deps: &Deps<'_>,
+    context: RunContext<'_>,
+    state: &mut PipelineState<'_>,
+    step: &str,
+    run: &mut StepRunState,
+    duration: Duration,
+    reason: &str,
+) -> Result<Option<(Duration, TaskStatus, Option<String>)>, RunError> {
+    run.total += duration;
+    run.transport_failures = run.transport_failures.saturating_add(1);
+    if run.transport_failures >= context.transport_retries {
+        return exhausted_transport_failure(
+            deps,
+            state,
+            step,
+            run.total,
+            run.transport_failures,
+            reason,
+            run.limit_wait,
+        )
+        .map(Some);
     }
+    let wait = transport_backoff(run.transport_failures);
+    let until = deps.clock.now() + wait;
+    let waiting = format!(
+        "Codex transport disconnected; retry {} of {} in {}s",
+        run.transport_failures,
+        context.transport_retries,
+        wait.as_secs()
+    );
+    run.total += wait_for_limit(deps, state, step, until, &waiting)?;
+    Ok(None)
+}
+
+/// Ends an agent step once its Codex stream has disconnected too many consecutive times.
+fn exhausted_transport_failure(
+    deps: &Deps<'_>,
+    state: &mut PipelineState<'_>,
+    step: &str,
+    total: Duration,
+    failures: u32,
+    reason: &str,
+    limit_wait: Option<LimitWait>,
+) -> Result<(Duration, TaskStatus, Option<String>), RunError> {
+    let exhausted = StepOutcome::Ended {
+        duration: Duration::ZERO,
+        exit_code: state.exit_code,
+        status: TaskStatus::FailedUnknown,
+        reason: Some(format!(
+            "Codex transport failed {failures} consecutive times: {reason}"
+        )),
+        reported: None,
+    };
+    end_one_step(deps, state, step, total, exhausted, limit_wait)
 }
 
 /// The retry delays for an interrupted Codex stream: growing, but capped so an unattended run
