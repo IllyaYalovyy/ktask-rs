@@ -316,14 +316,7 @@ fn write_step_lines(
         let usage = presentation::step_usage_text(step)
             .map(|usage| format!("\t{usage}"))
             .unwrap_or_default();
-        let activity = if index + 1 == steps.len() {
-            activity.map_or_else(String::new, |value| {
-                let text = presentation::activity(value);
-                format!("\t{} {}", text.indicator, text.message)
-            })
-        } else {
-            String::new()
-        };
+        let activity = activity_suffix(index + 1 == steps.len(), activity);
         match presentation::reason(step) {
             Some(reason) => writeln!(
                 out,
@@ -337,4 +330,15 @@ fn write_step_lines(
             ),
         }
     })
+}
+
+/// The final step alone carries the live provider-output activity field.
+fn activity_suffix(current: bool, activity: Option<&ktask_core::OutputActivity>) -> String {
+    current
+        .then_some(activity)
+        .flatten()
+        .map_or_else(String::new, |value| {
+            let text = presentation::activity(value);
+            format!("\t{} {}", text.indicator, text.message)
+        })
 }

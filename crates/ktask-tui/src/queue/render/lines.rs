@@ -61,6 +61,25 @@ fn step_line(
 /// The non-live part of one queue step line, including its optional failure reason and limit
 /// wait, before [`step_line`] adds provider-output activity.
 fn step_text(step: &StepLine, width: usize, label: &str) -> String {
+    let prefix = step_prefix(step, label);
+    let text = presentation::reason(step).map_or_else(
+        || prefix.clone(),
+        |reason| {
+            let budget = width.saturating_sub(prefix.chars().count() + 2);
+            format!("{prefix}: {}", elide(&reason, budget))
+        },
+    );
+    let text = match &step.limit_wait {
+        Some(wait) => format!("{text} · {}", presentation::queue_limit_wait_text(wait)),
+        None => text,
+    };
+    presentation::step_usage_text(step)
+        .map(|usage| format!("{text} · {usage}"))
+        .unwrap_or(text)
+}
+
+/// The fixed part of a queue step line, before an optional reason and end facts.
+fn step_prefix(step: &StepLine, label: &str) -> String {
     let provider = step.provider.as_deref().unwrap_or("-");
     let seconds = step.time_spent.as_secs();
     let outcome = presentation::outcome(step.outcome);
@@ -84,22 +103,7 @@ fn step_text(step: &StepLine, width: usize, label: &str) -> String {
         "      {label}{} · {shown_provider} · {seconds}s · {outcome}{limit_warning}{session}",
         step.step
     );
-    let text = presentation::reason(step).map_or_else(
-        || prefix.clone(),
-        |reason| {
-            let budget = width.saturating_sub(prefix.chars().count() + 2);
-            format!("{prefix}: {}", elide(&reason, budget))
-        },
-    );
-    let text = match &step.limit_wait {
-        Some(wait) => {
-            format!("{text} · {}", presentation::queue_limit_wait_text(wait))
-        }
-        None => text,
-    };
-    presentation::step_usage_text(step)
-        .map(|usage| format!("{text} · {usage}"))
-        .unwrap_or(text)
+    prefix
 }
 
 /// `lines`, kept to at most `budget`: shown in full when they already fit; otherwise the

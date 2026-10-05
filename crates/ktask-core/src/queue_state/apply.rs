@@ -285,18 +285,7 @@ impl QueueState {
     /// attempt it names, when there is one.
     pub(super) fn apply_step_ended(&mut self, event: &Event) {
         let Event::StepEnded {
-            id,
-            number,
-            step,
-            duration,
-            status,
-            reason,
-            reported,
-            limit_wait,
-            limit_warning,
-            usage,
-            used_model,
-            ..
+            id, number, step, ..
         } = event
         else {
             return;
@@ -313,16 +302,7 @@ impl QueueState {
         else {
             return;
         };
-        current.ended = Some(AttemptEnd {
-            duration: *duration,
-            status: *status,
-            reason: reason.clone(),
-            reported: *reported,
-            limit_wait: *limit_wait,
-            limit_warning: limit_warning.clone(),
-            usage: *usage,
-            used_model: used_model.clone(),
-        });
+        current.ended = Some(step_end(event));
     }
 
     /// Where a task placed at `placement` goes, if `placement` names a task — the caller
@@ -345,5 +325,33 @@ impl QueueState {
         for (index, task) in self.tasks.iter_mut().enumerate() {
             task.position = index + 1;
         }
+    }
+}
+
+/// The durable end facts from a [`Event::StepEnded`]. Callers only pass matching events.
+fn step_end(event: &Event) -> AttemptEnd {
+    let Event::StepEnded {
+        duration,
+        status,
+        reason,
+        reported,
+        limit_wait,
+        limit_warning,
+        usage,
+        used_model,
+        ..
+    } = event
+    else {
+        unreachable!("step_end requires a StepEnded event");
+    };
+    AttemptEnd {
+        duration: *duration,
+        status: *status,
+        reason: reason.clone(),
+        reported: *reported,
+        limit_wait: *limit_wait,
+        limit_warning: limit_warning.clone(),
+        usage: *usage,
+        used_model: used_model.clone(),
     }
 }

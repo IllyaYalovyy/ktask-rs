@@ -164,11 +164,16 @@ fn attempt_line(
         limit_wait: current.limit_wait,
         limit_warning: current.limit_warning,
         output_activity,
-        usage: steps.iter().fold(crate::Usage::default(), |total, step| {
-            total.plus(step.usage)
-        }),
+        usage: total_usage(&steps),
         steps,
     }
+}
+
+/// The usage accumulated by every step the attempt has run.
+fn total_usage(steps: &[StepLine]) -> crate::Usage {
+    steps.iter().fold(crate::Usage::default(), |total, step| {
+        total.plus(step.usage)
+    })
 }
 
 /// The live output state for this attempt's current step, when that step is an agent provider
