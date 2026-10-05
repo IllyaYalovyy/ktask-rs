@@ -142,6 +142,7 @@ mod tests {
             model: None,
             resume: None,
             prompt_path: Path::new("/state/prompts/the-prompt.prompt"),
+            project_dir: Path::new("/work/app"),
         }
     }
 
@@ -190,6 +191,7 @@ mod tests {
                 model: Some("opus"),
                 resume: None,
                 prompt_path: Path::new("/state/prompts/the-prompt.prompt"),
+                project_dir: Path::new("/work/app"),
             },
         )
         .unwrap();
@@ -223,6 +225,7 @@ mod tests {
                     transcript_path: Path::new("/state/sessions/the-session.log"),
                 }),
                 prompt_path: Path::new("/state/prompts/the-prompt.prompt"),
+                project_dir: Path::new("/work/app"),
             },
         )
         .unwrap();

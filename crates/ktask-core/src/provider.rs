@@ -58,6 +58,9 @@ pub struct StepCall<'a> {
     /// own script or command line only ever sees part of its prompt can still read everything
     /// it said.
     pub prompt_path: &'a Path,
+    /// The project directory in which this provider invocation runs. Command templates may
+    /// use it when a CLI requires an explicit working-directory argument.
+    pub project_dir: &'a Path,
 }
 
 /// What a provider's own output said about having hit its usage limit: the reset time it
@@ -235,6 +238,7 @@ mod tests {
             model: None,
             resume: None,
             prompt_path: Path::new("/state/prompts/the-prompt.prompt"),
+            project_dir: Path::new(DIR),
         }
     }
 

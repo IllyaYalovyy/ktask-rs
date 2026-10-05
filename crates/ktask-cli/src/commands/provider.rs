@@ -228,6 +228,7 @@ fn run_echo(
             model: None,
             resume: None,
             prompt_path: &prompt_path,
+            project_dir: dir,
         },
         dir,
         Duration::from_millis(timeout_ms),

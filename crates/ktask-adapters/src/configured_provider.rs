@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use crate::claude_stream;
+use crate::{claude_stream, codex_jsonl};
 use ktask_core::{
     LimitSignal, Output, Provider, ProviderCommand, ProviderDefinition, ProviderParser,
     ProviderUsage, StepCall, Usage,
@@ -64,10 +64,10 @@ fn build_command(
     call: StepCall<'_>,
 ) -> ProviderCommand {
     let mut args = render(&definition.args, prompt, call);
-    args.extend(render(&definition.prompt, prompt, call));
     if call.model.is_some() {
         args.extend(render(&definition.model, prompt, call));
     }
+    args.extend(render(&definition.prompt, prompt, call));
     if call.resume.is_some() {
         args.extend(render(&definition.resume, prompt, call));
     }
@@ -89,13 +89,14 @@ fn render(template: &[String], prompt: &str, call: StepCall<'_>) -> Vec<String> 
             part.replace("{prompt}", prompt)
                 .replace("{model}", call.model.unwrap_or_default())
                 .replace("{session}", call.resume.map_or("", |resume| resume.session))
+                .replace("{project-dir}", &call.project_dir.to_string_lossy())
         })
         .collect()
 }
 
 fn parse_output(parser: ProviderParser, output: Output) -> Output {
     match parser {
-        ProviderParser::Plain => output,
+        ProviderParser::Plain | ProviderParser::CodexJsonl => output,
         ProviderParser::ClaudeStreamJson => parse_claude_stream(output),
     }
 }
@@ -112,6 +113,9 @@ fn parse_claude_stream(output: Output) -> Output {
 fn read_usage(definition: &ProviderDefinition, output: &Output) -> ProviderUsage {
     if definition.parser == ProviderParser::ClaudeStreamJson {
         return claude_stream::usage(output);
+    }
+    if definition.parser == ProviderParser::CodexJsonl {
+        return codex_jsonl::usage(output);
     }
     let Some(path) = definition.usage.as_deref() else {
         return ProviderUsage::default();
@@ -205,8 +209,8 @@ pub(crate) fn decimal_microusd(value: &str) -> Option<u64> {
 }
 
 fn read_session(definition: &ProviderDefinition, output: &Output) -> Option<String> {
-    (definition.parser == ProviderParser::ClaudeStreamJson).then(|| {
-        String::from_utf8_lossy(&output.stdout)
+    match definition.parser {
+        ProviderParser::ClaudeStreamJson => String::from_utf8_lossy(&output.stdout)
             .lines()
             .find_map(|line| {
                 serde_json::from_str::<serde_json::Value>(line)
@@ -217,8 +221,10 @@ fn read_session(definition: &ProviderDefinition, output: &Output) -> Option<Stri
                             .and_then(|v| v.as_str())
                             .map(str::to_owned)
                     })
-            })
-    })?
+            }),
+        ProviderParser::CodexJsonl => codex_jsonl::session(output),
+        ProviderParser::Plain => None,
+    }
 }
 
 #[cfg(test)]

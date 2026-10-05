@@ -52,6 +52,17 @@ fn known_claude_error(output: &Output) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The concise diagnostic conventional CLI providers place on standard error. The runner has
+/// no provider-specific dependency here: any process that writes a line beginning `ERROR:`
+/// keeps that observed reason when it exits before reporting.
+fn reported_error(output: &Output) -> Option<String> {
+    String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .rev()
+        .find(|line| line.starts_with("ERROR:"))
+        .map(str::to_owned)
+}
+
 /// What a step that ran a provider ended at: its exit code (`None` when the provider could not
 /// be run at all, or was killed), the resulting status, the reason when it is not `done`, and
 /// the fine-grained outcome the agent itself reported, when it reported anything.
@@ -116,9 +127,11 @@ fn status_and_reason(
                 Some(phrase) => format!(
                     "the provider exited with code {exit_code} and reported nothing: {phrase}"
                 ),
-                None => known_claude_error(output).unwrap_or_else(|| {
-                    format!("the provider exited with code {exit_code} and reported nothing")
-                }),
+                None => reported_error(output)
+                    .or_else(|| known_claude_error(output))
+                    .unwrap_or_else(|| {
+                        format!("the provider exited with code {exit_code} and reported nothing")
+                    }),
             };
             (TaskStatus::FailedUnknown, Some(reason))
         }
@@ -296,6 +309,7 @@ fn run_prompt(
             model,
             resume,
             prompt_path: &prompt_path,
+            project_dir: context.project_dir,
         },
         context.project_dir,
         context.attempt_timeout,

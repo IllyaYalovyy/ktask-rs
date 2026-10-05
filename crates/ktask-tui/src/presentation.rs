@@ -140,7 +140,7 @@ pub fn usage_text(usage: Usage) -> String {
         .output_tokens
         .map_or_else(|| "?".to_owned(), |n| n.to_string());
     let cost = usage.cost_microusd.map_or_else(
-        || "cost ?".to_owned(),
+        || "cost not reported".to_owned(),
         |microusd| format!("cost ${}.{:06}", microusd / 1_000_000, microusd % 1_000_000),
     );
     format!("tokens in {input} out {output} {cost}")

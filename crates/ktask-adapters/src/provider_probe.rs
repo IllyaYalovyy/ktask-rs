@@ -55,6 +55,7 @@ impl ProviderProbe for ProcessProviderProbe {
                 model,
                 resume: None,
                 prompt_path: Path::new(""),
+                project_dir: &self.dir,
             },
             &self.dir,
             Duration::from_secs(15),

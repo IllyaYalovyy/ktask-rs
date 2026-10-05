@@ -7,6 +7,7 @@
 mod attempt_output;
 mod claude_stream;
 mod clock;
+mod codex_jsonl;
 mod configured_provider;
 pub mod echo;
 mod git;

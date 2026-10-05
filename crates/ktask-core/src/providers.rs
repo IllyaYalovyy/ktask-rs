@@ -5,7 +5,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// The two output encodings the generic provider adapter understands.
+/// The output encodings the generic provider adapter understands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderParser {
@@ -13,6 +13,8 @@ pub enum ProviderParser {
     Plain,
     /// Claude Code's line-delimited structured event stream.
     ClaudeStreamJson,
+    /// Codex's line-delimited structured event stream.
+    CodexJsonl,
 }
 
 impl fmt::Display for ProviderParser {
@@ -20,13 +22,14 @@ impl fmt::Display for ProviderParser {
         match self {
             Self::Plain => f.write_str("plain"),
             Self::ClaudeStreamJson => f.write_str("claude-stream-json"),
+            Self::CodexJsonl => f.write_str("codex-jsonl"),
         }
     }
 }
 
-/// A complete provider definition. The argument lists are templates: `{prompt}`, `{model}`
-/// and `{session}` are replaced for an invocation. `denied-tools` is the list passed to a
-/// provider's tool-denial option. The prompt is also supplied on standard input.
+/// A complete provider definition. The argument lists are templates: `{prompt}`, `{model}`,
+/// `{session}` and `{project-dir}` are replaced for an invocation. `denied-tools` is the list
+/// passed to a provider's tool-denial option. The prompt is also supplied on standard input.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderDefinition {
     /// Program found on `PATH`, or an absolute program path.

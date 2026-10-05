@@ -7,6 +7,7 @@ use std::time::SystemTime;
 use crate::{StatusEntry, TaskId};
 
 mod claude;
+mod codex;
 
 /// Port: when an attempt's append-only provider output was last written.
 ///
@@ -132,12 +133,13 @@ pub fn sanitize_output(bytes: &[u8]) -> String {
 }
 
 /// Renders retained provider bytes into the words an operator reads. Plain providers retain
-/// their own text; structured Claude streams become one short line per visible event.
+/// their own text; structured streams become one short line per visible event.
 #[must_use]
 pub fn render_provider_output(parser: crate::ProviderParser, bytes: &[u8]) -> String {
     match parser {
         crate::ProviderParser::Plain => String::from_utf8_lossy(bytes).into_owned(),
         crate::ProviderParser::ClaudeStreamJson => claude::render(bytes),
+        crate::ProviderParser::CodexJsonl => codex::render(bytes),
     }
 }
 
