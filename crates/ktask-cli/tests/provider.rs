@@ -465,9 +465,9 @@ fn provider_list_and_show_print_the_complete_built_in_and_project_definitions() 
 
     let list = sandbox.run(&repository, &["provider", "list"])?;
     assert_eq!(list.code, Some(0), "{}", list.stderr);
-    assert_eq!(list.stdout, "claude\necho\nlocal\n");
+    assert_eq!(list.stdout, "claude\ncodex\necho\nlocal\n");
     let json = sandbox.run(&repository, &["provider", "list", "--json"])?;
-    assert_eq!(json.stdout, "[\"claude\",\"echo\",\"local\"]\n");
+    assert_eq!(json.stdout, "[\"claude\",\"codex\",\"echo\",\"local\"]\n");
 
     let claude = sandbox.run(&repository, &["provider", "show", "claude", "--json"])?;
     assert_eq!(claude.code, Some(0), "{}", claude.stderr);
@@ -501,6 +501,32 @@ fn provider_list_and_show_print_the_complete_built_in_and_project_definitions() 
             "TaskOutput",
             "TaskStop"
         ])
+    );
+
+    let codex = sandbox.run(&repository, &["provider", "show", "codex", "--json"])?;
+    assert_eq!(codex.code, Some(0), "{}", codex.stderr);
+    let value: serde_json::Value = serde_json::from_str(&codex.stdout)?;
+    assert_eq!(value["command"], "codex");
+    assert_eq!(value["parser"], "codex-jsonl");
+    assert_eq!(
+        value["args"],
+        serde_json::json!([
+            "exec",
+            "--json",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            "-C",
+            "{project-dir}"
+        ])
+    );
+    let codex_text = sandbox.run(&repository, &["provider", "show", "codex"])?;
+    assert_eq!(codex_text.code, Some(0), "{}", codex_text.stderr);
+    assert!(
+        codex_text
+            .stdout
+            .contains("parser\tcodex-jsonl\tbuilt-in\n"),
+        "{}",
+        codex_text.stdout
     );
 
     std::fs::write(

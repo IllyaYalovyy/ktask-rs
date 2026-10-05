@@ -153,17 +153,18 @@ fn v_shows_the_same_provider_list_and_definition_the_cli_shows_then_returns_to_t
     let cli = fixture
         .sandbox
         .run(&fixture.repository, &["provider", "list"])?;
-    assert_eq!(cli.stdout, "claude\necho\nlocal\n");
+    assert_eq!(cli.stdout, "claude\ncodex\necho\nlocal\n");
 
     let mut terminal = super::open(&fixture.sandbox, &fixture.repository, ROWS, super::COLS)?;
     terminal.send("v")?;
     terminal.wait_for("the providers list", |screen| {
         screen.contents().contains("Providers")
             && screen.contents().contains("claude")
+            && screen.contents().contains("codex")
             && screen.contents().contains("echo")
             && screen.contents().contains("local")
     })?;
-    terminal.send("jj\r")?;
+    terminal.send("jjj\r")?;
     terminal.wait_for("the selected provider definition", |screen| {
         let text = screen.contents();
         text.contains("Provider: local")
@@ -177,7 +178,7 @@ fn v_shows_the_same_provider_list_and_definition_the_cli_shows_then_returns_to_t
     terminal.wait_for("the providers list again", |screen| {
         screen.contents().contains("Providers") && !screen.contents().contains("Provider: local")
     })?;
-    terminal.send("kk\r")?;
+    terminal.send("kkk\r")?;
     terminal.wait_for("the built-in claude definition", |screen| {
         let text = screen.contents();
         text.contains("Provider: claude")

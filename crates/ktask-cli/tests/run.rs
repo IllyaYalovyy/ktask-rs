@@ -1397,6 +1397,138 @@ fn select_claude(fixture: &Fixture) -> Result<()> {
     Ok(())
 }
 
+/// Selects Codex for the implementation step alone, keeping this test focused on the provider
+/// transcript rather than the review and testing workflows.
+fn select_codex(fixture: &Fixture) -> Result<()> {
+    for (name, value) in [
+        ("provider", "codex"),
+        ("model", "gpt-5-codex"),
+        ("step-review", "off"),
+        ("step-testing", "off"),
+    ] {
+        let outcome = fixture.run(&["settings", "set", name, value])?;
+        assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    }
+    Ok(())
+}
+
+/// Installs the hermetic `codex` executable used by the Codex provider tests.
+fn codex_script(script: &str) -> Result<TempDir> {
+    let dir = TempDir::new()?;
+    let path = dir.path().join("codex");
+    std::fs::write(&path, format!("#!/bin/sh\n{script}\n"))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+    Ok(dir)
+}
+
+#[test]
+fn recorded_codex_jsonl_runs_the_task_with_its_requested_model_session_and_usage() -> Result<()> {
+    let fixture = Fixture::new()?;
+    select_codex(&fixture)?;
+    fixture.add_agent_task("a", "do the recorded work")?;
+    let script = [
+        "[ \"$1\" = exec ] && [ \"$2\" = --json ] && [ \"$3\" = --dangerously-bypass-approvals-and-sandbox ] && [ \"$4\" = --skip-git-repo-check ] && [ \"$5\" = -C ] && [ \"$6\" = \"$PWD\" ] && [ \"$7\" = --model ] && [ \"$8\" = gpt-5-codex ] && [ \"$9\" = - ] || exit 9",
+        &format!("printf '%s' '{}'", include_str!("../../../test-fixtures/codex/codex-0.160.0-success.jsonl")),
+        "prompt=$(cat)\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
+    ]
+    .join("\n");
+    let codex = codex_script(&script)?;
+    let outcome = fixture
+        .sandbox
+        .run_with(&fixture.repository, &["run"], |command| {
+            with_dir_first_on_path(command, codex.path());
+        })?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(fixture.task_status(1)?, "done");
+    assert_eq!(fixture.attempt_running_provider(1, 1)?, "codex");
+    let status = fixture.run(&["status"])?;
+    assert!(
+        status.stdout.contains("implementation\tgpt-5-codex\tcodex"),
+        "{}",
+        status.stdout
+    );
+    assert!(
+        status
+            .stdout
+            .contains("session:01a10555-6a4c-7f21-8ac4-aed0bf10dbb2"),
+        "{}",
+        status.stdout
+    );
+    assert!(
+        status
+            .stdout
+            .contains("tokens in 13282 out 5 cost not reported"),
+        "{}",
+        status.stdout
+    );
+    let status_json: serde_json::Value =
+        serde_json::from_str(&fixture.run(&["status", "--json"])?.stdout)?;
+    assert_eq!(status_json[0]["attempt"]["input_tokens"], 13_282);
+    assert_eq!(status_json[0]["attempt"]["output_tokens"], 5);
+    assert_eq!(
+        status_json[0]["attempt"]["cost_usd"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        status_json[0]["attempt"]["steps"][0]["session"],
+        "01a10555-6a4c-7f21-8ac4-aed0bf10dbb2"
+    );
+    let output = fixture.run(&["output", "1"])?;
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    assert!(
+        output.stdout.contains("{\"type\":\"turn.started\"}"),
+        "{}",
+        output.stdout
+    );
+    Ok(())
+}
+
+#[test]
+fn a_codex_error_or_timeout_keeps_the_observed_exit_reason() -> Result<()> {
+    for (script, timeout, expected_exit, expected_reason) in [
+        (
+            format!(
+                "cat >/dev/null\nprintf '%s' '{}' >&2\nexit 7",
+                include_str!("../../../test-fixtures/codex/transport-failure-stderr.txt")
+            ),
+            None,
+            Some(7),
+            "stream disconnected before completion",
+        ),
+        (
+            "cat >/dev/null\nsleep 30".to_owned(),
+            Some("1"),
+            None,
+            "time limit",
+        ),
+    ] {
+        let fixture = Fixture::new()?;
+        select_codex(&fixture)?;
+        fixture.add_agent_task("a", "do work")?;
+        let codex = codex_script(&script)?;
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_ktask-rs"));
+        command.args(["run"]);
+        if let Some(timeout) = timeout {
+            command.args(["--attempt-timeout", timeout]);
+        }
+        fixture.sandbox.isolate(&mut command, &fixture.repository);
+        with_dir_first_on_path(&mut command, codex.path());
+        let output = command.output()?;
+        assert_eq!(output.status.code(), Some(1));
+        let (_, exit_code, status, reason) = fixture.attempt_ended(1)?;
+        assert_eq!(exit_code, expected_exit);
+        assert_eq!(status, "failed-unknown");
+        assert!(
+            reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains(expected_reason),
+            "{reason:?}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn recorded_claude_stream_json_runs_the_task_with_its_model() -> Result<()> {
     let fixture = Fixture::new()?;
