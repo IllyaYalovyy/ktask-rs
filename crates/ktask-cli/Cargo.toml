@@ -19,7 +19,7 @@ required-features = ["test-support"]
 
 [features]
 test-support = []
-# Opt-in only: this runs a paid, authenticated Claude readiness request against the operator's
+# Opt-in only: this runs a paid, authenticated Codex readiness request against the operator's
 # real account. It is deliberately absent from normal workspace checks.
 real-provider-tests = []
 

@@ -255,6 +255,20 @@ fn recorded_claude(recording: &str, exit_code: u8) -> Result<TempDir> {
     Ok(dir)
 }
 
+/// A recorded Codex executable, placed first on the child process's `PATH`.
+fn recorded_codex(recording: &str, exit_code: u8) -> Result<TempDir> {
+    let dir = TempDir::new()?;
+    let script = dir.path().join("codex");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\n[ \"$1\" = exec ] && [ \"$2\" = --json ] && [ \"$3\" = --dangerously-bypass-approvals-and-sandbox ] && [ \"$4\" = --skip-git-repo-check ] && [ \"$5\" = -C ] && [ \"$7\" = - ] || exit 9\nprintf '%s' '{recording}'\nexit {exit_code}\n"
+        ),
+    )?;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
+    Ok(dir)
+}
+
 fn path_with(dir: &Path) -> Result<std::ffi::OsString> {
     let existing = std::env::var_os("PATH").unwrap_or_default();
     Ok(std::env::join_paths(
@@ -386,6 +400,79 @@ fn provider_check_reports_every_claude_check_passed_for_recorded_output() -> Res
 }
 
 #[test]
+fn provider_check_exits_one_with_codex_install_advice_when_codex_is_not_on_path() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, repository) = project(&sandbox)?;
+    let outcome = sandbox.run_with(&repository, &["provider", "check", "codex"], |command| {
+        command.env("PATH", "/usr/bin:/bin");
+    })?;
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stderr);
+    assert!(
+        outcome.stdout.contains("the `codex` binary is not on PATH"),
+        "{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("npm install -g @openai/codex"),
+        "{}",
+        outcome.stdout
+    );
+    Ok(())
+}
+
+#[test]
+fn provider_check_reports_every_codex_check_passed_for_recorded_output() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, repository) = project(&sandbox)?;
+    let codex = recorded_codex(
+        include_str!("../../../test-fixtures/codex/codex-0.160.0-success.jsonl"),
+        0,
+    )?;
+    let path = path_with(codex.path())?;
+    let outcome = sandbox.run_with(&repository, &["provider", "check", "codex"], |command| {
+        command.env("PATH", &path);
+    })?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "Provider: codex\ncommand: passed\nlogin: passed\nsmallest call: passed\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn provider_check_replays_a_codex_login_failure_with_login_advice() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, repository) = project(&sandbox)?;
+    let codex = recorded_codex(
+        include_str!("../../../test-fixtures/codex/authentication-failure.jsonl"),
+        1,
+    )?;
+    let path = path_with(codex.path())?;
+    let outcome = sandbox.run_with(&repository, &["provider", "check", "codex"], |command| {
+        command.env("PATH", &path);
+    })?;
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stderr);
+    let login = outcome
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("login: failed"))
+        .expect("login failure line");
+    assert!(
+        login.contains("run `codex login`, then check again"),
+        "{login}"
+    );
+    let call = outcome
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("smallest call: failed"))
+        .expect("smallest call failure line");
+    assert!(call.contains("fix the provider error"), "{call}");
+    assert!(!call.contains("{\"type\""), "{call}");
+    Ok(())
+}
+
+#[test]
 fn provider_check_replays_a_claude_failure_as_a_short_result_error_with_a_remedy() -> Result<()> {
     let sandbox = Sandbox::new()?;
     let (_keep, repository) = project(&sandbox)?;
@@ -429,17 +516,17 @@ fn provider_check_echo_always_passes_without_a_provider_binary() -> Result<()> {
     Ok(())
 }
 
-/// This is intentionally opt-in: it verifies the real binary's readiness path with the
-/// low-cost Claude model, and therefore needs an authenticated operator account.
+/// This is intentionally opt-in: it verifies the real binary's Codex readiness path and
+/// therefore needs an authenticated operator account.
 #[cfg(feature = "real-provider-tests")]
 #[test]
-fn real_model_provider_check_uses_claudes_cheapest_readiness_model() -> Result<()> {
+fn real_model_provider_check_runs_codex() -> Result<()> {
     let output = Command::new(env!("CARGO_BIN_EXE_ktask-rs"))
-        .args(["provider", "check", "claude"])
+        .args(["provider", "check", "codex"])
         .output()?;
     assert!(
         output.status.success(),
-        "provider check claude failed:\n{}",
+        "provider check codex failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(

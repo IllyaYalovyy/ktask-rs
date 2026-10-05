@@ -97,9 +97,15 @@ fn is_executable(path: PathBuf) -> bool {
 
 fn authentication_failure(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    ["not logged in", "invalid api key", "please run /login"]
-        .iter()
-        .any(|phrase| lower.contains(phrase))
+    [
+        "not logged in",
+        "invalid api key",
+        "please run /login",
+        "missing bearer or basic authentication",
+        "401 unauthorized",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase))
 }
 
 /// Chooses the one concise, operator-facing explanation for a failed probe. Claude's first
@@ -114,12 +120,46 @@ fn probe_problem(definition: &ProviderDefinition, output: &ktask_core::Output) -
         }
         return exit_problem(output.exit);
     }
+    if definition.parser == ktask_core::ProviderParser::CodexJsonl {
+        if let Some(problem) = codex_problem(&output.stdout) {
+            return problem;
+        }
+        if let Some(stderr) = compact_text(&String::from_utf8_lossy(&output.stderr)) {
+            return stderr;
+        }
+        return exit_problem(output.exit);
+    }
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     compact_text(&text).unwrap_or_else(|| exit_problem(output.exit))
+}
+
+/// Reads the terminal error message from Codex's JSONL stream instead of showing its events.
+fn codex_problem(stdout: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|event| {
+            event
+                .get("error")
+                .and_then(error_message)
+                .or_else(|| {
+                    (event.get("type")?.as_str()? == "error")
+                        .then(|| event.get("message")?.as_str())
+                        .flatten()
+                })
+                .map(str::to_owned)
+        })
+        .next_back()
+        .as_deref()
+        .and_then(compact_text)
+}
+
+fn error_message(value: &serde_json::Value) -> Option<&str> {
+    value.as_str().or_else(|| value.get("message")?.as_str())
 }
 
 /// Reads the human-readable error in Claude's final stream event, never its setup event.
@@ -168,12 +208,15 @@ fn probe_error(error: ProviderRunError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{authentication_failure, claude_result_problem};
+    use super::{authentication_failure, claude_result_problem, codex_problem};
 
     #[test]
     fn recognizes_recorded_claude_login_errors() {
         assert!(authentication_failure("Invalid API key; please run /login"));
         assert!(authentication_failure("Not logged in"));
+        assert!(authentication_failure(
+            "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header"
+        ));
         assert!(!authentication_failure("network unavailable"));
     }
 
@@ -185,5 +228,15 @@ mod tests {
         .unwrap();
         assert_eq!(problem, "Not logged in · Please run /login");
         assert!(!problem.contains("init"));
+    }
+
+    #[test]
+    fn recorded_codex_failure_uses_its_terminal_error_not_its_events() {
+        let problem = codex_problem(include_bytes!(
+            "../../../test-fixtures/codex/authentication-failure.jsonl"
+        ))
+        .unwrap();
+        assert!(problem.contains("401 Unauthorized"), "{problem}");
+        assert!(!problem.contains("{\"type\""), "{problem}");
     }
 }

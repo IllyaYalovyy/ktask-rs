@@ -129,10 +129,15 @@ fn passed(kind: ProviderCheckKind) -> ProviderCheckItem {
 
 fn missing_command(provider: &ProviderView) -> ProviderCheck {
     let command = &provider.definition.command;
-    let advice = if provider.name == "claude" {
-        "the `claude` binary is not on PATH; install Claude Code with `npm install -g @anthropic-ai/claude-code`".to_owned()
-    } else {
-        format!("install `{command}` and make sure it is on PATH")
+    let advice = match provider.name.as_str() {
+        "claude" => {
+            "the `claude` binary is not on PATH; install Claude Code with `npm install -g @anthropic-ai/claude-code`".to_owned()
+        }
+        "codex" => {
+            "the `codex` binary is not on PATH; install Codex with `npm install -g @openai/codex`"
+                .to_owned()
+        }
+        _ => format!("install `{command}` and make sure it is on PATH"),
     };
     ProviderCheck {
         provider: provider.name.clone(),
@@ -163,13 +168,13 @@ fn called_provider(provider: &ProviderView, call: ProbeCall) -> ProviderCheck {
     let problem = call
         .problem
         .unwrap_or_else(|| "the command failed".to_owned());
-    let login_advice = if provider.name == "claude" {
-        "run `claude /login`, then check again".to_owned()
-    } else {
-        format!(
+    let login_advice = match provider.name.as_str() {
+        "claude" => "run `claude /login`, then check again".to_owned(),
+        "codex" => "run `codex login`, then check again".to_owned(),
+        _ => format!(
             "sign in to `{}`, then check again",
             provider.definition.command
-        )
+        ),
     };
     let call_advice = format!("fix the provider error ({problem}), then check again");
     ProviderCheck {
@@ -269,6 +274,50 @@ mod tests {
                 .as_deref()
                 .unwrap()
                 .contains("@anthropic-ai/claude-code")
+        );
+    }
+
+    #[test]
+    fn missing_codex_command_names_its_install_command() {
+        let report = check_provider(
+            &[provider("codex")],
+            "codex",
+            &Probe {
+                present: false,
+                call: ProbeCall {
+                    succeeded: false,
+                    authentication_failed: false,
+                    problem: None,
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            report.items[0].advice.as_deref(),
+            Some(
+                "the `codex` binary is not on PATH; install Codex with `npm install -g @openai/codex`"
+            )
+        );
+    }
+
+    #[test]
+    fn failed_codex_login_says_how_to_sign_in() {
+        let report = check_provider(
+            &[provider("codex")],
+            "codex",
+            &Probe {
+                present: true,
+                call: ProbeCall {
+                    succeeded: false,
+                    authentication_failed: true,
+                    problem: Some("authentication failed".to_owned()),
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            report.items[1].advice.as_deref(),
+            Some("run `codex login`, then check again")
         );
     }
 }

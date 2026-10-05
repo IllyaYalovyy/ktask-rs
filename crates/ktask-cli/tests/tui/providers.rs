@@ -22,6 +22,19 @@ fn recorded_claude(recording: &str, exit_code: u8) -> Result<TempDir> {
     Ok(dir)
 }
 
+fn recorded_codex(recording: &str, exit_code: u8) -> Result<TempDir> {
+    let dir = TempDir::new()?;
+    let script = dir.path().join("codex");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\n[ \"$1\" = exec ] && [ \"$2\" = --json ] && [ \"$3\" = --dangerously-bypass-approvals-and-sandbox ] && [ \"$4\" = --skip-git-repo-check ] && [ \"$5\" = -C ] && [ \"$7\" = - ] || exit 9\nprintf '%s' '{recording}'\nexit {exit_code}\n"
+        ),
+    )?;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
+    Ok(dir)
+}
+
 fn path_with(dir: &std::path::Path) -> Result<OsString> {
     let old = std::env::var_os("PATH").unwrap_or_default();
     Ok(std::env::join_paths(
@@ -95,6 +108,63 @@ fn provider_screen_shows_all_recorded_claude_checks_as_passed() -> Result<()> {
     })?;
     terminal.send(ESC)?;
     terminal.wait_for("the queue", |screen| {
+        screen.contents().contains("The queue is empty.")
+    })?;
+    quit(terminal)
+}
+
+#[test]
+fn provider_screen_checks_codex_for_missing_binary_and_recorded_success() -> Result<()> {
+    let fixture = Fixture::empty()?;
+    let mut terminal = Terminal::launch_with_path(
+        &fixture.sandbox,
+        &fixture.repository,
+        &["tui"],
+        ROWS,
+        super::COLS,
+        OsString::from("/usr/bin:/bin"),
+    )?;
+    terminal.wait_for("the queue", |screen| {
+        screen.contents().contains("The queue is empty.")
+    })?;
+    terminal.send("vj\rc")?;
+    terminal.wait_for("the missing Codex binary advice", |screen| {
+        let text = screen.contents();
+        text.contains("Readiness")
+            && text.contains("the `codex` binary is not on PATH")
+            && text.contains("@openai/codex")
+    })?;
+    terminal.send("\u{1b}\u{1b}\u{1b}")?;
+    terminal.wait_for("the queue again", |screen| {
+        screen.contents().contains("The queue is empty.")
+    })?;
+    quit(terminal)?;
+
+    let codex = recorded_codex(
+        include_str!("../../../../test-fixtures/codex/codex-0.160.0-success.jsonl"),
+        0,
+    )?;
+    let mut terminal = Terminal::launch_with_path(
+        &fixture.sandbox,
+        &fixture.repository,
+        &["tui"],
+        ROWS,
+        super::COLS,
+        path_with(codex.path())?,
+    )?;
+    terminal.wait_for("the queue", |screen| {
+        screen.contents().contains("The queue is empty.")
+    })?;
+    terminal.send("vj\rc")?;
+    terminal.wait_for("the passed Codex readiness check", |screen| {
+        let text = screen.contents();
+        text.contains("Readiness")
+            && text.contains("command: passed")
+            && text.contains("login: passed")
+            && text.contains("smallest call: passed")
+    })?;
+    terminal.send("\u{1b}\u{1b}\u{1b}")?;
+    terminal.wait_for("the queue again", |screen| {
         screen.contents().contains("The queue is empty.")
     })?;
     quit(terminal)
