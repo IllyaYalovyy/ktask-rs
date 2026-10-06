@@ -4,17 +4,11 @@
 //! [`crate::steps`] — the sync and health-check gates ahead of an attempt, then the list an
 //! attempt walks.
 
-use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt;
 use std::time::Duration;
 
 use crate::pick::{Pick, end_when_nothing_left, pick_next_task};
 use crate::steps::{self, INTERRUPTED};
-use crate::{
-    BeginAttemptError, Clock, Commands, Git, Journal, JournalError, Provider, RecordReportError,
-    RunLock, RunLockError, SessionLog, Sleep, TaskId, TaskStatus,
-};
+use crate::{Clock, Commands, Git, Journal, RunLock, SessionLog, Sleep, TaskId, TaskStatus};
 
 pub use crate::steps::implementation::build_prompt;
 pub use crate::steps::review::build_review_prompt;
@@ -22,53 +16,14 @@ pub use crate::steps::sync::SyncProblem;
 pub use crate::steps::test_step::build_test_prompt;
 
 mod context;
+mod entry;
+mod error;
+mod providers;
 
 pub use context::RunContext;
-
-/// Why a run could not proceed at all — never for how an attempt itself ended, which is a
-/// normal [`RunReport`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RunError {
-    /// Another run already holds the project's run lock.
-    Locked(RunLockError),
-    /// Some other failure — the journal could not be read or written.
-    Other(String),
-}
-
-impl fmt::Display for RunError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Locked(error) => error.fmt(f),
-            Self::Other(message) => f.write_str(message),
-        }
-    }
-}
-
-impl Error for RunError {}
-
-impl From<JournalError> for RunError {
-    fn from(error: JournalError) -> Self {
-        Self::Other(error.to_string())
-    }
-}
-
-impl From<BeginAttemptError> for RunError {
-    fn from(error: BeginAttemptError) -> Self {
-        Self::Other(error.to_string())
-    }
-}
-
-impl From<RecordReportError> for RunError {
-    fn from(error: RecordReportError) -> Self {
-        Self::Other(error.to_string())
-    }
-}
-
-impl From<RunLockError> for RunError {
-    fn from(error: RunLockError) -> Self {
-        Self::Locked(error)
-    }
-}
+pub use entry::{run_queue, run_queue_with_resolver, run_queue_with_task_providers};
+pub use error::RunError;
+pub use providers::TaskProviders;
 
 /// One task the run attempted, and how its one attempt ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,37 +96,6 @@ pub struct RunReport {
     pub attempted: Vec<Attempted>,
     /// Why the run ended.
     pub end: RunEnd,
-}
-
-/// Providers available for task-level agent-step selections. The resolver remains a project
-/// role setting; a task's provider applies to implementation, review and test.
-#[derive(Clone, Copy)]
-pub struct TaskProviders<'a> {
-    /// Provider used when a task has no override.
-    pub default: &'a Provider,
-    /// Provider used for the resolve role.
-    pub resolver: &'a Provider,
-    /// Every configured provider, keyed by its configured name.
-    pub named: &'a BTreeMap<String, Provider>,
-}
-
-impl fmt::Debug for TaskProviders<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TaskProviders")
-            .field("default", &self.default.name)
-            .field("resolver", &self.resolver.name)
-            .field("named", &self.named.keys().collect::<Vec<_>>())
-            .finish()
-    }
-}
-
-impl<'a> TaskProviders<'a> {
-    fn agent_for(&self, task: &crate::Task) -> &'a Provider {
-        task.provider
-            .as_ref()
-            .and_then(|name| self.named.get(name))
-            .unwrap_or(self.default)
-    }
 }
 
 /// Takes `lock` for the whole run, so that two runs of the same project never overlap.
@@ -373,126 +297,6 @@ fn run_attempt_loop(
     }
 }
 
-/// Use case: runs the pending tasks of `context.project_name`, in queue order, one attempt
-/// each, with `provider` — stopping at the first task of kind `human`, at the first attempt
-/// that ends at anything but `done`, `skipped` or `superseded`, at the first task in queue
-/// order already left `failed`, `blocked` or `failed-unknown` (nothing is attempted in that
-/// case), or when nothing is left pending.
-///
-/// Takes `lock` for the whole run, so that two runs of the same project never overlap. When
-/// the previous run was killed while an attempt was in progress, this run finds its task
-/// still `running`, ends it `failed-unknown` with the reason "the run was interrupted", and
-/// stops there without attempting anything else.
-///
-/// # Errors
-///
-/// Fails, attempting nothing, when another run already holds `lock`. Fails when the journal
-/// cannot be read or written; an attempt's own failure is reported in the returned
-/// [`RunReport`], not here.
-#[allow(clippy::too_many_arguments)]
-pub fn run_queue(
-    journal: &impl Journal,
-    clock: &impl Clock,
-    commands: &impl Commands,
-    git: &impl Git,
-    provider: &Provider,
-    session_log: &impl SessionLog,
-    sleep: &impl Sleep,
-    lock: &impl RunLock,
-    context: RunContext<'_>,
-) -> Result<RunReport, RunError> {
-    run_queue_with_resolver(
-        journal,
-        clock,
-        commands,
-        git,
-        provider,
-        provider,
-        session_log,
-        sleep,
-        lock,
-        context,
-    )
-}
-
-/// Runs a queue with the provider used by implementation, review and test steps, and the
-/// possibly separate provider used only by resolve.
-///
-/// # Errors
-///
-/// Returns the same lock and journal failures as [`run_queue`].
-#[allow(clippy::too_many_arguments)]
-pub fn run_queue_with_resolver(
-    journal: &impl Journal,
-    clock: &impl Clock,
-    commands: &impl Commands,
-    git: &impl Git,
-    provider: &Provider,
-    resolver_provider: &Provider,
-    session_log: &impl SessionLog,
-    sleep: &impl Sleep,
-    lock: &impl RunLock,
-    context: RunContext<'_>,
-) -> Result<RunReport, RunError> {
-    let named = BTreeMap::new();
-    run_queue_with_task_providers(
-        journal,
-        clock,
-        commands,
-        git,
-        TaskProviders {
-            default: provider,
-            resolver: resolver_provider,
-            named: &named,
-        },
-        session_log,
-        sleep,
-        lock,
-        context,
-    )
-}
-
-/// Runs a queue with the project's role providers and its complete configured catalogue, so a
-/// task can select its own agent-step provider.
-///
-/// # Errors
-///
-/// Returns the same lock and journal failures as [`run_queue`].
-#[allow(clippy::too_many_arguments)]
-pub fn run_queue_with_task_providers(
-    journal: &impl Journal,
-    clock: &impl Clock,
-    commands: &impl Commands,
-    git: &impl Git,
-    providers: TaskProviders<'_>,
-    session_log: &impl SessionLog,
-    sleep: &impl Sleep,
-    lock: &impl RunLock,
-    context: RunContext<'_>,
-) -> Result<RunReport, RunError> {
-    take_lock(lock)?;
-    if let Some(attempted) = account_for_interrupted_run(journal, clock)? {
-        let end = RunEnd::Stopped {
-            id: attempted.id,
-            status: attempted.status,
-        };
-        return Ok(RunReport {
-            attempted: vec![attempted],
-            end,
-        });
-    }
-    attempt_loop(
-        journal,
-        clock,
-        commands,
-        git,
-        &providers,
-        session_log,
-        sleep,
-        context,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -505,10 +309,10 @@ mod tests {
     };
     use crate::{
         AttemptRun, AttemptToken, COMMIT_STEP, CommandSpec, Commands, CommandsError,
-        CommitAllError, Event, Exit, HEALTH_CHECK_STEP, IMPLEMENTATION, LimitSignal, Outcome,
-        Output, PUSH_STEP, Placement, Provider, ProviderCommand, PullRebase, PullRebaseError,
-        RESOLVE_STEP, REVIEW_STEP, SYNC_STEP, TEST_STEP, TaskDraft, TaskId, TaskKind, TaskStatus,
-        add_task, report, report_retry, report_supersede,
+        CommitAllError, Event, Exit, HEALTH_CHECK_STEP, IMPLEMENTATION, JournalError, LimitSignal,
+        Outcome, Output, PUSH_STEP, Placement, Provider, ProviderCommand, PullRebase,
+        PullRebaseError, RESOLVE_STEP, REVIEW_STEP, RunLockError, SYNC_STEP, TEST_STEP, TaskDraft,
+        TaskId, TaskKind, TaskStatus, add_task, report, report_retry, report_supersede,
     };
 
     use super::*;
