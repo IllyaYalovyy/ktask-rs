@@ -8,7 +8,7 @@ use crate::{
     AttemptRun, Clock, Journal, LimitWait, Outcome, RunContext, RunError, TaskId, TaskStatus,
 };
 
-use super::known_cause::KnownCause;
+use super::known_cause::{KnownCause, codex_transport_reason};
 use super::{Deps, PipelineState, PreStep, Step, StepOutcome};
 
 /// Records a step, named `step`, that already ran and passed, in `duration`, with `reason` —
@@ -343,9 +343,7 @@ fn exhausted_transport_failure(
         duration: Duration::ZERO,
         exit_code: state.exit_code,
         status: TaskStatus::FailedUnknown,
-        reason: Some(format!(
-            "Codex transport failed {failures} consecutive times: {reason}"
-        )),
+        reason: Some(codex_transport_reason(failures, reason)),
         reported: None,
     };
     end_one_step(deps, state, step, total, exhausted, limit_wait)

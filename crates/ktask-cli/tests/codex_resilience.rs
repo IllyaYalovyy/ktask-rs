@@ -123,6 +123,8 @@ fn status_shows_the_live_codex_transport_backoff_from_the_real_cli() -> Result<(
     }
 }
 
+const TRANSPORT_STOP: &str = "Codex transport failed 3 consecutive times: stream disconnected before completion: Transport error: network error: error decoding response body; check the network and Codex service, then run again";
+
 #[test]
 fn recorded_transport_failures_back_off_then_leave_the_task_pending_without_costing_an_attempt()
 -> Result<()> {
@@ -136,7 +138,7 @@ fn recorded_transport_failures_back_off_then_leave_the_task_pending_without_cost
 
     let run = fixture.run(&["run"])?;
     assert_eq!(run.code, Some(1), "{}", run.stderr);
-    assert!(run.stdout.contains("check the network"), "{}", run.stdout);
+    assert!(run.stdout.contains(TRANSPORT_STOP), "{}", run.stdout);
     let status = fixture.run(&["status"])?;
     assert!(
         status.stdout.starts_with("#1\tpending\t"),
@@ -148,13 +150,13 @@ fn recorded_transport_failures_back_off_then_leave_the_task_pending_without_cost
         "{}",
         status.stdout
     );
-    assert!(
-        status
-            .stdout
-            .contains("Codex transport failed 3 consecutive times"),
-        "{}",
-        status.stdout
-    );
+    assert!(status.stdout.contains(TRANSPORT_STOP), "{}", status.stdout);
+    for output in [&run.stdout, &status.stdout] {
+        assert!(!output.contains("ERROR:"), "{output}");
+        assert_eq!(output.matches("check the network").count(), 1, "{output}");
+        assert_eq!(output.matches("stream disconnected").count(), 1, "{output}");
+        assert!(!output.contains("lost its transport"), "{output}");
+    }
     assert!(!status.stdout.contains("resolve"), "{}", status.stdout);
     Ok(())
 }

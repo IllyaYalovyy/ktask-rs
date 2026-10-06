@@ -51,8 +51,18 @@ const REMOTE_UNREACHABLE_PHRASES: [&str; 6] = [
 const CLAUDE_AUTHENTICATION_PHRASES: [&str; 2] = ["invalid api key", "not logged in"];
 const CLAUDE_CONFIGURATION_PHRASE: &str = "invalid settings";
 const CODEX_TRANSPORT_PHRASE: &str = "codex transport failed";
+const CODEX_ERROR_PREFIX: &str = "ERROR:";
 const CODEX_AUTHENTICATION_PHRASES: [&str; 2] =
     ["missing bearer or basic authentication", "401 unauthorized"];
+
+/// What Codex's transport failure says, once: how many consecutive times it failed and the
+/// provider's last line without its `ERROR:` prefix. [`KnownCause::CodexTransport`] recognises
+/// it by [`CODEX_TRANSPORT_PHRASE`] and adds only the fix.
+pub(crate) fn codex_transport_reason(failures: u32, last_line: &str) -> String {
+    let line = last_line.trim();
+    let line = line.strip_prefix(CODEX_ERROR_PREFIX).unwrap_or(line).trim();
+    format!("Codex transport failed {failures} consecutive times: {line}")
+}
 
 impl KnownCause {
     /// What matches `exit_code` and `reason` against every known cause, in the order checked:
@@ -125,9 +135,9 @@ impl KnownCause {
             Self::ClaudeConfiguration => format!(
                 "Claude Code has invalid settings: {reason}; fix the named Claude Code settings file, then run again"
             ),
-            Self::CodexTransport => format!(
-                "Codex lost its transport repeatedly: {reason}; check the network and Codex service, then run again"
-            ),
+            Self::CodexTransport => {
+                format!("{reason}; check the network and Codex service, then run again")
+            }
             Self::CodexAuthentication => {
                 format!("Codex could not authenticate: {reason}; run `codex login`, then run again")
             }
@@ -290,6 +300,55 @@ mod tests {
             assert_eq!(message.lines().count(), 1, "{message:?}");
             assert!(message.contains(reason), "{message}");
             assert!(message.contains("run again"), "{message}");
+            assert_eq!(
+                repeated_phrase(&message.replacen(reason, "", 1)),
+                None,
+                "{message}"
+            );
         }
+    }
+
+    #[test]
+    fn the_codex_transport_message_states_count_cause_and_fix_once() {
+        let reason = codex_transport_reason(
+            3,
+            "ERROR: stream disconnected before completion: Transport error: network error",
+        );
+        let message = KnownCause::CodexTransport.message(&reason);
+        assert_eq!(
+            message,
+            "Codex transport failed 3 consecutive times: stream disconnected before completion: \
+             Transport error: network error; check the network and Codex service, then run again"
+        );
+        assert_eq!(repeated_phrase(&message), None, "{message}");
+    }
+
+    #[test]
+    fn a_message_that_says_the_same_thing_twice_is_caught() {
+        assert_eq!(
+            repeated_phrase(
+                "Codex lost its transport repeatedly: Codex transport failed; its transport repeatedly fails"
+            ),
+            Some("its transport".to_owned())
+        );
+        assert_eq!(repeated_phrase("the disk is full: x; free up space"), None);
+    }
+
+    /// The first two-word phrase that occurs twice in `message`, compared case-insensitively
+    /// and ignoring punctuation.
+    fn repeated_phrase(message: &str) -> Option<String> {
+        let words: Vec<String> = message
+            .split_whitespace()
+            .map(|word| {
+                word.trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_lowercase()
+            })
+            .collect();
+        (0..words.len().saturating_sub(1)).find_map(|start| {
+            let pair = &words[start..start + 2];
+            (start + 2..words.len().saturating_sub(1))
+                .any(|later| words[later..later + 2] == *pair)
+                .then(|| pair.join(" "))
+        })
     }
 }
