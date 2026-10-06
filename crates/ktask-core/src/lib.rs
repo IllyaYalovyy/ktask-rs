@@ -67,9 +67,8 @@ pub use report::{
 };
 pub use resolve::{Resolution, ResolveError, resolve_project};
 pub use run::{
-    Attempted, RunContext, RunEnd, RunError, RunReport, SyncProblem, TaskProviders, build_prompt,
-    build_review_prompt, build_test_prompt, run_queue, run_queue_with_resolver,
-    run_queue_with_task_providers,
+    Attempted, RunContext, RunEnd, RunError, RunReport, RunRequest, SyncProblem, TaskProviders,
+    build_prompt, build_review_prompt, build_test_prompt, run_queue,
 };
 pub use sessions::{SessionLog, SessionLogError};
 pub use settings::{

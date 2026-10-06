@@ -19,11 +19,13 @@ mod context;
 mod entry;
 mod error;
 mod providers;
+mod request;
 
 pub use context::RunContext;
-pub use entry::{run_queue, run_queue_with_resolver, run_queue_with_task_providers};
+pub use entry::run_queue;
 pub use error::RunError;
 pub use providers::TaskProviders;
+pub use request::RunRequest;
 
 /// One task the run attempted, and how its one attempt ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -374,6 +376,20 @@ mod tests {
         }
     }
 
+    static NO_NAMED_PROVIDERS: std::collections::BTreeMap<String, Provider> =
+        std::collections::BTreeMap::new();
+
+    fn request<'a>(provider: &'a Provider, context: RunContext<'a>) -> RunRequest<'a> {
+        RunRequest {
+            providers: TaskProviders {
+                default: provider,
+                resolver: provider,
+                named: &NO_NAMED_PROVIDERS,
+            },
+            context,
+        }
+    }
+
     fn run(
         journal: &FakeJournal,
         commands: &impl Commands,
@@ -385,11 +401,10 @@ mod tests {
             &clock(),
             commands,
             &FakeGit::default(),
-            provider,
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context(timeout),
+            request(provider, context(timeout)),
         )
     }
 
@@ -582,11 +597,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -635,11 +649,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         assert_eq!(
@@ -680,11 +693,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
 
@@ -732,11 +744,10 @@ mod tests {
             &clock(),
             &failing,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         assert!(
@@ -763,11 +774,10 @@ mod tests {
             &clock(),
             &passing,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -808,11 +818,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         match report.end {
@@ -838,11 +847,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         let spec = commands.last.borrow().clone().unwrap();
@@ -894,11 +902,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -934,11 +941,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -968,11 +974,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -1002,11 +1007,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -1036,11 +1040,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -1079,11 +1082,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
+            request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -1121,11 +1123,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
+            request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
         .unwrap();
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
@@ -1154,11 +1155,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
+            request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
         .unwrap();
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
@@ -1186,11 +1186,10 @@ mod tests {
             &clock(),
             &NeverRun,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
+            request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
         .unwrap();
         assert_eq!(
@@ -1224,11 +1223,10 @@ mod tests {
             &clock(),
             &NeverRun,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
+            request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
         .unwrap();
         match report.end {
@@ -1264,11 +1262,10 @@ mod tests {
             &clock(),
             &NeverRun,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
+            request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
         .unwrap();
         assert_eq!(
@@ -1305,11 +1302,10 @@ mod tests {
             &clock(),
             &NeverRun,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
+            request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
         .unwrap();
 
@@ -1342,11 +1338,10 @@ mod tests {
             &clock(),
             &NeverRun,
             &failing_git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
+            request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
         .unwrap();
         assert!(
@@ -1369,11 +1364,10 @@ mod tests {
             &clock(),
             &reporting,
             &passing_git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
+            request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -1436,11 +1430,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         let attempt = crate::attempt::last_attempt(&journal, TaskId(1))
@@ -1846,11 +1839,10 @@ mod tests {
             &clock(),
             &commands,
             &git_with_diff(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context(Duration::from_secs(60)),
+            request(&test_provider(), context(Duration::from_secs(60))),
         )
         .unwrap();
         let prompt = String::from_utf8(captured.borrow().clone().expect("review step ran"))
@@ -1878,11 +1870,10 @@ mod tests {
             &clock(),
             &commands,
             &git_with_diff(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context(Duration::from_secs(60)),
+            request(&test_provider(), context(Duration::from_secs(60))),
         )
         .unwrap();
         let prompt = String::from_utf8(captured.borrow().clone().expect("test step ran"))
@@ -2046,11 +2037,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context(Duration::from_secs(42)),
+            request(&test_provider(), context(Duration::from_secs(42))),
         )
         .unwrap();
         let spec = commands.last.borrow().clone().unwrap();
@@ -2141,11 +2131,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &lock,
-            context(Duration::from_secs(60)),
+            request(&test_provider(), context(Duration::from_secs(60))),
         )
         .unwrap_err();
         assert_eq!(
@@ -2489,11 +2478,10 @@ mod tests {
             &clock(),
             &failing,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context(Duration::from_secs(60)),
+            request(&test_provider(), context(Duration::from_secs(60))),
         )
         .unwrap();
         assert_eq!(
@@ -2514,11 +2502,10 @@ mod tests {
             &clock(),
             &recording,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context(Duration::from_secs(60)),
+            request(&test_provider(), context(Duration::from_secs(60))),
         )
         .unwrap();
 
@@ -2560,11 +2547,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
+            request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -2600,11 +2586,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context(Duration::from_secs(60)),
+            request(&test_provider(), context(Duration::from_secs(60))),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -2643,11 +2628,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context(Duration::from_secs(60)),
+            request(&test_provider(), context(Duration::from_secs(60))),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -2682,11 +2666,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context(Duration::from_secs(60)),
+            request(&test_provider(), context(Duration::from_secs(60))),
         )
         .unwrap();
         assert_eq!(
@@ -2737,11 +2720,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context(Duration::from_secs(60)),
+            request(&test_provider(), context(Duration::from_secs(60))),
         )
         .unwrap();
         assert_eq!(
@@ -2782,11 +2764,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
+            request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
         .unwrap();
         assert_eq!(
@@ -2827,11 +2808,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
+            request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
         .unwrap();
         assert_eq!(
@@ -2869,11 +2849,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_tracking(Duration::from_secs(60)),
+            request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -2911,11 +2890,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -2955,11 +2933,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);
@@ -3095,11 +3072,10 @@ mod tests {
             &clock(),
             &commands,
             &git,
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_with_max_attempts(3),
+            request(&test_provider(), context_with_max_attempts(3)),
         )
         .unwrap();
         assert_eq!(
@@ -3156,11 +3132,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            ctx,
+            request(&test_provider(), ctx),
         )
         .unwrap();
         assert_eq!(
@@ -3215,11 +3190,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_with_max_attempts(3),
+            request(&test_provider(), context_with_max_attempts(3)),
         )
         .unwrap();
         assert_eq!(
@@ -3267,11 +3241,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_with_max_attempts(3),
+            request(&test_provider(), context_with_max_attempts(3)),
         )
         .unwrap();
         assert_eq!(
@@ -3357,11 +3330,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_with_max_attempts(3),
+            request(&test_provider(), context_with_max_attempts(3)),
         )
         .unwrap();
 
@@ -3414,11 +3386,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_with_max_attempts(3),
+            request(&test_provider(), context_with_max_attempts(3)),
         )
         .unwrap();
         match report.end {
@@ -3450,11 +3421,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_with_max_attempts(1),
+            request(&test_provider(), context_with_max_attempts(1)),
         )
         .unwrap();
         assert_eq!(
@@ -3534,11 +3504,10 @@ mod tests {
             &clock(),
             &AlwaysFails(commands),
             &FakeGit::default(),
-            &test_provider(),
             &FakeSessionLog::default(),
             &FakeSleep::default(),
             &FakeRunLock::free(),
-            context_with_max_attempts(3),
+            request(&test_provider(), context_with_max_attempts(3)),
         )
         .unwrap();
         assert_eq!(
@@ -3654,11 +3623,10 @@ mod tests {
             &clock(),
             &commands,
             &FakeGit::default(),
-            &provider,
             &FakeSessionLog::default(),
             &sleep,
             &FakeRunLock::free(),
-            ctx,
+            request(&provider, ctx),
         )
         .unwrap();
         assert_eq!(report.end, RunEnd::Completed);

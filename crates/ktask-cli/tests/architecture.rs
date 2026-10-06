@@ -66,3 +66,52 @@ fn core_does_not_name_or_know_the_echo_provider() -> std::io::Result<()> {
     }
     Ok(())
 }
+
+/// Every `.rs` file under `dir`, recursively, with its text.
+fn rust_sources(dir: &Path, found: &mut Vec<(std::path::PathBuf, String)>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            rust_sources(&path, found)?;
+        } else if path.extension().and_then(std::ffi::OsStr::to_str) == Some("rs") {
+            let text = std::fs::read_to_string(&path)?;
+            found.push((path, text));
+        }
+    }
+    Ok(())
+}
+
+/// Starting a run is one call: `run_queue` takes the ports and one `RunRequest` carrying every
+/// choice the CLI makes. A further choice is a field of that struct, never another entry point.
+#[test]
+fn starting_a_run_is_the_one_run_queue_taking_a_run_request() -> std::io::Result<()> {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut sources = Vec::new();
+    for name in ["ktask-core", "ktask-adapters", "ktask-cli", "ktask-tui"] {
+        rust_sources(&crates.join(name).join("src"), &mut sources)?;
+    }
+    let entry_points: Vec<_> = sources
+        .iter()
+        .filter(|(_, text)| text.contains("fn run_queue"))
+        .collect();
+    assert_eq!(
+        entry_points.len(),
+        1,
+        "{:?}",
+        entry_points
+            .iter()
+            .map(|(path, _)| path)
+            .collect::<Vec<_>>()
+    );
+    let (_, text) = entry_points[0];
+    assert_eq!(text.matches("fn run_queue").count(), 1);
+    assert!(text.contains("request: RunRequest<'_>"), "{text}");
+    for (path, text) in &sources {
+        assert!(
+            !text.contains("run_queue_with"),
+            "{} names a longer form of run_queue",
+            path.display()
+        );
+    }
+    Ok(())
+}

@@ -12,8 +12,8 @@ use ktask_adapters::{
     builtin_providers, configured_provider, echo,
 };
 use ktask_core::{
-    COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, RunReport, SYNC_STEP,
-    Settings, TEST_STEP, TaskProviders, effective_provider, effective_resolver_provider,
+    COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, RunReport, RunRequest,
+    SYNC_STEP, Settings, TEST_STEP, TaskProviders, effective_provider, effective_resolver_provider,
     effective_transport_retries, show_providers,
 };
 
@@ -125,20 +125,22 @@ fn run_with_providers(
                 effective_resolver_provider(settings)
             )
         })?;
-    Ok(ktask_core::run_queue_with_task_providers(
+    Ok(ktask_core::run_queue(
         journal,
         &SystemClock,
         &ProcessCommands,
         &GitCli,
-        TaskProviders {
-            default: provider,
-            resolver,
-            named: &providers,
-        },
         &FileSessionLog,
         &RealSleep,
         lock,
-        context,
+        RunRequest {
+            providers: TaskProviders {
+                default: provider,
+                resolver,
+                named: &providers,
+            },
+            context,
+        },
     )?)
 }
 
