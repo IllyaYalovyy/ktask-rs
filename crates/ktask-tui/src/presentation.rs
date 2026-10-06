@@ -5,7 +5,7 @@ mod transcript;
 use jiff::Timestamp;
 use ktask_core::{
     AttemptOutcome, DoneMark, LimitWait, LimitWarning, OutputActivity, ProviderCheck,
-    ProviderCheckKind, StepLine, TaskStatus, Usage,
+    ProviderCheckKind, StepLine, TaskStatus, Usage, Wait, WaitReason,
 };
 
 pub use transcript::{Transcript, step_heading};
@@ -95,25 +95,30 @@ pub fn outcome(outcome: AttemptOutcome) -> &'static str {
 /// The reason an interface shows for a step, including the live usage-limit countdown.
 #[must_use]
 pub fn reason(step: &StepLine) -> Option<String> {
-    reason_for(step.reason.as_deref(), step.waiting_for)
+    reason_for(step.reason.as_deref(), step.waiting)
 }
 
-/// The common status reason for recorded text and a live usage-limit countdown.
+/// The common status reason for recorded text or a live wait. A wait names its one countdown:
+/// a transport back-off counts down to its retry, a usage-limit wait to its reset.
 #[must_use]
-pub fn reason_for(
-    reason: Option<&str>,
-    waiting_for: Option<std::time::Duration>,
-) -> Option<String> {
-    match (reason, waiting_for) {
-        (Some(reason), Some(remaining)) => {
-            Some(format!("{reason}; resumes in {}s", remaining.as_secs()))
-        }
+pub fn reason_for(reason: Option<&str>, waiting: Option<Wait>) -> Option<String> {
+    match (reason, waiting) {
+        (_, Some(wait)) => Some(wait_text(wait)),
         (Some(reason), None) => Some(reason.to_owned()),
-        (None, Some(remaining)) => Some(format!(
-            "the provider's usage limit was hit; resumes in {}s",
-            remaining.as_secs()
-        )),
         (None, None) => None,
+    }
+}
+
+/// The words for a live wait, counting `remaining` down once.
+fn wait_text(wait: Wait) -> String {
+    let remaining = wait.remaining.as_secs();
+    match wait.reason {
+        WaitReason::UsageLimit => {
+            format!("the provider's usage limit was hit; resumes in {remaining}s")
+        }
+        WaitReason::TransportRetry { failure, limit } => {
+            format!("Codex transport disconnected; retry {failure} of {limit} in {remaining}s")
+        }
     }
 }
 
@@ -282,5 +287,45 @@ mod tests {
         assert_eq!(cli, tui);
         assert_eq!(cli.indicator, '○');
         assert_eq!(cli.message, "silent for 45 s — may be stuck");
+    }
+
+    fn wait(reason: WaitReason, seconds: u64) -> Wait {
+        Wait {
+            reason,
+            remaining: Duration::from_secs(seconds),
+        }
+    }
+
+    #[test]
+    fn a_transport_backoff_names_one_countdown_and_no_reset() {
+        let retry = WaitReason::TransportRetry {
+            failure: 2,
+            limit: 3,
+        };
+        assert_eq!(
+            reason_for(None, Some(wait(retry, 2))).as_deref(),
+            Some("Codex transport disconnected; retry 2 of 3 in 2s")
+        );
+        assert_eq!(
+            reason_for(None, Some(wait(retry, 0))).as_deref(),
+            Some("Codex transport disconnected; retry 2 of 3 in 0s")
+        );
+    }
+
+    #[test]
+    fn a_usage_limit_wait_keeps_its_resume_countdown() {
+        assert_eq!(
+            reason_for(None, Some(wait(WaitReason::UsageLimit, 70))).as_deref(),
+            Some("the provider's usage limit was hit; resumes in 70s")
+        );
+    }
+
+    #[test]
+    fn recorded_text_is_shown_as_recorded_when_nothing_waits() {
+        assert_eq!(
+            reason_for(Some("it broke"), None).as_deref(),
+            Some("it broke")
+        );
+        assert_eq!(reason_for(None, None), None);
     }
 }

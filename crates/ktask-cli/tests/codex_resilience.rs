@@ -92,8 +92,14 @@ impl Fixture {
     }
 }
 
+/// The seconds a transport back-off line counts down, when `text` names `retry 2 of 3`.
+fn retry_two_countdown(text: &str) -> Option<u64> {
+    let after = text.split("retry 2 of 3 in ").nth(1)?;
+    after.split('s').next()?.parse().ok()
+}
+
 #[test]
-fn status_shows_the_live_codex_transport_backoff_from_the_real_cli() -> Result<()> {
+fn a_transport_backoff_line_counts_one_number_down_in_status_and_status_json() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add()?;
     let _codex = fixture.install_codex(&format!(
@@ -102,25 +108,43 @@ fn status_shows_the_live_codex_transport_backoff_from_the_real_cli() -> Result<(
     ))?;
     let mut run = fixture.spawn_run()?;
     let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let status = fixture.run(&["status"])?;
-        if status
-            .stdout
-            .contains("Codex transport disconnected; retry 1 of 3 in")
-        {
-            run.kill()?;
-            let _ = run.wait()?;
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            run.kill()?;
-            let _ = run.wait()?;
-            return Err(
-                format!("timed out waiting for transport backoff: {}", status.stdout).into(),
-            );
+    let mut countdown = Vec::new();
+    let mut json_reason = None;
+    while Instant::now() < deadline {
+        let text = fixture.run(&["status"])?.stdout;
+        let json = fixture.run(&["status", "--json"])?.stdout;
+        assert!(!text.contains("resumes in"), "{text}");
+        assert!(!json.contains("resumes in"), "{json}");
+        if let Some(seconds) = retry_two_countdown(&text) {
+            countdown.push(seconds);
+            let parsed = serde_json::from_str::<serde_json::Value>(&json)?;
+            let reason = parsed[0]["attempt"]["reason"].as_str().unwrap_or_default();
+            if reason.contains("retry 2 of 3 in ") {
+                json_reason = Some(reason.to_owned());
+            }
+        } else if !countdown.is_empty() {
+            break;
         }
         std::thread::park_timeout(Duration::from_millis(20));
     }
+    run.kill()?;
+    let _ = run.wait()?;
+    assert!(!countdown.is_empty(), "never saw retry 2 of 3");
+    assert!(
+        countdown.iter().all(|seconds| *seconds <= 2),
+        "{countdown:?}"
+    );
+    assert!(
+        countdown.windows(2).all(|pair| pair[1] <= pair[0]),
+        "the one number only counts down: {countdown:?}"
+    );
+    let reason = json_reason.expect("status --json carried the reason");
+    assert!(
+        reason.starts_with("Codex transport disconnected; retry 2 of 3 in "),
+        "{reason}"
+    );
+    assert_eq!(reason.matches(" in ").count(), 1, "{reason}");
+    Ok(())
 }
 
 const TRANSPORT_STOP: &str = "Codex transport failed 3 consecutive times: stream disconnected before completion: Transport error: network error: error decoding response body; check the network and Codex service, then run again";

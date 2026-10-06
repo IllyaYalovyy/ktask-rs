@@ -48,7 +48,7 @@ impl QueueState {
             provider: fold.provider.clone(),
             session: fold.session.clone(),
             waiting_until: fold.waiting.as_ref().map(|(_, until, _)| *until),
-            waiting_reason: fold.waiting.as_ref().map(|(_, _, reason)| reason.clone()),
+            waiting_reason: fold.waiting.as_ref().map(|(_, _, reason)| *reason),
             ended: fold.ended.clone(),
             steps: fold
                 .steps

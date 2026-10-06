@@ -2,9 +2,18 @@
 
 use std::time::{Duration, SystemTime};
 
-use crate::{LimitWait, LimitWarning, TaskId, TaskStatus, Usage};
+use crate::{LimitWait, LimitWarning, TaskId, TaskStatus, Usage, WaitReason};
 
 use super::AttemptOutcome;
+
+/// A live wait: why a step is waiting and how long is left of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Wait {
+    /// What the step is waiting for.
+    pub reason: WaitReason,
+    /// How long remains until the step runs again.
+    pub remaining: Duration,
+}
 
 /// One step of an attempt, as the status use case observed it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,8 +32,8 @@ pub struct StepLine {
     pub outcome: AttemptOutcome,
     /// The recorded reason, when the journal has one.
     pub reason: Option<String>,
-    /// How long remains until the provider-limit reset while the step waits for it.
-    pub waiting_for: Option<Duration>,
+    /// What the step is waiting for, and how long remains, while it waits.
+    pub waiting: Option<Wait>,
     /// The provider-limit wait recorded after the step resumed.
     pub limit_wait: Option<LimitWait>,
     /// A non-blocking provider-limit warning emitted while the step ran.
@@ -52,8 +61,8 @@ pub struct AttemptLine {
     pub outcome: AttemptOutcome,
     /// The current step's recorded reason.
     pub reason: Option<String>,
-    /// How long remains until the provider-limit reset while the current step waits for it.
-    pub waiting_for: Option<Duration>,
+    /// What the current step is waiting for, and how long remains, while it waits.
+    pub waiting: Option<Wait>,
     /// The current step's completed provider-limit wait.
     pub limit_wait: Option<LimitWait>,
     /// A non-blocking provider-limit warning emitted while the current step ran.

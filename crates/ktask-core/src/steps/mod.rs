@@ -578,7 +578,6 @@ mod tests {
                 StepOutcome::Waiting {
                     duration: Duration::from_secs(2),
                     until: at(1_030),
-                    reason: "the provider's usage limit was hit".to_owned(),
                 }
             })
         }

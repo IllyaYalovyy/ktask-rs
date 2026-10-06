@@ -105,6 +105,8 @@ fn the_queue_screen_shows_the_limit_countdown_then_the_task_done() -> Result<()>
         .expect("a waiting line");
     assert!(step_line.contains("implementation"), "{step_line}");
     assert!(step_line.contains("usage limit"), "{step_line}");
+    assert!(step_line.contains("resumes in"), "{step_line}");
+    assert!(!step_line.contains("retry"), "{step_line}");
 
     let screen = terminal.wait_for("the task done", |screen| {
         lines_inside_frame(&screen.contents())

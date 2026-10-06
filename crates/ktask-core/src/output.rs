@@ -183,7 +183,7 @@ mod tests {
             time_spent: Duration::ZERO,
             outcome: AttemptOutcome::Passed,
             reason: None,
-            waiting_for: None,
+            waiting: None,
             limit_wait: None,
             limit_warning: None,
             usage: crate::Usage::default(),

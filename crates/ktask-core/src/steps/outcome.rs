@@ -47,8 +47,6 @@ pub(crate) enum StepOutcome {
         /// The time to wait until before trying again: the provider's own message named it, or
         /// the resolve role's own default back-off when it did not.
         until: SystemTime,
-        /// Why the step is waiting, shown while the wait is live.
-        reason: String,
     },
     /// Codex exhausted its stream transport. The runner retries this same step with a bounded
     /// back-off, or turns the last consecutive failure into a pending known cause.

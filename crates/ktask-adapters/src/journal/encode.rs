@@ -3,7 +3,9 @@
 
 use std::time::SystemTime;
 
-use ktask_core::{Event, LimitWait, LimitWarning, Outcome, Placement, TaskDraft, TaskId};
+use ktask_core::{
+    Event, LimitWait, LimitWarning, Outcome, Placement, TaskDraft, TaskId, WaitReason,
+};
 use serde_json::Value;
 
 use super::{
@@ -87,7 +89,13 @@ fn attempt_waiting_payload(event: &Event) -> String {
     else {
         unreachable!("only called for Event::AttemptWaiting")
     };
-    serde_json::json!({ "number": number, "step": step, "until": to_seconds(*until), "reason": reason }).to_string()
+    let retry = match reason {
+        WaitReason::UsageLimit => Value::Null,
+        WaitReason::TransportRetry { failure, limit } => {
+            serde_json::json!({ "failure": failure, "limit": limit })
+        }
+    };
+    serde_json::json!({ "number": number, "step": step, "until": to_seconds(*until), "transport_retry": retry }).to_string()
 }
 
 /// The payload an `attempt_reported` row is written with.

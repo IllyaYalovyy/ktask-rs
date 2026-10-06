@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use crate::journal::{AttemptRun, Event, LimitWait};
+use crate::journal::{AttemptRun, Event, LimitWait, WaitReason};
 use crate::{
     AcknowledgeError, AnswerError, AppendConflict, AppendError, Attempt, AttemptEnd,
     BeginAttemptError, CancelError, DoneError, Journal, JournalError, Outcome, Placement,
@@ -41,7 +41,7 @@ struct AttemptFold {
     session: Option<String>,
     /// The step name and time of the most recent [`Event::AttemptWaiting`] not yet superseded
     /// by a later event for this attempt: [`QueueState::attempt_from_fold`].
-    waiting: Option<(String, SystemTime, String)>,
+    waiting: Option<(String, SystemTime, WaitReason)>,
     ended: Option<AttemptEnd>,
     steps: Vec<StepFold>,
 }

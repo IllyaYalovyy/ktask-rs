@@ -9,11 +9,13 @@ use crate::{LimitWarning, Usage};
 use crate::{Outcome, Placement, TaskDraft, TaskId, TaskStatus};
 
 mod errors;
+mod wait;
 
 pub use errors::{
     AcknowledgeError, AnswerError, AppendConflict, AppendError, BeginAttemptError, CancelError,
     DoneError, RecordReportError, RetryError,
 };
+pub use wait::{LimitWait, WaitReason};
 
 /// One thing that happened to the queue: what [`Journal::events`] reads and
 /// [`Journal::append_events`] writes. [`crate::queue_state`] is the one place that decides
@@ -104,7 +106,7 @@ pub enum Event {
         /// The time it waits until.
         until: SystemTime,
         /// Why this provider step is waiting before it runs again.
-        reason: String,
+        reason: WaitReason,
         /// When this was recorded — not the same as `until`, the time it waits for.
         at: SystemTime,
     },
@@ -300,19 +302,6 @@ pub struct AttemptEnd {
     pub used_model: Option<String>,
 }
 
-/// How long a step waited, in total, for its provider's own usage limit, and when it last
-/// resumed after the most recent of those waits — shown alongside the step's own outcome once
-/// it has ended, so a limit hit while it ran is never lost once the wait is over, unlike
-/// [`crate::Attempt::waiting_until`], which only shows while the wait is still live.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LimitWait {
-    /// How long the step waited, in total, across every time its provider's usage limit was
-    /// hit before it ended.
-    pub waited: Duration,
-    /// When it last resumed running, after the most recent of those waits.
-    pub resumed_at: SystemTime,
-}
-
 /// One step of an attempt, as [`crate::attempt::last_attempt`] reports it: the pipeline every
 /// task's attempt runs through is an ordered list of these, one per name in it, run in order
 /// and stopping at the first that ends badly — so a step later in the list has none of these at
@@ -353,7 +342,7 @@ pub struct Attempt {
     /// the attempt itself, ends. `None` when nothing is waiting.
     pub waiting_until: Option<SystemTime>,
     /// Why the current provider step is waiting, when it is waiting.
-    pub waiting_reason: Option<String>,
+    pub waiting_reason: Option<WaitReason>,
     /// How it ended, once [`crate::attempt::end_attempt`] has recorded it; `None` while it runs.
     pub ended: Option<AttemptEnd>,
     /// Every step run so far, in the order they were started.

@@ -9,7 +9,7 @@ mod facts;
 mod lines;
 mod outcome;
 
-pub use facts::{AttemptLine, DoneMark, OutputActivity, StatusEntry, StepLine};
+pub use facts::{AttemptLine, DoneMark, OutputActivity, StatusEntry, StepLine, Wait};
 pub use outcome::AttemptOutcome;
 
 /// Reads every task with recorded status history, in queue order.

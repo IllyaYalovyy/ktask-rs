@@ -151,7 +151,8 @@ fn the_queue_screen_shows_the_codex_transport_backoff() -> Result<()> {
     let screen = terminal.wait_for("Codex transport wait", |screen| {
         screen.contents().contains("Codex transport disconnected")
     })?;
-    assert!(screen.contains("retry 1 of 3"), "{screen}");
+    assert!(screen.contains("retry 1 of 3 in"), "{screen}");
+    assert!(!screen.contains("resumes in"), "{screen}");
     run.kill()?;
     let _ = run.wait()?;
     terminal.send("q")?;

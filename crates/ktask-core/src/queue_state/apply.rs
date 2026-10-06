@@ -169,7 +169,7 @@ impl QueueState {
             return;
         };
         if let Some(attempt) = self.attempt_mut(*id, *number) {
-            attempt.waiting = Some((step.clone(), *until, reason.clone()));
+            attempt.waiting = Some((step.clone(), *until, *reason));
         }
     }
 

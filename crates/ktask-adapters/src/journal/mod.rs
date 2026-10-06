@@ -187,7 +187,9 @@ impl Journal for SqliteJournal {
 mod tests {
     use std::time::SystemTime;
 
-    use ktask_core::{LimitWait, Outcome, Placement, TaskDraft, TaskId, TaskKind, TaskStatus};
+    use ktask_core::{
+        LimitWait, Outcome, Placement, TaskDraft, TaskId, TaskKind, TaskStatus, WaitReason,
+    };
     use serde_json::Value;
     use tempfile::TempDir;
 
@@ -591,7 +593,29 @@ mod tests {
                 number: 1,
                 step: "implementation".to_owned(),
                 until: at(20),
-                reason: "the provider's usage limit was hit".to_owned(),
+                reason: WaitReason::UsageLimit,
+                at: at(10),
+            },
+        );
+        assert_eq!(journal.events().unwrap()[1..], [waiting]);
+    }
+
+    #[test]
+    fn a_transport_retry_wait_round_trips() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "a", Placement::End);
+        let waiting = append(
+            &journal,
+            Event::AttemptWaiting {
+                id: TaskId(1),
+                number: 1,
+                step: "implementation".to_owned(),
+                until: at(20),
+                reason: WaitReason::TransportRetry {
+                    failure: 2,
+                    limit: 3,
+                },
                 at: at(10),
             },
         );

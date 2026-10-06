@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use super::{
     AnswerError, AppendError, AttemptRun, BeginAttemptError, CancelError, DoneError, Event,
     LimitWait, Outcome, Placement, QueueState, RecordReportError, RetryError, Task, TaskDraft,
-    TaskId, TaskStatus,
+    TaskId, TaskStatus, WaitReason,
 };
 
 impl QueueState {
@@ -270,7 +270,7 @@ impl QueueState {
         number: u32,
         step: String,
         until: SystemTime,
-        reason: String,
+        reason: WaitReason,
         at: SystemTime,
     ) -> Result<Event, RecordReportError> {
         self.check_attempt_running(id, number)?;

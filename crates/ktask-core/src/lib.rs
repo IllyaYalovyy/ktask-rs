@@ -38,7 +38,7 @@ pub use import::{Import, ImportError, InvalidTask, import_tasks, import_tasks_wi
 pub use journal::{
     AcknowledgeError, AnswerError, AppendConflict, AppendError, Attempt, AttemptEnd, AttemptRun,
     BeginAttemptError, CancelError, DoneError, Event, Journal, JournalError, JournalWatch,
-    LimitWait, RecordReportError, RetryError, Step,
+    LimitWait, RecordReportError, RetryError, Step, WaitReason,
 };
 pub use lock::{RunLock, RunLockError};
 pub use output::{
@@ -83,7 +83,7 @@ pub use settings::{
 };
 pub use sleep::Sleep;
 pub use status::{
-    AttemptLine, AttemptOutcome, DoneMark, OutputActivity, StatusEntry, StepLine, status,
+    AttemptLine, AttemptOutcome, DoneMark, OutputActivity, StatusEntry, StepLine, Wait, status,
     status_with_output,
 };
 pub use steps::{

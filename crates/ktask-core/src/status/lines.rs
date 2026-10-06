@@ -4,9 +4,9 @@
 
 use std::time::{Duration, SystemTime};
 
-use crate::{AttemptEnd, Clock, Outcome, Task, TaskStatus};
+use crate::{AttemptEnd, Clock, Outcome, Task, TaskStatus, WaitReason};
 
-use super::{AttemptLine, AttemptOutcome, StatusEntry, StepLine};
+use super::{AttemptLine, AttemptOutcome, StatusEntry, StepLine, Wait};
 use crate::{IMPLEMENTATION, RESOLVE_STEP, REVIEW_STEP, TEST_STEP};
 
 /// The outcome and reason shown for the implementation step ended at `end`, given what the
@@ -93,15 +93,15 @@ pub(super) fn running_step(
     session: Option<&str>,
     started_at: SystemTime,
     waiting_until: Option<SystemTime>,
-    waiting_reason: Option<&str>,
+    waiting_reason: Option<WaitReason>,
     clock: &(impl Clock + ?Sized),
     run_alive: bool,
 ) -> StepLine {
     let elapsed = clock.now().duration_since(started_at).unwrap_or_default();
-    let (outcome, reason) = match (run_alive, waiting_until) {
-        (false, _) => (AttemptOutcome::Interrupted, None),
-        (true, Some(_)) => (AttemptOutcome::Waiting, waiting_reason.map(str::to_owned)),
-        (true, None) => (AttemptOutcome::Running, None),
+    let outcome = match (run_alive, waiting_until) {
+        (false, _) => AttemptOutcome::Interrupted,
+        (true, Some(_)) => AttemptOutcome::Waiting,
+        (true, None) => AttemptOutcome::Running,
     };
     StepLine {
         step: name.to_owned(),
@@ -110,14 +110,30 @@ pub(super) fn running_step(
         session: step_session(name, session),
         time_spent: elapsed,
         outcome,
-        reason,
-        waiting_for: (run_alive && outcome == AttemptOutcome::Waiting)
-            .then(|| waiting_until.and_then(|until| until.duration_since(clock.now()).ok()))
-            .flatten(),
+        reason: None,
+        waiting: live_wait(run_alive, waiting_until, waiting_reason, clock),
         limit_wait: None,
         limit_warning: None,
         usage: crate::Usage::default(),
     }
+}
+
+/// What a live run's step is waiting for and how long is left, or none when it is not waiting
+/// or its run is gone.
+fn live_wait(
+    run_alive: bool,
+    until: Option<SystemTime>,
+    reason: Option<WaitReason>,
+    clock: &(impl Clock + ?Sized),
+) -> Option<Wait> {
+    if !run_alive {
+        return None;
+    }
+    let remaining = until?.duration_since(clock.now()).ok()?;
+    Some(Wait {
+        reason: reason?,
+        remaining,
+    })
 }
 
 /// The [`StatusEntry`] for `task`, given the step and reason a gate recorded stopping it before
@@ -133,7 +149,7 @@ pub(super) fn gate_stop_entry(task: Task, step: String, reason: String) -> Statu
         time_spent: Duration::ZERO,
         outcome: AttemptOutcome::Failed,
         reason: Some(reason),
-        waiting_for: None,
+        waiting: None,
         limit_wait: None,
         limit_warning: None,
         usage: crate::Usage::default(),
@@ -151,7 +167,7 @@ pub(super) fn gate_stop_entry(task: Task, step: String, reason: String) -> Statu
             time_spent: Duration::ZERO,
             outcome: line.outcome,
             reason: line.reason.clone(),
-            waiting_for: None,
+            waiting: None,
             limit_wait: None,
             limit_warning: None,
             output_activity: None,

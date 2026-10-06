@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::{
     AttemptRun, Clock, Journal, LimitWait, Outcome, RunContext, RunError, TaskId, TaskStatus,
+    WaitReason,
 };
 
 use super::known_cause::{KnownCause, codex_transport_reason};
@@ -109,7 +110,7 @@ fn wait_for_limit(
     state: &PipelineState<'_>,
     step: &str,
     until: SystemTime,
-    reason: &str,
+    reason: WaitReason,
 ) -> Result<Duration, RunError> {
     crate::attempt::record_waiting(
         deps.journal,
@@ -231,12 +232,8 @@ fn process_step_outcome(
     outcome: StepOutcome,
 ) -> Result<Option<(Duration, TaskStatus, Option<String>)>, RunError> {
     match outcome {
-        StepOutcome::Waiting {
-            duration,
-            until,
-            reason,
-        } => {
-            wait_for_provider_limit(deps, state, step, run, duration, until, &reason).map(|()| None)
+        StepOutcome::Waiting { duration, until } => {
+            wait_for_provider_limit(deps, state, step, run, duration, until).map(|()| None)
         }
         StepOutcome::TransportFailure { duration, reason } => {
             retry_transport_failure(deps, context, state, step, run, duration, &reason)
@@ -279,10 +276,9 @@ fn wait_for_provider_limit(
     run: &mut StepRunState,
     duration: Duration,
     until: SystemTime,
-    reason: &str,
 ) -> Result<(), RunError> {
     run.total += duration;
-    let waited = wait_for_limit(deps, state, step, until, reason)?;
+    let waited = wait_for_limit(deps, state, step, until, WaitReason::UsageLimit)?;
     run.total += waited;
     let waited_so_far = run.limit_wait.map_or(Duration::ZERO, |wait| wait.waited);
     run.limit_wait = Some(LimitWait {
@@ -319,13 +315,11 @@ fn retry_transport_failure(
     }
     let wait = transport_backoff(run.transport_failures);
     let until = deps.clock.now() + wait;
-    let waiting = format!(
-        "Codex transport disconnected; retry {} of {} in {}s",
-        run.transport_failures,
-        context.transport_retries,
-        wait.as_secs()
-    );
-    run.total += wait_for_limit(deps, state, step, until, &waiting)?;
+    let waiting = WaitReason::TransportRetry {
+        failure: run.transport_failures,
+        limit: context.transport_retries,
+    };
+    run.total += wait_for_limit(deps, state, step, until, waiting)?;
     Ok(None)
 }
 

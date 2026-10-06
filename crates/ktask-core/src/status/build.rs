@@ -49,7 +49,7 @@ fn step_lines(
                 session,
                 step.started_at,
                 attempt.waiting_until,
-                attempt.waiting_reason.as_deref(),
+                attempt.waiting_reason,
                 clock,
                 run_alive,
             ),
@@ -80,7 +80,7 @@ fn ended_step_line(
         time_spent: end.duration,
         outcome,
         reason,
-        waiting_for: None,
+        waiting: None,
         limit_wait: end.limit_wait,
         limit_warning: end.limit_warning.clone(),
         usage: end.usage,
@@ -118,7 +118,7 @@ fn current_step_line(
             attempt.session.as_deref(),
             attempt.started_at,
             attempt.waiting_until,
-            attempt.waiting_reason.as_deref(),
+            attempt.waiting_reason,
             clock,
             run_alive,
         ),
@@ -162,7 +162,7 @@ fn attempt_line(
         time_spent: current.time_spent,
         outcome: current.outcome,
         reason: current.reason,
-        waiting_for: current.waiting_for,
+        waiting: current.waiting,
         limit_wait: current.limit_wait,
         limit_warning: current.limit_warning,
         output_activity,
@@ -413,7 +413,7 @@ mod tests {
                     time_spent: Duration::from_secs(30),
                     outcome: AttemptOutcome::Running,
                     reason: None,
-                    waiting_for: None,
+                    waiting: None,
                     limit_wait: None,
                     limit_warning: None,
                     usage: crate::Usage::default(),
@@ -426,7 +426,7 @@ mod tests {
                         time_spent: Duration::from_secs(30),
                         outcome: AttemptOutcome::Running,
                         reason: None,
-                        waiting_for: None,
+                        waiting: None,
                         limit_wait: None,
                         limit_warning: None,
                         usage: crate::Usage::default(),
@@ -500,7 +500,7 @@ mod tests {
                     time_spent: Duration::from_secs(30),
                     outcome: AttemptOutcome::Interrupted,
                     reason: None,
-                    waiting_for: None,
+                    waiting: None,
                     limit_wait: None,
                     limit_warning: None,
                     usage: crate::Usage::default(),
@@ -513,7 +513,7 @@ mod tests {
                         time_spent: Duration::from_secs(30),
                         outcome: AttemptOutcome::Interrupted,
                         reason: None,
-                        waiting_for: None,
+                        waiting: None,
                         limit_wait: None,
                         limit_warning: None,
                         usage: crate::Usage::default(),
@@ -549,7 +549,7 @@ mod tests {
             1,
             IMPLEMENTATION,
             at(200),
-            "the provider's usage limit was hit",
+            crate::WaitReason::UsageLimit,
         )
         .unwrap();
 
@@ -558,19 +558,65 @@ mod tests {
         let entries = status(&journal, &clock(130), &a_live_run()).unwrap();
         assert_eq!(entries[0].attempt.outcome, AttemptOutcome::Waiting);
         assert_eq!(
-            entries[0].attempt.waiting_for,
-            Some(Duration::from_secs(70))
+            entries[0].attempt.waiting,
+            Some(crate::Wait {
+                reason: crate::WaitReason::UsageLimit,
+                remaining: Duration::from_secs(70),
+            })
         );
         assert_eq!(entries[0].attempt.steps.len(), 1);
         assert_eq!(entries[0].attempt.steps[0].outcome, AttemptOutcome::Waiting);
 
         // A later read, further along, shows less of it left.
         let later = status(&journal, &clock(190), &a_live_run()).unwrap();
-        assert_eq!(later[0].attempt.waiting_for, Some(Duration::from_secs(10)));
+        assert_eq!(
+            later[0].attempt.waiting.map(|wait| wait.remaining),
+            Some(Duration::from_secs(10))
+        );
 
         // A run that is not alive shows interrupted instead, the wait notwithstanding.
         let not_alive = status(&journal, &clock(130), &no_run()).unwrap();
         assert_eq!(not_alive[0].attempt.outcome, AttemptOutcome::Interrupted);
+    }
+
+    #[test]
+    fn a_transport_retry_wait_shows_its_retry_number_and_the_time_left_to_it() {
+        let journal = journal_with_a_started_attempt();
+        crate::attempt::begin_step(
+            &journal,
+            &clock(100),
+            TaskId(1),
+            1,
+            IMPLEMENTATION,
+            None,
+            None,
+        )
+        .unwrap();
+        let reason = crate::WaitReason::TransportRetry {
+            failure: 2,
+            limit: 3,
+        };
+        crate::attempt::record_waiting(
+            &journal,
+            &clock(100),
+            TaskId(1),
+            1,
+            IMPLEMENTATION,
+            at(102),
+            reason,
+        )
+        .unwrap();
+
+        let entries = status(&journal, &clock(101), &a_live_run()).unwrap();
+        assert_eq!(
+            entries[0].attempt.waiting,
+            Some(crate::Wait {
+                reason,
+                remaining: Duration::from_secs(1),
+            })
+        );
+        assert_eq!(entries[0].attempt.reason, None);
+        assert_eq!(entries[0].attempt.steps[0].reason, None);
     }
 
     #[test]
@@ -593,7 +639,7 @@ mod tests {
             1,
             IMPLEMENTATION,
             at(200),
-            "the provider's usage limit was hit",
+            crate::WaitReason::UsageLimit,
         )
         .unwrap();
         crate::attempt::end_step(
@@ -1090,7 +1136,7 @@ mod tests {
                     time_spent: Duration::from_secs(4),
                     outcome: AttemptOutcome::Passed,
                     reason: None,
-                    waiting_for: None,
+                    waiting: None,
                     limit_wait: None,
                     limit_warning: None,
                     usage: crate::Usage::default(),
@@ -1103,7 +1149,7 @@ mod tests {
                     time_spent: Duration::from_secs(6),
                     outcome: AttemptOutcome::Running,
                     reason: None,
-                    waiting_for: None,
+                    waiting: None,
                     limit_wait: None,
                     limit_warning: None,
                     usage: crate::Usage::default(),
@@ -1169,7 +1215,7 @@ mod tests {
                 time_spent: Duration::ZERO,
                 outcome: AttemptOutcome::Failed,
                 reason: Some("uncommitted changes; commit or stash".to_owned()),
-                waiting_for: None,
+                waiting: None,
                 limit_wait: None,
                 limit_warning: None,
                 usage: crate::Usage::default(),

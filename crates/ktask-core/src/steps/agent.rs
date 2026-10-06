@@ -210,11 +210,7 @@ pub(crate) fn run_agent_step(
     maybe_record_session(deps, context, state, step, prompt, &result)?;
     record_exit_code(state, &result);
     if let Some(until) = limit_wait(deps, step, &result) {
-        return Ok(StepOutcome::Waiting {
-            duration,
-            until,
-            reason: "the provider's usage limit was hit".to_owned(),
-        });
+        return Ok(StepOutcome::Waiting { duration, until });
     }
     if let Some(reason) = result.as_ref().ok().and_then(codex_transport_failure) {
         return Ok(StepOutcome::TransportFailure { duration, reason });

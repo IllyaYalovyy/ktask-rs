@@ -5,7 +5,7 @@
 use std::time::{Duration, SystemTime};
 
 use ktask_core::{
-    Event, JournalError, LimitWait, LimitWarning, Outcome, TaskId, TaskStatus, Usage,
+    Event, JournalError, LimitWait, LimitWarning, Outcome, TaskId, TaskStatus, Usage, WaitReason,
 };
 use serde_json::Value;
 
@@ -80,6 +80,31 @@ fn bool_field(payload: &Value, key: &str) -> bool {
     payload.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
+/// The [`WaitReason`] an `attempt_waiting` payload names: a transport retry when it carries
+/// one, the provider's usage limit otherwise.
+fn decode_wait_reason(
+    payload: &Value,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<WaitReason, JournalError> {
+    let Some(retry) = payload
+        .get("transport_retry")
+        .filter(|retry| !retry.is_null())
+    else {
+        return Ok(WaitReason::UsageLimit);
+    };
+    let count = |field: &str| {
+        retry
+            .get(field)
+            .and_then(Value::as_u64)
+            .and_then(|count| u32::try_from(count).ok())
+            .ok_or_else(|| corrupt(field, "missing".to_owned()))
+    };
+    Ok(WaitReason::TransportRetry {
+        failure: count("failure")?,
+        limit: count("limit")?,
+    })
+}
+
 /// The [`Event::AttemptWaiting`] an `attempt_waiting` row's `payload` decodes to.
 pub(super) fn decode_attempt_waiting(
     payload: &Value,
@@ -98,11 +123,7 @@ pub(super) fn decode_attempt_waiting(
         .and_then(Value::as_i64)
         .map(super::from_seconds)
         .ok_or_else(|| corrupt("until", "missing".to_owned()))?;
-    let reason = payload
-        .get("reason")
-        .and_then(Value::as_str)
-        .unwrap_or("the provider's usage limit was hit")
-        .to_owned();
+    let reason = decode_wait_reason(payload, corrupt)?;
     Ok(Event::AttemptWaiting {
         id,
         number,

@@ -205,6 +205,7 @@ fn a_derived_claude_rejection_waits_for_its_resets_at_time() -> Result<()> {
     assert!(status.contains("attempt 1: implementation"), "{status}");
     assert!(status.contains("usage limit"), "{status}");
     assert!(status.contains("resumes in"), "{status}");
+    assert!(!status.contains("retry"), "{status}");
     Ok(())
 }
 
@@ -219,6 +220,7 @@ fn a_derived_claude_limit_error_result_waits() -> Result<()> {
     assert!(status.contains("attempt 1: implementation"), "{status}");
     assert!(status.contains("usage limit"), "{status}");
     assert!(status.contains("resumes in"), "{status}");
+    assert!(!status.contains("retry"), "{status}");
     Ok(())
 }
 

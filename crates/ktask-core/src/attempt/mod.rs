@@ -7,7 +7,7 @@
 
 use std::time::SystemTime;
 
-use crate::journal::AttemptRun;
+use crate::journal::{AttemptRun, WaitReason};
 use crate::queue_state::decide_and_append;
 use crate::{
     BeginAttemptError, Clock, Event, Journal, JournalError, LimitWait, Outcome, RecordReportError,
@@ -167,14 +167,13 @@ pub(crate) fn record_waiting(
     number: u32,
     step: &str,
     until: SystemTime,
-    reason: &str,
+    reason: WaitReason,
 ) -> Result<(), RecordReportError> {
     let at = clock.now();
     let step = step.to_owned();
-    let reason = reason.to_owned();
     decide_and_append(journal, move |state| {
         state
-            .decide_record_waiting(id, number, step.clone(), until, reason.clone(), at)
+            .decide_record_waiting(id, number, step.clone(), until, reason, at)
             .map(|event| (vec![event], ()))
     })
 }
