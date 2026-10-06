@@ -2,6 +2,7 @@
 
 use std::time::{Duration, SystemTime};
 
+use crate::json_lines::events;
 use ktask_core::{LimitSignal, LimitWarning, Output, ProviderUsage, Usage};
 
 /// Reads a structured rejection, or a rejected result that names a usage limit.
@@ -119,11 +120,4 @@ fn cost_microusd(value: &serde_json::Value) -> Option<u64> {
         .map(str::to_owned)
         .or_else(|| value.as_number().map(ToString::to_string))
         .and_then(|value| super::configured_provider::decimal_microusd(&value))
-}
-
-fn events(output: &Output) -> Vec<serde_json::Value> {
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect()
 }

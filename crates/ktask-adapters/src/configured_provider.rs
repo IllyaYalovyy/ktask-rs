@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use crate::json_lines::events;
 use crate::{claude_stream, codex_jsonl};
 use ktask_core::{
     LimitSignal, Output, Provider, ProviderCommand, ProviderDefinition, ProviderParser,
@@ -131,13 +132,6 @@ fn read_usage(definition: &ProviderDefinition, output: &Output) -> ProviderUsage
         .into_iter()
         .find_map(|event| usage_in_event(&event, path))
         .unwrap_or_default()
-}
-
-fn events(output: &Output) -> Vec<serde_json::Value> {
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect()
 }
 
 fn usage_in_event(event: &serde_json::Value, path: &str) -> Option<ProviderUsage> {

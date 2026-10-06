@@ -1,5 +1,6 @@
 //! Facts Codex puts in its `--json` line-delimited event stream.
 
+use crate::json_lines::events;
 use ktask_core::{Output, ProviderUsage, Usage};
 
 /// Reads the first thread identifier Codex reports for an invocation.
@@ -31,13 +32,6 @@ pub(crate) fn usage(output: &Output) -> ProviderUsage {
         model: None,
         limit_warning: None,
     }
-}
-
-fn events(output: &Output) -> Vec<serde_json::Value> {
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect()
 }
 
 fn number(value: &serde_json::Value, name: &str) -> Option<u64> {

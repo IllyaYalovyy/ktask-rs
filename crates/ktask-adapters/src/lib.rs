@@ -13,6 +13,7 @@ pub mod echo;
 mod git;
 mod input;
 mod journal;
+mod json_lines;
 mod lock;
 mod process;
 mod provider_probe;
