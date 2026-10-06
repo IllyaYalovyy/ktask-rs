@@ -151,13 +151,21 @@ impl Fixture {
             .to_owned())
     }
 
-    /// `status`'s text lines, once there are at least `count` of them; fails after 10s.
+    /// `status`'s text lines, once there are at least `count` of them and the `count`th has
+    /// ended — a step still `running` has not yet said what it did; fails after 10s.
     fn wait_for_status_lines(&self, count: usize) -> Result<Vec<String>> {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let outcome = self.run(&["status"])?;
             let lines: Vec<String> = outcome.stdout.lines().map(str::to_owned).collect();
-            if lines.len() >= count {
+            assert!(
+                !lines.iter().any(|line| line.contains("\tinterrupted\t")),
+                "a run that is alive was shown interrupted: {lines:?}"
+            );
+            if lines
+                .get(count - 1)
+                .is_some_and(|last| !last.ends_with("\trunning"))
+            {
                 return Ok(lines);
             }
             assert!(
