@@ -9,16 +9,11 @@ license.workspace = true
 name = "ktask-rs"
 path = "src/main.rs"
 
-# `panic_test` is launched only by the terminal-recovery test in `tests/tui/exit.rs`; a
-# release build must not ship it. `test-support`, activated below only for test builds
-# through the self dev-dependency, keeps it out of a plain `cargo build --release`.
-[[bin]]
-name = "panic_test"
-path = "src/bin/panic_test.rs"
-required-features = ["test-support"]
+# `panic_test` is a cargo example (`examples/panic_test.rs`), launched only by the
+# terminal-recovery test in `tests/tui/exit.rs`. Cargo builds examples for `cargo test` and
+# never for `cargo build` or `cargo build --release`, so a release build ships `ktask-rs` alone.
 
 [features]
-test-support = []
 # Opt-in only: this runs a paid, authenticated Codex readiness request against the operator's
 # real account. It is deliberately absent from normal workspace checks.
 real-provider-tests = []
@@ -37,9 +32,6 @@ terminal_size = "0.4.4"
 workspace = true
 
 [dev-dependencies]
-# Activates `test-support` for test builds only, so `panic_test` is built for `cargo test`
-# but absent from a release build.
-test-support-of-self = { package = "ktask-cli", path = ".", features = ["test-support"] }
 nix = { version = "0.28", features = ["term", "signal"] }
 portable-pty = "0.9.0"
 rusqlite = { version = "0.40.2", features = ["bundled"] }

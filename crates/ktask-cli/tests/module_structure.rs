@@ -99,8 +99,8 @@ fn no_function_in_the_cli_source_is_longer_than_40_lines() -> std::io::Result<()
 }
 
 /// A release build of `ktask-cli` produces exactly one binary: `ktask-rs`. `panic_test` is
-/// gated behind the `test-support` feature, active only through the crate's own
-/// dev-dependency on itself, so it never lands in a release build's output.
+/// is a cargo example, which cargo builds for `cargo test` and never for `cargo build`, so it
+/// never lands in a release build's output.
 #[test]
 fn a_release_build_produces_only_ktask_rs() -> std::io::Result<()> {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -120,6 +120,7 @@ fn a_release_build_produces_only_ktask_rs() -> std::io::Result<()> {
         "cargo build --release failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_no_warning(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut executables: Vec<String> = stdout
         .lines()
@@ -136,4 +137,24 @@ fn a_release_build_produces_only_ktask_rs() -> std::io::Result<()> {
     executables.dedup();
     assert_eq!(executables, ["ktask-rs"]);
     Ok(())
+}
+
+/// Every cargo invocation prints no warning, including the manifest ones cargo prints before
+/// it compiles anything, such as an ignored dependency.
+#[test]
+fn cargo_reads_the_manifests_without_a_warning() -> std::io::Result<()> {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .args(["metadata", "--format-version=1", "--no-deps"])
+        .current_dir(&workspace_root)
+        .output()?;
+    assert!(output.status.success());
+    assert_no_warning(&output.stderr);
+    Ok(())
+}
+
+fn assert_no_warning(stderr: &[u8]) {
+    let stderr = String::from_utf8_lossy(stderr);
+    assert!(!stderr.contains("warning"), "{stderr}");
 }

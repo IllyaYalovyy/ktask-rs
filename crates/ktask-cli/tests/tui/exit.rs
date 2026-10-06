@@ -210,18 +210,40 @@ fn when_its_terminal_closes_the_tui_exits_at_once_and_burns_no_cpu() -> Result<(
     Ok(())
 }
 
+/// Builds `examples/panic_test.rs` and returns its path. `cargo test` builds examples only
+/// when no single test target is selected, so the test builds it itself and reads the path
+/// from cargo rather than guessing the target directory.
+fn panic_test_example() -> Result<String> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = std::process::Command::new(cargo)
+        .args([
+            "build",
+            "--example",
+            "panic_test",
+            "--message-format=json",
+            "-p",
+            "ktask-cli",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find_map(|message| message.get("executable")?.as_str().map(str::to_owned))
+        .ok_or_else(|| "cargo built no panic_test example".into())
+}
+
 #[test]
 fn a_panic_restores_the_terminal_before_the_message_is_printed() -> Result<()> {
     let sandbox = Sandbox::new()?;
     let cwd = sandbox.home();
-    let mut terminal = Terminal::launch_binary(
-        env!("CARGO_BIN_EXE_panic_test"),
-        &sandbox,
-        &cwd,
-        &[],
-        ROWS,
-        80,
-    )?;
+    let mut terminal =
+        Terminal::launch_binary(&panic_test_example()?, &sandbox, &cwd, &[], ROWS, 80)?;
     terminal.wait_for("the first frame", |screen| {
         screen.contents().contains("panic-test") && screen.contents().ends_with('┘')
     })?;
