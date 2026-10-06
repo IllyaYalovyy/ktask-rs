@@ -166,7 +166,7 @@ fn push_criteria(sheet: &mut Sheet, form: &Form) {
     }
 }
 
-/// Pushes `form`'s own fields — title, kind, links, body and criteria — each marked with the
+/// Pushes `form`'s own fields — title, kind, links, body, criteria, provider and model — each marked with the
 /// focus when it is on that field.
 fn push_fields(sheet: &mut Sheet, form: &Form) {
     let mark = |field| marker(form, field);
@@ -186,23 +186,18 @@ fn push_fields(sheet: &mut Sheet, form: &Form) {
     sheet.push(format!("{} Body:", mark(Focus::Body)));
     sheet.text("    ", "    ", &form.body, form.focus == Focus::Body);
     push_criteria(sheet, form);
-    if !form.provider.text().is_empty()
-        || !form.model.text().is_empty()
-        || matches!(form.focus, Focus::Provider | Focus::Model)
-    {
-        sheet.text(
-            &format!("{} Provider:  ", mark(Focus::Provider)),
-            "",
-            &form.provider,
-            form.focus == Focus::Provider,
-        );
-        sheet.text(
-            &format!("{} Model:     ", mark(Focus::Model)),
-            "",
-            &form.model,
-            form.focus == Focus::Model,
-        );
-    }
+    sheet.text(
+        &format!("{} Provider:  ", mark(Focus::Provider)),
+        "",
+        &form.provider,
+        form.focus == Focus::Provider,
+    );
+    sheet.text(
+        &format!("{} Model:     ", mark(Focus::Model)),
+        "",
+        &form.model,
+        form.focus == Focus::Model,
+    );
 }
 
 /// Draws `form` over the whole of `area`, asking to discard it when `discard` says so, and
@@ -284,6 +279,8 @@ mod tests {
         assert_eq!(row(&rows, 4), "  Links:");
         assert_eq!(row(&rows, 5), "  Body:");
         assert_eq!(row(&rows, 7), "  Criteria:");
+        assert_eq!(row(&rows, 9), "  Provider:");
+        assert_eq!(row(&rows, 10), "  Model:");
         assert_eq!(cursor, Some(Position::new(13, 2)));
     }
 

@@ -10,7 +10,8 @@ use crate::text::TextArea;
 mod render;
 
 /// What the form's frame says at the bottom: the keys that are not typing.
-const FORM_KEYS: &str = " Ctrl-S add · Esc cancel · Tab, Shift-Tab field · Ctrl-N, Ctrl-D criterion · Ctrl-P provider · Ctrl-O model ";
+const FORM_KEYS: &str =
+    " Ctrl-S add · Esc cancel · Tab, Shift-Tab field · Ctrl-N, Ctrl-D criterion ";
 
 /// What the form's frame says at the bottom while it asks to discard the task.
 const DISCARD_KEYS: &str = " y discard · n, Esc keep writing ";
@@ -100,6 +101,7 @@ impl Form {
     fn moved(self, forward: bool) -> Self {
         let mut order = vec![Focus::Title, Focus::Kind, Focus::Links, Focus::Body];
         order.extend((0..self.criteria.len()).map(Focus::Criterion));
+        order.extend([Focus::Provider, Focus::Model]);
         let at = order
             .iter()
             .position(|focus| *focus == self.focus)
@@ -330,17 +332,7 @@ impl TaskFormScreen {
                 },
                 None,
             ),
-            'p' => (self.focused(Focus::Provider), None),
-            'o' => (self.focused(Focus::Model), None),
             _ => (self, None),
-        }
-    }
-
-    /// Moves focus to one non-criterion field.
-    fn focused(self, focus: Focus) -> Self {
-        Self {
-            form: Form { focus, ..self.form },
-            ..self
         }
     }
 
@@ -409,7 +401,13 @@ mod tests {
 
     #[test]
     fn a_criterion_has_one_line_and_ignores_enter() {
-        let form = type_in(Form::new(Placement::End).moved(false), "a\nb");
+        let form = type_in(
+            Form::new(Placement::End)
+                .moved(false)
+                .moved(false)
+                .moved(false),
+            "a\nb",
+        );
         assert_eq!(form.draft().criteria, ["ab"]);
     }
 
@@ -426,6 +424,8 @@ mod tests {
             seen,
             [
                 Focus::Criterion(1),
+                Focus::Provider,
+                Focus::Model,
                 Focus::Title,
                 Focus::Kind,
                 Focus::Links,
@@ -434,8 +434,8 @@ mod tests {
             ]
         );
         let back = Form::new(Placement::End).moved(false);
-        assert_eq!(back.focus, Focus::Criterion(0));
-        assert_eq!(back.moved(false).focus, Focus::Body);
+        assert_eq!(back.focus, Focus::Model);
+        assert_eq!(back.moved(false).focus, Focus::Provider);
     }
 
     #[test]
@@ -461,7 +461,13 @@ mod tests {
 
     #[test]
     fn removing_a_criterion_moves_the_focus_to_its_neighbour_then_to_the_body() {
-        let form = type_in(Form::new(Placement::End).moved(false), "a");
+        let form = type_in(
+            Form::new(Placement::End)
+                .moved(false)
+                .moved(false)
+                .moved(false),
+            "a",
+        );
         let form = type_in(form.with_criterion(), "b");
         let form = type_in(form.with_criterion(), "c");
         let form = form.moved(false).without_criterion();
@@ -478,13 +484,17 @@ mod tests {
 
     #[test]
     fn with_no_criterion_left_the_focus_still_walks_and_one_can_be_added() {
-        let form = Form::new(Placement::End).moved(false).without_criterion();
-        assert_eq!(form.clone().moved(true).focus, Focus::Title);
+        let on_criterion = || {
+            Form::new(Placement::End)
+                .moved(false)
+                .moved(false)
+                .moved(false)
+        };
+        let form = on_criterion().without_criterion();
+        assert_eq!(form.focus, Focus::Body);
+        assert_eq!(form.clone().moved(true).focus, Focus::Provider);
         assert_eq!(form.moved(false).focus, Focus::Links);
-        let form = Form::new(Placement::End)
-            .moved(false)
-            .without_criterion()
-            .with_criterion();
+        let form = on_criterion().without_criterion().with_criterion();
         assert_eq!(form.focus, Focus::Criterion(0));
     }
 
@@ -518,7 +528,7 @@ mod tests {
         let screen = press(screen, &[KeyCode::Tab]);
         assert_eq!(screen.form.focus, Focus::Kind);
         let screen = press(screen, &[KeyCode::BackTab, KeyCode::BackTab]);
-        assert_eq!(screen.form.focus, Focus::Criterion(0));
+        assert_eq!(screen.form.focus, Focus::Model);
     }
 
     #[test]

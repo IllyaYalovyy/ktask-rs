@@ -23,8 +23,6 @@ const END: &str = "\x1b[F";
 pub(crate) const SUBMIT: &str = "\x13";
 const ADD_CRITERION: &str = "\x0e";
 const REMOVE_CRITERION: &str = "\x04";
-const PROVIDER: &str = "\x10";
-const MODEL: &str = "\x0f";
 
 /// The column the text of the title and links fields starts at: the frame, the marker, the
 /// label.
@@ -114,6 +112,8 @@ fn n_opens_an_empty_form_over_the_queue_with_the_cursor_in_the_title() -> Result
     assert_eq!(lines[7], "");
     assert_eq!(lines[8], "  Criteria:");
     assert_eq!(lines[9], "   1.");
+    assert_eq!(lines[10], "  Provider:");
+    assert_eq!(lines[11], "  Model:");
     assert!(!screen.contains("alpha"), "{screen}");
     let bottom = screen
         .lines()
@@ -124,8 +124,65 @@ fn n_opens_an_empty_form_over_the_queue_with_the_cursor_in_the_title() -> Result
         "{bottom}"
     );
     assert!(bottom.contains("Ctrl-N, Ctrl-D criterion"), "{bottom}");
+    assert!(
+        !bottom.contains("Ctrl-P") && !bottom.contains("Ctrl-O"),
+        "{bottom}"
+    );
     assert_eq!(listed(&fixture)?.len(), 5);
     Ok(())
+}
+
+#[test]
+fn ctrl_p_and_ctrl_o_do_nothing_on_the_form() -> Result<()> {
+    let fixture = Fixture::empty()?;
+    let mut terminal = open_form(&fixture)?;
+    terminal.send("T\x10\x0fx")?;
+    expect_rows(&terminal, &[(3, "> Title:     Tx"), (10, "  Provider:")])?;
+    assert_eq!(listed(&fixture)?, Vec::<Value>::new());
+    quit_after_esc(terminal)
+}
+
+fn quit_after_esc(mut terminal: Terminal) -> Result<()> {
+    terminal.send(ESC)?;
+    terminal.wait_for("the queue back", |screen| {
+        !screen.contents().contains("New task") && screen.contents().ends_with('┘')
+    })?;
+    quit(terminal)
+}
+
+#[test]
+fn an_unknown_provider_is_refused_in_the_form_in_the_words_of_add_provider() -> Result<()> {
+    let fixture = Fixture::empty()?;
+    let refused = fixture.sandbox.run(
+        &fixture.repository,
+        &[
+            "add",
+            "--title",
+            "t",
+            "--criterion",
+            "c",
+            "--provider",
+            "nope",
+        ],
+    )?;
+    let words = refused
+        .stderr
+        .lines()
+        .find_map(|line| line.find("unknown provider").map(|at| &line[at..]))
+        .ok_or("add --provider names no unknown provider")?
+        .to_owned();
+    let mut terminal = open_form(&fixture)?;
+    terminal.send(&format!("T{TAB}{TAB}{TAB}{TAB}c{TAB}nope{SUBMIT}"))?;
+
+    expect_rows(&terminal, &[(2, &format!("! {words}"))])?;
+    assert_eq!(listed(&fixture)?, Vec::<Value>::new());
+
+    terminal.send(&format!(
+        "{BACKSPACE}{BACKSPACE}{BACKSPACE}{BACKSPACE}codex{SUBMIT}"
+    ))?;
+    wait_queue_with(&terminal, "T · codex")?;
+    assert_eq!(listed(&fixture)?[0]["provider"], "codex");
+    quit(terminal)
 }
 
 #[test]
@@ -133,7 +190,7 @@ fn the_task_form_stores_its_provider_and_model_and_the_queue_shows_them() -> Res
     let fixture = Fixture::empty()?;
     let mut terminal = open_form(&fixture)?;
     terminal.send(&format!(
-        "T{TAB}{TAB}{TAB}{TAB}c{PROVIDER}codex{MODEL}gpt-5{SUBMIT}"
+        "T{TAB}{TAB}{TAB}{TAB}c{TAB}codex{TAB}gpt-5{SUBMIT}"
     ))?;
     wait_queue_with(&terminal, "T · codex (gpt-5)")?;
     let tasks = listed(&fixture)?;
@@ -277,7 +334,7 @@ fn a_form_with_no_criterion_shows_that_and_a_criterion_added_lets_it_through() -
     let fixture = Fixture::empty()?;
     let mut terminal = open_form(&fixture)?;
     terminal.send("Needs a criterion")?;
-    terminal.send(SHIFT_TAB)?;
+    terminal.send(&format!("{SHIFT_TAB}{SHIFT_TAB}{SHIFT_TAB}"))?;
     terminal.send(REMOVE_CRITERION)?;
     expect_rows(&terminal, &[(9, "    none: Ctrl-N adds one")])?;
 
@@ -606,17 +663,24 @@ fn criteria_are_added_after_the_last_and_removed_from_where_the_focus_is() -> Re
     terminal.send(REMOVE_CRITERION)?;
     expect(
         &terminal,
-        &[(9, "   1. one"), (10, ">  2. three"), (11, "")],
+        &[(9, "   1. one"), (10, ">  2. three"), (11, "  Provider:")],
         (10, 7 + 5),
     )?;
     // The last one removed leaves the focus on the one before it.
     terminal.send(REMOVE_CRITERION)?;
-    expect(&terminal, &[(9, ">  1. one"), (10, "")], (9, 7 + 3))?;
+    expect(
+        &terminal,
+        &[(9, ">  1. one"), (10, "  Provider:")],
+        (9, 7 + 3),
+    )?;
     // Ctrl-D outside a criterion removes nothing.
     terminal.send(&format!("{SHIFT_TAB}{REMOVE_CRITERION}"))?;
     expect(&terminal, &[(8, "  Criteria:"), (9, "   1. one")], (7, 5))?;
     terminal.send(&format!("{TAB}{REMOVE_CRITERION}"))?;
-    expect_rows(&terminal, &[(9, "    none: Ctrl-N adds one"), (10, "")])?;
+    expect_rows(
+        &terminal,
+        &[(9, "    none: Ctrl-N adds one"), (10, "  Provider:")],
+    )?;
     // With none left, Ctrl-N adds one and the focus is on it.
     terminal.send(&format!("{ADD_CRITERION}again"))?;
     expect(&terminal, &[(9, ">  1. again")], (9, 7 + 5))?;
@@ -642,18 +706,17 @@ fn wait_focus(terminal: &Terminal, row: usize) -> Result<()> {
 fn tab_and_shift_tab_walk_every_field_and_wrap_around_in_both_directions() -> Result<()> {
     let fixture = Fixture::empty()?;
     let mut terminal = open_form(&fixture)?;
-    terminal.send(&format!(
-        "{ADD_CRITERION}{SHIFT_TAB}{SHIFT_TAB}{SHIFT_TAB}{SHIFT_TAB}{SHIFT_TAB}"
-    ))?;
-    // Title, kind, links, body, criterion 1, criterion 2: rows 3, 4, 5, 6, 9, 10.
+    terminal.send(&format!("{ADD_CRITERION}{TAB}{TAB}{TAB}"))?;
+    // Title, kind, links, body, criterion 1, criterion 2, provider, model: rows 3, 4, 5, 6,
+    // 9, 10, 11, 12.
     wait_focus(&terminal, 3)?;
     // The cursor is in the field the focus is on, and hidden on the kind.
-    for row in [4, 5, 6, 9, 10, 3, 4] {
+    for row in [4, 5, 6, 9, 10, 11, 12, 3, 4] {
         terminal.send(TAB)?;
         wait_focus(&terminal, row)?;
         terminal.wait_for("the cursor", |screen| screen.hide_cursor() == (row == 4))?;
     }
-    for row in [3, 10, 9, 6, 5, 4, 3] {
+    for row in [3, 12, 11, 10, 9, 6, 5, 4, 3] {
         terminal.send(SHIFT_TAB)?;
         wait_focus(&terminal, row)?;
         terminal.wait_for("the cursor", |screen| screen.hide_cursor() == (row == 4))?;
