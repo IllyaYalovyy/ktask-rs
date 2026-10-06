@@ -26,6 +26,8 @@ mod idle;
 mod import;
 #[path = "tui/insert.rs"]
 mod insert;
+#[path = "tui/key_maps.rs"]
+mod key_maps;
 #[path = "tui/limit_wait.rs"]
 mod limit_wait;
 #[path = "tui/navigate.rs"]

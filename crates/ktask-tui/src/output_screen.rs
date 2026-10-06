@@ -7,6 +7,14 @@ use ratatui::layout::Rect;
 use ratatui::widgets::{Paragraph, Widget};
 
 use crate::presentation::Transcript;
+use crate::widgets::key_map;
+
+const KEYS: [(&str, &str); 4] = [
+    ("j, Down / k, Up", "move to the next / previous step"),
+    ("l", "close the output"),
+    ("?", "show or hide this key map"),
+    ("Esc", "close this key map, or the output"),
+];
 
 /// A request made by the output screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +32,7 @@ pub(crate) struct OutputScreen {
     task: TaskId,
     transcript: Transcript,
     picked: Option<usize>,
+    help: bool,
 }
 
 impl OutputScreen {
@@ -32,6 +41,7 @@ impl OutputScreen {
             task,
             transcript: Transcript::default(),
             picked: None,
+            help: false,
         }
     }
     pub(crate) fn task(&self) -> TaskId {
@@ -44,8 +54,16 @@ impl OutputScreen {
             .filter(|&index| index + 1 < self.transcript.steps());
         self
     }
-    pub(crate) fn key(self, key: KeyCode) -> (Self, Option<Request>) {
+    pub(crate) fn key(mut self, key: KeyCode) -> (Self, Option<Request>) {
+        if self.help {
+            self.help = !matches!(key, KeyCode::Esc | KeyCode::Char('?'));
+            return (self, None);
+        }
         match key {
+            KeyCode::Char('?') => {
+                self.help = true;
+                (self, None)
+            }
             KeyCode::Esc | KeyCode::Char('l') => (self, Some(Request::Close)),
             KeyCode::Char('j') | KeyCode::Down => (self.moved(1), None),
             KeyCode::Char('k') | KeyCode::Up => (self.moved(-1), None),
@@ -69,10 +87,14 @@ impl OutputScreen {
     }
 
     pub(crate) fn footer_keys() -> &'static str {
-        " Esc, l close  j/k step "
+        " Esc, l close  j/k step  ? keys "
     }
 
     pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer) {
+        if self.help {
+            key_map(&KEYS, area, buf);
+            return;
+        }
         let text = self.transcript.text();
         let offset = self
             .picked
@@ -160,5 +182,19 @@ mod tests {
             Some(1)
         );
         assert_eq!(picked.refreshed(&steps(&["a", "b"])).picked, None);
+    }
+
+    #[test]
+    fn question_mark_opens_the_key_map_which_swallows_other_keys_until_it_is_closed() {
+        let open = press(screen(&["a", "b"]), &[KeyCode::Char('?')]);
+        assert!(open.help);
+        let still_open = press(open.clone(), &[KeyCode::Char('k'), KeyCode::Char('l')]);
+        assert!(still_open.help);
+        assert_eq!(still_open.picked, None);
+        for close in [KeyCode::Char('?'), KeyCode::Esc] {
+            let (closed, request) = open.clone().key(close);
+            assert!(!closed.help);
+            assert_eq!(request, None);
+        }
     }
 }

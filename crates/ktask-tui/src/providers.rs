@@ -6,6 +6,22 @@ use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
+use crate::widgets::key_map;
+
+const LIST_KEYS: [(&str, &str); 4] = [
+    ("j, Down / k, Up", "select the next / previous provider"),
+    ("Enter", "show the selected provider's definition"),
+    ("?", "show or hide this key map"),
+    ("Esc", "close this key map, or go back to the queue"),
+];
+
+const DEFINITION_KEYS: [(&str, &str); 4] = [
+    ("c", "check the provider is ready to use"),
+    ("j, Down / k, Up", "scroll the definition"),
+    ("?", "show or hide this key map"),
+    ("Esc", "close this key map, or go back to the list"),
+];
+
 /// The catalogue, first as a list and then as one selected definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProvidersScreen {
@@ -14,6 +30,7 @@ pub(crate) struct ProvidersScreen {
     showing: bool,
     offset: usize,
     check: Option<ProviderCheck>,
+    help: bool,
 }
 
 impl ProvidersScreen {
@@ -25,48 +42,64 @@ impl ProvidersScreen {
             showing: false,
             offset: 0,
             check: None,
+            help: false,
         }
     }
-    /// Applies a key: Enter shows the selected definition, Esc returns to the list or queue.
+    /// Applies a key: `?` shows or hides the key map, Enter shows the selected definition, Esc
+    /// returns to the list or queue.
     pub(crate) fn key(mut self, key: KeyCode) -> (Self, bool, Option<String>) {
-        match (self.showing, key) {
-            (_, KeyCode::Esc) if self.showing => {
-                self.showing = false;
-                self.offset = 0;
-                (self, false, None)
-            }
-            (_, KeyCode::Esc) => (self, true, None),
-            (false, KeyCode::Char('j') | KeyCode::Down) => {
+        if self.help {
+            self.help = !matches!(key, KeyCode::Esc | KeyCode::Char('?'));
+            return (self, false, None);
+        }
+        if key == KeyCode::Char('?') {
+            self.help = true;
+            return (self, false, None);
+        }
+        if self.showing {
+            self.definition_key(key)
+        } else {
+            self.list_key(key)
+        }
+    }
+
+    fn list_key(mut self, key: KeyCode) -> (Self, bool, Option<String>) {
+        match key {
+            KeyCode::Esc => return (self, true, None),
+            KeyCode::Char('j') | KeyCode::Down => {
                 self.selected = (self.selected + 1).min(self.providers.len().saturating_sub(1));
-                (self, false, None)
             }
-            (false, KeyCode::Char('k') | KeyCode::Up) => {
+            KeyCode::Char('k') | KeyCode::Up => {
                 self.selected = self.selected.saturating_sub(1);
-                (self, false, None)
             }
-            (false, KeyCode::Enter) => {
+            KeyCode::Enter => {
                 self.showing = true;
                 self.offset = 0;
                 self.check = None;
-                (self, false, None)
             }
-            (true, KeyCode::Char('c')) => {
+            _ => {}
+        }
+        (self, false, None)
+    }
+
+    fn definition_key(mut self, key: KeyCode) -> (Self, bool, Option<String>) {
+        match key {
+            KeyCode::Esc => {
+                self.showing = false;
+                self.offset = 0;
+            }
+            KeyCode::Char('c') => {
                 let name = self
                     .providers
                     .get(self.selected)
                     .map(|provider| provider.name.clone());
-                (self, false, name)
+                return (self, false, name);
             }
-            (true, KeyCode::Char('j') | KeyCode::Down) => {
-                self.offset = self.offset.saturating_add(1);
-                (self, false, None)
-            }
-            (true, KeyCode::Char('k') | KeyCode::Up) => {
-                self.offset = self.offset.saturating_sub(1);
-                (self, false, None)
-            }
-            _ => (self, false, None),
+            KeyCode::Char('j') | KeyCode::Down => self.offset = self.offset.saturating_add(1),
+            KeyCode::Char('k') | KeyCode::Up => self.offset = self.offset.saturating_sub(1),
+            _ => {}
         }
+        (self, false, None)
     }
     /// Keeps a completed check below the selected provider definition.
     #[must_use]
@@ -78,13 +111,22 @@ impl ProvidersScreen {
     /// The footer appropriate to the list or definition view.
     pub(crate) fn footer_keys(&self) -> &'static str {
         if self.showing {
-            " c check · j/k scroll · Esc list "
+            " c check · j/k scroll · ? keys · Esc list "
         } else {
-            " j/k select · Enter show · Esc back "
+            " j/k select · Enter show · ? keys · Esc back "
         }
     }
     /// Draws the list or the full selected definition.
     pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer) {
+        if self.help {
+            let keys = if self.showing {
+                &DEFINITION_KEYS
+            } else {
+                &LIST_KEYS
+            };
+            key_map(keys, area, buf);
+            return;
+        }
         Paragraph::new(self.lines().join("\n"))
             .wrap(Wrap { trim: false })
             .render(area, buf);

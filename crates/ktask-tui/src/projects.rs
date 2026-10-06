@@ -20,10 +20,11 @@ const PROJECTS_KEYS: &str = " j, k select · Enter switch · d forget · Esc can
 const FORGET_KEYS: &str = " y forget · n, Esc keep it ";
 
 /// The keys shown by `?` while the picker is open, not asking to forget a project.
-const PICKER_KEYS: [(&str, &str); 4] = [
+const PICKER_KEYS: [(&str, &str); 5] = [
     ("j, k", "select the next or previous project"),
     ("Enter", "switch to the selected project"),
     ("d", "forget the selected project, after asking"),
+    ("?", "show or hide this key map"),
     ("Esc", "cancel"),
 ];
 
