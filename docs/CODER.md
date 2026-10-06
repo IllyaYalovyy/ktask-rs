@@ -64,4 +64,13 @@ is a defect.
 
 ## Report
 
-What changed, how it was verified (commands and their result), and what is not done.
+What changed, how it was verified (commands and their result), and what is not done. The
+project's check command runs on the commit you report, after the last change, and the
+report quotes its final lines; "tests passed" without them is not evidence.
+
+## Recorded provider output
+
+A test of a provider replays a recording of the real program, never text written by hand.
+When a scenario cannot be recorded on demand (a refused rate limit, a disconnected stream),
+derive the fixture from a real recording by changing one field, and name the file and its
+first line as derived with that one change.
