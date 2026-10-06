@@ -254,10 +254,10 @@ fn refresh_output<A: Application>(app: App, application: &A) -> Result<App, Stri
     else {
         return Ok(app);
     };
-    let text = application
+    let steps = application
         .load_output(id)
         .map_err(|error| error.to_string())?;
-    Ok(update(app, Event::OutputLoaded(text)))
+    Ok(update(app, Event::OutputLoaded(steps)))
 }
 
 /// What handling one `wake` produces: `None` when the loop should stop; otherwise `app` to

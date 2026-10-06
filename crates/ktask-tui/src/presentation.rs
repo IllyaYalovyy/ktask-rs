@@ -1,10 +1,14 @@
 //! The shared words and indicators that ktask interfaces use to present status facts.
 
+mod transcript;
+
 use jiff::Timestamp;
 use ktask_core::{
     AttemptOutcome, DoneMark, LimitWait, LimitWarning, OutputActivity, ProviderCheck,
     ProviderCheckKind, StepLine, TaskStatus, Usage,
 };
+
+pub use transcript::{Transcript, step_heading};
 
 /// The operator-facing label for one provider readiness fact.
 #[must_use]

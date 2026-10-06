@@ -158,16 +158,21 @@ fn output_follows_live_bytes_and_retains_safe_whole_attempts() -> Result<()> {
     let mut reader = output.stdout.take().expect("piped stdout");
     let (sent, received) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut bytes = [0_u8; 10];
-        let read = reader.read(&mut bytes);
-        let _ = sent.send((read, bytes));
+        let mut seen = Vec::new();
+        let mut chunk = [0_u8; 64];
+        while !String::from_utf8_lossy(&seen).contains("live line") {
+            match reader.read(&mut chunk) {
+                Ok(0) | Err(_) => return,
+                Ok(read) => seen.extend_from_slice(&chunk[..read]),
+            }
+        }
+        let _ = sent.send(());
         let mut rest = Vec::new();
         let _ = reader.read_to_end(&mut rest);
     });
-    let (read, bytes) = received
+    received
         .recv_timeout(Duration::from_secs(1))
         .map_err(|_| "output --follow did not print within one second")?;
-    assert!(String::from_utf8_lossy(&bytes[..read?]).contains("live line"));
     std::fs::write(&gate, "go\n")?;
     assert!(!run.wait()?.success());
     assert!(output.wait()?.success());
@@ -211,7 +216,7 @@ fn output_renders_a_recorded_claude_stream_and_raw_keeps_the_wire_format() -> Re
     assert_eq!(shown.code, Some(0), "{}", shown.stderr);
     assert_eq!(
         shown.stdout,
-        "assistant: KTASK_RECORDING_SUCCESS\nresult: KTASK_RECORDING_SUCCESS"
+        "--- implementation · claude · claude-haiku-4-5-20251001 ---\nassistant: KTASK_RECORDING_SUCCESS\nresult: KTASK_RECORDING_SUCCESS"
     );
     assert!(!shown.stdout.contains("{\"type\""), "{}", shown.stdout);
     assert!(!shown.stdout.contains("\"message\""), "{}", shown.stdout);
@@ -242,7 +247,10 @@ fn output_renders_a_recorded_codex_stream_and_raw_keeps_the_wire_format() -> Res
 
     let shown = fixture.run(&["output", "1"])?;
     assert_eq!(shown.code, Some(0), "{}", shown.stderr);
-    assert_eq!(shown.stdout, "turn started\nassistant: OK");
+    assert_eq!(
+        shown.stdout,
+        "--- implementation · codex · gpt-5-codex ---\nturn started\nassistant: OK"
+    );
     assert!(!shown.stdout.contains("{\"type\""), "{}", shown.stdout);
     assert!(!shown.stdout.contains("agent_message"), "{}", shown.stdout);
 

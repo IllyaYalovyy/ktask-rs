@@ -23,8 +23,8 @@ pub(super) fn try_output(app: App, event: Event) -> Tried {
                 },
             })
         }
-        Event::OutputLoaded(text) => handled(App {
-            output: app.output.map(|screen| screen.refreshed(text)),
+        Event::OutputLoaded(steps) => handled(App {
+            output: app.output.map(|screen| screen.refreshed(&steps)),
             ..app
         }),
         other => Tried::Unhandled(Box::new(app), Box::new(other)),

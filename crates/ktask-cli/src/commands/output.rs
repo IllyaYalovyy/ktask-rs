@@ -1,12 +1,14 @@
 //! `ktask-rs output`: retained provider bytes for one task attempt.
 
 use std::io::Write;
-use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use ktask_adapters::{FileRunLock, SystemClock, builtin_providers};
-use ktask_core::{ProviderParser, RunLock, TaskId, TaskStatus};
+use ktask_adapters::{
+    FileAttemptOutput, FileRunLock, SqliteJournal, SystemClock, builtin_providers,
+};
+use ktask_core::{ProviderView, RunLock, TaskId, TaskStatus, TranscriptError};
+use ktask_tui::presentation::Transcript;
 
 use crate::context::{
     merge_project, open_journal, open_registry, outputs_dir_file, resolve, run_lock_file,
@@ -27,17 +29,25 @@ pub(crate) struct Args {
     /// Print the provider stream exactly as it was received
     #[arg(long)]
     pub raw: bool,
+    /// Print only this agent step's transcript, such as implementation or review
+    #[arg(long, value_name = "NAME")]
+    pub step: Option<String>,
     /// Work on this registered project instead of the one the current directory is in
     #[arg(long, value_name = "NAME")]
     project: Option<String>,
 }
 
-/// The selected attempt's output file and whether it is still receiving bytes.
+/// The selected attempt: where its steps' output is read from and whether it is still
+/// receiving bytes.
 struct SelectedAttempt {
-    path: PathBuf,
+    journal: SqliteJournal,
     lock: FileRunLock,
+    providers: Vec<ProviderView>,
+    output: FileAttemptOutput,
+    task: TaskId,
+    number: u32,
+    step: Option<String>,
     running: bool,
-    parser: ProviderParser,
 }
 
 pub(crate) fn run(
@@ -50,7 +60,7 @@ pub(crate) fn run(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Resolves the selected attempt and its append-only output file.
+/// Resolves the selected attempt and its append-only output files.
 fn select(args: &Args, project: Option<&str>) -> Result<SelectedAttempt, Failure> {
     let registry = open_registry()?;
     let selected = merge_project(project, args.project.as_deref())?;
@@ -68,34 +78,44 @@ fn select(args: &Args, project: Option<&str>) -> Result<SelectedAttempt, Failure
         .iter()
         .find(|entry| entry.task == task)
         .is_some_and(|entry| entry.attempt.number == number && entry.status == TaskStatus::Running);
-    let parser = provider_parser(
-        &settings,
-        ktask_core::attempt_provider(&entries, task, number),
-    )?;
-    let path = outputs_dir_file(&project)?.join(format!("{}-{number}.log", args.id));
-    Ok(SelectedAttempt {
-        path,
+    let providers = ktask_core::show_providers(&settings, &builtin_providers())
+        .map_err(|error| error.to_string())?;
+    let selected = SelectedAttempt {
+        journal,
         lock,
+        providers,
+        output: FileAttemptOutput::new(outputs_dir_file(&project)?),
+        task,
+        number,
+        step: args.step.clone(),
         running: following_running_attempt,
-        parser,
-    })
+    };
+    selected.transcripts()?;
+    Ok(selected)
 }
 
-/// Finds the parser the attempt's provider was configured with. Attempts with no agent step
-/// have no structured stream to decode.
-fn provider_parser(
-    settings: &ktask_core::Settings,
-    provider: Option<&str>,
-) -> Result<ProviderParser, Failure> {
-    let Some(provider) = provider else {
-        return Ok(ProviderParser::Plain);
-    };
-    ktask_core::show_providers(settings, &builtin_providers())
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .find(|candidate| candidate.name == provider)
-        .map(|candidate| candidate.definition.parser)
-        .ok_or_else(|| format!("cannot find output parser for provider {provider:?}").into())
+impl SelectedAttempt {
+    /// The attempt's transcripts as they are now: steps that began since the last call are
+    /// included.
+    fn transcripts(&self) -> Result<Vec<ktask_core::StepTranscript>, Failure> {
+        let entries = ktask_core::status(&self.journal, &SystemClock, &self.lock)
+            .map_err(|e| e.to_string())?;
+        ktask_core::attempt_transcripts(
+            &entries,
+            &self.providers,
+            &self.output,
+            self.task,
+            self.number,
+            self.step.as_deref(),
+        )
+        .map_err(|error| Failure {
+            code: match error {
+                TranscriptError::UnknownStep(..) => 2,
+                TranscriptError::Unavailable(_) => 1,
+            },
+            message: error.to_string(),
+        })
+    }
 }
 
 /// Writes the output already present, and appended bytes while this selected attempt runs.
@@ -124,25 +144,16 @@ fn write_output(
     }
 }
 
-/// Reads and, unless raw output was requested, turns the complete retained stream into entries.
+/// The complete retained output: each step's bytes in the order the steps ran when raw output
+/// was requested; otherwise each step's readable entries under its heading.
 fn rendered_output(selected: &SelectedAttempt, raw: bool) -> Result<Vec<u8>, Failure> {
-    let bytes = match std::fs::read(&selected.path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => {
-            return Err(format!(
-                "cannot read attempt output {}: {error}",
-                selected.path.display()
-            )
-            .into());
-        }
-    };
+    let transcripts = selected.transcripts()?;
     Ok(if raw {
-        bytes
+        transcripts
+            .iter()
+            .flat_map(|transcript| transcript.raw().iter().copied())
+            .collect()
     } else {
-        ktask_core::sanitize_output(
-            ktask_core::render_provider_output(selected.parser, &bytes).as_bytes(),
-        )
-        .into_bytes()
+        Transcript::new(&transcripts).text().as_bytes().to_vec()
     })
 }

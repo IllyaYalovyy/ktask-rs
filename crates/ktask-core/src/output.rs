@@ -8,6 +8,12 @@ use crate::{StatusEntry, TaskId};
 
 mod claude;
 mod codex;
+mod transcript;
+
+pub use transcript::{
+    StepOutputStore, StepTranscript, TranscriptError, attempt_output_file_prefix,
+    attempt_transcripts, step_output_file_name,
+};
 
 /// Port: when an attempt's append-only provider output was last written.
 ///
@@ -76,27 +82,14 @@ pub fn select_attempt(
     }
 }
 
-/// The last agent provider that wrote retained output for an attempt. A completed command step
-/// may be current after it, so its provider alone is not enough to identify the stream format.
-#[must_use]
-pub fn attempt_provider(entries: &[StatusEntry], task: TaskId, number: u32) -> Option<&str> {
-    let attempt = entries
-        .iter()
-        .find(|entry| entry.task == task)
-        .and_then(|entry| {
-            if entry.attempt.number == number {
-                Some(&entry.attempt)
-            } else {
-                entry.history.iter().find(|older| older.number == number)
-            }
-        })?;
-    attempt.provider.as_deref().or_else(|| {
-        attempt
-            .steps
-            .iter()
-            .rev()
-            .find_map(|step| step.provider.as_deref())
-    })
+/// The recorded attempt `number` of `task`, current or earlier.
+fn find_attempt(entries: &[StatusEntry], task: TaskId, number: u32) -> Option<&crate::AttemptLine> {
+    let entry = entries.iter().find(|entry| entry.task == task)?;
+    if entry.attempt.number == number {
+        Some(&entry.attempt)
+    } else {
+        entry.history.iter().find(|older| older.number == number)
+    }
 }
 
 /// Makes output safe to draw: control bytes are visible, carriage returns become newlines,
@@ -149,9 +142,7 @@ mod tests {
 
     use crate::{AttemptLine, AttemptOutcome, StatusEntry, TaskStatus};
 
-    use super::{
-        OutputError, attempt_provider, render_provider_output, sanitize_output, select_attempt,
-    };
+    use super::{OutputError, render_provider_output, sanitize_output, select_attempt};
 
     #[test]
     fn controls_invalid_utf8_and_long_lines_are_safe_and_bounded() {
@@ -204,37 +195,6 @@ mod tests {
         assert_eq!(
             render_provider_output(crate::ProviderParser::Plain, b"echoed\ntext"),
             "echoed\ntext"
-        );
-    }
-
-    #[test]
-    fn output_parser_uses_the_last_agent_step_after_a_command_step_finishes() {
-        let mut finished = attempt(1);
-        finished.steps = vec![crate::StepLine {
-            step: "implementation".to_owned(),
-            provider: Some("claude".to_owned()),
-            model: None,
-            session: None,
-            time_spent: Duration::ZERO,
-            outcome: AttemptOutcome::Passed,
-            reason: None,
-            waiting_for: None,
-            limit_wait: None,
-            limit_warning: None,
-            usage: crate::Usage::default(),
-        }];
-        finished.provider = None;
-        let entries = vec![StatusEntry {
-            task: crate::TaskId(8),
-            title: String::new(),
-            status: TaskStatus::Done,
-            attempt: finished,
-            history: vec![],
-            done_by_user: None,
-        }];
-        assert_eq!(
-            attempt_provider(&entries, crate::TaskId(8), 1),
-            Some("claude")
         );
     }
 }

@@ -147,7 +147,7 @@ impl Application for PanicTestApplication {
         Err(NOT_SUPPORTED.to_owned())
     }
 
-    fn load_output(&self, _id: TaskId) -> Result<String, String> {
+    fn load_output(&self, _id: TaskId) -> Result<Vec<ktask_core::StepTranscript>, String> {
         Err(NOT_SUPPORTED.to_owned())
     }
 }

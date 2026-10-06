@@ -12,8 +12,8 @@ use ktask_adapters::{
 };
 use ktask_core::{
     AcknowledgeError, AddError, AnswerError, CancelError, DoneError, Import, JournalError,
-    Placement, Project, ProviderCheck, ProviderParser, ProviderView, QueueView, RegistryError,
-    RetryError, RunReport, SetSettingError, SettingView, SettingsError, TaskDraft, TaskId,
+    Placement, Project, ProviderCheck, ProviderView, QueueView, RegistryError, RetryError,
+    RunReport, SetSettingError, SettingView, SettingsError, StepTranscript, TaskDraft, TaskId,
 };
 use ktask_tui::Application;
 
@@ -314,49 +314,23 @@ impl Application for CliApplication {
         }
     }
 
-    fn load_output(&self, id: TaskId) -> Result<String, Self::OutputError> {
+    fn load_output(&self, id: TaskId) -> Result<Vec<StepTranscript>, Self::OutputError> {
         self.with_context(|context| {
             let entries = ktask_core::status(&context.journal, &SystemClock, &context.lock)
                 .map_err(|error| error.to_string())?;
             let attempt = ktask_core::select_attempt(&entries, id, None)
                 .map_err(|error| error.to_string())?;
-            let parser = output_parser(
-                &context.settings_store,
-                ktask_core::attempt_provider(&entries, id, attempt),
-            )?;
-            let path = outputs_dir_file(&context.project)
-                .map_err(|error| error.clone())?
-                .join(format!("{}-{attempt}.log", id.0));
-            match std::fs::read(&path) {
-                Ok(bytes) => Ok(ktask_core::sanitize_output(
-                    ktask_core::render_provider_output(parser, &bytes).as_bytes(),
-                )),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-                Err(error) => Err(format!(
-                    "cannot read attempt output {}: {error}",
-                    path.display()
-                )),
-            }
+            let settings = ktask_core::SettingsStore::load(&context.settings_store)
+                .map_err(|error| error.to_string())?;
+            let providers = ktask_core::show_providers(&settings, &builtin_providers())
+                .map_err(|error| error.to_string())?;
+            let output = FileAttemptOutput::new(
+                outputs_dir_file(&context.project).map_err(|error| error.clone())?,
+            );
+            ktask_core::attempt_transcripts(&entries, &providers, &output, id, attempt, None)
+                .map_err(|error| error.to_string())
         })
     }
-}
-
-/// The configured parser for the provider that wrote this attempt's retained output.
-fn output_parser(
-    settings_store: &TomlSettingsStore,
-    provider: Option<&str>,
-) -> Result<ProviderParser, String> {
-    let Some(provider) = provider else {
-        return Ok(ProviderParser::Plain);
-    };
-    let settings =
-        ktask_core::SettingsStore::load(settings_store).map_err(|error| error.to_string())?;
-    ktask_core::show_providers(&settings, &builtin_providers())
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .find(|candidate| candidate.name == provider)
-        .map(|candidate| candidate.definition.parser)
-        .ok_or_else(|| format!("cannot find output parser for provider {provider:?}"))
 }
 
 /// Wires every action the screen can take to the active project's journal, run lock and

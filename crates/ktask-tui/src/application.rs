@@ -204,10 +204,11 @@ pub trait Application {
     /// already in progress, or no project open yet.
     fn start_run(&self) -> Result<RunReport, Self::RunRefusal>;
 
-    /// The selected task's latest attempt output, sanitised for a terminal frame.
+    /// The selected task's latest attempt output, one transcript per agent step.
     ///
     /// # Errors
     ///
     /// Returns the application's output-read error when the task or its state cannot be read.
-    fn load_output(&self, id: TaskId) -> Result<String, Self::OutputError>;
+    fn load_output(&self, id: TaskId)
+    -> Result<Vec<ktask_core::StepTranscript>, Self::OutputError>;
 }

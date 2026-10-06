@@ -108,10 +108,10 @@ fn handle_output_action(
     let Some(id) = app.output_requested.take() else {
         return Ok((app, false));
     };
-    let text = application
+    let steps = application
         .load_output(id)
         .map_err(|error| error.to_string())?;
-    Ok((update(app, Event::OutputLoaded(text)), false))
+    Ok((update(app, Event::OutputLoaded(steps)), false))
 }
 
 /// Loads the project picker, switches to the project `app` has pending, or forgets the one its
@@ -412,8 +412,8 @@ mod tests {
             self.start_run.borrow_mut().remove(0)
         }
 
-        fn load_output(&self, _id: TaskId) -> Result<String, Failure> {
-            Ok(String::new())
+        fn load_output(&self, _id: TaskId) -> Result<Vec<ktask_core::StepTranscript>, Failure> {
+            Ok(Vec::new())
         }
     }
 
