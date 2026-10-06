@@ -144,8 +144,8 @@ pub enum Event {
     /// The registration screen's submission registered nothing, for this reason: it stays
     /// open, keeps what was typed, and shows it.
     RegistrationFailed(String),
-    /// The selected task's freshly read output, one transcript per agent step.
-    OutputLoaded(Vec<ktask_core::StepTranscript>),
+    /// The selected task's freshly read output of one attempt.
+    OutputLoaded(crate::LoadedOutput),
 }
 
 /// The app after `event` happened to `app`. `Loaded` and a first Ctrl-C are handled here,

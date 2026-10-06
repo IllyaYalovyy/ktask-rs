@@ -108,10 +108,14 @@ fn handle_output_action(
     let Some(id) = app.output_requested.take() else {
         return Ok((app, false));
     };
-    let steps = application
-        .load_output(id)
+    let attempt = app
+        .output
+        .as_ref()
+        .and_then(crate::output_screen::OutputScreen::wanted_attempt);
+    let loaded = application
+        .load_output(id, attempt)
         .map_err(|error| error.to_string())?;
-    Ok((update(app, Event::OutputLoaded(steps)), false))
+    Ok((update(app, Event::OutputLoaded(loaded)), false))
 }
 
 /// Loads the project picker, switches to the project `app` has pending, or forgets the one its
@@ -412,8 +416,16 @@ mod tests {
             self.start_run.borrow_mut().remove(0)
         }
 
-        fn load_output(&self, _id: TaskId) -> Result<Vec<ktask_core::StepTranscript>, Failure> {
-            Ok(Vec::new())
+        fn load_output(
+            &self,
+            _id: TaskId,
+            _attempt: Option<u32>,
+        ) -> Result<crate::LoadedOutput, Failure> {
+            Ok(crate::LoadedOutput {
+                attempt: 1,
+                attempts: vec![1],
+                steps: Vec::new(),
+            })
         }
     }
 

@@ -43,8 +43,8 @@ pub use journal::{
 pub use lock::{RunLock, RunLockError};
 pub use output::{
     AttemptOutput, NoAttemptOutput, OutputError, StepOutputStore, StepTranscript, TranscriptError,
-    attempt_output_file_prefix, attempt_transcripts, render_provider_output, sanitize_output,
-    select_attempt, step_output_file_name,
+    attempt_numbers, attempt_output_file_prefix, attempt_transcripts, render_provider_output,
+    sanitize_output, select_attempt, step_output_file_name,
 };
 pub use project::{Project, ProjectRegistry, RegistryError, list_projects};
 pub use provider::{

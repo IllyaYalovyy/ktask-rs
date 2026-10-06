@@ -247,17 +247,17 @@ fn task_running(app: &App) -> bool {
 /// this only reads it, so an independently started run is unaffected by opening or closing
 /// the screen.
 fn refresh_output<A: Application>(app: App, application: &A) -> Result<App, String> {
-    let Some(id) = app
+    let Some((id, attempt)) = app
         .output
         .as_ref()
-        .map(crate::output_screen::OutputScreen::task)
+        .map(|screen| (screen.task(), screen.wanted_attempt()))
     else {
         return Ok(app);
     };
-    let steps = application
-        .load_output(id)
+    let loaded = application
+        .load_output(id, attempt)
         .map_err(|error| error.to_string())?;
-    Ok(update(app, Event::OutputLoaded(steps)))
+    Ok(update(app, Event::OutputLoaded(loaded)))
 }
 
 /// What handling one `wake` produces: `None` when the loop should stop; otherwise `app` to

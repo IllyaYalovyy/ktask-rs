@@ -127,6 +127,18 @@ pub fn attempt_label(number: u32) -> String {
     }
 }
 
+/// The line that heads the output screen: which attempt's output it shows, numbered as the
+/// queue screen numbers its attempt lines. `number` 0 is the synthetic attempt of a gate stop
+/// before any attempt began.
+#[must_use]
+pub fn output_attempt_heading(number: u32, latest: bool) -> String {
+    match (number, latest) {
+        (0, _) => "no attempt has begun".to_owned(),
+        (_, true) => format!("attempt {number} (latest)"),
+        (_, false) => format!("attempt {number} (earlier)"),
+    }
+}
+
 /// The common session suffix for a status line.
 #[must_use]
 pub fn session_suffix(session: Option<&str>) -> String {
@@ -248,6 +260,14 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn the_output_heading_names_the_attempt_as_the_queue_lines_do() {
+        assert_eq!(output_attempt_heading(2, true), "attempt 2 (latest)");
+        assert_eq!(output_attempt_heading(1, false), "attempt 1 (earlier)");
+        assert_eq!(output_attempt_heading(0, true), "no attempt has begun");
+        assert!(attempt_label(2).starts_with("attempt 2"));
+    }
 
     #[test]
     fn the_cli_and_tui_get_the_same_live_activity_words_from_one_fact() {

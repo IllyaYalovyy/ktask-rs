@@ -1,16 +1,18 @@
 //! The read-only, live provider-output screen.
 
-use ktask_core::{StepTranscript, TaskId};
+use ktask_core::TaskId;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::KeyCode;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::widgets::{Paragraph, Widget};
 
-use crate::presentation::Transcript;
+use crate::LoadedOutput;
+use crate::presentation::{Transcript, output_attempt_heading};
 use crate::widgets::key_map;
 
-const KEYS: [(&str, &str); 4] = [
+const KEYS: [(&str, &str); 5] = [
     ("j, Down / k, Up", "move to the next / previous step"),
+    ("[ / ]", "show the previous / next attempt"),
     ("l", "close the output"),
     ("?", "show or hide this key map"),
     ("Esc", "close this key map, or the output"),
@@ -20,6 +22,8 @@ const KEYS: [(&str, &str); 4] = [
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Request {
     Close,
+    /// Load the attempt [`OutputScreen::wanted_attempt`] now names.
+    Reload,
 }
 
 /// Retained output for one selected task. The application refreshes the transcript while the
@@ -27,9 +31,15 @@ pub(crate) enum Request {
 ///
 /// While no step is picked the screen follows the end of the output, so a running step is
 /// always in view. Picking an earlier step puts that step's heading at the top of the screen.
+///
+/// The screen follows the task's latest attempt until `[` moves to an earlier one; `]` back to
+/// the latest follows it again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OutputScreen {
     task: TaskId,
+    wanted: Option<u32>,
+    shown: Option<u32>,
+    attempts: Vec<u32>,
     transcript: Transcript,
     picked: Option<usize>,
     help: bool,
@@ -39,6 +49,9 @@ impl OutputScreen {
     pub(crate) fn new(task: TaskId) -> Self {
         Self {
             task,
+            wanted: None,
+            shown: None,
+            attempts: Vec::new(),
             transcript: Transcript::default(),
             picked: None,
             help: false,
@@ -47,8 +60,14 @@ impl OutputScreen {
     pub(crate) fn task(&self) -> TaskId {
         self.task
     }
-    pub(crate) fn refreshed(mut self, steps: &[StepTranscript]) -> Self {
-        self.transcript = Transcript::new(steps);
+    /// The attempt to load: `None` for the latest.
+    pub(crate) fn wanted_attempt(&self) -> Option<u32> {
+        self.wanted
+    }
+    pub(crate) fn refreshed(mut self, loaded: &LoadedOutput) -> Self {
+        self.shown = Some(loaded.attempt);
+        self.attempts.clone_from(&loaded.attempts);
+        self.transcript = Transcript::new(&loaded.steps);
         self.picked = self
             .picked
             .filter(|&index| index + 1 < self.transcript.steps());
@@ -65,10 +84,28 @@ impl OutputScreen {
                 (self, None)
             }
             KeyCode::Esc | KeyCode::Char('l') => (self, Some(Request::Close)),
+            KeyCode::Char('[') => self.shifted_attempt(-1),
+            KeyCode::Char(']') => self.shifted_attempt(1),
             KeyCode::Char('j') | KeyCode::Down => (self.moved(1), None),
             KeyCode::Char('k') | KeyCode::Up => (self.moved(-1), None),
             _ => (self, None),
         }
+    }
+
+    /// Moves to the neighbouring attempt, `1` for the next and `-1` for the previous, when there
+    /// is one. The latest attempt is followed, not pinned.
+    fn shifted_attempt(mut self, direction: isize) -> (Self, Option<Request>) {
+        let target = self
+            .shown
+            .and_then(|shown| self.attempts.iter().position(|&number| number == shown))
+            .and_then(|at| self.attempts.get(at.checked_add_signed(direction)?))
+            .copied();
+        let Some(target) = target else {
+            return (self, None);
+        };
+        self.wanted = (self.attempts.last() != Some(&target)).then_some(target);
+        self.picked = None;
+        (self, Some(Request::Reload))
     }
 
     /// Moves one step towards the end (`1`) or the start (`-1`). The last step is the one the
@@ -87,7 +124,7 @@ impl OutputScreen {
     }
 
     pub(crate) fn footer_keys() -> &'static str {
-        " Esc, l close  j/k step  ? keys "
+        " Esc, l close  j/k step  [/] attempt  ? keys "
     }
 
     pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer) {
@@ -95,6 +132,14 @@ impl OutputScreen {
             key_map(&KEYS, area, buf);
             return;
         }
+        let Some(shown) = self.shown else {
+            Paragraph::new("Waiting for provider output…").render(area, buf);
+            return;
+        };
+        let heading = output_attempt_heading(shown, self.attempts.last() == Some(&shown));
+        let [heading_row, area] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+        Paragraph::new(heading).render(heading_row, buf);
         let text = self.transcript.text();
         let offset = self
             .picked
@@ -129,8 +174,16 @@ mod tests {
             .collect()
     }
 
+    fn loaded(attempt: u32, attempts: &[u32], names: &[&str]) -> LoadedOutput {
+        LoadedOutput {
+            attempt,
+            attempts: attempts.to_vec(),
+            steps: steps(names),
+        }
+    }
+
     fn screen(names: &[&str]) -> OutputScreen {
-        OutputScreen::new(TaskId(1)).refreshed(&steps(names))
+        OutputScreen::new(TaskId(1)).refreshed(&loaded(1, &[1], names))
     }
 
     fn press(mut screen: OutputScreen, keys: &[KeyCode]) -> OutputScreen {
@@ -177,11 +230,11 @@ mod tests {
         assert_eq!(
             picked
                 .clone()
-                .refreshed(&steps(&["a", "b", "c", "d"]))
+                .refreshed(&loaded(1, &[1], &["a", "b", "c", "d"]))
                 .picked,
             Some(1)
         );
-        assert_eq!(picked.refreshed(&steps(&["a", "b"])).picked, None);
+        assert_eq!(picked.refreshed(&loaded(1, &[1], &["a", "b"])).picked, None);
     }
 
     #[test]
@@ -196,5 +249,33 @@ mod tests {
             assert!(!closed.help);
             assert_eq!(request, None);
         }
+    }
+
+    #[test]
+    fn brackets_step_to_the_neighbouring_attempt_and_the_latest_is_followed_not_pinned() {
+        let latest = OutputScreen::new(TaskId(1)).refreshed(&loaded(3, &[1, 2, 3], &["a"]));
+        assert_eq!(latest.wanted_attempt(), None);
+        assert_eq!(
+            latest.clone().key(KeyCode::Char(']')),
+            (latest.clone(), None)
+        );
+
+        let (earlier, request) = latest.key(KeyCode::Char('['));
+        assert_eq!(request, Some(Request::Reload));
+        assert_eq!(earlier.wanted_attempt(), Some(2));
+
+        let earlier = earlier.refreshed(&loaded(2, &[1, 2, 3], &["a"]));
+        let (first, _) = earlier.clone().key(KeyCode::Char('['));
+        assert_eq!(first.wanted_attempt(), Some(1));
+        let first = first.refreshed(&loaded(1, &[1, 2, 3], &["a"]));
+        assert_eq!(first.clone().key(KeyCode::Char('[')), (first.clone(), None));
+
+        let (back_to_two, _) = first.key(KeyCode::Char(']'));
+        assert_eq!(back_to_two.wanted_attempt(), Some(2));
+        let (back_to_latest, request) = back_to_two
+            .refreshed(&loaded(2, &[1, 2, 3], &["a"]))
+            .key(KeyCode::Char(']'));
+        assert_eq!(request, Some(Request::Reload));
+        assert_eq!(back_to_latest.wanted_attempt(), None);
     }
 }

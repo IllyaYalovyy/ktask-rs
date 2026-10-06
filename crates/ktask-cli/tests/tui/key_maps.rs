@@ -128,6 +128,7 @@ fn question_mark_opens_a_key_map_on_the_queue_the_providers_the_picker_and_the_o
         &mut terminal,
         "output",
         &[
+            "[ / ]            show the previous / next attempt",
             "l                close the output",
             "Esc              close this key map, or the output",
         ],

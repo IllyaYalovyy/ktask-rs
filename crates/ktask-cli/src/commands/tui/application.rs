@@ -13,9 +13,9 @@ use ktask_adapters::{
 use ktask_core::{
     AcknowledgeError, AddError, AnswerError, CancelError, DoneError, Import, JournalError,
     Placement, Project, ProviderCheck, ProviderView, QueueView, RegistryError, RetryError,
-    RunReport, SetSettingError, SettingView, SettingsError, StepTranscript, TaskDraft, TaskId,
+    RunReport, SetSettingError, SettingView, SettingsError, TaskDraft, TaskId,
 };
-use ktask_tui::Application;
+use ktask_tui::{Application, LoadedOutput};
 
 use crate::context::{
     journal_file, open_settings_store, outputs_dir_file, run_lock_file, state_root,
@@ -314,11 +314,15 @@ impl Application for CliApplication {
         }
     }
 
-    fn load_output(&self, id: TaskId) -> Result<Vec<StepTranscript>, Self::OutputError> {
+    fn load_output(
+        &self,
+        id: TaskId,
+        requested: Option<u32>,
+    ) -> Result<LoadedOutput, Self::OutputError> {
         self.with_context(|context| {
             let entries = ktask_core::status(&context.journal, &SystemClock, &context.lock)
                 .map_err(|error| error.to_string())?;
-            let attempt = ktask_core::select_attempt(&entries, id, None)
+            let attempt = ktask_core::select_attempt(&entries, id, requested)
                 .map_err(|error| error.to_string())?;
             let settings = ktask_core::SettingsStore::load(&context.settings_store)
                 .map_err(|error| error.to_string())?;
@@ -327,8 +331,14 @@ impl Application for CliApplication {
             let output = FileAttemptOutput::new(
                 outputs_dir_file(&context.project).map_err(|error| error.clone())?,
             );
-            ktask_core::attempt_transcripts(&entries, &providers, &output, id, attempt, None)
-                .map_err(|error| error.to_string())
+            let steps =
+                ktask_core::attempt_transcripts(&entries, &providers, &output, id, attempt, None)
+                    .map_err(|error| error.to_string())?;
+            Ok(LoadedOutput {
+                attempt,
+                attempts: ktask_core::attempt_numbers(&entries, id),
+                steps,
+            })
         })
     }
 }

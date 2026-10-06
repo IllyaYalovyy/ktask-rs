@@ -34,6 +34,8 @@ mod limit_wait;
 mod navigate;
 #[path = "tui/no_leftover_processes.rs"]
 mod no_leftover_processes;
+#[path = "tui/output_attempts.rs"]
+mod output_attempts;
 #[path = "tui/output_steps.rs"]
 mod output_steps;
 #[path = "tui/projects.rs"]

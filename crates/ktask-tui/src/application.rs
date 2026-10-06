@@ -204,11 +204,28 @@ pub trait Application {
     /// already in progress, or no project open yet.
     fn start_run(&self) -> Result<RunReport, Self::RunRefusal>;
 
-    /// The selected task's latest attempt output, one transcript per agent step.
+    /// The selected task's output of attempt `attempt`, or of its latest attempt when `None`,
+    /// one transcript per agent step.
     ///
     /// # Errors
     ///
-    /// Returns the application's output-read error when the task or its state cannot be read.
-    fn load_output(&self, id: TaskId)
-    -> Result<Vec<ktask_core::StepTranscript>, Self::OutputError>;
+    /// Returns the application's output-read error when the task or its state cannot be read,
+    /// or the task has no such attempt.
+    fn load_output(
+        &self,
+        id: TaskId,
+        attempt: Option<u32>,
+    ) -> Result<LoadedOutput, Self::OutputError>;
+}
+
+/// One attempt's output, with the numbers of every attempt the task has, so the output screen
+/// can name the attempt it shows and step to its neighbours.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedOutput {
+    /// The attempt these transcripts belong to.
+    pub attempt: u32,
+    /// The number of every attempt of the task, oldest first.
+    pub attempts: Vec<u32>,
+    /// One transcript per agent step the attempt ran.
+    pub steps: Vec<ktask_core::StepTranscript>,
 }

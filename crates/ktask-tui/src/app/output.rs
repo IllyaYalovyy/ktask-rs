@@ -17,14 +17,19 @@ pub(super) fn try_output(app: App, event: Event) -> Tried {
                     output: None,
                     ..app
                 },
+                Some(output_screen::Request::Reload) => App {
+                    output_requested: Some(screen.task()),
+                    output: Some(screen),
+                    ..app
+                },
                 None => App {
                     output: Some(screen),
                     ..app
                 },
             })
         }
-        Event::OutputLoaded(steps) => handled(App {
-            output: app.output.map(|screen| screen.refreshed(&steps)),
+        Event::OutputLoaded(loaded) => handled(App {
+            output: app.output.map(|screen| screen.refreshed(&loaded)),
             ..app
         }),
         other => Tried::Unhandled(Box::new(app), Box::new(other)),

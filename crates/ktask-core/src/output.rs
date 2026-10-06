@@ -82,6 +82,24 @@ pub fn select_attempt(
     }
 }
 
+/// The numbers of every attempt of `task` that has one to show, oldest first, the latest last.
+/// The TUI steps through exactly these, so it never offers an attempt the CLI would refuse.
+#[must_use]
+pub fn attempt_numbers(entries: &[StatusEntry], task: TaskId) -> Vec<u32> {
+    entries
+        .iter()
+        .find(|entry| entry.task == task)
+        .map(|entry| {
+            entry
+                .history
+                .iter()
+                .map(|older| older.number)
+                .chain([entry.attempt.number])
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The recorded attempt `number` of `task`, current or earlier.
 fn find_attempt(entries: &[StatusEntry], task: TaskId, number: u32) -> Option<&crate::AttemptLine> {
     let entry = entries.iter().find(|entry| entry.task == task)?;
@@ -142,7 +160,9 @@ mod tests {
 
     use crate::{AttemptLine, AttemptOutcome, StatusEntry, TaskStatus};
 
-    use super::{OutputError, render_provider_output, sanitize_output, select_attempt};
+    use super::{
+        OutputError, attempt_numbers, render_provider_output, sanitize_output, select_attempt,
+    };
 
     #[test]
     fn controls_invalid_utf8_and_long_lines_are_safe_and_bounded() {
@@ -187,6 +207,11 @@ mod tests {
         assert_eq!(
             select_attempt(&entries, crate::TaskId(8), Some(4)),
             Err(OutputError::UnknownAttempt(crate::TaskId(8), 4))
+        );
+        assert_eq!(attempt_numbers(&entries, crate::TaskId(8)), vec![1, 2, 3]);
+        assert_eq!(
+            attempt_numbers(&entries, crate::TaskId(9)),
+            Vec::<u32>::new()
         );
     }
 
