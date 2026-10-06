@@ -853,7 +853,6 @@ dependencies = [
  "clap",
  "jiff",
  "ktask-adapters",
- "ktask-cli",
  "ktask-core",
  "ktask-tui",
  "nix 0.28.0",
