@@ -69,6 +69,14 @@ process groups and signals, pseudo-terminals, paths and directory conventions, f
 locking — lives behind a port or in one adapter module, never in `core` or the frontends.
 No decision may make a second platform harder to add.
 
+## No Python
+
+`ktask-rs` depends on Rust, git and the agent CLIs it drives — nothing else. No Python, in
+any form: no script in the repository, no build or test step, no fixture recorder, no
+development tool, no command string that starts an interpreter. A project that `ktask-rs`
+orthestrates may be written in anything; the tool itself never is. A structure test refuses
+any `.py` file and any `python` in a tracked file.
+
 ## State and isolation
 
 Per-project state lives under `$XDG_STATE_HOME/ktask-rs/<project>/`, configuration under
