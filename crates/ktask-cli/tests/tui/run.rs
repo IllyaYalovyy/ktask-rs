@@ -656,3 +656,26 @@ fn l_replays_the_same_readable_codex_entries_as_output() -> Result<()> {
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())
 }
+
+#[test]
+fn r_with_an_instruction_file_missing_leaves_the_task_pending_and_names_the_file_and_the_setting()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    std::fs::remove_file(fixture.repository.join("docs/REVIEWER.md"))?;
+    fixture.add_agent_task("a", &reporting_body("done"))?;
+    let mut terminal = fixture.open()?;
+
+    terminal.send("r")?;
+
+    let screen = terminal.wait_for_text("docs/REVIEWER.md")?;
+    assert!(screen.contains("pending  agent  a"), "{screen}");
+    assert!(
+        screen.contains("docs/REVIEWER.md: no such file"),
+        "{screen}"
+    );
+    assert!(screen.contains("instructions-dir"), "{screen}");
+
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}

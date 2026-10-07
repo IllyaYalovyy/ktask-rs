@@ -1666,7 +1666,7 @@ fn agent_and_resolver_settings_run_only_their_own_steps_and_status_names_each_ac
     std::fs::write(
         &runner,
         format!(
-            "#!/bin/sh\nprompt=$(cat)\ncase \"$prompt\" in\n  '# Review:'*) step=review; outcome=approved ;;\n  '# Test:'*) step=testing; outcome=rejected ;;\n  '# Resolve:'*) step=resolve; outcome=stop ;;\n  *) step=implementation; outcome=done ;;\nesac\nprintf '%s:%s\\n' \"$step\" \"$1\" >> \"{}\"\nreport=$(printf '%s\\n' \"$prompt\" | sed -n \"s/^    //; / report --token .* $outcome/p\" | head -n 1)\neval \"$report\"\n",
+            "#!/bin/sh\nprompt=$(cat)\ncase \"$prompt\" in\n  *'# Review:'*) step=review; outcome=approved ;;\n  *'# Test:'*) step=testing; outcome=rejected ;;\n  *'# Resolve:'*) step=resolve; outcome=stop ;;\n  *) step=implementation; outcome=done ;;\nesac\nprintf '%s:%s\\n' \"$step\" \"$1\" >> \"{}\"\nreport=$(printf '%s\\n' \"$prompt\" | sed -n \"s/^    //; / report --token .* $outcome/p\" | head -n 1)\neval \"$report\"\n",
             seen.display()
         ),
     )?;
@@ -1743,7 +1743,7 @@ fn recorded_claude_and_codex_runs_mix_project_roles_and_a_tasks_own_provider_and
         include_str!("../../../test-fixtures/claude/success.jsonl")
     ))?;
     let codex = codex_script(&format!(
-        "prompt=$(cat)\nprintf '%s' '{}'\ntoken=$(printf '%s\\n' \"$prompt\" | sed -n 's/.*--token \\([^ ]*\\).*/\\1/p' | head -n 1)\ncase \"$prompt\" in '# Resolve:'*) ktask-rs report --token \"$token\" skip --reason resolved;; *) ktask-rs report --token \"$token\" done;; esac",
+        "prompt=$(cat)\nprintf '%s' '{}'\ntoken=$(printf '%s\\n' \"$prompt\" | sed -n 's/.*--token \\([^ ]*\\).*/\\1/p' | head -n 1)\ncase \"$prompt\" in *'# Resolve:'*) ktask-rs report --token \"$token\" skip --reason resolved;; *) ktask-rs report --token \"$token\" done;; esac",
         include_str!("../../../test-fixtures/codex/codex-0.160.0-success.jsonl")
     ))?;
     let mut paths = vec![claude.path().to_path_buf(), codex.path().to_path_buf()];

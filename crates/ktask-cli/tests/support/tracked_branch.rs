@@ -38,6 +38,19 @@ pub(crate) fn cloned_repository(sandbox: &Sandbox, parent: &Path, name: &str) ->
     )?;
     git(sandbox, &seed, &["config", "user.name", "Test"])?;
     std::fs::write(seed.join("README"), "first\n")?;
+    std::fs::create_dir_all(seed.join("docs"))?;
+    for name in [
+        "VISION.md",
+        "CODER.md",
+        "REVIEWER.md",
+        "TESTER.md",
+        "RESOLVER.md",
+    ] {
+        std::fs::write(
+            seed.join("docs").join(name),
+            format!("{name} of the seed\n"),
+        )?;
+    }
     git(sandbox, &seed, &["add", "."])?;
     git(sandbox, &seed, &["commit", "--quiet", "-m", "first"])?;
 

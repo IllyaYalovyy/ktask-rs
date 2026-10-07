@@ -1148,3 +1148,40 @@ fn a_long_failure_reason_on_a_narrow_terminal_is_cut_with_a_trailing_ellipsis() 
     }
     Ok(())
 }
+
+#[test]
+fn a_missing_instruction_file_shows_on_the_queue_screen_naming_the_file_and_the_setting_and_clears_once_it_is_back()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    let coder = fixture.repository.join("docs/CODER.md");
+    let text = std::fs::read_to_string(&coder)?;
+    std::fs::remove_file(&coder)?;
+    fixture.add_agent_task("a", &reporting_body("done"))?;
+    fixture.run_the_queue()?;
+
+    let mut terminal = fixture.open()?;
+    let screen = terminal.wait_for("the refusal shown against the pending task", |screen| {
+        screen.contents().contains("instructions")
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert_eq!(lines[4], ">1  #1  pending  agent  a");
+    assert!(lines[5].contains("failed"), "{}", lines[5]);
+    assert!(lines[5].contains("docs/CODER.md"), "{}", lines[5]);
+    assert!(lines[5].contains("instructions-dir"), "{}", lines[5]);
+
+    std::fs::write(&coder, text)?;
+    fixture.run_the_queue()?;
+    let screen = terminal.wait_for(
+        "the task done with no trace of the earlier refusal",
+        |screen| {
+            lines_inside_frame(&screen.contents())
+                .get(4)
+                .is_some_and(|line| line.starts_with(">1  #1  done"))
+        },
+    )?;
+    assert!(!screen.contains("docs/CODER.md"), "{screen}");
+
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}

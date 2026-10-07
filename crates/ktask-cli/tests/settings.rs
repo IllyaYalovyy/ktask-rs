@@ -71,7 +71,8 @@ const STEP_DEFAULTS: &str = "step-sync\ton\tdefault\n\
      provider\techo\tdefault\n\
      model\t\tdefault\n\
      resolver-provider\techo\tdefault\n\
-     resolver-model\t\tdefault\n";
+     resolver-model\t\tdefault\n\
+     instructions-dir\tdocs\tdefault\n";
 
 /// The default `settings` output: its two time settings at their built-in defaults,
 /// health-check and tracked-branch unset, every step switch on, attempt and transport retry
@@ -81,7 +82,8 @@ const DEFAULTS: &str = "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefa
      step-check\ton\tdefault\n\
      step-review\ton\tdefault\nstep-testing\ton\tdefault\nstep-commit\ton\tdefault\n\
      step-push\ton\tdefault\nmax-attempts\t3\tdefault\ntransport-retries\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\n\
-     resolver-model\t\tdefault\n";
+     resolver-model\t\tdefault\n\
+     instructions-dir\tdocs\tdefault\n";
 
 #[test]
 fn a_fresh_project_shows_every_default() -> Result<()> {
@@ -120,7 +122,8 @@ fn json_carries_the_same() -> Result<()> {
          {\"name\":\"provider\",\"value\":\"echo\",\"default\":true},\
          {\"name\":\"model\",\"value\":\"\",\"default\":true},\
          {\"name\":\"resolver-provider\",\"value\":\"echo\",\"default\":true},\
-         {\"name\":\"resolver-model\",\"value\":\"\",\"default\":true}]\n"
+         {\"name\":\"resolver-model\",\"value\":\"\",\"default\":true},\
+         {\"name\":\"instructions-dir\",\"value\":\"docs\",\"default\":true}]\n"
     );
     Ok(())
 }
@@ -793,6 +796,48 @@ fn a_step_check_that_is_not_on_or_off_exits_two_and_changes_nothing() -> Result<
 
     assert_eq!(outcome.code, Some(2));
     assert!(outcome.stderr.contains("step-check"), "{}", outcome.stderr);
+    assert_eq!(fixture.run(&["settings"])?.stdout, DEFAULTS);
+    Ok(())
+}
+
+#[test]
+fn instructions_dir_is_changed_shown_as_custom_and_persists() -> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let set = fixture.run(&["settings", "set", "instructions-dir", "handbook"])?;
+
+    assert_eq!(set.code, Some(0), "{}", set.stderr);
+    assert_eq!(set.stdout, "instructions-dir\thandbook\n");
+    let shown = fixture.run(&["settings"])?;
+    assert!(
+        shown
+            .stdout
+            .contains("instructions-dir\thandbook\tcustom\n"),
+        "{}",
+        shown.stdout
+    );
+    let json = fixture.run(&["settings", "--json"])?;
+    assert!(
+        json.stdout
+            .contains("{\"name\":\"instructions-dir\",\"value\":\"handbook\",\"default\":false}"),
+        "{}",
+        json.stdout
+    );
+    Ok(())
+}
+
+#[test]
+fn an_empty_instructions_dir_is_refused_and_changes_nothing() -> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let outcome = fixture.run(&["settings", "set", "instructions-dir", "  "])?;
+
+    assert_eq!(outcome.code, Some(2), "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("must not be empty"),
+        "{}",
+        outcome.stderr
+    );
     assert_eq!(fixture.run(&["settings"])?.stdout, DEFAULTS);
     Ok(())
 }
