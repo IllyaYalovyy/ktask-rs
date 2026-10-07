@@ -74,7 +74,7 @@ No decision may make a second platform harder to add.
 `ktask-rs` depends on Rust, git and the agent CLIs it drives — nothing else. No Python, in
 any form: no script in the repository, no build or test step, no fixture recorder, no
 development tool, no command string that starts an interpreter. A project that `ktask-rs`
-orthestrates may be written in anything; the tool itself never is. A structure test refuses
+orchestrates may be written in anything; the tool itself never is. A structure test refuses
 any `.py` file and any `python` in a tracked file.
 
 ## State and isolation
