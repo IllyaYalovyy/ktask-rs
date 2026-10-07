@@ -10,13 +10,16 @@ pub struct Transcript {
     heading_lines: Vec<usize>,
 }
 
-/// The line that begins a step's transcript: the step, its provider and its model.
+/// The line that begins a step's transcript: the step, its provider (the check has none) and its model.
 #[must_use]
 pub fn step_heading(step: &StepTranscript) -> String {
-    match &step.model {
-        Some(model) => format!("--- {} · {} · {model} ---", step.step, step.provider),
-        None => format!("--- {} · {} ---", step.step, step.provider),
+    let mut heading = format!("--- {}", step.step);
+    for part in step.provider.iter().chain(step.model.iter()) {
+        heading.push_str(" · ");
+        heading.push_str(part);
     }
+    heading.push_str(" ---");
+    heading
 }
 
 impl Transcript {
@@ -66,7 +69,13 @@ mod tests {
     use super::*;
 
     fn step(name: &str, model: Option<&str>, said: &str) -> StepTranscript {
-        StepTranscript::new(name, "echo", model, ProviderParser::Plain, said.as_bytes())
+        StepTranscript::new(
+            name,
+            Some("echo"),
+            model,
+            ProviderParser::Plain,
+            said.as_bytes(),
+        )
     }
 
     #[test]
@@ -79,6 +88,12 @@ mod tests {
             step_heading(&step("review", None, "")),
             "--- review · echo ---"
         );
+    }
+
+    #[test]
+    fn the_check_has_no_provider_so_its_heading_names_only_the_step() {
+        let check = StepTranscript::new("check", None, None, ProviderParser::Plain, b"");
+        assert_eq!(step_heading(&check), "--- check ---");
     }
 
     #[test]

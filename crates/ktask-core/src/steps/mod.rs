@@ -9,6 +9,7 @@
 
 mod agent;
 mod attempt_count;
+pub(crate) mod check;
 pub(crate) mod commit;
 mod execute;
 pub(crate) mod health_check;
@@ -56,6 +57,12 @@ pub(crate) trait Step {
     /// the resolver's own `retry` decision named one for this attempt.
     fn model(&self, _context: RunContext<'_>, _state: &PipelineState<'_>) -> Option<String> {
         None
+    }
+
+    /// The reason the attempt ends with when this step fails with `step_reason`; the step's own
+    /// reason by default.
+    fn attempt_reason(&self, step_reason: Option<String>) -> Option<String> {
+        step_reason
     }
 
     /// Runs the step, returning what it found and did.
@@ -113,12 +120,13 @@ pub(crate) struct PreStep {
 }
 
 /// The steps every attempt walks, once its sync and health-check gates — run ahead of it,
-/// outside this list — have passed: implementation, then, when switched on, review, then, when
+/// outside this list — have passed: implementation, then, when a check command is set and the step is switched on, check, then, when switched on, review, then, when
 /// switched on, test; then, when switched on, commit, then, when the project tracks a branch,
 /// a commit was made and push is switched on, push. Implementation is never switched off.
 pub(crate) fn default_steps() -> Vec<Box<dyn Step>> {
     vec![
         Box::new(implementation::Implementation),
+        Box::new(check::Check),
         Box::new(review::Review),
         Box::new(test_step::Test),
         Box::new(commit::Commit),
@@ -173,7 +181,7 @@ pub(crate) fn run_attempt_steps(
         total += duration;
         if step_status != TaskStatus::Done {
             status = step_status;
-            reason = step_reason;
+            reason = step.attempt_reason(step_reason);
             break;
         }
     }
@@ -360,6 +368,7 @@ mod tests {
             binary_path: Path::new("/opt/ktask-rs/bin/ktask-rs"),
             attempt_timeout: timeout,
             health_check_command: None,
+            check_command: None,
             tracked_branch: None,
             disabled_steps: &[],
             max_attempts: 1,

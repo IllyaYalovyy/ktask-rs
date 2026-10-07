@@ -37,6 +37,9 @@ pub const SILENT_AFTER: &str = "silent-after";
 /// The health-check command setting's name.
 pub const HEALTH_CHECK: &str = "health-check";
 
+/// The check command setting's name.
+pub const CHECK: &str = "check";
+
 /// The tracked-branch setting's name.
 pub const TRACKED_BRANCH: &str = "tracked-branch";
 
@@ -45,6 +48,9 @@ pub const STEP_SYNC: &str = "step-sync";
 
 /// The health-check step's on/off switch setting's name.
 pub const STEP_HEALTH_CHECK: &str = "step-health-check";
+
+/// The check step's on/off switch setting's name.
+pub const STEP_CHECK: &str = "step-check";
 
 /// The review step's on/off switch setting's name.
 pub const STEP_REVIEW: &str = "step-review";
@@ -92,6 +98,10 @@ pub struct Settings {
     /// project has set one. `None` means the health-check step is skipped: it is run for no
     /// task, and leaves no line.
     pub health_check_command: Option<String>,
+    /// The command that proves a task's implementation passes, run after it and before the
+    /// review, when the project has set one. `None` means the check step is skipped: it is run
+    /// for no task, and leaves no line.
+    pub check_command: Option<String>,
     /// The remote and branch to pull with rebase before a task's health check, as
     /// `"<remote>/<branch>"` (for example `"origin/main"`), when the project has set one.
     /// `None` means the sync step is skipped: it is run for no task, and leaves no line.
@@ -102,6 +112,9 @@ pub struct Settings {
     /// Whether the health-check step runs, when the project has switched it. `None` means on:
     /// the step still only actually runs when [`Settings::health_check_command`] is also set.
     pub health_check_step: Option<bool>,
+    /// Whether the check step runs, when the project has switched it. `None` means on: the
+    /// step still only actually runs when [`Settings::check_command`] is also set.
+    pub check_step: Option<bool>,
     /// Whether the review step runs, when the project has switched it. `None` means on.
     pub review_step: Option<bool>,
     /// Whether the testing step runs, when the project has switched it. `None` means on.
@@ -426,6 +439,11 @@ mod tests {
                     is_default: true,
                 },
                 SettingView {
+                    name: CHECK,
+                    value: String::new(),
+                    is_default: true,
+                },
+                SettingView {
                     name: TRACKED_BRANCH,
                     value: String::new(),
                     is_default: true,
@@ -437,6 +455,11 @@ mod tests {
                 },
                 SettingView {
                     name: STEP_HEALTH_CHECK,
+                    value: "on".to_owned(),
+                    is_default: true,
+                },
+                SettingView {
+                    name: STEP_CHECK,
                     value: "on".to_owned(),
                     is_default: true,
                 },
@@ -500,9 +523,11 @@ mod tests {
             attempt_timeout_seconds: Some(7_200),
             silent_after_seconds: Some(90),
             health_check_command: Some("cargo test".to_owned()),
+            check_command: Some("make check".to_owned()),
             tracked_branch: Some("origin/main".to_owned()),
             sync_step: Some(false),
             health_check_step: Some(false),
+            check_step: Some(false),
             review_step: Some(false),
             testing_step: Some(false),
             commit_step: Some(false),
@@ -534,6 +559,11 @@ mod tests {
                     is_default: false,
                 },
                 SettingView {
+                    name: CHECK,
+                    value: "make check".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
                     name: TRACKED_BRANCH,
                     value: "origin/main".to_owned(),
                     is_default: false,
@@ -545,6 +575,11 @@ mod tests {
                 },
                 SettingView {
                     name: STEP_HEALTH_CHECK,
+                    value: "off".to_owned(),
+                    is_default: false,
+                },
+                SettingView {
+                    name: STEP_CHECK,
                     value: "off".to_owned(),
                     is_default: false,
                 },
@@ -682,6 +717,52 @@ mod tests {
                 ..Settings::default()
             })
         );
+    }
+
+    #[test]
+    fn setting_a_check_command_persists_it_beside_the_health_check_and_refuses_an_empty_one() {
+        let store = FakeSettingsStore::with(Settings {
+            health_check_command: Some("cargo test".to_owned()),
+            ..Settings::default()
+        });
+        assert_eq!(
+            set(&store, CHECK, "  make check  "),
+            Ok(SettingView {
+                name: CHECK,
+                value: "make check".to_owned(),
+                is_default: false,
+            })
+        );
+        assert_eq!(
+            store.load(),
+            Ok(Settings {
+                health_check_command: Some("cargo test".to_owned()),
+                check_command: Some("make check".to_owned()),
+                ..Settings::default()
+            })
+        );
+        assert_eq!(
+            set(&store, CHECK, "  ").unwrap_err(),
+            SetSettingError::InvalidValue {
+                name: CHECK,
+                message: "must not be empty".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn the_check_step_switches_off_and_shows_off() {
+        let store = FakeSettingsStore::with(Settings::default());
+        assert_eq!(
+            set(&store, STEP_CHECK, "off"),
+            Ok(SettingView {
+                name: STEP_CHECK,
+                value: "off".to_owned(),
+                is_default: false,
+            })
+        );
+        assert_eq!(store.load().unwrap().check_step, Some(false));
+        assert!(set(&store, STEP_CHECK, "maybe").is_err());
     }
 
     #[test]

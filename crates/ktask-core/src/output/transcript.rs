@@ -1,4 +1,5 @@
-//! The retained output of one attempt, split into one transcript per agent step.
+//! The retained output of one attempt, split into one transcript per step that kept output: each
+//! agent step, and the check.
 
 use std::error::Error;
 use std::fmt;
@@ -31,7 +32,7 @@ pub fn attempt_output_file_prefix(task: TaskId, attempt: u32) -> String {
 /// Why the transcripts of an attempt cannot be produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptError {
-    /// The attempt ran no agent step with this name.
+    /// The attempt ran no step with output by this name.
     UnknownStep(TaskId, u32, String),
     /// The output or the configuration needed to read it is unavailable.
     Unavailable(String),
@@ -43,7 +44,7 @@ impl fmt::Display for TranscriptError {
             Self::UnknownStep(task, attempt, step) => {
                 write!(
                     f,
-                    "task {task} attempt {attempt} has no agent step {step:?}"
+                    "task {task} attempt {attempt} has no step with output {step:?}"
                 )
             }
             Self::Unavailable(reason) => f.write_str(reason),
@@ -58,8 +59,8 @@ impl Error for TranscriptError {}
 pub struct StepTranscript {
     /// The step's journal name.
     pub step: String,
-    /// The provider that ran the step.
-    pub provider: String,
+    /// The provider that ran the step; `None` for the check, which a command ran.
+    pub provider: Option<String>,
     /// The model the step ran with, when it has one.
     pub model: Option<String>,
     parser: ProviderParser,
@@ -67,18 +68,19 @@ pub struct StepTranscript {
 }
 
 impl StepTranscript {
-    /// What `step`, run by `provider` with `model`, retained as `raw` in `parser`'s encoding.
+    /// What `step`, run by `provider` (`None` when a command ran it) with `model`, retained as
+    /// `raw` in `parser`'s encoding.
     #[must_use]
     pub fn new(
         step: &str,
-        provider: &str,
+        provider: Option<&str>,
         model: Option<&str>,
         parser: ProviderParser,
         raw: &[u8],
     ) -> Self {
         Self {
             step: step.to_owned(),
-            provider: provider.to_owned(),
+            provider: provider.map(str::to_owned),
             model: model.map(str::to_owned),
             parser,
             raw: raw.to_vec(),
@@ -98,7 +100,7 @@ impl StepTranscript {
     }
 }
 
-/// One transcript per agent step that `attempt` of `task` ran, in the order the steps ran —
+/// One transcript per step of `attempt` of `task` that kept output (each agent step, and the check), in the order the steps ran —
 /// or only the step called `step`. This is shared by the CLI and the TUI so both show the same
 /// conversations.
 ///
@@ -120,31 +122,34 @@ pub fn attempt_transcripts(
             let raw = store
                 .read_step_output(task, attempt, &line.step)
                 .map_err(TranscriptError::Unavailable)?;
+            let parser =
+                provider.map_or(Ok(ProviderParser::Plain), |name| parser_of(providers, name))?;
             Ok(StepTranscript::new(
                 &line.step,
                 provider,
                 line.model.as_deref(),
-                parser_of(providers, provider)?,
+                parser,
                 &raw,
             ))
         })
         .collect()
 }
 
-/// The steps of `attempt` that an agent ran, with their providers — only the one called
-/// `wanted` when it is given.
+/// The steps of `attempt` that retained output — those an agent ran, with their providers, and
+/// the check, which has none — only the one called `wanted` when it is given.
 fn agent_steps<'a>(
     entries: &'a [StatusEntry],
     task: TaskId,
     attempt: u32,
     wanted: Option<&str>,
-) -> Result<Vec<(&'a StepLine, &'a str)>, TranscriptError> {
+) -> Result<Vec<(&'a StepLine, Option<&'a str>)>, TranscriptError> {
     let lines = super::find_attempt(entries, task, attempt)
         .map(|found| found.steps.as_slice())
         .unwrap_or_default();
     let found = lines
         .iter()
-        .filter_map(|line| Some((line, line.provider.as_deref()?)))
+        .filter(|line| line.provider.is_some() || line.step == crate::CHECK_STEP)
+        .map(|line| (line, line.provider.as_deref()))
         .filter(|(line, _)| wanted.is_none_or(|name| line.step == name))
         .collect::<Vec<_>>();
     match wanted {
@@ -260,6 +265,7 @@ mod tests {
     fn store() -> Store {
         Store(BTreeMap::from([
             ("implementation".to_owned(), b"built it\n".to_vec()),
+            ("check".to_owned(), b"2 failed".to_vec()),
             ("review".to_owned(), b"looks fine".to_vec()),
         ]))
     }
@@ -268,6 +274,7 @@ mod tests {
         vec![
             step("health check", None, None),
             step("implementation", Some("dummy"), Some("m1")),
+            step("check", None, None),
             step("review", Some("dummy"), None),
             step("commit", None, None),
         ]
@@ -286,6 +293,7 @@ mod tests {
             names,
             vec![
                 ("implementation", Some("m1"), "built it\n".to_owned()),
+                ("check", None, "2 failed".to_owned()),
                 ("review", None, "looks fine".to_owned()),
             ]
         );

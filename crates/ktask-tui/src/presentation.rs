@@ -207,6 +207,7 @@ fn decide_label(why: DecideWhy) -> &'static str {
         DecideWhy::RetriesExhausted => "transport retries exhausted",
         DecideWhy::AgentFailed => "agent failed",
         DecideWhy::Rejected => "rejected",
+        DecideWhy::CheckFailed => "check failed",
         DecideWhy::Unmatched => "unmatched",
     }
 }

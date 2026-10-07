@@ -128,6 +128,7 @@ mod tests {
             binary_path: Path::new("/opt/ktask-rs/bin/ktask-rs"),
             attempt_timeout: std::time::Duration::from_secs(60),
             health_check_command: None,
+            check_command: None,
             tracked_branch: None,
             disabled_steps: &[TEST_STEP],
             max_attempts: 1,

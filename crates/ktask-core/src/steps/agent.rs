@@ -50,10 +50,6 @@ fn prompt_scratch_path(sessions_dir: &Path, token: &AttemptToken, step: &str) ->
     sessions_dir.join(format!("{}-{}-{step}.prompt", token.task, token.number))
 }
 
-fn step_output_path(outputs_dir: &Path, token: &AttemptToken, step: &str) -> PathBuf {
-    outputs_dir.join(crate::step_output_file_name(token.task, token.number, step))
-}
-
 /// The session and transcript path the implementation step of `state`'s attempt is told to
 /// resume, when `state.requested_session` names one and `step` is the implementation step.
 /// `None` for every other step, and for an attempt with nothing to resume.
@@ -159,7 +155,7 @@ fn run_prompt(
         },
         context.project_dir,
         attempt_limit(context, state),
-        Some(&step_output_path(context.outputs_dir, state.token, step)),
+        Some(&context.step_output_path(state.token, step)),
     );
     let duration = deps.clock.now().duration_since(started).unwrap_or_default();
     deps.session_log
@@ -257,5 +253,6 @@ fn signals_of(
         limit: (deps.provider_for(step).detect_limit)(output),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         killed,
+        check_output: None,
     }
 }

@@ -8,9 +8,9 @@ use std::path::Path;
 use crate::Git;
 
 use super::{
-    ATTEMPT_TIMEOUT, DEFAULT_RESOLVER_PROVIDER, DEFAULT_SILENT_AFTER_SECS, HEALTH_CHECK,
-    RESOLVER_MODEL, RESOLVER_PROVIDER, SILENT_AFTER, STEP_COMMIT, STEP_HEALTH_CHECK, STEP_PUSH,
-    STEP_REVIEW, STEP_SYNC, STEP_TESTING, SetSettingError, Settings, TRACKED_BRANCH,
+    ATTEMPT_TIMEOUT, CHECK, DEFAULT_RESOLVER_PROVIDER, DEFAULT_SILENT_AFTER_SECS, HEALTH_CHECK,
+    RESOLVER_MODEL, RESOLVER_PROVIDER, SILENT_AFTER, STEP_CHECK, STEP_COMMIT, STEP_HEALTH_CHECK,
+    STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING, SetSettingError, Settings, TRACKED_BRANCH,
     split_tracked_branch, step_enabled,
 };
 
@@ -41,33 +41,11 @@ pub(super) struct SettingSpec {
 
 /// Every setting's description, in the order [`super::show_settings`] lists them.
 pub(super) fn setting_specs() -> Vec<SettingSpec> {
-    vec![
-        attempt_timeout_spec(),
-        silent_after_spec(),
-        health_check_spec(),
-        tracked_branch_spec(),
-        step_toggle_spec(STEP_SYNC, |s| s.sync_step, |s, on| s.sync_step = Some(on)),
-        step_toggle_spec(
-            STEP_HEALTH_CHECK,
-            |s| s.health_check_step,
-            |s, on| {
-                s.health_check_step = Some(on);
-            },
-        ),
-        step_toggle_spec(
-            STEP_REVIEW,
-            |s| s.review_step,
-            |s, on| {
-                s.review_step = Some(on);
-            },
-        ),
-        step_toggle_spec(
-            STEP_TESTING,
-            |s| s.testing_step,
-            |s, on| {
-                s.testing_step = Some(on);
-            },
-        ),
+    let mut specs = vec![attempt_timeout_spec(), silent_after_spec()];
+    specs.extend(command_specs());
+    specs.push(tracked_branch_spec());
+    specs.extend(step_switch_specs());
+    specs.extend([
         commit_step_spec(),
         push_step_spec(),
         retries::max_attempts_spec(),
@@ -76,6 +54,50 @@ pub(super) fn setting_specs() -> Vec<SettingSpec> {
         agent::model_spec(),
         resolver_provider_spec(),
         resolver_model_spec(),
+    ]);
+    specs
+}
+
+/// The settings holding a command to run.
+fn command_specs() -> [SettingSpec; 2] {
+    [
+        command_spec(
+            HEALTH_CHECK,
+            |s| s.health_check_command.as_ref(),
+            |s, command| s.health_check_command = Some(command),
+        ),
+        command_spec(
+            CHECK,
+            |s| s.check_command.as_ref(),
+            |s, command| s.check_command = Some(command),
+        ),
+    ]
+}
+
+/// The on/off switches of the steps before commit.
+fn step_switch_specs() -> [SettingSpec; 5] {
+    [
+        step_toggle_spec(STEP_SYNC, |s| s.sync_step, |s, on| s.sync_step = Some(on)),
+        step_toggle_spec(
+            STEP_HEALTH_CHECK,
+            |s| s.health_check_step,
+            |s, on| s.health_check_step = Some(on),
+        ),
+        step_toggle_spec(
+            STEP_CHECK,
+            |s| s.check_step,
+            |s, on| s.check_step = Some(on),
+        ),
+        step_toggle_spec(
+            STEP_REVIEW,
+            |s| s.review_step,
+            |s, on| s.review_step = Some(on),
+        ),
+        step_toggle_spec(
+            STEP_TESTING,
+            |s| s.testing_step,
+            |s, on| s.testing_step = Some(on),
+        ),
     ]
 }
 
@@ -121,19 +143,22 @@ fn attempt_timeout_spec() -> SettingSpec {
     }
 }
 
-/// [`HEALTH_CHECK`]'s description.
-fn health_check_spec() -> SettingSpec {
+/// The description of `name`, a setting that is a shell command: `field` reads it from
+/// [`Settings`], `apply` writes a new one back.
+fn command_spec(
+    name: &'static str,
+    field: impl Fn(&Settings) -> Option<&String> + 'static,
+    apply: impl Fn(&mut Settings, String) + 'static,
+) -> SettingSpec {
     SettingSpec {
-        name: HEALTH_CHECK,
-        get: Box::new(|settings| {
-            (
-                settings.health_check_command.clone().unwrap_or_default(),
-                settings.health_check_command.is_none(),
-            )
+        name,
+        get: Box::new(move |settings| {
+            let command = field(settings);
+            (command.cloned().unwrap_or_default(), command.is_none())
         }),
-        set: Box::new(|settings, value, _git, _dir| {
-            let command = parse_health_check(value)?;
-            settings.health_check_command = Some(command.clone());
+        set: Box::new(move |settings, value, _git, _dir| {
+            let command = parse_non_empty(name, value)?;
+            apply(settings, command.clone());
             Ok(command)
         }),
     }
@@ -297,20 +322,8 @@ fn parse_positive_seconds(name: &'static str, value: &str) -> Result<u64, SetSet
     Ok(seconds)
 }
 
-/// The health-check part of [`super::set_setting`]: `value` trimmed, or why it was refused.
-fn parse_health_check(value: &str) -> Result<String, SetSettingError> {
-    let command = value.trim();
-    if command.is_empty() {
-        return Err(SetSettingError::InvalidValue {
-            name: HEALTH_CHECK,
-            message: "must not be empty".to_owned(),
-        });
-    }
-    Ok(command.to_owned())
-}
-
 /// `name`'s part of [`super::set_setting`] for a setting that is just a trimmed, non-empty
-/// string: [`RESOLVER_PROVIDER`] and [`RESOLVER_MODEL`].
+/// string: a command, [`RESOLVER_PROVIDER`] or [`RESOLVER_MODEL`].
 fn parse_non_empty(name: &'static str, value: &str) -> Result<String, SetSettingError> {
     let value = value.trim();
     if value.is_empty() {

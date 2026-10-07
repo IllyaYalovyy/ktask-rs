@@ -72,6 +72,24 @@ pub struct Output {
     pub exit: Exit,
 }
 
+impl Output {
+    /// The last `lines` lines of what the command wrote: its standard output, then its standard
+    /// error.
+    #[must_use]
+    pub fn tail(&self, lines: usize) -> String {
+        let mut combined = self.stdout.clone();
+        combined.extend_from_slice(&self.stderr);
+        let text = String::from_utf8_lossy(&combined);
+        let all: Vec<&str> = text.lines().collect();
+        let skipped = all.len().saturating_sub(lines);
+        all.iter()
+            .skip(skipped)
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
 /// Port: starting a process, feeding it input on its standard input, and capturing its
 /// standard output, standard error and exit code — killing it, and every process it started,
 /// if it runs past its time limit.

@@ -13,6 +13,8 @@ pub enum DecideWhy {
     AgentFailed,
     /// A review or a test turned the work down.
     Rejected,
+    /// The project's own check failed.
+    CheckFailed,
     /// No rule matched, so a decider reads it.
     Unmatched,
 }
@@ -36,11 +38,12 @@ pub enum Routed {
 }
 
 impl DecideWhy {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::TimeLimit,
         Self::RetriesExhausted,
         Self::AgentFailed,
         Self::Rejected,
+        Self::CheckFailed,
         Self::Unmatched,
     ];
 
@@ -52,6 +55,7 @@ impl DecideWhy {
             Self::RetriesExhausted => "retries-exhausted",
             Self::AgentFailed => "agent-failed",
             Self::Rejected => "rejected",
+            Self::CheckFailed => "check-failed",
             Self::Unmatched => "unmatched",
         }
     }

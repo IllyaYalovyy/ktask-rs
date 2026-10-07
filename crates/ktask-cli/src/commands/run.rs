@@ -12,9 +12,9 @@ use ktask_adapters::{
     SystemClock, builtin_providers, configured_provider, echo,
 };
 use ktask_core::{
-    COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, RunReport, RunRequest,
-    SYNC_STEP, Settings, TEST_STEP, TaskProviders, effective_provider, effective_resolver_provider,
-    effective_transport_retries, show_providers,
+    CHECK_STEP, COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, RunReport,
+    RunRequest, SYNC_STEP, Settings, TEST_STEP, TaskProviders, effective_provider,
+    effective_resolver_provider, effective_transport_retries, show_providers,
 };
 
 use crate::context::{
@@ -29,6 +29,7 @@ fn disabled_steps(settings: &Settings) -> Vec<&'static str> {
     [
         (SYNC_STEP, settings.sync_step),
         (HEALTH_CHECK_STEP, settings.health_check_step),
+        (CHECK_STEP, settings.check_step),
         (REVIEW_STEP, settings.review_step),
         (TEST_STEP, settings.testing_step),
         (COMMIT_STEP, settings.commit_step),
@@ -76,6 +77,7 @@ fn run_context<'a>(
         binary_path,
         attempt_timeout: ktask_core::effective_attempt_timeout(settings, args.attempt_timeout),
         health_check_command: settings.health_check_command.as_deref(),
+        check_command: settings.check_command.as_deref(),
         tracked_branch: settings.tracked_branch.as_deref(),
         disabled_steps: disabled,
         max_attempts: ktask_core::effective_max_attempts(settings),

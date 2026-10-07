@@ -1,5 +1,5 @@
 //! `ktask-rs settings`: a project's settings — the attempt time limit, the health-check
-//! command, the tracked branch, the step switches, attempt and transport retry limits, and the
+//! and check commands, the tracked branch, the step switches, attempt and transport retry limits, and the
 //! resolver's provider and model, so far.
 
 use std::io::Write;
@@ -30,8 +30,8 @@ pub(crate) struct Args {
 pub(crate) enum Command {
     /// Change a setting
     Set {
-        /// The setting to change: attempt-timeout, silent-after, health-check, tracked-branch,
-        /// step-sync, step-health-check, step-review, step-testing, step-commit, step-push,
+        /// The setting to change: attempt-timeout, silent-after, health-check, check,
+        /// tracked-branch, step-sync, step-health-check, step-check, step-review, step-testing, step-commit, step-push,
         /// max-attempts, transport-retries, provider, model, resolver-provider or resolver-model
         #[arg(value_name = "NAME")]
         name: String,

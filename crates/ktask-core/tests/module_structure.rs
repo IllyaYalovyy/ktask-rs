@@ -70,6 +70,7 @@ fn step_modules() -> Vec<(&'static str, &'static str)> {
         ("implementation.rs", "IMPLEMENTATION"),
         ("review.rs", "REVIEW_STEP"),
         ("test_step.rs", "TEST_STEP"),
+        ("check.rs", "CHECK_STEP"),
         ("commit.rs", "COMMIT_STEP"),
         ("push.rs", "PUSH_STEP"),
     ]

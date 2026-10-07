@@ -39,6 +39,8 @@ pub(crate) struct Signals {
     pub(crate) stderr: String,
     /// Set when the provider was killed at the attempt's time limit.
     pub(crate) killed: Option<Killed>,
+    /// The end of the output of the project's check, when it ran and failed.
+    pub(crate) check_output: Option<String>,
 }
 
 /// How a step ended, as far as routing is concerned.
@@ -95,12 +97,13 @@ impl Route {
 type Rule = fn(&Facts<'_>) -> Option<Route>;
 
 /// The rules, first match wins; a failure none of them matches goes to the decider.
-const RULES: [Rule; 5] = [
+const RULES: [Rule; 6] = [
     rate_limit,
     time_limit,
     intermittent,
     environment_fault,
     reported_failure,
+    check_failed,
 ];
 
 /// The verdict for a step that ended as `facts` say; `None` when it did not fail.
@@ -177,6 +180,19 @@ fn reported_failure(facts: &Facts<'_>) -> Option<Route> {
         why,
         reason: None,
         detail: None,
+    }))
+}
+
+fn check_failed(facts: &Facts<'_>) -> Option<Route> {
+    let tail = facts.signals.check_output.as_ref()?;
+    let how = facts.reason.unwrap_or("it did not pass");
+    Some(Route::Decide(Decision {
+        why: DecideWhy::CheckFailed,
+        reason: None,
+        detail: Some(format!(
+            "The project's check failed ({how}). Review and testing did not run.\n\n\
+             The end of its output:\n{tail}"
+        )),
     }))
 }
 

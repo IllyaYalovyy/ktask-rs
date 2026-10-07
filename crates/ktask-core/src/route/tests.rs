@@ -193,6 +193,7 @@ fn a_rate_limit_outranks_every_other_rule() {
         limit: Some(LimitSignal { reset_at: None }),
         stderr: TRANSPORT_STDERR.to_owned(),
         killed: Some(Killed::default()),
+        ..Signals::default()
     };
     assert!(matches!(route(&facts(&signals)), Some(Route::Wait { .. })));
 }
@@ -215,4 +216,35 @@ fn the_decider_is_never_handed_to_the_decider_but_still_waits_and_stops() {
     let mut ending = facts(&limited);
     ending.decider = true;
     assert!(matches!(route(&ending), Some(Route::Wait { .. })));
+}
+
+#[test]
+fn a_failed_check_goes_to_the_decider_with_the_end_of_its_output() {
+    let signals = Signals {
+        check_output: Some("test a ... FAILED\n2 failed".to_owned()),
+        ..Signals::default()
+    };
+    let mut failed = facts(&signals);
+    failed.status = TaskStatus::Failed;
+    failed.exit_code = Some(2);
+    failed.reason = Some("exit 2");
+    let decision = decision(route(&failed));
+    assert_eq!(decision.why, DecideWhy::CheckFailed);
+    assert_eq!(decision.reason, None);
+    let detail = decision.detail.expect("the output is carried");
+    assert!(detail.contains("exit 2"), "{detail}");
+    assert!(detail.contains("test a ... FAILED\n2 failed"), "{detail}");
+}
+
+#[test]
+fn a_check_that_could_not_find_its_program_stops_the_run_instead() {
+    let signals = Signals {
+        check_output: Some("bash: nope: command not found".to_owned()),
+        ..Signals::default()
+    };
+    let mut failed = facts(&signals);
+    failed.status = TaskStatus::Failed;
+    failed.exit_code = Some(127);
+    failed.reason = Some("exit 127");
+    assert!(matches!(route(&failed), Some(Route::Stop { .. })));
 }

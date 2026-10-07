@@ -34,23 +34,6 @@ pub(crate) fn enabled(context: RunContext<'_>) -> bool {
     context.health_check_command.is_some() && context.step_enabled(HEALTH_CHECK_STEP)
 }
 
-/// The last [`OUTPUT_TAIL_LINES`] lines of `output`'s combined standard output and standard
-/// error.
-fn output_tail(output: &Output) -> String {
-    let mut combined = output.stdout.clone();
-    combined.extend_from_slice(&output.stderr);
-    let text = String::from_utf8_lossy(&combined);
-    let lines: Vec<&str> = text.lines().collect();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(OUTPUT_TAIL_LINES)
-        .rev()
-        .copied()
-        .collect();
-    tail.join("\n")
-}
-
 /// What `run` found, turned into a [`HealthCheck`].
 fn health_check_outcome(result: Result<Output, CommandsError>, duration: Duration) -> HealthCheck {
     let output = match result {
@@ -66,15 +49,15 @@ fn health_check_outcome(result: Result<Output, CommandsError>, duration: Duratio
         Exit::Code(0) => HealthCheck::Passed(duration),
         Exit::Code(code) => HealthCheck::Failed {
             reason: format!("the health check exited with code {code}"),
-            output_tail: output_tail(&output),
+            output_tail: output.tail(OUTPUT_TAIL_LINES),
         },
         Exit::Killed => HealthCheck::Failed {
             reason: "the health check ran past its time limit and was killed".to_owned(),
-            output_tail: output_tail(&output),
+            output_tail: output.tail(OUTPUT_TAIL_LINES),
         },
         Exit::Interrupted => HealthCheck::Failed {
             reason: INTERRUPTED.to_owned(),
-            output_tail: output_tail(&output),
+            output_tail: output.tail(OUTPUT_TAIL_LINES),
         },
     }
 }
@@ -176,6 +159,7 @@ mod tests {
             binary_path: Path::new("/opt/ktask-rs/bin/ktask-rs"),
             attempt_timeout: Duration::from_secs(42),
             health_check_command: Some("make check"),
+            check_command: None,
             tracked_branch: None,
             disabled_steps: &[],
             max_attempts: 1,

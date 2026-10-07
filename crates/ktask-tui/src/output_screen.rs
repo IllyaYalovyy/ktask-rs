@@ -169,7 +169,13 @@ mod tests {
         names
             .iter()
             .map(|name| {
-                StepTranscript::new(name, "echo", None, ProviderParser::Plain, name.as_bytes())
+                StepTranscript::new(
+                    name,
+                    Some("echo"),
+                    None,
+                    ProviderParser::Plain,
+                    name.as_bytes(),
+                )
             })
             .collect()
     }

@@ -2,7 +2,8 @@
 //! drawn. Covers the queue while it is open.
 
 use ktask_core::{
-    STEP_COMMIT, STEP_HEALTH_CHECK, STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING, SettingView,
+    STEP_CHECK, STEP_COMMIT, STEP_HEALTH_CHECK, STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING,
+    SettingView,
 };
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::KeyCode;
@@ -18,9 +19,10 @@ use crate::text::TextArea;
 const SETTINGS_KEYS: &str = " Tab, Shift-Tab field · Ctrl-S save · Esc cancel ";
 
 /// Every setting whose field is an on/off switch rather than free text.
-const TOGGLE_NAMES: [&str; 6] = [
+const TOGGLE_NAMES: [&str; 7] = [
     STEP_SYNC,
     STEP_HEALTH_CHECK,
+    STEP_CHECK,
     STEP_REVIEW,
     STEP_TESTING,
     STEP_COMMIT,
@@ -46,9 +48,11 @@ fn toggled(value: &str) -> &'static str {
 fn label(name: &str) -> &'static str {
     match name {
         "health-check" => "Health check command",
+        "check" => "Check command",
         "tracked-branch" => "Tracked branch (remote/branch)",
         "step-sync" => "Sync step (on/off)",
         "step-health-check" => "Health check step (on/off)",
+        "step-check" => "Check step (on/off)",
         "step-review" => "Review step (on/off)",
         "step-testing" => "Testing step (on/off)",
         "step-commit" => "Commit step (on/off)",

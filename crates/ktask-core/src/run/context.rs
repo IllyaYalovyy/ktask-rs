@@ -16,6 +16,8 @@ pub struct RunContext<'a> {
     pub attempt_timeout: Duration,
     /// Optional health-check command.
     pub health_check_command: Option<&'a str>,
+    /// Optional check command, run after implementation.
+    pub check_command: Option<&'a str>,
     /// Optional remote branch to synchronize.
     pub tracked_branch: Option<&'a str>,
     /// Steps explicitly disabled by project settings.
@@ -35,6 +37,16 @@ pub struct RunContext<'a> {
 }
 
 impl RunContext<'_> {
+    /// Where the retained output of step `step` of the attempt `token` names is kept.
+    pub(crate) fn step_output_path(
+        &self,
+        token: &crate::AttemptToken,
+        step: &str,
+    ) -> std::path::PathBuf {
+        self.outputs_dir
+            .join(crate::step_output_file_name(token.task, token.number, step))
+    }
+
     /// Whether the step named `step` is switched on.
     pub(crate) fn step_enabled(&self, step: &str) -> bool {
         !self.disabled_steps.contains(&step)
