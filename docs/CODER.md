@@ -60,6 +60,10 @@ is a defect.
   compatibility shims, no unused options or parameters. The future gets its code when it
   arrives.
 - Do what the task asks. Report adjacent problems instead of fixing them.
+- Every task raises the patch part of the workspace version (`version` under
+  `[workspace.package]` in `Cargo.toml`, with `Cargo.lock`) by one, in the task's own commit;
+  `ktask-rs --version` must show the new number. The minor part is raised only by a task
+  that says so; the major part never, until the owner says so.
 - A product decision the documents do not answer is not yours to make — stop and ask.
 
 ## Report
