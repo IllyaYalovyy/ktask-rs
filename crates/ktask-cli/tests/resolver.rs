@@ -325,6 +325,84 @@ fn a_supersede_decision_replaces_the_task_with_the_new_ones_and_the_run_continue
     Ok(())
 }
 
+/// A TOML task for a `supersede` file, the counterpart of `new_task`.
+fn new_toml_task(title: &str) -> String {
+    format!(
+        "[[tasks]]\ntitle = \"{title}\"\ncriteria = [\"it works\"]\nbody = '''\n{}'''\n\n",
+        succeeding_body()
+    )
+}
+
+#[test]
+fn a_supersede_decision_reads_a_toml_tasks_file_and_the_run_continues_with_its_tasks() -> Result<()>
+{
+    let fixture = Fixture::new()?;
+    let tasks_file = fixture.work.join("tasks.toml");
+    std::fs::write(
+        &tasks_file,
+        new_toml_task("part one") + &new_toml_task("part two"),
+    )?;
+    fixture.add_agent_task(
+        "too large",
+        &failing_once_body(
+            "it broke",
+            &format!(
+                "ktask-rs report --token \"$1\" supersede --tasks \"{}\"",
+                tasks_file.display()
+            ),
+        ),
+    )?;
+
+    let outcome = fixture.run_the_queue()?;
+
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stdout);
+    let all = fixture.run(&["list", "--all"])?;
+    assert_eq!(all.code, Some(0), "{}", all.stderr);
+    assert_eq!(
+        all.stdout,
+        "1\t#1\tsuperseded\tagent\ttoo large\n2\t#2\tdone\tagent\tpart one\n\
+         3\t#3\tdone\tagent\tpart two\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_supersede_tasks_file_that_is_neither_json_nor_toml_is_refused_before_it_is_read() -> Result<()>
+{
+    let fixture = Fixture::new()?;
+    let missing_file = fixture.work.join("tasks.md");
+    let supersede_stderr = fixture.work.join("supersede-stderr");
+    let supersede_exit = fixture.work.join("supersede-exit");
+    fixture.add_agent_task(
+        "too large",
+        &failing_once_body(
+            "it broke",
+            &format!(
+                "ktask-rs report --token \"$1\" supersede --tasks \"{}\" 2> \"{}\"; \
+                 echo $? > \"{}\"\n  \
+                 ktask-rs report --token \"$1\" stop --reason \"supersede was refused\"",
+                missing_file.display(),
+                supersede_stderr.display(),
+                supersede_exit.display(),
+            ),
+        ),
+    )?;
+
+    let outcome = fixture.run_the_queue()?;
+
+    assert_eq!(outcome.code, Some(1), "{}", outcome.stdout);
+    let exit: i32 = std::fs::read_to_string(&supersede_exit)?.trim().parse()?;
+    assert_eq!(exit, 2);
+    let stderr = std::fs::read_to_string(&supersede_stderr)?;
+    assert!(
+        stderr.contains("only .json and .toml files are imported"),
+        "{stderr}"
+    );
+    let all = fixture.run(&["list", "--all"])?;
+    assert_eq!(all.stdout, "1\t#1\tfailed\tagent\ttoo large\n");
+    Ok(())
+}
+
 #[test]
 fn an_invalid_tasks_file_is_refused_with_the_same_messages_import_gives_and_changes_nothing()
 -> Result<()> {

@@ -31,6 +31,7 @@ mod sleep;
 mod status;
 mod steps;
 mod task;
+mod task_file;
 mod usage;
 
 pub use channel::Channel;
@@ -102,6 +103,7 @@ pub use task::{
     AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, acknowledge_task, add_task,
     answer_task, done_task, list_all_tasks, list_tasks, provider_problem, remove_task, retry_task,
 };
+pub use task_file::TaskFormat;
 pub use usage::Usage;
 
 #[cfg(test)]

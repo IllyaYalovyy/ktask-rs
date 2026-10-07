@@ -7,7 +7,7 @@ use std::path::Path;
 use ktask_adapters::{
     GitCli, SqliteJournal, SqliteRegistry, SystemClock, TomlSettingsStore, builtin_providers,
 };
-use ktask_core::{Import, ImportError, Placement, Project, ResolveError};
+use ktask_core::{Import, ImportError, Placement, Project, ResolveError, TaskFormat};
 
 use crate::context::{current_dir, current_exe, merge_project, open_registry, resolved};
 use crate::error::Failure;
@@ -97,7 +97,8 @@ fn import_into(
     settings: &TomlSettingsStore,
     path: &str,
 ) -> Result<Import, ImportProblem> {
-    let json = read_file(path).map_err(ImportProblem::Read)?;
+    let format = TaskFormat::of_path(path).map_err(ImportProblem::Import)?;
+    let text = read_file(path).map_err(ImportProblem::Read)?;
     let settings = ktask_core::SettingsStore::load(settings)
         .map_err(|error| ImportProblem::Read(error.to_string()))?;
     let known = ktask_core::show_providers(&settings, &builtin_providers())
@@ -105,8 +106,15 @@ fn import_into(
         .into_iter()
         .map(|provider| provider.name)
         .collect::<Vec<_>>();
-    ktask_core::import_tasks_with_providers(journal, &SystemClock, &json, Placement::End, &known)
-        .map_err(ImportProblem::Import)
+    ktask_core::import_tasks_with_providers(
+        journal,
+        &SystemClock,
+        &text,
+        format,
+        Placement::End,
+        &known,
+    )
+    .map_err(ImportProblem::Import)
 }
 
 /// Refuses to open the terminal interface when there is no terminal to draw it on.

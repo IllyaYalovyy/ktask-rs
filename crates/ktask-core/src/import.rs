@@ -5,6 +5,7 @@ use std::fmt;
 
 use serde::Deserialize;
 
+use crate::TaskFormat;
 use crate::task::{add_tasks, draft_problems, provider_problem};
 use crate::{AddError, Clock, Journal, Placement, Task, TaskDraft, TaskKind, TaskStatus};
 
@@ -97,6 +98,12 @@ pub enum ImportError {
     Malformed(String),
     /// The text is JSON but not an array.
     NotAnArray,
+    /// The text is not TOML; the message says where it stops making sense.
+    MalformedToml(String),
+    /// The text is TOML but not a list of `[[tasks]]` tables; the message says why.
+    NotATaskTable(String),
+    /// The file is neither a `.json` nor a `.toml` file.
+    UnsupportedFormat,
     /// Some tasks cannot be added; every one is listed.
     Invalid(Vec<InvalidTask>),
     /// The tasks could not be added.
@@ -108,6 +115,11 @@ impl fmt::Display for ImportError {
         match self {
             Self::Malformed(message) => write!(f, "not valid JSON: {message}"),
             Self::NotAnArray => f.write_str("expected a JSON array of tasks"),
+            Self::MalformedToml(message) => write!(f, "not valid TOML: {message}"),
+            Self::NotATaskTable(message) => {
+                write!(f, "expected [[tasks]] tables: {message}")
+            }
+            Self::UnsupportedFormat => f.write_str("only .json and .toml files are imported"),
             Self::Invalid(tasks) => {
                 write!(
                     f,
@@ -130,10 +142,20 @@ impl fmt::Display for ImportError {
 
 impl Error for ImportError {}
 
+/// What went wrong reading one task, naming the field it is about when it is about one.
+fn field_error(error: &serde_path_to_error::Error<serde_json::Error>) -> String {
+    let path = error.path().to_string();
+    if path == "." || error.inner().to_string().contains(&format!("`{path}`")) {
+        error.inner().to_string()
+    } else {
+        format!("{path}: {}", error.inner())
+    }
+}
+
 /// What `value` describes — a task to add, or one to leave out because it is cancelled — or
 /// everything wrong with it.
 fn read_item(value: serde_json::Value) -> Result<Parsed, Vec<String>> {
-    let item: Item = serde_json::from_value(value).map_err(|e| vec![e.to_string()])?;
+    let item: Item = serde_path_to_error::deserialize(value).map_err(|e| vec![field_error(&e)])?;
     if matches!(&item.status, Some(serde_json::Value::String(s)) if s == TaskStatus::Cancelled.as_str())
     {
         return Ok(Parsed::Cancelled);
@@ -163,22 +185,21 @@ fn read_item(value: serde_json::Value) -> Result<Parsed, Vec<String>> {
     }
 }
 
-/// Reads the JSON array `json` into the tasks to add, in order, and how many were left out
+/// Reads the `format` file `text` into the tasks to add, in order, and how many were left out
 /// because they were cancelled where they came from — every rule [`import_tasks`] itself
 /// applies, pulled out so [`crate::report_supersede`] refuses a bad file the same way, with the
 /// same messages, before anything else about its own command is decided.
 ///
 /// # Errors
 ///
-/// Fails, parsing nothing, when `json` is not a JSON array, or when any task breaks a rule or
+/// Fails, parsing nothing, when `text` is not a task file of `format`, or when any task breaks a rule or
 /// carries a field that is neither authored nor tool-managed — all of them are listed, by their
-/// place in the array.
-pub(crate) fn parse_items(json: &str) -> Result<(Vec<TaskDraft>, usize), ImportError> {
-    let serde_json::Value::Array(values) =
-        serde_json::from_str(json).map_err(|e| ImportError::Malformed(e.to_string()))?
-    else {
-        return Err(ImportError::NotAnArray);
-    };
+/// place in the file.
+pub(crate) fn parse_items(
+    text: &str,
+    format: TaskFormat,
+) -> Result<(Vec<TaskDraft>, usize), ImportError> {
+    let values = format.tasks(text)?;
     let mut drafts = Vec::new();
     let mut invalid = Vec::new();
     let mut skipped_cancelled = 0usize;
@@ -198,7 +219,7 @@ pub(crate) fn parse_items(json: &str) -> Result<(Vec<TaskDraft>, usize), ImportE
     Ok((drafts, skipped_cancelled))
 }
 
-/// Use case: adds every task of the JSON array `json` to the queue, in order and together, at
+/// Use case: adds every task of the `format` file `text` to the queue, in order and together, at
 /// `placement`, so that what one project's `list --json` or `list --all --json` prints
 /// imports into another as it is.
 ///
@@ -210,17 +231,18 @@ pub(crate) fn parse_items(json: &str) -> Result<(Vec<TaskDraft>, usize), ImportE
 ///
 /// # Errors
 ///
-/// Fails, adding nothing, when `json` is not a JSON array, when any task breaks a rule or
+/// Fails, adding nothing, when `text` is not a task file of `format`, when any task breaks a rule or
 /// carries a field that is neither authored nor tool-managed — all of them are listed, by
 /// their place in the array — when `placement` names a task that does not exist or was
 /// cancelled, or when the journal cannot be written.
 pub fn import_tasks(
     journal: &impl Journal,
     clock: &impl Clock,
-    json: &str,
+    text: &str,
+    format: TaskFormat,
     placement: Placement,
 ) -> Result<Import, ImportError> {
-    let (drafts, skipped_cancelled) = parse_items(json)?;
+    let (drafts, skipped_cancelled) = parse_items(text, format)?;
     let tasks = add_tasks(journal, clock, &drafts, placement).map_err(ImportError::Add)?;
     Ok(Import {
         tasks,
@@ -239,11 +261,12 @@ pub fn import_tasks(
 pub fn import_tasks_with_providers(
     journal: &impl Journal,
     clock: &impl Clock,
-    json: &str,
+    text: &str,
+    format: TaskFormat,
     placement: Placement,
     known_providers: &[String],
 ) -> Result<Import, ImportError> {
-    let (drafts, skipped_cancelled) = parse_items(json)?;
+    let (drafts, skipped_cancelled) = parse_items(text, format)?;
     let invalid = drafts
         .iter()
         .enumerate()
@@ -318,7 +341,8 @@ mod tests {
     #[test]
     fn every_task_is_added_in_order_as_written_with_defaults_for_what_is_left_out() {
         let journal = FakeJournal::default();
-        let import = import_tasks(&journal, &clock(), THREE, Placement::End).unwrap();
+        let import =
+            import_tasks(&journal, &clock(), THREE, TaskFormat::Json, Placement::End).unwrap();
         let tasks = import.tasks;
         assert_eq!(import.skipped_cancelled, 0);
         assert_eq!(
@@ -335,6 +359,52 @@ mod tests {
         assert_eq!(tasks[1].links, ["github:o/r#1", "https://example.com"]);
     }
 
+    const TOML_TWO: &str = r#"
+[[tasks]]
+title = "one"
+criteria = ["a"]
+
+[[tasks]]
+title = "two"
+body = "more"
+criteria = ["a", "b"]
+kind = "human"
+links = ["github:o/r#1"]
+"#;
+
+    #[test]
+    fn toml_tasks_are_added_in_order_with_the_same_fields_as_json() {
+        let journal = FakeJournal::default();
+        let import = import_tasks(
+            &journal,
+            &clock(),
+            TOML_TWO,
+            TaskFormat::Toml,
+            Placement::End,
+        )
+        .unwrap();
+        assert_eq!(titles(&journal), ["one", "two"]);
+        assert_eq!(import.tasks[1].kind, TaskKind::Human);
+        assert_eq!(import.tasks[1].body, "more");
+        assert_eq!(import.tasks[1].criteria, ["a", "b"]);
+        assert_eq!(import.tasks[1].links, ["github:o/r#1"]);
+    }
+
+    #[test]
+    fn a_toml_field_error_reads_as_the_json_one_does_and_nothing_is_added() {
+        let toml = "[[tasks]]\ntitle = \"ok\"\ncriteria = [\"c\"]\n[[tasks]]\ntitle = 5\ncriteria = [\"c\"]\n[[tasks]]\ntitle = \"x\"\ncriteria = [\"c\"]\nassignee = \"bob\"\n";
+        let json = r#"[{"title":"ok","criteria":["c"]},{"title":5,"criteria":["c"]},{"title":"x","criteria":["c"],"assignee":"bob"}]"#;
+        let journal = FakeJournal::default();
+        let from_toml =
+            import_tasks(&journal, &clock(), toml, TaskFormat::Toml, Placement::End).unwrap_err();
+        let from_json =
+            import_tasks(&journal, &clock(), json, TaskFormat::Json, Placement::End).unwrap_err();
+        assert_eq!(from_toml, from_json);
+        assert!(from_toml.to_string().contains("task 2:"));
+        assert!(from_toml.to_string().contains("task 3:"));
+        assert_eq!(titles(&journal), Vec::<String>::new());
+    }
+
     #[test]
     fn the_batch_goes_together_before_or_after_the_task_named() {
         let batch = r#"[{"title":"x","criteria":["c"]},{"title":"y","criteria":["c"]}]"#;
@@ -346,7 +416,7 @@ mod tests {
             (Placement::After(TaskId(3)), ["a", "b", "c", "x", "y"]),
         ] {
             let journal = queue_of(&["a", "b", "c"]);
-            import_tasks(&journal, &clock(), batch, placement).unwrap();
+            import_tasks(&journal, &clock(), batch, TaskFormat::Json, placement).unwrap();
             assert_eq!(titles(&journal), expected, "{placement:?}");
         }
     }
@@ -355,7 +425,13 @@ mod tests {
     fn an_empty_array_imports_nothing() {
         let journal = queue_of(&["a"]);
         assert_eq!(
-            import_tasks(&journal, &clock(), " [ ] ", Placement::End),
+            import_tasks(
+                &journal,
+                &clock(),
+                " [ ] ",
+                TaskFormat::Json,
+                Placement::End
+            ),
             Ok(Import {
                 tasks: vec![],
                 skipped_cancelled: 0
@@ -376,7 +452,7 @@ mod tests {
             "text"
         ]"#;
         let Err(ImportError::Invalid(invalid)) =
-            import_tasks(&journal, &clock(), json, Placement::End)
+            import_tasks(&journal, &clock(), json, TaskFormat::Json, Placement::End)
         else {
             panic!("expected invalid tasks");
         };
@@ -403,7 +479,8 @@ mod tests {
             {"id": 8, "position": 2, "title": "two", "body": "", "criteria": ["b"],
              "kind": "human", "links": [], "status": "pending", "created_at": "2024-01-02T00:00:00Z"}
         ]"#;
-        let import = import_tasks(&journal, &clock(), json, Placement::End).unwrap();
+        let import =
+            import_tasks(&journal, &clock(), json, TaskFormat::Json, Placement::End).unwrap();
         assert_eq!(import.skipped_cancelled, 0);
         assert_eq!(
             import.tasks.iter().map(|t| t.id).collect::<Vec<_>>(),
@@ -420,7 +497,8 @@ mod tests {
             {"title": "gone", "criteria": ["c"], "status": "cancelled"},
             {"title": "kept two", "criteria": ["c"]}
         ]"#;
-        let import = import_tasks(&journal, &clock(), json, Placement::End).unwrap();
+        let import =
+            import_tasks(&journal, &clock(), json, TaskFormat::Json, Placement::End).unwrap();
         assert_eq!(import.skipped_cancelled, 1);
         assert_eq!(
             import.skipped_message().as_deref(),
@@ -491,15 +569,19 @@ mod tests {
     #[test]
     fn text_that_is_not_json_or_not_an_array_adds_nothing() {
         let journal = FakeJournal::default();
-        let Err(ImportError::Malformed(message)) =
-            import_tasks(&journal, &clock(), "[\n  {\"title\": }\n]", Placement::End)
-        else {
+        let Err(ImportError::Malformed(message)) = import_tasks(
+            &journal,
+            &clock(),
+            "[\n  {\"title\": }\n]",
+            TaskFormat::Json,
+            Placement::End,
+        ) else {
             panic!("expected malformed JSON");
         };
         assert!(message.contains("line 2 column"), "{message}");
         for json in ["{}", "\"x\"", "3", "null"] {
             assert_eq!(
-                import_tasks(&journal, &clock(), json, Placement::End),
+                import_tasks(&journal, &clock(), json, TaskFormat::Json, Placement::End),
                 Err(ImportError::NotAnArray)
             );
         }
@@ -510,7 +592,13 @@ mod tests {
     fn a_place_that_does_not_exist_or_a_journal_failure_adds_nothing() {
         let journal = queue_of(&["a"]);
         assert_eq!(
-            import_tasks(&journal, &clock(), THREE, Placement::After(TaskId(9))),
+            import_tasks(
+                &journal,
+                &clock(),
+                THREE,
+                TaskFormat::Json,
+                Placement::After(TaskId(9))
+            ),
             Err(ImportError::Add(AddError::UnknownTask(TaskId(9))))
         );
         assert_eq!(titles(&journal), ["a"]);
@@ -520,6 +608,7 @@ mod tests {
                 &FakeJournal::failing(failure.clone()),
                 &clock(),
                 THREE,
+                TaskFormat::Json,
                 Placement::End
             ),
             Err(ImportError::Add(AddError::Journal(failure)))

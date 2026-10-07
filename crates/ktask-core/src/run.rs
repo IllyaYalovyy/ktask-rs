@@ -3457,7 +3457,14 @@ mod tests {
                         {"title": "part one", "criteria": ["a"]},
                         {"title": "part two", "criteria": ["b"]}
                     ]"#;
-                    report_supersede(self.journal, &clock(), &token, tasks).unwrap();
+                    report_supersede(
+                        self.journal,
+                        &clock(),
+                        &token,
+                        tasks,
+                        crate::TaskFormat::Json,
+                    )
+                    .unwrap();
                 }
                 _ if token.task == TaskId(1) && token.number == 1 => {
                     report(

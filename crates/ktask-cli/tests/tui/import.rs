@@ -234,6 +234,97 @@ fn a_file_that_cannot_be_read_is_refused_naming_it() -> Result<()> {
 }
 
 #[test]
+fn a_toml_path_is_imported_exactly_as_ktask_rs_import_would() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add("Existing")?;
+    let file = fixture.file(
+        "tasks.toml",
+        "[[tasks]]\ntitle = \"x\"\ncriteria = [\"c\"]\n\n\
+         [[tasks]]\ntitle = \"y\"\ncriteria = [\"c\"]\nkind = \"human\"\n",
+    )?;
+    let mut terminal = fixture.open_form()?;
+
+    terminal.send(&file)?;
+    terminal.send(SUBMIT)?;
+
+    let screen = terminal.wait_for_text("2 tasks added: 2, 3")?;
+    assert_eq!(result_line(&screen, 0), "2 tasks added: 2, 3");
+    assert!(list_still_shown(&screen), "{screen}");
+
+    terminal.send("x")?;
+    let screen = terminal.wait_for("the reloaded queue with the imported tasks", |screen| {
+        screen.contents().contains(" y")
+    })?;
+    let lines = lines_inside_frame(&screen);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with('>') && line.ends_with("agent  x")),
+        "{screen}"
+    );
+    assert!(
+        lines.iter().any(|line| line.ends_with("human  y")),
+        "{screen}"
+    );
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
+fn a_toml_task_with_a_wrong_field_is_refused_naming_its_index_and_field() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let file = fixture.file(
+        "tasks.toml",
+        "[[tasks]]\ntitle = \"ok\"\ncriteria = [\"c\"]\n\n[[tasks]]\ntitle = 5\ncriteria = [\"c\"]\n",
+    )?;
+    let mut terminal = fixture.open_form()?;
+
+    terminal.send(&file)?;
+    terminal.send(SUBMIT)?;
+
+    let screen = terminal.wait_for_text("1 task is invalid")?;
+    assert_eq!(
+        result_line(&screen, 1),
+        "  - task 2: title: invalid type: integer `5`, expected a string"
+    );
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
+fn a_path_that_is_neither_json_nor_toml_is_refused_in_the_words_ktask_rs_import_gives() -> Result<()>
+{
+    let fixture = Fixture::new()?;
+    fixture.add("Existing")?;
+    let file = fixture.file("tasks.md", r#"[{"title": "x", "criteria": ["c"]}]"#)?;
+    let mut terminal = fixture.open_form()?;
+
+    terminal.send(&file)?;
+    terminal.send(SUBMIT)?;
+
+    let screen = terminal.wait_for_text("only .json and .toml files are imported")?;
+    assert_eq!(
+        result_line(&screen, 0),
+        "only .json and .toml files are imported"
+    );
+    assert!(list_still_shown(&screen), "{screen}");
+
+    terminal.send("x")?;
+    let screen = terminal.wait_for("the queue back with nothing new added", |screen| {
+        !screen.contents().contains("files are imported")
+    })?;
+    assert_eq!(
+        lines_inside_frame(&screen)[2],
+        "pending 1 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0 superseded 0 · usage"
+    );
+    terminal.send("q")?;
+    assert_eq!(terminal.wait_for_exit()?, 0);
+    Ok(())
+}
+
+#[test]
 fn a_cancelled_task_in_the_file_is_skipped_saying_how_many() -> Result<()> {
     let fixture = Fixture::new()?;
     let file = fixture.file(
@@ -280,10 +371,7 @@ fn the_key_map_lists_i() -> Result<()> {
     terminal.send("?")?;
 
     let screen = terminal.wait_for("the key map", |screen| screen.contents().contains("Keys"))?;
-    assert!(
-        screen.contains("ktask-rs import") || screen.contains("JSON file"),
-        "{screen}"
-    );
+    assert!(screen.contains("JSON or TOML file"), "{screen}");
     assert!(
         lines_inside_frame(&screen)
             .iter()

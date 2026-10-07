@@ -461,6 +461,7 @@ mod tests {
             &journal,
             &clock,
             r#"[{"title":"x","criteria":["c"]},{"title":"y","criteria":["c"]}]"#,
+            crate::TaskFormat::Json,
             Placement::End,
         )
         .unwrap();

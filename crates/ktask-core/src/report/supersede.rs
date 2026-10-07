@@ -73,13 +73,13 @@ impl Supersede {
 }
 
 /// Use case: records the resolver's `supersede` decision for the attempt `token` names, reading
-/// `tasks_json` — a JSON array of tasks in the same format [`crate::import_tasks`] takes — and
+/// `tasks` — a task file of `format`, read as [`crate::import_tasks`] reads one — and
 /// adding every task it describes, together, in order, where the superseded task was.
 ///
 /// # Errors
 ///
-/// Fails, recording nothing, when `tasks_json` is refused the same way `import_tasks` refuses
-/// one — not a JSON array, or any task breaks a rule or carries a field that is neither
+/// Fails, recording nothing, when `tasks` is refused the same way `import_tasks` refuses
+/// one — not a task file of `format`, or any task breaks a rule or carries a field that is neither
 /// authored nor tool-managed; when `supersede` does not belong to the step currently running
 /// for this attempt — only the resolve step accepts it; or when the journal reports the
 /// attempt is unknown or has ended.
@@ -87,9 +87,10 @@ pub fn report_supersede(
     journal: &impl Journal,
     clock: &impl Clock,
     token: &AttemptToken,
-    tasks_json: &str,
+    tasks: &str,
+    format: crate::TaskFormat,
 ) -> Result<Supersede, ReportError> {
-    let (drafts, skipped_cancelled) = crate::import::parse_items(tasks_json)?;
+    let (drafts, skipped_cancelled) = crate::import::parse_items(tasks, format)?;
     check_outcome_for_step(journal, token, Outcome::Supersede)?;
     let tasks =
         crate::attempt::record_supersede(journal, clock, token.task, token.number, &drafts)?;
@@ -102,7 +103,7 @@ pub fn report_supersede(
 #[cfg(test)]
 mod tests {
     use crate::fakes::{FakeClock, FakeJournal, at, draft};
-    use crate::{ImportError, Placement, TaskId, TaskStatus, add_task};
+    use crate::{ImportError, Placement, TaskFormat, TaskId, TaskStatus, add_task};
 
     use super::*;
 
@@ -140,7 +141,8 @@ mod tests {
         let journal = journal_with_the_resolve_step_running();
         let token = AttemptToken::new("proj", TaskId(1), 1);
 
-        let supersede = report_supersede(&journal, &clock(), &token, THREE).unwrap();
+        let supersede =
+            report_supersede(&journal, &clock(), &token, THREE, TaskFormat::Json).unwrap();
 
         assert_eq!(supersede.skipped_cancelled, 0);
         let ids: Vec<_> = supersede.tasks.iter().map(|task| task.id).collect();
@@ -177,7 +179,8 @@ mod tests {
             {"title": "gone", "criteria": ["c"], "status": "cancelled"}
         ]"#;
 
-        let supersede = report_supersede(&journal, &clock(), &token, json).unwrap();
+        let supersede =
+            report_supersede(&journal, &clock(), &token, json, TaskFormat::Json).unwrap();
 
         assert_eq!(supersede.skipped_cancelled, 1);
         assert_eq!(
@@ -193,7 +196,13 @@ mod tests {
         let token = AttemptToken::new("proj", TaskId(1), 1);
         let before = crate::list_all_tasks(&journal).unwrap();
 
-        let malformed = report_supersede(&journal, &clock(), &token, "[\n  {\"title\": }\n]");
+        let malformed = report_supersede(
+            &journal,
+            &clock(),
+            &token,
+            "[\n  {\"title\": }\n]",
+            TaskFormat::Json,
+        );
         assert!(
             matches!(
                 malformed,
@@ -202,13 +211,19 @@ mod tests {
             "{malformed:?}"
         );
 
-        let not_an_array = report_supersede(&journal, &clock(), &token, "{}");
+        let not_an_array = report_supersede(&journal, &clock(), &token, "{}", TaskFormat::Json);
         assert_eq!(
             not_an_array,
             Err(ReportError::Import(ImportError::NotAnArray))
         );
 
-        let invalid = report_supersede(&journal, &clock(), &token, r#"[{"title": "  "}]"#);
+        let invalid = report_supersede(
+            &journal,
+            &clock(),
+            &token,
+            r#"[{"title": "  "}]"#,
+            TaskFormat::Json,
+        );
         assert!(
             matches!(invalid, Err(ReportError::Import(ImportError::Invalid(_)))),
             "{invalid:?}"
@@ -238,7 +253,8 @@ mod tests {
         .unwrap();
         let token = AttemptToken::new("proj", TaskId(1), 1);
 
-        let error = report_supersede(&journal, &clock(), &token, THREE).unwrap_err();
+        let error =
+            report_supersede(&journal, &clock(), &token, THREE, TaskFormat::Json).unwrap_err();
 
         assert_eq!(
             error,

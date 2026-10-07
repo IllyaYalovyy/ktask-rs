@@ -51,7 +51,7 @@ const KEYS: [(&str, &str); 22] = [
     ),
     (
         "i",
-        "import the tasks of a JSON file, asked for by its path",
+        "import the tasks of a JSON or TOML file, asked for by its path",
     ),
     ("s", "open the project's settings"),
     ("v", "open the project's providers"),

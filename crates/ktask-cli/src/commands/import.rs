@@ -4,6 +4,7 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use ktask_adapters::{SystemClock, read_text};
+use ktask_core::TaskFormat;
 
 use crate::context::{merge_project, open_journal, open_registry, placement, resolve};
 use crate::error::Failure;
@@ -18,7 +19,7 @@ use crate::render;
 /// left out.
 #[derive(Debug, clap::Args)]
 pub(crate) struct Args {
-    /// The JSON file to read, or - for standard input
+    /// The .json or .toml file to read, or - for standard input (JSON)
     #[arg(value_name = "FILE")]
     file: String,
     /// Put the tasks immediately before the task with this ID
@@ -40,7 +41,8 @@ pub(crate) fn run(
 ) -> Result<ExitCode, Failure> {
     // Read before anything is registered or opened, so that a missing file changes
     // nothing.
-    let json = read_text(&args.file).map_err(|message| Failure { message, code: 2 })?;
+    let format = TaskFormat::of_path(&args.file)?;
+    let text = read_text(&args.file).map_err(|message| Failure { message, code: 2 })?;
     let project = merge_project(project, args.project.as_deref())?;
     let registry = open_registry()?;
     let (project, settings) = resolve(&registry, project.as_deref())?;
@@ -53,7 +55,8 @@ pub(crate) fn run(
     let import = ktask_core::import_tasks_with_providers(
         &journal,
         &SystemClock,
-        &json,
+        &text,
+        format,
         placement(args.before, args.after),
         &known,
     )?;

@@ -349,7 +349,7 @@ fn every_invalid_task_is_named_by_its_index_with_every_problem_it_has() -> Resul
             "task 3: an acceptance criterion is empty",
             "task 3: malformed link \"nonsense\"",
             "task 4: unknown field `assignee`",
-            "task 5: invalid type: integer `5`, expected a string",
+            "task 5: title: invalid type: integer `5`, expected a string",
             "task 6: invalid type: string \"just text\"",
         ],
     );
@@ -727,5 +727,163 @@ fn the_import_help_describes_the_file_the_placement_and_the_fields() -> Result<(
     }
     let top = fixture.run(&["--help"])?;
     assert!(top.stdout.contains("import"), "{}", top.stdout);
+    Ok(())
+}
+
+const TOML_TWO: &str = r#"
+[[tasks]]
+title = "First"
+body = "more\ntext"
+criteria = ["a", "b"]
+kind = "human"
+links = ["github:o/r#1"]
+
+[[tasks]]
+title = "Second"
+criteria = ["c"]
+"#;
+
+#[test]
+fn a_toml_file_with_two_tasks_imports_them_in_order_with_every_field() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add("Existing")?;
+    let file = fixture.file("tasks.toml", TOML_TWO)?;
+
+    let outcome = fixture.run(&["import", &file])?;
+
+    assert_eq!(outcome.stdout, "2 tasks added: 2, 3\n");
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(fixture.queue()?, ["1:Existing", "2:First", "3:Second"]);
+    let listed = fixture.listed()?;
+    assert_eq!(listed[1]["body"], "more\ntext");
+    assert_eq!(listed[1]["criteria"], json!(["a", "b"]));
+    assert_eq!(listed[1]["kind"], "human");
+    assert_eq!(listed[1]["links"], json!(["github:o/r#1"]));
+    assert_eq!(listed[2]["kind"], "agent");
+    Ok(())
+}
+
+#[test]
+fn a_toml_file_takes_the_placement_options_like_a_json_one() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add("Existing")?;
+    fixture.add("Last")?;
+    let file = fixture.file("tasks.toml", TOML_TWO)?;
+
+    let outcome = fixture.run(&["import", &file, "--after", "1"])?;
+
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(
+        fixture.queue()?,
+        ["1:Existing", "3:First", "4:Second", "2:Last"]
+    );
+    Ok(())
+}
+
+#[test]
+fn one_bad_toml_task_adds_none_and_the_error_is_the_json_forms_word_for_word() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.listed()?;
+    let toml = fixture.file(
+        "bad.toml",
+        "[[tasks]]\ntitle = \"fine\"\ncriteria = [\"c\"]\n\n\
+         [[tasks]]\ntitle = \"x\"\ncriteria = [\"c\"]\nkind = \"robot\"\n\n\
+         [[tasks]]\ntitle = \"y\"\ncriteria = [\"c\"]\nassignee = \"bob\"\n",
+    )?;
+    let json = fixture.file(
+        "bad.json",
+        &json!([
+            task("fine"),
+            { "title": "x", "criteria": ["c"], "kind": "robot" },
+            { "title": "y", "criteria": ["c"], "assignee": "bob" },
+        ])
+        .to_string(),
+    )?;
+
+    let from_json = fixture.run(&["import", &json])?;
+    let from_toml = fixture.run(&["import", &toml])?;
+
+    assert_refused(
+        &from_toml,
+        &[
+            "2 tasks are invalid",
+            "task 2:",
+            "robot",
+            "task 3:",
+            "assignee",
+        ],
+    );
+    assert_eq!(from_toml.stderr, from_json.stderr);
+    assert_eq!(fixture.listed()?, Vec::<Value>::new());
+    assert_eq!(fixture.event_payloads()?, Vec::<Value>::new());
+    Ok(())
+}
+
+#[test]
+fn a_toml_field_of_the_wrong_type_is_named_by_task_and_field_as_in_json() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.listed()?;
+    let toml = fixture.file("typed.toml", "[[tasks]]\ntitle = 5\ncriteria = [\"c\"]\n")?;
+    let json = fixture.file("typed.json", r#"[{"title": 5, "criteria": ["c"]}]"#)?;
+
+    let from_json = fixture.run(&["import", &json])?;
+    let from_toml = fixture.run(&["import", &toml])?;
+
+    assert_refused(
+        &from_toml,
+        &["task 1: title: invalid type: integer `5`, expected a string"],
+    );
+    assert_eq!(from_toml.stderr, from_json.stderr);
+    Ok(())
+}
+
+#[test]
+fn text_that_is_not_toml_task_tables_exits_two_and_adds_nothing() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let broken = fixture.file("broken.toml", "[[tasks]\ntitle = \"a\"\n")?;
+    assert_refused(&fixture.run(&["import", &broken])?, &["not valid TOML"]);
+    for text in [
+        "",
+        "title = \"a\"\n",
+        "tasks = 3\n",
+        "[[tasks]]\ntitle = \"a\"\ncriteria = [\"c\"]\n[other]\nx = 1\n",
+    ] {
+        let file = fixture.file("shape.toml", text)?;
+        assert_refused(
+            &fixture.run(&["import", &file])?,
+            &["expected [[tasks]] tables"],
+        );
+    }
+    assert_eq!(fixture.listed()?, Vec::<Value>::new());
+    Ok(())
+}
+
+#[test]
+fn any_other_extension_is_refused_naming_the_two_and_registers_nothing() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let message = "only .json and .toml files are imported";
+    for name in ["x.yaml", "x.md", "x", "x.JSON"] {
+        let file = fixture.file(name, &json!([task("never")]).to_string())?;
+        let outcome = fixture.run(&["import", &file])?;
+        assert_refused(&outcome, &[message]);
+    }
+    let missing = fixture.work.join("missing.yaml");
+    assert_refused(
+        &fixture.run(&["import", &missing.to_string_lossy()])?,
+        &[message],
+    );
+    assert_eq!(fixture.run(&["project", "list"])?.stdout, "");
+    assert_eq!(fixture.listed()?, Vec::<Value>::new());
+    Ok(())
+}
+
+#[test]
+fn a_dash_is_still_json_so_toml_on_standard_input_is_not_valid_json() -> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let outcome = fixture.run_with_stdin(&["import", "-"], TOML_TWO)?;
+
+    assert_refused(&outcome, &["not valid JSON"]);
+    assert_eq!(fixture.listed()?, Vec::<Value>::new());
     Ok(())
 }

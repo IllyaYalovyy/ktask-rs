@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use ktask_adapters::{
     SystemClock, TomlSettingsStore, builtin_providers, echo, read_text, settings_path,
 };
-use ktask_core::{AttemptToken, Outcome, SettingsStore};
+use ktask_core::{AttemptToken, Outcome, SettingsStore, TaskFormat};
 
 use crate::context::{open_journal, open_registry, reject_project, resolve};
 use crate::error::Failure;
@@ -50,9 +50,9 @@ pub(crate) struct Args {
     /// limit
     #[arg(long, value_name = "MINUTES", value_parser = clap::value_parser!(u32).range(1..))]
     more_time: Option<u32>,
-    /// The JSON file of tasks that replace the superseded one, in the same format `import`
-    /// takes, or - for standard input; required with the `supersede` outcome, refused with
-    /// every other one
+    /// The .json or .toml file of tasks that replace the superseded one, in the same format
+    /// `import` takes, or - for standard input (JSON); required with the `supersede` outcome,
+    /// refused with every other one
     #[arg(long, value_name = "FILE")]
     tasks: Option<String>,
 }
@@ -163,6 +163,20 @@ fn record(
     }
 }
 
+/// The text of the `--tasks` file and its format, when one is given — read before anything is
+/// registered or opened, so that a missing file or one of an unsupported format changes nothing.
+fn read_tasks_file(args: &Args) -> Result<Option<(String, TaskFormat)>, Failure> {
+    args.tasks
+        .as_deref()
+        .map(|path| {
+            let format = TaskFormat::of_path(path)?;
+            read_text(path)
+                .map(|text| (text, format))
+                .map_err(|message| Failure { message, code: 2 })
+        })
+        .transpose()
+}
+
 /// Records `args.outcome` (and `args.reason`) for the attempt `args.token` names, in the
 /// journal of the project it names — resolved from the token alone, so this needs no
 /// `--project` and works from any directory; one named before it is refused.
@@ -183,18 +197,13 @@ pub(crate) fn run(
     check_provider_and_model(outcome, args)?;
     check_defined_provider(&token, args.provider.as_deref())?;
     check_tasks_flag(outcome, args)?;
-    // Read before anything is registered or opened, so that a missing file changes nothing.
-    let tasks_json = args
-        .tasks
-        .as_deref()
-        .map(read_text)
-        .transpose()
-        .map_err(|message| Failure { message, code: 2 })?;
+    let tasks = read_tasks_file(args)?;
     let registry = open_registry()?;
     let (project, _settings) = resolve(&registry, Some(&token.project))?;
     let journal = open_journal(&project)?;
-    if let Some(tasks_json) = tasks_json {
-        let supersede = ktask_core::report_supersede(&journal, &SystemClock, &token, &tasks_json)?;
+    if let Some((text, format)) = tasks {
+        let supersede =
+            ktask_core::report_supersede(&journal, &SystemClock, &token, &text, format)?;
         render::reported_supersede(token.task, &supersede, stdout)?;
     } else {
         record(&journal, &token, outcome, args)?;

@@ -220,7 +220,12 @@ impl From<ImportError> for Failure {
     fn from(error: ImportError) -> Self {
         match error {
             ImportError::Add(error) => Self::from(error),
-            ImportError::Malformed(_) | ImportError::NotAnArray | ImportError::Invalid(_) => Self {
+            ImportError::Malformed(_)
+            | ImportError::NotAnArray
+            | ImportError::MalformedToml(_)
+            | ImportError::NotATaskTable(_)
+            | ImportError::UnsupportedFormat
+            | ImportError::Invalid(_) => Self {
                 message: error.to_string(),
                 code: 2,
             },
