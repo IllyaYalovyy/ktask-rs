@@ -28,3 +28,8 @@ Check, in this order:
 
 `APPROVE` or `CHANGES REQUESTED`, then findings — each with `file:line`, what is wrong, and
 what would fix it. No praise, no summary of the change.
+
+A finding is something that must change. There are no severities and no notes: if a thing
+has no impact, it is not a finding and costs nobody a word; if it is a risk, it is a finding
+and it will be fixed. A problem outside the change under review is still a finding — mark it
+`elsewhere`; it becomes a task of its own instead of a fix in this one.
