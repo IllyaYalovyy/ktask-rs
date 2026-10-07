@@ -149,7 +149,7 @@ mod tests {
     #[test]
     fn a_prompt_with_no_bash_block_is_an_error() {
         let result = command(
-            "just some text\n```python\nprint(1)\n```\n",
+            "just some text\n```ruby\nputs 1\n```\n",
             call("tok", 1, "implementation"),
         );
         assert_eq!(
@@ -245,8 +245,8 @@ mod tests {
     }
 
     #[test]
-    fn only_the_first_of_several_bash_blocks_is_run() {
-        let prompt = "```bash\nfirst\n```\n```bash\nsecond\n```\n";
+    fn only_the_first_bash_block_among_several_languages_is_run() {
+        let prompt = "```ruby\nputs 1\n```\n```bash\nfirst\n```\n```perl\nprint 2\n```\n```bash\nsecond\n```\n";
         let built = command(prompt, call("t", 1, "implementation")).unwrap();
         assert_eq!(built.stdin, b"first\n");
     }
