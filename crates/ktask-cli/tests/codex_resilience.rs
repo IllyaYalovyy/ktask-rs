@@ -113,10 +113,12 @@ fn a_transport_backoff_line_counts_one_number_down_in_status_and_status_json() -
         assert!(!text.contains("resumes in"), "{text}");
         assert!(!json.contains("resumes in"), "{json}");
         if let Some(seconds) = retry_two_countdown(&text) {
+            assert!(text.contains("routed: retry 2 of 3"), "{text}");
             countdown.push(seconds);
             let parsed = serde_json::from_str::<serde_json::Value>(&json)?;
             let reason = parsed[0]["attempt"]["reason"].as_str().unwrap_or_default();
             if reason.contains("retry 2 of 3 in ") {
+                assert_eq!(parsed[0]["attempt"]["routed"], "retry 2 of 3", "{json}");
                 json_reason = Some(reason.to_owned());
             }
         } else if !countdown.is_empty() {
@@ -144,41 +146,70 @@ fn a_transport_backoff_line_counts_one_number_down_in_status_and_status_json() -
     Ok(())
 }
 
-const TRANSPORT_STOP: &str = "Codex transport failed 3 consecutive times: stream disconnected before completion: Transport error: network error: error decoding response body; check the network and Codex service, then run again";
+const TRANSPORT_FAILURE: &str = "Codex transport failed 3 consecutive times: stream disconnected before completion: Transport error: network error: error decoding response body";
+
+/// A fake codex that fails the recorded way, except when it is handed a resolve prompt: that it
+/// saves to `saved` and answers with `stop`.
+fn transport_failure_then_stop(saved: &std::path::Path) -> String {
+    format!(
+        "prompt=$(cat)\nif printf '%s\\n' \"$prompt\" | grep -q '^# Resolve:'; then printf '%s\\n' \"$prompt\" > '{saved}'; binary=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    \\(.*\\) report --token .* stop --reason .*/\\1/p' | head -n 1); token=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    .* report --token \\([^ ]*\\) stop --reason .*/\\1/p' | head -n 1); \"$binary\" report --token \"$token\" stop --reason 'the network is down'; else printf '%s' '{thread}'; printf '%s' '{failure}' >&2; exit 1; fi",
+        saved = saved.display(),
+        thread = "{\"type\":\"thread.started\",\"thread_id\":\"transport-thread\"}",
+        failure = include_str!("../../../test-fixtures/codex/transport-failure-stderr.txt"),
+    )
+}
 
 #[test]
-fn recorded_transport_failures_back_off_then_leave_the_task_pending_without_costing_an_attempt()
+fn recorded_transport_failures_back_off_then_end_in_the_resolve_step_naming_the_exhausted_retries()
 -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add()?;
-    let _codex = fixture.install_codex(&format!(
-        "cat >/dev/null\nprintf '%s' '{thread}'\nprintf '%s' '{failure}' >&2\nexit 1",
-        thread = "{\"type\":\"thread.started\",\"thread_id\":\"transport-thread\"}",
-        failure = include_str!("../../../test-fixtures/codex/transport-failure-stderr.txt"),
-    ))?;
+    let saved = fixture.repository.join("resolve-prompt.md");
+    let _codex = fixture.install_codex(&transport_failure_then_stop(&saved))?;
 
     let run = fixture.run(&["run"])?;
     assert_eq!(run.code, Some(1), "{}", run.stderr);
-    assert!(run.stdout.contains(TRANSPORT_STOP), "{}", run.stdout);
+    let prompt = std::fs::read_to_string(&saved)?;
+    assert!(prompt.contains("## Why this came to you"), "{prompt}");
+    assert!(
+        prompt.contains("All 3 transport retries are used up"),
+        "{prompt}"
+    );
+    assert!(prompt.contains(TRANSPORT_FAILURE), "{prompt}");
+    assert!(!prompt.contains("--more-time"), "{prompt}");
     let status = fixture.run(&["status"])?;
     assert!(
-        status.stdout.starts_with("#1\tpending\t"),
+        status.stdout.starts_with("#1\tfailed\t"),
         "{}",
         status.stdout
     );
     assert!(
-        status.stdout.contains("attempt 1: implementation"),
+        status.stdout.contains("attempt 1: resolve"),
         "{}",
         status.stdout
     );
-    assert!(status.stdout.contains(TRANSPORT_STOP), "{}", status.stdout);
+    assert!(
+        status
+            .stdout
+            .contains("routed: decide — transport retries exhausted"),
+        "{}",
+        status.stdout
+    );
+    assert!(
+        status.stdout.contains("the network is down"),
+        "{}",
+        status.stdout
+    );
     for output in [&run.stdout, &status.stdout] {
         assert!(!output.contains("ERROR:"), "{output}");
-        assert_eq!(output.matches("check the network").count(), 1, "{output}");
-        assert_eq!(output.matches("stream disconnected").count(), 1, "{output}");
-        assert!(!output.contains("lost its transport"), "{output}");
     }
-    assert!(!status.stdout.contains("resolve"), "{}", status.stdout);
+    let json = fixture.run(&["status", "--json"])?;
+    assert!(
+        json.stdout
+            .contains("\"routed\":\"decide — transport retries exhausted\""),
+        "{}",
+        json.stdout
+    );
     Ok(())
 }
 

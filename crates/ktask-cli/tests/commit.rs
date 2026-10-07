@@ -288,6 +288,11 @@ fn an_unconfigured_git_identity_is_a_known_cause_the_task_stays_pending_over() -
         lines[4]
     );
     assert!(
+        lines[4].contains("routed: stop — no git identity"),
+        "{}",
+        lines[4]
+    );
+    assert!(
         !lines
             .iter()
             .any(|line| line.starts_with("\tattempt 1: resolve\t")),

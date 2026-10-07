@@ -202,6 +202,7 @@ fn a_derived_claude_rejection_waits_for_its_resets_at_time() -> Result<()> {
     assert!(status.contains("attempt 1: implementation"), "{status}");
     assert!(status.contains("usage limit"), "{status}");
     assert!(status.contains("resumes in"), "{status}");
+    assert!(status.contains("routed: wait"), "{status}");
     assert!(!status.contains("retry"), "{status}");
     Ok(())
 }
@@ -217,6 +218,7 @@ fn a_derived_claude_limit_error_result_waits() -> Result<()> {
     assert!(status.contains("attempt 1: implementation"), "{status}");
     assert!(status.contains("usage limit"), "{status}");
     assert!(status.contains("resumes in"), "{status}");
+    assert!(status.contains("routed: wait"), "{status}");
     assert!(!status.contains("retry"), "{status}");
     Ok(())
 }
@@ -240,6 +242,11 @@ fn recorded_claude_authentication_failure_stops_with_login_advice() -> Result<()
         status.stdout
     );
     assert!(!status.stdout.contains("\tresolve\t"), "{}", status.stdout);
+    assert!(
+        status.stdout.contains("routed: stop — not logged in"),
+        "{}",
+        status.stdout
+    );
     Ok(())
 }
 

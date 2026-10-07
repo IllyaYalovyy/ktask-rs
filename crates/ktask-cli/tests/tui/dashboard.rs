@@ -555,7 +555,7 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     assert!(lines[8].contains("commit"));
     assert_eq!(lines[9], " 2  #2  failed  agent  b");
     assert!(
-        lines[10].ends_with("failed: it broke · usage none"),
+        lines[10].ends_with("failed: it broke · routed: decide — agent failed · usage none"),
         "{}",
         lines[10]
     );
@@ -574,7 +574,7 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     assert_eq!(lines[4], ">1  #1  done    agent  x");
     assert_eq!(lines[9], " 2  #2  failed  agent  c");
     assert!(
-        lines[10].ends_with("too-large: split me · usage none"),
+        lines[10].ends_with("too-large: split me · routed: decide — agent failed · usage none"),
         "{}",
         lines[10]
     );
@@ -649,7 +649,9 @@ fn a_changes_requested_review_shows_its_own_outcome_and_findings() -> Result<()>
     );
     assert!(
         lines[6].contains("review · echo")
-            && lines[6].ends_with("changes-requested: needs docs · usage none"),
+            && lines[6].ends_with(
+                "changes-requested: needs docs · routed: decide — rejected · usage none"
+            ),
         "{}",
         lines[6]
     );
@@ -687,7 +689,8 @@ fn a_rejecting_tester_shows_its_own_outcome_and_what_failed() -> Result<()> {
     );
     assert!(
         lines[7].contains("testing · echo")
-            && lines[7].ends_with("rejected: login is broken · usage none"),
+            && lines[7]
+                .ends_with("rejected: login is broken · routed: decide — rejected · usage none"),
         "{}",
         lines[7]
     );

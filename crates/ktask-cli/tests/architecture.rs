@@ -157,3 +157,44 @@ fn the_directories_of_the_channels_are_named_in_one_place() -> std::io::Result<(
     );
     Ok(())
 }
+
+/// Every failure is routed by one rule table, in `route/` of `ktask-core`: no step module and no
+/// part of the attempt loop decides wait, retry, decide or stop for itself. The only caller of
+/// the router outside it is `steps/execute.rs`, which every step passes through.
+#[test]
+fn only_the_router_holds_a_routing_rule() -> std::io::Result<()> {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("ktask-core")
+        .join("src");
+    let mut sources = Vec::new();
+    rust_sources(&source, &mut sources)?;
+    let router = source.join("route");
+    let executor = source.join("steps/execute.rs");
+    let mut callers = Vec::new();
+    for (path, text) in &sources {
+        let production_code = text.split("#[cfg(test)]").next().unwrap_or(text);
+        if path.starts_with(&router) {
+            continue;
+        }
+        for rule in [
+            "StopCause::classify",
+            "stream disconnected before completion",
+            "Reconnecting",
+            "const RULES",
+            "DEFAULT_LIMIT_BACKOFF",
+            "fn route(",
+        ] {
+            assert!(
+                !production_code.contains(rule),
+                "{} holds a routing rule ({rule}) outside route/",
+                path.display()
+            );
+        }
+        if production_code.contains("route(&facts)") {
+            callers.push(path.clone());
+        }
+    }
+    assert_eq!(callers, [executor]);
+    Ok(())
+}

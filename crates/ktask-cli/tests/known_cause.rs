@@ -148,6 +148,12 @@ fn a_disk_full_message_from_the_provider_is_a_known_cause_the_task_stays_pending
         "{}",
         outcome.stdout
     );
+    let status = fixture.run(&["status"])?;
+    assert!(
+        status.stdout.contains("routed: stop — disk full"),
+        "{}",
+        status.stdout
+    );
     assert_eq!(fixture.task_status()?, "pending");
     Ok(())
 }

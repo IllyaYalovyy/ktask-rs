@@ -129,7 +129,7 @@ fn a_resumed_attempt_reads_the_earlier_transcript_and_the_session_stays_the_same
         fixture.status_lines()?,
         [
             "#1\tdone\ta\tusage none",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\tsession:carried-over\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tsession:carried-over\tusage none",
             "\tattempt 1: resolve\techo\t0s\tretry\tusage none",
             "\tattempt 2: implementation\techo\t0s\tdone\tsession:carried-over\tusage none",
             "\tattempt 2: review\techo\t0s\tapproved\tusage none",

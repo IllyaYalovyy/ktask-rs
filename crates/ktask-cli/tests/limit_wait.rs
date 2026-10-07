@@ -200,6 +200,10 @@ fn a_limit_message_waits_for_its_reset_then_runs_the_same_attempt_again() -> Res
         implementation_line.contains("resumed at"),
         "{implementation_line}"
     );
+    assert!(
+        implementation_line.contains("routed: wait"),
+        "{implementation_line}"
+    );
 
     let json_status = fixture.run(&["status", "--json"])?;
     assert_eq!(json_status.code, Some(0), "{}", json_status.stderr);
@@ -215,6 +219,7 @@ fn a_limit_message_waits_for_its_reset_then_runs_the_same_attempt_again() -> Res
         .as_u64()
         .unwrap_or_else(|| panic!("no limit_wait.waited_seconds in {implementation}"));
     assert!(waited_seconds >= 1, "{implementation}");
+    assert_eq!(implementation["routed"], "wait", "{implementation}");
     assert!(
         implementation["limit_wait"]["resumed_at"].is_string(),
         "{implementation}"

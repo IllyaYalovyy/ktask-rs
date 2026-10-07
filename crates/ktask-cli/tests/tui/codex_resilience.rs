@@ -42,7 +42,7 @@ fn exhausted_transport_setup() -> Result<Setup> {
     std::fs::write(
         &codex,
         format!(
-            "#!/bin/sh\ncat >/dev/null\nprintf '%s' '{failure}' >&2\nexit 1\n",
+            "#!/bin/sh\nprompt=$(cat)\nif printf '%s\n' \"$prompt\" | grep -q '^# Resolve:'; then binary=$(printf '%s\n' \"$prompt\" | sed -n 's/^    \\(.*\\) report --token .* stop --reason .*/\\1/p' | head -n 1); token=$(printf '%s\n' \"$prompt\" | sed -n 's/^    .* report --token \\([^ ]*\\) stop --reason .*/\\1/p' | head -n 1); \"$binary\" report --token \"$token\" stop --reason 'the network is down'; else printf '%s' '{failure}' >&2; exit 1; fi\n",
             failure = include_str!("../../../../test-fixtures/codex/transport-failure-stderr.txt")
         ),
     )?;
@@ -73,27 +73,20 @@ fn exhausted_transport_setup() -> Result<Setup> {
 }
 
 #[test]
-fn the_queue_screen_shows_the_transport_stop_once_in_the_same_words_as_run_and_status() -> Result<()>
-{
+fn the_queue_screen_shows_the_exhausted_transport_retries_routed_to_the_decider_in_the_same_words_as_status()
+-> Result<()> {
     let setup = exhausted_transport_setup()?;
     let run = setup.sandbox.run(&setup.repository, &["run"])?;
     assert_eq!(run.code, Some(1), "{}", run.stderr);
-    let stop = "Codex transport failed 3 consecutive times: stream disconnected before completion: Transport error: network error: error decoding response body; check the network and Codex service, then run again";
-    assert!(run.stdout.contains(stop), "{}", run.stdout);
-    assert!(
-        setup
-            .sandbox
-            .run(&setup.repository, &["status"])?
-            .stdout
-            .contains(stop)
-    );
+    let verdict = "routed: decide — transport retries exhausted";
+    let status = setup.sandbox.run(&setup.repository, &["status"])?;
+    assert!(status.stdout.contains(verdict), "{}", status.stdout);
     let mut terminal = Terminal::launch(&setup.sandbox, &setup.repository, &["tui"], 12, 300)?;
-    let screen = terminal.wait_for("the transport stop", |screen| {
-        screen.contents().contains("check the network")
+    let screen = terminal.wait_for("the routed verdict", |screen| {
+        screen.contents().contains("routed:")
     })?;
-    assert!(screen.contains(stop), "{screen}");
+    assert!(screen.contains(verdict), "{screen}");
     assert!(!screen.contains("ERROR:"), "{screen}");
-    assert_eq!(screen.matches("stream disconnected").count(), 1, "{screen}");
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);
     Ok(())

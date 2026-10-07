@@ -388,7 +388,7 @@ fn a_provider_killed_past_its_time_limit_ends_that_task_failed_unknown_and_stops
     assert_eq!(exit_code, None);
     assert_eq!(status, "failed-unknown");
     assert!(
-        reason.as_deref().unwrap().contains("time limit"),
+        reason.as_deref().unwrap().contains("killed after"),
         "{reason:?}"
     );
     Ok(())
@@ -415,7 +415,7 @@ fn run_uses_the_projects_attempt_timeout_setting_when_the_command_line_gives_non
     assert_eq!(exit_code, None);
     assert_eq!(status, "failed-unknown");
     assert!(
-        reason.as_deref().unwrap().contains("time limit"),
+        reason.as_deref().unwrap().contains("killed after"),
         "{reason:?}"
     );
     Ok(())
@@ -1123,7 +1123,7 @@ fn a_reviewer_that_requests_changes_ends_the_task_failed_with_the_findings_as_th
         [
             "#1\tfailed\ta\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
-            "\tattempt 1: review\techo\t0s\tchanges-requested\tfix the thing\tusage none",
+            "\tattempt 1: review\techo\t0s\tchanges-requested\tfix the thing\trouted: decide — rejected\tusage none",
         ]
     );
     Ok(())
@@ -1175,7 +1175,7 @@ fn a_reviewer_past_its_time_limit_is_killed_and_ends_the_task_failed_unknown() -
     assert_eq!(exit_code, None);
     assert_eq!(status, "failed-unknown");
     assert!(
-        reason.as_deref().unwrap().contains("time limit"),
+        reason.as_deref().unwrap().contains("killed after"),
         "{reason:?}"
     );
     Ok(())
@@ -1281,7 +1281,7 @@ fn a_tester_that_rejects_ends_the_task_failed_with_what_failed_as_the_reason_and
             "#1\tfailed\ta\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
-            "\tattempt 1: testing\techo\t0s\trejected\tthe login button does nothing\tusage none",
+            "\tattempt 1: testing\techo\t0s\trejected\tthe login button does nothing\trouted: decide — rejected\tusage none",
         ]
     );
     let json = fixture.run(&["status", "--json"])?;
@@ -1363,7 +1363,7 @@ fn a_tester_past_its_time_limit_is_killed_and_ends_the_task_failed_unknown() -> 
     assert_eq!(exit_code, None);
     assert_eq!(status, "failed-unknown");
     assert!(
-        reason.as_deref().unwrap().contains("time limit"),
+        reason.as_deref().unwrap().contains("killed after"),
         "{reason:?}"
     );
     Ok(())
@@ -1479,7 +1479,8 @@ fn recorded_codex_jsonl_runs_the_task_with_its_requested_model_session_and_usage
 }
 
 #[test]
-fn a_codex_transport_failure_is_pending_but_other_errors_keep_their_exit_reason() -> Result<()> {
+fn a_codex_transport_failure_ends_in_the_decider_and_other_errors_keep_their_exit_reason()
+-> Result<()> {
     for (script, timeout, expected_exit, expected_status, expected_reason) in [
         (
             format!(
@@ -1488,7 +1489,7 @@ fn a_codex_transport_failure_is_pending_but_other_errors_keep_their_exit_reason(
             ),
             None,
             Some(7),
-            "pending",
+            "failed-unknown",
             "stream disconnected before completion",
         ),
         (
@@ -1496,7 +1497,7 @@ fn a_codex_transport_failure_is_pending_but_other_errors_keep_their_exit_reason(
             Some("1"),
             None,
             "failed-unknown",
-            "time limit",
+            "killed after",
         ),
     ] {
         let fixture = Fixture::new()?;
@@ -1627,7 +1628,7 @@ fn a_project_claude_deny_list_replaces_the_built_in_list() -> Result<()> {
 fn a_claude_error_or_timeout_keeps_the_exit_reason() -> Result<()> {
     for (script, timeout, expected_exit, expected_reason) in [
         ("cat >/dev/null\nexit 7", None, Some(7), "reported nothing"),
-        ("cat >/dev/null\nsleep 30", Some("1"), None, "time limit"),
+        ("cat >/dev/null\nsleep 30", Some("1"), None, "killed after"),
     ] {
         let fixture = Fixture::new()?;
         select_claude(&fixture)?;
