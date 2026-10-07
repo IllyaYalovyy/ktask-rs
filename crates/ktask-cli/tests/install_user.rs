@@ -111,7 +111,7 @@ fn a_clean_tree_installs_the_user_channel_at_head_and_leaves_the_dev_build_alone
         &[
             "clone",
             "--quiet",
-            "--local",
+            "--no-hardlinks",
             &source.to_string_lossy(),
             "tree",
         ],
