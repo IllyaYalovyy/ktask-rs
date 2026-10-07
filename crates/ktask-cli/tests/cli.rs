@@ -12,10 +12,15 @@ use support::{Result, Sandbox};
 fn version_prints_the_version_and_exits_zero() -> Result<()> {
     let sandbox = Sandbox::new()?;
     let outcome = sandbox.run(&sandbox.home(), &["--version"])?;
+    let line = outcome.stdout.trim_end_matches('\n');
+    let words: Vec<&str> = line.split(' ').collect();
     assert_eq!(
-        outcome.stdout,
-        format!("ktask-rs {}\n", env!("CARGO_PKG_VERSION"))
+        &words[..3],
+        ["ktask-rs", env!("CARGO_PKG_VERSION"), "dev"],
+        "{line}"
     );
+    assert_eq!(words.len(), 4, "{line}");
+    assert_eq!(outcome.stdout, format!("{line}\n"));
     assert_eq!(outcome.stderr, "");
     assert_eq!(outcome.code, Some(0));
     Ok(())

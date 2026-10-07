@@ -17,6 +17,7 @@ use ktask_core::{
 };
 use ktask_tui::{Application, LoadedOutput};
 
+use crate::build::CHANNEL;
 use crate::context::{
     journal_file, open_settings_store, outputs_dir_file, run_lock_file, state_root,
 };
@@ -370,5 +371,5 @@ pub(super) fn drive(
         cwd,
         binary_path,
     };
-    ktask_tui::run(tui_start, application, watch)
+    ktask_tui::run(tui_start, CHANNEL, application, watch)
 }

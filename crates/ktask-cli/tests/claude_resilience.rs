@@ -82,10 +82,7 @@ impl Fixture {
         let executable = dir.path().join("claude");
         std::fs::write(&executable, format!("#!/bin/sh\n{script}\n"))?;
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))?;
-        let settings = self
-            .sandbox
-            .state_home()
-            .join("ktask-rs/my-app/settings.toml");
+        let settings = self.sandbox.state_dir().join("my-app/settings.toml");
         let mut configured = std::fs::read_to_string(&settings)?;
         let _ = writeln!(
             configured,

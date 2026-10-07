@@ -9,7 +9,7 @@ const ENTER: &str = "\r";
 const BODY: &str = "```bash\ncase \"$3\" in\nreview) ktask-rs report --token \"$1\" approved ;;\ntesting) ktask-rs report --token \"$1\" accepted ;;\n*) ktask-rs report --token \"$1\" done ;;\nesac\n```\n";
 
 /// A queue whose one task has already run, so it has output to show.
-fn open_after_a_run(fixture: &Fixture) -> Result<Terminal> {
+pub(crate) fn open_after_a_run(fixture: &Fixture) -> Result<Terminal> {
     fixture.cli(&["settings", "set", "model", "m-impl"])?;
     fixture.cli(&[
         "add",

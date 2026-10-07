@@ -94,12 +94,8 @@ fn capital_h_opens_the_acknowledgement_form_and_records_its_optional_message() -
         serde_json::from_str::<serde_json::Value>(&listed.stdout)?[0]["status"],
         "done"
     );
-    let database = rusqlite::Connection::open(
-        fixture
-            .sandbox
-            .state_home()
-            .join("ktask-rs/my-app/journal.db"),
-    )?;
+    let database =
+        rusqlite::Connection::open(fixture.sandbox.state_dir().join("my-app/journal.db"))?;
     let payload: String = database.query_row(
         "SELECT payload FROM events WHERE kind = 'task_acknowledged'",
         [],

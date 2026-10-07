@@ -132,6 +132,7 @@ fn capital_a_opens_the_answer_form_with_the_question_and_ctrl_s_answers_it() -> 
     let screen = terminal.wait_for("the answer form", |screen| {
         screen.contents().contains("Answer task #1")
     })?;
+    super::title::assert_dev_title(&screen, "");
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[1], "Answer task #1");
     assert_eq!(lines[3], "which path?");

@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::Path;
 
 use jiff::Timestamp;
-use ktask_core::{AttemptToken, Outcome, Output, Project, Supersede, Task, TaskId};
+use ktask_core::{AttemptToken, Channel, Outcome, Output, Project, Supersede, Task, TaskId};
 use serde::Serialize;
 
 mod run;
@@ -25,7 +25,7 @@ struct ProjectJson<'a> {
     registered_at: String,
 }
 
-/// One project as `project show --json` shows it.
+/// One project as `project register --json` shows it.
 #[derive(Debug, Serialize)]
 struct ShownJson<'a> {
     name: &'a str,
@@ -76,6 +76,47 @@ pub(crate) fn project(project: &Project, json: bool, out: &mut impl Write) -> Re
         writeln!(out).map_err(|e| e.to_string())
     } else {
         writeln!(out, "{}\t{}", project.name, project.path.display()).map_err(|e| e.to_string())
+    }
+}
+
+/// One project as `project show --json` shows it: the project, and the world it is kept in.
+#[derive(Debug, Serialize)]
+struct ShownInChannelJson<'a> {
+    name: &'a str,
+    path: &'a Path,
+    channel: &'static str,
+    state_directory: &'a Path,
+}
+
+/// Writes `project` with the channel this binary belongs to and the state directory that
+/// channel keeps everything in: a `name<TAB>path<TAB>channel<TAB>state directory` line, or a
+/// JSON object with `json`.
+pub(crate) fn project_in_channel(
+    project: &Project,
+    channel: Channel,
+    state_directory: &Path,
+    json: bool,
+    out: &mut impl Write,
+) -> Result<(), String> {
+    if json {
+        let shown = ShownInChannelJson {
+            name: &project.name,
+            path: &project.path,
+            channel: channel.name(),
+            state_directory,
+        };
+        serde_json::to_writer(&mut *out, &shown).map_err(|e| e.to_string())?;
+        writeln!(out).map_err(|e| e.to_string())
+    } else {
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}",
+            project.name,
+            project.path.display(),
+            channel.name(),
+            state_directory.display()
+        )
+        .map_err(|e| e.to_string())
     }
 }
 

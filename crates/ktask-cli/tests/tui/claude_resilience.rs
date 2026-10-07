@@ -66,7 +66,7 @@ impl Fixture {
             ),
         )?;
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))?;
-        let settings = sandbox.state_home().join("ktask-rs/my-app/settings.toml");
+        let settings = sandbox.state_dir().join("my-app/settings.toml");
         let mut configured = std::fs::read_to_string(&settings)?;
         let _ = writeln!(
             configured,

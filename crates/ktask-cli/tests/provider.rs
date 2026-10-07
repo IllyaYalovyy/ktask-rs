@@ -541,9 +541,7 @@ fn real_model_provider_check_runs_codex() -> Result<()> {
 fn provider_list_and_show_print_the_complete_built_in_and_project_definitions() -> Result<()> {
     let sandbox = Sandbox::new()?;
     let (_keep, repository) = project(&sandbox)?;
-    let settings = sandbox
-        .state_home()
-        .join("ktask-rs/provider-app/settings.toml");
+    let settings = sandbox.state_dir().join("provider-app/settings.toml");
     std::fs::create_dir_all(settings.parent().expect("settings has parent"))?;
     std::fs::write(
         &settings,
@@ -654,9 +652,7 @@ fn provider_list_and_show_print_the_complete_built_in_and_project_definitions() 
 fn invalid_provider_settings_are_refused_when_any_project_command_reads_them() -> Result<()> {
     let sandbox = Sandbox::new()?;
     let (_keep, repository) = project(&sandbox)?;
-    let settings = sandbox
-        .state_home()
-        .join("ktask-rs/provider-app/settings.toml");
+    let settings = sandbox.state_dir().join("provider-app/settings.toml");
     std::fs::create_dir_all(settings.parent().expect("settings has parent"))?;
     std::fs::write(&settings, "[providers.broken]\nparser = \"plain\"\n")?;
     let missing = sandbox.run(&repository, &["provider", "list"])?;

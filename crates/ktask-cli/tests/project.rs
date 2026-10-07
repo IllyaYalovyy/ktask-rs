@@ -9,7 +9,7 @@ use support::{Result, Sandbox};
 
 /// Where the binary keeps the registry when started with this sandbox's `XDG_STATE_HOME`.
 fn registry_file(sandbox: &Sandbox) -> PathBuf {
-    sandbox.state_home().join("ktask-rs").join("registry.db")
+    sandbox.state_dir().join("registry.db")
 }
 
 /// Registers projects the way a later `project add` will: rows in the binary's own database.
@@ -116,11 +116,8 @@ fn the_database_lives_under_the_state_home_and_nowhere_else() -> Result<()> {
     for args in [&["project", "list"][..], &["project", "list", "--json"]] {
         assert_eq!(sandbox.run(&cwd, args)?.code, Some(0));
     }
-    assert_eq!(entries(&sandbox.state_home())?, ["ktask-rs"]);
-    assert_eq!(
-        entries(&sandbox.state_home().join("ktask-rs"))?,
-        ["registry.db"]
-    );
+    assert_eq!(entries(&sandbox.state_home())?, ["ktask-rs-dev"]);
+    assert_eq!(entries(&sandbox.state_dir())?, ["registry.db"]);
     assert_eq!(entries(&sandbox.home())?, Vec::<String>::new());
     assert_eq!(entries(&sandbox.config_home())?, Vec::<String>::new());
     assert_eq!(entries(&sandbox.tmpdir())?, Vec::<String>::new());
@@ -145,7 +142,7 @@ fn without_xdg_state_home_the_state_home_is_dot_local_state_under_home() -> Resu
         command.env_remove("XDG_STATE_HOME");
     })?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
-    let database = sandbox.home().join(".local/state/ktask-rs/registry.db");
+    let database = sandbox.home().join(".local/state/ktask-rs-dev/registry.db");
     assert!(database.is_file());
     assert_eq!(entries(&sandbox.state_home())?, Vec::<String>::new());
     Ok(())
@@ -197,10 +194,7 @@ fn a_database_that_is_not_one_is_reported_with_its_path_and_exits_one() -> Resul
 #[test]
 fn a_state_home_that_cannot_hold_a_directory_is_reported_and_exits_one() -> Result<()> {
     let sandbox = Sandbox::new()?;
-    std::fs::write(
-        sandbox.state_home().join("ktask-rs"),
-        "a file, not a directory",
-    )?;
+    std::fs::write(sandbox.state_dir(), "a file, not a directory")?;
     let outcome = sandbox.run(&sandbox.home(), &["project", "list"])?;
     assert_eq!(outcome.stdout, "");
     assert!(

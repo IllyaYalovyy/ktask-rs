@@ -42,6 +42,16 @@ fn shown(name: &str, path: &Path) -> String {
     format!("{name}\t{}\n", path.display())
 }
 
+/// What `project show` prints: the project, the channel of the binary under test, and the
+/// state directory of that channel.
+fn shown_in(sandbox: &Sandbox, name: &str, path: &Path) -> String {
+    format!(
+        "{name}\t{}\tdev\t{}\n",
+        path.display(),
+        sandbox.state_dir().display()
+    )
+}
+
 /// What `project list` prints.
 fn listed(sandbox: &Sandbox) -> Result<String> {
     let outcome = sandbox.run(&sandbox.home(), &["project", "list"])?;
@@ -56,12 +66,12 @@ fn a_new_repository_is_registered_under_its_folder_name_once() -> Result<()> {
     let repository = git_repository(&sandbox, &work, "my-app")?;
 
     let first = sandbox.run(&repository, &["project", "show"])?;
-    assert_eq!(first.stdout, shown("my-app", &repository));
+    assert_eq!(first.stdout, shown_in(&sandbox, "my-app", &repository));
     assert_eq!(first.stderr, registration_line("my-app", &repository));
     assert_eq!(first.code, Some(0));
 
     let second = sandbox.run(&repository, &["project", "show"])?;
-    assert_eq!(second.stdout, shown("my-app", &repository));
+    assert_eq!(second.stdout, shown_in(&sandbox, "my-app", &repository));
     assert_eq!(second.stderr, "");
     assert_eq!(second.code, Some(0));
 
@@ -77,16 +87,16 @@ fn a_subdirectory_resolves_to_the_repository_and_registers_nothing_new() -> Resu
     let deep = make_dir(&repository, "src/deeper")?;
 
     let from_deep = sandbox.run(&deep, &["project", "show"])?;
-    assert_eq!(from_deep.stdout, shown("my-app", &repository));
+    assert_eq!(from_deep.stdout, shown_in(&sandbox, "my-app", &repository));
     assert_eq!(from_deep.stderr, registration_line("my-app", &repository));
     assert_eq!(from_deep.code, Some(0));
 
     let from_root = sandbox.run(&repository, &["project", "show"])?;
-    assert_eq!(from_root.stdout, shown("my-app", &repository));
+    assert_eq!(from_root.stdout, shown_in(&sandbox, "my-app", &repository));
     assert_eq!(from_root.stderr, "");
 
     let from_src = sandbox.run(&repository.join("src"), &["project", "show"])?;
-    assert_eq!(from_src.stdout, shown("my-app", &repository));
+    assert_eq!(from_src.stdout, shown_in(&sandbox, "my-app", &repository));
     assert_eq!(from_src.stderr, "");
 
     assert_eq!(listed(&sandbox)?, shown("my-app", &repository));
@@ -100,18 +110,18 @@ fn outside_a_repository_the_current_directory_is_the_project() -> Result<()> {
     let notes = make_dir(&work, "notes")?;
 
     let first = sandbox.run(&notes, &["project", "show"])?;
-    assert_eq!(first.stdout, shown("notes", &notes));
+    assert_eq!(first.stdout, shown_in(&sandbox, "notes", &notes));
     assert_eq!(first.stderr, registration_line("notes", &notes));
     assert_eq!(first.code, Some(0));
 
     let second = sandbox.run(&notes, &["project", "show"])?;
-    assert_eq!(second.stdout, shown("notes", &notes));
+    assert_eq!(second.stdout, shown_in(&sandbox, "notes", &notes));
     assert_eq!(second.stderr, "");
 
     // Without a repository, a subdirectory is a project of its own.
     let inner = make_dir(&notes, "inner")?;
     let third = sandbox.run(&inner, &["project", "show"])?;
-    assert_eq!(third.stdout, shown("inner", &inner));
+    assert_eq!(third.stdout, shown_in(&sandbox, "inner", &inner));
     assert_eq!(third.stderr, registration_line("inner", &inner));
     Ok(())
 }
@@ -125,7 +135,7 @@ fn a_repository_reached_through_a_symlink_is_registered_by_its_real_path() -> Re
     std::os::unix::fs::symlink(&repository, &link)?;
 
     let outcome = sandbox.run(&link, &["project", "show"])?;
-    assert_eq!(outcome.stdout, shown("real-name", &repository));
+    assert_eq!(outcome.stdout, shown_in(&sandbox, "real-name", &repository));
     assert_eq!(outcome.stderr, registration_line("real-name", &repository));
     Ok(())
 }
@@ -144,12 +154,12 @@ fn project_selects_a_registered_project_from_any_directory() -> Result<()> {
 
     for cwd in [&elsewhere, &first, &second, &sandbox.home()] {
         let outcome = sandbox.run(cwd, &["project", "show", "--project", "second"])?;
-        assert_eq!(outcome.stdout, shown("second", &second));
+        assert_eq!(outcome.stdout, shown_in(&sandbox, "second", &second));
         assert_eq!(outcome.stderr, "");
         assert_eq!(outcome.code, Some(0));
     }
     let by_name = sandbox.run(&elsewhere, &["project", "show", "--project", "first"])?;
-    assert_eq!(by_name.stdout, shown("first", &first));
+    assert_eq!(by_name.stdout, shown_in(&sandbox, "first", &first));
 
     // Selecting a project never registers the directory it is run from.
     assert_eq!(listed(&sandbox)?, before);
@@ -169,7 +179,7 @@ fn project_named_before_or_after_show_gives_the_same_result() -> Result<()> {
     let before = sandbox.run(&first, &["--project", "second", "project", "show"])?;
     let after = sandbox.run(&first, &["project", "show", "--project", "second"])?;
 
-    assert_eq!(before.stdout, shown("second", &second));
+    assert_eq!(before.stdout, shown_in(&sandbox, "second", &second));
     assert_eq!(before.stdout, after.stdout);
     assert_eq!(before.stderr, after.stderr);
     assert_eq!(before.code, after.code);
@@ -198,7 +208,7 @@ fn project_named_twice_with_the_same_value_is_not_a_conflict() -> Result<()> {
         ],
     )?;
 
-    assert_eq!(outcome.stdout, shown("my-app", &repository));
+    assert_eq!(outcome.stdout, shown_in(&sandbox, "my-app", &repository));
     assert_eq!(outcome.stderr, "");
     assert_eq!(outcome.code, Some(0));
     Ok(())
@@ -298,7 +308,12 @@ fn json_prints_name_and_path() -> Result<()> {
     let sandbox = Sandbox::new()?;
     let (_keep, work) = scratch()?;
     let repository = git_repository(&sandbox, &work, "my-app")?;
-    let expected = json!({ "name": "my-app", "path": repository });
+    let expected = json!({
+        "name": "my-app",
+        "path": repository,
+        "channel": "dev",
+        "state_directory": sandbox.state_dir(),
+    });
 
     let first = sandbox.run(&repository, &["project", "show", "--json"])?;
     assert!(first.stdout.ends_with('\n'), "{:?}", first.stdout);
@@ -412,10 +427,7 @@ fn project_show_needs_a_readable_registry() -> Result<()> {
     let sandbox = Sandbox::new()?;
     let (_keep, work) = scratch()?;
     let notes = make_dir(&work, "notes")?;
-    std::fs::write(
-        sandbox.state_home().join("ktask-rs"),
-        "a file, not a directory",
-    )?;
+    std::fs::write(sandbox.state_dir(), "a file, not a directory")?;
     let outcome = sandbox.run(&notes, &["project", "show"])?;
     assert_eq!(outcome.stdout, "");
     assert!(

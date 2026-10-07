@@ -15,11 +15,7 @@ use super::support::Sandbox;
 /// Where `project`'s run lock lives under `sandbox`'s state home — exactly where `ktask-rs
 /// run` itself puts it, and its own process id along with it.
 fn run_lock_file(sandbox: &Sandbox, project: &str) -> PathBuf {
-    sandbox
-        .state_home()
-        .join("ktask-rs")
-        .join(project)
-        .join("run.lock")
+    sandbox.state_dir().join(project).join("run.lock")
 }
 
 /// Kills outright whatever process presently holds `project`'s run lock. That is all a test

@@ -79,6 +79,7 @@ fn check_defined_provider(token: &AttemptToken, provider: Option<&str>) -> Resul
         return Ok(());
     };
     let path = settings_path(
+        crate::build::CHANNEL,
         std::env::var_os("XDG_STATE_HOME"),
         std::env::var_os("HOME"),
         &token.project,

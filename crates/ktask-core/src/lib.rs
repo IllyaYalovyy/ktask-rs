@@ -3,6 +3,7 @@
 //! outside world only through ports it defines itself. See docs/ARCHITECTURE.md.
 
 mod attempt;
+mod channel;
 mod clock;
 mod commands;
 mod forget;
@@ -30,6 +31,7 @@ mod steps;
 mod task;
 mod usage;
 
+pub use channel::Channel;
 pub use clock::Clock;
 pub use commands::{CommandSpec, Commands, CommandsError, Exit, Output};
 pub use forget::{ForgetError, forget_project};

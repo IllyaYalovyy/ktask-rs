@@ -43,11 +43,7 @@ impl Fixture {
     }
 
     fn journal(&self, project: &str) -> PathBuf {
-        self.sandbox
-            .state_home()
-            .join("ktask-rs")
-            .join(project)
-            .join("journal.db")
+        self.sandbox.state_dir().join(project).join("journal.db")
     }
 
     /// The rows of `table` in the journal of `my-app`, as JSON objects, oldest first.

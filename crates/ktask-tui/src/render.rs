@@ -1,6 +1,7 @@
 //! Draws an [`App`] into a buffer: the frame shared by every screen, and, inside it,
 //! whichever screen is open drawing itself.
 
+use ktask_core::Channel;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::widgets::{Block, Widget};
@@ -42,18 +43,27 @@ fn footer_keys(app: &App) -> &'static str {
     }
 }
 
-/// Draws `app` over the whole of `area`, and returns where the cursor goes when it is shown.
-pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
+/// What the frame's top border says on every screen: the tool's name, with the channel in
+/// brackets on a dev build, and, while the queue's key map is open, the `Keys` heading.
+fn title(app: &App) -> String {
+    let name = match app.channel {
+        Channel::Dev => "ktask-rs [dev]",
+        Channel::User => "ktask-rs",
+    };
     // The queue has one more shortcut than fits below a separate `Keys` heading in a 24-row
     // terminal. Put that heading in the frame title while the map is open, leaving every
     // shortcut visible in the inner area.
-    let title = if app.queue.help_open() {
-        " ktask-rs · Keys "
+    if app.queue.help_open() {
+        format!(" {name} · Keys ")
     } else {
-        " ktask-rs "
-    };
+        format!(" {name} ")
+    }
+}
+
+/// Draws `app` over the whole of `area`, and returns where the cursor goes when it is shown.
+pub fn render(app: &App, area: Rect, buf: &mut Buffer) -> Option<Position> {
     let block = Block::bordered()
-        .title(title)
+        .title(title(app))
         .title_bottom(footer_keys(app));
     let inner = block.inner(area);
     block.render(area, buf);
@@ -146,10 +156,28 @@ mod tests {
     #[test]
     fn the_frame_fills_the_area_and_shows_the_key_to_quit() {
         let rows = drawn(&loaded(), 60, 8);
-        assert!(rows[0].starts_with("┌ ktask-rs ─"));
+        assert!(rows[0].starts_with("┌ ktask-rs [dev] ─"));
         assert!(rows[0].ends_with('┐'));
         assert!(rows[7].starts_with("└ q quit · ? keys ─"));
         assert!(rows[7].ends_with('┘'));
+    }
+
+    #[test]
+    fn the_title_names_the_channel_on_a_dev_build_and_only_the_tool_on_a_user_build() {
+        let user = App {
+            channel: Channel::User,
+            ..loaded()
+        };
+        assert!(drawn(&user, 60, 8)[0].starts_with("┌ ktask-rs ─"));
+        assert!(drawn(&loaded(), 60, 8)[0].starts_with("┌ ktask-rs [dev] ─"));
+        let key_map = |app| {
+            crate::update(
+                app,
+                crate::Event::Key(ratatui::crossterm::event::KeyCode::Char('?')),
+            )
+        };
+        assert!(drawn(&key_map(user), 60, 24)[0].starts_with("┌ ktask-rs · Keys ─"));
+        assert!(drawn(&key_map(loaded()), 60, 24)[0].starts_with("┌ ktask-rs [dev] · Keys ─"));
     }
 
     #[test]

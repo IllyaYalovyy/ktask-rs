@@ -159,6 +159,7 @@ impl Application for PanicTestApplication {
 fn main() {
     let _ = ktask_tui::run(
         ktask_tui::Start::Ready,
+        ktask_core::Channel::Dev,
         PanicTestApplication::default(),
         NeverChanges,
     );

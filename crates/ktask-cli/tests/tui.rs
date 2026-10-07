@@ -67,6 +67,8 @@ mod skip;
 #[path = "tui/supersede.rs"]
 mod supersede;
 mod support;
+#[path = "tui/title.rs"]
+mod title;
 #[path = "support/tracked_branch.rs"]
 mod tracked_branch;
 #[path = "tui/usage.rs"]
@@ -125,7 +127,7 @@ fn the_screen_is_a_frame_around_the_whole_terminal_with_the_key_to_quit() -> Res
     let screen = terminal.screen();
     let rows: Vec<&str> = screen.lines().collect();
     assert_eq!(rows.len(), usize::from(ROWS));
-    assert!(rows[0].starts_with("┌ ktask-rs ─"), "{screen}");
+    assert!(rows[0].starts_with("┌ ktask-rs [dev] ─"), "{screen}");
     assert!(rows[0].ends_with('┐'), "{screen}");
     assert!(
         rows[rows.len() - 1].starts_with("└ q quit · ? keys ─"),

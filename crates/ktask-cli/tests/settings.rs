@@ -51,8 +51,7 @@ impl Fixture {
 
     fn settings_file(&self) -> PathBuf {
         self.sandbox
-            .state_home()
-            .join("ktask-rs")
+            .state_dir()
             .join("my-app")
             .join("settings.toml")
     }

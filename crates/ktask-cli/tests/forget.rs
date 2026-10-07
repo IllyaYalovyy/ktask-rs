@@ -38,11 +38,7 @@ fn run_with_stdin(sandbox: &Sandbox, cwd: &Path, args: &[&str], stdin: &str) -> 
 
 /// Where the binary keeps the project `name`'s journal under this sandbox's `XDG_STATE_HOME`.
 fn journal_file(sandbox: &Sandbox, name: &str) -> PathBuf {
-    sandbox
-        .state_home()
-        .join("ktask-rs")
-        .join(name)
-        .join("journal.db")
+    sandbox.state_dir().join(name).join("journal.db")
 }
 
 /// What `project list` prints.

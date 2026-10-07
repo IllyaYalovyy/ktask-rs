@@ -6,8 +6,9 @@ use std::process::ExitCode;
 use clap::Subcommand;
 use ktask_adapters::{GitCli, SystemClock};
 
+use crate::build::CHANNEL;
 use crate::context::{
-    current_dir, journal_file, merge_project, open_registry, reject_project, resolve,
+    current_dir, journal_file, merge_project, open_registry, reject_project, resolve, state_root,
 };
 use crate::error::Failure;
 use crate::render;
@@ -91,7 +92,7 @@ fn list(json: bool, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
 fn show(project: Option<&str>, json: bool, stdout: &mut impl Write) -> Result<ExitCode, Failure> {
     let registry = open_registry()?;
     let (project, _settings) = resolve(&registry, project)?;
-    render::project(&project, json, stdout)?;
+    render::project_in_channel(&project, CHANNEL, &state_root()?, json, stdout)?;
     Ok(ExitCode::SUCCESS)
 }
 

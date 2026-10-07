@@ -47,7 +47,7 @@ fn exhausted_transport_setup() -> Result<Setup> {
         ),
     )?;
     std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755))?;
-    let settings = sandbox.state_home().join("ktask-rs/my-app/settings.toml");
+    let settings = sandbox.state_dir().join("my-app/settings.toml");
     let mut configured = std::fs::read_to_string(&settings)?;
     let _ = writeln!(
         configured,
@@ -126,7 +126,7 @@ fn the_queue_screen_shows_the_codex_transport_backoff() -> Result<()> {
         ),
     )?;
     std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755))?;
-    let settings = sandbox.state_home().join("ktask-rs/my-app/settings.toml");
+    let settings = sandbox.state_dir().join("my-app/settings.toml");
     let mut configured = std::fs::read_to_string(&settings)?;
     let _ = writeln!(
         configured,

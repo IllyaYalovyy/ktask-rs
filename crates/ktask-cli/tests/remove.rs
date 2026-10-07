@@ -126,11 +126,7 @@ impl Fixture {
     }
 
     fn journal(&self) -> PathBuf {
-        self.sandbox
-            .state_home()
-            .join("ktask-rs")
-            .join("my-app")
-            .join("journal.db")
+        self.sandbox.state_dir().join("my-app").join("journal.db")
     }
 
     /// The number of events in the journal and the kind of the last one.

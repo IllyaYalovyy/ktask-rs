@@ -2,6 +2,7 @@
 //!
 //! This is the only place where adapters are chosen and wired to the core.
 
+mod build;
 mod commands;
 mod context;
 mod error;
@@ -18,7 +19,7 @@ use error::Failure;
 
 /// Runs an ordered queue of software tasks through AI coding agents.
 #[derive(Debug, Parser)]
-#[command(name = "ktask-rs", version)]
+#[command(name = "ktask-rs", version = build::VERSION)]
 struct Cli {
     /// Work on this registered project instead of the one the current directory is in
     #[arg(long, value_name = "NAME")]

@@ -53,11 +53,7 @@ impl Fixture {
     }
 
     fn journal(&self) -> PathBuf {
-        self.sandbox
-            .state_home()
-            .join("ktask-rs")
-            .join("my-app")
-            .join("journal.db")
+        self.sandbox.state_dir().join("my-app").join("journal.db")
     }
 
     /// Starts the next attempt at task `task`, through `ktask_core`, directly against the

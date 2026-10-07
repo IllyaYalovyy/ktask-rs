@@ -54,9 +54,8 @@ impl Fixture {
     }
 
     fn events(&self) -> Result<Vec<(String, String)>> {
-        let database = rusqlite::Connection::open(
-            self.sandbox.state_home().join("ktask-rs/my-app/journal.db"),
-        )?;
+        let database =
+            rusqlite::Connection::open(self.sandbox.state_dir().join("my-app/journal.db"))?;
         database
             .prepare("SELECT kind, payload FROM events ORDER BY seq")?
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?

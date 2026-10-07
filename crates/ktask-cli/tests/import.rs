@@ -100,12 +100,7 @@ impl Fixture {
 
     /// The payloads of the events in the journal of `my-app`, oldest first.
     fn event_payloads(&self) -> Result<Vec<Value>> {
-        let path = self
-            .sandbox
-            .state_home()
-            .join("ktask-rs")
-            .join("my-app")
-            .join("journal.db");
+        let path = self.sandbox.state_dir().join("my-app").join("journal.db");
         let database = rusqlite::Connection::open(path)?;
         let mut statement = database.prepare("SELECT payload FROM events ORDER BY seq")?;
         let payloads = statement

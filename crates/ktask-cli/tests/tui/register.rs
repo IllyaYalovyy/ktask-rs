@@ -67,6 +67,7 @@ fn opening_on_a_taken_folder_name_shows_the_refusal_with_both_paths_and_asks_for
     let mut terminal = fixture.open()?;
 
     let screen = terminal.screen();
+    super::title::assert_dev_title(&screen, "");
     assert!(
         screen.contains("This directory cannot be opened"),
         "{screen}"
@@ -133,7 +134,11 @@ fn a_free_name_registers_the_directory_and_opens_its_queue() -> Result<()> {
     let shown = fixture.sandbox.run(&fixture.two, &["project", "show"])?;
     assert_eq!(
         shown.stdout,
-        format!("app-two\t{}\n", fixture.two.display())
+        format!(
+            "app-two\t{}\tdev\t{}\n",
+            fixture.two.display(),
+            fixture.sandbox.state_dir().display()
+        )
     );
     assert_eq!(shown.stderr, "");
     assert_eq!(shown.code, Some(0));

@@ -149,11 +149,7 @@ impl Fixture {
     }
 
     fn journal(&self) -> PathBuf {
-        self.sandbox
-            .state_home()
-            .join("ktask-rs")
-            .join("my-app")
-            .join("journal.db")
+        self.sandbox.state_dir().join("my-app").join("journal.db")
     }
 
     /// The provider recorded for attempt 1 of `task`.

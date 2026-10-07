@@ -212,10 +212,7 @@ fn provider_screen_replays_a_claude_failure_with_its_result_error_and_remedy() -
 fn v_shows_the_same_provider_list_and_definition_the_cli_shows_then_returns_to_the_queue()
 -> Result<()> {
     let fixture = Fixture::empty()?;
-    let settings = fixture
-        .sandbox
-        .state_home()
-        .join("ktask-rs/my-app/settings.toml");
+    let settings = fixture.sandbox.state_dir().join("my-app/settings.toml");
     std::fs::write(
         &settings,
         "[providers.local]\ncommand = \"agent\"\nargs = [\"--prompt\", \"{prompt}\"]\nparser = \"plain\"\nsession-id = \"session:\"\n",

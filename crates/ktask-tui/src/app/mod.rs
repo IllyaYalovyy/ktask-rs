@@ -5,7 +5,8 @@
 //! something for the loop in [`crate::run`] to do.
 
 use ktask_core::{
-    Placement, Project, ProviderCheck, ProviderView, QueueView, SettingView, TaskDraft, TaskId,
+    Channel, Placement, Project, ProviderCheck, ProviderView, QueueView, SettingView, TaskDraft,
+    TaskId,
 };
 use ratatui::crossterm::event::KeyCode;
 
@@ -39,6 +40,8 @@ use screens::{
 /// against the real project, which answers with an [`Event`] once it has.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct App {
+    /// The world the binary was built for, shown in the title bar of every screen.
+    pub(crate) channel: Channel,
     pub(crate) queue: Queue,
     pub(crate) form: Option<TaskFormScreen>,
     pub(crate) answer: Option<AnswerScreen>,

@@ -31,6 +31,16 @@ fn shown(name: &str, path: &Path) -> String {
     format!("{name}\t{}\n", path.display())
 }
 
+/// What `project show` prints: the project, the channel of the binary under test, and the
+/// state directory of that channel.
+fn shown_in(sandbox: &Sandbox, name: &str, path: &Path) -> String {
+    format!(
+        "{name}\t{}\tdev\t{}\n",
+        path.display(),
+        sandbox.state_dir().display()
+    )
+}
+
 /// What `project list` prints.
 fn listed(sandbox: &Sandbox) -> Result<String> {
     let outcome = sandbox.run(&sandbox.home(), &["project", "list"])?;
@@ -87,12 +97,12 @@ fn register_names_the_current_directory_and_later_commands_resolve_to_it() -> Re
     std::fs::create_dir(&deep)?;
     for cwd in [&two, &deep] {
         let resolved = sandbox.run(cwd, &["project", "show"])?;
-        assert_eq!(resolved.stdout, shown("app-two", &two));
+        assert_eq!(resolved.stdout, shown_in(&sandbox, "app-two", &two));
         assert_eq!(resolved.stderr, "");
         assert_eq!(resolved.code, Some(0));
     }
     let original = sandbox.run(&one, &["project", "show"])?;
-    assert_eq!(original.stdout, shown("app", &one));
+    assert_eq!(original.stdout, shown_in(&sandbox, "app", &one));
     assert_eq!(
         listed(&sandbox)?,
         format!("{}{}", shown("app", &one), shown("app-two", &two))
@@ -254,10 +264,7 @@ fn register_needs_a_readable_registry() -> Result<()> {
     let sandbox = Sandbox::new()?;
     let (_keep, work) = scratch()?;
     let repository = git_repository(&sandbox, &work, "my-app")?;
-    std::fs::write(
-        sandbox.state_home().join("ktask-rs"),
-        "a file, not a directory",
-    )?;
+    std::fs::write(sandbox.state_dir(), "a file, not a directory")?;
     let outcome = sandbox.run(&repository, &["project", "register", "--name", "mine"])?;
     assert_eq!(outcome.stdout, "");
     assert!(

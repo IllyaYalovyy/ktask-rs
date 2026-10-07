@@ -90,11 +90,7 @@ impl Fixture {
 
     /// Where the binary keeps `name`'s journal under this fixture's `XDG_STATE_HOME`.
     fn journal_file(&self, name: &str) -> PathBuf {
-        self.sandbox
-            .state_home()
-            .join("ktask-rs")
-            .join(name)
-            .join("journal.db")
+        self.sandbox.state_dir().join(name).join("journal.db")
     }
 }
 

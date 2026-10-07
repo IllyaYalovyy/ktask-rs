@@ -202,11 +202,7 @@ impl Fixture {
     }
 
     fn journal(&self) -> PathBuf {
-        self.sandbox
-            .state_home()
-            .join("ktask-rs")
-            .join("my-app")
-            .join("journal.db")
+        self.sandbox.state_dir().join("my-app").join("journal.db")
     }
 
     fn task_status(&self, task: u64) -> Result<String> {
@@ -1607,10 +1603,7 @@ fn a_project_claude_deny_list_replaces_the_built_in_list() -> Result<()> {
     let fixture = Fixture::new()?;
     select_claude(&fixture)?;
     fixture.add_agent_task("a", "do the recorded work")?;
-    let settings = fixture
-        .sandbox
-        .state_home()
-        .join("ktask-rs/my-app/settings.toml");
+    let settings = fixture.sandbox.state_dir().join("my-app/settings.toml");
     let mut configured = std::fs::read_to_string(&settings)?;
     configured.push_str(
         "\n[providers.claude]\ndenied-tools = [\"ProjectSchedule\", \"ProjectMonitor\"]\n",
@@ -1677,10 +1670,7 @@ fn agent_and_resolver_settings_run_only_their_own_steps_and_status_names_each_ac
         ),
     )?;
     std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755))?;
-    let settings = fixture
-        .sandbox
-        .state_home()
-        .join("ktask-rs/my-app/settings.toml");
+    let settings = fixture.sandbox.state_dir().join("my-app/settings.toml");
     let mut configured = std::fs::read_to_string(&settings)?;
     let _ = write!(
         configured,

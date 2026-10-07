@@ -11,6 +11,7 @@ use ktask_adapters::{
 };
 use ktask_core::{Placement, Project, Settings, SettingsStore, TaskId};
 
+use crate::build::CHANNEL;
 use crate::error::Failure;
 use crate::render;
 
@@ -58,16 +59,24 @@ pub(crate) fn resolved(resolution: ktask_core::Resolution) -> Result<(Project, S
 }
 
 pub(crate) fn open_registry() -> Result<SqliteRegistry, String> {
-    let path = registry_path(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME")).ok_or(
-        "cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path",
-    )?;
+    let path = registry_path(
+        CHANNEL,
+        std::env::var_os("XDG_STATE_HOME"),
+        std::env::var_os("HOME"),
+    )
+    .ok_or("cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path")?;
     SqliteRegistry::open(&path).map_err(|e| e.to_string())
 }
 
 /// The directory every registered project's own state lives under, for watching every one's
 /// journal at once.
 pub(crate) fn state_root() -> Result<PathBuf, String> {
-    state_root_path(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME")).ok_or_else(|| {
+    state_root_path(
+        CHANNEL,
+        std::env::var_os("XDG_STATE_HOME"),
+        std::env::var_os("HOME"),
+    )
+    .ok_or_else(|| {
         "cannot locate the state directory: set XDG_STATE_HOME or HOME to an absolute path"
             .to_owned()
     })
@@ -76,6 +85,7 @@ pub(crate) fn state_root() -> Result<PathBuf, String> {
 /// Where the journal of `project` lives.
 pub(crate) fn journal_file(project: &Project) -> Result<PathBuf, String> {
     journal_path(
+        CHANNEL,
         std::env::var_os("XDG_STATE_HOME"),
         std::env::var_os("HOME"),
         &project.name,
@@ -93,6 +103,7 @@ pub(crate) fn open_journal(project: &Project) -> Result<SqliteJournal, String> {
 /// Where the run lock of `project` lives.
 pub(crate) fn run_lock_file(project: &Project) -> Result<PathBuf, String> {
     run_lock_path(
+        CHANNEL,
         std::env::var_os("XDG_STATE_HOME"),
         std::env::var_os("HOME"),
         &project.name,
@@ -106,6 +117,7 @@ pub(crate) fn run_lock_file(project: &Project) -> Result<PathBuf, String> {
 /// Where the session transcripts of `project` live.
 pub(crate) fn sessions_dir_file(project: &Project) -> Result<PathBuf, String> {
     sessions_dir_path(
+        CHANNEL,
         std::env::var_os("XDG_STATE_HOME"),
         std::env::var_os("HOME"),
         &project.name,
@@ -119,6 +131,7 @@ pub(crate) fn sessions_dir_file(project: &Project) -> Result<PathBuf, String> {
 /// Where the live and retained output of `project`'s attempts lives.
 pub(crate) fn outputs_dir_file(project: &Project) -> Result<PathBuf, String> {
     outputs_dir_path(
+        CHANNEL,
         std::env::var_os("XDG_STATE_HOME"),
         std::env::var_os("HOME"),
         &project.name,
@@ -132,6 +145,7 @@ pub(crate) fn outputs_dir_file(project: &Project) -> Result<PathBuf, String> {
 /// Where the settings of `project` live.
 pub(crate) fn settings_file(project: &Project) -> Result<PathBuf, String> {
     settings_path(
+        CHANNEL,
         std::env::var_os("XDG_STATE_HOME"),
         std::env::var_os("HOME"),
         &project.name,

@@ -70,10 +70,7 @@ impl Fixture {
             "#!/bin/sh\nprompt=$(cat)\nprintf '%s\\n' '{\"usage\":{\"input_tokens\":12,\"output_tokens\":34,\"cost_usd\":0.056789,\"model\":\"asked-model\"}}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"\n",
         )?;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
-        let settings = self
-            .sandbox
-            .state_home()
-            .join("ktask-rs/my-app/settings.toml");
+        let settings = self.sandbox.state_dir().join("my-app/settings.toml");
         let definition = format!(
             "\n[providers.reported]\ncommand = \"{script}\"\nparser = \"plain\"\nusage = \"usage\"\n",
             script = script.display()

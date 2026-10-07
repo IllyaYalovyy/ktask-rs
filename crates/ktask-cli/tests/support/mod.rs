@@ -26,12 +26,16 @@ pub(crate) struct Outcome {
 #[derive(Debug)]
 pub(crate) struct Sandbox {
     root: TempDir,
+    /// Set by the one test that fills the user channel's roots itself, to look at them
+    /// afterwards; every other test fails if a dev binary leaves anything there.
+    pub(crate) user_channel_populated_on_purpose: bool,
 }
 
 impl Sandbox {
     pub(crate) fn new() -> Result<Self> {
         let sandbox = Self {
             root: TempDir::new()?,
+            user_channel_populated_on_purpose: false,
         };
         for dir in [
             sandbox.home(),
@@ -54,6 +58,21 @@ impl Sandbox {
 
     pub(crate) fn state_home(&self) -> PathBuf {
         self.root.path().join("state")
+    }
+
+    /// The directory the dev binary keeps its state in. The tests only ever run a dev binary,
+    /// so this is the one place a test names it.
+    pub(crate) fn state_dir(&self) -> PathBuf {
+        self.state_home().join("ktask-rs-dev")
+    }
+
+    /// Where the user channel would keep its state and configuration: a dev binary never
+    /// reads or writes either.
+    pub(crate) fn user_channel_roots(&self) -> [PathBuf; 2] {
+        [
+            self.state_home().join("ktask-rs"),
+            self.config_home().join("ktask-rs"),
+        ]
     }
 
     pub(crate) fn tmpdir(&self) -> PathBuf {
@@ -106,5 +125,25 @@ impl Sandbox {
             stderr: String::from_utf8(output.stderr)?,
             code: output.status.code(),
         })
+    }
+}
+
+/// Every test that uses a sandbox is also a check that a dev binary stays out of the user
+/// channel's roots: a `ktask-rs/` directory under the sandbox's state or config home, left
+/// by anything a test ran, fails the test. A test that pre-populates one on purpose does so
+/// in a sandbox of its own and removes nothing, so it sets `user_channel_populated_on_purpose`.
+impl Drop for Sandbox {
+    fn drop(&mut self) {
+        if std::thread::panicking() || self.user_channel_populated_on_purpose {
+            return;
+        }
+        for root in self.user_channel_roots() {
+            assert!(
+                !root.exists(),
+                "a dev binary reached the user channel's root {}; its own state is {}",
+                root.display(),
+                self.state_dir().display()
+            );
+        }
     }
 }

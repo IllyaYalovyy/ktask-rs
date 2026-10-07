@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
 
-use ktask_core::{JournalWatch, QueueView};
+use ktask_core::{Channel, JournalWatch, QueueView};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, KeyModifiers};
 use signal_hook::consts::{SIGHUP, SIGTERM};
@@ -134,13 +134,15 @@ fn draw(terminal: &mut DefaultTerminal, app: &App) -> Result<(), String> {
 /// `switch_project` replaces the queue on show when the picker is submitted.
 pub fn run(
     start: Start,
+    channel: Channel,
     application: impl Application + Send + Sync + 'static,
     watch: impl JournalWatch + Send + 'static,
 ) -> Result<(), String> {
     let mut terminal = ratatui::try_init().map_err(|e| format!("cannot use the terminal: {e}"))?;
     let application = Arc::new(application);
-    let result = spawn_wakes(watch)
-        .and_then(|(sender, wakes)| drive(start, &mut terminal, &application, &sender, &wakes));
+    let result = spawn_wakes(watch).and_then(|(sender, wakes)| {
+        drive(start, channel, &mut terminal, &application, &sender, &wakes)
+    });
     ratatui::restore();
     result
 }
@@ -291,24 +293,33 @@ fn step<A: Application + Send + Sync + 'static>(
 
 /// The app the loop starts on: the queue `application.load_queue` fetches, or the
 /// registration screen open on `start`'s message, when it says a name is needed first.
-fn initial_app(start: Start, application: &impl Application) -> Result<App, String> {
+fn initial_app(
+    start: Start,
+    channel: Channel,
+    application: &impl Application,
+) -> Result<App, String> {
+    let app = App {
+        channel,
+        ..App::default()
+    };
     Ok(match start {
-        Start::Ready => update(App::default(), Event::Loaded(load(application, false)?)),
+        Start::Ready => update(app, Event::Loaded(load(application, false)?)),
         Start::NameTaken { message } => App {
             registration: Some(RegistrationScreen::new(message)),
-            ..App::default()
+            ..app
         },
     })
 }
 
 fn drive<A: Application + Send + Sync + 'static>(
     start: Start,
+    channel: Channel,
     terminal: &mut DefaultTerminal,
     application: &Arc<A>,
     sender: &Sender<Wake>,
     wakes: &Receiver<Wake>,
 ) -> Result<(), String> {
-    let app = initial_app(start, application.as_ref())?;
+    let app = initial_app(start, channel, application.as_ref())?;
     run_loop(app, terminal, application, sender, wakes)
 }
 
