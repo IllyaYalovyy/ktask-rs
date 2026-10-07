@@ -16,7 +16,7 @@ depends on none of them. `cli` is the only place where adapters are chosen and w
 
 Everything `core` needs from the outside world is a trait defined in `core`:
 `Journal`, `Git`, `Commands` (run a process with timeout and streaming output), `Provider`,
-`Clock`, `ProjectRegistry` (the projects the tool knows, in `$XDG_STATE_HOME/ktask-rs/registry.db`). Each has a real adapter in `ktask-adapters` and an in-memory fake used by `core`'s
+`Clock`, `ProjectRegistry` (the projects the tool knows, in `registry.db` under the state directory of the build's channel). Each has a real adapter in `ktask-adapters` and an in-memory fake used by `core`'s
 tests. Nothing in `core` spawns a process, opens a file or reads the environment.
 
 The `Provider` adapter is one generic implementation driven by provider configuration
@@ -79,11 +79,31 @@ any `.py` file and any `python` in a tracked file.
 
 ## State and isolation
 
-Per-project state lives under `$XDG_STATE_HOME/ktask-rs/<project>/`, configuration under
-`$XDG_CONFIG_HOME/ktask-rs/`. Nothing is written into the project's working tree except by
+Per-project state lives under `$XDG_STATE_HOME/<channel directory>/<project>/`, configuration under
+`$XDG_CONFIG_HOME/<channel directory>/`. Nothing is written into the project's working tree except by
 an agent or a configured step. Every path the tool touches comes from configuration or the
 environment it was started with, so tests run the real binary with their own `HOME`,
 `XDG_*` and `TMPDIR`.
+
+## Channels
+
+Every binary is built for one channel, `dev` or `user`, fixed at build time and never decided at
+runtime. The channel names the directory a binary keeps its world in: `ktask-rs-dev` for `dev`,
+`ktask-rs` for `user`, under both the state home and the config home. A build from the
+repository and the installed tool therefore never see each other's registry, queues or
+settings, even when started in the same directory.
+
+- `dev` is the default for every cargo build, test, run and install.
+- `user` comes only from the installer for the user tool, which sets `KTASK_RS_CHANNEL=user`; `build.rs`
+  reads it and fails the build for any other value but `dev` or `user`.
+- `build.rs` also records the short git commit and whether the tree was dirty.
+  `ktask-rs --version` prints `ktask-rs <version> <channel> <commit>`, `-dirty` appended when so.
+- The channel is a constant of the build. Nothing at runtime inspects the binary's path or the
+  environment to choose one. The mapping from channel to directory lives in one place, `state.rs`
+  of `ktask-adapters`, and a structure test refuses it anywhere else.
+- `project show` prints the channel and state directory; the TUI title bar reads `ktask-rs [dev]`
+  on `dev` and `ktask-rs` on `user`, in every screen.
+- No test and no command a `dev` binary runs reads or writes under `ktask-rs/`.
 
 ## End-to-end test harness
 
