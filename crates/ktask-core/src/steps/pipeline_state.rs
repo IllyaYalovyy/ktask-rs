@@ -29,11 +29,16 @@ pub(crate) struct PipelineState<'a> {
     /// The session the resolver's `retry --same-session` decision asked this attempt to
     /// resume. `None` for a task's first attempt, and for a retry that did not ask for it.
     pub(crate) requested_session: Option<String>,
-    /// Set by `execute::run_one_step` when the step that stopped the attempt matched one of
-    /// `known_cause`'s own known causes: the run stops without ever reaching the resolver,
+    /// Set by `execute::run_one_step` when the router stopped the attempt at one of its own
+    /// known causes: the run stops without ever reaching the resolver,
     /// and the task returns to `pending` rather than ending `failed` or `failed-unknown` —
     /// `finish_attempt`'s own job to act on, once `run_attempt_steps` returns.
     pub(crate) known_cause: bool,
+    /// Why the router handed the failure that ended the attempt to the decider, with the facts
+    /// the resolve step's prompt carries. `None` when nothing was decided.
+    pub(crate) decision: Option<crate::route::Decision>,
+    /// The time a decider's `retry --more-time` added to this attempt's limit.
+    pub(crate) extra_time: std::time::Duration,
     /// Usage reported by the provider while the current step ran.
     pub(crate) usage: crate::Usage,
     /// Model reported by the provider while the current step ran.

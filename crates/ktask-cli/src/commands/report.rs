@@ -45,6 +45,11 @@ pub(crate) struct Args {
     /// `retry` outcome
     #[arg(long)]
     reset_tree: bool,
+    /// Give the task's next attempt this many more minutes than the attempt time limit; only
+    /// valid with the `retry` outcome, and only after an attempt that was killed at its time
+    /// limit
+    #[arg(long, value_name = "MINUTES", value_parser = clap::value_parser!(u32).range(1..))]
+    more_time: Option<u32>,
     /// The JSON file of tasks that replace the superseded one, in the same format `import`
     /// takes, or - for standard input; required with the `supersede` outcome, refused with
     /// every other one
@@ -52,18 +57,23 @@ pub(crate) struct Args {
     tasks: Option<String>,
 }
 
-/// Checks `args.provider`, `args.model`, `args.same_session` and `args.reset_tree` against
-/// `outcome`: with `retry`, a named provider must be a known one; with anything else, none of
-/// the four may be given at all.
+/// Checks `args.provider`, `args.model`, `args.same_session`, `args.reset_tree` and
+/// `args.more_time` against `outcome`: with `retry`, a named provider must be a known one; with anything else, none of
+/// the five may be given at all.
 fn check_provider_and_model(outcome: Outcome, args: &Args) -> Result<(), Failure> {
     if outcome == Outcome::Retry {
         return Ok(());
     }
-    if args.provider.is_some() || args.model.is_some() || args.same_session || args.reset_tree {
+    if args.provider.is_some()
+        || args.model.is_some()
+        || args.same_session
+        || args.reset_tree
+        || args.more_time.is_some()
+    {
         return Err(Failure {
             message: format!(
-                "outcome {outcome} does not accept --provider, --model, --same-session or \
-                 --reset-tree: only retry does"
+                "outcome {outcome} does not accept --provider, --model, --same-session, \
+                 --reset-tree or --more-time: only retry does"
             ),
             code: 2,
         });
@@ -140,6 +150,7 @@ fn record(
             args.same_session,
             echo::provider().supports_resume,
             args.reset_tree,
+            args.more_time,
         )
     } else {
         ktask_core::report(

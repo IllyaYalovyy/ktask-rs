@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::{AttemptEnd, Clock, Outcome, Task, TaskStatus, WaitReason};
 
-use super::{AttemptLine, AttemptOutcome, StatusEntry, StepLine, Wait};
+use super::{AttemptLine, AttemptOutcome, OutputActivity, StatusEntry, StepLine, Wait};
 use crate::{IMPLEMENTATION, RESOLVE_STEP, REVIEW_STEP, TEST_STEP};
 
 /// The outcome and reason shown for the implementation step ended at `end`, given what the
@@ -103,6 +103,8 @@ pub(super) fn running_step(
         (true, Some(_)) => AttemptOutcome::Waiting,
         (true, None) => AttemptOutcome::Running,
     };
+    let waiting = live_wait(run_alive, waiting_until, waiting_reason, clock);
+    let routed = waiting.as_ref().map(|wait| wait.reason.routed());
     StepLine {
         step: name.to_owned(),
         provider: step_provider(name, provider),
@@ -111,10 +113,12 @@ pub(super) fn running_step(
         time_spent: elapsed,
         outcome,
         reason: None,
-        waiting: live_wait(run_alive, waiting_until, waiting_reason, clock),
+        waiting,
         limit_wait: None,
         limit_warning: None,
         usage: crate::Usage::default(),
+        routed,
+        more_time: None,
     }
 }
 
@@ -136,6 +140,36 @@ fn live_wait(
     })
 }
 
+/// An [`AttemptLine`] numbered `number` carrying `current`'s own fields flat, the usage of every
+/// one of `steps` summed, and the verdict of the last of them the router gave one.
+pub(super) fn attempt_of(
+    number: u32,
+    current: StepLine,
+    output_activity: Option<OutputActivity>,
+    steps: Vec<StepLine>,
+) -> AttemptLine {
+    AttemptLine {
+        number,
+        step: current.step,
+        provider: current.provider,
+        model: current.model,
+        session: current.session,
+        time_spent: current.time_spent,
+        outcome: current.outcome,
+        reason: current.reason,
+        waiting: current.waiting,
+        limit_wait: current.limit_wait,
+        limit_warning: current.limit_warning,
+        output_activity,
+        usage: steps.iter().fold(crate::Usage::default(), |total, step| {
+            total.plus(step.usage)
+        }),
+        routed: steps.iter().rev().find_map(|step| step.routed),
+        more_time: None,
+        steps,
+    }
+}
+
 /// The [`StatusEntry`] for `task`, given the step and reason a gate recorded stopping it before
 /// any attempt began: one [`StepLine`] shown [`AttemptOutcome::Failed`], the same way a
 /// command-kind step that fails inside an attempt is shown — `task.status` is untouched, still
@@ -153,27 +187,14 @@ pub(super) fn gate_stop_entry(task: Task, step: String, reason: String) -> Statu
         limit_wait: None,
         limit_warning: None,
         usage: crate::Usage::default(),
+        routed: None,
+        more_time: None,
     };
     StatusEntry {
         task: task.id,
         title: task.title,
         status: task.status,
-        attempt: AttemptLine {
-            number: 0,
-            step: line.step.clone(),
-            provider: None,
-            model: None,
-            session: None,
-            time_spent: Duration::ZERO,
-            outcome: line.outcome,
-            reason: line.reason.clone(),
-            waiting: None,
-            limit_wait: None,
-            limit_warning: None,
-            output_activity: None,
-            usage: crate::Usage::default(),
-            steps: vec![line],
-        },
+        attempt: attempt_of(0, line.clone(), None, vec![line]),
         history: Vec::new(),
         done_by_user: None,
     }

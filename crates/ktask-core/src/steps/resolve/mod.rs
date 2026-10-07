@@ -59,6 +59,7 @@ impl Step for Resolve {
             current_status,
             current_reason.as_deref(),
             &diff,
+            state.decision.as_ref(),
         );
         let model = self.model(context, state);
         let outcome = run_agent_step(
@@ -288,6 +289,9 @@ fn retry_the_task_after_resolver(
 ) -> Result<Attempted, RunError> {
     let requested_model = crate::attempt::last_retry_model(deps.journal, task.id, number)?;
     let requested_session = requested_session(deps.journal, task.id, number)?;
+    let extra_time = Duration::from_mins(u64::from(
+        crate::attempt::last_retry_more_time(deps.journal, task.id, number)?.unwrap_or(0),
+    ));
     let reset_to =
         requested_reset_to(deps.journal, task.id, number, state.start_commit.as_deref())?;
     retry_the_task(
@@ -298,6 +302,7 @@ fn retry_the_task_after_resolver(
         requested_model,
         requested_session,
         reset_to.as_deref(),
+        extra_time,
     )
 }
 
@@ -321,6 +326,7 @@ fn retry_the_task(
     requested_model: Option<String>,
     requested_session: Option<String>,
     reset_to: Option<&str>,
+    extra_time: Duration,
 ) -> Result<Attempted, RunError> {
     if let Some(commit) = reset_to {
         deps.git
@@ -336,6 +342,7 @@ fn retry_the_task(
         steps,
         requested_model,
         requested_session,
+        extra_time,
     )
 }
 
@@ -382,6 +389,7 @@ mod tests {
             TaskStatus::FailedUnknown,
             Some("crashed"),
             diff,
+            None,
         );
         assert!(prompt.contains("Do the thing"), "{prompt}");
         assert!(
@@ -439,6 +447,8 @@ mod tests {
             requested_model: None,
             requested_session: None,
             known_cause: false,
+            decision: None,
+            extra_time: Duration::ZERO,
             usage: crate::Usage::default(),
             used_model: None,
             limit_warning: None,

@@ -161,6 +161,8 @@ mod tests {
             requested_model: None,
             requested_session: None,
             known_cause: false,
+            decision: None,
+            extra_time: std::time::Duration::ZERO,
             usage: crate::Usage::default(),
             used_model: None,
             limit_warning: None,

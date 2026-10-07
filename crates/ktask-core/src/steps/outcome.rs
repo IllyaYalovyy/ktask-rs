@@ -1,7 +1,8 @@
 //! The typed result produced by a single pipeline step.
 
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
+use crate::route::Signals;
 use crate::{Outcome, TaskStatus};
 
 /// What running one step produced.
@@ -36,24 +37,8 @@ pub(crate) enum StepOutcome {
         /// The agent's own fine-grained outcome, when this step ran a provider and it reported
         /// one.
         reported: Option<Outcome>,
-    },
-    /// The provider's own output said its usage limit was hit: the step neither passed nor
-    /// ended the attempt. [`super::execute::run_one_step`] records this as a wait, sleeps until
-    /// `until`, then runs the step itself again — never beginning a fresh step, so the
-    /// attempt's own number never moves for it, exactly as a hand-driven retry would.
-    Waiting {
-        /// How long the provider ran before its output showed the limit.
-        duration: Duration,
-        /// The time to wait until before trying again: the provider's own message named it, or
-        /// the resolve role's own default back-off when it did not.
-        until: SystemTime,
-    },
-    /// Codex exhausted its stream transport. The runner retries this same step with a bounded
-    /// back-off, or turns the last consecutive failure into a pending known cause.
-    TransportFailure {
-        /// How long the failed provider invocation ran.
-        duration: Duration,
-        /// Codex's observed transport error.
-        reason: String,
+        /// What the provider run showed besides its exit code: the facts the router reads.
+        /// Empty for a step that ran no provider.
+        signals: Signals,
     },
 }

@@ -126,6 +126,25 @@ impl QueueState {
             .unwrap_or(false)
     }
 
+    /// The minutes the resolver's `retry` decision for attempt `number` of task `id` added to
+    /// the next attempt's time limit. `None` when it added none.
+    pub(crate) fn retry_more_time_of(&self, id: TaskId, number: u32) -> Option<u32> {
+        self.retry_more_times.get(&(id, number)).copied()
+    }
+
+    /// Whether a step of attempt `number` of task `id` ended at the attempt time limit, its
+    /// ending routed to the decider for it.
+    pub(crate) fn ended_at_time_limit(&self, id: TaskId, number: u32) -> bool {
+        self.attempts.get(&id).is_some_and(|attempts| {
+            attempts
+                .iter()
+                .filter(|attempt| attempt.number == number)
+                .flat_map(|attempt| attempt.steps.iter())
+                .filter_map(|step| step.ended.as_ref())
+                .any(|end| end.routed == Some(crate::Routed::Decide(crate::DecideWhy::TimeLimit)))
+        })
+    }
+
     /// The session the provider reported for attempt `number` of task `id`'s implementation
     /// step. `None` when it reported none, or the attempt has not run it yet.
     pub(crate) fn session_of(&self, id: TaskId, number: u32) -> Option<String> {

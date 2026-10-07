@@ -127,6 +127,33 @@ pub(crate) fn last_retry_model(
     read_and_query(journal, |state| state.retry_model_of(id, number))
 }
 
+/// The minutes the resolver's `retry` decision for attempt `number` of task `id` added to the
+/// task's next attempt's time limit. `None` when it added none.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub(crate) fn last_retry_more_time(
+    journal: &dyn Journal,
+    id: TaskId,
+    number: u32,
+) -> Result<Option<u32>, JournalError> {
+    read_and_query(journal, |state| state.retry_more_time_of(id, number))
+}
+
+/// Whether a step of attempt `number` of task `id` ended at the attempt time limit.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub(crate) fn ended_at_time_limit(
+    journal: &dyn Journal,
+    id: TaskId,
+    number: u32,
+) -> Result<bool, JournalError> {
+    read_and_query(journal, |state| state.ended_at_time_limit(id, number))
+}
+
 /// The outcome and reason reported while step `step` of attempt `number` of task `id` was
 /// open, with [`crate::report`]. `None` when nothing was reported during that step.
 ///

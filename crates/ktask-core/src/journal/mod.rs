@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::{LimitWarning, Usage};
 
-use crate::{Outcome, Placement, TaskDraft, TaskId, TaskStatus};
+use crate::{Outcome, Placement, Routed, TaskDraft, TaskId, TaskStatus};
 
 mod errors;
 mod wait;
@@ -85,6 +85,9 @@ pub enum Event {
         /// commit this attempt started from before the task's next attempt begins. Always
         /// `false` for every outcome but `retry`.
         retry_reset_tree: bool,
+        /// The minutes the resolver's `retry --more-time` added to the task's next attempt's
+        /// time limit. `None` for every other outcome, and for a `retry` that asked for none.
+        retry_more_time: Option<u32>,
         /// The step that was open when this was reported — so a later step's own report of
         /// the same attempt never reads back as this one's. `None` when no step was open,
         /// which only happens ahead of the pipeline itself ever beginning one.
@@ -185,6 +188,9 @@ pub enum Event {
         usage: Usage,
         /// The model the provider says it used, when it said one.
         used_model: Option<String>,
+        /// What the router did with this step's ending: the last verdict it gave while the step
+        /// ran. `None` for a step that passed on its first run, and for an older journal.
+        routed: Option<Routed>,
         /// When.
         at: SystemTime,
     },
@@ -300,6 +306,8 @@ pub struct AttemptEnd {
     pub usage: Usage,
     /// The model the provider says it used for this step.
     pub used_model: Option<String>,
+    /// What the router did with this step's ending, when it routed one.
+    pub routed: Option<Routed>,
 }
 
 /// One step of an attempt, as [`crate::attempt::last_attempt`] reports it: the pipeline every

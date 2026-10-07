@@ -182,9 +182,6 @@ impl QueueState {
             number,
             outcome,
             reason,
-            retry_model,
-            retry_same_session,
-            retry_reset_tree,
             step,
             ..
         } = event
@@ -197,18 +194,43 @@ impl QueueState {
             self.step_reports
                 .insert((*id, *number, step.clone()), (*outcome, reason.clone()));
         }
+        self.apply_retry_choices(event);
+    }
+
+    /// Records or clears what a report's `retry` asked for the task's next attempt: the model,
+    /// the session, the tree reset and the extra time.
+    fn apply_retry_choices(&mut self, event: &Event) {
+        let Event::AttemptReported {
+            id,
+            number,
+            retry_model,
+            retry_same_session,
+            retry_reset_tree,
+            retry_more_time,
+            ..
+        } = event
+        else {
+            return;
+        };
+        let key = (*id, *number);
         match retry_model {
             Some(model) => {
-                self.retry_models.insert((*id, *number), model.clone());
+                self.retry_models.insert(key, model.clone());
             }
             None => {
-                self.retry_models.remove(&(*id, *number));
+                self.retry_models.remove(&key);
             }
         }
-        self.retry_same_sessions
-            .insert((*id, *number), *retry_same_session);
-        self.retry_reset_trees
-            .insert((*id, *number), *retry_reset_tree);
+        self.retry_same_sessions.insert(key, *retry_same_session);
+        self.retry_reset_trees.insert(key, *retry_reset_tree);
+        match retry_more_time {
+            Some(minutes) => {
+                self.retry_more_times.insert(key, *minutes);
+            }
+            None => {
+                self.retry_more_times.remove(&key);
+            }
+        }
     }
 
     /// Applies a [`Event::AttemptSessionRecorded`]: records the session against the attempt it
@@ -256,6 +278,7 @@ impl QueueState {
                 limit_warning: None,
                 usage: crate::Usage::default(),
                 used_model: None,
+                routed: None,
             });
         }
     }
@@ -344,6 +367,7 @@ fn step_end(event: &Event) -> AttemptEnd {
         limit_warning,
         usage,
         used_model,
+        routed,
         ..
     } = event
     else {
@@ -358,5 +382,6 @@ fn step_end(event: &Event) -> AttemptEnd {
         limit_warning: limit_warning.clone(),
         usage: *usage,
         used_model: used_model.clone(),
+        routed: *routed,
     }
 }

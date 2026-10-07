@@ -207,6 +207,8 @@ pub enum ReportError {
     /// `--same-session` was given, but the attempt the token names reported no session to
     /// continue.
     NoSessionRecorded,
+    /// `--more-time` was given, but the attempt the token names did not end at its time limit.
+    NoTimeLimitEnding,
     /// `supersede`'s own tasks file is refused — the same way, with the same messages,
     /// [`crate::import_tasks`] refuses one.
     Import(ImportError),
@@ -240,6 +242,9 @@ impl fmt::Display for ReportError {
             ),
             Self::NoSessionRecorded => f.write_str(
                 "this attempt reported no session to continue: --same-session needs one",
+            ),
+            Self::NoTimeLimitEnding => f.write_str(
+                "this attempt did not end at its time limit: --more-time only follows a timeout",
             ),
             Self::Import(error) => error.fmt(f),
         }
@@ -292,7 +297,9 @@ pub fn report(
     outcome: Outcome,
     reason: Option<&str>,
 ) -> Result<(), ReportError> {
-    report_impl(journal, clock, token, outcome, reason, None, false, false)
+    report_impl(
+        journal, clock, token, outcome, reason, None, false, false, None,
+    )
 }
 
 /// Use case: records the resolver's `retry` decision for the attempt `token` names, carrying
@@ -301,7 +308,8 @@ pub fn report(
 /// `same_session` asks the task's next attempt to resume this attempt's own session instead of
 /// starting fresh; `provider_supports_resume` is whatever the project's configured provider
 /// reports for itself. `reset_tree` asks the working tree to be returned to the commit this
-/// attempt started from before the task's next attempt begins.
+/// attempt started from before the task's next attempt begins. `more_time` raises that next
+/// attempt's time limit by that many minutes.
 ///
 /// # Errors
 ///
@@ -309,7 +317,8 @@ pub fn report(
 /// this attempt — only the resolve step accepts it; when the journal reports the attempt is
 /// unknown or has ended; when `same_session` is asked for a provider that does not support
 /// resuming at all ([`ReportError::ResumeNotSupported`]); or when `same_session` is asked and
-/// this attempt reported no session to continue ([`ReportError::NoSessionRecorded`]).
+/// this attempt reported no session to continue ([`ReportError::NoSessionRecorded`]); or when
+/// `more_time` is given and this attempt did not end at its time limit ([`ReportError::NoTimeLimitEnding`]).
 #[allow(clippy::too_many_arguments)]
 pub fn report_retry(
     journal: &impl Journal,
@@ -319,7 +328,14 @@ pub fn report_retry(
     same_session: bool,
     provider_supports_resume: bool,
     reset_tree: bool,
+    more_time: Option<u32>,
 ) -> Result<(), ReportError> {
+    if more_time.is_some()
+        && !crate::attempt::ended_at_time_limit(journal, token.task, token.number)
+            .map_err(RecordReportError::from)?
+    {
+        return Err(ReportError::NoTimeLimitEnding);
+    }
     if same_session {
         if !provider_supports_resume {
             return Err(ReportError::ResumeNotSupported);
@@ -339,6 +355,7 @@ pub fn report_retry(
         model,
         same_session,
         reset_tree,
+        more_time,
     )
 }
 
@@ -355,6 +372,7 @@ fn report_impl(
     retry_model: Option<&str>,
     retry_same_session: bool,
     retry_reset_tree: bool,
+    retry_more_time: Option<u32>,
 ) -> Result<(), ReportError> {
     let blank = reason.is_none_or(|reason| reason.trim().is_empty());
     if outcome.needs_reason() && blank {
@@ -371,6 +389,7 @@ fn report_impl(
         retry_model,
         retry_same_session,
         retry_reset_tree,
+        retry_more_time,
     )?;
     Ok(())
 }
@@ -710,7 +729,16 @@ mod tests {
         let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
         let token = AttemptToken::new("proj", TaskId(1), 1);
         assert_eq!(
-            report_retry(&journal, &clock(), &token, Some("opus"), false, true, false),
+            report_retry(
+                &journal,
+                &clock(),
+                &token,
+                Some("opus"),
+                false,
+                true,
+                false,
+                None
+            ),
             Ok(())
         );
         assert_eq!(
@@ -721,7 +749,7 @@ mod tests {
         let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
         let token = AttemptToken::new("proj", TaskId(1), 1);
         assert_eq!(
-            report_retry(&journal, &clock(), &token, None, false, true, false),
+            report_retry(&journal, &clock(), &token, None, false, true, false, None),
             Ok(())
         );
         assert_eq!(
@@ -735,7 +763,7 @@ mod tests {
         let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
         let token = AttemptToken::new("proj", TaskId(1), 1);
         assert_eq!(
-            report_retry(&journal, &clock(), &token, None, false, true, true),
+            report_retry(&journal, &clock(), &token, None, false, true, true, None),
             Ok(())
         );
         assert_eq!(
@@ -746,7 +774,7 @@ mod tests {
         let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
         let token = AttemptToken::new("proj", TaskId(1), 1);
         assert_eq!(
-            report_retry(&journal, &clock(), &token, None, false, true, false),
+            report_retry(&journal, &clock(), &token, None, false, true, false, None),
             Ok(())
         );
         assert_eq!(
@@ -759,7 +787,8 @@ mod tests {
     fn retry_same_session_without_a_recorded_session_is_refused_naming_it() {
         let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
         let token = AttemptToken::new("proj", TaskId(1), 1);
-        let error = report_retry(&journal, &clock(), &token, None, true, true, false).unwrap_err();
+        let error =
+            report_retry(&journal, &clock(), &token, None, true, true, false, None).unwrap_err();
         assert_eq!(error, ReportError::NoSessionRecorded);
         assert!(
             error
@@ -778,7 +807,8 @@ mod tests {
         let journal = journal_with_a_running_step(crate::RESOLVE_STEP);
         let token = AttemptToken::new("proj", TaskId(1), 1);
         crate::attempt::record_session(&journal, &clock(), TaskId(1), 1, "a-session").unwrap();
-        let error = report_retry(&journal, &clock(), &token, None, true, false, false).unwrap_err();
+        let error =
+            report_retry(&journal, &clock(), &token, None, true, false, false, None).unwrap_err();
         assert_eq!(error, ReportError::ResumeNotSupported);
         assert!(error.to_string().contains("does not support resuming"));
     }
@@ -789,7 +819,7 @@ mod tests {
         let token = AttemptToken::new("proj", TaskId(1), 1);
         crate::attempt::record_session(&journal, &clock(), TaskId(1), 1, "a-session").unwrap();
         assert_eq!(
-            report_retry(&journal, &clock(), &token, None, true, true, false),
+            report_retry(&journal, &clock(), &token, None, true, true, false, None),
             Ok(())
         );
         assert_eq!(
@@ -802,8 +832,17 @@ mod tests {
     fn a_retry_outside_the_resolve_step_is_refused_the_same_as_report_would() {
         let journal = journal_with_a_running_step(crate::IMPLEMENTATION);
         let token = AttemptToken::new("proj", TaskId(1), 1);
-        let error =
-            report_retry(&journal, &clock(), &token, Some("opus"), false, true, false).unwrap_err();
+        let error = report_retry(
+            &journal,
+            &clock(),
+            &token,
+            Some("opus"),
+            false,
+            true,
+            false,
+            None,
+        )
+        .unwrap_err();
         assert_eq!(
             error,
             ReportError::WrongStep {

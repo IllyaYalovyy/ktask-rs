@@ -69,6 +69,14 @@ fn step_text(step: &StepLine, width: usize, label: &str) -> String {
             format!("{prefix}: {}", elide(&reason, budget))
         },
     );
+    let text = match step.routed {
+        Some(routed) => format!("{text} · {}", presentation::routed_text(routed)),
+        None => text,
+    };
+    let text = match step.more_time {
+        Some(more_time) => format!("{text} · {}", presentation::more_time_text(more_time)),
+        None => text,
+    };
     let text = match &step.limit_wait {
         Some(wait) => format!("{text} · {}", presentation::queue_limit_wait_text(wait)),
         None => text,

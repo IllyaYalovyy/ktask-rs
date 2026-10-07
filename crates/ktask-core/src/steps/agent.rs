@@ -2,8 +2,9 @@
 //! implementation, review and test steps, none of which otherwise names the others.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
+use crate::route::{Killed, Signals, output_tail};
 use crate::steps::{Deps, PipelineState, StepOutcome};
 use crate::{
     AttemptToken, Exit, IMPLEMENTATION, Output, ProviderRunError, Resume, RunContext, RunError,
@@ -14,26 +15,9 @@ mod outcome;
 
 use outcome::{AgentOutcome, agent_outcome};
 
-/// How long an attempt waits before trying again when its provider's own message said its
-/// usage limit was hit but named no reset time of its own.
-const DEFAULT_LIMIT_BACKOFF: Duration = Duration::from_mins(5);
-
-const CODEX_TRANSPORT_FAILURE: &str =
-    "ERROR: stream disconnected before completion: Transport error:";
-
-/// The terminal error in Codex's recorded reconnect failure, retaining its final diagnostic
-/// rather than treating every reconnect notice as a failed stream.
-fn codex_transport_failure(output: &Output) -> Option<String> {
-    String::from_utf8_lossy(&output.stderr)
-        .lines()
-        .rev()
-        .find(|line| line.starts_with(CODEX_TRANSPORT_FAILURE))
-        .map(str::to_owned)
-}
-
 /// `outcome`, timed at `duration`, as the [`StepOutcome`] it ended at: `Passed` for `done`,
 /// `Ended` for anything else.
-fn to_step_outcome(duration: Duration, outcome: AgentOutcome) -> StepOutcome {
+fn to_step_outcome(duration: Duration, outcome: AgentOutcome, signals: Signals) -> StepOutcome {
     if outcome.status == TaskStatus::Done {
         StepOutcome::Passed {
             duration,
@@ -48,6 +32,7 @@ fn to_step_outcome(duration: Duration, outcome: AgentOutcome) -> StepOutcome {
             status: outcome.status,
             reason: outcome.reason,
             reported: outcome.reported,
+            signals,
         }
     }
 }
@@ -173,7 +158,7 @@ fn run_prompt(
             project_dir: context.project_dir,
         },
         context.project_dir,
-        context.attempt_timeout,
+        attempt_limit(context, state),
         Some(&step_output_path(context.outputs_dir, state.token, step)),
     );
     let duration = deps.clock.now().duration_since(started).unwrap_or_default();
@@ -208,25 +193,9 @@ pub(crate) fn run_agent_step(
     });
     let (duration, result) = run_prompt(deps, context, state, step, model, prompt, resume)?;
     maybe_record_session(deps, context, state, step, prompt, &result)?;
-    record_exit_code(state, &result);
-    if let Some(until) = limit_wait(deps, step, &result) {
-        return Ok(StepOutcome::Waiting { duration, until });
-    }
-    if let Some(reason) = result.as_ref().ok().and_then(codex_transport_failure) {
-        return Ok(StepOutcome::TransportFailure { duration, reason });
-    }
+    let signals = signals_of(deps, context, state, step, &result);
     let outcome = final_agent_outcome(deps, state, step, model, result)?;
-    Ok(to_step_outcome(duration, outcome))
-}
-
-/// Records the provider's process exit code before a wait or transport retry resumes this same
-/// step, so an exhausted retry keeps the last failed process's code.
-fn record_exit_code(state: &mut PipelineState<'_>, result: &Result<Output, ProviderRunError>) {
-    if let Ok(output) = result
-        && let Exit::Code(code) = output.exit
-    {
-        state.exit_code = Some(code);
-    }
+    Ok(to_step_outcome(duration, outcome, signals))
 }
 
 /// Reads a completed provider call's facts, applies them to the attempt, and turns its output
@@ -256,20 +225,37 @@ fn final_agent_outcome(
     Ok(outcome)
 }
 
-/// The time to wait until before running this step again, when `result`'s own output says the
-/// provider's usage limit was hit: the message's own reset time, or [`DEFAULT_LIMIT_BACKOFF`]
-/// from now when it named none. `None` when the provider could not even be run, or its output
-/// says no such thing.
-fn limit_wait(
+/// How long one provider run of `state`'s attempt may last: the project's attempt time limit,
+/// plus the minutes a decider's `retry --more-time` added to this attempt.
+fn attempt_limit(context: RunContext<'_>, state: &PipelineState<'_>) -> Duration {
+    context.attempt_timeout + state.extra_time
+}
+
+/// What `result` showed besides its exit code, for the router to read.
+fn signals_of(
     deps: &Deps<'_>,
+    context: RunContext<'_>,
+    state: &PipelineState<'_>,
     step: &str,
     result: &Result<Output, ProviderRunError>,
-) -> Option<SystemTime> {
-    let output = result.as_ref().ok()?;
-    let signal = (deps.provider_for(step).detect_limit)(output)?;
-    Some(
-        signal
-            .reset_at
-            .unwrap_or_else(|| deps.clock.now() + DEFAULT_LIMIT_BACKOFF),
-    )
+) -> Signals {
+    let Ok(output) = result else {
+        return Signals::default();
+    };
+    let killed = (output.exit == Exit::Killed).then(|| {
+        let last_output = deps
+            .output
+            .last_output_at(state.task.id, state.token.number);
+        Killed {
+            after: attempt_limit(context, state),
+            last_output_ago: last_output
+                .map(|at| deps.clock.now().duration_since(at).unwrap_or_default()),
+            tail: output_tail(&output.stdout, &output.stderr),
+        }
+    });
+    Signals {
+        limit: (deps.provider_for(step).detect_limit)(output),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        killed,
+    }
 }

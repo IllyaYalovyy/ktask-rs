@@ -11,15 +11,15 @@ use crate::journal::{AttemptRun, WaitReason};
 use crate::queue_state::decide_and_append;
 use crate::{
     BeginAttemptError, Clock, Event, Journal, JournalError, LimitWait, Outcome, RecordReportError,
-    Task, TaskDraft, TaskId,
+    Routed, Task, TaskDraft, TaskId,
 };
 
 mod query;
 
 pub(crate) use query::{
-    all_attempts, answer_of, current_step, done_mark_of, gate_stop_of, last_attempt, last_report,
-    last_retry_model, last_retry_reset_tree, last_retry_same_session, last_session, report_of_step,
-    running, with_answer,
+    all_attempts, answer_of, current_step, done_mark_of, ended_at_time_limit, gate_stop_of,
+    last_attempt, last_report, last_retry_model, last_retry_more_time, last_retry_reset_tree,
+    last_retry_same_session, last_session, report_of_step, running, with_answer,
 };
 
 /// Use case: records that the gate named `step` refused to let task `id`'s attempt begin, with
@@ -91,6 +91,7 @@ pub(crate) fn record_report(
     retry_model: Option<&str>,
     retry_same_session: bool,
     retry_reset_tree: bool,
+    retry_more_time: Option<u32>,
 ) -> Result<(), RecordReportError> {
     let at = clock.now();
     decide_and_append(journal, |state| {
@@ -103,6 +104,7 @@ pub(crate) fn record_report(
                 retry_model,
                 retry_same_session,
                 retry_reset_tree,
+                retry_more_time,
                 at,
             )
             .map(|event| (vec![event], ()))
@@ -291,6 +293,7 @@ pub(crate) fn end_step(
     limit_warning: Option<&crate::LimitWarning>,
     usage: crate::Usage,
     used_model: Option<&str>,
+    routed: Option<Routed>,
 ) -> Result<(), RecordReportError> {
     let at = clock.now();
     decide_and_append(journal, |state| {
@@ -305,6 +308,7 @@ pub(crate) fn end_step(
                 limit_warning,
                 usage,
                 used_model,
+                routed,
                 at,
             )
             .map(|event| (vec![event], ()))

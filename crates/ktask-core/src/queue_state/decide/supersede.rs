@@ -37,6 +37,7 @@ impl QueueState {
             retry_model: None,
             retry_same_session: false,
             retry_reset_tree: false,
+            retry_more_time: None,
             step: self.current_step(id),
             at,
         });

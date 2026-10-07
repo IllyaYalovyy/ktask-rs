@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use crate::pick::{Pick, end_when_nothing_left, pick_next_task};
 use crate::steps::{self, INTERRUPTED};
-use crate::{Clock, Commands, Git, Journal, RunLock, SessionLog, Sleep, TaskId, TaskStatus};
+use crate::{
+    AttemptOutput, Clock, Commands, Git, Journal, RunLock, SessionLog, Sleep, TaskId, TaskStatus,
+};
 
 pub use crate::steps::implementation::build_prompt;
 pub use crate::steps::review::build_review_prompt;
@@ -218,6 +220,7 @@ fn finish_attempt(
         &steps::default_steps(),
         None,
         None,
+        Duration::ZERO,
     )?;
     let status = result.status;
     attempted.push(result);
@@ -251,6 +254,7 @@ fn attempt_loop(
     providers: &TaskProviders<'_>,
     session_log: &impl SessionLog,
     sleep: &impl Sleep,
+    output: &dyn AttemptOutput,
     context: RunContext<'_>,
 ) -> Result<RunReport, RunError> {
     let deps = steps::Deps {
@@ -262,6 +266,7 @@ fn attempt_loop(
         resolver_provider: providers.resolver,
         session_log,
         sleep,
+        output,
     };
     run_attempt_loop(deps, providers, journal, context)
 }
@@ -318,6 +323,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::NoAttemptOutput;
 
     fn clock() -> FakeClock {
         FakeClock(at(1_000))
@@ -387,6 +393,7 @@ mod tests {
                 named: &NO_NAMED_PROVIDERS,
             },
             context,
+            output: &NoAttemptOutput,
         }
     }
 
@@ -1937,7 +1944,7 @@ mod tests {
                 .reason
                 .as_deref()
                 .unwrap()
-                .contains("time limit"),
+                .contains("killed after"),
             "{:?}",
             report.attempted[0].reason
         );
@@ -3034,7 +3041,17 @@ mod tests {
                     report(self.journal, &clock(), &token, Outcome::Accepted, None).unwrap();
                 }
                 Some(RESOLVE_STEP) => {
-                    report_retry(self.journal, &clock(), &token, None, false, false, true).unwrap();
+                    report_retry(
+                        self.journal,
+                        &clock(),
+                        &token,
+                        None,
+                        false,
+                        false,
+                        true,
+                        None,
+                    )
+                    .unwrap();
                 }
                 _ if token.number == 1 => {
                     report(

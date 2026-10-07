@@ -4,12 +4,12 @@
 
 use std::time::{Duration, SystemTime};
 
+use crate::route::{Facts, Route, Signals, route};
 use crate::{
-    AttemptRun, Clock, Journal, LimitWait, Outcome, RunContext, RunError, TaskId, TaskStatus,
-    WaitReason,
+    AttemptRun, Clock, Journal, LimitWait, Outcome, Routed, RunContext, RunError, TaskId,
+    TaskStatus, WaitReason,
 };
 
-use super::known_cause::{KnownCause, codex_transport_reason};
 use super::{Deps, PipelineState, PreStep, Step, StepOutcome};
 
 /// Records a step, named `step`, that already ran and passed, in `duration`, with `reason` —
@@ -43,64 +43,24 @@ fn record_passed_step(
         None,
         crate::Usage::default(),
         None,
+        None,
     )?;
     Ok(())
 }
 
-/// `outcome`'s duration, exit code, status (`done` for [`StepOutcome::Passed`]), reason and
-/// reported outcome, whichever of the two it is. Never called with [`StepOutcome::Waiting`]:
-/// [`run_one_step`] acts on that one directly, without ever ending the step over it.
-fn outcome_fields(
-    outcome: StepOutcome,
-) -> (
-    Duration,
-    Option<i32>,
-    TaskStatus,
-    Option<String>,
-    Option<Outcome>,
-) {
-    match outcome {
-        StepOutcome::Passed {
-            duration,
-            exit_code,
-            reason,
-            reported,
-        } => (duration, exit_code, TaskStatus::Done, reason, reported),
-        StepOutcome::Ended {
-            duration,
-            exit_code,
-            status,
-            reason,
-            reported,
-        } => (duration, exit_code, status, reason, reported),
-        StepOutcome::Waiting { .. } | StepOutcome::TransportFailure { .. } => {
-            unreachable!("run_one_step handles Waiting before outcome_fields is ever called")
-        }
-    }
-}
-
-/// Classifies `status` and `reason` against [`super::known_cause`]'s own known causes, when
-/// `status` is not `done`: `Some` with the enriched what/why/fix message to record in `reason`
-/// instead, when one matches — the signal [`PipelineState::known_cause`] carries up to
-/// [`super::finish_attempt`], which leaves the task `pending` and skips the resolver entirely
-/// over it.
-fn classify_known_cause(
-    status: TaskStatus,
+/// A step's end, before it is recorded: what the step itself ended at, or — when the router
+/// overrode them — what it routed them to.
+struct Ending {
+    duration: Duration,
     exit_code: Option<i32>,
-    reason: Option<&str>,
-) -> Option<String> {
-    if !matches!(status, TaskStatus::Failed | TaskStatus::FailedUnknown) {
-        return None;
-    }
-    let cause = KnownCause::classify(exit_code, reason)?;
-    Some(cause.message(reason.unwrap_or_default()))
+    status: TaskStatus,
+    reason: Option<String>,
+    reported: Option<Outcome>,
 }
 
 /// Records that `state`'s attempt is waiting on step `step` until `until`, then sleeps for
-/// what is left of that wait — [`run_one_step`]'s own work for a [`StepOutcome::Waiting`],
-/// pulled out of it so it stays within the workspace's function-length limit. Returns how long
-/// it actually waited, so the step's own duration counts it, and [`run_one_step`] can fold it
-/// into the [`LimitWait`] it records for the step once it ends.
+/// what is left of that wait. Returns how long it actually waited, so the step's own duration
+/// counts it.
 ///
 /// # Errors
 ///
@@ -126,13 +86,8 @@ fn wait_for_limit(
     Ok(wait)
 }
 
-/// Ends step `step` with `outcome`, timed at `waited_so_far` (every earlier `Waiting`'s own
-/// duration, the time actually spent waiting out its provider's usage limit included) plus
-/// `outcome`'s own — enriching its reason and setting [`PipelineState::known_cause`] first,
-/// when it matches one of [`super::known_cause`]'s own known causes — and recording
-/// `limit_wait` against it, when the step waited for its provider's usage limit at least once
-/// before it ended. [`run_one_step`]'s own tail, pulled out of it so it stays within the
-/// workspace's function-length limit.
+/// Ends step `step` at `ending`, timed at `run.total` plus its own duration, with the verdict
+/// the router last gave it, and `run`'s record of the usage-limit waits it sat out.
 ///
 /// # Errors
 ///
@@ -141,16 +96,10 @@ fn end_one_step(
     deps: &Deps<'_>,
     state: &mut PipelineState<'_>,
     step: &str,
-    waited_so_far: Duration,
-    outcome: StepOutcome,
-    limit_wait: Option<LimitWait>,
+    run: &StepRunState,
+    ending: Ending,
 ) -> Result<(Duration, TaskStatus, Option<String>), RunError> {
-    let (duration, exit_code, status, mut reason, reported) = outcome_fields(outcome);
-    let total = waited_so_far + duration;
-    if let Some(message) = classify_known_cause(status, exit_code, reason.as_deref()) {
-        reason = Some(message);
-        state.known_cause = true;
-    }
+    let total = run.total + ending.duration;
     let usage = std::mem::take(&mut state.usage);
     let used_model = state.used_model.take();
     let limit_warning = state.limit_warning.take();
@@ -162,25 +111,25 @@ fn end_one_step(
         step,
         AttemptRun {
             duration: total,
-            exit_code,
-            status,
-            reason: reason.as_deref(),
+            exit_code: ending.exit_code,
+            status: ending.status,
+            reason: ending.reason.as_deref(),
         },
-        reported,
-        limit_wait,
+        ending.reported,
+        run.limit_wait,
         limit_warning.as_ref(),
         usage,
         used_model.as_deref(),
+        run.routed,
     )?;
-    Ok((total, status, reason))
+    Ok((total, ending.status, ending.reason))
 }
 
 /// Begins `step`, already known enabled, then runs it — sleeping out and running it again, as
-/// many times as it reports [`StepOutcome::Waiting`], never beginning a fresh step over it — and
+/// many times as the router says wait or retry, never beginning a fresh step over it — and
 /// ends it once it either passes or ends the attempt: its total duration (the time actually
-/// spent running it, plus every wait for its provider's usage limit — counted in the task's own
-/// time, even though it spent no attempt on it), the status it ended at, and, when that is not
-/// `done`, why.
+/// spent running it, plus every wait — counted in the task's own time, even though it spent no
+/// attempt on it), the status it ended at, and, when that is not `done`, why.
 ///
 /// # Errors
 ///
@@ -195,16 +144,17 @@ pub(crate) fn run_one_step(
     finish_started_step(deps, context, state, step)
 }
 
-/// The elapsed work and waits accumulated while one already-started step is rerun.
+/// The elapsed work, waits and retries accumulated while one already-started step is rerun.
 #[derive(Default)]
 struct StepRunState {
     total: Duration,
     limit_wait: Option<LimitWait>,
-    transport_failures: u32,
+    retried: u32,
+    routed: Option<Routed>,
 }
 
-/// Repeats the already-started `step` until it ends, preserving all wait and transport retry
-/// state on its one journal entry.
+/// Repeats the already-started `step` until it ends, preserving all wait and retry state on
+/// its one journal entry.
 fn finish_started_step(
     deps: &Deps<'_>,
     context: RunContext<'_>,
@@ -222,7 +172,9 @@ fn finish_started_step(
     }
 }
 
-/// Acts on one fresh result from an already-started step; `Some` means the step has ended.
+/// Acts on one fresh result from an already-started step: a passed step ends; a failed one is
+/// routed — [`crate::route::route`] is the only place that decides what happens to it. `Some`
+/// means the step has ended.
 fn process_step_outcome(
     deps: &Deps<'_>,
     context: RunContext<'_>,
@@ -231,15 +183,156 @@ fn process_step_outcome(
     run: &mut StepRunState,
     outcome: StepOutcome,
 ) -> Result<Option<(Duration, TaskStatus, Option<String>)>, RunError> {
+    let (mut ending, signals) = ending_of(outcome);
+    let Some(signals) = signals else {
+        return end_one_step(deps, state, step, run, ending).map(Some);
+    };
+    let facts = Facts {
+        status: ending.status,
+        exit_code: ending.exit_code,
+        reason: ending.reason.as_deref(),
+        reported: ending.reported,
+        signals: &signals,
+        retried: run.retried,
+        transport_retries: context.transport_retries,
+        now: deps.clock.now(),
+        decider: step == crate::RESOLVE_STEP,
+    };
+    let route = route(&facts);
+    apply_route(deps, state, step, run, route, &mut ending)
+}
+
+/// How `outcome` ended its step, and the signals the router reads when it ended badly.
+fn ending_of(outcome: StepOutcome) -> (Ending, Option<Signals>) {
     match outcome {
-        StepOutcome::Waiting { duration, until } => {
-            wait_for_provider_limit(deps, state, step, run, duration, until).map(|()| None)
+        StepOutcome::Passed {
+            duration,
+            exit_code,
+            reason,
+            reported,
+        } => {
+            let status = TaskStatus::Done;
+            let ending = Ending {
+                duration,
+                exit_code,
+                status,
+                reason,
+                reported,
+            };
+            (ending, None)
         }
-        StepOutcome::TransportFailure { duration, reason } => {
-            retry_transport_failure(deps, context, state, step, run, duration, &reason)
+        StepOutcome::Ended {
+            duration,
+            exit_code,
+            status,
+            reason,
+            reported,
+            signals,
+        } => {
+            let ending = Ending {
+                duration,
+                exit_code,
+                status,
+                reason,
+                reported,
+            };
+            (ending, Some(signals))
         }
-        outcome => end_one_step(deps, state, step, run.total, outcome, run.limit_wait).map(Some),
     }
+}
+
+/// Carries out `route` for a step that ended as `ending`: waits or retries — `None`, the step
+/// runs again — or ends it, with the router's own words in place of its reason when it gave
+/// some.
+fn apply_route(
+    deps: &Deps<'_>,
+    state: &mut PipelineState<'_>,
+    step: &str,
+    run: &mut StepRunState,
+    route: Option<Route>,
+    ending: &mut Ending,
+) -> Result<Option<(Duration, TaskStatus, Option<String>)>, RunError> {
+    if let Some(route) = &route {
+        run.routed = Some(route.routed());
+    }
+    match route {
+        Some(Route::Wait { until }) => {
+            wait_and_run_again(deps, state, step, run, ending.duration, until)?;
+            Ok(None)
+        }
+        Some(Route::Retry { n, of, after }) => {
+            back_off_and_run_again(deps, state, step, run, ending.duration, (n, of, after))?;
+            Ok(None)
+        }
+        Some(Route::Decide(decision)) => {
+            if let Some(reason) = decision.reason.clone() {
+                ending.reason = Some(reason);
+            }
+            state.decision = Some(decision);
+            end_one_step(deps, state, step, run, take(ending)).map(Some)
+        }
+        Some(Route::Stop { reason, .. }) => {
+            ending.reason = Some(reason);
+            state.known_cause = true;
+            end_one_step(deps, state, step, run, take(ending)).map(Some)
+        }
+        None => end_one_step(deps, state, step, run, take(ending)).map(Some),
+    }
+}
+
+/// Waits `after` for retry `n` of `of`, and counts it, so the step can run again.
+fn back_off_and_run_again(
+    deps: &Deps<'_>,
+    state: &mut PipelineState<'_>,
+    step: &str,
+    run: &mut StepRunState,
+    ran_for: Duration,
+    (n, of, after): (u32, u32, Duration),
+) -> Result<(), RunError> {
+    run.retried = n;
+    run.total += ran_for;
+    let waiting = WaitReason::TransportRetry {
+        failure: n,
+        limit: of,
+    };
+    let until = deps.clock.now() + after;
+    run.total += wait_for_limit(deps, state, step, until, waiting)?;
+    Ok(())
+}
+
+/// Waits for the provider's usage limit to reset at `until` and counts the wait, so the step
+/// can run again.
+fn wait_and_run_again(
+    deps: &Deps<'_>,
+    state: &mut PipelineState<'_>,
+    step: &str,
+    run: &mut StepRunState,
+    ran_for: Duration,
+    until: SystemTime,
+) -> Result<(), RunError> {
+    run.total += ran_for;
+    let waited = wait_for_limit(deps, state, step, until, WaitReason::UsageLimit)?;
+    run.total += waited;
+    let waited_so_far = run.limit_wait.map_or(Duration::ZERO, |wait| wait.waited);
+    run.limit_wait = Some(LimitWait {
+        waited: waited_so_far + waited,
+        resumed_at: until,
+    });
+    Ok(())
+}
+
+/// `ending`, moved out, leaving a placeholder behind.
+fn take(ending: &mut Ending) -> Ending {
+    std::mem::replace(
+        ending,
+        Ending {
+            duration: Duration::ZERO,
+            exit_code: None,
+            status: TaskStatus::Done,
+            reason: None,
+            reported: None,
+        },
+    )
 }
 
 /// Appends the start event for `step`, including the provider and model actually selected for
@@ -265,88 +358,6 @@ fn begin_one_step(
         step.model(context, state).as_deref(),
     )?;
     Ok(())
-}
-
-/// Waits out one provider usage-limit response and keeps its wait record with prior waits for
-/// the same step.
-fn wait_for_provider_limit(
-    deps: &Deps<'_>,
-    state: &PipelineState<'_>,
-    step: &str,
-    run: &mut StepRunState,
-    duration: Duration,
-    until: SystemTime,
-) -> Result<(), RunError> {
-    run.total += duration;
-    let waited = wait_for_limit(deps, state, step, until, WaitReason::UsageLimit)?;
-    run.total += waited;
-    let waited_so_far = run.limit_wait.map_or(Duration::ZERO, |wait| wait.waited);
-    run.limit_wait = Some(LimitWait {
-        waited: waited_so_far + waited,
-        resumed_at: until,
-    });
-    Ok(())
-}
-
-/// Retries one Codex transport failure after its bounded delay, or ends the step when the
-/// configured consecutive-failure limit has been reached.
-fn retry_transport_failure(
-    deps: &Deps<'_>,
-    context: RunContext<'_>,
-    state: &mut PipelineState<'_>,
-    step: &str,
-    run: &mut StepRunState,
-    duration: Duration,
-    reason: &str,
-) -> Result<Option<(Duration, TaskStatus, Option<String>)>, RunError> {
-    run.total += duration;
-    run.transport_failures = run.transport_failures.saturating_add(1);
-    if run.transport_failures >= context.transport_retries {
-        return exhausted_transport_failure(
-            deps,
-            state,
-            step,
-            run.total,
-            run.transport_failures,
-            reason,
-            run.limit_wait,
-        )
-        .map(Some);
-    }
-    let wait = transport_backoff(run.transport_failures);
-    let until = deps.clock.now() + wait;
-    let waiting = WaitReason::TransportRetry {
-        failure: run.transport_failures,
-        limit: context.transport_retries,
-    };
-    run.total += wait_for_limit(deps, state, step, until, waiting)?;
-    Ok(None)
-}
-
-/// Ends an agent step once its Codex stream has disconnected too many consecutive times.
-fn exhausted_transport_failure(
-    deps: &Deps<'_>,
-    state: &mut PipelineState<'_>,
-    step: &str,
-    total: Duration,
-    failures: u32,
-    reason: &str,
-    limit_wait: Option<LimitWait>,
-) -> Result<(Duration, TaskStatus, Option<String>), RunError> {
-    let exhausted = StepOutcome::Ended {
-        duration: Duration::ZERO,
-        exit_code: state.exit_code,
-        status: TaskStatus::FailedUnknown,
-        reason: Some(codex_transport_reason(failures, reason)),
-        reported: None,
-    };
-    end_one_step(deps, state, step, total, exhausted, limit_wait)
-}
-
-/// The retry delays for an interrupted Codex stream: growing, but capped so an unattended run
-/// always comes back to the operator in bounded time.
-fn transport_backoff(failure: u32) -> Duration {
-    Duration::from_secs(1_u64 << failure.saturating_sub(1).min(5))
 }
 
 /// Records every one of `pre_steps` as attempt `number` of task `id`'s own first steps, in

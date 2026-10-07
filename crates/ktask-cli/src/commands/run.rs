@@ -8,8 +8,8 @@ use std::process::ExitCode;
 use std::path::Path;
 
 use ktask_adapters::{
-    FileRunLock, FileSessionLog, GitCli, ProcessCommands, RealSleep, SystemClock,
-    builtin_providers, configured_provider, echo,
+    FileAttemptOutput, FileRunLock, FileSessionLog, GitCli, ProcessCommands, RealSleep,
+    SystemClock, builtin_providers, configured_provider, echo,
 };
 use ktask_core::{
     COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, RunReport, RunRequest,
@@ -140,6 +140,7 @@ fn run_with_providers(
                 named: &providers,
             },
             context,
+            output: &FileAttemptOutput::new(context.outputs_dir.to_path_buf()),
         },
     )?)
 }

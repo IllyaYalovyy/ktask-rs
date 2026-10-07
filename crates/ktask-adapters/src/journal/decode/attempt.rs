@@ -5,7 +5,8 @@
 use std::time::{Duration, SystemTime};
 
 use ktask_core::{
-    Event, JournalError, LimitWait, LimitWarning, Outcome, TaskId, TaskStatus, Usage, WaitReason,
+    Event, JournalError, LimitWait, LimitWarning, Outcome, Routed, TaskId, TaskStatus, Usage,
+    WaitReason,
 };
 use serde_json::Value;
 
@@ -149,25 +150,19 @@ pub(super) fn decode_attempt_reported(
         .ok_or_else(|| corrupt("outcome", "missing".to_owned()))?
         .parse::<Outcome>()
         .map_err(|e| corrupt("outcome", e))?;
-    let step = payload
-        .get("step")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let retry_model = payload
-        .get("retry_model")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let retry_same_session = bool_field(payload, "retry_same_session");
-    let retry_reset_tree = bool_field(payload, "retry_reset_tree");
     Ok(Event::AttemptReported {
         id,
         number,
         outcome,
         reason,
-        retry_model,
-        retry_same_session,
-        retry_reset_tree,
-        step,
+        retry_model: string_field(payload, "retry_model"),
+        retry_same_session: bool_field(payload, "retry_same_session"),
+        retry_reset_tree: bool_field(payload, "retry_reset_tree"),
+        retry_more_time: payload
+            .get("retry_more_time")
+            .and_then(Value::as_u64)
+            .and_then(|minutes| u32::try_from(minutes).ok()),
+        step: string_field(payload, "step"),
         at,
     })
 }
@@ -275,6 +270,22 @@ fn decode_usage(payload: &Value) -> Usage {
     }
 }
 
+/// The verdict a `step_ended` row's `payload` records, when it records one.
+fn decode_routed(
+    payload: &Value,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Option<Routed>, JournalError> {
+    payload
+        .get("routed")
+        .and_then(Value::as_str)
+        .map(|token| Routed::from_token(token).ok_or_else(|| corrupt("routed", token.to_owned())))
+        .transpose()
+}
+
+fn string_field(payload: &Value, key: &str) -> Option<String> {
+    payload.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
 /// The [`Event::StepEnded`] a `step_ended` row's `payload` decodes to.
 pub(super) fn decode_step_ended(
     payload: &Value,
@@ -296,6 +307,7 @@ pub(super) fn decode_step_ended(
         .map(str::parse::<Outcome>)
         .transpose()
         .map_err(|e| corrupt("reported", e))?;
+    let routed = decode_routed(payload, corrupt)?;
     Ok(Event::StepEnded {
         id,
         number,
@@ -308,10 +320,8 @@ pub(super) fn decode_step_ended(
         limit_wait: decode_limit_wait(payload),
         limit_warning: decode_limit_warning(payload),
         usage: decode_usage(payload),
-        used_model: payload
-            .get("used_model")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        used_model: string_field(payload, "used_model"),
+        routed,
         at,
     })
 }

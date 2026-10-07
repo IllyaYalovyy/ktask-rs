@@ -186,6 +186,8 @@ mod tests {
             waiting: None,
             limit_wait: None,
             limit_warning: None,
+            routed: None,
+            more_time: None,
             usage: crate::Usage::default(),
             output_activity: None,
             steps: vec![],

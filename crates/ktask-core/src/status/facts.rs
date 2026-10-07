@@ -2,7 +2,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use crate::{LimitWait, LimitWarning, TaskId, TaskStatus, Usage, WaitReason};
+use crate::{LimitWait, LimitWarning, Routed, TaskId, TaskStatus, Usage, WaitReason};
 
 use super::AttemptOutcome;
 
@@ -40,6 +40,10 @@ pub struct StepLine {
     pub limit_warning: Option<LimitWarning>,
     /// Provider token and cost figures, or none for a provider that reported no usage.
     pub usage: Usage,
+    /// What the router decided to do next after the step ended badly, when it did.
+    pub routed: Option<Routed>,
+    /// The time the router's decision added to the step's limit, when it added any.
+    pub more_time: Option<Duration>,
 }
 
 /// One task attempt, including its current step and every step it has run.
@@ -73,6 +77,10 @@ pub struct AttemptLine {
     pub steps: Vec<StepLine>,
     /// Total provider usage across every completed step in this attempt.
     pub usage: Usage,
+    /// What the router decided after the attempt's step that ended badly, when it did.
+    pub routed: Option<Routed>,
+    /// The time the router's decision added to this attempt's limit, when it added any.
+    pub more_time: Option<Duration>,
 }
 
 /// What an append-only provider output stream says about a running attempt.

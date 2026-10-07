@@ -64,6 +64,9 @@ pub(crate) struct QueueState {
     /// Whether the resolver's retry decision for an attempt asked for the working tree to be
     /// reset before the task's next attempt begins: [`QueueState::retry_reset_tree_of`].
     retry_reset_trees: HashMap<(TaskId, u32), bool>,
+    /// The minutes the resolver's retry decision for an attempt added to the next attempt's
+    /// time limit: [`QueueState::retry_more_time_of`].
+    retry_more_times: HashMap<(TaskId, u32), u32>,
     /// The most recent gate stop recorded for each task, cleared once a later attempt for it
     /// actually begins: [`QueueState::gate_stop_of`].
     gate_stops: HashMap<TaskId, (String, String)>,
@@ -335,6 +338,7 @@ mod tests {
                         None,
                         false,
                         false,
+                        None,
                     );
                     if status == TaskStatus::Running {
                         assert_eq!(result, Ok(()));

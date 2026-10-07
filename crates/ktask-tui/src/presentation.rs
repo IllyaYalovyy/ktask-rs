@@ -4,8 +4,8 @@ mod transcript;
 
 use jiff::Timestamp;
 use ktask_core::{
-    AttemptOutcome, DoneMark, LimitWait, LimitWarning, OutputActivity, ProviderCheck,
-    ProviderCheckKind, StepLine, TaskStatus, Usage, Wait, WaitReason,
+    AttemptOutcome, DecideWhy, DoneMark, LimitWait, LimitWarning, OutputActivity, ProviderCheck,
+    ProviderCheckKind, Routed, StepLine, StopCause, TaskStatus, Usage, Wait, WaitReason,
 };
 
 pub use transcript::{Transcript, step_heading};
@@ -177,6 +177,52 @@ pub fn step_usage_text(step: &StepLine) -> Option<String> {
     step.provider.as_ref().map(|_| usage_text(step.usage))
 }
 
+/// What the router decided about a failed step, in the words status and the queue screen share:
+/// `wait`, `retry 2 of 3`, `decide — timeout`, `stop — no git identity`.
+#[must_use]
+pub fn routed_label(routed: Routed) -> String {
+    match routed {
+        Routed::Wait => "wait".to_owned(),
+        Routed::Retry { n, of } => format!("retry {n} of {of}"),
+        Routed::Decide(why) => format!("decide — {}", decide_label(why)),
+        Routed::Stop(cause) => format!("stop — {}", stop_label(cause)),
+    }
+}
+
+/// [`routed_label`] as the text a status line carries after its outcome.
+#[must_use]
+pub fn routed_text(routed: Routed) -> String {
+    format!("routed: {}", routed_label(routed))
+}
+
+/// The extra time a retry decision gave an attempt, as `+30 min`.
+#[must_use]
+pub fn more_time_text(more_time: std::time::Duration) -> String {
+    format!("+{} min", more_time.as_secs() / 60)
+}
+
+fn decide_label(why: DecideWhy) -> &'static str {
+    match why {
+        DecideWhy::TimeLimit => "timeout",
+        DecideWhy::RetriesExhausted => "transport retries exhausted",
+        DecideWhy::AgentFailed => "agent failed",
+        DecideWhy::Rejected => "rejected",
+        DecideWhy::Unmatched => "unmatched",
+    }
+}
+
+fn stop_label(cause: StopCause) -> &'static str {
+    match cause {
+        StopCause::ProgramNotFound => "program not found",
+        StopCause::DiskFull => "disk full",
+        StopCause::FileSlotsFull => "file slots full",
+        StopCause::GitIdentityMissing => "no git identity",
+        StopCause::RemoteUnreachable => "remote unreachable",
+        StopCause::ClaudeAuthentication | StopCause::CodexAuthentication => "not logged in",
+        StopCause::ClaudeConfiguration => "invalid settings",
+    }
+}
+
 /// The common provider-limit account for a completed step.
 #[must_use]
 pub fn limit_wait_text(wait: &LimitWait) -> String {
@@ -327,5 +373,24 @@ mod tests {
             Some("it broke")
         );
         assert_eq!(reason_for(None, None), None);
+    }
+    #[test]
+    fn every_verdict_reads_as_routed_followed_by_its_words() {
+        let words = |routed| routed_text(routed);
+        assert_eq!(words(Routed::Wait), "routed: wait");
+        assert_eq!(words(Routed::Retry { n: 2, of: 3 }), "routed: retry 2 of 3");
+        assert_eq!(
+            words(Routed::Decide(DecideWhy::TimeLimit)),
+            "routed: decide — timeout"
+        );
+        assert_eq!(
+            words(Routed::Decide(DecideWhy::RetriesExhausted)),
+            "routed: decide — transport retries exhausted"
+        );
+        assert_eq!(
+            words(Routed::Stop(StopCause::GitIdentityMissing)),
+            "routed: stop — no git identity"
+        );
+        assert_eq!(more_time_text(Duration::from_mins(30)), "+30 min");
     }
 }

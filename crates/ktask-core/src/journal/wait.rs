@@ -29,3 +29,17 @@ pub enum WaitReason {
         limit: u32,
     },
 }
+
+impl WaitReason {
+    /// The router's verdict this wait carries out.
+    #[must_use]
+    pub fn routed(self) -> crate::Routed {
+        match self {
+            Self::UsageLimit => crate::Routed::Wait,
+            Self::TransportRetry { failure, limit } => crate::Routed::Retry {
+                n: failure,
+                of: limit,
+            },
+        }
+    }
+}

@@ -107,6 +107,7 @@ fn attempt_reported_payload(event: &Event) -> String {
         retry_model,
         retry_same_session,
         retry_reset_tree,
+        retry_more_time,
         step,
         ..
     } = event
@@ -120,6 +121,7 @@ fn attempt_reported_payload(event: &Event) -> String {
         "retry_model": retry_model,
         "retry_same_session": retry_same_session,
         "retry_reset_tree": retry_reset_tree,
+        "retry_more_time": retry_more_time,
         "step": step,
     })
     .to_string()
@@ -199,6 +201,22 @@ fn limit_warning_fields(warning: Option<&LimitWarning>) -> (Option<&str>, Option
 
 /// The payload a `step_ended` row is written with.
 fn step_ended_payload(event: &Event) -> String {
+    let mut payload = step_ended_facts(event);
+    if let (
+        Event::StepEnded {
+            routed: Some(routed),
+            ..
+        },
+        Some(fields),
+    ) = (event, payload.as_object_mut())
+    {
+        fields.insert("routed".to_owned(), routed.token().into());
+    }
+    payload.to_string()
+}
+
+/// What a `step_ended` row records of how the step ran.
+fn step_ended_facts(event: &Event) -> Value {
     let Event::StepEnded {
         number,
         step,
@@ -236,7 +254,6 @@ fn step_ended_payload(event: &Event) -> String {
         "cost_microusd": usage.cost_microusd,
         "used_model": used_model,
     })
-    .to_string()
 }
 
 /// The payload a `gate_failed` row is written with.

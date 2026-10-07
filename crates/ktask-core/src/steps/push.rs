@@ -77,6 +77,7 @@ impl Step for Push {
                 status: TaskStatus::Failed,
                 reason: Some(why),
                 reported: None,
+                signals: crate::route::Signals::default(),
             },
         })
     }
@@ -144,6 +145,8 @@ mod tests {
             requested_model: None,
             requested_session: None,
             known_cause: false,
+            decision: None,
+            extra_time: Duration::ZERO,
             usage: crate::Usage::default(),
             used_model: None,
             limit_warning: None,
@@ -175,6 +178,7 @@ mod tests {
             resolver_provider: &provider,
             session_log: &session_log,
             sleep: &sleep,
+            output: &crate::NoAttemptOutput,
         };
         Push.run(&deps, context(), &mut state).unwrap()
     }
@@ -190,8 +194,6 @@ mod tests {
                 assert_eq!(reason, Some("pushed abcdef1 to origin/main".to_owned()));
             }
             StepOutcome::Ended { reason, .. } => panic!("expected Passed, got Ended({reason:?})"),
-            StepOutcome::Waiting { .. } => panic!("expected Passed, got Waiting"),
-            StepOutcome::TransportFailure { .. } => panic!("expected Passed, got TransportFailure"),
         }
     }
 
@@ -209,8 +211,6 @@ mod tests {
                 assert!(reason.contains("run again"), "{reason}");
             }
             StepOutcome::Passed { .. } => panic!("expected Ended"),
-            StepOutcome::Waiting { .. } => panic!("expected Ended, got Waiting"),
-            StepOutcome::TransportFailure { .. } => panic!("expected Ended, got TransportFailure"),
         }
     }
 
@@ -231,8 +231,6 @@ mod tests {
                 assert!(reason.contains("exited with code 128"), "{reason}");
             }
             StepOutcome::Passed { .. } => panic!("expected Ended"),
-            StepOutcome::Waiting { .. } => panic!("expected Ended, got Waiting"),
-            StepOutcome::TransportFailure { .. } => panic!("expected Ended, got TransportFailure"),
         }
     }
 
@@ -252,6 +250,8 @@ mod tests {
             requested_model: None,
             requested_session: None,
             known_cause: false,
+            decision: None,
+            extra_time: Duration::ZERO,
             usage: crate::Usage::default(),
             used_model: None,
             limit_warning: None,
@@ -273,6 +273,8 @@ mod tests {
             requested_model: None,
             requested_session: None,
             known_cause: false,
+            decision: None,
+            extra_time: Duration::ZERO,
             usage: crate::Usage::default(),
             used_model: None,
             limit_warning: None,
@@ -296,6 +298,8 @@ mod tests {
             requested_model: None,
             requested_session: None,
             known_cause: false,
+            decision: None,
+            extra_time: Duration::ZERO,
             usage: crate::Usage::default(),
             used_model: None,
             limit_warning: None,

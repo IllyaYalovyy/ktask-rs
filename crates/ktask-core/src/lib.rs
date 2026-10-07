@@ -22,6 +22,7 @@ mod queue_state;
 mod register;
 mod report;
 mod resolve;
+mod route;
 mod run;
 mod sessions;
 mod settings;
@@ -68,6 +69,7 @@ pub use report::{
     start_attempt,
 };
 pub use resolve::{Resolution, ResolveError, resolve_project};
+pub use route::{DecideWhy, Routed, StopCause};
 pub use run::{
     Attempted, RunContext, RunEnd, RunError, RunReport, RunRequest, SyncProblem, TaskProviders,
     build_prompt, build_review_prompt, build_test_prompt, run_queue,

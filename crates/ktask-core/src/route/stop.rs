@@ -1,14 +1,10 @@
-//! Known causes: cheap, mechanical checks against a failed step's own exit code and reason,
-//! run ahead of the resolver so a machine problem is never handed to a model and never costs
-//! the task an attempt. Each one stops the whole run, with its own what, why and exact fix;
-//! [`crate::steps::mod`] leaves the task `pending` and skips the resolver entirely when one
-//! matches — see [`super::execute::run_one_step`], which classifies every step's own ending.
-
-use crate::{Journal, JournalError, TaskId, TaskStatus};
+//! Environment faults: mechanical checks against a failed step's exit code and reason, so a
+//! machine problem is never handed to a model and never costs the task an attempt. Each one
+//! stops the run with its own what, why and exact fix.
 
 /// A failure the tool recognises on its own, with its own fix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum KnownCause {
+pub enum StopCause {
     /// The program a step needed was not on `PATH` at all: the shell that tried to run it
     /// exited `127`, the POSIX convention for "command not found".
     ProgramNotFound,
@@ -25,8 +21,6 @@ pub(crate) enum KnownCause {
     ClaudeAuthentication,
     /// Claude Code rejected one of its settings files.
     ClaudeConfiguration,
-    /// Codex could not keep its stream connected after its configured retries.
-    CodexTransport,
     /// Codex needs the operator to authenticate.
     CodexAuthentication,
 }
@@ -50,21 +44,43 @@ const REMOTE_UNREACHABLE_PHRASES: [&str; 6] = [
 ];
 const CLAUDE_AUTHENTICATION_PHRASES: [&str; 2] = ["invalid api key", "not logged in"];
 const CLAUDE_CONFIGURATION_PHRASE: &str = "invalid settings";
-const CODEX_TRANSPORT_PHRASE: &str = "codex transport failed";
-const CODEX_ERROR_PREFIX: &str = "ERROR:";
 const CODEX_AUTHENTICATION_PHRASES: [&str; 2] =
     ["missing bearer or basic authentication", "401 unauthorized"];
 
-/// What Codex's transport failure says, once: how many consecutive times it failed and the
-/// provider's last line without its `ERROR:` prefix. [`KnownCause::CodexTransport`] recognises
-/// it by [`CODEX_TRANSPORT_PHRASE`] and adds only the fix.
-pub(crate) fn codex_transport_reason(failures: u32, last_line: &str) -> String {
-    let line = last_line.trim();
-    let line = line.strip_prefix(CODEX_ERROR_PREFIX).unwrap_or(line).trim();
-    format!("Codex transport failed {failures} consecutive times: {line}")
-}
+impl StopCause {
+    /// Every cause, in the order [`Self::classify`] checks them.
+    pub(crate) const ALL: [Self; 8] = [
+        Self::ProgramNotFound,
+        Self::DiskFull,
+        Self::FileSlotsFull,
+        Self::GitIdentityMissing,
+        Self::RemoteUnreachable,
+        Self::ClaudeAuthentication,
+        Self::ClaudeConfiguration,
+        Self::CodexAuthentication,
+    ];
 
-impl KnownCause {
+    /// The name this cause is kept under in the journal.
+    #[must_use]
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::ProgramNotFound => "program-not-found",
+            Self::DiskFull => "disk-full",
+            Self::FileSlotsFull => "file-slots-full",
+            Self::GitIdentityMissing => "git-identity-missing",
+            Self::RemoteUnreachable => "remote-unreachable",
+            Self::ClaudeAuthentication => "claude-authentication",
+            Self::ClaudeConfiguration => "claude-configuration",
+            Self::CodexAuthentication => "codex-authentication",
+        }
+    }
+
+    /// The cause kept under `token` in the journal.
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|cause| cause.token() == token)
+    }
+
     /// What matches `exit_code` and `reason` against every known cause, in the order checked:
     /// `exit_code` first, since it needs no `reason` at all, then `reason` itself against each
     /// remaining cause's own phrase. `None` when nothing matches — the failure goes to the
@@ -92,9 +108,6 @@ impl KnownCause {
         }
         if lower.contains(CLAUDE_CONFIGURATION_PHRASE) {
             return Some(Self::ClaudeConfiguration);
-        }
-        if lower.contains(CODEX_TRANSPORT_PHRASE) {
-            return Some(Self::CodexTransport);
         }
         if CODEX_AUTHENTICATION_PHRASES
             .iter()
@@ -135,43 +148,11 @@ impl KnownCause {
             Self::ClaudeConfiguration => format!(
                 "Claude Code has invalid settings: {reason}; fix the named Claude Code settings file, then run again"
             ),
-            Self::CodexTransport => {
-                format!("{reason}; check the network and Codex service, then run again")
-            }
             Self::CodexAuthentication => {
                 format!("Codex could not authenticate: {reason}; run `codex login`, then run again")
             }
         }
     }
-}
-
-/// How many of task `id`'s attempts, up to and including `number`, are weighed against
-/// `max_attempts` — every one of them except an attempt that ended `pending`, a known cause's
-/// own ending: the environment stopped it, not the task, so it is never counted as one of the
-/// task's attempts. `number` itself is always counted as one, since the caller only asks once
-/// it knows this attempt did not end that way itself.
-///
-/// # Errors
-///
-/// Fails when the journal cannot be read.
-pub(crate) fn real_attempt_count(
-    journal: &dyn Journal,
-    id: TaskId,
-    number: u32,
-) -> Result<u32, JournalError> {
-    let earlier_real = crate::attempt::all_attempts(journal, id)?
-        .into_iter()
-        .filter(|attempt| attempt.number < number)
-        .filter(|attempt| {
-            !matches!(
-                attempt.ended.as_ref().map(|end| end.status),
-                Some(TaskStatus::Pending)
-            )
-        })
-        .count();
-    Ok(u32::try_from(earlier_real)
-        .unwrap_or(u32::MAX)
-        .saturating_add(1))
 }
 
 #[cfg(test)]
@@ -181,120 +162,120 @@ mod tests {
     #[test]
     fn exit_code_127_is_a_program_not_found_whatever_the_reason() {
         assert_eq!(
-            KnownCause::classify(Some(127), None),
-            Some(KnownCause::ProgramNotFound)
+            StopCause::classify(Some(127), None),
+            Some(StopCause::ProgramNotFound)
         );
         assert_eq!(
-            KnownCause::classify(Some(127), Some("anything")),
-            Some(KnownCause::ProgramNotFound)
+            StopCause::classify(Some(127), Some("anything")),
+            Some(StopCause::ProgramNotFound)
         );
     }
 
     #[test]
     fn a_disk_full_error_is_recognised_in_the_reason() {
         assert_eq!(
-            KnownCause::classify(
+            StopCause::classify(
                 None,
                 Some(
                     "the provider could not run: cannot run bash: No space left on device (os error 28)"
                 )
             ),
-            Some(KnownCause::DiskFull)
+            Some(StopCause::DiskFull)
         );
     }
 
     #[test]
     fn a_file_slots_full_error_is_recognised_in_the_reason() {
         assert_eq!(
-            KnownCause::classify(
+            StopCause::classify(
                 None,
                 Some(
                     "the provider could not run: cannot run bash: Too many open files (os error 24)"
                 )
             ),
-            Some(KnownCause::FileSlotsFull)
+            Some(StopCause::FileSlotsFull)
         );
     }
 
     #[test]
     fn a_missing_git_identity_is_recognised_in_the_reason() {
         assert_eq!(
-            KnownCause::classify(
+            StopCause::classify(
                 None,
                 Some(
                     "git identity is not configured: set it with `git config user.name \
                      \"Your Name\"` and `git config user.email you@example.com`, then run again"
                 )
             ),
-            Some(KnownCause::GitIdentityMissing)
+            Some(StopCause::GitIdentityMissing)
         );
     }
 
     #[test]
     fn an_unreachable_remote_is_recognised_case_insensitively_in_the_reason() {
         assert_eq!(
-            KnownCause::classify(
+            StopCause::classify(
                 None,
                 Some(
                     "`git push origin HEAD:refs/heads/main` exited with code 128: fatal: \
                      Could not read from remote repository."
                 )
             ),
-            Some(KnownCause::RemoteUnreachable)
+            Some(StopCause::RemoteUnreachable)
         );
     }
 
     #[test]
     fn a_remote_that_is_not_even_a_git_repository_is_recognised_as_unreachable_too() {
         assert_eq!(
-            KnownCause::classify(
+            StopCause::classify(
                 None,
                 Some(
                     "`git push origin HEAD:refs/heads/main` exited with code 128: fatal: \
                      '/no/such/path' does not appear to be a git repository"
                 )
             ),
-            Some(KnownCause::RemoteUnreachable)
+            Some(StopCause::RemoteUnreachable)
         );
     }
 
     #[test]
     fn nothing_known_matches_an_ordinary_failure() {
         assert_eq!(
-            KnownCause::classify(Some(1), Some("the tests did not pass")),
+            StopCause::classify(Some(1), Some("the tests did not pass")),
             None
         );
-        assert_eq!(KnownCause::classify(None, None), None);
+        assert_eq!(StopCause::classify(None, None), None);
     }
 
     #[test]
     fn claude_authentication_and_configuration_errors_are_known_causes() {
         assert_eq!(
-            KnownCause::classify(None, Some("Invalid API key · Please run /login")),
-            Some(KnownCause::ClaudeAuthentication)
+            StopCause::classify(None, Some("Invalid API key · Please run /login")),
+            Some(StopCause::ClaudeAuthentication)
         );
         assert_eq!(
-            KnownCause::classify(
+            StopCause::classify(
                 None,
                 Some("Error: Invalid settings at ~/.claude/settings.json")
             ),
-            Some(KnownCause::ClaudeConfiguration)
+            Some(StopCause::ClaudeConfiguration)
         );
     }
 
     #[test]
     fn the_git_identity_message_is_the_reason_verbatim() {
         let reason = "git identity is not configured: do the thing";
-        assert_eq!(KnownCause::GitIdentityMissing.message(reason), reason);
+        assert_eq!(StopCause::GitIdentityMissing.message(reason), reason);
     }
 
     #[test]
     fn every_other_message_names_what_why_and_a_fix_on_one_line() {
         for (cause, reason) in [
-            (KnownCause::ProgramNotFound, "exited 127"),
-            (KnownCause::DiskFull, "No space left on device"),
-            (KnownCause::FileSlotsFull, "Too many open files"),
-            (KnownCause::RemoteUnreachable, "could not read from remote"),
+            (StopCause::ProgramNotFound, "exited 127"),
+            (StopCause::DiskFull, "No space left on device"),
+            (StopCause::FileSlotsFull, "Too many open files"),
+            (StopCause::RemoteUnreachable, "could not read from remote"),
         ] {
             let message = cause.message(reason);
             assert_eq!(message.lines().count(), 1, "{message:?}");
@@ -306,21 +287,6 @@ mod tests {
                 "{message}"
             );
         }
-    }
-
-    #[test]
-    fn the_codex_transport_message_states_count_cause_and_fix_once() {
-        let reason = codex_transport_reason(
-            3,
-            "ERROR: stream disconnected before completion: Transport error: network error",
-        );
-        let message = KnownCause::CodexTransport.message(&reason);
-        assert_eq!(
-            message,
-            "Codex transport failed 3 consecutive times: stream disconnected before completion: \
-             Transport error: network error; check the network and Codex service, then run again"
-        );
-        assert_eq!(repeated_phrase(&message), None, "{message}");
     }
 
     #[test]

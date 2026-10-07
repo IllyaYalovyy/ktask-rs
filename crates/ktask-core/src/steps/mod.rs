@@ -8,11 +8,11 @@
 //! [`crate::run`] calls them directly, ahead of walking the list built here.
 
 mod agent;
+mod attempt_count;
 pub(crate) mod commit;
 mod execute;
 pub(crate) mod health_check;
 pub(crate) mod implementation;
-mod known_cause;
 mod outcome;
 mod pipeline_state;
 pub(crate) mod push;
@@ -30,8 +30,8 @@ pub(crate) use pipeline_state::PipelineState;
 
 use crate::run::Attempted;
 use crate::{
-    AttemptToken, Clock, Commands, Git, Journal, Provider, RunContext, RunError, SessionLog, Sleep,
-    Task, TaskStatus,
+    AttemptOutput, AttemptToken, Clock, Commands, Git, Journal, Provider, RunContext, RunError,
+    SessionLog, Sleep, Task, TaskStatus,
 };
 
 /// The reason recorded for an attempt a killed run left running, found still running when the
@@ -85,6 +85,7 @@ pub(crate) struct Deps<'a> {
     pub(crate) resolver_provider: &'a Provider,
     pub(crate) session_log: &'a dyn SessionLog,
     pub(crate) sleep: &'a dyn Sleep,
+    pub(crate) output: &'a dyn AttemptOutput,
 }
 
 impl Deps<'_> {
@@ -224,6 +225,7 @@ fn finish_attempt(
     steps: &[Box<dyn Step>],
     requested_model: Option<String>,
     requested_session: Option<String>,
+    extra_time: Duration,
 ) -> Result<Attempted, RunError> {
     let token = AttemptToken::new(context.project_name, task.id, number);
     let mut state = PipelineState {
@@ -236,6 +238,8 @@ fn finish_attempt(
         requested_model,
         requested_session,
         known_cause: false,
+        decision: None,
+        extra_time,
         usage: crate::Usage::default(),
         used_model: None,
         limit_warning: None,
@@ -250,7 +254,7 @@ fn finish_attempt(
 /// Ends attempt `number` with what its steps left it at — `pending`, without ever reaching the
 /// resolver and never weighed against `max_attempts`, when [`PipelineState::known_cause`] says
 /// the tool recognised the failure on its own; otherwise the resolver's own job when it is
-/// still eligible, [`known_cause::real_attempt_count`] rather than `number` itself judging
+/// still eligible, [`attempt_count::real_attempt_count`] rather than `number` itself judging
 /// that, so a known cause's own attempt is never one of the task's. [`finish_attempt`]'s own
 /// tail, pulled out of it so it stays within the workspace's function-length limit.
 ///
@@ -280,7 +284,7 @@ fn end_or_resolve(
             reason,
         );
     }
-    let real_number = known_cause::real_attempt_count(deps.journal, task.id, number)?;
+    let real_number = attempt_count::real_attempt_count(deps.journal, task.id, number)?;
     if resolve::resolver_eligible(status, real_number, context.max_attempts) {
         return resolve::resolve_and_continue(
             deps, context, task, number, duration, state, status, reason, steps,
@@ -309,6 +313,7 @@ pub(crate) fn run_one_attempt(
     steps: &[Box<dyn Step>],
     requested_model: Option<String>,
     requested_session: Option<String>,
+    extra_time: Duration,
 ) -> Result<Attempted, RunError> {
     let start_commit = current_commit(deps.git, context);
     let number = crate::attempt::begin_attempt_running(
@@ -329,6 +334,7 @@ pub(crate) fn run_one_attempt(
         steps,
         requested_model,
         requested_session,
+        extra_time,
     )
 }
 
@@ -340,6 +346,7 @@ mod tests {
     use crate::fakes::{
         FakeClock, FakeCommands, FakeGit, FakeJournal, FakeSessionLog, FakeSleep, at, draft,
     };
+    use crate::route::Signals;
     use crate::{Exit, Output, Placement, ProviderCommand, TaskId, add_task, list_all_tasks};
 
     fn clock() -> FakeClock {
@@ -422,6 +429,7 @@ mod tests {
                     status: self.status,
                     reason: Some("stopped".to_owned()),
                     reported: None,
+                    signals: Signals::default(),
                 }
             })
         }
@@ -463,6 +471,7 @@ mod tests {
             resolver_provider: &provider,
             session_log: &session_log,
             sleep: &sleep,
+            output: &crate::NoAttemptOutput,
         };
         let attempted = run_one_attempt(
             deps,
@@ -472,6 +481,7 @@ mod tests {
             &steps,
             None,
             None,
+            Duration::ZERO,
         )
         .unwrap();
         assert_eq!(attempted.status, TaskStatus::Done);
@@ -524,6 +534,7 @@ mod tests {
             resolver_provider: &provider,
             session_log: &session_log,
             sleep: &sleep,
+            output: &crate::NoAttemptOutput,
         };
         let attempted = run_one_attempt(
             deps,
@@ -533,6 +544,7 @@ mod tests {
             &steps,
             None,
             None,
+            Duration::ZERO,
         )
         .unwrap();
         assert_eq!(attempted.status, TaskStatus::Failed);
@@ -575,9 +587,18 @@ mod tests {
                     reported: None,
                 }
             } else {
-                StepOutcome::Waiting {
+                StepOutcome::Ended {
                     duration: Duration::from_secs(2),
-                    until: at(1_030),
+                    exit_code: Some(1),
+                    status: TaskStatus::Failed,
+                    reason: None,
+                    reported: None,
+                    signals: Signals {
+                        limit: Some(crate::LimitSignal {
+                            reset_at: Some(at(1_030)),
+                        }),
+                        ..Signals::default()
+                    },
                 }
             })
         }
@@ -611,6 +632,7 @@ mod tests {
             resolver_provider: &provider,
             session_log: &session_log,
             sleep: &sleep,
+            output: &crate::NoAttemptOutput,
         };
         let attempted = run_one_attempt(
             deps,
@@ -620,6 +642,7 @@ mod tests {
             &steps,
             None,
             None,
+            Duration::ZERO,
         )
         .unwrap();
         assert_eq!(attempted.status, TaskStatus::Done);
@@ -673,6 +696,7 @@ mod tests {
             resolver_provider: &provider,
             session_log: &session_log,
             sleep: &sleep,
+            output: &crate::NoAttemptOutput,
         };
         let attempted = run_one_attempt(
             deps,
@@ -682,6 +706,7 @@ mod tests {
             &steps,
             None,
             None,
+            Duration::ZERO,
         )
         .unwrap();
         assert_eq!(attempted.reason, None);

@@ -51,6 +51,7 @@ pub fn run_queue(
         &request.providers,
         session_log,
         sleep,
+        request.output,
         request.context,
     )
 }

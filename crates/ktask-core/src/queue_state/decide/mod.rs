@@ -220,6 +220,7 @@ impl QueueState {
         retry_model: Option<&str>,
         retry_same_session: bool,
         retry_reset_tree: bool,
+        retry_more_time: Option<u32>,
         at: SystemTime,
     ) -> Result<Event, RecordReportError> {
         self.check_attempt_running(id, number)?;
@@ -231,6 +232,7 @@ impl QueueState {
             retry_model: retry_model.map(str::to_owned),
             retry_same_session,
             retry_reset_tree,
+            retry_more_time,
             step: self.current_step(id),
             at,
         })
@@ -354,6 +356,7 @@ impl QueueState {
         limit_warning: Option<&crate::LimitWarning>,
         usage: crate::Usage,
         used_model: Option<&str>,
+        routed: Option<crate::Routed>,
         at: SystemTime,
     ) -> Result<Event, RecordReportError> {
         self.check_attempt_running(id, number)?;
@@ -370,6 +373,7 @@ impl QueueState {
             limit_warning: limit_warning.cloned(),
             usage,
             used_model: used_model.map(str::to_owned),
+            routed,
             at,
         })
     }

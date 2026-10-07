@@ -8,7 +8,9 @@ use crate::{
 
 use super::AttemptOutcome;
 use super::facts::{AttemptLine, DoneMark, OutputActivity, StatusEntry, StepLine};
-use super::lines::{gate_stop_entry, running_step, step_outcome, step_provider, step_session};
+use super::lines::{
+    attempt_of, gate_stop_entry, running_step, step_outcome, step_provider, step_session,
+};
 
 /// The [`StatusEntry`] for `task`, given its most recent attempt and the agent's own report of
 /// it, when there was one; `run_alive` says whether a live run currently holds the project's
@@ -84,6 +86,8 @@ fn ended_step_line(
         limit_wait: end.limit_wait,
         limit_warning: end.limit_warning.clone(),
         usage: end.usage,
+        routed: end.routed,
+        more_time: None,
     }
 }
 
@@ -153,29 +157,7 @@ fn attempt_line(
             task,
         )
     });
-    AttemptLine {
-        number: attempt.number,
-        step: current.step,
-        provider: current.provider,
-        model: current.model,
-        session: current.session,
-        time_spent: current.time_spent,
-        outcome: current.outcome,
-        reason: current.reason,
-        waiting: current.waiting,
-        limit_wait: current.limit_wait,
-        limit_warning: current.limit_warning,
-        output_activity,
-        usage: total_usage(&steps),
-        steps,
-    }
-}
-
-/// The usage accumulated by every step the attempt has run.
-fn total_usage(steps: &[StepLine]) -> crate::Usage {
-    steps.iter().fold(crate::Usage::default(), |total, step| {
-        total.plus(step.usage)
-    })
+    attempt_of(attempt.number, current, output_activity, steps)
 }
 
 /// The live output state for this attempt's current step, when that step is an agent provider
@@ -275,22 +257,44 @@ pub(super) fn entry_for_task(
     let done_by_user =
         crate::attempt::done_mark_of(journal, task.id)?.map(|(reason, at)| DoneMark { reason, at });
     let history = attempt_history(journal, task.id, &attempts, clock)?;
-    Ok(Some(StatusEntry {
-        done_by_user,
-        ..entry_for(
-            task,
-            &attempt,
-            history,
-            CurrentAttempt {
-                reported,
-                clock,
-                run_alive,
-                answer: answer.as_deref(),
-                output,
-                silent_after,
-            },
-        )
-    }))
+    let previous = attempts.last().map(|previous| previous.number);
+    let more_time = more_time_of_next(journal, task.id, previous)?;
+    let current = CurrentAttempt {
+        reported,
+        clock,
+        run_alive,
+        answer: answer.as_deref(),
+        output,
+        silent_after,
+    };
+    let mut entry = entry_for(task, &attempt, history, current);
+    entry.done_by_user = done_by_user;
+    with_more_time(&mut entry.attempt, more_time);
+    Ok(Some(entry))
+}
+
+/// The time the resolver's retry decision after attempt `previous` added to the next attempt's
+/// limit, when it added any.
+fn more_time_of_next(
+    journal: &impl Journal,
+    id: TaskId,
+    previous: Option<u32>,
+) -> Result<Option<Duration>, JournalError> {
+    let Some(previous) = previous else {
+        return Ok(None);
+    };
+    let minutes = crate::attempt::last_retry_more_time(journal, id, previous)?;
+    Ok(minutes.map(|minutes| Duration::from_mins(u64::from(minutes))))
+}
+
+/// Shows `more_time` on `line` and on the step it applies to, the implementation step.
+fn with_more_time(line: &mut AttemptLine, more_time: Option<Duration>) {
+    line.more_time = more_time;
+    for step in &mut line.steps {
+        if step.step == IMPLEMENTATION {
+            step.more_time = more_time;
+        }
+    }
 }
 
 /// Every earlier attempt of `attempts` as an [`AttemptLine`], oldest first, given its own
@@ -303,10 +307,10 @@ fn attempt_history(
     clock: &impl Clock,
 ) -> Result<Vec<AttemptLine>, JournalError> {
     let mut history = Vec::with_capacity(attempts.len());
-    for earlier in attempts {
+    for (index, earlier) in attempts.iter().enumerate() {
         let reported = crate::attempt::last_report(journal, id, earlier.number)?;
         let earlier_answer = crate::attempt::answer_of(journal, id, earlier.number)?;
-        history.push(attempt_line(
+        let mut line = attempt_line(
             earlier,
             reported,
             clock,
@@ -314,7 +318,13 @@ fn attempt_history(
             earlier_answer.as_deref(),
             None,
             id,
-        ));
+        );
+        let previous = index
+            .checked_sub(1)
+            .and_then(|before| attempts.get(before))
+            .map(|before| before.number);
+        with_more_time(&mut line, more_time_of_next(journal, id, previous)?);
+        history.push(line);
     }
     Ok(history)
 }
@@ -416,6 +426,8 @@ mod tests {
                     waiting: None,
                     limit_wait: None,
                     limit_warning: None,
+                    routed: None,
+                    more_time: None,
                     usage: crate::Usage::default(),
                     output_activity: None,
                     steps: vec![StepLine {
@@ -429,6 +441,8 @@ mod tests {
                         waiting: None,
                         limit_wait: None,
                         limit_warning: None,
+                        routed: None,
+                        more_time: None,
                         usage: crate::Usage::default(),
                     }],
                 },
@@ -503,6 +517,8 @@ mod tests {
                     waiting: None,
                     limit_wait: None,
                     limit_warning: None,
+                    routed: None,
+                    more_time: None,
                     usage: crate::Usage::default(),
                     output_activity: None,
                     steps: vec![StepLine {
@@ -516,6 +532,8 @@ mod tests {
                         waiting: None,
                         limit_wait: None,
                         limit_warning: None,
+                        routed: None,
+                        more_time: None,
                         usage: crate::Usage::default(),
                     }],
                 },
@@ -617,6 +635,9 @@ mod tests {
         );
         assert_eq!(entries[0].attempt.reason, None);
         assert_eq!(entries[0].attempt.steps[0].reason, None);
+        let retry_two_of_three = Some(crate::Routed::Retry { n: 2, of: 3 });
+        assert_eq!(entries[0].attempt.routed, retry_two_of_three);
+        assert_eq!(entries[0].attempt.steps[0].routed, retry_two_of_three);
     }
 
     #[test]
@@ -661,6 +682,7 @@ mod tests {
             }),
             None,
             crate::Usage::default(),
+            None,
             None,
         )
         .unwrap();
@@ -1049,6 +1071,7 @@ mod tests {
             limit_warning: None,
             usage: crate::Usage::default(),
             used_model: None,
+            routed: None,
         };
         assert_eq!(
             step_outcome(COMMIT_STEP, &end, None, None),
@@ -1109,6 +1132,7 @@ mod tests {
             None,
             crate::Usage::default(),
             None,
+            None,
         )
         .unwrap();
         crate::attempt::begin_step(
@@ -1139,6 +1163,8 @@ mod tests {
                     waiting: None,
                     limit_wait: None,
                     limit_warning: None,
+                    routed: None,
+                    more_time: None,
                     usage: crate::Usage::default(),
                 },
                 StepLine {
@@ -1152,6 +1178,8 @@ mod tests {
                     waiting: None,
                     limit_wait: None,
                     limit_warning: None,
+                    routed: None,
+                    more_time: None,
                     usage: crate::Usage::default(),
                 },
             ]
@@ -1218,6 +1246,8 @@ mod tests {
                 waiting: None,
                 limit_wait: None,
                 limit_warning: None,
+                routed: None,
+                more_time: None,
                 usage: crate::Usage::default(),
             }]
         );

@@ -4,6 +4,8 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+use crate::DecideWhy;
+use crate::route::Decision;
 use crate::steps::implementation::EarlierAttempt;
 use crate::{AttemptToken, Task, TaskStatus};
 
@@ -59,18 +61,48 @@ fn append_diff(prompt: &mut String, diff: &str) {
 /// longer the right thing to do at all; `supersede` ends it `superseded`, replacing it with the
 /// smaller tasks of a JSON array in the same format `import` takes, for a task too large to
 /// finish as written.
-fn append_reporting(prompt: &mut String, token: &AttemptToken, binary_path: &Path) {
+fn append_reporting(
+    prompt: &mut String,
+    token: &AttemptToken,
+    binary_path: &Path,
+    timed_out: bool,
+) {
     let binary = binary_path.display();
+    let more_time = if timed_out {
+        " [--same-session] [--more-time <minutes>]"
+    } else {
+        ""
+    };
     let _ = write!(
         prompt,
         "\n## Reporting\n\n\
          You may change files. When you are done, run exactly one of these, with the decision \
          that fits:\n\n\
-         \x20\x20\x20\x20{binary} report --token {token} retry [--model <name>]\n\
+         \x20\x20\x20\x20{binary} report --token {token} retry [--model <name>]{more_time}\n\
          \x20\x20\x20\x20{binary} report --token {token} stop --reason \"<why>\"\n\
          \x20\x20\x20\x20{binary} report --token {token} skip --reason \"<why>\"\n\
          \x20\x20\x20\x20{binary} report --token {token} supersede --tasks <file>\n"
     );
+}
+
+/// Appends what the router saw of the failure that came to the decider, when it kept any, with
+/// the option only a timeout offers.
+fn append_decision(prompt: &mut String, decision: Option<&Decision>) {
+    let Some(decision) = decision else {
+        return;
+    };
+    prompt.push_str("\n## Why this came to you\n\n");
+    if let Some(detail) = &decision.detail {
+        prompt.push_str(detail);
+        prompt.push('\n');
+    }
+    if decision.why == DecideWhy::TimeLimit {
+        prompt.push_str(
+            "\nThe attempt may only need more time: `retry --same-session --more-time <minutes>` \
+             resumes its session and raises that one next attempt's time limit by that many \
+             minutes.\n",
+        );
+    }
 }
 
 /// The prompt for the resolve step of attempt `token` of `task`: its title, body and
@@ -79,6 +111,7 @@ fn append_reporting(prompt: &mut String, token: &AttemptToken, binary_path: &Pat
 /// changed since its first attempt began; and the exact `report` command, run through
 /// `binary_path`, to run for each possible decision.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_resolve_prompt(
     task: &Task,
     token: &AttemptToken,
@@ -87,6 +120,7 @@ pub(crate) fn build_resolve_prompt(
     current_status: TaskStatus,
     current_reason: Option<&str>,
     diff: &str,
+    decision: Option<&Decision>,
 ) -> String {
     let mut prompt = String::new();
     append_header(&mut prompt, task);
@@ -100,7 +134,9 @@ pub(crate) fn build_resolve_prompt(
             reason: current_reason.map(str::to_owned),
         }],
     );
+    append_decision(&mut prompt, decision);
     append_diff(&mut prompt, diff);
-    append_reporting(&mut prompt, token, binary_path);
+    let timed_out = decision.is_some_and(|decision| decision.why == DecideWhy::TimeLimit);
+    append_reporting(&mut prompt, token, binary_path, timed_out);
     prompt
 }
