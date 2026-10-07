@@ -40,7 +40,9 @@ fn offending_paths(root: &Path) -> Result<Vec<String>> {
         if !path.is_file() {
             continue;
         }
-        let is_script = relative.ends_with(".py");
+        let is_script = Path::new(&relative)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("py"));
         let names_it = !relative.starts_with("docs/")
             && String::from_utf8_lossy(&std::fs::read(&path)?)
                 .to_lowercase()
@@ -82,7 +84,7 @@ fn verdict(root: &Path) -> Result<std::result::Result<(), String>> {
 }
 
 #[test]
-fn no_tracked_file_is_python_or_names_it_outside_docs() -> Result {
+fn no_tracked_file_is_a_script_or_names_the_interpreter_outside_docs() -> Result {
     if let Err(message) = verdict(&repository_root())? {
         panic!("{message}");
     }
