@@ -88,6 +88,7 @@ fn a_dirty_tree_is_refused_with_the_modified_files_named_and_nothing_installed()
 }
 
 /// The version line of the binary at `path`.
+#[cfg(feature = "real-provider-tests")]
 fn version_of(path: &Path) -> Result<String> {
     let output = Command::new(path).arg("--version").output()?;
     assert!(
