@@ -12,6 +12,7 @@ mod configured_provider;
 pub mod echo;
 mod git;
 mod input;
+mod instruction_files;
 mod journal;
 mod json_lines;
 mod lock;
@@ -30,6 +31,7 @@ pub use clock::SystemClock;
 pub use configured_provider::configured_provider;
 pub use git::GitCli;
 pub use input::read_text;
+pub use instruction_files::FileInstructionFiles;
 pub use journal::SqliteJournal;
 pub use lock::FileRunLock;
 pub use process::{

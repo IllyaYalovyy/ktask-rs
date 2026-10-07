@@ -32,7 +32,7 @@ pub(crate) enum Command {
     Set {
         /// The setting to change: attempt-timeout, silent-after, health-check, check,
         /// tracked-branch, step-sync, step-health-check, step-check, step-review, step-testing, step-commit, step-push,
-        /// max-attempts, transport-retries, provider, model, resolver-provider or resolver-model
+        /// max-attempts, transport-retries, provider, model, resolver-provider, resolver-model or instructions-dir
         #[arg(value_name = "NAME")]
         name: String,
         /// The new value

@@ -63,6 +63,7 @@ fn label(name: &str) -> &'static str {
         "model" => "Agent model",
         "resolver-provider" => "Resolver provider",
         "resolver-model" => "Resolver model",
+        "instructions-dir" => "Instructions directory",
         "silent-after" => "Silent after, in seconds",
         _ => "Attempt timeout, in seconds",
     }
@@ -397,13 +398,19 @@ mod tests {
                 value: String::new(),
                 is_default: true,
             },
+            SettingView {
+                name: "instructions-dir",
+                value: "docs".to_owned(),
+                is_default: true,
+            },
         ];
         let screen = SettingsScreen::new(&views);
-        let (rows, _) = drawn(&screen, 60, 15);
+        let (rows, _) = drawn(&screen, 60, 18);
         assert_eq!(row(&rows, 2), "Max attempts (default):");
         assert_eq!(row(&rows, 5), "Transport retries (default):");
         assert_eq!(row(&rows, 8), "Resolver provider (default):");
         assert_eq!(row(&rows, 11), "Resolver model (default):");
+        assert_eq!(row(&rows, 14), "Instructions directory (default):");
     }
 
     #[test]

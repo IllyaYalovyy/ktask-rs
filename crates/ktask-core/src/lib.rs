@@ -9,6 +9,7 @@ mod commands;
 mod forget;
 mod git;
 mod import;
+mod instruction_files;
 mod journal;
 mod lock;
 mod output;
@@ -38,6 +39,7 @@ pub use commands::{CommandSpec, Commands, CommandsError, Exit, Output};
 pub use forget::{ForgetError, forget_project};
 pub use git::{CommitAllError, Git, GitError, PullRebase, PullRebaseError, PushError};
 pub use import::{Import, ImportError, InvalidTask, import_tasks, import_tasks_with_providers};
+pub use instruction_files::{InstructionFiles, InstructionFilesError};
 pub use journal::{
     AcknowledgeError, AnswerError, AppendConflict, AppendError, Attempt, AttemptEnd, AttemptRun,
     BeginAttemptError, CancelError, DoneError, Event, Journal, JournalError, JournalWatch,
@@ -76,12 +78,13 @@ pub use run::{
 };
 pub use sessions::{SessionLog, SessionLogError};
 pub use settings::{
-    ATTEMPT_TIMEOUT, CHECK, DEFAULT_ATTEMPT_TIMEOUT_SECS, DEFAULT_MAX_ATTEMPTS, DEFAULT_PROVIDER,
-    DEFAULT_RESOLVER_PROVIDER, DEFAULT_SILENT_AFTER_SECS, DEFAULT_TRANSPORT_RETRIES, HEALTH_CHECK,
-    MAX_ATTEMPTS, MODEL, PROVIDER, RESOLVER_MODEL, RESOLVER_PROVIDER, SILENT_AFTER, STEP_CHECK,
-    STEP_COMMIT, STEP_HEALTH_CHECK, STEP_IMPLEMENTATION, STEP_PUSH, STEP_REVIEW, STEP_SYNC,
-    STEP_TESTING, SetSettingError, SettingView, Settings, SettingsError, SettingsStore,
-    TRACKED_BRANCH, TRANSPORT_RETRIES, effective_attempt_timeout, effective_max_attempts,
+    ATTEMPT_TIMEOUT, CHECK, DEFAULT_ATTEMPT_TIMEOUT_SECS, DEFAULT_INSTRUCTIONS_DIR,
+    DEFAULT_MAX_ATTEMPTS, DEFAULT_PROVIDER, DEFAULT_RESOLVER_PROVIDER, DEFAULT_SILENT_AFTER_SECS,
+    DEFAULT_TRANSPORT_RETRIES, HEALTH_CHECK, INSTRUCTIONS_DIR, MAX_ATTEMPTS, MODEL, PROVIDER,
+    RESOLVER_MODEL, RESOLVER_PROVIDER, SILENT_AFTER, STEP_CHECK, STEP_COMMIT, STEP_HEALTH_CHECK,
+    STEP_IMPLEMENTATION, STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING, SetSettingError,
+    SettingView, Settings, SettingsError, SettingsStore, TRACKED_BRANCH, TRANSPORT_RETRIES,
+    effective_attempt_timeout, effective_instructions_dir, effective_max_attempts,
     effective_provider, effective_resolver_provider, effective_silent_after,
     effective_transport_retries, set_setting, show_providers, show_settings, step_enabled,
 };
@@ -92,8 +95,8 @@ pub use status::{
 };
 pub use steps::{
     check::CHECK_STEP, commit::COMMIT_STEP, health_check::HEALTH_CHECK_STEP,
-    implementation::IMPLEMENTATION, push::PUSH_STEP, resolve::RESOLVE_STEP, review::REVIEW_STEP,
-    sync::SYNC_STEP, test_step::TEST_STEP,
+    implementation::IMPLEMENTATION, instructions::INSTRUCTIONS_STEP, push::PUSH_STEP,
+    resolve::RESOLVE_STEP, review::REVIEW_STEP, sync::SYNC_STEP, test_step::TEST_STEP,
 };
 pub use task::{
     AddError, Placement, Task, TaskDraft, TaskId, TaskKind, TaskStatus, acknowledge_task, add_task,

@@ -42,6 +42,8 @@ struct SettingsFile {
     transport_retries: Option<u32>,
     #[serde(rename = "provider", skip_serializing_if = "Option::is_none")]
     provider: Option<String>,
+    #[serde(rename = "instructions-dir", skip_serializing_if = "Option::is_none")]
+    instructions_dir: Option<String>,
     #[serde(rename = "model", skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(rename = "resolver-provider", skip_serializing_if = "Option::is_none")]
@@ -70,6 +72,7 @@ impl From<Settings> for SettingsFile {
             max_attempts: settings.max_attempts,
             transport_retries: settings.transport_retries,
             provider: settings.provider,
+            instructions_dir: settings.instructions_dir,
             model: settings.model,
             resolver_provider: settings.resolver_provider,
             resolver_model: settings.resolver_model,
@@ -96,6 +99,7 @@ impl From<SettingsFile> for Settings {
             max_attempts: file.max_attempts,
             transport_retries: file.transport_retries,
             provider: file.provider,
+            instructions_dir: file.instructions_dir,
             model: file.model,
             resolver_provider: file.resolver_provider,
             resolver_model: file.resolver_model,
@@ -188,6 +192,7 @@ mod tests {
             max_attempts: Some(5),
             transport_retries: Some(4),
             provider: Some("claude".to_owned()),
+            instructions_dir: Some("handbook".to_owned()),
             model: Some("sonnet".to_owned()),
             resolver_provider: Some("claude".to_owned()),
             resolver_model: Some("opus".to_owned()),

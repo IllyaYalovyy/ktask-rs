@@ -14,6 +14,7 @@ pub(crate) mod commit;
 mod execute;
 pub(crate) mod health_check;
 pub(crate) mod implementation;
+pub(crate) mod instructions;
 mod outcome;
 mod pipeline_state;
 pub(crate) mod push;
@@ -93,6 +94,8 @@ pub(crate) struct Deps<'a> {
     pub(crate) session_log: &'a dyn SessionLog,
     pub(crate) sleep: &'a dyn Sleep,
     pub(crate) output: &'a dyn AttemptOutput,
+    /// What each agent step's prompt opens with, read by the instructions gate for this task.
+    pub(crate) instructions: &'a instructions::Instructions,
 }
 
 impl Deps<'_> {
@@ -377,6 +380,7 @@ mod tests {
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
             outputs_dir: Path::new("/state/outputs"),
+            instructions_dir: "docs",
         }
     }
 
@@ -481,6 +485,7 @@ mod tests {
             session_log: &session_log,
             sleep: &sleep,
             output: &crate::NoAttemptOutput,
+            instructions: &instructions::Instructions::default(),
         };
         let attempted = run_one_attempt(
             deps,
@@ -544,6 +549,7 @@ mod tests {
             session_log: &session_log,
             sleep: &sleep,
             output: &crate::NoAttemptOutput,
+            instructions: &instructions::Instructions::default(),
         };
         let attempted = run_one_attempt(
             deps,
@@ -642,6 +648,7 @@ mod tests {
             session_log: &session_log,
             sleep: &sleep,
             output: &crate::NoAttemptOutput,
+            instructions: &instructions::Instructions::default(),
         };
         let attempted = run_one_attempt(
             deps,
@@ -706,6 +713,7 @@ mod tests {
             session_log: &session_log,
             sleep: &sleep,
             output: &crate::NoAttemptOutput,
+            instructions: &instructions::Instructions::default(),
         };
         let attempted = run_one_attempt(
             deps,

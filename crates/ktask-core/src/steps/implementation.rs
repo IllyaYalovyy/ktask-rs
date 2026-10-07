@@ -473,6 +473,7 @@ mod tests {
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
             outputs_dir: Path::new("/state/outputs"),
+            instructions_dir: "docs",
         };
         let task = Task {
             id: TaskId(1),
@@ -525,6 +526,7 @@ mod tests {
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
             outputs_dir: Path::new("/state/outputs"),
+            instructions_dir: "docs",
         };
         let task = Task {
             id: TaskId(1),

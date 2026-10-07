@@ -108,6 +108,7 @@ mod tests {
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
             outputs_dir: Path::new("/state/outputs"),
+            instructions_dir: "docs",
         }
     }
 
@@ -180,6 +181,7 @@ mod tests {
             session_log: &session_log,
             sleep: &sleep,
             output: &crate::NoAttemptOutput,
+            instructions: &crate::steps::instructions::Instructions::default(),
         };
         Push.run(&deps, context(), &mut state).unwrap()
     }

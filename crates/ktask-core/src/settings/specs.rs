@@ -9,9 +9,9 @@ use crate::Git;
 
 use super::{
     ATTEMPT_TIMEOUT, CHECK, DEFAULT_RESOLVER_PROVIDER, DEFAULT_SILENT_AFTER_SECS, HEALTH_CHECK,
-    RESOLVER_MODEL, RESOLVER_PROVIDER, SILENT_AFTER, STEP_CHECK, STEP_COMMIT, STEP_HEALTH_CHECK,
-    STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING, SetSettingError, Settings, TRACKED_BRANCH,
-    split_tracked_branch, step_enabled,
+    INSTRUCTIONS_DIR, RESOLVER_MODEL, RESOLVER_PROVIDER, SILENT_AFTER, STEP_CHECK, STEP_COMMIT,
+    STEP_HEALTH_CHECK, STEP_PUSH, STEP_REVIEW, STEP_SYNC, STEP_TESTING, SetSettingError, Settings,
+    TRACKED_BRANCH, split_tracked_branch, step_enabled,
 };
 
 mod agent;
@@ -54,6 +54,7 @@ pub(super) fn setting_specs() -> Vec<SettingSpec> {
         agent::model_spec(),
         resolver_provider_spec(),
         resolver_model_spec(),
+        instructions_dir_spec(),
     ]);
     specs
 }
@@ -276,6 +277,24 @@ fn resolver_provider_spec() -> SettingSpec {
             let provider = parse_non_empty(RESOLVER_PROVIDER, value)?;
             settings.resolver_provider = Some(provider.clone());
             Ok(provider)
+        }),
+    }
+}
+
+/// [`INSTRUCTIONS_DIR`]'s description.
+fn instructions_dir_spec() -> SettingSpec {
+    SettingSpec {
+        name: INSTRUCTIONS_DIR,
+        get: Box::new(|settings| {
+            (
+                super::effective_instructions_dir(settings).to_owned(),
+                settings.instructions_dir.is_none(),
+            )
+        }),
+        set: Box::new(|settings, value, _git, _dir| {
+            let dir = parse_non_empty(INSTRUCTIONS_DIR, value)?;
+            settings.instructions_dir = Some(dir.clone());
+            Ok(dir)
         }),
     }
 }

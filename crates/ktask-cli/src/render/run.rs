@@ -16,6 +16,7 @@ pub(crate) fn stopped(report: &RunReport) -> bool {
             | RunEnd::Blocked { .. }
             | RunEnd::HealthCheckFailed { .. }
             | RunEnd::SyncFailed { .. }
+            | RunEnd::InstructionsUnreadable { .. }
     )
 }
 
@@ -69,6 +70,9 @@ fn run_end(end: &RunEnd, out: &mut impl Write) -> Result<(), String> {
             tracked_branch,
             problem,
         } => sync_failed(*id, tracked_branch, problem, out),
+        RunEnd::InstructionsUnreadable { id, path, reason } => {
+            instructions_unreadable(*id, path, reason, out)
+        }
         RunEnd::Completed | RunEnd::Stopped { .. } => Ok(()),
     }
 }
@@ -90,6 +94,26 @@ fn health_check_failed(
     writeln!(
         out,
         "task {id} was not started; fix the health check, then run again"
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Writes why the instruction file `path` ahead of task `id` could not be read, and that the task
+/// was not started because of it.
+fn instructions_unreadable(
+    id: TaskId,
+    path: &str,
+    reason: &str,
+    out: &mut impl Write,
+) -> Result<(), String> {
+    writeln!(
+        out,
+        "task {id}: instructions: {path} could not be read ({reason})"
+    )
+    .map_err(|e| e.to_string())?;
+    writeln!(
+        out,
+        "task {id} was not started; add the file or change instructions-dir, then run again"
     )
     .map_err(|e| e.to_string())
 }

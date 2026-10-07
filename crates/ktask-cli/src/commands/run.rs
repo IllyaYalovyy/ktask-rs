@@ -8,13 +8,13 @@ use std::process::ExitCode;
 use std::path::Path;
 
 use ktask_adapters::{
-    FileAttemptOutput, FileRunLock, FileSessionLog, GitCli, ProcessCommands, RealSleep,
-    SystemClock, builtin_providers, configured_provider, echo,
+    FileAttemptOutput, FileInstructionFiles, FileRunLock, FileSessionLog, GitCli, ProcessCommands,
+    RealSleep, SystemClock, builtin_providers, configured_provider, echo,
 };
 use ktask_core::{
     CHECK_STEP, COMMIT_STEP, HEALTH_CHECK_STEP, PUSH_STEP, REVIEW_STEP, RunContext, RunReport,
-    RunRequest, SYNC_STEP, Settings, TEST_STEP, TaskProviders, effective_provider,
-    effective_resolver_provider, effective_transport_retries, show_providers,
+    RunRequest, SYNC_STEP, Settings, TEST_STEP, TaskProviders, effective_instructions_dir,
+    effective_provider, effective_resolver_provider, effective_transport_retries, show_providers,
 };
 
 use crate::context::{
@@ -86,6 +86,7 @@ fn run_context<'a>(
         resolver_model,
         sessions_dir,
         outputs_dir,
+        instructions_dir: effective_instructions_dir(settings),
     }
 }
 
@@ -143,6 +144,7 @@ fn run_with_providers(
             },
             context,
             output: &FileAttemptOutput::new(context.outputs_dir.to_path_buf()),
+            instruction_files: &FileInstructionFiles,
         },
     )?)
 }

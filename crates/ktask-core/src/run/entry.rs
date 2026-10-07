@@ -52,6 +52,7 @@ pub fn run_queue(
         session_log,
         sleep,
         request.output,
+        request.instruction_files,
         request.context,
     )
 }

@@ -183,6 +183,8 @@ pub(crate) fn run_agent_step(
     prompt: &str,
 ) -> Result<StepOutcome, RunError> {
     let requested = requested_resume(step, context, state);
+    let prompt = format!("{}{prompt}", deps.instructions.opening(step));
+    let prompt = prompt.as_str();
     let resume = requested.as_ref().map(|(session, transcript_path)| Resume {
         session,
         transcript_path,

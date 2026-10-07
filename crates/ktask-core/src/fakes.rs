@@ -4,6 +4,10 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+mod instruction_files;
+
+pub(crate) use instruction_files::{EveryInstructionFile, FakeInstructionFiles};
+
 use crate::{
     AppendConflict, Clock, CommandSpec, Commands, CommandsError, CommitAllError, Event, Git,
     GitError, Journal, JournalError, Output, Project, ProjectRegistry, PullRebase, PullRebaseError,

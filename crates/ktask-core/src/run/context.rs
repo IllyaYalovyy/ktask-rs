@@ -34,6 +34,9 @@ pub struct RunContext<'a> {
     pub sessions_dir: &'a Path,
     /// Tool-state directory for appended provider output.
     pub outputs_dir: &'a Path,
+    /// The directory holding the instruction files every agent prompt opens with, relative to
+    /// the project directory unless absolute.
+    pub instructions_dir: &'a str,
 }
 
 impl RunContext<'_> {

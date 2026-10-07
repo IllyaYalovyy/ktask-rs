@@ -52,6 +52,11 @@ enum RunEndJson {
         tracked_branch: String,
         problem: SyncProblemJson,
     },
+    InstructionsUnreadable {
+        id: u64,
+        path: String,
+        reason: String,
+    },
 }
 
 /// [`SyncProblem`] as JSON: tagged by `kind`, carrying only the fields that variant has.
@@ -119,6 +124,19 @@ impl From<&RunEnd> for RunEndJson {
                 tracked_branch: tracked_branch.clone(),
                 problem: SyncProblemJson::from(problem),
             },
+            RunEnd::InstructionsUnreadable { id, path, reason } => {
+                Self::instructions_unreadable(*id, path, reason)
+            }
+        }
+    }
+}
+
+impl RunEndJson {
+    fn instructions_unreadable(id: TaskId, path: &str, reason: &str) -> Self {
+        Self::InstructionsUnreadable {
+            id: id.0,
+            path: path.to_owned(),
+            reason: reason.to_owned(),
         }
     }
 }
@@ -256,6 +274,13 @@ impl RunEndJson {
                 tracked_branch,
                 problem,
             } => Ok(sync_failed_end(id, tracked_branch, problem)),
+            Self::InstructionsUnreadable { id, path, reason } => {
+                Ok(RunEnd::InstructionsUnreadable {
+                    id: TaskId(id),
+                    path,
+                    reason,
+                })
+            }
         }
     }
 }
@@ -314,6 +339,11 @@ mod tests {
                 id: TaskId(5),
                 tracked_branch: "origin/main".to_owned(),
                 problem: SyncProblem::Conflict(vec!["a.rs".to_owned()]),
+            },
+            RunEnd::InstructionsUnreadable {
+                id: TaskId(6),
+                path: "docs/CODER.md".to_owned(),
+                reason: "no such file".to_owned(),
             },
         ];
         for end in ends {

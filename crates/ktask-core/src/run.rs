@@ -9,7 +9,8 @@ use std::time::Duration;
 use crate::pick::{Pick, end_when_nothing_left, pick_next_task};
 use crate::steps::{self, INTERRUPTED};
 use crate::{
-    AttemptOutput, Clock, Commands, Git, Journal, RunLock, SessionLog, Sleep, TaskId, TaskStatus,
+    AttemptOutput, Clock, Commands, Git, InstructionFiles, Journal, RunLock, SessionLog, Sleep,
+    TaskId, TaskStatus,
 };
 
 pub use crate::steps::implementation::build_prompt;
@@ -80,6 +81,16 @@ pub enum RunEnd {
         reason: String,
         /// The end of its combined standard output and standard error.
         output_tail: String,
+    },
+    /// An instruction file the next task's agents open their prompts with could not be read, so
+    /// no attempt was begun for it: it stays `pending`.
+    InstructionsUnreadable {
+        /// The task the instructions were read ahead of.
+        id: TaskId,
+        /// The file, as `instructions-dir` names it.
+        path: String,
+        /// Why it could not be read.
+        reason: String,
     },
     /// The next task's sync, ahead of its health check, refused to run it: it stays
     /// `pending`.
@@ -157,6 +168,7 @@ fn account_for_interrupted_run(
 fn attempt_task(
     deps: steps::Deps<'_>,
     providers: &TaskProviders<'_>,
+    files: &dyn InstructionFiles,
     context: RunContext<'_>,
     task: &crate::Task,
     attempted: &mut Vec<Attempted>,
@@ -166,9 +178,13 @@ fn attempt_task(
         model: task.model.as_deref().unwrap_or(context.model),
         ..context
     };
-    let pre_steps = match pre_steps(deps, context, task.id)? {
-        Ok(steps) => steps,
+    let (pre_steps, instructions) = match pre_steps(deps, files, context, task.id)? {
+        Ok(gated) => gated,
         Err(end) => return Ok(Some(end)),
+    };
+    let deps = steps::Deps {
+        instructions: &instructions,
+        ..deps
     };
     finish_attempt(deps, context, task, &pre_steps, attempted)
 }
@@ -185,23 +201,30 @@ fn task_deps<'a>(
     }
 }
 
-/// Runs the gates that precede an attempt, returning their recorded pre-steps or their stop.
+/// Runs the gates that precede an attempt, returning their recorded pre-steps and the
+/// instructions its agents open their prompts with, or the stop of the gate that refused.
 fn pre_steps(
     deps: steps::Deps<'_>,
+    files: &dyn InstructionFiles,
     context: RunContext<'_>,
     task_id: TaskId,
-) -> Result<Result<Vec<steps::PreStep>, RunEnd>, RunError> {
+) -> Result<Result<(Vec<steps::PreStep>, steps::instructions::Instructions), RunEnd>, RunError> {
     let mut pre_steps = Vec::new();
     match steps::sync::run_gate(deps.journal, deps.git, deps.clock, context, task_id)? {
         Ok(step) => pre_steps.extend(step),
         Err(end) => return Ok(Err(end)),
     }
+    let instructions =
+        match steps::instructions::run_gate(deps.journal, files, deps.clock, context, task_id)? {
+            Ok(instructions) => instructions,
+            Err(end) => return Ok(Err(end)),
+        };
     match steps::health_check::run_gate(deps.journal, deps.commands, deps.clock, context, task_id)?
     {
         Ok(step) => pre_steps.extend(step),
         Err(end) => return Ok(Err(end)),
     }
-    Ok(Ok(pre_steps))
+    Ok(Ok((pre_steps, instructions)))
 }
 
 /// Runs the task's attempt after its gates passed and returns a stopping end when it failed.
@@ -255,8 +278,10 @@ fn attempt_loop(
     session_log: &impl SessionLog,
     sleep: &impl Sleep,
     output: &dyn AttemptOutput,
+    files: &dyn InstructionFiles,
     context: RunContext<'_>,
 ) -> Result<RunReport, RunError> {
+    let no_instructions = steps::instructions::Instructions::default();
     let deps = steps::Deps {
         journal,
         clock,
@@ -267,8 +292,9 @@ fn attempt_loop(
         session_log,
         sleep,
         output,
+        instructions: &no_instructions,
     };
-    run_attempt_loop(deps, providers, journal, context)
+    run_attempt_loop(deps, providers, files, journal, context)
 }
 
 /// [`attempt_loop`]'s own loop, pulled out of it so building `deps` stays within the
@@ -276,6 +302,7 @@ fn attempt_loop(
 fn run_attempt_loop(
     deps: steps::Deps<'_>,
     providers: &TaskProviders<'_>,
+    files: &dyn InstructionFiles,
     journal: &impl Journal,
     context: RunContext<'_>,
 ) -> Result<RunReport, RunError> {
@@ -283,7 +310,7 @@ fn run_attempt_loop(
     loop {
         match pick_next_task(journal)? {
             Pick::Task(task) => {
-                let end = attempt_task(deps, providers, context, &task, &mut attempted)?;
+                let end = attempt_task(deps, providers, files, context, &task, &mut attempted)?;
                 if let Some(end) = end {
                     return Ok(RunReport { attempted, end });
                 }
@@ -380,6 +407,7 @@ mod tests {
             resolver_model: "",
             sessions_dir: Path::new("/state/sessions"),
             outputs_dir: Path::new("/state/outputs"),
+            instructions_dir: "docs",
         }
     }
 
@@ -395,6 +423,7 @@ mod tests {
             },
             context,
             output: &NoAttemptOutput,
+            instruction_files: &crate::fakes::EveryInstructionFile,
         }
     }
 
@@ -1889,6 +1918,121 @@ mod tests {
         assert!(prompt.contains("+added line"), "{prompt}");
         assert!(prompt.contains("proj/1/1 accepted"), "{prompt}");
         assert!(prompt.contains("proj/1/1 rejected --reason"), "{prompt}");
+    }
+
+    fn request_with_files<'a>(
+        provider: &'a Provider,
+        files: &'a dyn InstructionFiles,
+    ) -> RunRequest<'a> {
+        RunRequest {
+            instruction_files: files,
+            ..request(provider, context(Duration::from_secs(60)))
+        }
+    }
+
+    #[test]
+    fn every_agent_prompt_opens_with_the_vision_then_the_roles_own_file() {
+        for (step, role) in [
+            (IMPLEMENTATION, "coder"),
+            (REVIEW_STEP, "reviewer"),
+            (TEST_STEP, "tester"),
+        ] {
+            let journal = FakeJournal::default();
+            add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+            let captured = RefCell::default();
+            let commands = CapturingStep {
+                journal: &journal,
+                capture_step: step,
+                captured: &captured,
+            };
+            let files = crate::fakes::FakeInstructionFiles::complete_in("/work/proj/docs");
+            run_queue(
+                &journal,
+                &clock(),
+                &commands,
+                &git_with_diff(),
+                &FakeSessionLog::default(),
+                &FakeSleep::default(),
+                &FakeRunLock::free(),
+                request_with_files(&test_provider(), &files),
+            )
+            .unwrap();
+            let prompt = String::from_utf8(captured.borrow().clone().expect("the step ran"))
+                .expect("the prompt is text");
+            let opening = format!("vision\n{role}\n\n");
+            assert!(prompt.starts_with(&opening), "{step}: {prompt}");
+        }
+    }
+
+    #[test]
+    fn a_missing_instruction_file_refuses_the_run_and_leaves_the_task_pending() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        let files = crate::fakes::FakeInstructionFiles::complete_in("/work/proj/docs");
+        files.remove(Path::new("/work/proj/docs/REVIEWER.md"));
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &NeverRun,
+            &git_with_diff(),
+            &FakeSessionLog::default(),
+            &FakeSleep::default(),
+            &FakeRunLock::free(),
+            request_with_files(&test_provider(), &files),
+        )
+        .unwrap();
+        match &report.end {
+            RunEnd::InstructionsUnreadable { id, path, .. } => {
+                assert_eq!(*id, TaskId(1));
+                assert_eq!(path, "docs/REVIEWER.md");
+            }
+            other => panic!("expected InstructionsUnreadable, got {other:?}"),
+        }
+        let tasks = crate::list_all_tasks(&journal).unwrap();
+        assert_eq!(tasks[0].status, TaskStatus::Pending);
+        assert_eq!(
+            crate::attempt::last_attempt(&journal, TaskId(1)).unwrap(),
+            None
+        );
+        let (step, reason) = crate::attempt::gate_stop_of(&journal, TaskId(1))
+            .unwrap()
+            .expect("a gate stop was recorded");
+        assert_eq!(step, crate::INSTRUCTIONS_STEP);
+        assert!(reason.contains("docs/REVIEWER.md"), "{reason}");
+        assert!(reason.contains("instructions-dir"), "{reason}");
+    }
+
+    #[test]
+    fn a_disabled_review_step_does_not_need_its_file() {
+        let journal = FakeJournal::default();
+        add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
+        let files = crate::fakes::FakeInstructionFiles::complete_in("/work/proj/docs");
+        files.remove(Path::new("/work/proj/docs/REVIEWER.md"));
+        let mut ctx = context(Duration::from_secs(60));
+        ctx.disabled_steps = &[REVIEW_STEP];
+        let report = run_queue(
+            &journal,
+            &clock(),
+            &CapturingStep {
+                journal: &journal,
+                capture_step: IMPLEMENTATION,
+                captured: &RefCell::default(),
+            },
+            &git_with_diff(),
+            &FakeSessionLog::default(),
+            &FakeSleep::default(),
+            &FakeRunLock::free(),
+            RunRequest {
+                context: ctx,
+                ..request_with_files(&test_provider(), &files)
+            },
+        )
+        .unwrap();
+        assert!(
+            !matches!(report.end, RunEnd::InstructionsUnreadable { .. }),
+            "{:?}",
+            report.end
+        );
     }
 
     #[test]

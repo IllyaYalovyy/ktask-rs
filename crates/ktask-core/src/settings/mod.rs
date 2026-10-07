@@ -8,83 +8,10 @@ use std::time::Duration;
 
 use crate::{Git, GitError, ProviderDefinition, ProviderOverride, ProviderView, provider_views};
 
+mod names;
 mod specs;
 
-/// `run`'s time limit for one attempt when nothing else sets it: four hours.
-pub const DEFAULT_ATTEMPT_TIMEOUT_SECS: u64 = 14_400;
-
-/// How long a running provider may produce no output before its line says it may be stuck.
-pub const DEFAULT_SILENT_AFTER_SECS: u64 = 120;
-
-/// How many attempts a task may have before the resolver is no longer run, when nothing else
-/// sets it.
-pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
-/// How many consecutive Codex transport failures are retried before asking the operator.
-pub const DEFAULT_TRANSPORT_RETRIES: u32 = 3;
-
-/// The provider the implementation, review and test steps run with when nothing else sets it.
-pub const DEFAULT_PROVIDER: &str = "echo";
-
-/// The provider the resolve step runs with, when nothing else sets it.
-pub const DEFAULT_RESOLVER_PROVIDER: &str = "echo";
-
-/// The attempt time limit setting's name.
-pub const ATTEMPT_TIMEOUT: &str = "attempt-timeout";
-
-/// The silence threshold setting's name.
-pub const SILENT_AFTER: &str = "silent-after";
-
-/// The health-check command setting's name.
-pub const HEALTH_CHECK: &str = "health-check";
-
-/// The check command setting's name.
-pub const CHECK: &str = "check";
-
-/// The tracked-branch setting's name.
-pub const TRACKED_BRANCH: &str = "tracked-branch";
-
-/// The sync step's on/off switch setting's name.
-pub const STEP_SYNC: &str = "step-sync";
-
-/// The health-check step's on/off switch setting's name.
-pub const STEP_HEALTH_CHECK: &str = "step-health-check";
-
-/// The check step's on/off switch setting's name.
-pub const STEP_CHECK: &str = "step-check";
-
-/// The review step's on/off switch setting's name.
-pub const STEP_REVIEW: &str = "step-review";
-
-/// The testing step's on/off switch setting's name.
-pub const STEP_TESTING: &str = "step-testing";
-
-/// The commit step's on/off switch setting's name.
-pub const STEP_COMMIT: &str = "step-commit";
-
-/// The push step's on/off switch setting's name.
-pub const STEP_PUSH: &str = "step-push";
-
-/// The max-attempts setting's name.
-pub const MAX_ATTEMPTS: &str = "max-attempts";
-/// The number of consecutive Codex transport failures retried in one attempt.
-pub const TRANSPORT_RETRIES: &str = "transport-retries";
-
-/// The provider for implementation, review and test steps.
-pub const PROVIDER: &str = "provider";
-
-/// The model for implementation, review and test steps.
-pub const MODEL: &str = "model";
-
-/// The resolver-provider setting's name.
-pub const RESOLVER_PROVIDER: &str = "resolver-provider";
-
-/// The resolver-model setting's name.
-pub const RESOLVER_MODEL: &str = "resolver-model";
-
-/// The name [`set_setting`] refuses under: the implementation step always runs, for every
-/// task, so it is never one of the switches [`show_settings`] lists — this name exists only
-/// so trying to switch it off gets a clear refusal instead of "unknown setting".
-pub const STEP_IMPLEMENTATION: &str = "step-implementation";
+pub use names::*;
 
 /// A project's settings: only the ones it has changed from their default.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -140,6 +67,9 @@ pub struct Settings {
     pub resolver_provider: Option<String>,
     /// The model the resolve step runs with, when the project has set one.
     pub resolver_model: Option<String>,
+    /// The directory, relative to the project (or absolute), holding `VISION.md` and the
+    /// role files every agent's prompt opens with, when the project has set one.
+    pub instructions_dir: Option<String>,
     /// Per-project additions to, and field replacements for, the provider catalogue.
     pub providers: BTreeMap<String, ProviderOverride>,
 }
@@ -384,6 +314,16 @@ pub fn effective_provider(settings: &Settings) -> &str {
     settings.provider.as_deref().unwrap_or(DEFAULT_PROVIDER)
 }
 
+/// The directory the instruction files are read from: the project's own setting, or the
+/// built-in default. Relative to the project.
+#[must_use]
+pub fn effective_instructions_dir(settings: &Settings) -> &str {
+    settings
+        .instructions_dir
+        .as_deref()
+        .unwrap_or(DEFAULT_INSTRUCTIONS_DIR)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::fakes::{FakeGit, FakeSettingsStore};
@@ -513,6 +453,11 @@ mod tests {
                     value: String::new(),
                     is_default: true,
                 },
+                SettingView {
+                    name: INSTRUCTIONS_DIR,
+                    value: DEFAULT_INSTRUCTIONS_DIR.to_owned(),
+                    is_default: true,
+                },
             ])
         );
     }
@@ -538,102 +483,38 @@ mod tests {
             model: Some("sonnet".to_owned()),
             resolver_provider: Some("claude".to_owned()),
             resolver_model: Some("opus".to_owned()),
+            instructions_dir: Some("guides".to_owned()),
             ..Settings::default()
         });
+        let shown: Vec<_> = show_settings(&store)
+            .unwrap()
+            .into_iter()
+            .map(|view| (view.name, view.value, view.is_default))
+            .collect();
+        let custom = |name, value: &str| (name, value.to_owned(), false);
         assert_eq!(
-            show_settings(&store),
-            Ok(vec![
-                SettingView {
-                    name: ATTEMPT_TIMEOUT,
-                    value: "7200".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: SILENT_AFTER,
-                    value: "90".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: HEALTH_CHECK,
-                    value: "cargo test".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: CHECK,
-                    value: "make check".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: TRACKED_BRANCH,
-                    value: "origin/main".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: STEP_SYNC,
-                    value: "off".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: STEP_HEALTH_CHECK,
-                    value: "off".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: STEP_CHECK,
-                    value: "off".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: STEP_REVIEW,
-                    value: "off".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: STEP_TESTING,
-                    value: "off".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: STEP_COMMIT,
-                    value: "off".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: STEP_PUSH,
-                    value: "off".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: MAX_ATTEMPTS,
-                    value: "5".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: TRANSPORT_RETRIES,
-                    value: "4".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: PROVIDER,
-                    value: "claude".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: MODEL,
-                    value: "sonnet".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: RESOLVER_PROVIDER,
-                    value: "claude".to_owned(),
-                    is_default: false,
-                },
-                SettingView {
-                    name: RESOLVER_MODEL,
-                    value: "opus".to_owned(),
-                    is_default: false,
-                },
-            ])
+            shown,
+            vec![
+                custom(ATTEMPT_TIMEOUT, "7200"),
+                custom(SILENT_AFTER, "90"),
+                custom(HEALTH_CHECK, "cargo test"),
+                custom(CHECK, "make check"),
+                custom(TRACKED_BRANCH, "origin/main"),
+                custom(STEP_SYNC, "off"),
+                custom(STEP_HEALTH_CHECK, "off"),
+                custom(STEP_CHECK, "off"),
+                custom(STEP_REVIEW, "off"),
+                custom(STEP_TESTING, "off"),
+                custom(STEP_COMMIT, "off"),
+                custom(STEP_PUSH, "off"),
+                custom(MAX_ATTEMPTS, "5"),
+                custom(TRANSPORT_RETRIES, "4"),
+                custom(PROVIDER, "claude"),
+                custom(MODEL, "sonnet"),
+                custom(RESOLVER_PROVIDER, "claude"),
+                custom(RESOLVER_MODEL, "opus"),
+                custom(INSTRUCTIONS_DIR, "guides"),
+            ]
         );
     }
 
@@ -1207,6 +1088,31 @@ mod tests {
             }
         );
         assert_eq!(store.load(), Ok(Settings::default()));
+    }
+
+    #[test]
+    fn the_instructions_dir_defaults_to_docs_persists_once_set_and_refuses_an_empty_one() {
+        let store = FakeSettingsStore::with(Settings::default());
+        assert_eq!(effective_instructions_dir(&Settings::default()), "docs");
+        assert_eq!(
+            set(&store, INSTRUCTIONS_DIR, "  guides  "),
+            Ok(SettingView {
+                name: INSTRUCTIONS_DIR,
+                value: "guides".to_owned(),
+                is_default: false,
+            })
+        );
+        assert_eq!(
+            store.load().map(|settings| settings.instructions_dir),
+            Ok(Some("guides".to_owned()))
+        );
+        assert_eq!(
+            set(&store, INSTRUCTIONS_DIR, "  ").unwrap_err(),
+            SetSettingError::InvalidValue {
+                name: INSTRUCTIONS_DIR,
+                message: "must not be empty".to_owned(),
+            }
+        );
     }
 
     #[test]

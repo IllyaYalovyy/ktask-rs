@@ -54,6 +54,12 @@ fn end_lines(end: &RunEnd) -> Vec<String> {
             tracked_branch,
             problem,
         } => sync_failed_lines(*id, tracked_branch, problem),
+        RunEnd::InstructionsUnreadable { id, path, reason } => vec![
+            format!("task {id}: instructions: {path} could not be read ({reason})"),
+            format!(
+                "task {id} was not started; add the file or change instructions-dir, then run again"
+            ),
+        ],
         RunEnd::Completed | RunEnd::Stopped { .. } => Vec::new(),
     }
 }

@@ -437,6 +437,7 @@ mod tests {
             resolver_model: "opus",
             sessions_dir: Path::new("/state/sessions"),
             outputs_dir: Path::new("/state/outputs"),
+            instructions_dir: "docs",
         };
         let state = PipelineState {
             task: &task(),
