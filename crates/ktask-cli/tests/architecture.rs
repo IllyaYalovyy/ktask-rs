@@ -115,3 +115,45 @@ fn starting_a_run_is_the_one_run_queue_taking_a_run_request() -> std::io::Result
     }
     Ok(())
 }
+
+/// The state and config roots are built from the channel in one place: only `state.rs` of
+/// `ktask-adapters` names the directory a channel keeps its world in, so no other code can
+/// build a path that ignores the channel.
+#[test]
+fn the_directories_of_the_channels_are_named_in_one_place() -> std::io::Result<()> {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut sources = Vec::new();
+    for name in ["ktask-core", "ktask-adapters", "ktask-cli", "ktask-tui"] {
+        rust_sources(&crates.join(name).join("src"), &mut sources)?;
+    }
+    let owner = crates.join("ktask-adapters/src/state.rs");
+    let mut owners = 0;
+    for (path, text) in &sources {
+        let production_code = text.split("#[cfg(test)]").next().unwrap_or(text);
+        let names_a_channel_directory = production_code.contains("ktask-rs-dev")
+            || production_code.contains("join(\"ktask-rs\")");
+        if path == &owner {
+            assert!(names_a_channel_directory, "{} names none", path.display());
+            assert!(production_code.contains("ktask-rs-dev"));
+            assert!(production_code.contains("=> \"ktask-rs\""));
+            owners += 1;
+        } else {
+            assert!(
+                !names_a_channel_directory,
+                "{} names a channel's directory; only state.rs of ktask-adapters may",
+                path.display()
+            );
+        }
+    }
+    assert_eq!(owners, 1, "state.rs of ktask-adapters was not found");
+    let state = std::fs::read_to_string(&owner)?;
+    let production_code = state.split("#[cfg(test)]").next().unwrap_or(&state);
+    for root in ["state_directory(", "config_root_path("] {
+        assert!(production_code.contains(root), "{root}");
+    }
+    assert_eq!(
+        production_code.matches("directory_name(channel)").count(),
+        2
+    );
+    Ok(())
+}
