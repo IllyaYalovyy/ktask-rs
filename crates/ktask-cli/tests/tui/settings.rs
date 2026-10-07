@@ -23,6 +23,7 @@ const RIGHT: &str = "\x1b[C";
 /// four settings show.
 const STEP_DEFAULTS: &str = "step-sync\ton\tdefault\n\
      step-health-check\ton\tdefault\n\
+     step-check\ton\tdefault\n\
      step-review\ton\tdefault\n\
      step-testing\ton\tdefault\n\
      step-commit\ton\tdefault\n\
@@ -160,7 +161,7 @@ fn editing_and_ctrl_s_saves_through_the_same_use_case_settings_set_runs() -> Res
     assert_eq!(
         cli_settings(&fixture)?,
         format!(
-            "attempt-timeout\t7200\tcustom\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t1\tcustom\ntransport-retries\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
+            "attempt-timeout\t7200\tcustom\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ncheck\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t1\tcustom\ntransport-retries\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
         )
     );
     quit(terminal)
@@ -189,9 +190,9 @@ fn tabbing_to_max_attempts_and_saving_a_valid_value_works_and_an_invalid_one_is_
 -> Result<()> {
     let fixture = Fixture::new()?;
     let mut terminal = open_settings(&fixture)?;
-    // attempt-timeout, silent-after, health-check, tracked-branch, the six step switches, then max-attempts.
+    // attempt-timeout, silent-after, health-check, check, tracked-branch, the seven step switches, then max-attempts.
     // This fixture already set `max-attempts` to 1, as every one of this file's own tests do.
-    terminal.send(&TAB.repeat(10))?;
+    terminal.send(&TAB.repeat(12))?;
     terminal.wait_for("the focus on the max-attempts field", |screen| {
         let lines = lines_inside_frame(&screen.contents());
         lines.iter().any(|line| line.contains("Max attempts")) && screen.contents().contains("> 1")
@@ -209,14 +210,14 @@ fn tabbing_to_max_attempts_and_saving_a_valid_value_works_and_an_invalid_one_is_
     assert_eq!(
         cli_settings(&fixture)?,
         format!(
-            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t5\tcustom\ntransport-retries\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
+            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ncheck\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t5\tcustom\ntransport-retries\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
         )
     );
 
     // Reopening and setting an invalid value refuses it, with the same words the CLI gives,
     // and saves nothing.
     let mut terminal = open_settings(&fixture)?;
-    terminal.send(&TAB.repeat(10))?;
+    terminal.send(&TAB.repeat(12))?;
     terminal.wait_for("the focus on the max-attempts field again", |screen| {
         screen.contents().contains("> 5")
     })?;
@@ -228,7 +229,7 @@ fn tabbing_to_max_attempts_and_saving_a_valid_value_works_and_an_invalid_one_is_
     assert_eq!(
         cli_settings(&fixture)?,
         format!(
-            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t5\tcustom\ntransport-retries\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
+            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ncheck\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t5\tcustom\ntransport-retries\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
         )
     );
     quit_from_settings(terminal)
@@ -239,9 +240,9 @@ fn tabbing_to_transport_retries_saves_a_valid_value_and_refuses_an_invalid_one()
     let fixture = Fixture::new()?;
     let mut terminal = open_settings(&fixture)?;
 
-    // The eleven fields before transport-retries are the four initial values, six step
+    // The thirteen fields before transport-retries are the five initial values, seven step
     // switches, and max-attempts.
-    terminal.send(&TAB.repeat(11))?;
+    terminal.send(&TAB.repeat(13))?;
     terminal.wait_for("the focus on the transport-retries field", |screen| {
         screen.contents().contains("Transport retries") && screen.contents().contains("> 3")
     })?;
@@ -253,7 +254,7 @@ fn tabbing_to_transport_retries_saves_a_valid_value_and_refuses_an_invalid_one()
     assert!(cli_settings(&fixture)?.contains("transport-retries\t4\tcustom\n"));
 
     let mut terminal = open_settings(&fixture)?;
-    terminal.send(&TAB.repeat(11))?;
+    terminal.send(&TAB.repeat(13))?;
     terminal.wait_for("the transport-retries field again", |screen| {
         screen.contents().contains("> 4")
     })?;
@@ -290,7 +291,7 @@ fn tab_moves_to_the_health_check_field_and_ctrl_s_saves_it_leaving_the_timeout_u
     assert_eq!(
         cli_settings(&fixture)?,
         format!(
-            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\tcargo test\tcustom\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t1\tcustom\ntransport-retries\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
+            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\tcargo test\tcustom\ncheck\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}max-attempts\t1\tcustom\ntransport-retries\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
         )
     );
     quit(terminal)
@@ -301,10 +302,10 @@ fn tab_tab_moves_to_the_tracked_branch_field_and_ctrl_s_saves_a_valid_value() ->
     let fixture = ClonedFixture::new()?;
     let mut terminal = enter_settings(fixture.open(ROWS)?)?;
 
-    terminal.send(&TAB.repeat(3))?;
+    terminal.send(&TAB.repeat(4))?;
     terminal.wait_for("the focus on the tracked-branch field", |screen| {
         let lines = lines_inside_frame(&screen.contents());
-        lines.get(13).is_some_and(|line| line == ">")
+        lines.get(16).is_some_and(|line| line == ">")
     })?;
     terminal.send("origin/main")?;
     terminal.wait_for("the typed value", |screen| {
@@ -319,7 +320,7 @@ fn tab_tab_moves_to_the_tracked_branch_field_and_ctrl_s_saves_a_valid_value() ->
     assert_eq!(
         fixture.cli_settings()?,
         format!(
-            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\torigin/main\tcustom\n{STEP_DEFAULTS}max-attempts\t3\tdefault\ntransport-retries\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
+            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ncheck\t\tdefault\ntracked-branch\torigin/main\tcustom\n{STEP_DEFAULTS}max-attempts\t3\tdefault\ntransport-retries\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\nresolver-model\t\tdefault\n"
         )
     );
     quit(terminal)
@@ -331,7 +332,7 @@ fn an_invalid_tracked_branch_shows_the_same_refusal_the_cli_would_and_saves_noth
     let fixture = Fixture::new()?;
     let before = cli_settings(&fixture)?;
     let mut terminal = open_settings(&fixture)?;
-    terminal.send(&format!("{TAB}{TAB}{TAB}not-a-branch"))?;
+    terminal.send(&format!("{TAB}{TAB}{TAB}{TAB}not-a-branch"))?;
     terminal.wait_for("the typed value", |screen| {
         screen.contents().contains("> not-a-branch")
     })?;
@@ -387,9 +388,9 @@ fn an_invalid_value_shows_the_same_refusal_the_cli_would_and_saves_nothing() -> 
     quit_from_settings(terminal)
 }
 
-/// Tall enough that every one of the ten settings — four values plus six step switches —
+/// Tall enough that every one of the twelve settings — five values plus seven step switches —
 /// fits on screen at once.
-const TALL: u16 = 36;
+const TALL: u16 = 42;
 
 #[test]
 fn every_step_switch_is_shown_with_its_label_and_default_value() -> Result<()> {
@@ -400,18 +401,20 @@ fn every_step_switch_is_shown_with_its_label_and_default_value() -> Result<()> {
         !screen.hide_cursor()
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[15], "Sync step (on/off) (default):");
-    assert_eq!(lines[16], "  on");
-    assert_eq!(lines[18], "Health check step (on/off) (default):");
+    assert_eq!(lines[18], "Sync step (on/off) (default):");
     assert_eq!(lines[19], "  on");
-    assert_eq!(lines[21], "Review step (on/off) (default):");
+    assert_eq!(lines[21], "Health check step (on/off) (default):");
     assert_eq!(lines[22], "  on");
-    assert_eq!(lines[24], "Testing step (on/off) (default):");
+    assert_eq!(lines[24], "Check step (on/off) (default):");
     assert_eq!(lines[25], "  on");
-    assert_eq!(lines[27], "Commit step (on/off) (default):");
+    assert_eq!(lines[27], "Review step (on/off) (default):");
     assert_eq!(lines[28], "  on");
-    assert_eq!(lines[30], "Push step (on/off) (default):");
+    assert_eq!(lines[30], "Testing step (on/off) (default):");
     assert_eq!(lines[31], "  on");
+    assert_eq!(lines[33], "Commit step (on/off) (default):");
+    assert_eq!(lines[34], "  on");
+    assert_eq!(lines[36], "Push step (on/off) (default):");
+    assert_eq!(lines[37], "  on");
     quit_from_settings(terminal)
 }
 
@@ -421,10 +424,10 @@ fn tabbing_to_the_review_step_and_switching_it_off_saves_through_the_same_use_ca
     let fixture = Fixture::new()?;
     let mut terminal = enter_settings(fixture.open(TALL)?)?;
 
-    terminal.send(&TAB.repeat(6))?;
+    terminal.send(&TAB.repeat(8))?;
     terminal.wait_for("the focus on the review-step field", |screen| {
         let lines = lines_inside_frame(&screen.contents());
-        lines.get(22).is_some_and(|line| line == "> on")
+        lines.get(28).is_some_and(|line| line == "> on")
     })?;
     terminal.send(SPACE)?;
     terminal.wait_for("the edited value", |screen| {
@@ -448,10 +451,10 @@ fn switching_commit_off_from_the_settings_screen_shows_the_same_refusal_the_cli_
     let before = cli_settings(&fixture)?;
     let mut terminal = enter_settings(fixture.open(TALL)?)?;
 
-    terminal.send(&TAB.repeat(8))?;
+    terminal.send(&TAB.repeat(10))?;
     terminal.wait_for("the focus on the commit-step field", |screen| {
         let lines = lines_inside_frame(&screen.contents());
-        lines.get(28).is_some_and(|line| line == "> on")
+        lines.get(34).is_some_and(|line| line == "> on")
     })?;
     terminal.send(LEFT)?;
     terminal.wait_for("the edited value", |screen| {
@@ -475,13 +478,15 @@ fn switching_commit_off_from_the_settings_screen_shows_the_same_refusal_the_cli_
 const SMALL: u16 = 10;
 
 /// Every setting's own label, in the order the screen shows them.
-const FIELD_LABELS: [&str; 16] = [
+const FIELD_LABELS: [&str; 18] = [
     "Attempt timeout, in seconds",
     "Silent after, in seconds",
     "Health check command",
+    "Check command",
     "Tracked branch (remote/branch)",
     "Sync step (on/off)",
     "Health check step (on/off)",
+    "Check step (on/off)",
     "Review step (on/off)",
     "Testing step (on/off)",
     "Commit step (on/off)",
@@ -501,14 +506,14 @@ fn on_a_small_terminal_tab_and_shift_tab_keep_the_focused_field_on_screen() -> R
 
     // Not every setting fits on ten rows: the last is not shown until it is reached, which is
     // what makes the rest of this test meaningful.
-    assert!(!terminal.screen().contains(FIELD_LABELS[9]));
+    assert!(!terminal.screen().contains(FIELD_LABELS[11]));
 
     for label in FIELD_LABELS.into_iter().skip(1) {
         terminal.send(TAB)?;
         terminal.wait_for_text(label)?;
     }
 
-    for label in FIELD_LABELS.into_iter().take(15).rev() {
+    for label in FIELD_LABELS.into_iter().take(17).rev() {
         terminal.send(SHIFT_TAB)?;
         terminal.wait_for_text(label)?;
     }
@@ -521,11 +526,11 @@ fn agent_and_resolver_provider_and_model_fields_are_visible_and_save_through_the
 -> Result<()> {
     let fixture = Fixture::new()?;
     for (tabs, value, expected) in [
-        (12, "claude", "provider\tclaude\tcustom\n"),
-        (13, "agent-model", "model\tagent-model\tcustom\n"),
-        (14, "echo", "resolver-provider\techo\tcustom\n"),
+        (14, "claude", "provider\tclaude\tcustom\n"),
+        (15, "agent-model", "model\tagent-model\tcustom\n"),
+        (16, "echo", "resolver-provider\techo\tcustom\n"),
         (
-            15,
+            17,
             "resolver-model",
             "resolver-model\tresolver-model\tcustom\n",
         ),
@@ -553,10 +558,10 @@ fn an_on_off_field_is_changed_with_space_left_or_right_and_cannot_hold_anything_
     let fixture = Fixture::new()?;
     let mut terminal = enter_settings(fixture.open(TALL)?)?;
 
-    terminal.send(&TAB.repeat(4))?;
+    terminal.send(&TAB.repeat(5))?;
     terminal.wait_for("the focus on the sync-step field", |screen| {
         let lines = lines_inside_frame(&screen.contents());
-        lines.get(16).is_some_and(|line| line == "> on")
+        lines.get(19).is_some_and(|line| line == "> on")
     })?;
 
     // Typing "off" over "on" must not append to it: none of these keys are Space, Left or
@@ -564,25 +569,25 @@ fn an_on_off_field_is_changed_with_space_left_or_right_and_cannot_hold_anything_
     terminal.send("off")?;
     terminal.wait_for("the value unchanged by typing", |screen| {
         let lines = lines_inside_frame(&screen.contents());
-        lines.get(16).is_some_and(|line| line == "> on")
+        lines.get(19).is_some_and(|line| line == "> on")
     })?;
 
     terminal.send(SPACE)?;
     terminal.wait_for("space switched it off", |screen| {
         let lines = lines_inside_frame(&screen.contents());
-        lines.get(16).is_some_and(|line| line == "> off")
+        lines.get(19).is_some_and(|line| line == "> off")
     })?;
 
     terminal.send(RIGHT)?;
     terminal.wait_for("right switched it back on", |screen| {
         let lines = lines_inside_frame(&screen.contents());
-        lines.get(16).is_some_and(|line| line == "> on")
+        lines.get(19).is_some_and(|line| line == "> on")
     })?;
 
     terminal.send(LEFT)?;
     terminal.wait_for("left switched it off", |screen| {
         let lines = lines_inside_frame(&screen.contents());
-        lines.get(16).is_some_and(|line| line == "> off")
+        lines.get(19).is_some_and(|line| line == "> off")
     })?;
 
     terminal.send(SUBMIT)?;
@@ -593,4 +598,73 @@ fn an_on_off_field_is_changed_with_space_left_or_right_and_cannot_hold_anything_
     let shown = cli_settings(&fixture)?;
     assert!(shown.contains("step-sync\toff\tcustom\n"), "{shown}");
     quit(terminal)
+}
+
+#[test]
+fn tab_three_times_moves_to_the_check_field_and_ctrl_s_saves_it_through_the_cli_use_case()
+-> Result<()> {
+    let fixture = Fixture::new()?;
+    let mut terminal = open_settings(&fixture)?;
+
+    terminal.send(&TAB.repeat(3))?;
+    terminal.wait_for("the focus on the check field", |screen| {
+        let lines = lines_inside_frame(&screen.contents());
+        lines
+            .get(12)
+            .is_some_and(|line| line == "Check command (default):")
+            && lines.get(13).is_some_and(|line| line == ">")
+    })?;
+    terminal.send("cargo test")?;
+    terminal.wait_for("the typed command", |screen| {
+        screen.contents().contains("> cargo test")
+    })?;
+    terminal.send(SUBMIT)?;
+
+    terminal.wait_for("the queue back", |screen| {
+        !screen.contents().contains("Settings")
+    })?;
+    let shown = cli_settings(&fixture)?;
+    assert!(
+        shown.contains("health-check\t\tdefault\ncheck\tcargo test\tcustom\n"),
+        "{shown}"
+    );
+    quit(terminal)
+}
+
+#[test]
+fn the_check_step_switch_is_saved_as_off_and_both_interfaces_show_it_off() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let mut terminal = enter_settings(fixture.open(TALL)?)?;
+
+    terminal.send(&TAB.repeat(7))?;
+    terminal.wait_for("the focus on the check-step field", |screen| {
+        let lines = lines_inside_frame(&screen.contents());
+        lines
+            .get(24)
+            .is_some_and(|line| line == "Check step (on/off) (default):")
+            && lines.get(25).is_some_and(|line| line == "> on")
+    })?;
+    terminal.send(SPACE)?;
+    terminal.wait_for("the edited value", |screen| {
+        screen.contents().contains("> off")
+    })?;
+    terminal.send(SUBMIT)?;
+    terminal.wait_for("the queue back", |screen| {
+        !screen.contents().contains("Settings")
+    })?;
+    let shown = cli_settings(&fixture)?;
+    assert!(shown.contains("step-check\toff\tcustom\n"), "{shown}");
+
+    quit(terminal)?;
+
+    let mut terminal = enter_settings(fixture.open(TALL)?)?;
+    terminal.send(&TAB.repeat(7))?;
+    terminal.wait_for("the check step shown off with its label", |screen| {
+        let lines = lines_inside_frame(&screen.contents());
+        lines
+            .get(24)
+            .is_some_and(|line| line == "Check step (on/off) (custom):")
+            && lines.get(25).is_some_and(|line| line == "> off")
+    })?;
+    quit_from_settings(terminal)
 }

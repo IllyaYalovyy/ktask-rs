@@ -118,3 +118,48 @@ fn the_keys_that_move_between_tasks_move_between_steps_and_esc_returns_to_the_qu
     })?;
     Ok(())
 }
+
+#[test]
+fn the_output_screen_shows_a_checks_output_under_a_heading_without_a_provider() -> Result<()> {
+    let sandbox = Sandbox::new()?;
+    let (_keep, work) = scratch()?;
+    let repository = git_repository(&sandbox, &work, "my-app")?;
+    for (name, value) in [
+        ("max-attempts", "1"),
+        ("check", "echo said-by-check; exit 2"),
+    ] {
+        let set = sandbox.run(&repository, &["settings", "set", name, value])?;
+        assert_eq!(set.code, Some(0), "{}", set.stderr);
+    }
+    let added = sandbox.run(
+        &repository,
+        &[
+            "add",
+            "--title",
+            "steps",
+            "--criterion",
+            "visible",
+            "--body",
+            BODY,
+        ],
+    )?;
+    assert_eq!(added.code, Some(0), "{}", added.stderr);
+    let run = sandbox.run(&repository, &["run"])?;
+    assert_eq!(run.code, Some(1), "{}{}", run.stdout, run.stderr);
+
+    let mut terminal = Terminal::launch(&sandbox, &repository, &["tui"], 24, 80)?;
+    terminal.wait_for("the queue screen", |screen| {
+        screen.contents().ends_with('┘')
+    })?;
+    terminal.send("l")?;
+    let screen = terminal.wait_for("the check heading", |screen| {
+        screen.contents().contains("--- check ---") && screen.contents().contains("said-by-check")
+    })?;
+
+    let implementation = screen.find("said-by-implementation");
+    let heading = screen.find("--- check ---");
+    let output = screen.find("said-by-check");
+    assert!(implementation < heading && heading < output, "{screen}");
+    assert!(!screen.contains("--- review"), "{screen}");
+    Ok(())
+}

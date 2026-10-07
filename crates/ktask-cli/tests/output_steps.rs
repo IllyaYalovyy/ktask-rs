@@ -143,7 +143,7 @@ fn step_prints_one_steps_transcript_only() -> Result<()> {
 }
 
 #[test]
-fn step_refuses_a_step_the_attempt_did_not_run_as_an_agent() -> Result<()> {
+fn step_refuses_a_step_the_attempt_kept_no_output_for() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add(FAILED_THEN_RESOLVED)?;
     fixture.run(&["run"])?;
@@ -153,9 +153,9 @@ fn step_refuses_a_step_the_attempt_did_not_run_as_an_agent() -> Result<()> {
         assert_eq!(refused.code, Some(2), "{wanted}: {}", refused.stdout);
         assert_eq!(refused.stdout, "");
         assert!(
-            refused
-                .stderr
-                .contains(&format!("task 1 attempt 2 has no agent step \"{wanted}\"")),
+            refused.stderr.contains(&format!(
+                "task 1 attempt 2 has no step with output \"{wanted}\""
+            )),
             "{}",
             refused.stderr
         );

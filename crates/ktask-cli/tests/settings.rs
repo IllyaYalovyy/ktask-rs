@@ -61,6 +61,7 @@ impl Fixture {
 /// first four settings show.
 const STEP_DEFAULTS: &str = "step-sync\ton\tdefault\n\
      step-health-check\ton\tdefault\n\
+     step-check\ton\tdefault\n\
      step-review\ton\tdefault\n\
      step-testing\ton\tdefault\n\
      step-commit\ton\tdefault\n\
@@ -75,8 +76,9 @@ const STEP_DEFAULTS: &str = "step-sync\ton\tdefault\n\
 /// The default `settings` output: its two time settings at their built-in defaults,
 /// health-check and tracked-branch unset, every step switch on, attempt and transport retry
 /// limits, and the resolver's provider and model at their built-in defaults.
-const DEFAULTS: &str = "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\n\
+const DEFAULTS: &str = "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ncheck\t\tdefault\n\
      tracked-branch\t\tdefault\nstep-sync\ton\tdefault\nstep-health-check\ton\tdefault\n\
+     step-check\ton\tdefault\n\
      step-review\ton\tdefault\nstep-testing\ton\tdefault\nstep-commit\ton\tdefault\n\
      step-push\ton\tdefault\nmax-attempts\t3\tdefault\ntransport-retries\t3\tdefault\nprovider\techo\tdefault\nmodel\t\tdefault\nresolver-provider\techo\tdefault\n\
      resolver-model\t\tdefault\n";
@@ -104,9 +106,11 @@ fn json_carries_the_same() -> Result<()> {
         "[{\"name\":\"attempt-timeout\",\"value\":\"14400\",\"default\":true},\
          {\"name\":\"silent-after\",\"value\":\"120\",\"default\":true},\
          {\"name\":\"health-check\",\"value\":\"\",\"default\":true},\
+         {\"name\":\"check\",\"value\":\"\",\"default\":true},\
          {\"name\":\"tracked-branch\",\"value\":\"\",\"default\":true},\
          {\"name\":\"step-sync\",\"value\":\"on\",\"default\":true},\
          {\"name\":\"step-health-check\",\"value\":\"on\",\"default\":true},\
+         {\"name\":\"step-check\",\"value\":\"on\",\"default\":true},\
          {\"name\":\"step-review\",\"value\":\"on\",\"default\":true},\
          {\"name\":\"step-testing\",\"value\":\"on\",\"default\":true},\
          {\"name\":\"step-commit\",\"value\":\"on\",\"default\":true},\
@@ -133,7 +137,7 @@ fn set_changes_the_value_and_it_shows_as_no_longer_the_default() -> Result<()> {
     assert_eq!(
         shown.stdout,
         format!(
-            "attempt-timeout\t3600\tcustom\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
+            "attempt-timeout\t3600\tcustom\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ncheck\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
         )
     );
     assert!(fixture.settings_file().is_file());
@@ -190,7 +194,7 @@ fn setting_health_check_changes_it_and_it_shows_as_no_longer_the_default() -> Re
     assert_eq!(
         shown.stdout,
         format!(
-            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\tcargo test\tcustom\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
+            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\tcargo test\tcustom\ncheck\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
         )
     );
     Ok(())
@@ -208,7 +212,7 @@ fn a_tracked_branch_naming_an_existing_remote_branch_is_accepted() -> Result<()>
     assert_eq!(
         shown.stdout,
         format!(
-            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\torigin/main\tcustom\n{STEP_DEFAULTS}"
+            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ncheck\t\tdefault\ntracked-branch\torigin/main\tcustom\n{STEP_DEFAULTS}"
         )
     );
     Ok(())
@@ -304,7 +308,7 @@ fn the_setting_persists_across_commands() -> Result<()> {
     assert_eq!(
         shown.stdout,
         format!(
-            "attempt-timeout\t600\tcustom\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
+            "attempt-timeout\t600\tcustom\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ncheck\t\tdefault\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
         )
     );
     Ok(())
@@ -724,5 +728,71 @@ fn settings_set_help_names_exactly_the_settings_settings_shows() -> Result<()> {
         "`settings set --help` must name exactly the settings `settings` shows, in the same \
          order, or it lies about one that does not exist or is missing one that does"
     );
+    Ok(())
+}
+
+#[test]
+fn setting_check_changes_it_and_it_shows_as_no_longer_the_default() -> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let set = fixture.run(&["settings", "set", "check", "cargo test"])?;
+
+    assert_eq!(set.code, Some(0), "{}", set.stderr);
+    assert_eq!(set.stdout, "check\tcargo test\n");
+    let shown = fixture.run(&["settings"])?;
+    assert_eq!(
+        shown.stdout,
+        format!(
+            "attempt-timeout\t14400\tdefault\nsilent-after\t120\tdefault\nhealth-check\t\tdefault\ncheck\tcargo test\tcustom\ntracked-branch\t\tdefault\n{STEP_DEFAULTS}"
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn an_empty_check_exits_two_naming_the_problem_and_changes_nothing() -> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let outcome = fixture.run(&["settings", "set", "check", "   "])?;
+
+    assert_eq!(outcome.code, Some(2));
+    assert!(
+        outcome.stderr.contains("check: must not be empty"),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(fixture.run(&["settings"])?.stdout, DEFAULTS);
+    Ok(())
+}
+
+#[test]
+fn step_check_switches_off_and_shows_off_while_check_keeps_its_command() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.run(&["settings", "set", "check", "cargo test"])?;
+
+    let set = fixture.run(&["settings", "set", "step-check", "off"])?;
+
+    assert_eq!(set.code, Some(0), "{}", set.stderr);
+    assert_eq!(set.stdout, "step-check\toff\n");
+    let shown = fixture.run(&["settings"])?.stdout;
+    assert!(shown.contains("check\tcargo test\tcustom\n"), "{shown}");
+    assert!(shown.contains("step-check\toff\tcustom\n"), "{shown}");
+    let json = fixture.run(&["settings", "--json"])?.stdout;
+    assert!(
+        json.contains("{\"name\":\"step-check\",\"value\":\"off\",\"default\":false}"),
+        "{json}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_step_check_that_is_not_on_or_off_exits_two_and_changes_nothing() -> Result<()> {
+    let fixture = Fixture::new()?;
+
+    let outcome = fixture.run(&["settings", "set", "step-check", "maybe"])?;
+
+    assert_eq!(outcome.code, Some(2));
+    assert!(outcome.stderr.contains("step-check"), "{}", outcome.stderr);
+    assert_eq!(fixture.run(&["settings"])?.stdout, DEFAULTS);
     Ok(())
 }
