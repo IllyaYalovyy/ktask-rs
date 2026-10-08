@@ -188,20 +188,19 @@ fn header_lines(view: &QueueView) -> Vec<Line<'static>> {
     ]
 }
 
+/// The whole queue's provider usage: every task's own total, from the same function `status`
+/// and the queue screen's own task lines use, summed.
 fn queue_usage(view: &QueueView) -> ktask_core::Usage {
     view.attempts
-        .values()
-        .fold(ktask_core::Usage::default(), |total, attempt| {
-            total.plus(attempt.usage)
+        .iter()
+        .fold(ktask_core::Usage::default(), |total, (id, attempt)| {
+            total.plus(ktask_core::total_usage(attempt, task_history(view, *id)))
         })
-        .plus(
-            view.history
-                .values()
-                .flatten()
-                .fold(ktask_core::Usage::default(), |total, attempt| {
-                    total.plus(attempt.usage)
-                }),
-        )
+}
+
+/// Task `id`'s earlier attempts, oldest first, or none when it is on its first attempt.
+fn task_history(view: &QueueView, id: TaskId) -> &[AttemptLine] {
+    view.history.get(&id).map_or(&[], Vec::as_slice)
 }
 
 /// `message` — the last run's or import's own results, one per line — windowed to the
@@ -257,6 +256,7 @@ fn task_lines(
         lines.push(task_line(
             task,
             attempt,
+            task_history(view, task.id),
             Some(index) == selected_index,
             &columns,
             width,
@@ -646,7 +646,7 @@ mod tests {
             band: RunBand::Idle { pending: 0 },
         });
         let rows = drawn(&queue, 100, 8);
-        assert_eq!(row(&rows, 4), ">1  #10  done  agent  first");
+        assert_eq!(row(&rows, 4), ">1  #10  done  agent  first · usage none");
         let line = row(&rows, 5);
         assert!(
             line.contains("marked done by the user: fixed by hand (at"),

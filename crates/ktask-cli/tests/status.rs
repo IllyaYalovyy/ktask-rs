@@ -11,6 +11,8 @@ mod repo;
 mod run_cleanup;
 mod support;
 
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant};
@@ -798,6 +800,122 @@ fn a_human_task_at_the_head_shows_a_stopped_band_naming_the_acknowledge_key() ->
     assert_eq!(parsed["run"]["state"], "stopped");
     assert_eq!(parsed["run"]["cause"], "human_task");
     assert_eq!(parsed["run"]["task"], 1);
+    Ok(())
+}
+
+/// Installs a provider named `reported` that reports usage for every step it runs: the
+/// implementation step fails with usage once, is resolved with `retry` (its own usage too),
+/// then the second attempt's implementation step reports `done` with a third usage figure —
+/// so the task's recorded history holds one earlier attempt built from two usage-reporting
+/// steps, and its current attempt a third. The token for whichever outcome is wanted is
+/// pulled from the prompt's own worked examples, exactly as a real agent would read it.
+fn install_two_attempt_usage_reporter(fixture: &Fixture) -> Result<()> {
+    let script = fixture.sandbox.tmpdir().join("two-attempts-with-usage");
+    let marker = fixture.sandbox.tmpdir().join("attempt-one-ran");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\n\
+             prompt=$(cat)\n\
+             if printf '%s\\n' \"$prompt\" | grep -q 'retry \\[--model'; then\n\
+             \x20\x20token=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* stop --reason \"<why>\"$/p' | head -n 1 | awk '{{print $4}}')\n\
+             \x20\x20printf '%s\\n' '{{\"usage\":{{\"input_tokens\":5,\"output_tokens\":5,\"cost_usd\":0.50,\"model\":\"m\"}}}}'\n\
+             \x20\x20ktask-rs report --token \"$token\" retry\n\
+             elif [ -f \"{marker}\" ]; then\n\
+             \x20\x20report=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\n\
+             \x20\x20printf '%s\\n' '{{\"usage\":{{\"input_tokens\":200,\"output_tokens\":100,\"cost_usd\":20.00,\"model\":\"m\"}}}}'\n\
+             \x20\x20eval \"$report\"\n\
+             else\n\
+             \x20\x20touch \"{marker}\"\n\
+             \x20\x20token=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1 | awk '{{print $4}}')\n\
+             \x20\x20printf '%s\\n' '{{\"usage\":{{\"input_tokens\":100,\"output_tokens\":50,\"cost_usd\":10.00,\"model\":\"m\"}}}}'\n\
+             \x20\x20ktask-rs report --token \"$token\" failed --reason \"it broke\"\n\
+             fi\n",
+            marker = marker.display()
+        ),
+    )?;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
+    let settings = fixture.sandbox.state_dir().join("my-app/settings.toml");
+    let definition = format!(
+        "\n[providers.reported]\ncommand = \"{script}\"\nparser = \"plain\"\nusage = \"usage\"\n",
+        script = script.display()
+    );
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(settings)?
+        .write_all(definition.as_bytes())?;
+    for (name, value) in [("provider", "reported"), ("resolver-provider", "reported")] {
+        fixture.run(&["settings", "set", name, value])?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_tasks_total_sums_every_attempts_usage_resolutions_included() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.run(&["settings", "set", "max-attempts", "2"])?;
+    for (name, value) in [
+        ("step-review", "off"),
+        ("step-testing", "off"),
+        ("step-push", "off"),
+        ("step-commit", "off"),
+    ] {
+        fixture.run(&["settings", "set", name, value])?;
+    }
+    install_two_attempt_usage_reporter(&fixture)?;
+    fixture.add_agent_task("a", "do the recorded work")?;
+
+    let outcome = fixture.run_the_queue(&["run"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+
+    // The task's own line sums every step of every attempt, resolutions included: $10.00
+    // (attempt 1's implementation) + $0.50 (its resolution) + $20.00 (attempt 2's
+    // implementation) = $30.50 — not attempt 2's $20.00 alone.
+    let status = fixture.run(&["status"])?;
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let lines: Vec<_> = status.stdout.lines().skip(1).collect();
+    assert_eq!(
+        lines[0],
+        "#1\tdone\ta\ttokens in 305 out 155 cost $30.500000"
+    );
+    // Each attempt keeps its own subtotal on its first line.
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("attempt 1: implementation")
+                && line.ends_with("tokens in 100 out 50 cost $10.000000")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("attempt 1: resolve")
+            && line.ends_with("tokens in 5 out 5 cost $0.500000")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("attempt 2: implementation")
+                && line.ends_with("tokens in 200 out 100 cost $20.000000")),
+        "{lines:?}"
+    );
+
+    let json = fixture.run(&["status", "--json"])?;
+    assert_eq!(json.code, Some(0), "{}", json.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&json.stdout)?;
+    let task = &parsed["tasks"][0];
+    assert_eq!(task["input_tokens"], 305);
+    assert_eq!(task["output_tokens"], 155);
+    assert_eq!(task["cost_usd"], "30.500000");
+    // The current attempt's own fields still carry only its own subtotal.
+    assert_eq!(task["attempt"]["input_tokens"], 200);
+    assert_eq!(task["attempt"]["output_tokens"], 100);
+    assert_eq!(task["attempt"]["cost_usd"], "20.000000");
+    // The earlier attempt, in history, carries its own subtotal too: implementation plus the
+    // resolution that ran inside it.
+    assert_eq!(task["history"][0]["input_tokens"], 105);
+    assert_eq!(task["history"][0]["output_tokens"], 55);
+    assert_eq!(task["history"][0]["cost_usd"], "10.500000");
+
     Ok(())
 }
 

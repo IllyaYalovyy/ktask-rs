@@ -6,6 +6,18 @@ use crate::{LimitWait, LimitWarning, Routed, TaskId, TaskStatus, Usage, WaitReas
 
 use super::AttemptOutcome;
 
+/// The total provider usage across `attempt` and every one of `history`'s earlier attempts —
+/// every attempt's own subtotal, resolutions included, summed into one task total. The one
+/// function `status`, `status --json` and the queue screen all share, so none of them sums the
+/// task's attempts a different way.
+#[must_use]
+pub fn total_usage(attempt: &AttemptLine, history: &[AttemptLine]) -> Usage {
+    history
+        .iter()
+        .chain(std::iter::once(attempt))
+        .fold(Usage::default(), |total, attempt| total.plus(attempt.usage))
+}
+
 /// A live wait: why a step is waiting and how long is left of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Wait {
@@ -120,4 +132,12 @@ pub struct StatusEntry {
     pub history: Vec<AttemptLine>,
     /// The manual done mark, when the operator made one.
     pub done_by_user: Option<DoneMark>,
+}
+
+impl StatusEntry {
+    /// The task's total provider usage across every attempt it has run, resolutions included.
+    #[must_use]
+    pub fn total_usage(&self) -> Usage {
+        total_usage(&self.attempt, &self.history)
+    }
 }

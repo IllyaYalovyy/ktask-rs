@@ -105,6 +105,9 @@ struct StatusJson<'a> {
     id: u64,
     title: &'a str,
     status: &'static str,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cost_usd: Option<String>,
     attempt: AttemptJson<'a>,
     history: Vec<AttemptJson<'a>>,
     done_by_user: Option<DoneMarkJson<'a>>,
@@ -220,10 +223,14 @@ fn status_json(
     let tasks = entries
         .iter()
         .map(|entry| {
+            let total = entry.total_usage();
             Ok(StatusJson {
                 id: entry.task.0,
                 title: &entry.title,
                 status: presentation::task_status(entry.status, Some(entry.attempt.outcome)),
+                input_tokens: total.input_tokens,
+                output_tokens: total.output_tokens,
+                cost_usd: cost_usd(total.cost_microusd),
                 attempt: attempt_json(&entry.attempt)?,
                 history: entry
                     .history
@@ -274,7 +281,7 @@ fn status_text(
             entry.task,
             status,
             entry.title,
-            presentation::usage_text(entry.attempt.usage)
+            presentation::usage_text(entry.total_usage())
         )
         .map_err(|e| e.to_string())?;
         write_done_mark_line(out, entry)?;

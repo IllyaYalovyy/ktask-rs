@@ -84,13 +84,18 @@ pub(crate) fn marked(screen: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether `row`'s title is `title`: at the row's very end for a task never attempted, or
+/// followed by its own usage suffix (`" · ..."`) for one that has.
+pub(crate) fn row_is_titled(row: &str, title: &str) -> bool {
+    row.ends_with(title) || row.contains(&format!("{title} ·"))
+}
+
 /// Waits until the selection is on `title` and nowhere else, and returns the whole matching
 /// screen, so a caller checking more of it does not have to read the screen a second time.
 pub(crate) fn wait_selected_screen(terminal: &Terminal, title: &str) -> Result<String> {
-    terminal.wait_for(
-        &format!("the selection on {title}"),
-        |screen| matches!(marked(&screen.contents()).as_slice(), [row] if row.ends_with(title)),
-    )
+    terminal.wait_for(&format!("the selection on {title}"), |screen| {
+        matches!(marked(&screen.contents()).as_slice(), [row] if row_is_titled(row, title))
+    })
 }
 
 /// Waits until the selection is on `title` and nowhere else, and returns the row it is on.

@@ -147,7 +147,7 @@ fn a_superseded_task_is_hidden_and_counted_while_the_new_ones_show_at_once_and_a
         .find(|line| line.contains("superseded  agent  too large"))
         .unwrap_or_else(|| panic!("no superseded row in {lines:?}"));
     assert!(
-        task_row.ends_with("1  #1  superseded  agent  too large"),
+        task_row.ends_with("1  #1  superseded  agent  too large · usage none"),
         "{task_row:?}"
     );
     assert!(

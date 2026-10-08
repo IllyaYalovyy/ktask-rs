@@ -227,7 +227,7 @@ fn a_run_started_elsewhere_shows_pending_then_running_with_elapsed_time_increasi
                 .is_some_and(|line| line.contains("implementation"))
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[5], ">1  #1  running  agent  a");
+    assert_eq!(lines[5], ">1  #1  running  agent  a · usage none");
     assert!(
         lines[6].contains("implementation · echo") && lines[6].contains("running"),
         "{}",
@@ -269,7 +269,7 @@ fn a_run_started_elsewhere_shows_pending_then_running_with_elapsed_time_increasi
         },
     )?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[5], ">1  #1  done  agent  a");
+    assert_eq!(lines[5], ">1  #1  done  agent  a · usage none");
     // Every step the attempt ran shows, in order — not only the last, `commit`.
     assert!(
         lines[6].contains("implementation · echo") && lines[6].ends_with("done · usage none"),
@@ -368,7 +368,7 @@ fn a_task_that_changes_a_file_gets_a_real_commit_and_the_dashboard_shows_its_sho
 
     let hash = fixture.head()?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[5], ">1  #1  done  agent  a");
+    assert_eq!(lines[5], ">1  #1  done  agent  a · usage none");
     // Every step shows, in order — the commit line is the fourth, not the only one.
     assert!(
         lines[6].contains("implementation · echo") && lines[6].ends_with("done · usage none"),
@@ -475,7 +475,7 @@ fn a_run_killed_outright_shows_the_task_interrupted_at_once_with_no_next_run() -
         lines[3],
         "run stopped: #1 interrupted — the run was killed · next: r to run, then t to retry #1"
     );
-    assert_eq!(lines[5], ">1  #1  interrupted  agent  a");
+    assert_eq!(lines[5], ">1  #1  interrupted  agent  a · usage none");
     assert!(
         lines[6].contains("implementation · echo")
             && lines[6].ends_with("interrupted · usage none"),
@@ -513,7 +513,7 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
         screen.contents().contains("commit") && screen.contents().ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[5], ">1  #1  done  agent  a");
+    assert_eq!(lines[5], ">1  #1  done  agent  a · usage none");
     // All four steps of the successful attempt show, in order.
     assert!(
         lines[6].contains("implementation") && lines[6].ends_with("done · usage none"),
@@ -554,13 +554,13 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     // the task list below it starts one row further down than it usually would.
     // `failed` (6 characters) is wider than `done` (4), so `done`'s status column pads out
     // to match it.
-    assert_eq!(lines[6], ">1  #1  done    agent  x");
+    assert_eq!(lines[6], ">1  #1  done    agent  x · usage none");
     // `x`'s four finished steps stay above `b`'s own header and single failed step.
     assert!(lines[7].contains("implementation") && lines[7].ends_with("done · usage none"));
     assert!(lines[8].contains("review") && lines[8].ends_with("approved · usage none"));
     assert!(lines[9].contains("testing") && lines[9].ends_with("accepted · usage none"));
     assert!(lines[10].contains("commit"));
-    assert_eq!(lines[11], " 2  #2  failed  agent  b");
+    assert_eq!(lines[11], " 2  #2  failed  agent  b · usage none");
     assert!(
         lines[12].ends_with("failed · routed: decide — agent failed · it broke · usage none"),
         "{}",
@@ -581,8 +581,8 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     let lines = lines_inside_frame(&screen);
     // The band's own "run stopped" report is long enough to wrap onto a second row here, so
     // the task list below it starts one row further down than it usually would.
-    assert_eq!(lines[6], ">1  #1  done    agent  x");
-    assert_eq!(lines[11], " 2  #2  failed  agent  c");
+    assert_eq!(lines[6], ">1  #1  done    agent  x · usage none");
+    assert_eq!(lines[11], " 2  #2  failed  agent  c · usage none");
     assert!(
         lines[12].ends_with("too-large · routed: decide — agent failed · split me · usage none"),
         "{}",
@@ -605,8 +605,8 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     let lines = lines_inside_frame(&screen);
     // `blocked` (7 characters) is wider than `done` (4), so `done`'s status column pads out
     // to match it.
-    assert_eq!(lines[5], ">1  #1  done     agent  x");
-    assert_eq!(lines[10], " 2  #2  blocked  agent  d");
+    assert_eq!(lines[5], ">1  #1  done     agent  x · usage none");
+    assert_eq!(lines[10], " 2  #2  blocked  agent  d · usage none");
     assert!(
         lines[11].ends_with("needs-input: which path? · usage none"),
         "{}",
@@ -629,8 +629,8 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     // pads out to match it.
     // The band's own "run stopped" report is long enough to wrap onto a second row here, so
     // the task list below it starts one row further down than it usually would.
-    assert_eq!(lines[6], ">1  #1  done            agent  x");
-    assert_eq!(lines[11], " 2  #2  failed-unknown  agent  e");
+    assert_eq!(lines[6], ">1  #1  done            agent  x · usage none");
+    assert_eq!(lines[11], " 2  #2  failed-unknown  agent  e · usage none");
     // The routed verdict sits right after the outcome, before the reason, so it is never cut
     // off — even though the line is long enough that the reason, further to the right, is.
     let at = |needle| lines[12].find(needle).unwrap_or(usize::MAX);
@@ -662,7 +662,7 @@ fn a_changes_requested_review_shows_its_own_outcome_and_findings() -> Result<()>
     let lines = lines_inside_frame(&screen);
     // The band's own "run stopped" report is long enough to wrap onto a second row here, so
     // the task list below it starts one row further down than it usually would.
-    assert_eq!(lines[6], ">1  #1  failed  agent  a");
+    assert_eq!(lines[6], ">1  #1  failed  agent  a · usage none");
     // The implementation step that passed stays visible above the review that failed it.
     assert!(
         lines[7].contains("implementation · echo") && lines[7].ends_with("done · usage none"),
@@ -699,7 +699,7 @@ fn a_rejecting_tester_shows_its_own_outcome_and_what_failed() -> Result<()> {
     let lines = lines_inside_frame(&screen);
     // The band's own "run stopped" report is long enough to wrap onto a second row here, so
     // the task list below it starts one row further down than it usually would.
-    assert_eq!(lines[6], ">1  #1  failed  agent  a");
+    assert_eq!(lines[6], ">1  #1  failed  agent  a · usage none");
     // The implementation and review steps that passed stay visible above the tester's own.
     assert!(
         lines[7].contains("implementation · echo") && lines[7].ends_with("done · usage none"),
@@ -742,7 +742,7 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
     let lines = lines_inside_frame(&screen);
     // `pending` (7 characters) is wider than `done` (4), so `done`'s status column pads out
     // to match it.
-    assert_eq!(lines[5], ">1  #1  done     agent  a");
+    assert_eq!(lines[5], ">1  #1  done     agent  a · usage none");
     // `a`'s block carries one line per step it ran — implementation, review, testing, commit
     // — so `b`'s own header is pushed down to row 9, not row 6.
     assert!(lines[6].contains("implementation"), "{}", lines[6]);
@@ -791,7 +791,7 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
         !contents.contains("Keys") && contents.contains("commit")
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[5], ">1  #1  done     agent  a");
+    assert_eq!(lines[5], ">1  #1  done     agent  a · usage none");
     assert!(lines[9].contains("commit"), "{}", lines[9]);
 
     // The cancelled task, never attempted, appears in its place with no step lines of its
@@ -803,7 +803,7 @@ fn navigation_the_cancelled_toggle_and_the_key_map_still_work_with_attempt_lines
     let lines = lines_inside_frame(&screen);
     // `cancelled` (9 characters) is now the widest status shown, so `done`'s and `pending`'s
     // columns pad out to match it.
-    assert_eq!(lines[5], ">1  #1  done       agent  a");
+    assert_eq!(lines[5], ">1  #1  done       agent  a · usage none");
     assert!(lines[9].contains("commit"), "{}", lines[9]);
     assert_eq!(lines[10], " 2  #2  pending    agent  b");
     assert_eq!(lines[11], " 3  #3  cancelled  agent  c");
@@ -872,7 +872,7 @@ fn a_task_that_commits_and_pushes_shows_the_dashboard_its_push_line() -> Result<
     let hash = String::from_utf8(head.stdout)?.trim().to_owned();
 
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[5], ">1  #1  done  agent  a");
+    assert_eq!(lines[5], ">1  #1  done  agent  a · usage none");
     // Every step of the attempt shows, in order: sync, implementation, review, testing,
     // commit, then push last.
     assert!(lines[6].contains("sync · -"), "{}", lines[6]);
@@ -940,7 +940,7 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
             let lines = lines_inside_frame(&screen.contents());
             lines
                 .get(5)
-                .is_some_and(|line| line == ">1  #1  running  agent  a")
+                .is_some_and(|line| line == ">1  #1  running  agent  a · usage none")
                 && lines.get(6).is_some_and(|line| {
                     line.contains("health check")
                         && line.ends_with("passed")
@@ -952,7 +952,7 @@ fn a_finished_step_stays_visible_above_the_one_still_running() -> Result<()> {
         },
     )?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[5], ">1  #1  running  agent  a");
+    assert_eq!(lines[5], ">1  #1  running  agent  a · usage none");
     assert!(
         lines[6].contains("health check · -")
             && lines[6].ends_with("passed")
@@ -1021,7 +1021,7 @@ fn a_failing_health_check_gate_shows_on_the_queue_screen_pending_and_clears_once
         band.ends_with("next: fix the problem, then r to run"),
         "{band}"
     );
-    assert_eq!(lines[6], ">1  #1  pending  agent  a");
+    assert_eq!(lines[6], ">1  #1  pending  agent  a · usage none");
     assert!(
         lines[7].contains("health check · -") && lines[7].contains("failed"),
         "{}",
@@ -1098,7 +1098,7 @@ fn steps_taller_than_the_screen_scroll_behind_an_ellipsis_until_there_is_room_fo
         screen.contents().ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[5], ">1  #1  done  agent  a");
+    assert_eq!(lines[5], ">1  #1  done  agent  a · usage none");
     assert_eq!(lines[6], "      …");
     assert!(lines[7].contains("commit · -"), "{}", lines[7]);
     assert!(lines[8].contains("push · -"), "{}", lines[8]);
@@ -1116,7 +1116,7 @@ fn steps_taller_than_the_screen_scroll_behind_an_ellipsis_until_there_is_room_fo
         contents.contains("push") && !contents.contains('…')
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[5], ">1  #1  done  agent  a");
+    assert_eq!(lines[5], ">1  #1  done  agent  a · usage none");
     assert!(lines[6].contains("sync · -"), "{}", lines[6]);
     assert!(lines[7].contains("health check · -"), "{}", lines[7]);
     assert!(lines[8].contains("implementation · echo"), "{}", lines[8]);
@@ -1208,7 +1208,7 @@ fn a_missing_instruction_file_shows_on_the_queue_screen_naming_the_file_and_the_
     let lines = lines_inside_frame(&screen);
     // The band's own "run stopped" report is long enough to wrap onto a second row here, so
     // the task list below it starts one row further down than it usually would.
-    assert_eq!(lines[6], ">1  #1  pending  agent  a");
+    assert_eq!(lines[6], ">1  #1  pending  agent  a · usage none");
     assert!(lines[7].contains("failed"), "{}", lines[7]);
     assert!(lines[7].contains("docs/CODER.md"), "{}", lines[7]);
     assert!(lines[7].contains("instructions-dir"), "{}", lines[7]);

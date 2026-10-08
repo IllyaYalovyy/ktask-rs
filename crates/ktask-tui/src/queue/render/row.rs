@@ -44,10 +44,13 @@ impl Columns {
 /// `columns`' width so every row lines up under the one before it, and the title cut to fit
 /// `width` with a trailing `…` when it does not. `attempt` — the same line `status` shows for
 /// it, from the same use case — decides the status word when it says the task is shown
-/// `interrupted` rather than `task.status`'s own `running`.
+/// `interrupted` rather than `task.status`'s own `running`; `attempt` and `history` together
+/// give the task's total provider usage, shown last, from the same core function `status`
+/// shows it from — absent when the task has never been attempted.
 pub(super) fn task_line(
     task: &Task,
     attempt: Option<&AttemptLine>,
+    history: &[AttemptLine],
     selected: bool,
     columns: &Columns,
     width: usize,
@@ -65,18 +68,28 @@ pub(super) fn task_line(
         kw = columns.kind,
     );
     let selection = task_selection(task);
+    let usage = task_usage_suffix(attempt, history);
     let budget = width.saturating_sub(prefix.chars().count());
+    let trailing = selection.chars().count() + usage.chars().count();
     Line::styled(
         format!(
-            "{prefix}{}{}",
-            elide(
-                &task.title,
-                budget.saturating_sub(selection.chars().count())
-            ),
-            selection
+            "{prefix}{}{selection}{usage}",
+            elide(&task.title, budget.saturating_sub(trailing))
         ),
         style,
     )
+}
+
+/// `attempt`'s and `history`'s combined provider usage, as the trailing field a task's own row
+/// carries it with — nothing at all for a task that was never attempted, which has no usage to
+/// show.
+fn task_usage_suffix(attempt: Option<&AttemptLine>, history: &[AttemptLine]) -> String {
+    attempt.map_or_else(String::new, |attempt| {
+        format!(
+            " · {}",
+            presentation::usage_text(ktask_core::total_usage(attempt, history))
+        )
+    })
 }
 
 /// The row marker and emphasis for a task's status and selection.

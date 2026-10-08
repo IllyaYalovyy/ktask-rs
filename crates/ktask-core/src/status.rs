@@ -11,7 +11,7 @@ mod lines;
 mod outcome;
 
 pub use detail::{TaskDetail, task_detail};
-pub use facts::{AttemptLine, DoneMark, OutputActivity, StatusEntry, StepLine, Wait};
+pub use facts::{AttemptLine, DoneMark, OutputActivity, StatusEntry, StepLine, Wait, total_usage};
 pub use outcome::AttemptOutcome;
 
 /// Reads every task with recorded status history, in queue order.

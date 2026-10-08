@@ -99,7 +99,7 @@ fn a_skipped_task_is_hidden_counted_and_shown_with_its_reason_once_toggled_on() 
         .find(|line| line.contains("skipped  agent  a"))
         .unwrap_or_else(|| panic!("no skipped row in {lines:?}"));
     assert!(
-        task_row.ends_with("1  #1  skipped  agent  a"),
+        task_row.ends_with("1  #1  skipped  agent  a · usage none"),
         "{task_row:?}"
     );
     assert!(

@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use super::navigate::{
-    COLS, ESC, Fixture, ROWS, marked, quit, wait_selected, wait_selected_screen,
+    COLS, ESC, Fixture, ROWS, marked, quit, row_is_titled, wait_selected, wait_selected_screen,
 };
 use super::pty::{Terminal, lines_inside_frame};
 use super::support::Result;
@@ -42,7 +42,7 @@ fn open_on(fixture: &Fixture, title: &str) -> Result<Terminal> {
     terminal.wait_for(&format!("the queue with {title} selected"), |screen| {
         let contents = screen.contents();
         contents.ends_with('┘')
-            && matches!(marked(&contents).as_slice(), [row] if row.ends_with(title))
+            && matches!(marked(&contents).as_slice(), [row] if row_is_titled(row, title))
     })?;
     Ok(terminal)
 }

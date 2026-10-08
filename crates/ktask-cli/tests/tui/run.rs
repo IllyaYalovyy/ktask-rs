@@ -228,11 +228,17 @@ fn selected_row(screen: &str) -> String {
 /// steps have pushed it to — found by its title, the last column of its row and unique among
 /// the fixtures below.
 fn row_titled(screen: &str, title: &str) -> String {
-    let suffix = format!("  {title}");
     lines_inside_frame(screen)
         .into_iter()
-        .find(|line| line.ends_with(&suffix))
+        .find(|line| row_is_titled(line, title))
         .unwrap_or_default()
+}
+
+/// Whether `row`'s title column is `title`: at the row's very end for a task never attempted,
+/// or followed by its own usage suffix (`" · ..."`) for one that has.
+fn row_is_titled(row: &str, title: &str) -> bool {
+    let suffix = format!("  {title}");
+    row.ends_with(&suffix) || row.contains(&format!("{suffix} ·"))
 }
 
 #[test]
@@ -253,7 +259,7 @@ fn r_starts_the_run_and_the_screen_shows_its_progress_as_it_would_for_a_run_star
                 .is_some_and(|line| line.contains("implementation"))
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[5], ">1  #1  running  agent  a");
+    assert_eq!(lines[5], ">1  #1  running  agent  a · usage none");
     assert!(
         lines[6].contains("implementation · echo") && lines[6].contains("running"),
         "{}",
@@ -291,31 +297,31 @@ fn r_on_a_queue_with_nothing_pending_shows_the_refusal_beside_the_task_list() ->
     // The task list is still there, under the refusal, with the selection on the first task,
     // where it was — not replaced by the refusal the way a run's own report would.
     let selected = selected_row(&screen);
-    assert!(selected.ends_with("  a"), "{screen}");
+    assert!(row_is_titled(&selected, "a"), "{screen}");
     assert!(row_titled(&screen, "b").starts_with(' '), "{screen}");
 
     // `j`, `k`, `g` and `G` move the selection while the refusal stays shown.
     terminal.send("j")?;
     let screen = terminal.wait_for("the selection moved to the second task", |screen| {
-        selected_row(&screen.contents()).ends_with("  b")
+        row_is_titled(&selected_row(&screen.contents()), "b")
     })?;
     assert_eq!(header_line(&screen), "nothing is pending");
 
     terminal.send("G")?;
     let screen = terminal.wait_for("G kept the selection on the last task", |screen| {
-        selected_row(&screen.contents()).ends_with("  b")
+        row_is_titled(&selected_row(&screen.contents()), "b")
     })?;
     assert_eq!(header_line(&screen), "nothing is pending");
 
     terminal.send("g")?;
     let screen = terminal.wait_for("g moved the selection to the first task", |screen| {
-        selected_row(&screen.contents()).ends_with("  a")
+        row_is_titled(&selected_row(&screen.contents()), "a")
     })?;
     assert_eq!(header_line(&screen), "nothing is pending");
 
     terminal.send("k")?;
     let screen = terminal.wait_for("k held the selection on the first task", |screen| {
-        selected_row(&screen.contents()).ends_with("  a")
+        row_is_titled(&selected_row(&screen.contents()), "a")
     })?;
     assert_eq!(header_line(&screen), "nothing is pending");
 
@@ -358,12 +364,12 @@ fn r_past_an_earlier_task_that_did_not_finish_shows_the_refusal_beside_the_task_
         header_line_below_a_wrapped_band(&screen),
         "task 1: failed: it broke; run did not start"
     );
-    assert!(selected_row(&screen).ends_with("  a"), "{screen}");
+    assert!(row_is_titled(&selected_row(&screen), "a"), "{screen}");
     assert!(row_titled(&screen, "b").starts_with(' '), "{screen}");
 
     terminal.send("j")?;
     let screen = terminal.wait_for("the selection moved to the second task", |screen| {
-        selected_row(&screen.contents()).ends_with("  b")
+        row_is_titled(&selected_row(&screen.contents()), "b")
     })?;
     assert_eq!(
         header_line_below_a_wrapped_band(&screen),
@@ -417,7 +423,7 @@ fn a_run_that_attempts_several_tasks_shows_one_result_per_line_scrollable_when_m
     assert_eq!(result_line(&screen, 2), "task 3: done");
     assert!(!screen.contains("task 4: done"), "{screen}");
     assert!(list_still_shown(&screen), "{screen}");
-    assert!(selected_row(&screen).ends_with("  a"), "{screen}");
+    assert!(row_is_titled(&selected_row(&screen), "a"), "{screen}");
 
     terminal.send("G")?;
 
@@ -465,14 +471,14 @@ fn r_while_a_run_started_elsewhere_holds_the_queue_shows_the_refusal_beside_the_
     // The task list is still there, both tasks on it, under the refusal, with the selection
     // on the first task, where it was.
     let selected = selected_row(&screen);
-    assert!(selected.ends_with("  a"), "{screen}");
+    assert!(row_is_titled(&selected, "a"), "{screen}");
     assert!(selected.contains("running"), "{screen}");
     assert!(row_titled(&screen, "b").starts_with(' '), "{screen}");
 
     // `j` moves the selection while the refusal stays shown.
     terminal.send("j")?;
     let screen = terminal.wait_for("the selection moved to the second task", |screen| {
-        selected_row(&screen.contents()).ends_with("  b")
+        row_is_titled(&selected_row(&screen.contents()), "b")
     })?;
     assert_eq!(header_line(&screen), expected);
 
@@ -511,7 +517,7 @@ fn quitting_the_screen_does_not_stop_the_run_it_started_and_opening_it_again_sho
                 .is_some_and(|line| line.contains("implementation"))
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[5], ">1  #1  running  agent  a");
+    assert_eq!(lines[5], ">1  #1  running  agent  a · usage none");
     assert!(!screen.contains("interrupted"), "{screen}");
 
     std::fs::write(&go, "")?;
