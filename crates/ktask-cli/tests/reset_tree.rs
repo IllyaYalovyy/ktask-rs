@@ -156,7 +156,7 @@ fn with_reset_tree_the_failed_attempts_changes_are_gone_before_the_next_attempt_
         fixture.status_lines()?,
         [
             "#1\tdone\ta\tusage none",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
             "\tattempt 1: resolve\techo\t0s\tretry\tthe working tree was reset to the commit \
              this attempt started from\tusage none",
             "\tattempt 2: implementation\techo\t0s\tdone\tusage none",

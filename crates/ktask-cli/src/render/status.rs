@@ -30,9 +30,9 @@ struct StepJson<'a> {
     session: Option<&'a str>,
     time_spent_seconds: u64,
     outcome: &'static str,
-    reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     routed: Option<String>,
+    reason: Option<String>,
     limit_wait: Option<LimitWaitJson>,
     limit_warning: Option<LimitWarningJson<'a>>,
     input_tokens: Option<u64>,
@@ -61,9 +61,9 @@ struct AttemptJson<'a> {
     session: Option<&'a str>,
     time_spent_seconds: u64,
     outcome: &'static str,
-    reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     routed: Option<String>,
+    reason: Option<String>,
     limit_wait: Option<LimitWaitJson>,
     limit_warning: Option<LimitWarningJson<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,8 +130,8 @@ fn step_json(line: &ktask_core::StepLine) -> Result<StepJson<'_>, String> {
         session: line.session.as_deref(),
         time_spent_seconds: line.time_spent.as_secs(),
         outcome: presentation::outcome(line.outcome),
-        reason: presentation::reason_for(line.reason.as_deref(), line.waiting),
         routed: line.routed.map(presentation::routed_label),
+        reason: presentation::reason_for(line.reason.as_deref(), line.waiting),
         limit_wait: line.limit_wait.as_ref().map(limit_wait_json).transpose()?,
         limit_warning: line.limit_warning.as_ref().map(limit_warning_json),
         input_tokens: line.usage.input_tokens,
@@ -170,8 +170,8 @@ fn attempt_json(line: &ktask_core::AttemptLine) -> Result<AttemptJson<'_>, Strin
         session: line.session.as_deref(),
         time_spent_seconds: line.time_spent.as_secs(),
         outcome: presentation::outcome(line.outcome),
-        reason: presentation::reason_for(line.reason.as_deref(), line.waiting),
         routed: line.routed.map(presentation::routed_label),
+        reason: presentation::reason_for(line.reason.as_deref(), line.waiting),
         limit_wait: line.limit_wait.as_ref().map(limit_wait_json).transpose()?,
         limit_warning: line.limit_warning.as_ref().map(limit_warning_json),
         output_activity: line.output_activity.as_ref().map(output_activity_json),
@@ -322,33 +322,33 @@ fn write_step_lines(
         let usage = presentation::step_usage_text(step)
             .map(|usage| format!("\t{usage}"))
             .unwrap_or_default();
-        let routed = routed_suffix(step);
+        let routed = routed_field(step);
+        let more_time = step.more_time.map_or_else(String::new, |more_time| {
+            format!("\t{}", presentation::more_time_text(more_time))
+        });
         let activity = activity_suffix(index + 1 == steps.len(), activity);
         match presentation::reason(step) {
             Some(reason) => writeln!(
                 out,
-                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}\t{reason}{routed}{session}{limit_wait}{limit_warning}{usage}{activity}",
+                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{routed}\t{reason}{more_time}{session}{limit_wait}{limit_warning}{usage}{activity}",
                 presentation::outcome(step.outcome)
             ),
             None => writeln!(
                 out,
-                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{routed}{session}{limit_wait}{limit_warning}{usage}{activity}",
+                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{routed}{more_time}{session}{limit_wait}{limit_warning}{usage}{activity}",
                 presentation::outcome(step.outcome)
             ),
         }
     })
 }
 
-/// What the router decided about `step`, and the extra time it was given, as trailing tab
-/// fields, when it has either.
-fn routed_suffix(step: &ktask_core::StepLine) -> String {
-    let routed = step.routed.map_or_else(String::new, |routed| {
+/// What the router decided about `step`, as the tab field a status line carries right after
+/// its outcome and before its reason — the first thing to know about a failure — when it has
+/// one.
+fn routed_field(step: &ktask_core::StepLine) -> String {
+    step.routed.map_or_else(String::new, |routed| {
         format!("\t{}", presentation::routed_text(routed))
-    });
-    let more_time = step.more_time.map_or_else(String::new, |more_time| {
-        format!("\t{}", presentation::more_time_text(more_time))
-    });
-    format!("{routed}{more_time}")
+    })
 }
 
 /// The final step alone carries the live provider-output activity field.

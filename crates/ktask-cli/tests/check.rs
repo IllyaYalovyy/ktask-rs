@@ -129,7 +129,8 @@ fn a_failing_check_ends_the_attempt_and_the_run_goes_no_further() -> Result<()> 
     assert_eq!(fields[1], "attempt 1: check", "{check}");
     assert_eq!(fields[2], "-", "{check}");
     assert_eq!(fields[4], "failed", "{check}");
-    assert!(fields[5].starts_with("exit 2"), "{check}");
+    assert_eq!(fields[5], "routed: decide — check failed", "{check}");
+    assert!(fields[6].starts_with("exit 2"), "{check}");
     let steps: Vec<&str> = lines.iter().map(|line| step_of(line)).collect();
     assert_eq!(steps, ["implementation", "check", "resolve"], "{lines:?}");
     Ok(())

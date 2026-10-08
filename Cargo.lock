@@ -832,7 +832,7 @@ dependencies = [
 
 [[package]]
 name = "ktask-adapters"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ktask-core",
  "nix 0.28.0",
@@ -848,7 +848,7 @@ dependencies = [
 
 [[package]]
 name = "ktask-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "jiff",
@@ -867,7 +867,7 @@ dependencies = [
 
 [[package]]
 name = "ktask-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -877,7 +877,7 @@ dependencies = [
 
 [[package]]
 name = "ktask-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "jiff",
  "ktask-core",

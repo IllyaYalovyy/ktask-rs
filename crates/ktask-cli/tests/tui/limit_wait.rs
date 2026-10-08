@@ -13,7 +13,7 @@ use super::repo::{git_repository, scratch};
 use super::support::{Result, Sandbox};
 
 const ROWS: u16 = 24;
-const COLS: u16 = 110;
+const COLS: u16 = 150;
 
 /// A sandbox with a git repository called `my-app`, with a configured git identity so the
 /// task's own commit step, once it succeeds, is not refused for want of one.

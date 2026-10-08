@@ -140,11 +140,21 @@ fn the_queue_screen_shows_the_codex_transport_backoff() -> Result<()> {
     run.arg("run").stdout(Stdio::piped()).stderr(Stdio::piped());
     sandbox.isolate(&mut run, &repository);
     let mut run = run.spawn()?;
-    let mut terminal = Terminal::launch(&sandbox, &repository, &["tui"], 24, 110)?;
+    let mut terminal = Terminal::launch(&sandbox, &repository, &["tui"], 24, 160)?;
     let screen = terminal.wait_for("Codex transport wait", |screen| {
         screen.contents().contains("Codex transport disconnected")
     })?;
     assert!(screen.contains("retry 1 of 3 in"), "{screen}");
+    let routed_at = screen
+        .find("routed: retry 1 of 3")
+        .expect("the routed verdict");
+    let reason_at = screen
+        .find("Codex transport disconnected")
+        .expect("the reason");
+    assert!(
+        routed_at < reason_at,
+        "the routed verdict must come before the reason: {screen}"
+    );
     assert!(!screen.contains("resumes in"), "{screen}");
     run.kill()?;
     let _ = run.wait()?;

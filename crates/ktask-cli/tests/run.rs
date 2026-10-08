@@ -1123,7 +1123,7 @@ fn a_reviewer_that_requests_changes_ends_the_task_failed_with_the_findings_as_th
         [
             "#1\tfailed\ta\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
-            "\tattempt 1: review\techo\t0s\tchanges-requested\tfix the thing\trouted: decide — rejected\tusage none",
+            "\tattempt 1: review\techo\t0s\tchanges-requested\trouted: decide — rejected\tfix the thing\tusage none",
         ]
     );
     Ok(())
@@ -1281,7 +1281,7 @@ fn a_tester_that_rejects_ends_the_task_failed_with_what_failed_as_the_reason_and
             "#1\tfailed\ta\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 1: review\techo\t0s\tapproved\tusage none",
-            "\tattempt 1: testing\techo\t0s\trejected\tthe login button does nothing\trouted: decide — rejected\tusage none",
+            "\tattempt 1: testing\techo\t0s\trejected\trouted: decide — rejected\tthe login button does nothing\tusage none",
         ]
     );
     let json = fixture.run(&["status", "--json"])?;
@@ -1591,7 +1591,7 @@ fn a_provider_reported_model_mismatch_fails_the_attempt_with_both_model_names() 
     let status = fixture.run(&["status"])?;
     assert!(
         status.stdout.contains(
-            "failed\tasked for claude-sonnet-5, the provider used claude-haiku-4-5-20251001"
+            "failed\trouted: decide — unmatched\tasked for claude-sonnet-5, the provider used claude-haiku-4-5-20251001"
         ),
         "{}",
         status.stdout

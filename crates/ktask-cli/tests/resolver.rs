@@ -103,7 +103,7 @@ fn a_retry_decision_starts_a_second_attempt_and_the_resolution_shows_between_the
         fixture.status_lines()?,
         [
             "#1\tdone\ta\tusage none",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
             "\tattempt 1: resolve\techo\t0s\tretry\tusage none",
             "\tattempt 2: implementation\techo\t0s\tdone\tusage none",
             "\tattempt 2: review\techo\t0s\tapproved\tusage none",
@@ -140,7 +140,7 @@ fn a_stop_decision_ends_the_task_failed_with_the_resolvers_own_reason_not_the_at
         fixture.status_lines()?,
         [
             "#1\tfailed\ta\tusage none",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
             "\tattempt 1: resolve\techo\t0s\tstop\tnot worth retrying\tusage none",
         ]
     );
@@ -168,7 +168,7 @@ fn a_skip_decision_ends_the_task_skipped_with_the_resolvers_own_reason_and_the_r
         fixture.status_lines()?,
         [
             "#1\tskipped\ta\tusage none",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
             "\tattempt 1: resolve\techo\t0s\tskip\tno longer relevant\tusage none",
             "#2\tdone\tb\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
@@ -210,7 +210,7 @@ fn skip_without_a_reason_is_refused_and_the_task_stays_running_its_attempt() -> 
         fixture.status_lines()?,
         [
             "#1\tfailed\ta\tusage none",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
             "\tattempt 1: resolve\techo\t0s\tstop\tskip was refused\tusage none",
         ]
     );
@@ -287,7 +287,7 @@ fn a_supersede_decision_replaces_the_task_with_the_new_ones_and_the_run_continue
         fixture.status_lines()?,
         [
             "#1\tsuperseded\ttoo large\tusage none",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
             "\tattempt 1: resolve\techo\t0s\tsupersede\tsuperseded by 3 tasks: 2, 3, 4\tusage none",
             "#2\tdone\tpart one\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
@@ -444,7 +444,7 @@ fn an_invalid_tasks_file_is_refused_with_the_same_messages_import_gives_and_chan
         fixture.status_lines()?,
         [
             "#1\tfailed\ttoo large\tusage none",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
             "\tattempt 1: resolve\techo\t0s\tstop\tsupersede was refused\tusage none",
         ]
     );
@@ -510,7 +510,7 @@ fn a_resolver_that_reports_nothing_ends_the_task_failed_unknown_with_what_was_ob
         fixture.status_lines()?,
         [
             "#1\tfailed-unknown\ta\tusage none",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
             "\tattempt 1: resolve\techo\t0s\tfailed-unknown\tthe provider exited with code 0 and reported nothing\tusage none",
         ]
     );
@@ -533,7 +533,7 @@ fn with_max_attempts_1_the_resolver_never_runs_and_the_task_ends_failed_at_once(
         fixture.status_lines()?,
         [
             "#1\tfailed\ta\tusage none",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
         ]
     );
     Ok(())
@@ -556,11 +556,11 @@ fn with_max_attempts_3_the_third_failure_ends_the_task_without_a_resolution_line
         fixture.status_lines()?,
         [
             "#1\tfailed\ta\tusage none",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
             "\tattempt 1: resolve\techo\t0s\tretry\tusage none",
-            "\tattempt 2: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tusage none",
+            "\tattempt 2: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
             "\tattempt 2: resolve\techo\t0s\tretry\tusage none",
-            "\tattempt 3: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tusage none",
+            "\tattempt 3: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
         ]
     );
     Ok(())

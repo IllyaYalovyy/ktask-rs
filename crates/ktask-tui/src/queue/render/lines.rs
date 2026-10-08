@@ -59,20 +59,24 @@ fn step_line(
 }
 
 /// The non-live part of one queue step line, including its optional failure reason and limit
-/// wait, before [`step_line`] adds provider-output activity.
+/// wait, before [`step_line`] adds provider-output activity. The router's verdict, when there
+/// is one, sits right after the outcome and before the reason: it is the first thing to know
+/// about a failure, so a long reason elides before it ever crowds the verdict out.
 fn step_text(step: &StepLine, width: usize, label: &str) -> String {
     let prefix = step_prefix(step, label);
+    let routed = step.routed.map(presentation::routed_text);
+    let head = match &routed {
+        Some(routed) => format!("{prefix} · {routed}"),
+        None => prefix.clone(),
+    };
+    let separator = if routed.is_some() { " · " } else { ": " };
     let text = presentation::reason(step).map_or_else(
-        || prefix.clone(),
+        || head.clone(),
         |reason| {
-            let budget = width.saturating_sub(prefix.chars().count() + 2);
-            format!("{prefix}: {}", elide(&reason, budget))
+            let budget = width.saturating_sub(head.chars().count() + separator.chars().count());
+            format!("{head}{separator}{}", elide(&reason, budget))
         },
     );
-    let text = match step.routed {
-        Some(routed) => format!("{text} · {}", presentation::routed_text(routed)),
-        None => text,
-    };
     let text = match step.more_time {
         Some(more_time) => format!("{text} · {}", presentation::more_time_text(more_time)),
         None => text,

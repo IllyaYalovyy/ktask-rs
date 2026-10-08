@@ -105,7 +105,7 @@ fn retry_with_a_model_hands_the_next_attempt_the_model_and_the_provider_runs_wit
         fixture.status_lines()?,
         [
             "#1\tdone\ta\tusage none",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
             "\tattempt 1: resolve\techo\t0s\tretry\tusage none",
             "\tattempt 2: implementation\tother\techo\t0s\tdone\tusage none",
             "\tattempt 2: review\techo\t0s\tapproved\tusage none",

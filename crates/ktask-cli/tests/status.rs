@@ -292,7 +292,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
             "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
             "#2\tfailed\tb\tusage none",
-            "\tattempt 1: implementation\techo\t0s\tfailed\tit broke\trouted: decide — agent failed\tusage none",
+            "\tattempt 1: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
         ]
     );
 
@@ -308,7 +308,7 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\tattempt 1: testing\techo\t0s\taccepted\tusage none",
             "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
             "#2\tfailed\tc\tusage none",
-            "\tattempt 1: implementation\techo\t0s\ttoo-large\tsplit me\trouted: decide — agent failed\tusage none",
+            "\tattempt 1: implementation\techo\t0s\ttoo-large\trouted: decide — agent failed\tsplit me\tusage none",
         ]
     );
 

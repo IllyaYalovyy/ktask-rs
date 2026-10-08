@@ -542,7 +542,8 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     failed.run_the_queue()?;
     let terminal = failed.open()?;
     let screen = terminal.wait_for("b's attempt line", |screen| {
-        screen.contents().contains("failed: it broke") && screen.contents().ends_with('┘')
+        let s = screen.contents();
+        s.contains("failed · routed: decide — agent failed · it broke") && s.ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
     // `failed` (6 characters) is wider than `done` (4), so `done`'s status column pads out
@@ -555,7 +556,7 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     assert!(lines[8].contains("commit"));
     assert_eq!(lines[9], " 2  #2  failed  agent  b");
     assert!(
-        lines[10].ends_with("failed: it broke · routed: decide — agent failed · usage none"),
+        lines[10].ends_with("failed · routed: decide — agent failed · it broke · usage none"),
         "{}",
         lines[10]
     );
@@ -568,13 +569,14 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     too_large.run_the_queue()?;
     let terminal = too_large.open()?;
     let screen = terminal.wait_for("c's attempt line", |screen| {
-        screen.contents().contains("too-large: split me") && screen.contents().ends_with('┘')
+        let s = screen.contents();
+        s.contains("too-large · routed: decide — agent failed · split me") && s.ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(lines[4], ">1  #1  done    agent  x");
     assert_eq!(lines[9], " 2  #2  failed  agent  c");
     assert!(
-        lines[10].ends_with("too-large: split me · routed: decide — agent failed · usage none"),
+        lines[10].ends_with("too-large · routed: decide — agent failed · split me · usage none"),
         "{}",
         lines[10]
     );
@@ -611,15 +613,23 @@ fn each_ending_shows_its_own_outcome_and_reason_and_the_summary_counts_it() -> R
     unknown.run_the_queue()?;
     let terminal = unknown.open()?;
     let screen = terminal.wait_for("e's attempt line", |screen| {
-        screen.contents().contains("failed-unknown:") && screen.contents().ends_with('┘')
+        let s = screen.contents();
+        s.contains("failed-unknown · routed: decide — unmatched") && s.ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
     // `failed-unknown` (14 characters) is wider than `done` (4), so `done`'s status column
     // pads out to match it.
     assert_eq!(lines[4], ">1  #1  done            agent  x");
     assert_eq!(lines[9], " 2  #2  failed-unknown  agent  e");
-    assert!(lines[10].contains("failed-unknown:"), "{}", lines[10]);
-    assert!(lines[10].contains("reported nothing"), "{}", lines[10]);
+    // The routed verdict sits right after the outcome, before the reason, so it is never cut
+    // off — even though the line is long enough that the reason, further to the right, is.
+    let at = |needle| lines[10].find(needle).unwrap_or(usize::MAX);
+    assert!(
+        at("failed-unknown") < at("routed: decide — unmatched")
+            && at("routed: decide — unmatched") < at("the provider exited with"),
+        "{}",
+        lines[10]
+    );
     assert_eq!(lines[2], summary(1, 0, 0, 1));
     drop(terminal);
 
@@ -650,7 +660,7 @@ fn a_changes_requested_review_shows_its_own_outcome_and_findings() -> Result<()>
     assert!(
         lines[6].contains("review · echo")
             && lines[6].ends_with(
-                "changes-requested: needs docs · routed: decide — rejected · usage none"
+                "changes-requested · routed: decide — rejected · needs docs · usage none"
             ),
         "{}",
         lines[6]
@@ -690,7 +700,7 @@ fn a_rejecting_tester_shows_its_own_outcome_and_what_failed() -> Result<()> {
     assert!(
         lines[7].contains("testing · echo")
             && lines[7]
-                .ends_with("rejected: login is broken · routed: decide — rejected · usage none"),
+                .ends_with("rejected · routed: decide — rejected · login is broken · usage none"),
         "{}",
         lines[7]
     );
