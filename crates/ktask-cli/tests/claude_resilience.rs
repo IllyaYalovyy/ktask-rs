@@ -359,6 +359,78 @@ fn a_resolver_models_alias_does_not_nullify_its_own_retry_verdict() -> Result<()
     Ok(())
 }
 
+/// B-54: a resolver that reports `retry` while its own resolve step genuinely ran with a
+/// different model than `resolver-model` asked for — no alias involved — must not let that
+/// mismatch stand as a retry verdict it never earned. The check on the resolve step's own
+/// model runs before its verdict is accepted: when it fails, the step line reads `failed`
+/// with why, never `retry`, and the task ends `failed` with that same reason, not the
+/// implementation's.
+#[test]
+fn a_genuine_model_mismatch_on_the_resolve_step_fails_it_instead_of_keeping_its_retry() -> Result<()>
+{
+    let fixture = Fixture::new()?;
+    fixture.add()?;
+    for (name, value) in [
+        ("resolver-provider", "claude"),
+        ("resolver-model", "claude-sonnet-5"),
+    ] {
+        let outcome = fixture.run(&["settings", "set", name, value])?;
+        assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    }
+    let script = format!(
+        "prompt=$(cat)\nprintf '%s' '{success}'\nif printf '%s\\n' \"$prompt\" | grep -q '^# Resolve:'; then\n  binary=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    \\(.*\\) report --token .* retry .*/\\1/p' | head -n 1)\n  token=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    .* report --token \\([^ ]*\\) retry .*/\\1/p' | head -n 1)\n  \"$binary\" report --token \"$token\" retry\nelse\n  report=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* failed --reason /p' | head -n 1)\n  eval \"$report\"\nfi",
+        success = include_str!("../../../test-fixtures/claude/success.jsonl"),
+    );
+    let _claude = fixture.install_claude(&script)?;
+
+    let run = fixture.run(&["run"])?;
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    let status = fixture.run(&["status"])?;
+    assert!(
+        status
+            .stdout
+            .lines()
+            .nth(1)
+            .is_some_and(|line| line.starts_with("#1\tfailed\t")),
+        "{}",
+        status.stdout
+    );
+    // The resolve step's own line says `failed`, with the mismatch's own reason — never
+    // `retry`, which would claim a verdict that never stood.
+    let resolve_line = status
+        .stdout
+        .lines()
+        .find(|line| line.contains(": resolve"))
+        .expect("a resolve step line");
+    assert!(
+        resolve_line.contains(
+            "\tfailed\tasked for claude-sonnet-5, the provider used claude-haiku-4-5-20251001"
+        ),
+        "{resolve_line}"
+    );
+    assert!(!resolve_line.contains("\tretry"), "{resolve_line}");
+    assert!(!status.stdout.contains("attempt 2"), "{}", status.stdout);
+
+    // `status --json` agrees with the text line: the resolve step's own outcome and reason
+    // carry the mismatch that actually failed it, never the `retry` the provider reported.
+    let json = fixture.run(&["status", "--json"])?;
+    assert_eq!(json.code, Some(0), "{}", json.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&json.stdout)?;
+    let steps = &parsed["tasks"][0]["attempt"]["steps"];
+    let resolve_step = steps
+        .as_array()
+        .expect("steps is an array")
+        .iter()
+        .find(|step| step["step"] == "resolve")
+        .expect("a resolve step");
+    assert_eq!(resolve_step["outcome"], "failed");
+    assert_eq!(
+        resolve_step["reason"],
+        "asked for claude-sonnet-5, the provider used claude-haiku-4-5-20251001"
+    );
+    Ok(())
+}
+
 #[test]
 fn a_recorded_claude_session_is_passed_to_resume_after_retry_same_session() -> Result<()> {
     let fixture = Fixture::new()?;

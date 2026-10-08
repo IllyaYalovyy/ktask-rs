@@ -19,11 +19,12 @@ fn ended_outcome(
     answer: Option<&str>,
 ) -> (AttemptOutcome, Option<String>) {
     match reported {
-        // A provider can claim success while the runner rejects its invocation on an
-        // independently recorded fact, such as using a different model than the one asked
-        // for. The journal retains that provider report, but status must show the attempt's
-        // real failed result and why.
-        Some((Outcome::Done | Outcome::Approved | Outcome::Accepted, _))
+        // A provider can claim success — or, for the resolve step, a retry verdict, which
+        // the runner treats the same way internally — while the runner rejects its
+        // invocation on an independently recorded fact, such as using a different model
+        // than the one asked for. The journal retains that provider report, but status must
+        // show the attempt's real failed result and why, never a verdict that did not stand.
+        Some((Outcome::Done | Outcome::Approved | Outcome::Accepted | Outcome::Retry, _))
             if end.status != TaskStatus::Done =>
         {
             (AttemptOutcome::Failed, end.reason.clone())
