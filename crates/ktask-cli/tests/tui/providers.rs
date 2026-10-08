@@ -172,6 +172,9 @@ fn provider_screen_checks_codex_for_missing_binary_and_recorded_success() -> Res
 
 #[test]
 fn provider_screen_replays_a_claude_failure_with_its_result_error_and_remedy() -> Result<()> {
+    // Taller than the shared `ROWS`: the claude definition's own `aliases` field is long
+    // enough to wrap, and the readiness block printed below it must still fit on screen.
+    const ROWS: u16 = 30;
     let fixture = Fixture::empty()?;
     let claude = recorded_claude(
         include_str!("../../../../test-fixtures/claude/authentication-failure.jsonl"),

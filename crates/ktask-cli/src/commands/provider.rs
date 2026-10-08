@@ -192,7 +192,8 @@ fn show(
             "prompt": definition.prompt, "model": definition.model, "resume": definition.resume,
             "denied-tools": definition.denied_tools, "parser": definition.parser.to_string(),
             "session-id": definition.session_id, "usage": definition.usage,
-            "limit-message": definition.limit_message, "overridden": provider.overridden,
+            "limit-message": definition.limit_message, "aliases": definition.aliases,
+            "overridden": provider.overridden,
         });
         writeln!(stdout, "{value}").map_err(|error| error.to_string())?;
     } else {

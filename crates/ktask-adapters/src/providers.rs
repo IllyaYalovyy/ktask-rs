@@ -30,27 +30,43 @@ fn claude() -> ProviderDefinition {
         model: vec!["--model".to_owned(), "{model}".to_owned()],
         resume: vec!["--resume".to_owned(), "{session}".to_owned()],
         resume_command: Vec::new(),
-        denied_tools: vec![
-            // Cannot work unattended: creates scheduled work beyond this invocation.
-            "CronCreate".to_owned(),
-            // Cannot work unattended: controls scheduled work outside this invocation.
-            "CronDelete".to_owned(),
-            // Cannot work unattended: reads schedules that change outside this invocation.
-            "CronList".to_owned(),
-            // Cannot work unattended: watches work that outlives this invocation.
-            "Monitor".to_owned(),
-            // Cannot work unattended: schedules a wake-up after this invocation ends.
-            "ScheduleWakeup".to_owned(),
-            // Cannot work unattended: reads output from work outside this invocation.
-            "TaskOutput".to_owned(),
-            // Cannot work unattended: controls work outside this invocation.
-            "TaskStop".to_owned(),
-        ],
+        denied_tools: claude_denied_tools(),
         parser: ProviderParser::ClaudeStreamJson,
         session_id: Some("result.session_id".to_owned()),
         usage: Some("usage".to_owned()),
         limit_message: Some(r"(?i)Claude AI usage limit reached\|(?<reset>[0-9]+)".to_owned()),
+        aliases: claude_aliases(),
     }
+}
+
+/// Tools Claude Code must not reach for an unattended invocation: every one controls or reads
+/// work that outlives this one call.
+fn claude_denied_tools() -> Vec<String> {
+    vec![
+        // Cannot work unattended: creates scheduled work beyond this invocation.
+        "CronCreate".to_owned(),
+        // Cannot work unattended: controls scheduled work outside this invocation.
+        "CronDelete".to_owned(),
+        // Cannot work unattended: reads schedules that change outside this invocation.
+        "CronList".to_owned(),
+        // Cannot work unattended: watches work that outlives this invocation.
+        "Monitor".to_owned(),
+        // Cannot work unattended: schedules a wake-up after this invocation ends.
+        "ScheduleWakeup".to_owned(),
+        // Cannot work unattended: reads output from work outside this invocation.
+        "TaskOutput".to_owned(),
+        // Cannot work unattended: controls work outside this invocation.
+        "TaskStop".to_owned(),
+    ]
+}
+
+/// Short names Claude Code itself accepts in place of one of its own dated model releases.
+fn claude_aliases() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("sonnet".to_owned(), "claude-sonnet-*".to_owned()),
+        ("opus".to_owned(), "claude-opus-*".to_owned()),
+        ("haiku".to_owned(), "claude-haiku-*".to_owned()),
+    ])
 }
 
 /// The shipped Codex command-line definition.
@@ -79,6 +95,7 @@ fn codex() -> ProviderDefinition {
         session_id: Some("thread.started.thread_id".to_owned()),
         usage: Some("turn.completed.usage".to_owned()),
         limit_message: None,
+        aliases: BTreeMap::new(),
     }
 }
 
@@ -101,5 +118,6 @@ fn echo() -> ProviderDefinition {
         session_id: Some("KTASK_SESSION: ".to_owned()),
         usage: None,
         limit_message: Some("KTASK_LIMIT: ".to_owned()),
+        aliases: BTreeMap::new(),
     }
 }

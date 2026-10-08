@@ -2,6 +2,7 @@
 //! that runs it. Nothing here names or knows any particular provider — every one is a
 //! [`Provider`] value defined outside `core`.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
@@ -125,6 +126,9 @@ pub struct Provider {
     pub read_usage: Arc<UsageReader>,
     /// Normalizes a provider's captured output before the rest of the runner reads it.
     pub parse_output: Arc<OutputParser>,
+    /// Short names this provider accepts in place of a model's full reported name — see
+    /// [`crate::model_matches`], which the runner checks a step's reported model with.
+    pub model_aliases: BTreeMap<String, String>,
 }
 
 /// The pure pieces a provider supplies. `Arc` makes a provider a value whose implementation
@@ -227,6 +231,7 @@ mod tests {
             detect_limit: Arc::new(|_| None),
             read_usage: Arc::new(|_| ProviderUsage::default()),
             parse_output: Arc::new(|output| output),
+            model_aliases: BTreeMap::new(),
         }
     }
 

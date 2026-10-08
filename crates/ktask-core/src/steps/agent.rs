@@ -214,7 +214,7 @@ fn final_agent_outcome(
     state.limit_warning.clone_from(&facts.limit_warning);
     let mut outcome = agent_outcome(deps.journal, state.task, state.token, step, result)?;
     if let (Some(asked), Some(used)) = (model, facts.model.as_deref())
-        && asked != used
+        && !crate::model_matches(asked, used, &deps.provider_for(step).model_aliases)
     {
         outcome.status = TaskStatus::Failed;
         outcome.reason = Some(format!("asked for {asked}, the provider used {used}"));

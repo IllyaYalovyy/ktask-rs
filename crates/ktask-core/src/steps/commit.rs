@@ -216,6 +216,7 @@ mod tests {
             detect_limit: std::sync::Arc::new(|_| None),
             parse_output: std::sync::Arc::new(|output| output),
             read_usage: std::sync::Arc::new(|_| crate::ProviderUsage::default()),
+            model_aliases: std::collections::BTreeMap::new(),
         };
         let session_log = crate::fakes::FakeSessionLog::default();
         let sleep = crate::fakes::FakeSleep::default();

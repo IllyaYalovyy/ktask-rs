@@ -37,6 +37,7 @@ pub fn provider() -> Provider {
         detect_limit: Arc::new(detect_limit),
         read_usage: Arc::new(|_| ktask_core::ProviderUsage::default()),
         parse_output: Arc::new(|output| output),
+        model_aliases: std::collections::BTreeMap::new(),
     }
 }
 

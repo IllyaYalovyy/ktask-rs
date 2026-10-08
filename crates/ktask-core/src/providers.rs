@@ -65,6 +65,11 @@ pub struct ProviderDefinition {
     /// when present, is Unix seconds at which the provider says the limit resets.
     #[serde(rename = "limit-message", default)]
     pub limit_message: Option<String>,
+    /// Short names this provider accepts in place of a model's full reported name — `sonnet`
+    /// for `claude-sonnet-*`, say — each a literal prefix optionally ending `*` to match a
+    /// whole family of dated releases. See [`model_matches`].
+    #[serde(default)]
+    pub aliases: BTreeMap<String, String>,
 }
 
 /// The fields a project may replace on a built-in definition. A new provider must set at
@@ -97,6 +102,9 @@ pub struct ProviderOverride {
     /// Replacement limit-message reader.
     #[serde(rename = "limit-message")]
     pub limit_message: Option<String>,
+    /// Aliases added to, or replacing a built-in's own name for, the built-in's model
+    /// aliases — a project adds one without repeating the ones it keeps.
+    pub aliases: Option<BTreeMap<String, String>>,
 }
 
 /// A provider ready to render, including the project fields that replaced built-in values.
@@ -147,7 +155,39 @@ pub fn provider_fields(provider: &ProviderView) -> Vec<(&'static str, String)> {
             "limit-message",
             definition.limit_message.clone().unwrap_or_default(),
         ),
+        ("aliases", format_aliases(&definition.aliases)),
     ]
+}
+
+/// `aliases` rendered as `name=pattern` pairs, in name order, for display.
+fn format_aliases(aliases: &BTreeMap<String, String>) -> String {
+    aliases
+        .iter()
+        .map(|(name, pattern)| format!("{name}={pattern}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Whether a model named `requested` — a setting, or a resolver's own `retry --model` — names
+/// the model `reported` — what the provider itself said it ran with. True when the two are
+/// equal, or `requested` is an alias in `aliases` whose pattern matches `reported`: a literal
+/// prefix, or, when it ends `*`, any reported name starting with the part before it — so a
+/// short family name like `sonnet` still names a provider's own dated release. A `reported`
+/// name outside every alias's pattern, asked for under that alias, is still a mismatch.
+#[must_use]
+pub fn model_matches(requested: &str, reported: &str, aliases: &BTreeMap<String, String>) -> bool {
+    requested == reported
+        || aliases
+            .get(requested)
+            .is_some_and(|pattern| matches_pattern(pattern, reported))
+}
+
+/// `text` matches `pattern`: equal, or, when `pattern` ends `*`, `text` starts with the part
+/// before it.
+fn matches_pattern(pattern: &str, text: &str) -> bool {
+    pattern
+        .strip_suffix('*')
+        .map_or(pattern == text, |prefix| text.starts_with(prefix))
 }
 
 /// Validates and overlays `overrides` on `builtins`. The error always names the provider
@@ -193,6 +233,7 @@ fn overlay_definitions(
                 session_id: None,
                 usage: None,
                 limit_message: None,
+                aliases: BTreeMap::new(),
             });
         let fields = changed.entry(name.clone()).or_default();
         if !built_in {
@@ -221,7 +262,20 @@ fn provider_view(
     })
 }
 
+/// Overlays `patch`'s argument-list and scalar fields on `definition`, each field named in
+/// `changed` when `patch` set it at all.
 fn apply(
+    definition: &mut ProviderDefinition,
+    patch: &ProviderOverride,
+    changed: &mut BTreeSet<String>,
+) {
+    apply_argument_lists(definition, patch, changed);
+    apply_scalar_fields(definition, patch, changed);
+}
+
+/// Overlays every field a provider's command line is built from — whole-list replacements,
+/// never merged with the built-in's own.
+fn apply_argument_lists(
     definition: &mut ProviderDefinition,
     patch: &ProviderOverride,
     changed: &mut BTreeSet<String>,
@@ -241,6 +295,16 @@ fn apply(
     replace!(resume, "resume");
     replace!(resume_command, "resume-command");
     replace!(denied_tools, "denied-tools");
+}
+
+/// Overlays every field that reads a provider's own output: the parser and each of its
+/// single-value readers replace the built-in's own, while `aliases` — a name-to-pattern map —
+/// adds to it instead.
+fn apply_scalar_fields(
+    definition: &mut ProviderDefinition,
+    patch: &ProviderOverride,
+    changed: &mut BTreeSet<String>,
+) {
     if let Some(value) = patch.parser {
         definition.parser = value;
         changed.insert("parser".to_owned());
@@ -256,6 +320,10 @@ fn apply(
     if let Some(value) = &patch.limit_message {
         definition.limit_message = Some(value.clone());
         changed.insert("limit-message".to_owned());
+    }
+    if let Some(value) = &patch.aliases {
+        definition.aliases.extend(value.clone());
+        changed.insert("aliases".to_owned());
     }
 }
 
@@ -287,6 +355,7 @@ mod tests {
                 session_id: None,
                 usage: None,
                 limit_message: None,
+                aliases: BTreeMap::new(),
             },
         )]);
         let views = provider_views(
@@ -315,5 +384,76 @@ mod tests {
             ),
             Err("providers.broken.command: must not be empty".to_owned())
         );
+    }
+
+    #[test]
+    fn a_project_alias_adds_to_the_built_ins_own_rather_than_replacing_them() {
+        let builtins = BTreeMap::from([(
+            "claude".to_owned(),
+            ProviderDefinition {
+                command: "claude".to_owned(),
+                args: Vec::new(),
+                prompt: Vec::new(),
+                model: Vec::new(),
+                resume: Vec::new(),
+                resume_command: Vec::new(),
+                denied_tools: Vec::new(),
+                parser: ProviderParser::Plain,
+                session_id: None,
+                usage: None,
+                limit_message: None,
+                aliases: BTreeMap::from([("haiku".to_owned(), "claude-haiku-*".to_owned())]),
+            },
+        )]);
+        let project = ProviderOverride {
+            aliases: Some(BTreeMap::from([(
+                "fast".to_owned(),
+                "claude-haiku-*".to_owned(),
+            )])),
+            ..ProviderOverride::default()
+        };
+        let views =
+            provider_views(&builtins, &BTreeMap::from([("claude".to_owned(), project)])).unwrap();
+        let claude = views.iter().find(|view| view.name == "claude").unwrap();
+        assert_eq!(
+            claude.definition.aliases,
+            BTreeMap::from([
+                ("fast".to_owned(), "claude-haiku-*".to_owned()),
+                ("haiku".to_owned(), "claude-haiku-*".to_owned()),
+            ])
+        );
+        assert!(claude.overridden.contains("aliases"));
+    }
+
+    #[test]
+    fn model_matches_is_exact_or_an_aliased_family_prefix() {
+        let aliases = BTreeMap::from([
+            ("sonnet".to_owned(), "claude-sonnet-*".to_owned()),
+            ("opus".to_owned(), "claude-opus-*".to_owned()),
+            ("haiku".to_owned(), "claude-haiku-*".to_owned()),
+        ]);
+        assert!(model_matches(
+            "claude-haiku-4-5-20251001",
+            "claude-haiku-4-5-20251001",
+            &aliases
+        ));
+        assert!(model_matches(
+            "haiku",
+            "claude-haiku-4-5-20251001",
+            &aliases
+        ));
+        assert!(model_matches("sonnet", "claude-sonnet-5", &aliases));
+        assert!(!model_matches(
+            "sonnet",
+            "claude-haiku-4-5-20251001",
+            &aliases
+        ));
+        assert!(!model_matches("haiku", "claude-sonnet-5", &aliases));
+        // An unaliased short name is not silently accepted.
+        assert!(!model_matches(
+            "unknown-alias",
+            "claude-haiku-4-5",
+            &aliases
+        ));
     }
 }

@@ -197,7 +197,7 @@ fn called_provider(provider: &ProviderView, call: ProbeCall) -> ProviderCheck {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
     use crate::{ProviderParser, ProviderView};
@@ -245,6 +245,7 @@ mod tests {
                 session_id: None,
                 usage: None,
                 limit_message: None,
+                aliases: BTreeMap::new(),
             },
             overridden: BTreeSet::new(),
             built_in: true,

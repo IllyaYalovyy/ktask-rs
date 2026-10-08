@@ -254,6 +254,7 @@ mod tests {
             session_id: None,
             usage: None,
             limit_message: None,
+            aliases: BTreeMap::new(),
         };
         provider_views(
             &BTreeMap::from([("dummy".to_owned(), plain)]),

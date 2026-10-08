@@ -189,6 +189,66 @@ fn a_recorded_claude_warning_finishes_with_its_usage_and_model() -> Result<()> {
     Ok(())
 }
 
+/// B-53: Claude Code accepts a short model name (`sonnet`, `opus`, `haiku`) and reports its own
+/// full dated release; asking for the alias of the family the recording actually used must not
+/// fail the attempt.
+#[test]
+fn a_model_alias_naming_the_recordings_own_family_still_ends_done() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add()?;
+    let outcome = fixture.run(&["settings", "set", "model", "haiku"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    let script = format!(
+        "prompt=$(cat)\nprintf '%s' '{success}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
+        success = include_str!("../../../test-fixtures/claude/claude-2.1.283-success-nodeny.jsonl")
+    );
+    let _claude = fixture.install_claude(&script)?;
+
+    let run = fixture.run(&["run"])?;
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let status = fixture.run(&["status"])?;
+    assert_eq!(
+        status.stdout.lines().nth(1),
+        Some("#1\tdone\tClaude task\ttokens in 9 out 56 cost $0.010677")
+    );
+    assert!(
+        status.stdout.contains("attempt 1: implementation"),
+        "{}",
+        status.stdout
+    );
+    assert!(!status.stdout.contains("asked for"), "{}", status.stdout);
+    Ok(())
+}
+
+/// B-53: a model name whose own family the recording did not report is still a real mismatch —
+/// `sonnet` asked for, a haiku model used — and still fails the attempt.
+#[test]
+fn a_model_alias_naming_a_different_family_than_the_recording_still_fails() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add()?;
+    for (name, value) in [("model", "sonnet"), ("max-attempts", "1")] {
+        let outcome = fixture.run(&["settings", "set", name, value])?;
+        assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    }
+    let script = format!(
+        "prompt=$(cat)\nprintf '%s' '{success}'\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
+        success = include_str!("../../../test-fixtures/claude/claude-2.1.283-success-nodeny.jsonl")
+    );
+    let _claude = fixture.install_claude(&script)?;
+
+    let run = fixture.run(&["run"])?;
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    let status = fixture.run(&["status"])?;
+    assert!(
+        status
+            .stdout
+            .contains("asked for sonnet, the provider used claude-haiku-4-5-20251001"),
+        "{}",
+        status.stdout
+    );
+    Ok(())
+}
+
 #[test]
 fn a_derived_claude_rejection_waits_for_its_resets_at_time() -> Result<()> {
     // The recorded reset is now in the past. Keep the fixture itself verbatim, apart from its
@@ -252,6 +312,50 @@ fn recorded_claude_authentication_failure_stops_with_login_advice() -> Result<()
         "{}",
         status.stdout
     );
+    Ok(())
+}
+
+/// B-53: before a requested model and a reported one were compared with aliases in mind, a
+/// resolver whose own `resolver-model` setting was a short name — `haiku`, say — ending its
+/// resolve step's own model check against the full dated name Claude Code actually reports had
+/// its `retry` verdict overwritten by that same mismatch check: the attempt ended `failed`
+/// with "asked for haiku, the provider used claude-haiku-4-5-…" instead of retrying, even
+/// though the resolver read the failure and correctly decided to retry it. With aliases
+/// honoured, the resolver's own `retry` verdict stands and the task's second attempt runs.
+#[test]
+fn a_resolver_models_alias_does_not_nullify_its_own_retry_verdict() -> Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.add()?;
+    for (name, value) in [("resolver-provider", "claude"), ("resolver-model", "haiku")] {
+        let outcome = fixture.run(&["settings", "set", name, value])?;
+        assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    }
+    let retried = fixture.repository.join("resolver-retried");
+    let script = format!(
+        "prompt=$(cat)\nif printf '%s\\n' \"$prompt\" | grep -q '^# Resolve:'; then\n  binary=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    \\(.*\\) report --token .* retry .*/\\1/p' | head -n 1)\n  token=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    .* report --token \\([^ ]*\\) retry .*/\\1/p' | head -n 1)\n  printf '%s' '{success}'\n  touch '{retried}'\n  \"$binary\" report --token \"$token\" retry\nelif [ -f '{retried}' ]; then\n  printf '%s' '{success}'\n  report=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\n  eval \"$report\"\nelse\n  printf '%s' '{success}'\n  report=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* failed --reason /p' | head -n 1)\n  eval \"$report\"\nfi",
+        retried = retried.display(),
+        success = include_str!("../../../test-fixtures/claude/success.jsonl"),
+    );
+    let _claude = fixture.install_claude(&script)?;
+
+    let run = fixture.run(&["run"])?;
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let status = fixture.run(&["status"])?;
+    assert!(
+        status
+            .stdout
+            .lines()
+            .nth(1)
+            .is_some_and(|line| line.starts_with("#1\tdone\t")),
+        "{}",
+        status.stdout
+    );
+    assert!(
+        status.stdout.contains("attempt 2: implementation"),
+        "{}",
+        status.stdout
+    );
+    assert!(!status.stdout.contains("asked for"), "{}", status.stdout);
     Ok(())
 }
 

@@ -64,8 +64,8 @@ pub use provider_check::{
     ProbeCall, ProviderCheck, ProviderCheckItem, ProviderCheckKind, ProviderProbe, check_provider,
 };
 pub use providers::{
-    ProviderDefinition, ProviderOverride, ProviderParser, ProviderView, provider_field_source,
-    provider_fields, provider_views,
+    ProviderDefinition, ProviderOverride, ProviderParser, ProviderView, model_matches,
+    provider_field_source, provider_fields, provider_views,
 };
 pub use queue::{QueueView, StatusSummary, queue_view, queue_view_with_output};
 pub use register::{RegisterError, register_project};

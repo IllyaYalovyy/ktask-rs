@@ -569,6 +569,7 @@ fn provider_list_and_show_print_the_complete_built_in_and_project_definitions() 
         "session-id",
         "usage",
         "limit-message",
+        "aliases",
         "overridden",
     ] {
         assert!(value.get(field).is_some(), "missing {field}: {value}");
@@ -586,6 +587,14 @@ fn provider_list_and_show_print_the_complete_built_in_and_project_definitions() 
             "TaskOutput",
             "TaskStop"
         ])
+    );
+    assert_eq!(
+        value["aliases"],
+        serde_json::json!({
+            "sonnet": "claude-sonnet-*",
+            "opus": "claude-opus-*",
+            "haiku": "claude-haiku-*",
+        })
     );
 
     let codex = sandbox.run(&repository, &["provider", "show", "codex", "--json"])?;
@@ -616,7 +625,7 @@ fn provider_list_and_show_print_the_complete_built_in_and_project_definitions() 
 
     std::fs::write(
         &settings,
-        "[providers.claude]\ndenied-tools = [\"ProjectSchedule\", \"ProjectMonitor\"]\n\n[providers.local]\ncommand = \"agent\"\nargs = [\"--prompt\", \"{prompt}\"]\nparser = \"plain\"\nsession-id = \"session:\"\n",
+        "[providers.claude]\ndenied-tools = [\"ProjectSchedule\", \"ProjectMonitor\"]\n\n[providers.claude.aliases]\nfast = \"claude-haiku-*\"\n\n[providers.local]\ncommand = \"agent\"\nargs = [\"--prompt\", \"{prompt}\"]\nparser = \"plain\"\nsession-id = \"session:\"\n",
     )?;
     let overridden = sandbox.run(&repository, &["provider", "show", "claude"])?;
     assert_eq!(overridden.code, Some(0), "{}", overridden.stderr);
@@ -624,6 +633,14 @@ fn provider_list_and_show_print_the_complete_built_in_and_project_definitions() 
         overridden
             .stdout
             .contains("denied-tools\tProjectSchedule ProjectMonitor\tproject\n"),
+        "{}",
+        overridden.stdout
+    );
+    // The project's own alias is added to the built-in ones, not a replacement of them.
+    assert!(
+        overridden
+            .stdout
+            .contains("aliases\tfast=claude-haiku-* haiku=claude-haiku-* opus=claude-opus-* sonnet=claude-sonnet-*\tproject\n"),
         "{}",
         overridden.stdout
     );

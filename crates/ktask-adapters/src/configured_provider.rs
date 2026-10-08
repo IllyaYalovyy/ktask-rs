@@ -27,6 +27,7 @@ pub fn configured_provider(name: &str, definition: &ProviderDefinition) -> Provi
         detect_limit: Arc::new(move |output| detect_limit(&limit_definition, output)),
         read_usage: Arc::new(move |output| read_usage(&usage_definition, output)),
         parse_output: Arc::new(move |output| parse_output(parser, output)),
+        model_aliases: definition.aliases.clone(),
     }
 }
 
@@ -230,6 +231,8 @@ fn read_session(definition: &ProviderDefinition, output: &Output) -> Option<Stri
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use ktask_core::Exit;
 
@@ -262,6 +265,7 @@ mod tests {
             session_id: None,
             usage: Some("usage".to_owned()),
             limit_message: None,
+            aliases: BTreeMap::new(),
         };
         let output = parse_claude_stream(Output {
             stdout: include_str!("../../../test-fixtures/claude/success.jsonl")
@@ -298,6 +302,7 @@ mod tests {
             session_id: None,
             usage: None,
             limit_message: Some(r"limit\|(?<reset>[0-9]+)".to_owned()),
+            aliases: BTreeMap::new(),
         };
         let output = Output {
             stdout: include_str!("../../../test-fixtures/claude/usage-limit.jsonl")
@@ -330,6 +335,7 @@ mod tests {
             session_id: None,
             usage: None,
             limit_message: Some(r"(?i)Claude AI usage limit reached\|(?<reset>[0-9]+)".to_owned()),
+            aliases: BTreeMap::new(),
         };
         let fixture =
             include_str!("../../../test-fixtures/claude/claude-2.1.283-derived-rejected.jsonl");
@@ -376,6 +382,7 @@ mod tests {
             session_id: None,
             usage: None,
             limit_message: Some(r"limit\|(?<reset>[0-9]+)".to_owned()),
+            aliases: BTreeMap::new(),
         };
         let output = Output {
             stdout: b"limit|42".to_vec(),
