@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, Widget};
 use crate::App;
 use crate::ack_screen::AckScreen;
 use crate::answer_screen::AnswerScreen;
+use crate::detail_screen::DetailScreen;
 use crate::done_screen::DoneScreen;
 use crate::import_screen::ImportScreen;
 use crate::output_screen::OutputScreen;
@@ -20,6 +21,8 @@ use crate::settings::SettingsScreen;
 fn footer_keys(app: &App) -> &'static str {
     if app.output.is_some() {
         OutputScreen::footer_keys()
+    } else if app.detail.is_some() {
+        DetailScreen::footer_keys()
     } else if app.settings.is_some() {
         SettingsScreen::footer_keys()
     } else if let Some(providers) = &app.providers {
@@ -75,16 +78,11 @@ fn draw_screen(app: &App, inner: Rect, buf: &mut Buffer) -> Option<Position> {
     if let Some(registration) = &app.registration {
         return Some(registration.draw(inner, buf));
     }
-    if let Some(output) = &app.output {
-        output.draw(inner, buf);
+    if draw_cursorless_overlay(app, inner, buf) {
         return None;
     }
     if let Some(settings) = &app.settings {
         return Some(settings.draw(inner, buf));
-    }
-    if let Some(providers) = &app.providers {
-        providers.draw(inner, buf);
-        return None;
     }
     if let Some(form) = &app.form {
         return form.draw(inner, buf);
@@ -101,12 +99,31 @@ fn draw_screen(app: &App, inner: Rect, buf: &mut Buffer) -> Option<Position> {
     if let Some(import) = &app.import {
         return Some(import.draw(inner, buf));
     }
-    if let Some(projects) = &app.projects {
-        projects.draw(app.queue.project_name(), inner, buf);
-        return None;
-    }
     app.queue.draw(inner, buf);
     None
+}
+
+/// Draws whichever overlay that puts the cursor nowhere is open — output, detail, the
+/// provider catalogue or the project picker — and says whether one was, so [`draw_screen`]
+/// knows to stop there.
+fn draw_cursorless_overlay(app: &App, inner: Rect, buf: &mut Buffer) -> bool {
+    if let Some(output) = &app.output {
+        output.draw(inner, buf);
+        return true;
+    }
+    if let Some(detail) = &app.detail {
+        detail.draw(inner, buf);
+        return true;
+    }
+    if let Some(providers) = &app.providers {
+        providers.draw(inner, buf);
+        return true;
+    }
+    if let Some(projects) = &app.projects {
+        projects.draw(app.queue.project_name(), inner, buf);
+        return true;
+    }
+    false
 }
 
 #[cfg(test)]

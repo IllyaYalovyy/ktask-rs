@@ -16,6 +16,8 @@ mod claude_resilience;
 mod codex_resilience;
 #[path = "tui/dashboard.rs"]
 mod dashboard;
+#[path = "tui/detail.rs"]
+mod detail;
 #[path = "tui/done.rs"]
 mod done;
 #[path = "tui/exit.rs"]

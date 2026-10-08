@@ -5,10 +5,12 @@ use std::time::Duration;
 use crate::{AttemptOutput, Clock, Journal, JournalError, RunLock, list_all_tasks};
 
 mod build;
+mod detail;
 mod facts;
 mod lines;
 mod outcome;
 
+pub use detail::{TaskDetail, task_detail};
 pub use facts::{AttemptLine, DoneMark, OutputActivity, StatusEntry, StepLine, Wait};
 pub use outcome::AttemptOutcome;
 
@@ -60,6 +62,22 @@ fn status_inner(
     }
 }
 
+/// Whether a run currently holds the project's run lock on an attempt the journal still calls
+/// running: `false` as soon as either is not so, with no need to wait for the next `run` to
+/// reconcile it. Shared by every status-shaped read — the queue, `status` itself, and one
+/// task's own detail — so they never disagree about it.
+pub(super) fn run_is_alive(
+    journal: &impl Journal,
+    lock: &impl RunLock,
+) -> Result<bool, JournalError> {
+    match crate::attempt::running(journal)? {
+        Some(_) => lock
+            .in_progress()
+            .map_err(|error| JournalError::new(error.to_string())),
+        None => Ok(false),
+    }
+}
+
 fn read_entries(
     journal: &impl Journal,
     clock: &impl Clock,
@@ -67,12 +85,7 @@ fn read_entries(
     output: Option<&dyn AttemptOutput>,
     silent_after: Duration,
 ) -> Result<Vec<StatusEntry>, JournalError> {
-    let run_alive = match crate::attempt::running(journal)? {
-        Some(_) => lock
-            .in_progress()
-            .map_err(|error| JournalError::new(error.to_string()))?,
-        None => false,
-    };
+    let run_alive = run_is_alive(journal, lock)?;
     let mut entries = Vec::new();
     for task in list_all_tasks(journal)? {
         if let Some(entry) =

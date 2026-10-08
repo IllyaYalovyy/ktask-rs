@@ -57,6 +57,16 @@ impl OutputScreen {
             help: false,
         }
     }
+
+    /// A fresh screen already asking to load `wanted`'s attempt — `None` for the latest,
+    /// followed live — rather than always starting on the latest the way [`Self::new`] does.
+    /// Opened this way from the detail screen's `l`, naming the attempt the selection was on.
+    pub(crate) fn opened_at(task: TaskId, wanted: Option<u32>) -> Self {
+        Self {
+            wanted,
+            ..Self::new(task)
+        }
+    }
     pub(crate) fn task(&self) -> TaskId {
         self.task
     }

@@ -118,6 +118,21 @@ fn handle_output_action(
     Ok((update(app, Event::OutputLoaded(loaded)), false))
 }
 
+/// Loads the detail overlay's selected task, when the detail screen asked to open or refresh
+/// it.
+fn handle_detail_action(
+    mut app: App,
+    application: &impl Application,
+) -> Result<(App, bool), String> {
+    let Some(id) = app.detail_requested.take() else {
+        return Ok((app, false));
+    };
+    let detail = application
+        .load_detail(id)
+        .map_err(|error| error.to_string())?;
+    Ok((update(app, Event::DetailLoaded(Box::new(detail))), false))
+}
+
 /// Loads the project picker, switches to the project `app` has pending, or forgets the one its
 /// confirmation named, whichever `app` has pending, through `application`: `(app, true)` when
 /// one was, `(app, false)`, unchanged, otherwise.
@@ -198,14 +213,16 @@ macro_rules! or_return_handled {
 }
 
 /// Tries registering the current directory, removing, retrying or adding a task, loading or
-/// saving a setting, and loading, switching or forgetting a project, in that order: the first
-/// one `app` has pending wins. `(app, true)` when one did, `(app, false)` otherwise.
+/// saving a setting, loading a provider catalogue or output or detail overlay, and loading,
+/// switching or forgetting a project, in that order: the first one `app` has pending wins.
+/// `(app, true)` when one did, `(app, false)` otherwise.
 fn try_background_actions(app: App, application: &impl Application) -> Result<(App, bool), String> {
     let app = or_return_handled!(handle_registration_action(app, application));
     let app = or_return_handled!(handle_task_action(app, application)?);
     let app = or_return_handled!(handle_settings_action(app, application)?);
     let app = or_return_handled!(handle_providers_action(app, application)?);
     let app = or_return_handled!(handle_output_action(app, application)?);
+    let app = or_return_handled!(handle_detail_action(app, application)?);
     handle_projects_action(app, application)
 }
 
@@ -341,6 +358,7 @@ mod tests {
         type ImportError = Failure;
         type RunRefusal = Failure;
         type OutputError = Failure;
+        type DetailError = Failure;
 
         fn load_queue(&self, _show_cancelled: bool) -> Result<QueueView, Failure> {
             Ok(empty_queue())
@@ -425,6 +443,30 @@ mod tests {
                 attempt: 1,
                 attempts: vec![1],
                 steps: Vec::new(),
+            })
+        }
+
+        fn load_detail(&self, id: TaskId) -> Result<ktask_core::TaskDetail, Failure> {
+            Ok(ktask_core::TaskDetail {
+                task: ktask_core::Task {
+                    id,
+                    position: 1,
+                    title: "task".to_owned(),
+                    body: String::new(),
+                    criteria: vec!["it works".to_owned()],
+                    kind: ktask_core::TaskKind::Agent,
+                    links: vec![],
+                    provider: None,
+                    model: None,
+                    status: TaskStatus::Pending,
+                    created_at: std::time::SystemTime::UNIX_EPOCH,
+                },
+                provider: "echo".to_owned(),
+                provider_is_own: false,
+                model: String::new(),
+                model_is_own: false,
+                status: None,
+                done_by_user: None,
             })
         }
     }

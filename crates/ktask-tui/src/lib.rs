@@ -12,6 +12,7 @@ mod ack_screen;
 mod answer_screen;
 mod app;
 mod application;
+mod detail_screen;
 mod done_screen;
 mod import_screen;
 mod output_screen;
@@ -26,6 +27,7 @@ mod settings;
 mod task_form;
 mod text;
 mod widgets;
+mod wrap;
 
 pub use app::{App, Event, update};
 pub use application::{Application, LoadedOutput};

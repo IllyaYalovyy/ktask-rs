@@ -9,11 +9,13 @@ use serde::Serialize;
 
 mod run;
 mod settings;
+mod show;
 mod status;
 mod tasks;
 
 pub(crate) use run::run;
 pub(crate) use settings::{setting_set, settings};
+pub(crate) use show::show;
 pub(crate) use status::status;
 pub(crate) use tasks::tasks;
 

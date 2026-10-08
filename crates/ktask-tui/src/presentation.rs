@@ -1,5 +1,6 @@
 //! The shared words and indicators that ktask interfaces use to present status facts.
 
+mod detail;
 mod transcript;
 
 use jiff::Timestamp;
@@ -8,6 +9,7 @@ use ktask_core::{
     ProviderCheckKind, Routed, StepLine, StopCause, TaskStatus, Usage, Wait, WaitReason,
 };
 
+pub use detail::{DetailLine, detail_lines};
 pub use transcript::{Transcript, step_heading};
 
 /// The operator-facing label for one provider readiness fact.

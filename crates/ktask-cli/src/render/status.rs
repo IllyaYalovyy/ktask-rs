@@ -51,9 +51,9 @@ struct OutputActivityJson {
 
 /// One task's attempt as `status --json` shows it: the current — most recent — step's own
 /// fields, kept flat here for whatever only cares about that, plus `steps`, every step run so
-/// far, in order.
+/// far, in order. `pub(super)`: `show --json` embeds this same shape.
 #[derive(Debug, Serialize)]
-struct AttemptJson<'a> {
+pub(super) struct AttemptJson<'a> {
     number: u32,
     step: &'a str,
     provider: Option<&'a str>,
@@ -87,8 +87,9 @@ fn output_activity_json(activity: &ktask_core::OutputActivity) -> OutputActivity
 }
 
 /// The reason and when a task was sealed `done` by hand, as `status --json` shows it.
+/// `pub(super)`: `show --json` embeds this same shape.
 #[derive(Debug, Serialize)]
-struct DoneMarkJson<'a> {
+pub(super) struct DoneMarkJson<'a> {
     reason: &'a str,
     at: String,
 }
@@ -160,8 +161,9 @@ pub(crate) fn status(
     }
 }
 
-/// `line` as an [`AttemptJson`].
-fn attempt_json(line: &ktask_core::AttemptLine) -> Result<AttemptJson<'_>, String> {
+/// `line` as an [`AttemptJson`]. `pub(super)`: also used to build `show --json`'s object, so
+/// the two commands' attempt shapes never drift apart.
+pub(super) fn attempt_json(line: &ktask_core::AttemptLine) -> Result<AttemptJson<'_>, String> {
     Ok(AttemptJson {
         number: line.number,
         step: &line.step,
@@ -187,7 +189,7 @@ fn attempt_json(line: &ktask_core::AttemptLine) -> Result<AttemptJson<'_>, Strin
 }
 
 /// `mark`, timestamped, as a [`DoneMarkJson`].
-fn done_mark_json(mark: &ktask_core::DoneMark) -> Result<DoneMarkJson<'_>, String> {
+pub(super) fn done_mark_json(mark: &ktask_core::DoneMark) -> Result<DoneMarkJson<'_>, String> {
     let at = Timestamp::try_from(mark.at).map_err(|e| format!("bad done time: {e}"))?;
     Ok(DoneMarkJson {
         reason: &mark.reason,

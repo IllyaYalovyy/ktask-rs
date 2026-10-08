@@ -15,5 +15,6 @@ pub(crate) mod report;
 pub(crate) mod retry;
 pub(crate) mod run;
 pub(crate) mod settings;
+pub(crate) mod show;
 pub(crate) mod status;
 pub(crate) mod tui;

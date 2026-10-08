@@ -45,6 +45,8 @@ pub(crate) enum Request {
     OpenAcknowledge(TaskId),
     /// Open the selected task's retained provider output.
     OpenOutput(TaskId),
+    /// Open the selected task's own detail screen, in full.
+    OpenDetail(TaskId),
     /// Leave every screen.
     Quit,
 }
@@ -234,6 +236,7 @@ impl Queue {
             KeyCode::Char('A') => this.press_answer(),
             KeyCode::Char('H') => this.press_acknowledge(),
             KeyCode::Char('l') => this.open_output(),
+            KeyCode::Enter => this.open_detail(),
             KeyCode::Char('D') => this.press_done(),
             KeyCode::Char('r') => (this, Some(Request::StartRun)),
             KeyCode::Char('i') => (this, Some(Request::OpenImport)),
@@ -260,6 +263,14 @@ impl Queue {
     fn open_output(self) -> (Self, Option<Request>) {
         match self.selected {
             Some(id) => (self, Some(Request::OpenOutput(id))),
+            None => (self, None),
+        }
+    }
+
+    /// Requests the selected task's own detail screen when there is a selection.
+    fn open_detail(self) -> (Self, Option<Request>) {
+        match self.selected {
+            Some(id) => (self, Some(Request::OpenDetail(id))),
             None => (self, None),
         }
     }

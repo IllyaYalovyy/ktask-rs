@@ -31,8 +31,10 @@ const KEYS: [(&str, &str); 22] = [
     ("G", "select the last task"),
     ("a", "show or hide cancelled, skipped and superseded tasks"),
     ("n", "add a task at the end, written in a form"),
-    ("o", "add a task below the selected one, written in a form"),
-    ("O", "add a task above the selected one, written in a form"),
+    (
+        "o, O",
+        "add a task below (o) or above (O) the selected one, written in a form",
+    ),
     ("d", "remove the selected task, after asking"),
     (
         "t",
@@ -45,6 +47,7 @@ const KEYS: [(&str, &str); 22] = [
     ("D", "mark the selected task done by hand"),
     ("H", "acknowledge the selected human task"),
     ("l", "show the selected task's output"),
+    ("Enter", "open the selected task's detail, in full"),
     (
         "r",
         "start executing the queue, exactly as `ktask-rs run` does",
@@ -474,8 +477,8 @@ mod tests {
         let rows = drawn(&queue, 60, 22);
         let screen = rows.join("\n");
         for key in [
-            "j, Down", "k, Up", "g ", "G ", "a ", "d ", "t ", "A ", "D ", "r ", "i ", "s ", "? ",
-            "Esc", "q ",
+            "Enter", "j, Down", "k, Up", "g ", "G ", "a ", "d ", "t ", "A ", "D ", "r ", "i ",
+            "s ", "? ", "Esc", "q ",
         ] {
             assert!(screen.contains(key), "{key:?} in\n{screen}");
         }

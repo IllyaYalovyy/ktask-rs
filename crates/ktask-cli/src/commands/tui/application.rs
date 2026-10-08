@@ -145,6 +145,7 @@ impl Application for CliApplication {
     type ImportError = NeedsProject<ImportProblem>;
     type RunRefusal = NeedsProject<ProcessRefusal>;
     type OutputError = NeedsProject<String>;
+    type DetailError = NeedsProject<String>;
 
     fn load_queue(&self, show_cancelled: bool) -> Result<QueueView, Self::LoadError> {
         self.with_context(|context| queue(context, show_cancelled))
@@ -340,6 +341,16 @@ impl Application for CliApplication {
                 attempts: ktask_core::attempt_numbers(&entries, id),
                 steps,
             })
+        })
+    }
+
+    fn load_detail(&self, id: TaskId) -> Result<ktask_core::TaskDetail, Self::DetailError> {
+        self.with_context(|context| {
+            let settings = ktask_core::SettingsStore::load(&context.settings_store)
+                .map_err(|error| error.to_string())?;
+            ktask_core::task_detail(&context.journal, &SystemClock, &context.lock, &settings, id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("there is no task {id}"))
         })
     }
 }

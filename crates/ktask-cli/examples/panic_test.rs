@@ -69,6 +69,7 @@ impl Application for PanicTestApplication {
     type ImportError = String;
     type RunRefusal = String;
     type OutputError = String;
+    type DetailError = String;
 
     fn load_queue(&self, _show_cancelled: bool) -> Result<QueueView, String> {
         let mut loaded_once = self
@@ -152,6 +153,10 @@ impl Application for PanicTestApplication {
         _id: TaskId,
         _attempt: Option<u32>,
     ) -> Result<ktask_tui::LoadedOutput, String> {
+        Err(NOT_SUPPORTED.to_owned())
+    }
+
+    fn load_detail(&self, _id: TaskId) -> Result<ktask_core::TaskDetail, String> {
         Err(NOT_SUPPORTED.to_owned())
     }
 }

@@ -52,6 +52,8 @@ pub trait Application {
     type RunRefusal: Display;
     /// Why retained output could not be loaded.
     type OutputError: Display;
+    /// Why a task's own detail could not be loaded.
+    type DetailError: Display;
 
     /// The queue to show, with the cancelled and skipped tasks when `show_cancelled`.
     ///
@@ -216,6 +218,14 @@ pub trait Application {
         id: TaskId,
         attempt: Option<u32>,
     ) -> Result<LoadedOutput, Self::OutputError>;
+
+    /// Task `id`, in full, for the detail screen to open on — the same facts `ktask-rs show`
+    /// prints.
+    ///
+    /// # Errors
+    ///
+    /// Fails when there is no such task, or its state cannot be read.
+    fn load_detail(&self, id: TaskId) -> Result<ktask_core::TaskDetail, Self::DetailError>;
 }
 
 /// One attempt's output, with the numbers of every attempt the task has, so the output screen

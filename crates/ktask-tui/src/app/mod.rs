@@ -12,6 +12,7 @@ use ratatui::crossterm::event::KeyCode;
 
 use crate::ack_screen::AckScreen;
 use crate::answer_screen::AnswerScreen;
+use crate::detail_screen::DetailScreen;
 use crate::done_screen::DoneScreen;
 use crate::import_screen::ImportScreen;
 use crate::output_screen::OutputScreen;
@@ -22,10 +23,12 @@ use crate::registration_screen::RegistrationScreen;
 use crate::settings::SettingsScreen;
 use crate::task_form::TaskFormScreen;
 
+mod detail;
 mod output;
 mod provider_screen;
 mod screens;
 
+use detail::try_detail;
 use output::try_output;
 use provider_screen::try_providers;
 use screens::{
@@ -53,6 +56,7 @@ pub struct App {
     pub(crate) projects: Option<ProjectsScreen>,
     pub(crate) registration: Option<RegistrationScreen>,
     pub(crate) output: Option<OutputScreen>,
+    pub(crate) detail: Option<DetailScreen>,
     /// The task the form was submitted with and where it goes, for the loop to add, answered
     /// with [`Event::Added`] or [`Event::Rejected`].
     pub(crate) submission: Option<(TaskDraft, Placement)>,
@@ -88,6 +92,8 @@ pub struct App {
     pub(crate) registration_submission: Option<String>,
     /// The selected task whose output the loop must load.
     pub(crate) output_requested: Option<TaskId>,
+    /// The task whose detail the loop must load, for the detail screen to open on or refresh.
+    pub(crate) detail_requested: Option<TaskId>,
     /// Set when the operator asked to leave.
     pub(crate) quit: bool,
 }
@@ -149,6 +155,10 @@ pub enum Event {
     RegistrationFailed(String),
     /// The selected task's freshly read output of one attempt.
     OutputLoaded(crate::LoadedOutput),
+    /// The selected task's detail, freshly read, for the detail screen to open on or refresh.
+    /// Boxed: a task's full detail is far larger than every other event, and this one is no
+    /// more frequent than they are.
+    DetailLoaded(Box<ktask_core::TaskDetail>),
 }
 
 /// The app after `event` happened to `app`. `Loaded` and a first Ctrl-C are handled here,
@@ -170,8 +180,9 @@ pub fn update(app: App, event: Event) -> App {
 
 /// Every screen that might own an event reaching [`dispatch`], tried in this order, the first
 /// match winning.
-const SCREENS: [fn(App, Event) -> Tried; 10] = [
+const SCREENS: [fn(App, Event) -> Tried; 11] = [
     try_output,
+    try_detail,
     try_settings,
     try_providers,
     try_form,
@@ -287,6 +298,11 @@ fn open_screen_for_request(
             output_requested: Some(id),
             ..app
         }),
+        queue::Request::OpenDetail(id) => Ok(App {
+            detail: Some(DetailScreen::new(id)),
+            detail_requested: Some(id),
+            ..app
+        }),
         other => Err(Box::new((app, other))),
     }
 }
@@ -338,7 +354,8 @@ fn apply_queue_mailbox_request(app: App, request: &queue::Request) -> App {
         | queue::Request::OpenAnswer(..)
         | queue::Request::OpenDone(_)
         | queue::Request::OpenAcknowledge(_)
-        | queue::Request::OpenOutput(_) => {
+        | queue::Request::OpenOutput(_)
+        | queue::Request::OpenDetail(_) => {
             unreachable!("handled by open_screen_for_request above")
         }
     }

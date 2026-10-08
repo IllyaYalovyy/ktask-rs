@@ -91,8 +91,8 @@ pub use settings::{
 };
 pub use sleep::Sleep;
 pub use status::{
-    AttemptLine, AttemptOutcome, DoneMark, OutputActivity, StatusEntry, StepLine, Wait, status,
-    status_with_output,
+    AttemptLine, AttemptOutcome, DoneMark, OutputActivity, StatusEntry, StepLine, TaskDetail, Wait,
+    status, status_with_output, task_detail,
 };
 pub use steps::{
     check::CHECK_STEP, commit::COMMIT_STEP, health_check::HEALTH_CHECK_STEP,

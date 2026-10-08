@@ -371,11 +371,10 @@ fn the_key_map_lists_o_and_capital_o() -> Result<()> {
     let screen = terminal.wait_for_text("Keys")?;
     let lines = lines_inside_frame(&screen);
     assert!(
-        lines.contains(&"o        add a task below the selected one, written in a form".to_owned()),
-        "{screen}"
-    );
-    assert!(
-        lines.contains(&"O        add a task above the selected one, written in a form".to_owned()),
+        lines.contains(
+            &"o, O     add a task below (o) or above (O) the selected one, written in a form"
+                .to_owned()
+        ),
         "{screen}"
     );
     assert!(
