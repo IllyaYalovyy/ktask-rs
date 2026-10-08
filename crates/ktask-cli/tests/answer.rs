@@ -167,7 +167,8 @@ fn answer_exits_zero_sends_the_task_back_to_pending_and_shows_the_question_and_t
     assert_eq!(fixture.task_status(1)?, "pending");
 
     // The question and the answer are both shown with the task.
-    let entries = fixture.status_json()?;
+    let parsed = fixture.status_json()?;
+    let entries = &parsed["tasks"];
     assert_eq!(entries[0]["status"], "pending");
     assert_eq!(entries[0]["attempt"]["outcome"], "needs-input");
     let reason = entries[0]["attempt"]["reason"].as_str().unwrap();

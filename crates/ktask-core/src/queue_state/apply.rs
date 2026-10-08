@@ -69,6 +69,7 @@ impl QueueState {
             session: None,
             waiting: None,
             ended: None,
+            ended_at: None,
             steps: Vec::new(),
         });
         // A later run got past every gate ahead of this task's attempt, sync and health check
@@ -129,12 +130,16 @@ impl QueueState {
     /// whatever it held before.
     pub(super) fn apply_gate_failed(&mut self, event: &Event) {
         let Event::GateFailed {
-            id, step, reason, ..
+            id,
+            step,
+            reason,
+            at,
         } = event
         else {
             return;
         };
-        self.gate_stops.insert(*id, (step.clone(), reason.clone()));
+        self.gate_stops
+            .insert(*id, (step.clone(), reason.clone(), *at));
     }
 
     /// Applies a [`Event::AttemptRunning`]: records its provider, when it is the attempt
@@ -259,6 +264,7 @@ impl QueueState {
             duration,
             status,
             reason,
+            at,
             ..
         } = event
         else {
@@ -269,6 +275,7 @@ impl QueueState {
         }
         if let Some(attempt) = self.attempt_mut(*id, *number) {
             attempt.waiting = None;
+            attempt.ended_at = Some(*at);
             attempt.ended = Some(AttemptEnd {
                 duration: *duration,
                 status: *status,

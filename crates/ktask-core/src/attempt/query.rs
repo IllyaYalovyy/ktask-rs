@@ -6,8 +6,8 @@ use std::time::SystemTime;
 use crate::queue_state::read_and_query;
 use crate::{Attempt, Journal, JournalError, Outcome, TaskId};
 
-/// The step name and reason of the most recent gate stop recorded for task `id`. `None` when
-/// it was never stopped by a gate, or a later attempt has since begun for it.
+/// The step name, reason and when of the most recent gate stop recorded for task `id`. `None`
+/// when it was never stopped by a gate, or a later attempt has since begun for it.
 ///
 /// # Errors
 ///
@@ -15,8 +15,22 @@ use crate::{Attempt, Journal, JournalError, Outcome, TaskId};
 pub(crate) fn gate_stop_of(
     journal: &dyn Journal,
     id: TaskId,
-) -> Result<Option<(String, String)>, JournalError> {
+) -> Result<Option<(String, String, SystemTime)>, JournalError> {
     read_and_query(journal, |state| state.gate_stop_of(id))
+}
+
+/// When attempt `number` of task `id` ended, with [`super::end_attempt`]. `None` while it is
+/// still open, or for an attempt that was never begun.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub(crate) fn ended_at(
+    journal: &dyn Journal,
+    id: TaskId,
+    number: u32,
+) -> Result<Option<SystemTime>, JournalError> {
+    read_and_query(journal, |state| state.ended_at(id, number))
 }
 
 /// The session the provider reported for attempt `number` of task `id`'s implementation step,

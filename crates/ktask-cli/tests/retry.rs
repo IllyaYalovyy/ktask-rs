@@ -198,7 +198,8 @@ fn retry_exits_zero_sends_the_task_back_to_pending_and_keeps_its_attempt_visible
     assert_eq!(fixture.task_status(1)?, "pending");
 
     // The earlier, failed attempt is still shown — nothing about it was forgotten.
-    let entries = fixture.status_json()?;
+    let parsed = fixture.status_json()?;
+    let entries = &parsed["tasks"];
     assert_eq!(entries[0]["status"], "pending");
     assert_eq!(entries[0]["attempt"]["number"], 1);
     assert_eq!(entries[0]["attempt"]["outcome"], "failed");
@@ -224,7 +225,8 @@ fn a_second_run_after_retry_adds_attempt_two_under_the_first_in_status_and_the_t
     assert_eq!(second.code, Some(0), "{}", second.stderr);
     assert_eq!(fixture.task_status(1)?, "done");
 
-    let entries = fixture.status_json()?;
+    let parsed = fixture.status_json()?;
+    let entries = &parsed["tasks"];
     assert_eq!(entries[0]["status"], "done");
     assert_eq!(entries[0]["attempt"]["number"], 2);
     let history = entries[0]["history"].as_array().expect("a history array");

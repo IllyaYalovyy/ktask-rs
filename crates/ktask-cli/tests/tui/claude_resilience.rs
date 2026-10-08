@@ -111,7 +111,7 @@ fn the_queue_screen_shows_a_recorded_claude_warning_without_waiting() -> Result<
     })?;
     let done = terminal.wait_for("the completed task", |screen| {
         lines_inside_frame(&screen.contents())
-            .get(4)
+            .get(5)
             .is_some_and(|line| line.starts_with(">1  #1  done"))
     })?;
     assert!(done.contains("claude-haiku-4-5-20251001"), "{done}");

@@ -70,8 +70,8 @@ enum Command {
     },
     /// A project's settings — shows every setting, or changes one with `settings set`
     Settings(commands::settings::Args),
-    /// What ran and how it ended: every task that was attempted, with every attempt it has
-    /// had
+    /// The run band first — what is running, where it most recently stopped and why, or that
+    /// the queue is idle — then every task that was attempted, with every attempt it has had
     Status(commands::status::Args),
     /// One task, in full: its own fields and every attempt it has had, nothing elided
     Show(commands::show::Args),

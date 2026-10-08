@@ -277,7 +277,7 @@ mod tests {
 
     use ktask_core::{
         ATTEMPT_TIMEOUT, Import, Placement, Project, ProviderCheck, ProviderView, QueueView,
-        RunEnd, RunReport, SettingView, StatusSummary, TaskDraft, TaskId, TaskStatus,
+        RunBand, RunEnd, RunReport, SettingView, StatusSummary, TaskDraft, TaskId, TaskStatus,
     };
 
     use super::{
@@ -336,6 +336,7 @@ mod tests {
             attempts: std::collections::HashMap::new(),
             history: std::collections::HashMap::new(),
             done_by_user: std::collections::HashMap::new(),
+            band: RunBand::Idle { pending: 0 },
         }
     }
 

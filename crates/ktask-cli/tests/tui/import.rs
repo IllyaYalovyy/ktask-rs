@@ -75,7 +75,7 @@ impl Fixture {
 /// line, above the task list.
 fn result_line(screen: &str, index: usize) -> String {
     lines_inside_frame(screen)
-        .get(4 + index)
+        .get(5 + index)
         .cloned()
         .unwrap_or_default()
 }
@@ -121,7 +121,7 @@ fn esc_closes_the_import_form_and_imports_nothing() -> Result<()> {
 
     let screen = terminal.wait_for("the queue screen back", |screen| {
         lines_inside_frame(&screen.contents())
-            .get(4)
+            .get(5)
             .is_some_and(|line| line.contains("Existing"))
     })?;
     assert!(!screen.contains("Import tasks"), "{screen}");

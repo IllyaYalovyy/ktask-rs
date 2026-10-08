@@ -43,6 +43,8 @@ struct AttemptFold {
     /// by a later event for this attempt: [`QueueState::attempt_from_fold`].
     waiting: Option<(String, SystemTime, WaitReason)>,
     ended: Option<AttemptEnd>,
+    /// When [`Event::AttemptEnded`] recorded `ended`: [`QueueState::ended_at`].
+    ended_at: Option<SystemTime>,
     steps: Vec<StepFold>,
 }
 
@@ -67,9 +69,9 @@ pub(crate) struct QueueState {
     /// The minutes the resolver's retry decision for an attempt added to the next attempt's
     /// time limit: [`QueueState::retry_more_time_of`].
     retry_more_times: HashMap<(TaskId, u32), u32>,
-    /// The most recent gate stop recorded for each task, cleared once a later attempt for it
-    /// actually begins: [`QueueState::gate_stop_of`].
-    gate_stops: HashMap<TaskId, (String, String)>,
+    /// The most recent gate stop recorded for each task, with when, cleared once a later
+    /// attempt for it actually begins: [`QueueState::gate_stop_of`].
+    gate_stops: HashMap<TaskId, (String, String, SystemTime)>,
     /// The answer recorded for each attempt that was answered: [`QueueState::answer_of`].
     answers: HashMap<(TaskId, u32), String>,
     /// The reason and when each task was marked done by the user's own hand:
@@ -503,7 +505,7 @@ mod tests {
         let state = QueueState::fold(&journal.events().unwrap());
         assert_eq!(
             state.gate_stop_of(TaskId(1)),
-            Some(("sync".to_owned(), "uncommitted changes".to_owned()))
+            Some(("sync".to_owned(), "uncommitted changes".to_owned(), at(1)))
         );
         // The task itself stays pending: a gate stop is not an attempt.
         assert_eq!(state.into_tasks()[0].status, TaskStatus::Pending);

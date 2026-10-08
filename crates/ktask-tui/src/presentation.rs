@@ -1,5 +1,6 @@
 //! The shared words and indicators that ktask interfaces use to present status facts.
 
+mod band;
 mod detail;
 mod transcript;
 
@@ -9,6 +10,7 @@ use ktask_core::{
     ProviderCheckKind, Routed, StepLine, StopCause, TaskStatus, Usage, Wait, WaitReason,
 };
 
+pub use band::run_band_text;
 pub use detail::{DetailLine, detail_lines};
 pub use transcript::{Transcript, step_heading};
 

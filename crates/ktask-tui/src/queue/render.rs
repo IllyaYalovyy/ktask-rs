@@ -1,5 +1,5 @@
-//! Drawing the queue screen: the header, the question or notice line, the key map, the task
-//! list, and, above it when there is one, the last run's or import's own report.
+//! Drawing the queue screen: the header, the run band, the question or notice line, the key
+//! map, the task list, and, above it when there is one, the last run's or import's own report.
 
 use crate::presentation;
 use ktask_core::{AttemptLine, DoneMark, QueueView, TaskId};
@@ -11,6 +11,7 @@ use ratatui::widgets::{Paragraph, Widget};
 
 use crate::scroll::first_shown;
 use crate::widgets::{elide, key_map_entries};
+use crate::wrap::wrap;
 
 use super::Queue;
 
@@ -80,13 +81,19 @@ impl Queue {
             key_map_entries(self.help_keys(), area, buf);
             return;
         }
-        let [header, notice, list] = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Length(self.message_height(area.height)),
+        let band_rows = band_lines(view, usize::from(area.width));
+        let band_height = u16::try_from(band_rows.len()).unwrap_or(u16::MAX).max(1);
+        let [header, band_area, question, notice, list] = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Length(band_height),
+            Constraint::Length(1),
+            Constraint::Length(self.message_height(area.height, band_height)),
             Constraint::Min(0),
         ])
         .areas(area);
-        Paragraph::new(self.header_lines(view, usize::from(header.width))).render(header, buf);
+        Paragraph::new(header_lines(view)).render(header, buf);
+        Paragraph::new(band_rows).render(band_area, buf);
+        Paragraph::new(self.question_line(view, usize::from(question.width))).render(question, buf);
         if let Some(message) = &self.message {
             let height = usize::from(notice.height);
             Paragraph::new(message_lines(self.message_offset, message, height)).render(notice, buf);
@@ -98,13 +105,15 @@ impl Queue {
 
     /// How many of `total` rows go to the last run's or import's own report, above the task
     /// list: as many as it has, so a short one wastes nothing, but never more than half of
-    /// what is left after the header, so the list it is about — and the selection on it — is
-    /// never pushed off screen by it, however long the report runs.
-    fn message_height(&self, total: u16) -> u16 {
+    /// what is left after the header, the band (`band_height` rows) and the question line, so
+    /// the list it is about — and the selection on it — is never pushed off screen by it,
+    /// however long the report runs.
+    fn message_height(&self, total: u16, band_height: u16) -> u16 {
         let Some(message) = &self.message else {
             return 0;
         };
-        let cap = (total.saturating_sub(3) / 2).max(1);
+        let reserved = 2u16.saturating_add(band_height).saturating_add(1);
+        let cap = (total.saturating_sub(reserved) / 2).max(1);
         u16::try_from(message.len()).unwrap_or(u16::MAX).min(cap)
     }
 
@@ -118,34 +127,7 @@ impl Queue {
         }
     }
 
-    /// The header: the project, the counts, and the question line.
-    fn header_lines(&self, view: &QueueView, width: usize) -> Vec<Line<'static>> {
-        let summary = view.summary;
-        vec![
-            Line::styled(
-                view.project.name.clone(),
-                Style::new().add_modifier(Modifier::BOLD),
-            ),
-            Line::from(
-                format!(
-                    "pending {} running {} done {} failed {} blocked {} unknown {} cancelled {} \
-                 skipped {} superseded {}",
-                    summary.pending,
-                    summary.running,
-                    summary.done,
-                    summary.failed,
-                    summary.blocked,
-                    summary.failed_unknown,
-                    summary.cancelled,
-                    summary.skipped,
-                    summary.superseded
-                ) + &format!(" · {}", presentation::usage_text(queue_usage(view))),
-            ),
-            self.question_line(view, width),
-        ]
-    }
-
-    /// The one-line question or notice shown under the summary — a removal confirmation, a
+    /// The one-line question or notice shown under the band — a removal confirmation, a
     /// refusal, or a run's refusal to start, whichever applies — or an empty line when none
     /// does. The title is cut with `…` to fit `width` when it is long, so its keys are never
     /// pushed off screen.
@@ -169,6 +151,41 @@ impl Queue {
             Line::styled(refusal.message(), Style::new().add_modifier(Modifier::BOLD))
         })
     }
+}
+
+/// The run band's own lines, wrapped to `width` so its `next:` part is never cut — a band too
+/// long for one row grows a second one instead of losing anything.
+fn band_lines(view: &QueueView, width: usize) -> Vec<Line<'static>> {
+    wrap(&presentation::run_band_text(&view.band), width)
+        .into_iter()
+        .map(|row| Line::styled(row, Style::new().add_modifier(Modifier::BOLD)))
+        .collect()
+}
+
+/// The header: the project and the counts.
+fn header_lines(view: &QueueView) -> Vec<Line<'static>> {
+    let summary = view.summary;
+    vec![
+        Line::styled(
+            view.project.name.clone(),
+            Style::new().add_modifier(Modifier::BOLD),
+        ),
+        Line::from(
+            format!(
+                "pending {} running {} done {} failed {} blocked {} unknown {} cancelled {} \
+                 skipped {} superseded {}",
+                summary.pending,
+                summary.running,
+                summary.done,
+                summary.failed,
+                summary.blocked,
+                summary.failed_unknown,
+                summary.cancelled,
+                summary.skipped,
+                summary.superseded
+            ) + &format!(" · {}", presentation::usage_text(queue_usage(view))),
+        ),
+    ]
 }
 
 fn queue_usage(view: &QueueView) -> ktask_core::Usage {
@@ -327,8 +344,8 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use ktask_core::{
-        AttemptOutcome, IMPLEMENTATION, Outcome, Project, StatusSummary, StepLine, Task, TaskId,
-        TaskKind, TaskStatus,
+        AttemptOutcome, IMPLEMENTATION, Outcome, Project, RunBand, StatusSummary, StepLine, Task,
+        TaskId, TaskKind, TaskStatus,
     };
     use ratatui::buffer::Buffer;
     use ratatui::crossterm::event::KeyCode;
@@ -364,6 +381,7 @@ mod tests {
             attempts: HashMap::new(),
             history: HashMap::new(),
             done_by_user: HashMap::new(),
+            band: RunBand::Idle { pending: 0 },
         }
     }
 
@@ -406,6 +424,7 @@ mod tests {
             attempts,
             history: HashMap::new(),
             done_by_user: HashMap::new(),
+            band: RunBand::Idle { pending: 0 },
         })
     }
 
@@ -440,7 +459,7 @@ mod tests {
             "pending 0 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0 \
              superseded 0"
         );
-        assert_eq!(row(&rows, 3), "The queue is empty.");
+        assert_eq!(row(&rows, 4), "The queue is empty.");
     }
 
     #[test]
@@ -453,8 +472,8 @@ mod tests {
             HashMap::new(),
         );
         let rows = drawn(&queue, 90, 8);
-        assert_eq!(row(&rows, 3), ">1  #10  pending  agent  first");
-        assert_eq!(row(&rows, 4), " 2  #20  pending  human  second");
+        assert_eq!(row(&rows, 4), ">1  #10  pending  agent  first");
+        assert_eq!(row(&rows, 5), " 2  #20  pending  human  second");
     }
 
     #[test]
@@ -465,7 +484,7 @@ mod tests {
             HashMap::new(),
         );
         let rows = drawn(&queue, 40, 8);
-        let row = row(&rows, 3);
+        let row = row(&rows, 4);
         assert!(row.starts_with(">1  #10  pending  agent  x"), "{row:?}");
         assert!(row.ends_with('…'), "{row:?}");
     }
@@ -502,7 +521,7 @@ mod tests {
         let queue = press(loaded(&[1, 2]), &[Char('j'), Char('d')]);
         let rows = drawn(&queue, 60, 8);
         assert_eq!(
-            row(&rows, 2),
+            row(&rows, 3),
             "Remove #2 task 2? y to remove · n or Esc to keep"
         );
     }
@@ -512,17 +531,17 @@ mod tests {
         let text = "task 1: done\ntask 2: failed: it broke\nnothing else is pending";
         let queue = loaded(&[1]).run_message(text.to_owned());
         let rows = drawn(&queue, 60, 8);
-        assert_eq!(row(&rows, 3), "task 1: done");
-        assert_eq!(row(&rows, 4), "task 2: failed: it broke");
-        assert_eq!(row(&rows, 5), ">0  #1  pending  agent  task 1");
+        assert_eq!(row(&rows, 4), "task 1: done");
+        assert_eq!(row(&rows, 5), "task 2: failed: it broke");
+        assert_eq!(row(&rows, 6), ">0  #1  pending  agent  task 1");
     }
 
     #[test]
     fn a_run_that_refuses_to_start_shows_beside_the_task_list_not_in_place_of_it() {
         let queue = loaded(&[1]).run_message("nothing is pending".to_owned());
         let rows = drawn(&queue, 60, 8);
-        assert_eq!(row(&rows, 2), "nothing is pending");
-        assert!(row(&rows, 3).contains("first") || rows[3].contains('1'));
+        assert_eq!(row(&rows, 3), "nothing is pending");
+        assert!(row(&rows, 4).contains("first") || rows[4].contains('1'));
     }
 
     fn attempt(provider: &str, seconds: u64, outcome: AttemptOutcome) -> AttemptLine {
@@ -567,7 +586,7 @@ mod tests {
         let queue = loaded_with_attempts(vec![task_named(1, "first", TaskKind::Agent)], attempts);
         let rows = drawn(&queue, 60, 8);
         assert_eq!(
-            row(&rows, 4),
+            row(&rows, 5),
             "      attempt 1: implementation · echo · 12s · running · us…"
         );
     }
@@ -584,7 +603,7 @@ mod tests {
         let queue = loaded_with_attempts(vec![task], attempts);
         let rows = drawn(&queue, 60, 8);
         assert_eq!(
-            row(&rows, 4),
+            row(&rows, 5),
             "      attempt 1: implementation · echo · 3s · done · usage …"
         );
     }
@@ -624,16 +643,17 @@ mod tests {
             attempts,
             history: HashMap::new(),
             done_by_user,
+            band: RunBand::Idle { pending: 0 },
         });
         let rows = drawn(&queue, 100, 8);
-        assert_eq!(row(&rows, 3), ">1  #10  done  agent  first");
-        let line = row(&rows, 4);
+        assert_eq!(row(&rows, 4), ">1  #10  done  agent  first");
+        let line = row(&rows, 5);
         assert!(
             line.contains("marked done by the user: fixed by hand (at"),
             "{line}"
         );
         assert_eq!(
-            row(&rows, 5),
+            row(&rows, 6),
             "      attempt 1: implementation · echo · 3s · failed · usage none"
         );
     }
@@ -673,14 +693,15 @@ mod tests {
             attempts,
             history,
             done_by_user: HashMap::new(),
+            band: RunBand::Idle { pending: 0 },
         });
         let rows = drawn(&queue, 60, 8);
         assert_eq!(
-            row(&rows, 4),
+            row(&rows, 5),
             "      attempt 1: implementation · echo · 9s · failed · usag…"
         );
         assert_eq!(
-            row(&rows, 5),
+            row(&rows, 6),
             "      attempt 2: implementation · echo · 5s · running · usa…"
         );
     }

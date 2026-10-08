@@ -15,6 +15,12 @@ use std::time::{Duration, Instant};
 use repo::{git_repository, scratch};
 use support::{Outcome, Result, Sandbox};
 
+/// `stdout`'s lines after the first — the run band, which this file's tests do not need to
+/// check since it is already covered, line by line, in `tests/status.rs`.
+fn after_band(stdout: &str) -> Vec<&str> {
+    stdout.lines().skip(1).collect()
+}
+
 /// Puts the directory of the `ktask-rs` under test on `command`'s `PATH`, so a task's own
 /// bash block can call back into `ktask-rs report`.
 fn with_nested_ktask_rs_on_path(command: &mut Command) {
@@ -127,7 +133,7 @@ impl Fixture {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let outcome = self.run(&["status"])?;
-            let lines: Vec<String> = outcome.stdout.lines().map(str::to_owned).collect();
+            let lines: Vec<String> = outcome.stdout.lines().skip(1).map(str::to_owned).collect();
             if lines.len() >= count {
                 return Ok(lines);
             }
@@ -178,7 +184,7 @@ fn a_passing_health_check_is_the_first_line_with_its_time_and_passed_and_the_tas
 
     let json = fixture.run(&["status", "--json"])?;
     let entries: serde_json::Value = serde_json::from_str(&json.stdout)?;
-    let steps = entries[0]["attempt"]["steps"].as_array().unwrap();
+    let steps = entries["tasks"][0]["attempt"]["steps"].as_array().unwrap();
     // The implementation step is still gated on `go`: the review step has not begun yet.
     assert_eq!(steps.len(), 2, "{steps:?}");
     assert_eq!(steps[0]["step"], "health check");
@@ -225,7 +231,7 @@ fn a_failing_health_check_stops_the_run_before_any_attempt_and_the_task_stays_pe
     // No attempt was ever begun, but the stop itself is not lost: `status` shows why the task
     // did not start, in the run's own words, and the task is still pending.
     let status = fixture.run(&["status"])?;
-    let lines: Vec<_> = status.stdout.lines().collect();
+    let lines = after_band(&status.stdout);
     assert_eq!(lines[0], "#1\tpending\ta\tusage none");
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(
@@ -259,7 +265,7 @@ fn once_a_later_run_gets_past_the_health_check_the_earlier_stop_is_no_longer_cur
     // attempt's own steps, with no trace of the health check ever having failed.
     let status = fixture.run(&["status"])?;
     assert!(!status.stdout.contains("failed"), "{}", status.stdout);
-    let lines: Vec<_> = status.stdout.lines().collect();
+    let lines = after_band(&status.stdout);
     assert_eq!(lines[0], "#1\tdone\ta\tusage none");
     assert!(
         lines[1].starts_with("\tattempt 1: health check\t-\t") && lines[1].ends_with("\tpassed"),
@@ -299,7 +305,7 @@ fn no_health_check_command_set_skips_the_step_and_leaves_no_line() -> Result<()>
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let outcome = fixture.run(&["status"])?;
     assert_eq!(
-        outcome.stdout.lines().collect::<Vec<_>>(),
+        after_band(&outcome.stdout),
         [
             "#1\tdone\ta\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",

@@ -381,7 +381,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::SystemTime;
 
-    use ktask_core::{Project, StatusSummary, Task, TaskKind, TaskStatus};
+    use ktask_core::{Project, RunBand, StatusSummary, Task, TaskKind, TaskStatus};
 
     use super::*;
 
@@ -413,6 +413,7 @@ mod tests {
             attempts: std::collections::HashMap::new(),
             history: std::collections::HashMap::new(),
             done_by_user: std::collections::HashMap::new(),
+            band: RunBand::Idle { pending: 0 },
         }
     }
 

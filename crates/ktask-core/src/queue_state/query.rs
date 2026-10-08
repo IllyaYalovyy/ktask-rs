@@ -169,10 +169,21 @@ impl QueueState {
         self.done_marks.get(&id).cloned()
     }
 
-    /// The step name and reason of the most recent gate stop recorded for task `id`, not yet
-    /// superseded by a later attempt actually beginning. `None` when it was never stopped by a
-    /// gate, or a later attempt has since begun.
-    pub(crate) fn gate_stop_of(&self, id: TaskId) -> Option<(String, String)> {
+    /// The step name, reason and when of the most recent gate stop recorded for task `id`, not
+    /// yet superseded by a later attempt actually beginning. `None` when it was never stopped
+    /// by a gate, or a later attempt has since begun.
+    pub(crate) fn gate_stop_of(&self, id: TaskId) -> Option<(String, String, SystemTime)> {
         self.gate_stops.get(&id).cloned()
+    }
+
+    /// When attempt `number` of task `id` ended, once [`crate::attempt::end_attempt`] has
+    /// recorded it. `None` while it is still open, or for an attempt or task that does not
+    /// exist.
+    pub(crate) fn ended_at(&self, id: TaskId, number: u32) -> Option<SystemTime> {
+        self.attempts
+            .get(&id)?
+            .iter()
+            .find(|attempt| attempt.number == number)?
+            .ended_at
     }
 }

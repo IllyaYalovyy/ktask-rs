@@ -148,7 +148,7 @@ fn capital_h_on_a_task_already_done_refuses_in_the_same_words_as_ktask_rs_ack() 
             .contains("only a pending human task can be acknowledged")
     })?;
     let refusal = lines_inside_frame(&screen)
-        .get(3)
+        .get(4)
         .cloned()
         .unwrap_or_default();
     let cli = fixture.sandbox.run(&fixture.repository, &["ack", "1"])?;

@@ -1,11 +1,14 @@
-//! Rendering a task's status: the current step's own fields, plus every step run so far.
+//! Rendering `status`: the run band first, then a task's own fields, plus every step run so
+//! far.
 
 use std::io::Write;
 
 use jiff::Timestamp;
-use ktask_core::StatusEntry;
+use ktask_core::{RunBand, StatusEntry};
 use ktask_tui::presentation;
 use serde::Serialize;
+
+use super::band::{RunBandJson, run_band_json};
 
 /// How long a step waited, in total, for its provider's usage limit, and when it last resumed,
 /// as `status --json` shows it.
@@ -41,8 +44,9 @@ struct StepJson<'a> {
 }
 
 /// The live output state for a running provider attempt as `status --json` shows it.
+/// `pub(super)`: the run band's own `status --json` shape embeds this same shape.
 #[derive(Debug, Serialize)]
-struct OutputActivityJson {
+pub(super) struct OutputActivityJson {
     last_output_seconds_ago: Option<u64>,
     silent_for_seconds: u64,
     active: bool,
@@ -74,8 +78,9 @@ pub(super) struct AttemptJson<'a> {
     steps: Vec<StepJson<'a>>,
 }
 
-/// `activity` in the stable, machine-readable status form.
-fn output_activity_json(activity: &ktask_core::OutputActivity) -> OutputActivityJson {
+/// `activity` in the stable, machine-readable status form. `pub(super)`: also used to build
+/// the run band's own `status --json` shape.
+pub(super) fn output_activity_json(activity: &ktask_core::OutputActivity) -> OutputActivityJson {
     OutputActivityJson {
         last_output_seconds_ago: activity
             .last_output_at
@@ -145,19 +150,21 @@ fn cost_usd(microusd: Option<u64>) -> Option<String> {
     microusd.map(|value| format!("{}.{:06}", value / 1_000_000, value % 1_000_000))
 }
 
-/// Writes `entries`: for every task that was attempted, one `#ID<TAB>status<TAB>title` line
-/// followed by an indented line for its attempt — step, provider, time spent, outcome, and
-/// the reason when it did not succeed — or a JSON array with `json`. Nothing is written when
-/// `entries` is empty.
+/// Writes the run band — what is running, where it most recently stopped and why, or that the
+/// queue is idle — as `status`'s own first line, then `entries`: for every task that was
+/// attempted, one `#ID<TAB>status<TAB>title` line followed by an indented line for its attempt
+/// — step, provider, time spent, outcome, and the reason when it did not succeed — or, with
+/// `json`, a JSON object with the band at `run` and the tasks at `tasks`.
 pub(crate) fn status(
+    band: &RunBand,
     entries: &[StatusEntry],
     json: bool,
     out: &mut impl Write,
 ) -> Result<(), String> {
     if json {
-        status_json(entries, out)
+        status_json(band, entries, out)
     } else {
-        status_text(entries, out)
+        status_text(band, entries, out)
     }
 }
 
@@ -197,9 +204,20 @@ pub(super) fn done_mark_json(mark: &ktask_core::DoneMark) -> Result<DoneMarkJson
     })
 }
 
-/// Writes `entries` as a JSON array.
-fn status_json(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), String> {
-    let shown = entries
+/// `status --json`'s whole object: the run band at `run`, every task at `tasks`.
+#[derive(Debug, Serialize)]
+struct StatusWithBandJson<'a> {
+    run: RunBandJson,
+    tasks: Vec<StatusJson<'a>>,
+}
+
+/// Writes `band` and `entries` as one JSON object.
+fn status_json(
+    band: &RunBand,
+    entries: &[StatusEntry],
+    out: &mut impl Write,
+) -> Result<(), String> {
+    let tasks = entries
         .iter()
         .map(|entry| {
             Ok(StatusJson {
@@ -220,6 +238,10 @@ fn status_json(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), Stri
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let shown = StatusWithBandJson {
+        run: run_band_json(band)?,
+        tasks,
+    };
     serde_json::to_writer(&mut *out, &shown).map_err(|e| e.to_string())?;
     writeln!(out).map_err(|e| e.to_string())
 }
@@ -238,7 +260,12 @@ fn write_done_mark_line(out: &mut impl Write, entry: &StatusEntry) -> Result<(),
 /// task sealed done by hand, by one line naming the reason and when — then one indented line
 /// per step its attempt has run so far, in order — step, provider (`-` for a step the tool ran
 /// itself, which names none), time spent, outcome, and the reason when it did not succeed.
-fn status_text(entries: &[StatusEntry], out: &mut impl Write) -> Result<(), String> {
+fn status_text(
+    band: &RunBand,
+    entries: &[StatusEntry],
+    out: &mut impl Write,
+) -> Result<(), String> {
+    writeln!(out, "{}", presentation::run_band_text(band)).map_err(|e| e.to_string())?;
     for entry in entries {
         let status = presentation::task_status(entry.status, Some(entry.attempt.outcome));
         writeln!(

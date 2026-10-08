@@ -111,7 +111,7 @@ fn selected_row(screen: &str) -> String {
 /// The header's question line — where a refusal is shown at once, without asking.
 fn header_line(screen: &str) -> String {
     lines_inside_frame(screen)
-        .get(3)
+        .get(4)
         .cloned()
         .unwrap_or_default()
 }

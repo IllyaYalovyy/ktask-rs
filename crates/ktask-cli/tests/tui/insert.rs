@@ -72,9 +72,9 @@ fn capital_o_then_submit_inserts_above_the_selected_task_with_the_ids_unchanged(
     let screen = wait_selected_screen(&terminal, "new")?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(marked(&screen), [">2  #6  pending  agent  new".to_owned()]);
-    assert_eq!(lines[4], " 1  #1  pending  agent  alpha");
-    assert_eq!(lines[6], " 3  #2  pending  agent  bravo");
-    assert_eq!(lines[9], " 6  #5  pending  agent  echo");
+    assert_eq!(lines[5], " 1  #1  pending  agent  alpha");
+    assert_eq!(lines[7], " 3  #2  pending  agent  bravo");
+    assert_eq!(lines[10], " 6  #5  pending  agent  echo");
     assert_eq!(
         order(&fixture)?,
         queue(&["alpha", "new", "bravo", "charlie", "delta", "echo"])
@@ -97,8 +97,8 @@ fn o_then_submit_inserts_below_the_selected_task_with_the_ids_unchanged() -> Res
     let screen = wait_selected_screen(&terminal, "new")?;
     let lines = lines_inside_frame(&screen);
     assert_eq!(marked(&screen), [">3  #6  pending  agent  new".to_owned()]);
-    assert_eq!(lines[5], " 2  #2  pending  agent  bravo");
-    assert_eq!(lines[7], " 4  #3  pending  agent  charlie");
+    assert_eq!(lines[6], " 2  #2  pending  agent  bravo");
+    assert_eq!(lines[8], " 4  #3  pending  agent  charlie");
     assert_eq!(
         order(&fixture)?,
         queue(&["alpha", "bravo", "new", "charlie", "delta", "echo"])
@@ -200,10 +200,10 @@ fn a_task_added_with_the_cli_at_a_place_is_shown_where_the_form_would_have_put_i
     terminal.wait_for("the task from the CLI below bravo", |screen| {
         let lines = lines_inside_frame(&screen.contents());
         lines
-            .get(5)
+            .get(6)
             .is_some_and(|line| line == ">2  #2  pending  agent  bravo")
             && lines
-                .get(6)
+                .get(7)
                 .is_some_and(|line| line == " 3  #6  pending  agent  via cli")
     })?;
     quit(terminal)
@@ -333,7 +333,7 @@ fn a_cancelled_task_selected_refuses_a_task_next_to_it_at_once_without_opening_t
             screen.contents().contains("task 3 is cancelled")
         })?;
         let lines = lines_inside_frame(&screen);
-        assert_eq!(lines[3], "task 3 is cancelled");
+        assert_eq!(lines[4], "task 3 is cancelled");
         assert!(!screen.contains("New task"), "{key} opened the form");
         assert_eq!(
             marked(&screen),
@@ -347,7 +347,7 @@ fn a_cancelled_task_selected_refuses_a_task_next_to_it_at_once_without_opening_t
         )?;
         assert_eq!(cli_refusal.code, Some(2));
         assert!(
-            cli_refusal.stderr.contains(&lines[3]),
+            cli_refusal.stderr.contains(&lines[4]),
             "{}",
             cli_refusal.stderr
         );

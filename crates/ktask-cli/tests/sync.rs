@@ -21,6 +21,12 @@ use repo::{git_repository, scratch};
 use support::{Outcome, Result, Sandbox};
 use tracked_branch::cloned_repository;
 
+/// `stdout`'s lines after the first — the run band, which this file's tests do not need to
+/// check since it is already covered, line by line, in `tests/status.rs`.
+fn after_band(stdout: &str) -> Vec<&str> {
+    stdout.lines().skip(1).collect()
+}
+
 /// Puts the directory of the `ktask-rs` under test on `command`'s `PATH`, so a task's own
 /// bash block can call back into `ktask-rs report`.
 fn with_nested_ktask_rs_on_path(command: &mut Command) {
@@ -157,7 +163,7 @@ impl Fixture {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let outcome = self.run(&["status"])?;
-            let lines: Vec<String> = outcome.stdout.lines().map(str::to_owned).collect();
+            let lines: Vec<String> = outcome.stdout.lines().skip(1).map(str::to_owned).collect();
             assert!(
                 !lines.iter().any(|line| line.contains("\tinterrupted\t")),
                 "a run that is alive was shown interrupted: {lines:?}"
@@ -230,7 +236,7 @@ fn several_new_commits_are_counted_and_pluralised() -> Result<()> {
 
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let status = fixture.run(&["status"])?;
-    let lines: Vec<_> = status.stdout.lines().collect();
+    let lines = after_band(&status.stdout);
     assert_eq!(
         lines[0..2],
         [
@@ -270,7 +276,7 @@ fn nothing_new_says_so_and_the_task_carries_on() -> Result<()> {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let status = fixture.run(&["status"])?;
     assert_eq!(
-        status.stdout.lines().collect::<Vec<_>>(),
+        after_band(&status.stdout),
         [
             "#1\tdone\ta\tusage none",
             "\tattempt 1: sync\t-\t0s\tpassed\tnothing new",
@@ -309,7 +315,7 @@ fn no_tracked_branch_set_skips_the_step_and_leaves_no_line() -> Result<()> {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let status = sandbox.run(&repository, &["status"])?;
     assert_eq!(
-        status.stdout.lines().collect::<Vec<_>>(),
+        after_band(&status.stdout),
         [
             "#1\tdone\ta\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
@@ -348,7 +354,7 @@ fn uncommitted_changes_stop_the_run_before_the_task_starts_and_say_what_is_expec
     // The stop is not lost once the run's own terminal is gone: `status` shows the same
     // words, against the task's still-pending status.
     let status = fixture.run(&["status"])?;
-    let lines: Vec<_> = status.stdout.lines().collect();
+    let lines = after_band(&status.stdout);
     assert_eq!(lines[0], "#1\tpending\ta\tusage none");
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(
@@ -388,7 +394,7 @@ fn once_a_later_run_gets_past_the_sync_the_earlier_stop_is_no_longer_current() -
     // The earlier stop is no longer shown as current: the passing sync step replaces it.
     let status = fixture.run(&["status"])?;
     assert!(!status.stdout.contains("failed"), "{}", status.stdout);
-    let lines: Vec<_> = status.stdout.lines().collect();
+    let lines = after_band(&status.stdout);
     assert_eq!(lines[0], "#1\tdone\ta\tusage none");
     assert!(
         lines[1].starts_with("\tattempt 1: sync\t-\t")
@@ -437,7 +443,7 @@ fn an_unreachable_remote_stops_the_run_and_says_what_is_expected() -> Result<()>
     assert_eq!(fixture.task_status(1)?, "pending");
 
     let status = fixture.run(&["status"])?;
-    let lines: Vec<_> = status.stdout.lines().collect();
+    let lines = after_band(&status.stdout);
     assert_eq!(lines[0], "#1\tpending\ta\tusage none");
     assert!(
         lines[1].starts_with("\tsync\t-\t0s\tfailed\t"),
@@ -498,7 +504,7 @@ fn a_rebase_conflict_is_undone_leaving_the_directory_exactly_as_it_was() -> Resu
     assert_eq!(fixture.task_status(1)?, "pending");
 
     let ktask_status = fixture.run(&["status"])?;
-    let lines: Vec<_> = ktask_status.stdout.lines().collect();
+    let lines = after_band(&ktask_status.stdout);
     assert_eq!(lines[0], "#1\tpending\ta\tusage none");
     assert!(
         lines[1].starts_with("\tsync\t-\t0s\tfailed\t"),

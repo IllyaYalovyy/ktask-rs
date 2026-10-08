@@ -92,11 +92,13 @@ impl Fixture {
         Ok(())
     }
 
-    /// `ktask-rs status`'s own stdout lines.
+    /// `status`'s task lines, after the run band — its own first line — which this file's
+    /// tests do not need to check since it is already covered, line by line, in
+    /// `tests/status.rs`.
     fn status_lines(&self) -> Result<Vec<String>> {
         let status = self.run(&["status"])?;
         assert_eq!(status.code, Some(0), "{}", status.stderr);
-        Ok(status.stdout.lines().map(str::to_owned).collect())
+        Ok(status.stdout.lines().skip(1).map(str::to_owned).collect())
     }
 
     fn read(&self, name: &str) -> Result<String> {

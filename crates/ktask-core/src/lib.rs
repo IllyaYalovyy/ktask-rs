@@ -3,6 +3,7 @@
 //! outside world only through ports it defines itself. See docs/ARCHITECTURE.md.
 
 mod attempt;
+mod band;
 mod channel;
 mod clock;
 mod commands;
@@ -34,6 +35,7 @@ mod task;
 mod task_file;
 mod usage;
 
+pub use band::{RunBand, RunningBand, StopKind, StoppedBand, run_band, run_band_with_output};
 pub use channel::Channel;
 pub use clock::Clock;
 pub use commands::{CommandSpec, Commands, CommandsError, Exit, Output};

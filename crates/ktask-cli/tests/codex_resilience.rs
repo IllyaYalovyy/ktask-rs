@@ -112,13 +112,21 @@ fn a_transport_backoff_line_counts_one_number_down_in_status_and_status_json() -
         let json = fixture.run(&["status", "--json"])?.stdout;
         assert!(!text.contains("resumes in"), "{text}");
         assert!(!json.contains("resumes in"), "{json}");
-        if let Some(seconds) = retry_two_countdown(&text) {
-            assert!(text.contains("routed: retry 2 of 3"), "{text}");
+        // The run band, `status`'s first line, echoes the same reason from its own read of
+        // the journal, so the countdown is taken from the task lines below it.
+        let tasks = text.split_once('\n').map_or("", |(_, rest)| rest);
+        if let Some(seconds) = retry_two_countdown(tasks) {
+            assert!(tasks.contains("routed: retry 2 of 3"), "{text}");
             countdown.push(seconds);
             let parsed = serde_json::from_str::<serde_json::Value>(&json)?;
-            let reason = parsed[0]["attempt"]["reason"].as_str().unwrap_or_default();
+            let reason = parsed["tasks"][0]["attempt"]["reason"]
+                .as_str()
+                .unwrap_or_default();
             if reason.contains("retry 2 of 3 in ") {
-                assert_eq!(parsed[0]["attempt"]["routed"], "retry 2 of 3", "{json}");
+                assert_eq!(
+                    parsed["tasks"][0]["attempt"]["routed"], "retry 2 of 3",
+                    "{json}"
+                );
                 json_reason = Some(reason.to_owned());
             }
         } else if !countdown.is_empty() {
@@ -179,7 +187,11 @@ fn recorded_transport_failures_back_off_then_end_in_the_resolve_step_naming_the_
     assert!(!prompt.contains("--more-time"), "{prompt}");
     let status = fixture.run(&["status"])?;
     assert!(
-        status.stdout.starts_with("#1\tfailed\t"),
+        status
+            .stdout
+            .lines()
+            .nth(1)
+            .is_some_and(|line| line.starts_with("#1\tfailed\t")),
         "{}",
         status.stdout
     );
@@ -228,7 +240,9 @@ fn recorded_codex_authentication_failure_stops_with_codex_login_advice() -> Resu
         fixture
             .run(&["status"])?
             .stdout
-            .starts_with("#1\tpending\t")
+            .lines()
+            .nth(1)
+            .is_some_and(|line| line.starts_with("#1\tpending\t"))
     );
     Ok(())
 }

@@ -250,7 +250,7 @@ pub(super) fn entry_for_task(
         } else {
             None
         };
-        return Ok(gate_stop.map(|(step, reason)| gate_stop_entry(task, step, reason)));
+        return Ok(gate_stop.map(|(step, reason, _at)| gate_stop_entry(task, step, reason)));
     };
     let reported = crate::attempt::last_report(journal, task.id, attempt.number)?;
     let answer = crate::attempt::answer_of(journal, task.id, attempt.number)?;

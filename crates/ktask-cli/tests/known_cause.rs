@@ -89,7 +89,7 @@ impl Fixture {
         Ok(status
             .stdout
             .lines()
-            .next()
+            .nth(1)
             .unwrap_or_default()
             .split('\t')
             .nth(1)

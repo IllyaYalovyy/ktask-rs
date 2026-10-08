@@ -28,6 +28,12 @@ use rusqlite::OptionalExtension;
 use support::{Outcome, Result, Sandbox};
 use tempfile::TempDir;
 
+/// `stdout`'s lines after the first — the run band, which this file's tests do not need to
+/// check since it is already covered, line by line, in `tests/status.rs`.
+fn after_band(stdout: &str) -> Vec<&str> {
+    stdout.lines().skip(1).collect()
+}
+
 /// A directory holding a fake `ktask-rs` that does nothing but exit `99` — standing in for
 /// some other tool of that name found earlier on a caller's `PATH`. Placed ahead of the real
 /// one on `PATH`, it proves whether the real one is still the one reached: if it ran instead,
@@ -1083,7 +1089,7 @@ fn an_approving_review_carries_the_task_on_as_done_and_the_review_line_shows_it(
     let status = fixture.run(&["status"])?;
     assert_eq!(status.code, Some(0), "{}", status.stderr);
     assert_eq!(
-        status.stdout.lines().collect::<Vec<_>>(),
+        after_band(&status.stdout),
         [
             "#1\tdone\ta\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
@@ -1119,7 +1125,7 @@ fn a_reviewer_that_requests_changes_ends_the_task_failed_with_the_findings_as_th
     // Both interfaces show the review line and the findings.
     let status_lines = fixture.run(&["status"])?;
     assert_eq!(
-        status_lines.stdout.lines().collect::<Vec<_>>(),
+        after_band(&status_lines.stdout),
         [
             "#1\tfailed\ta\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
@@ -1240,7 +1246,7 @@ fn an_accepting_tester_carries_the_task_on_as_done_and_the_testing_line_shows_it
     let status = fixture.run(&["status"])?;
     assert_eq!(status.code, Some(0), "{}", status.stderr);
     assert_eq!(
-        status.stdout.lines().collect::<Vec<_>>(),
+        after_band(&status.stdout),
         [
             "#1\tdone\ta\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
@@ -1276,7 +1282,7 @@ fn a_tester_that_rejects_ends_the_task_failed_with_what_failed_as_the_reason_and
     // Both interfaces show the testing line and the reason.
     let status_lines = fixture.run(&["status"])?;
     assert_eq!(
-        status_lines.stdout.lines().collect::<Vec<_>>(),
+        after_band(&status_lines.stdout),
         [
             "#1\tfailed\ta\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
@@ -1287,9 +1293,9 @@ fn a_tester_that_rejects_ends_the_task_failed_with_what_failed_as_the_reason_and
     let json = fixture.run(&["status", "--json"])?;
     assert_eq!(json.code, Some(0), "{}", json.stderr);
     let entries: serde_json::Value = serde_json::from_str(&json.stdout)?;
-    assert_eq!(entries[0]["attempt"]["outcome"], "rejected");
+    assert_eq!(entries["tasks"][0]["attempt"]["outcome"], "rejected");
     assert_eq!(
-        entries[0]["attempt"]["reason"],
+        entries["tasks"][0]["attempt"]["reason"],
         "the login button does nothing"
     );
     Ok(())
@@ -1459,14 +1465,14 @@ fn recorded_codex_jsonl_runs_the_task_with_its_requested_model_session_and_usage
     );
     let status_json: serde_json::Value =
         serde_json::from_str(&fixture.run(&["status", "--json"])?.stdout)?;
-    assert_eq!(status_json[0]["attempt"]["input_tokens"], 13_282);
-    assert_eq!(status_json[0]["attempt"]["output_tokens"], 5);
+    assert_eq!(status_json["tasks"][0]["attempt"]["input_tokens"], 13_282);
+    assert_eq!(status_json["tasks"][0]["attempt"]["output_tokens"], 5);
     assert_eq!(
-        status_json[0]["attempt"]["cost_usd"],
+        status_json["tasks"][0]["attempt"]["cost_usd"],
         serde_json::Value::Null
     );
     assert_eq!(
-        status_json[0]["attempt"]["steps"][0]["session"],
+        status_json["tasks"][0]["attempt"]["steps"][0]["session"],
         "01a10555-6a4c-7f21-8ac4-aed0bf10dbb2"
     );
     let output = fixture.run(&["output", "1"])?;
@@ -1561,11 +1567,11 @@ fn recorded_claude_stream_json_runs_the_task_with_its_model() -> Result<()> {
     );
     let status_json: serde_json::Value =
         serde_json::from_str(&fixture.run(&["status", "--json"])?.stdout)?;
-    assert_eq!(status_json[0]["attempt"]["input_tokens"], 10);
-    assert_eq!(status_json[0]["attempt"]["output_tokens"], 56);
-    assert_eq!(status_json[0]["attempt"]["cost_usd"], "0.011002");
+    assert_eq!(status_json["tasks"][0]["attempt"]["input_tokens"], 10);
+    assert_eq!(status_json["tasks"][0]["attempt"]["output_tokens"], 56);
+    assert_eq!(status_json["tasks"][0]["attempt"]["cost_usd"], "0.011002");
     assert_eq!(
-        status_json[0]["attempt"]["steps"][0]["model"],
+        status_json["tasks"][0]["attempt"]["steps"][0]["model"],
         "claude-haiku-4-5-20251001"
     );
     Ok(())

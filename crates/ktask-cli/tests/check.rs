@@ -158,9 +158,17 @@ fn the_attempt_fails_with_the_check_named_and_the_router_sends_it_to_decide() ->
     assert!(check.contains("routed: decide — check failed"), "{check}");
     let json = fixture.run(&["status", "--json"])?;
     let parsed = serde_json::from_str::<serde_json::Value>(&json.stdout)?;
-    assert_eq!(parsed[0]["status"], "failed", "{}", json.stdout);
-    assert_eq!(parsed[0]["attempt"]["outcome"], "failed", "{}", json.stdout);
-    assert_eq!(parsed[0]["attempt"]["reason"], "exit 2", "{}", json.stdout);
+    assert_eq!(parsed["tasks"][0]["status"], "failed", "{}", json.stdout);
+    assert_eq!(
+        parsed["tasks"][0]["attempt"]["outcome"], "failed",
+        "{}",
+        json.stdout
+    );
+    assert_eq!(
+        parsed["tasks"][0]["attempt"]["reason"], "exit 2",
+        "{}",
+        json.stdout
+    );
     Ok(())
 }
 

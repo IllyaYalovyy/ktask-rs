@@ -150,8 +150,9 @@ fn a_recorded_claude_warning_finishes_with_its_usage_and_model() -> Result<()> {
     let run = fixture.run(&["run"])?;
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let status = fixture.run(&["status"])?;
+    assert_eq!(status.stdout.lines().next(), Some("idle · nothing pending"));
     assert_eq!(
-        status.stdout.lines().next(),
+        status.stdout.lines().nth(1),
         Some("#1\tdone\tClaude task\ttokens in 9 out 56 cost $0.010677")
     );
     assert!(!status.stdout.contains("attempt 2"), "{}", status.stdout);
@@ -171,7 +172,7 @@ fn a_recorded_claude_warning_finishes_with_its_usage_and_model() -> Result<()> {
     let json = fixture.run(&["status", "--json"])?;
     assert_eq!(json.code, Some(0), "{}", json.stderr);
     let parsed = serde_json::from_str::<serde_json::Value>(&json.stdout)?;
-    let implementation = parsed[0]["attempt"]["steps"]
+    let implementation = parsed["tasks"][0]["attempt"]["steps"]
         .as_array()
         .and_then(|steps| steps.iter().find(|step| step["step"] == "implementation"))
         .expect("an implementation step");
@@ -237,7 +238,11 @@ fn recorded_claude_authentication_failure_stops_with_login_advice() -> Result<()
     assert!(run.stdout.contains("claude /login"), "{}", run.stdout);
     let status = fixture.run(&["status"])?;
     assert!(
-        status.stdout.starts_with("#1\tpending\t"),
+        status
+            .stdout
+            .lines()
+            .nth(1)
+            .is_some_and(|line| line.starts_with("#1\tpending\t")),
         "{}",
         status.stdout
     );

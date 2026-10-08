@@ -17,9 +17,10 @@ use crate::{
 mod query;
 
 pub(crate) use query::{
-    all_attempts, answer_of, current_step, done_mark_of, ended_at_time_limit, gate_stop_of,
-    last_attempt, last_report, last_retry_model, last_retry_more_time, last_retry_reset_tree,
-    last_retry_same_session, last_session, report_of_step, running, with_answer,
+    all_attempts, answer_of, current_step, done_mark_of, ended_at, ended_at_time_limit,
+    gate_stop_of, last_attempt, last_report, last_retry_model, last_retry_more_time,
+    last_retry_reset_tree, last_retry_same_session, last_session, report_of_step, running,
+    with_answer,
 };
 
 /// Use case: records that the gate named `step` refused to let task `id`'s attempt begin, with

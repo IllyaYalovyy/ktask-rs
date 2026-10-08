@@ -201,7 +201,7 @@ fn path_with(directory: &Path) -> Result<std::ffi::OsString> {
 /// per line, above the task list.
 fn result_line(screen: &str, index: usize) -> String {
     lines_inside_frame(screen)
-        .get(4 + index)
+        .get(5 + index)
         .cloned()
         .unwrap_or_default()
 }
@@ -210,7 +210,7 @@ fn result_line(screen: &str, index: usize) -> String {
 /// rather than in place of it.
 fn header_line(screen: &str) -> String {
     lines_inside_frame(screen)
-        .get(3)
+        .get(4)
         .cloned()
         .unwrap_or_default()
 }
@@ -247,23 +247,23 @@ fn r_starts_the_run_and_the_screen_shows_its_progress_as_it_would_for_a_run_star
 
     let screen = terminal.wait_for("the task running with its attempt line", |screen| {
         let lines = lines_inside_frame(&screen.contents());
-        lines.get(4).is_some_and(|line| line.contains("running"))
+        lines.get(5).is_some_and(|line| line.contains("running"))
             && lines
-                .get(5)
+                .get(6)
                 .is_some_and(|line| line.contains("implementation"))
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">1  #1  running  agent  a");
+    assert_eq!(lines[5], ">1  #1  running  agent  a");
     assert!(
-        lines[5].contains("implementation · echo") && lines[5].contains("running"),
+        lines[6].contains("implementation · echo") && lines[6].contains("running"),
         "{}",
-        lines[5]
+        lines[6]
     );
 
     std::fs::write(&go, "")?;
     let screen = terminal.wait_for("the task done", |screen| {
         lines_inside_frame(&screen.contents())
-            .get(4)
+            .get(5)
             .is_some_and(|line| line.starts_with(">1  #1  done"))
     })?;
     assert!(
@@ -343,9 +343,19 @@ fn r_past_an_earlier_task_that_did_not_finish_shows_the_refusal_beside_the_task_
 
     terminal.send("r")?;
 
+    // The earlier run's own band ("run stopped: ...") is long enough to wrap onto a second
+    // row here, so the refusal this press of `r` raises is one row further down than
+    // `header_line` assumes.
+    let header_line_below_a_wrapped_band = |screen: &str| {
+        lines_inside_frame(screen)
+            .get(5)
+            .cloned()
+            .unwrap_or_default()
+    };
+
     let screen = terminal.wait_for_text("run did not start")?;
     assert_eq!(
-        header_line(&screen),
+        header_line_below_a_wrapped_band(&screen),
         "task 1: failed: it broke; run did not start"
     );
     assert!(selected_row(&screen).ends_with("  a"), "{screen}");
@@ -356,7 +366,7 @@ fn r_past_an_earlier_task_that_did_not_finish_shows_the_refusal_beside_the_task_
         selected_row(&screen.contents()).ends_with("  b")
     })?;
     assert_eq!(
-        header_line(&screen),
+        header_line_below_a_wrapped_band(&screen),
         "task 1: failed: it broke; run did not start"
     );
 
@@ -443,7 +453,7 @@ fn r_while_a_run_started_elsewhere_holds_the_queue_shows_the_refusal_beside_the_
     let outside_pid = outside.id();
     terminal.wait_for("the task running from the outside run", |screen| {
         lines_inside_frame(&screen.contents())
-            .get(4)
+            .get(5)
             .is_some_and(|line| line.contains("running"))
     })?;
 
@@ -484,7 +494,7 @@ fn quitting_the_screen_does_not_stop_the_run_it_started_and_opening_it_again_sho
     first.send("r")?;
     first.wait_for("the task running", |screen| {
         lines_inside_frame(&screen.contents())
-            .get(4)
+            .get(5)
             .is_some_and(|line| line.contains("running"))
     })?;
 
@@ -495,19 +505,19 @@ fn quitting_the_screen_does_not_stop_the_run_it_started_and_opening_it_again_sho
     let mut second = fixture.open()?;
     let screen = second.wait_for("the run still in progress, not interrupted", |screen| {
         let lines = lines_inside_frame(&screen.contents());
-        lines.get(4).is_some_and(|line| line.contains("running"))
+        lines.get(5).is_some_and(|line| line.contains("running"))
             && lines
-                .get(5)
+                .get(6)
                 .is_some_and(|line| line.contains("implementation"))
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">1  #1  running  agent  a");
+    assert_eq!(lines[5], ">1  #1  running  agent  a");
     assert!(!screen.contains("interrupted"), "{screen}");
 
     std::fs::write(&go, "")?;
     second.wait_for("the task done", |screen| {
         lines_inside_frame(&screen.contents())
-            .get(4)
+            .get(5)
             .is_some_and(|line| line.starts_with(">1  #1  done"))
     })?;
 

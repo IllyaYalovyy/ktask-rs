@@ -7,6 +7,7 @@ use jiff::Timestamp;
 use ktask_core::{AttemptToken, Channel, Outcome, Output, Project, Supersede, Task, TaskId};
 use serde::Serialize;
 
+mod band;
 mod run;
 mod settings;
 mod show;

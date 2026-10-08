@@ -10,8 +10,8 @@ use std::sync::{Mutex, PoisonError};
 use std::time::SystemTime;
 
 use ktask_core::{
-    Import, JournalError, JournalWatch, Placement, Project, ProviderView, QueueView, RunReport,
-    SettingView, StatusSummary, TaskDraft, TaskId,
+    Import, JournalError, JournalWatch, Placement, Project, ProviderView, QueueView, RunBand,
+    RunReport, SettingView, StatusSummary, TaskDraft, TaskId,
 };
 use ktask_tui::Application;
 
@@ -38,6 +38,7 @@ fn empty_queue() -> QueueView {
         attempts: HashMap::new(),
         history: HashMap::new(),
         done_by_user: HashMap::new(),
+        band: RunBand::Idle { pending: 0 },
     }
 }
 

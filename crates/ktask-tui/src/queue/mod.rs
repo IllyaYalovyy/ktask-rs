@@ -290,8 +290,8 @@ mod tests {
     use std::time::SystemTime;
 
     use ktask_core::{
-        AnswerError, AttemptLine, AttemptOutcome, Outcome, Project, RetryError, StatusSummary,
-        Task, TaskKind, TaskStatus,
+        AnswerError, AttemptLine, AttemptOutcome, Outcome, Project, RetryError, RunBand,
+        StatusSummary, Task, TaskKind, TaskStatus,
     };
 
     use super::*;
@@ -324,6 +324,7 @@ mod tests {
             attempts: HashMap::new(),
             history: HashMap::new(),
             done_by_user: HashMap::new(),
+            band: RunBand::Idle { pending: 0 },
         }
     }
 

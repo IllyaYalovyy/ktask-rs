@@ -143,7 +143,8 @@ fn done_exits_zero_marks_the_task_done_and_status_shows_the_reason_and_when() ->
 
     // `status --json` shows the task done, with the reason and when, and the attempt's own
     // ending is still there too — the manual marking does not erase it.
-    let entries = fixture.status_json()?;
+    let parsed = fixture.status_json()?;
+    let entries = &parsed["tasks"];
     assert_eq!(entries[0]["status"], "done");
     assert_eq!(entries[0]["done_by_user"]["reason"], "fixed by hand");
     assert!(entries[0]["done_by_user"]["at"].is_string(), "{entries}");

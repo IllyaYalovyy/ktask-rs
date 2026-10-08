@@ -145,10 +145,16 @@ fn the_queue_screen_shows_the_codex_transport_backoff() -> Result<()> {
         screen.contents().contains("Codex transport disconnected")
     })?;
     assert!(screen.contains("retry 1 of 3 in"), "{screen}");
-    let routed_at = screen
+    // The band, above the task list, echoes the same reason ahead of the attempt line's own
+    // `routed:` verdict, so the ordering below is checked from the task list's row down —
+    // the attempt line's own words, not the band's.
+    let attempt_area = &screen[screen
+        .find(">1  #1  running")
+        .expect("the running task row")..];
+    let routed_at = attempt_area
         .find("routed: retry 1 of 3")
         .expect("the routed verdict");
-    let reason_at = screen
+    let reason_at = attempt_area
         .find("Codex transport disconnected")
         .expect("the reason");
     assert!(

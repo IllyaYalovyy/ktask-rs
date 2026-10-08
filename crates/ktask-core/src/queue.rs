@@ -7,8 +7,8 @@ use std::time::Duration;
 use crate::status::{AttemptLine, AttemptOutcome, DoneMark, status_with_output};
 use crate::task::without_hidden_statuses;
 use crate::{
-    AttemptOutput, Clock, Journal, JournalError, Project, RunLock, Task, TaskId, TaskStatus,
-    list_all_tasks,
+    AttemptOutput, Clock, Journal, JournalError, Project, RunBand, RunLock, Task, TaskId,
+    TaskStatus, list_all_tasks, run_band_with_output,
 };
 
 /// How many tasks are in each status.
@@ -92,6 +92,9 @@ pub struct QueueView {
     /// [`crate::done_task`], from the same use case `status` reads it from. A task not marked
     /// done this way has no entry here.
     pub done_by_user: HashMap<TaskId, DoneMark>,
+    /// Whether a run is going right now, where it most recently stopped and why, or that the
+    /// queue is idle, from the same use case [`crate::run_band`] reads it from.
+    pub band: RunBand,
 }
 
 /// Use case: the queue of `project`, whose journal is `journal`; with the cancelled, skipped and
@@ -139,6 +142,7 @@ pub fn queue_view_with_output(
 ) -> Result<QueueView, JournalError> {
     let tasks = list_all_tasks(journal)?;
     let entries = status_with_output(journal, clock, lock, output, silent_after)?;
+    let band = run_band_with_output(journal, clock, lock, output, silent_after)?;
     let attempts: HashMap<TaskId, AttemptLine> = entries
         .iter()
         .map(|entry| (entry.task, entry.attempt.clone()))
@@ -160,6 +164,7 @@ pub fn queue_view_with_output(
         attempts,
         history,
         done_by_user,
+        band,
     })
 }
 
@@ -192,6 +197,11 @@ mod tests {
     /// A lock no run holds — irrelevant whenever nothing is running.
     fn no_run() -> FakeRunLock {
         FakeRunLock::free()
+    }
+
+    /// A lock a live run holds.
+    fn a_live_run() -> FakeRunLock {
+        FakeRunLock::held_by(Some(4_321))
     }
 
     #[test]
@@ -387,6 +397,27 @@ mod tests {
             .attempt
             .clone();
         assert_eq!(view.attempts.get(&TaskId(1)), Some(&expected));
+    }
+
+    #[test]
+    fn the_view_carries_the_same_band_run_band_would_give() {
+        let journal = FakeJournal::default();
+        let clock = FakeClock(at(0));
+        add_task(&journal, &clock, &draft("a"), Placement::End).unwrap();
+        crate::attempt::begin_attempt_running(&journal, &clock, TaskId(1), "echo", None).unwrap();
+
+        let view = queue_view(
+            project("app", 10),
+            &journal,
+            &FakeClock(at(30)),
+            &a_live_run(),
+            false,
+        )
+        .unwrap();
+
+        let expected = crate::run_band(&journal, &FakeClock(at(30)), &a_live_run()).unwrap();
+        assert_eq!(view.band, expected);
+        assert!(matches!(view.band, RunBand::Running(_)));
     }
 
     #[test]

@@ -20,6 +20,12 @@ use std::time::{Duration, Instant};
 use support::{Outcome, Result, Sandbox};
 use tracked_branch::cloned_repository;
 
+/// `stdout`'s lines after the first — the run band, which this file's tests do not need to
+/// check since it is already covered, line by line, in `tests/status.rs`.
+fn after_band(stdout: &str) -> Vec<&str> {
+    stdout.lines().skip(1).collect()
+}
+
 /// A scratch directory, canonical so that it can be compared with what the binary prints.
 fn scratch() -> Result<(tempfile::TempDir, PathBuf)> {
     let dir = tempfile::TempDir::new()?;
@@ -163,7 +169,7 @@ impl Fixture {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let outcome = self.run(&["status"])?;
-            let lines: Vec<String> = outcome.stdout.lines().map(str::to_owned).collect();
+            let lines: Vec<String> = outcome.stdout.lines().skip(1).map(str::to_owned).collect();
             if lines
                 .get(count - 1)
                 .is_some_and(|last| !last.ends_with("\trunning"))
@@ -274,7 +280,7 @@ fn a_pushed_commit_lands_on_the_remote_its_line_says_so_and_the_task_ends_done()
 
     let status = fixture.run(&["status"])?;
     assert_eq!(status.code, Some(0), "{}", status.stderr);
-    let lines: Vec<&str> = status.stdout.lines().collect();
+    let lines = after_band(&status.stdout);
     assert_eq!(lines[0], "#1\tdone\ta\tusage none");
     let short = &hash[..7];
     assert_eq!(
@@ -398,7 +404,7 @@ fn a_task_with_nothing_to_commit_has_no_push_line_and_ends_done() -> Result<()> 
     assert_eq!(fixture.task_status(1)?, "done");
     let status = fixture.run(&["status"])?;
     assert_eq!(
-        status.stdout.lines().collect::<Vec<_>>(),
+        after_band(&status.stdout),
         [
             "#1\tdone\ta\tusage none",
             "\tattempt 1: sync\t-\t0s\tpassed\tnothing new",

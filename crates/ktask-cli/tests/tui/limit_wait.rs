@@ -98,7 +98,7 @@ fn the_queue_screen_shows_the_limit_countdown_then_the_task_done() -> Result<()>
             .any(|line| line.contains("waiting"))
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[4], ">1  #1  running  agent  a");
+    assert_eq!(lines[5], ">1  #1  running  agent  a");
     let step_line = lines
         .iter()
         .find(|line| line.contains("waiting"))
@@ -110,7 +110,7 @@ fn the_queue_screen_shows_the_limit_countdown_then_the_task_done() -> Result<()>
 
     let screen = terminal.wait_for("the task done", |screen| {
         lines_inside_frame(&screen.contents())
-            .get(4)
+            .get(5)
             .is_some_and(|line| line.starts_with(">1  #1  done"))
     })?;
     assert!(screen.contains("done 1"), "{screen}");

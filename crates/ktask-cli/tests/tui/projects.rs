@@ -172,7 +172,7 @@ fn selecting_a_project_replaces_the_queue_screen_and_every_action_then_applies_t
         let lines = lines_inside_frame(&screen.contents());
         lines.get(1).is_some_and(|line| line == "other-app")
             && lines
-                .get(4)
+                .get(5)
                 .is_some_and(|line| line == ">1  #1  pending  agent  bravo")
     })?;
 

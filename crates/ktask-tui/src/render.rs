@@ -131,7 +131,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::SystemTime;
 
-    use ktask_core::{Project, QueueView, StatusSummary};
+    use ktask_core::{Project, QueueView, RunBand, StatusSummary};
 
     use crate::App;
 
@@ -160,6 +160,7 @@ mod tests {
                 attempts: std::collections::HashMap::new(),
                 history: std::collections::HashMap::new(),
                 done_by_user: std::collections::HashMap::new(),
+                band: RunBand::Idle { pending: 0 },
             }),
         )
     }

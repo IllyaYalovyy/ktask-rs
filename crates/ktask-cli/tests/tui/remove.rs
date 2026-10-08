@@ -66,7 +66,7 @@ fn d_asks_before_removing_and_names_the_selected_task_without_changing_anything(
     let screen = ask(&mut terminal, 2, "bravo")?;
 
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[3], question(2, "bravo"));
+    assert_eq!(lines[4], question(2, "bravo"));
     assert_eq!(
         lines[2],
         "pending 5 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
@@ -89,17 +89,17 @@ fn d_then_y_removes_the_selected_task_and_the_selection_moves_to_the_one_after_i
 
     let screen = terminal.wait_for("bravo gone", |screen| !screen.contents().contains("bravo"))?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[3], "");
+    assert_eq!(lines[4], "");
     assert_eq!(
         lines[2],
         "pending 4 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 1 skipped 0"
     );
-    assert_eq!(lines[4], " 1  #1  pending  agent  alpha");
-    assert_eq!(lines[5], ">2  #3  pending  agent  charlie");
-    assert_eq!(lines[6], " 3  #4  pending  agent  delta");
-    assert_eq!(lines[7], " 4  #5  pending  agent  echo");
-    assert_eq!(lines[8], "");
-    assert_eq!(marked(&screen), [lines[5].clone()]);
+    assert_eq!(lines[5], " 1  #1  pending  agent  alpha");
+    assert_eq!(lines[6], ">2  #3  pending  agent  charlie");
+    assert_eq!(lines[7], " 3  #4  pending  agent  delta");
+    assert_eq!(lines[8], " 4  #5  pending  agent  echo");
+    assert_eq!(lines[9], "");
+    assert_eq!(marked(&screen), [lines[6].clone()]);
     assert_eq!(
         journal(&fixture)?,
         [
@@ -290,10 +290,10 @@ fn a_title_too_long_to_fit_is_cut_with_an_ellipsis_but_the_keys_never_are() -> R
     })?;
     let lines = lines_inside_frame(&screen);
     assert!(
-        lines[3].ends_with("…? y to remove · n or Esc to keep"),
+        lines[4].ends_with("…? y to remove · n or Esc to keep"),
         "{lines:?}"
     );
-    assert!(!lines[3].contains(long_title), "{lines:?}");
+    assert!(!lines[4].contains(long_title), "{lines:?}");
     quit(terminal)
 }
 
@@ -335,8 +335,8 @@ fn removing_every_task_one_by_one_ends_on_the_empty_queue_message() -> Result<()
         lines[2],
         "pending 0 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 2 skipped 0"
     );
-    assert_eq!(lines[3], "");
-    assert_eq!(lines[4], "The queue is empty.");
+    assert_eq!(lines[4], "");
+    assert_eq!(lines[5], "The queue is empty.");
     assert!(marked(&screen).is_empty(), "{screen}");
     assert_eq!(
         journal(&fixture)?,
@@ -391,10 +391,10 @@ fn with_cancelled_tasks_shown_the_removed_task_stays_in_its_place_and_the_select
     );
     // `cancelled` (9 characters) is now the widest status shown, so every `pending` row
     // pads out to match it.
-    assert_eq!(lines[4], " 1  #1  pending    agent  alpha");
-    assert_eq!(lines[5], " 2  #2  cancelled  agent  bravo");
-    assert_eq!(lines[6], ">3  #3  pending    agent  charlie");
-    assert_eq!(marked(&screen), [lines[6].clone()]);
+    assert_eq!(lines[5], " 1  #1  pending    agent  alpha");
+    assert_eq!(lines[6], " 2  #2  cancelled  agent  bravo");
+    assert_eq!(lines[7], ">3  #3  pending    agent  charlie");
+    assert_eq!(marked(&screen), [lines[7].clone()]);
     quit(terminal)
 }
 
@@ -417,14 +417,14 @@ fn d_on_a_cancelled_task_shows_the_same_refusal_as_remove_and_asks_nothing() -> 
         screen.contents().contains("task 1 is already cancelled")
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[3], "task 1 is already cancelled");
+    assert_eq!(lines[4], "task 1 is already cancelled");
     assert!(!screen.contains("y to remove"), "{screen}");
     assert_eq!(marked(&screen), [row], "the refusal asked nothing");
     // The same words the CLI gives for removing the same task again.
     let cli_refusal = fixture.sandbox.run(&fixture.repository, &["remove", "1"])?;
     assert_eq!(cli_refusal.code, Some(2));
     assert!(
-        cli_refusal.stderr.contains(&lines[3]),
+        cli_refusal.stderr.contains(&lines[4]),
         "{}",
         cli_refusal.stderr
     );
@@ -474,19 +474,19 @@ fn d_on_the_running_task_shows_the_same_refusal_and_asks_nothing() -> Result<()>
     let mut terminal = open_on(&fixture, "gated")?;
     let screen = terminal.wait_for("the task running", |screen| {
         lines_inside_frame(&screen.contents())
-            .get(4)
+            .get(5)
             .is_some_and(|line| line.starts_with(">1  #1  running"))
     })?;
-    let running_row = lines_inside_frame(&screen)[4].clone();
+    let running_row = lines_inside_frame(&screen)[5].clone();
 
     terminal.send("d")?;
     let screen = terminal.wait_for("the refusal", |screen| {
         screen.contents().contains("task 1 is running")
     })?;
     let lines = lines_inside_frame(&screen);
-    assert_eq!(lines[3], "task 1 is running");
+    assert_eq!(lines[4], "task 1 is running");
     assert!(!screen.contains("y to remove"), "{screen}");
-    assert_eq!(lines[4], running_row, "the refusal asked nothing");
+    assert_eq!(lines[5], running_row, "the refusal asked nothing");
 
     terminal.send("j")?;
     let screen = terminal.wait_for("the refusal gone", |screen| {
@@ -499,7 +499,7 @@ fn d_on_the_running_task_shows_the_same_refusal_and_asks_nothing() -> Result<()>
     assert!(status.success(), "{status:?}");
     terminal.wait_for("the task done", |screen| {
         lines_inside_frame(&screen.contents())
-            .get(4)
+            .get(5)
             .is_some_and(|line| line.starts_with(">1  #1  done"))
     })?;
 

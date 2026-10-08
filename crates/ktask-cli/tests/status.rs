@@ -170,28 +170,31 @@ impl Fixture {
 }
 
 #[test]
-fn a_project_with_no_attempts_prints_nothing_and_exits_zero() -> Result<()> {
+fn a_project_with_no_attempts_prints_only_the_run_band_and_exits_zero() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add_agent_task("a", &reporting_body("done"))?;
 
     let outcome = fixture.run(&["status"])?;
 
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
-    assert_eq!(outcome.stdout, "");
+    assert_eq!(outcome.stdout, "idle · 1 pending · r to run\n");
     Ok(())
 }
 
 #[test]
-fn an_empty_queue_also_prints_nothing_and_exits_zero() -> Result<()> {
+fn an_empty_queue_shows_an_idle_band_with_nothing_pending_and_exits_zero() -> Result<()> {
     let fixture = Fixture::new()?;
 
     let outcome = fixture.run(&["status"])?;
 
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
-    assert_eq!(outcome.stdout, "");
+    assert_eq!(outcome.stdout, "idle · nothing pending\n");
     let json = fixture.run(&["status", "--json"])?;
     assert_eq!(json.code, Some(0), "{}", json.stderr);
-    assert_eq!(json.stdout, "[]\n");
+    let parsed: serde_json::Value = serde_json::from_str(&json.stdout)?;
+    assert_eq!(parsed["run"]["state"], "idle");
+    assert_eq!(parsed["run"]["pending"], 0);
+    assert_eq!(parsed["tasks"], serde_json::json!([]));
     Ok(())
 }
 
@@ -264,13 +267,29 @@ fn status_shows_fresh_output_then_silence_and_the_stuck_warning() -> Result<()> 
     Ok(())
 }
 
+/// `stdout`'s lines, with the first — the run band, which carries a timestamp this test
+/// cannot predict — checked separately with `band_check`, so the rest can still be compared
+/// for exact equality.
+fn task_lines(stdout: &str, band_check: impl FnOnce(&str)) -> Vec<&str> {
+    let Some((band, rest)) = stdout.split_once('\n') else {
+        band_check(stdout);
+        return Vec::new();
+    };
+    band_check(band);
+    rest.lines().collect()
+}
+
 #[test]
-fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_line() -> Result<()> {
+fn status_shows_a_done_ending_in_queue_order_with_its_title_status_and_attempt_line() -> Result<()>
+{
     let fixture = done_fixture()?;
     let outcome = fixture.run(&["status"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     assert_eq!(
-        outcome.stdout.lines().collect::<Vec<_>>(),
+        task_lines(&outcome.stdout, |band| assert_eq!(
+            band,
+            "idle · nothing pending"
+        )),
         [
             "#1\tdone\ta\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
@@ -279,12 +298,26 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\tattempt 1: commit\t-\t0s\tpassed\tnothing was changed",
         ]
     );
+    Ok(())
+}
 
+#[test]
+fn status_shows_a_failed_ending_in_queue_order_with_its_title_status_and_attempt_line() -> Result<()>
+{
     let fixture = failed_fixture()?;
     let outcome = fixture.run(&["status"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     assert_eq!(
-        outcome.stdout.lines().collect::<Vec<_>>(),
+        task_lines(&outcome.stdout, |band| {
+            assert!(band.starts_with("run stopped "), "{band}");
+            assert!(
+                band.ends_with(
+                    ": #2 failed (routed: decide — agent failed) — it broke \
+                     · next: fix the cause, then t to retry #2"
+                ),
+                "{band}"
+            );
+        }),
         [
             "#1\tdone\tx\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
@@ -295,12 +328,26 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\tattempt 1: implementation\techo\t0s\tfailed\trouted: decide — agent failed\tit broke\tusage none",
         ]
     );
+    Ok(())
+}
 
+#[test]
+fn status_shows_a_too_large_ending_in_queue_order_with_its_title_status_and_attempt_line()
+-> Result<()> {
     let fixture = too_large_fixture()?;
     let outcome = fixture.run(&["status"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     assert_eq!(
-        outcome.stdout.lines().collect::<Vec<_>>(),
+        task_lines(&outcome.stdout, |band| {
+            assert!(band.starts_with("run stopped "), "{band}");
+            assert!(
+                band.ends_with(
+                    ": #2 failed (routed: decide — agent failed) — split me \
+                     · next: fix the cause, then t to retry #2"
+                ),
+                "{band}"
+            );
+        }),
         [
             "#1\tdone\tx\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
@@ -311,12 +358,26 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\tattempt 1: implementation\techo\t0s\ttoo-large\trouted: decide — agent failed\tsplit me\tusage none",
         ]
     );
+    Ok(())
+}
 
+#[test]
+fn status_shows_a_needs_input_ending_in_queue_order_with_its_title_status_and_attempt_line()
+-> Result<()> {
     let fixture = needs_input_fixture()?;
     let outcome = fixture.run(&["status"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     assert_eq!(
-        outcome.stdout.lines().collect::<Vec<_>>(),
+        task_lines(&outcome.stdout, |band| {
+            assert!(band.starts_with("run stopped "), "{band}");
+            assert!(
+                band.ends_with(
+                    ": #2 blocked — which path? \
+                     · next: answer the question, then A to answer #2"
+                ),
+                "{band}"
+            );
+        }),
         [
             "#1\tdone\tx\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
@@ -327,11 +388,23 @@ fn status_shows_every_ending_in_queue_order_with_its_title_status_and_attempt_li
             "\tattempt 1: implementation\techo\t0s\tneeds-input\twhich path?\tusage none",
         ]
     );
+    Ok(())
+}
 
+#[test]
+fn status_shows_a_failed_unknown_ending_in_queue_order_with_its_title_status_and_attempt_line()
+-> Result<()> {
     let fixture = failed_unknown_fixture()?;
     let outcome = fixture.run(&["status"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
-    let lines: Vec<&str> = outcome.stdout.lines().collect();
+    let lines = task_lines(&outcome.stdout, |band| {
+        assert!(band.starts_with("run stopped "), "{band}");
+        assert!(band.contains(": #2 failed-unknown"), "{band}");
+        assert!(
+            band.ends_with("· next: fix the cause, then t to retry #2"),
+            "{band}"
+        );
+    });
     assert_eq!(lines.len(), 7, "{lines:#?}");
     assert_eq!(lines[0], "#1\tdone\tx\tusage none");
     assert_eq!(
@@ -366,11 +439,11 @@ type ShownEntry = (u64, String, String, String, Option<String>);
 
 #[test]
 fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
-    /// `entries["id"/"status"/"title"/"attempt"."outcome"/"attempt"."reason"]`, in order, for
-    /// every entry of a `status --json` array.
+    /// `tasks["id"/"status"/"title"/"attempt"."outcome"/"attempt"."reason"]`, in order, for
+    /// every entry of `status --json`'s `tasks` array.
     fn shown(stdout: &str) -> Result<Vec<ShownEntry>> {
-        let entries: serde_json::Value = serde_json::from_str(stdout)?;
-        Ok(entries
+        let parsed: serde_json::Value = serde_json::from_str(stdout)?;
+        Ok(parsed["tasks"]
             .as_array()
             .unwrap()
             .iter()
@@ -474,8 +547,8 @@ fn status_json_carries_the_same_information_as_the_text_form() -> Result<()> {
         shown_entries[1].4
     );
 
-    let entries: serde_json::Value = serde_json::from_str(&outcome.stdout)?;
-    for entry in entries.as_array().unwrap() {
+    let parsed: serde_json::Value = serde_json::from_str(&outcome.stdout)?;
+    for entry in parsed["tasks"].as_array().unwrap() {
         assert_eq!(entry["attempt"]["number"], 1);
         assert!(entry["attempt"]["time_spent_seconds"].as_u64().is_some());
         let steps = entry["attempt"]["steps"].as_array().unwrap();
@@ -523,7 +596,7 @@ fn a_pending_task_never_attempted_does_not_appear() -> Result<()> {
         "{}",
         outcome.stdout
     );
-    assert_eq!(outcome.stdout.lines().count(), 10);
+    assert_eq!(outcome.stdout.lines().count(), 11);
     Ok(())
 }
 
@@ -548,38 +621,47 @@ fn while_a_run_is_in_progress_the_running_task_shows_its_elapsed_time_so_far() -
             .run(&["status", "--json"])
             .ok()
             .and_then(|outcome| serde_json::from_str::<serde_json::Value>(&outcome.stdout).ok())
-            .and_then(|entries| entries[0]["attempt"]["time_spent_seconds"].as_u64())
+            .and_then(|parsed| parsed["tasks"][0]["attempt"]["time_spent_seconds"].as_u64())
             .is_some_and(|seconds| seconds >= 1)
     })?;
 
     let outcome = fixture.run(&["status"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
     let lines: Vec<&str> = outcome.stdout.lines().collect();
-    assert_eq!(lines[0], "#1\trunning\ta\tusage none");
-    assert_eq!(lines.len(), 2, "{lines:#?}");
-    let fields: Vec<&str> = lines[1].split('\t').collect();
-    assert_eq!(fields.len(), 7, "{}", lines[1]);
+    assert!(
+        lines[0].starts_with("running: #1 implementation"),
+        "{lines:#?}"
+    );
+    assert_eq!(lines[1], "#1\trunning\ta\tusage none");
+    assert_eq!(lines.len(), 3, "{lines:#?}");
+    let fields: Vec<&str> = lines[2].split('\t').collect();
+    assert_eq!(fields.len(), 7, "{}", lines[2]);
     assert_eq!(
         &fields[..3],
         ["", "attempt 1: implementation", "echo"],
         "{}",
-        lines[1]
+        lines[2]
     );
     assert_eq!(fields[4], "running");
     assert_eq!(fields[5], "usage none");
-    assert!(fields[6].contains("silent for "), "{}", lines[1]);
+    assert!(fields[6].contains("silent for "), "{}", lines[2]);
     let seconds: u64 = fields[3].strip_suffix('s').unwrap().parse().unwrap();
     assert!((1..10).contains(&seconds), "{seconds}");
 
     let json = fixture.run(&["status", "--json"])?;
-    let entries: serde_json::Value = serde_json::from_str(&json.stdout)?;
-    let seconds = entries[0]["attempt"]["time_spent_seconds"]
+    let parsed: serde_json::Value = serde_json::from_str(&json.stdout)?;
+    let seconds = parsed["tasks"][0]["attempt"]["time_spent_seconds"]
         .as_u64()
         .unwrap();
     assert!((1..10).contains(&seconds), "{seconds}");
-    assert_eq!(entries[0]["attempt"]["outcome"], "running");
-    assert!(entries[0]["attempt"]["reason"].is_null());
-    assert_eq!(entries[0]["attempt"]["output_activity"]["active"], false);
+    assert_eq!(parsed["tasks"][0]["attempt"]["outcome"], "running");
+    assert!(parsed["tasks"][0]["attempt"]["reason"].is_null());
+    assert_eq!(
+        parsed["tasks"][0]["attempt"]["output_activity"]["active"],
+        false
+    );
+    assert_eq!(parsed["run"]["state"], "running");
+    assert_eq!(parsed["run"]["task"], 1);
 
     std::fs::write(&go, "")?;
     let status = child.wait()?;
@@ -636,18 +718,86 @@ fn a_task_left_running_by_a_run_killed_outright_shows_interrupted_not_running() 
 
     let outcome = fixture.run(&["status"])?;
     assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    let mut lines = outcome.stdout.lines();
     assert_eq!(
-        outcome.stdout.lines().next(),
-        Some("#1\tinterrupted\ta\tusage none")
+        lines.next(),
+        Some(
+            "run stopped: #1 interrupted — the run was killed \
+             · next: r to run, then t to retry #1"
+        )
     );
+    assert_eq!(lines.next(), Some("#1\tinterrupted\ta\tusage none"));
     assert!(!outcome.stdout.contains("running"), "{}", outcome.stdout);
 
     let json = fixture.run(&["status", "--json"])?;
     assert_eq!(json.code, Some(0), "{}", json.stderr);
-    let entries: serde_json::Value = serde_json::from_str(&json.stdout)?;
-    assert_eq!(entries[0]["status"], "interrupted");
-    assert_eq!(entries[0]["attempt"]["outcome"], "interrupted");
+    let parsed: serde_json::Value = serde_json::from_str(&json.stdout)?;
+    assert_eq!(parsed["run"]["state"], "stopped");
+    assert_eq!(parsed["run"]["cause"], "interrupted");
+    assert_eq!(parsed["tasks"][0]["status"], "interrupted");
+    assert_eq!(parsed["tasks"][0]["attempt"]["outcome"], "interrupted");
 
+    Ok(())
+}
+
+#[test]
+fn a_failing_health_check_gate_shows_a_stopped_band_naming_the_gate_and_to_run_again() -> Result<()>
+{
+    let fixture = Fixture::new()?;
+    fixture.run(&["settings", "set", "health-check", "exit 1"])?;
+    fixture.add_agent_task("a", &reporting_body("done"))?;
+
+    let run = fixture.run_the_queue(&["run"])?;
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+
+    let outcome = fixture.run(&["status"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    let band = outcome.stdout.lines().next().expect("the run band");
+    assert!(band.starts_with("run stopped"), "{band}");
+    assert!(band.contains("#1 health check failed"), "{band}");
+    assert!(
+        band.ends_with("· next: fix the problem, then r to run"),
+        "{band}"
+    );
+    // The band is followed by the task's own line and its synthetic gate-stop step line,
+    // exactly as `status` always shows a gate-stopped pending task.
+    assert_eq!(outcome.stdout.lines().count(), 3, "{}", outcome.stdout);
+
+    let json = fixture.run(&["status", "--json"])?;
+    let parsed: serde_json::Value = serde_json::from_str(&json.stdout)?;
+    assert_eq!(parsed["run"]["state"], "stopped");
+    assert_eq!(parsed["run"]["cause"], "environment_fault");
+    assert_eq!(parsed["run"]["task"], 1);
+    assert_eq!(parsed["run"]["step"], "health check");
+    Ok(())
+}
+
+#[test]
+fn a_human_task_at_the_head_shows_a_stopped_band_naming_the_acknowledge_key() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let added = fixture.run(&[
+        "add",
+        "--title",
+        "approve the plan",
+        "--criterion",
+        "approved",
+        "--kind",
+        "human",
+    ])?;
+    assert_eq!(added.code, Some(0), "{}", added.stderr);
+
+    let outcome = fixture.run(&["status"])?;
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(
+        outcome.stdout,
+        "run stopped: #1 is a human task · next: H to acknowledge #1, then r to run\n"
+    );
+
+    let json = fixture.run(&["status", "--json"])?;
+    let parsed: serde_json::Value = serde_json::from_str(&json.stdout)?;
+    assert_eq!(parsed["run"]["state"], "stopped");
+    assert_eq!(parsed["run"]["cause"], "human_task");
+    assert_eq!(parsed["run"]["task"], 1);
     Ok(())
 }
 

@@ -102,7 +102,7 @@ fn a_killed_attempt_ends_in_the_resolve_step_and_more_time_lifts_only_the_next_a
     assert!(prompt.contains("timed-thread"), "{prompt}");
     assert!(prompt.contains("--more-time <minutes>"), "{prompt}");
     let status = fixture.run(&["status"])?;
-    let lines: Vec<&str> = status.stdout.lines().collect();
+    let lines: Vec<&str> = status.stdout.lines().skip(1).collect();
     assert_eq!(lines[0], "#1\tdone\tCodex task\tusage none", "{lines:?}");
     let first = lines
         .iter()
@@ -119,7 +119,7 @@ fn a_killed_attempt_ends_in_the_resolve_step_and_more_time_lifts_only_the_next_a
     let json = fixture.run(&["status", "--json"])?;
     let parsed = serde_json::from_str::<serde_json::Value>(&json.stdout)?;
     assert_eq!(
-        parsed[0]["history"][0]["steps"]
+        parsed["tasks"][0]["history"][0]["steps"]
             .as_array()
             .and_then(|steps| steps.iter().find(|step| step["step"] == "implementation"))
             .map(|step| step["routed"].clone()),

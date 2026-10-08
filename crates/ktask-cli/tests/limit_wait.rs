@@ -147,7 +147,7 @@ fn a_limit_message_waits_for_its_reset_then_runs_the_same_attempt_again() -> Res
         stdout.contains("\twaiting\t")
     })?;
     let lines: Vec<&str> = waiting.lines().collect();
-    assert_eq!(lines[0], "#1\trunning\ta\tusage none");
+    assert_eq!(lines[1], "#1\trunning\ta\tusage none");
     let step_line = lines
         .iter()
         .find(|line| line.contains("\twaiting\t"))
@@ -175,7 +175,7 @@ fn a_limit_message_waits_for_its_reset_then_runs_the_same_attempt_again() -> Res
     assert_eq!(std::fs::read_to_string(&tries)?.trim(), "2");
     let final_status = fixture.run(&["status"])?;
     assert_eq!(
-        final_status.stdout.lines().next(),
+        final_status.stdout.lines().nth(1),
         Some("#1\tdone\ta\tusage none"),
         "{}",
         final_status.stdout
@@ -208,7 +208,7 @@ fn a_limit_message_waits_for_its_reset_then_runs_the_same_attempt_again() -> Res
     let json_status = fixture.run(&["status", "--json"])?;
     assert_eq!(json_status.code, Some(0), "{}", json_status.stderr);
     let parsed: serde_json::Value = serde_json::from_str(&json_status.stdout)?;
-    let steps = parsed[0]["attempt"]["steps"]
+    let steps = parsed["tasks"][0]["attempt"]["steps"]
         .as_array()
         .expect("a steps array");
     let implementation = steps

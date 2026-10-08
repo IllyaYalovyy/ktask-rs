@@ -737,7 +737,7 @@ mod tests {
         )
         .unwrap();
 
-        let (step, reason) = crate::attempt::gate_stop_of(&journal, TaskId(1))
+        let (step, reason, _at) = crate::attempt::gate_stop_of(&journal, TaskId(1))
             .unwrap()
             .expect("a gate stop was recorded");
         assert_eq!(step, HEALTH_CHECK_STEP);
@@ -1346,7 +1346,7 @@ mod tests {
         )
         .unwrap();
 
-        let (step, reason) = crate::attempt::gate_stop_of(&journal, TaskId(1))
+        let (step, reason, _at) = crate::attempt::gate_stop_of(&journal, TaskId(1))
             .unwrap()
             .expect("a gate stop was recorded");
         assert_eq!(step, SYNC_STEP);
@@ -1994,7 +1994,7 @@ mod tests {
             crate::attempt::last_attempt(&journal, TaskId(1)).unwrap(),
             None
         );
-        let (step, reason) = crate::attempt::gate_stop_of(&journal, TaskId(1))
+        let (step, reason, _at) = crate::attempt::gate_stop_of(&journal, TaskId(1))
             .unwrap()
             .expect("a gate stop was recorded");
         assert_eq!(step, crate::INSTRUCTIONS_STEP);

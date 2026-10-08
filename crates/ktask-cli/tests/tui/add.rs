@@ -260,9 +260,9 @@ fn filling_every_field_and_submitting_adds_the_task_at_the_end_as_typed() -> Res
         lines[2],
         "pending 6 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
     );
-    assert_eq!(lines[4], ">1  #1  pending  agent  alpha");
-    assert_eq!(lines[9], " 6  #6  pending  human  Ship the form");
-    assert_eq!(marked(&screen), [lines[4].clone()]);
+    assert_eq!(lines[5], ">1  #1  pending  agent  alpha");
+    assert_eq!(lines[10], " 6  #6  pending  human  Ship the form");
+    assert_eq!(marked(&screen), [lines[5].clone()]);
     let tasks = listed(&fixture)?;
     assert_eq!(tasks.len(), 6);
     assert_eq!(
@@ -446,8 +446,8 @@ fn esc_cancels_the_form_and_adds_nothing_and_the_next_form_is_empty() -> Result<
         lines[2],
         "pending 5 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
     );
-    assert_eq!(lines[4], ">1  #1  pending  agent  alpha");
-    assert_eq!(lines[8], " 5  #5  pending  agent  echo");
+    assert_eq!(lines[5], ">1  #1  pending  agent  alpha");
+    assert_eq!(lines[9], " 5  #5  pending  agent  echo");
     assert!(!screen.contains("Never added"), "{screen}");
     assert_eq!(listed(&fixture)?, before);
     // The queue answers its keys again, and the form starts empty.
@@ -864,7 +864,7 @@ fn a_task_added_from_the_cli_while_the_form_is_open_shows_once_the_form_is_close
         lines[2],
         "pending 7 running 0 done 0 failed 0 blocked 0 unknown 0 cancelled 0 skipped 0"
     );
-    assert_eq!(lines[9], " 6  #6  pending  agent  from the cli");
-    assert_eq!(lines[10], " 7  #7  pending  agent  Half typed!");
+    assert_eq!(lines[10], " 6  #6  pending  agent  from the cli");
+    assert_eq!(lines[11], " 7  #7  pending  agent  Half typed!");
     quit(terminal)
 }
