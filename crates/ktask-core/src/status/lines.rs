@@ -83,15 +83,23 @@ pub(super) fn step_session(name: &str, session: Option<&str>) -> Option<String> 
     }
 }
 
-/// The still-running step line for a step named `name`, started at `started_at`: its elapsed
-/// time so far, and whether it shows `running`, `waiting` (when `waiting_until` names a time
-/// not yet passed) or `interrupted` depending on `run_alive`.
-#[allow(clippy::too_many_arguments)]
+/// A step's own identity in a status line: its name, the model it ran with (the one requested,
+/// when nothing more specific is known), the provider that ran it, and the session it
+/// reported, before [`step_provider`] and [`step_session`] narrow provider and session to the
+/// steps that actually show them.
+#[derive(Clone, Copy)]
+pub(super) struct StepIdentity<'a> {
+    pub(super) name: &'a str,
+    pub(super) provider: Option<&'a str>,
+    pub(super) model: Option<&'a str>,
+    pub(super) session: Option<&'a str>,
+}
+
+/// The still-running step line for `identity`, started at `started_at`: its elapsed time so
+/// far, and whether it shows `running`, `waiting` (when `waiting_until` names a time not yet
+/// passed) or `interrupted` depending on `run_alive`.
 pub(super) fn running_step(
-    name: &str,
-    provider: Option<&str>,
-    model: Option<&str>,
-    session: Option<&str>,
+    identity: StepIdentity<'_>,
     started_at: SystemTime,
     waiting_until: Option<SystemTime>,
     waiting_reason: Option<WaitReason>,
@@ -107,10 +115,10 @@ pub(super) fn running_step(
     let waiting = live_wait(run_alive, waiting_until, waiting_reason, clock);
     let routed = waiting.as_ref().map(|wait| wait.reason.routed());
     StepLine {
-        step: name.to_owned(),
-        provider: step_provider(name, provider),
-        model: model.map(str::to_owned),
-        session: step_session(name, session),
+        step: identity.name.to_owned(),
+        provider: step_provider(identity.name, identity.provider),
+        model: identity.model.map(str::to_owned),
+        session: step_session(identity.name, identity.session),
         time_spent: elapsed,
         outcome,
         reason: None,

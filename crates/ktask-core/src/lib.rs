@@ -73,14 +73,14 @@ pub use providers::{
 pub use queue::{QueueView, StatusSummary, queue_view, queue_view_with_output};
 pub use register::{RegisterError, register_project};
 pub use report::{
-    AttemptToken, Outcome, ReportError, Supersede, report, report_findings, report_retry,
-    report_supersede, start_attempt,
+    AttemptToken, Outcome, ReportError, RetryRequest, Supersede, report, report_findings,
+    report_retry, report_supersede, start_attempt,
 };
 pub use resolve::{Resolution, ResolveError, resolve_project};
 pub use route::{DecideWhy, Routed, StopCause};
 pub use run::{
-    Attempted, RunContext, RunEnd, RunError, RunReport, RunRequest, SyncProblem, TaskProviders,
-    build_prompt, build_review_prompt, build_test_prompt, run_queue,
+    Attempted, RunContext, RunEnd, RunError, RunPorts, RunReport, RunRequest, SyncProblem,
+    TaskProviders, build_prompt, build_review_prompt, build_test_prompt, run_queue,
 };
 pub use sessions::{SessionLog, SessionLogError};
 pub use settings::{

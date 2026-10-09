@@ -56,20 +56,33 @@ pub(crate) struct Args {
     json: bool,
 }
 
+/// The model names this run uses: the implementation (and other agent steps') own model, and
+/// the resolver's own — each empty when the project's settings name none.
+#[derive(Clone, Copy)]
+struct EffectiveModels<'a> {
+    model: &'a str,
+    resolver_model: &'a str,
+}
+
+/// Where this run keeps per-attempt state outside the project: sessions, for a provider that
+/// supports resuming one, and captured output.
+#[derive(Clone, Copy)]
+struct StateDirs<'a> {
+    sessions_dir: &'a Path,
+    outputs_dir: &'a Path,
+}
+
 /// The [`RunContext`] `run` hands `run_queue`, built from `project`'s own directory and name,
 /// `binary_path`, `args` and `settings`, and `settings`' own steps switched off, held in
 /// `disabled` since `RunContext` only borrows them.
-#[allow(clippy::too_many_arguments)]
 fn run_context<'a>(
     project: &'a ktask_core::Project,
     binary_path: &'a Path,
     args: &Args,
     settings: &'a Settings,
     disabled: &'a [&'static str],
-    model: &'a str,
-    resolver_model: &'a str,
-    sessions_dir: &'a Path,
-    outputs_dir: &'a Path,
+    models: EffectiveModels<'a>,
+    dirs: StateDirs<'a>,
 ) -> RunContext<'a> {
     RunContext {
         project_name: &project.name,
@@ -82,10 +95,10 @@ fn run_context<'a>(
         disabled_steps: disabled,
         max_attempts: ktask_core::effective_max_attempts(settings),
         transport_retries: effective_transport_retries(settings),
-        model,
-        resolver_model,
-        sessions_dir,
-        outputs_dir,
+        model: models.model,
+        resolver_model: models.resolver_model,
+        sessions_dir: dirs.sessions_dir,
+        outputs_dir: dirs.outputs_dir,
         instructions_dir: effective_instructions_dir(settings),
     }
 }
@@ -129,12 +142,14 @@ fn run_with_providers(
             )
         })?;
     Ok(ktask_core::run_queue(
-        journal,
-        &SystemClock,
-        &ProcessCommands,
-        &GitCli,
-        &FileSessionLog,
-        &RealSleep,
+        ktask_core::RunPorts {
+            journal,
+            clock: &SystemClock,
+            commands: &ProcessCommands,
+            git: &GitCli,
+            session_log: &FileSessionLog,
+            sleep: &RealSleep,
+        },
         lock,
         RunRequest {
             providers: TaskProviders {
@@ -170,10 +185,14 @@ fn execute(args: &Args, project: Option<&str>) -> Result<RunReport, Failure> {
         args,
         &settings,
         &disabled,
-        &model,
-        &resolver_model,
-        &sessions_dir,
-        &outputs_dir,
+        EffectiveModels {
+            model: &model,
+            resolver_model: &resolver_model,
+        },
+        StateDirs {
+            sessions_dir: &sessions_dir,
+            outputs_dir: &outputs_dir,
+        },
     );
     run_with_providers(&journal, &settings, &lock, context)
 }

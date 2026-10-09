@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use crate::run::Attempted;
 use crate::steps::implementation::earlier_attempts;
-use crate::steps::{Deps, PipelineState, Step, StepOutcome, run_agent_step, run_one_step};
+use crate::steps::{
+    AttemptEnding, Deps, PipelineState, RetryInputs, Step, StepOutcome, run_agent_step,
+    run_one_step,
+};
 use crate::{AttemptRun, Journal, RunContext, RunError, Task, TaskId, TaskStatus};
 
 /// The journal name of the resolve step.
@@ -14,7 +17,7 @@ pub const RESOLVE_STEP: &str = "resolve";
 
 mod prompt;
 
-use prompt::build_resolve_prompt;
+use prompt::{CurrentOutcome, build_resolve_prompt};
 
 /// The resolve step of a task's attempt: run only when the step ahead of it in the pipeline
 /// ended `failed` or `failed-unknown` and the task has attempts left — [`crate::steps::mod`]'s
@@ -79,9 +82,11 @@ fn resolve_prompt(
         state.token,
         context.binary_path,
         &earlier,
-        current_status,
-        current_reason.as_deref(),
-        &current_findings,
+        CurrentOutcome {
+            status: current_status,
+            reason: current_reason.as_deref(),
+            findings: &current_findings,
+        },
         &diff,
         state.decision.as_ref(),
     ))
@@ -220,31 +225,27 @@ pub(crate) fn resolver_eligible(status: TaskStatus, number: u32, max_attempts: u
 /// decided — [`resolve_and_continue`]'s own first half, pulled out of it so it stays within the
 /// workspace's function-length limit. Returns whether the resolver decided `retry`, and the
 /// status and reason the attempt ended at.
-#[allow(clippy::too_many_arguments)]
 fn run_resolve_and_end_attempt(
     deps: Deps<'_>,
     context: RunContext<'_>,
     task: &Task,
-    number: u32,
-    duration_so_far: Duration,
+    ending: AttemptEnding,
     state: &mut PipelineState<'_>,
-    status: TaskStatus,
-    reason: Option<String>,
 ) -> Result<(bool, TaskStatus, Option<String>), RunError> {
-    state.failure = Some((status, reason.clone()));
+    state.failure = Some((ending.status, ending.reason.clone()));
     let (resolve_duration, resolve_status, resolve_reason) =
         run_one_step(&deps, context, state, &Resolve)?;
     let retried = resolve_status == TaskStatus::Done;
     let (end_status, end_reason) = if retried {
-        (status, reason)
+        (ending.status, ending.reason)
     } else {
         (resolve_status, resolve_reason)
     };
-    let total = duration_so_far + resolve_duration;
+    let total = ending.duration + resolve_duration;
     end_attempt_now(
         deps,
         task.id,
-        number,
+        ending.number,
         total,
         state.exit_code,
         end_status,
@@ -253,28 +254,17 @@ fn run_resolve_and_end_attempt(
     Ok((retried, end_status, end_reason))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_and_continue(
     deps: Deps<'_>,
     context: RunContext<'_>,
     task: &Task,
-    number: u32,
-    duration_so_far: Duration,
+    ending: AttemptEnding,
     state: &mut PipelineState<'_>,
-    status: TaskStatus,
-    reason: Option<String>,
     steps: &[Box<dyn Step>],
 ) -> Result<Attempted, RunError> {
-    let (retried, end_status, end_reason) = run_resolve_and_end_attempt(
-        deps,
-        context,
-        task,
-        number,
-        duration_so_far,
-        state,
-        status,
-        reason,
-    )?;
+    let number = ending.number;
+    let (retried, end_status, end_reason) =
+        run_resolve_and_end_attempt(deps, context, task, ending, state)?;
     if retried {
         return retry_the_task_after_resolver(deps, context, task, number, state, steps);
     }
@@ -312,10 +302,12 @@ fn retry_the_task_after_resolver(
         context,
         task,
         steps,
-        requested_model,
-        requested_session,
+        RetryInputs {
+            requested_model,
+            requested_session,
+            extra_time,
+        },
         reset_to.as_deref(),
-        extra_time,
     )
 }
 
@@ -330,16 +322,13 @@ fn retry_the_task_after_resolver(
 /// # Errors
 ///
 /// Fails when the journal cannot be read or written, or the working tree could not be reset.
-#[allow(clippy::too_many_arguments)]
 fn retry_the_task(
     deps: Deps<'_>,
     context: RunContext<'_>,
     task: &Task,
     steps: &[Box<dyn Step>],
-    requested_model: Option<String>,
-    requested_session: Option<String>,
+    retry: RetryInputs,
     reset_to: Option<&str>,
-    extra_time: Duration,
 ) -> Result<Attempted, RunError> {
     if let Some(commit) = reset_to {
         deps.git
@@ -347,16 +336,7 @@ fn retry_the_task(
             .map_err(|error| RunError::Other(error.to_string()))?;
     }
     retry_for_resolver(deps, task.id)?;
-    super::run_one_attempt(
-        deps,
-        context,
-        task,
-        &[],
-        steps,
-        requested_model,
-        requested_session,
-        extra_time,
-    )
+    super::run_one_attempt(deps, context, task, &[], steps, retry)
 }
 
 #[cfg(test)]
@@ -400,9 +380,11 @@ mod tests {
             &token,
             binary_path,
             &earlier,
-            TaskStatus::FailedUnknown,
-            Some("crashed"),
-            &[],
+            CurrentOutcome {
+                status: TaskStatus::FailedUnknown,
+                reason: Some("crashed"),
+                findings: &[],
+            },
             diff,
             None,
         );
@@ -458,9 +440,11 @@ mod tests {
             &token,
             binary_path,
             &[],
-            TaskStatus::Failed,
-            None,
-            &findings,
+            CurrentOutcome {
+                status: TaskStatus::Failed,
+                reason: None,
+                findings: &findings,
+            },
             "",
             None,
         );

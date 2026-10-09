@@ -34,7 +34,7 @@ pub(crate) enum Pick {
 /// # Errors
 ///
 /// Fails when the journal cannot be read.
-pub(crate) fn pick_next_task(journal: &impl Journal) -> Result<Pick, RunError> {
+pub(crate) fn pick_next_task(journal: &dyn Journal) -> Result<Pick, RunError> {
     let tasks = list_tasks(journal)?;
     let Some(next) = tasks.iter().find(|task| {
         !matches!(

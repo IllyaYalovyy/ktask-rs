@@ -1,9 +1,10 @@
 //! The public way to start a queue run.
 
 use super::{
-    RunEnd, RunError, RunReport, RunRequest, account_for_interrupted_run, attempt_loop, take_lock,
+    RunEnd, RunError, RunPorts, RunReport, RunRequest, account_for_interrupted_run, attempt_loop,
+    take_lock,
 };
-use crate::{Clock, Commands, Git, Journal, RunLock, SessionLog, Sleep};
+use crate::RunLock;
 
 /// Use case: runs the pending tasks of `request.context.project_name`, in queue order, one attempt
 /// each, with the providers in `request` — stopping at the first task of kind `human`, at the first attempt
@@ -21,19 +22,13 @@ use crate::{Clock, Commands, Git, Journal, RunLock, SessionLog, Sleep};
 /// Fails, attempting nothing, when another run already holds `lock`. Fails when the journal
 /// cannot be read or written; an attempt's own failure is reported in the returned
 /// [`RunReport`], not here.
-#[allow(clippy::too_many_arguments)]
 pub fn run_queue(
-    journal: &impl Journal,
-    clock: &impl Clock,
-    commands: &impl Commands,
-    git: &impl Git,
-    session_log: &impl SessionLog,
-    sleep: &impl Sleep,
+    ports: RunPorts<'_>,
     lock: &impl RunLock,
     request: RunRequest<'_>,
 ) -> Result<RunReport, RunError> {
     take_lock(lock)?;
-    if let Some(attempted) = account_for_interrupted_run(journal, clock)? {
+    if let Some(attempted) = account_for_interrupted_run(ports.journal, ports.clock)? {
         let end = RunEnd::Stopped {
             id: attempted.id,
             status: attempted.status,
@@ -43,16 +38,5 @@ pub fn run_queue(
             end,
         });
     }
-    attempt_loop(
-        journal,
-        clock,
-        commands,
-        git,
-        &request.providers,
-        session_log,
-        sleep,
-        request.output,
-        request.instruction_files,
-        request.context,
-    )
+    attempt_loop(ports, &request)
 }

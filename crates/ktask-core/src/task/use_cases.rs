@@ -184,7 +184,7 @@ pub fn acknowledge_task(
 /// # Errors
 ///
 /// Fails when the journal cannot be read.
-pub fn list_all_tasks(journal: &impl Journal) -> Result<Vec<Task>, JournalError> {
+pub fn list_all_tasks(journal: &(impl Journal + ?Sized)) -> Result<Vec<Task>, JournalError> {
     let events = journal.events()?;
     Ok(QueueState::fold(&events).into_tasks())
 }
@@ -195,7 +195,7 @@ pub fn list_all_tasks(journal: &impl Journal) -> Result<Vec<Task>, JournalError>
 /// # Errors
 ///
 /// Fails when the journal cannot be read.
-pub fn list_tasks(journal: &impl Journal) -> Result<Vec<Task>, JournalError> {
+pub fn list_tasks(journal: &(impl Journal + ?Sized)) -> Result<Vec<Task>, JournalError> {
     Ok(without_hidden_statuses(list_all_tasks(journal)?))
 }
 

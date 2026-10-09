@@ -6,8 +6,8 @@ use std::time::SystemTime;
 
 use super::{
     AnswerError, AppendError, AttemptRun, BeginAttemptError, CancelError, DoneError, Event,
-    Finding, LimitWait, Outcome, Placement, QueueState, RecordReportError, RetryError, Task,
-    TaskDraft, TaskId, TaskStatus, WaitReason,
+    Placement, QueueState, RecordReportError, ReportDecision, RetryError, StepEnd, Task, TaskDraft,
+    TaskId, TaskStatus, WaitReason,
 };
 
 impl QueueState {
@@ -210,31 +210,24 @@ impl QueueState {
     ///
     /// Fails, deciding nothing, when no attempt numbered `number` was started for this task, or
     /// when it was but has since ended.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn decide_record_report(
         &self,
         id: TaskId,
         number: u32,
-        outcome: Outcome,
-        reason: Option<&str>,
-        findings: &[Finding],
-        retry_model: Option<&str>,
-        retry_same_session: bool,
-        retry_reset_tree: bool,
-        retry_more_time: Option<u32>,
+        decision: ReportDecision<'_>,
         at: SystemTime,
     ) -> Result<Event, RecordReportError> {
         self.check_attempt_running(id, number)?;
         Ok(Event::AttemptReported {
             id,
             number,
-            outcome,
-            reason: reason.map(str::to_owned),
-            findings: findings.to_vec(),
-            retry_model: retry_model.map(str::to_owned),
-            retry_same_session,
-            retry_reset_tree,
-            retry_more_time,
+            outcome: decision.outcome,
+            reason: decision.reason.map(str::to_owned),
+            findings: decision.findings.to_vec(),
+            retry_model: decision.retry_model.map(str::to_owned),
+            retry_same_session: decision.retry_same_session,
+            retry_reset_tree: decision.retry_reset_tree,
+            retry_more_time: decision.retry_more_time,
             step: self.current_step(id),
             at,
         })
@@ -346,19 +339,12 @@ impl QueueState {
     /// # Errors
     ///
     /// Fails, deciding nothing, when no attempt numbered `number` is running for this task.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn decide_end_step(
         &self,
         id: TaskId,
         number: u32,
         step: &str,
-        run: AttemptRun<'_>,
-        reported: Option<Outcome>,
-        limit_wait: Option<LimitWait>,
-        limit_warning: Option<&crate::LimitWarning>,
-        usage: crate::Usage,
-        used_model: Option<&str>,
-        routed: Option<crate::Routed>,
+        end: StepEnd<'_>,
         at: SystemTime,
     ) -> Result<Event, RecordReportError> {
         self.check_attempt_running(id, number)?;
@@ -366,16 +352,16 @@ impl QueueState {
             id,
             number,
             step: step.to_owned(),
-            duration: run.duration,
-            exit_code: run.exit_code,
-            status: run.status,
-            reason: run.reason.map(str::to_owned),
-            reported,
-            limit_wait,
-            limit_warning: limit_warning.cloned(),
-            usage,
-            used_model: used_model.map(str::to_owned),
-            routed,
+            duration: end.run.duration,
+            exit_code: end.run.exit_code,
+            status: end.run.status,
+            reason: end.run.reason.map(str::to_owned),
+            reported: end.reported,
+            limit_wait: end.limit_wait,
+            limit_warning: end.limit_warning.cloned(),
+            usage: end.usage,
+            used_model: end.used_model.map(str::to_owned),
+            routed: end.routed,
             at,
         })
     }

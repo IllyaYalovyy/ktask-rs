@@ -109,6 +109,33 @@ impl Deps<'_> {
     }
 }
 
+/// How an attempt's steps left it, before the pipeline decides what happens next: `pending`
+/// (a known cause), the resolve step's own job (still eligible), or ended outright — the facts
+/// [`end_or_resolve`], [`end_attempt_plainly`] and the resolve step's own functions all act on.
+pub(crate) struct AttemptEnding {
+    pub(crate) number: u32,
+    pub(crate) duration: Duration,
+    pub(crate) status: TaskStatus,
+    pub(crate) reason: Option<String>,
+}
+
+/// What a resolver's `retry` decision asked this attempt to use: the model it named, when any,
+/// the session it asked to resume, when any, and the extra time it added to this attempt's own
+/// time limit.
+pub(crate) struct RetryInputs {
+    pub(crate) requested_model: Option<String>,
+    pub(crate) requested_session: Option<String>,
+    pub(crate) extra_time: Duration,
+}
+
+/// An attempt already begun and recorded, with its pre-steps run: its own number, the commit
+/// `HEAD` named before any step ran, and how long its pre-steps already took.
+pub(crate) struct BegunAttempt {
+    pub(crate) number: u32,
+    pub(crate) start_commit: Option<String>,
+    pub(crate) pre_duration: Duration,
+}
+
 /// One step that already ran and passed before the attempt it belongs to was even begun — the
 /// sync and health-check steps, when the project has configured and switched them on —
 /// recorded as the attempt's own first steps, in the order they ran, once it begins.
@@ -222,140 +249,119 @@ pub(crate) fn run_attempt_steps(
     Ok((total, status, reason))
 }
 
-/// Ends attempt `number` of `task` at `status` (with `reason`, `exit_code` and `duration`)
-/// directly, the resolver never eligible to run — [`finish_attempt`]'s own tail, pulled out of
-/// it so it stays within the workspace's function-length limit.
+/// Ends `ending`'s attempt of `task` directly, the resolver never eligible to run —
+/// [`finish_attempt`]'s own tail, pulled out of it so it stays within the workspace's
+/// function-length limit.
 fn end_attempt_plainly(
     deps: Deps<'_>,
     task: &Task,
-    number: u32,
-    duration: Duration,
+    ending: AttemptEnding,
     exit_code: Option<i32>,
-    status: TaskStatus,
-    reason: Option<String>,
 ) -> Result<Attempted, RunError> {
     resolve::end_attempt_now(
         deps,
         task.id,
-        number,
-        duration,
+        ending.number,
+        ending.duration,
         exit_code,
-        status,
-        reason.as_deref(),
+        ending.status,
+        ending.reason.as_deref(),
     )?;
     Ok(Attempted {
         id: task.id,
-        status,
-        reason,
+        status: ending.status,
+        reason: ending.reason,
     })
 }
 
-/// Builds the pipeline state for attempt `number`, walks `steps` through it, and ends it, or
-/// hands it to the resolver — `pre_duration` already spent on its pre-steps.
+/// Builds the pipeline state for `begun`'s attempt, walks `steps` through it, and ends it, or
+/// hands it to the resolver.
 ///
 /// # Errors
 ///
 /// Fails when the journal cannot be read or written.
-#[allow(clippy::too_many_arguments)]
 fn finish_attempt(
     deps: Deps<'_>,
     context: RunContext<'_>,
     task: &Task,
-    number: u32,
-    start_commit: Option<String>,
-    pre_duration: Duration,
+    begun: BegunAttempt,
     steps: &[Box<dyn Step>],
-    requested_model: Option<String>,
-    requested_session: Option<String>,
-    extra_time: Duration,
+    retry: RetryInputs,
 ) -> Result<Attempted, RunError> {
-    let token = AttemptToken::new(context.project_name, task.id, number);
+    let token = AttemptToken::new(context.project_name, task.id, begun.number);
     let mut state = PipelineState {
         task,
         token: &token,
-        start_commit,
+        start_commit: begun.start_commit,
         committed: None,
         exit_code: None,
         failure: None,
-        requested_model,
-        requested_session,
+        requested_model: retry.requested_model,
+        requested_session: retry.requested_session,
         known_cause: false,
         decision: None,
-        extra_time,
+        extra_time: retry.extra_time,
         usage: crate::Usage::default(),
         used_model: None,
         limit_warning: None,
     };
     let (steps_duration, status, reason) = run_attempt_steps(&deps, context, &mut state, steps)?;
-    let duration = pre_duration + steps_duration;
-    end_or_resolve(
-        deps, context, task, number, duration, &mut state, status, reason, steps,
-    )
+    let ending = AttemptEnding {
+        number: begun.number,
+        duration: begun.pre_duration + steps_duration,
+        status,
+        reason,
+    };
+    end_or_resolve(deps, context, task, ending, &mut state, steps)
 }
 
-/// Ends attempt `number` with what its steps left it at — `pending`, without ever reaching the
-/// resolver and never weighed against `max_attempts`, when [`PipelineState::known_cause`] says
-/// the tool recognised the failure on its own; otherwise the resolver's own job when it is
-/// still eligible, [`attempt_count::real_attempt_count`] rather than `number` itself judging
-/// that, so a known cause's own attempt is never one of the task's. [`finish_attempt`]'s own
-/// tail, pulled out of it so it stays within the workspace's function-length limit.
+/// Ends the attempt `ending` describes with what its steps left it at — `pending`, without
+/// ever reaching the resolver and never weighed against `max_attempts`, when
+/// [`PipelineState::known_cause`] says the tool recognised the failure on its own; otherwise
+/// the resolver's own job when it is still eligible, [`attempt_count::real_attempt_count`]
+/// rather than `ending.number` itself judging that, so a known cause's own attempt is never
+/// one of the task's. [`finish_attempt`]'s own tail, pulled out of it so it stays within the
+/// workspace's function-length limit.
 ///
 /// # Errors
 ///
 /// Fails when the journal cannot be read or written.
-#[allow(clippy::too_many_arguments)]
 fn end_or_resolve(
     deps: Deps<'_>,
     context: RunContext<'_>,
     task: &Task,
-    number: u32,
-    duration: Duration,
+    ending: AttemptEnding,
     state: &mut PipelineState<'_>,
-    status: TaskStatus,
-    reason: Option<String>,
     steps: &[Box<dyn Step>],
 ) -> Result<Attempted, RunError> {
     if state.known_cause {
         return end_attempt_plainly(
             deps,
             task,
-            number,
-            duration,
+            AttemptEnding {
+                status: TaskStatus::Pending,
+                ..ending
+            },
             state.exit_code,
-            TaskStatus::Pending,
-            reason,
         );
     }
-    let real_number = attempt_count::real_attempt_count(deps.journal, task.id, number)?;
-    if resolve::resolver_eligible(status, real_number, context.max_attempts) {
-        return resolve::resolve_and_continue(
-            deps, context, task, number, duration, state, status, reason, steps,
-        );
+    let real_number = attempt_count::real_attempt_count(deps.journal, task.id, ending.number)?;
+    if resolve::resolver_eligible(ending.status, real_number, context.max_attempts) {
+        return resolve::resolve_and_continue(deps, context, task, ending, state, steps);
     }
-    end_attempt_plainly(
-        deps,
-        task,
-        number,
-        duration,
-        state.exit_code,
-        status,
-        reason,
-    )
+    end_attempt_plainly(deps, task, ending, state.exit_code)
 }
 
-/// Begins and runs one attempt at `task`, with `requested_model` — the model the resolver's
-/// own `retry` decision named for it, when this is the attempt that decision began; `None` for
-/// a task's first attempt, and for a retry that named none.
-#[allow(clippy::too_many_arguments)]
+/// Begins and runs one attempt at `task`, with `retry` — the resolver's own `retry` decision
+/// that began it, when this attempt is one; every field `None` or zero for a task's first
+/// attempt, and for a retry that asked for none of them.
 pub(crate) fn run_one_attempt(
     deps: Deps<'_>,
     context: RunContext<'_>,
     task: &Task,
     pre_steps: &[PreStep],
     steps: &[Box<dyn Step>],
-    requested_model: Option<String>,
-    requested_session: Option<String>,
-    extra_time: Duration,
+    retry: RetryInputs,
 ) -> Result<Attempted, RunError> {
     let start_commit = current_commit(deps.git, context);
     let number = crate::attempt::begin_attempt_running(
@@ -370,13 +376,13 @@ pub(crate) fn run_one_attempt(
         deps,
         context,
         task,
-        number,
-        start_commit,
-        pre_duration,
+        BegunAttempt {
+            number,
+            start_commit,
+            pre_duration,
+        },
         steps,
-        requested_model,
-        requested_session,
-        extra_time,
+        retry,
     )
 }
 
@@ -525,9 +531,11 @@ mod tests {
             &task,
             &[],
             &steps,
-            None,
-            None,
-            Duration::ZERO,
+            RetryInputs {
+                requested_model: None,
+                requested_session: None,
+                extra_time: Duration::ZERO,
+            },
         )
         .unwrap();
         assert_eq!(attempted.status, TaskStatus::Done);
@@ -589,9 +597,11 @@ mod tests {
             &task,
             &[],
             &steps,
-            None,
-            None,
-            Duration::ZERO,
+            RetryInputs {
+                requested_model: None,
+                requested_session: None,
+                extra_time: Duration::ZERO,
+            },
         )
         .unwrap();
         assert_eq!(attempted.status, TaskStatus::Failed);
@@ -688,9 +698,11 @@ mod tests {
             &task,
             &[],
             &steps,
-            None,
-            None,
-            Duration::ZERO,
+            RetryInputs {
+                requested_model: None,
+                requested_session: None,
+                extra_time: Duration::ZERO,
+            },
         )
         .unwrap();
         assert_eq!(attempted.status, TaskStatus::Done);
@@ -753,9 +765,11 @@ mod tests {
             &task,
             &[],
             &steps,
-            None,
-            None,
-            Duration::ZERO,
+            RetryInputs {
+                requested_model: None,
+                requested_session: None,
+                extra_time: Duration::ZERO,
+            },
         )
         .unwrap();
         assert_eq!(attempted.reason, None);

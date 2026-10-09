@@ -190,11 +190,13 @@ fn record(
             journal,
             &SystemClock,
             token,
-            args.model.as_deref(),
-            args.same_session,
+            ktask_core::RetryRequest {
+                model: args.model.as_deref(),
+                same_session: args.same_session,
+                reset_tree: args.reset_tree,
+                more_time: args.more_time,
+            },
             echo::provider().supports_resume,
-            args.reset_tree,
-            args.more_time,
         )
     } else {
         ktask_core::report(

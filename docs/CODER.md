@@ -53,6 +53,8 @@ is a defect.
   with a timeout.
 - Never make a check pass by weakening it: no `#[ignore]`, no `#[allow]` on the offending
   line, no deleted or loosened assertion, no narrowing a test until it passes.
+- A lint is fixed, never silenced — a structure test refuses any `allow` or `expect`
+  attribute, anywhere, so there is no cheaper way around it than fixing what it warns about.
 - **Nothing outside the task's scope is mocked, stubbed or sketched.** No placeholder
   screens, lines, commands or options for features that do not exist yet. What is in scope
   is complete, wired and tested end to end; what is not in scope is absent.

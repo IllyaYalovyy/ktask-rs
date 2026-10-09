@@ -108,22 +108,28 @@ fn append_decision(prompt: &mut String, decision: Option<&Decision>) {
     }
 }
 
+/// The attempt's own outcome so far, not yet recorded as one of its earlier ones: what
+/// [`build_resolve_prompt`] folds into the attempt list alongside `earlier`, built by its
+/// caller from the pipeline state the step ahead of the resolve step left behind.
+#[derive(Clone, Copy)]
+pub(crate) struct CurrentOutcome<'a> {
+    pub(crate) status: TaskStatus,
+    pub(crate) reason: Option<&'a str>,
+    pub(crate) findings: &'a [Finding],
+}
+
 /// The prompt for the resolve step of attempt `token` of `task`: its title, body and
-/// acceptance criteria; every attempt so far, `earlier` then this one's own `current_status`,
-/// `current_reason` and `current_findings`, each with its own outcome and why — a list, not a
-/// blob, when a review ended it; `diff`, everything the task has changed since its first
-/// attempt began; and the exact `report` command, run through `binary_path`, to run for each
-/// possible decision.
+/// acceptance criteria; every attempt so far, `earlier` then this one's own `current`, each
+/// with its own outcome and why — a list, not a blob, when a review ended it; `diff`,
+/// everything the task has changed since its first attempt began; and the exact `report`
+/// command, run through `binary_path`, to run for each possible decision.
 #[must_use]
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_resolve_prompt(
     task: &Task,
     token: &AttemptToken,
     binary_path: &Path,
     earlier: &[EarlierAttempt],
-    current_status: TaskStatus,
-    current_reason: Option<&str>,
-    current_findings: &[Finding],
+    current: CurrentOutcome<'_>,
     diff: &str,
     decision: Option<&Decision>,
 ) -> String {
@@ -135,9 +141,9 @@ pub(crate) fn build_resolve_prompt(
         &mut prompt,
         &[EarlierAttempt {
             number: token.number,
-            outcome: current_status.as_str().to_owned(),
-            reason: current_reason.map(str::to_owned),
-            findings: current_findings.to_vec(),
+            outcome: current.status.as_str().to_owned(),
+            reason: current.reason.map(str::to_owned),
+            findings: current.findings.to_vec(),
         }],
     );
     append_decision(&mut prompt, decision);

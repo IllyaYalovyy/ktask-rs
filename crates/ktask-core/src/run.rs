@@ -8,10 +8,7 @@ use std::time::Duration;
 
 use crate::pick::{Pick, end_when_nothing_left, pick_next_task};
 use crate::steps::{self, INTERRUPTED};
-use crate::{
-    AttemptOutput, Clock, Commands, Git, InstructionFiles, Journal, RunLock, SessionLog, Sleep,
-    TaskId, TaskStatus,
-};
+use crate::{Clock, InstructionFiles, Journal, RunLock, TaskId, TaskStatus};
 
 pub use crate::steps::implementation::build_prompt;
 pub use crate::steps::review::build_review_prompt;
@@ -28,7 +25,7 @@ pub use context::RunContext;
 pub use entry::run_queue;
 pub use error::RunError;
 pub use providers::TaskProviders;
-pub use request::RunRequest;
+pub use request::{RunPorts, RunRequest};
 
 /// One task the run attempted, and how its one attempt ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,8 +129,8 @@ fn take_lock(lock: &impl RunLock) -> Result<(), RunError> {
 ///
 /// Fails when the journal cannot be read or written.
 fn account_for_interrupted_run(
-    journal: &impl Journal,
-    clock: &impl Clock,
+    journal: &dyn Journal,
+    clock: &dyn Clock,
 ) -> Result<Option<Attempted>, RunError> {
     let Some((id, number)) = crate::attempt::running(journal)? else {
         return Ok(None);
@@ -241,9 +238,11 @@ fn finish_attempt(
         task,
         pre_steps,
         &steps::default_steps(),
-        None,
-        None,
-        Duration::ZERO,
+        steps::RetryInputs {
+            requested_model: None,
+            requested_session: None,
+            extra_time: Duration::ZERO,
+        },
     )?;
     let status = result.status;
     attempted.push(result);
@@ -268,33 +267,27 @@ fn finish_attempt(
 /// # Errors
 ///
 /// Fails when the journal cannot be read or written.
-#[allow(clippy::too_many_arguments)]
-fn attempt_loop(
-    journal: &impl Journal,
-    clock: &impl Clock,
-    commands: &impl Commands,
-    git: &impl Git,
-    providers: &TaskProviders<'_>,
-    session_log: &impl SessionLog,
-    sleep: &impl Sleep,
-    output: &dyn AttemptOutput,
-    files: &dyn InstructionFiles,
-    context: RunContext<'_>,
-) -> Result<RunReport, RunError> {
+fn attempt_loop(ports: RunPorts<'_>, request: &RunRequest<'_>) -> Result<RunReport, RunError> {
     let no_instructions = steps::instructions::Instructions::default();
     let deps = steps::Deps {
-        journal,
-        clock,
-        commands,
-        git,
-        provider: providers.default,
-        resolver_provider: providers.resolver,
-        session_log,
-        sleep,
-        output,
+        journal: ports.journal,
+        clock: ports.clock,
+        commands: ports.commands,
+        git: ports.git,
+        provider: request.providers.default,
+        resolver_provider: request.providers.resolver,
+        session_log: ports.session_log,
+        sleep: ports.sleep,
+        output: request.output,
         instructions: &no_instructions,
     };
-    run_attempt_loop(deps, providers, files, journal, context)
+    run_attempt_loop(
+        deps,
+        &request.providers,
+        request.instruction_files,
+        ports.journal,
+        request.context,
+    )
 }
 
 /// [`attempt_loop`]'s own loop, pulled out of it so building `deps` stays within the
@@ -303,7 +296,7 @@ fn run_attempt_loop(
     deps: steps::Deps<'_>,
     providers: &TaskProviders<'_>,
     files: &dyn InstructionFiles,
-    journal: &impl Journal,
+    journal: &dyn Journal,
     context: RunContext<'_>,
 ) -> Result<RunReport, RunError> {
     let mut attempted = Vec::new();
@@ -345,8 +338,9 @@ mod tests {
         AttemptRun, AttemptToken, COMMIT_STEP, CommandSpec, Commands, CommandsError,
         CommitAllError, Event, Exit, HEALTH_CHECK_STEP, IMPLEMENTATION, JournalError, LimitSignal,
         Outcome, Output, PUSH_STEP, Placement, Provider, ProviderCommand, PullRebase,
-        PullRebaseError, RESOLVE_STEP, REVIEW_STEP, RunLockError, SYNC_STEP, TEST_STEP, TaskDraft,
-        TaskId, TaskKind, TaskStatus, add_task, report, report_retry, report_supersede,
+        PullRebaseError, RESOLVE_STEP, REVIEW_STEP, RetryRequest, RunLockError, SYNC_STEP,
+        TEST_STEP, TaskDraft, TaskId, TaskKind, TaskStatus, add_task, report, report_retry,
+        report_supersede,
     };
 
     use super::*;
@@ -435,12 +429,14 @@ mod tests {
         timeout: Duration,
     ) -> Result<RunReport, RunError> {
         run_queue(
-            journal,
-            &clock(),
-            commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal,
+                clock: &clock(),
+                commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(provider, context(timeout)),
         )
@@ -631,12 +627,14 @@ mod tests {
         let mut ctx = context(Duration::from_secs(60));
         ctx.health_check_command = Some("make check");
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -683,12 +681,14 @@ mod tests {
         let mut ctx = context(Duration::from_secs(60));
         ctx.health_check_command = Some("make check");
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -727,12 +727,14 @@ mod tests {
         let mut ctx = context(Duration::from_secs(60));
         ctx.health_check_command = Some("make check");
         run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -778,12 +780,14 @@ mod tests {
         let mut ctx = context(Duration::from_secs(60));
         ctx.health_check_command = Some("make check");
         run_queue(
-            &journal,
-            &clock(),
-            &failing,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &failing,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -808,12 +812,14 @@ mod tests {
             other: &reporting,
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &passing,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &passing,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -852,12 +858,14 @@ mod tests {
         let mut ctx = context(Duration::from_secs(60));
         ctx.health_check_command = Some("sleep 999");
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -881,12 +889,14 @@ mod tests {
         let mut ctx = context(Duration::from_secs(42));
         ctx.health_check_command = Some("make check");
         run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -936,12 +946,14 @@ mod tests {
         ctx.health_check_command = Some("make check");
         ctx.disabled_steps = &[HEALTH_CHECK_STEP];
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -975,12 +987,14 @@ mod tests {
         let mut ctx = context_tracking(Duration::from_secs(60));
         ctx.disabled_steps = &[SYNC_STEP];
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -1008,12 +1022,14 @@ mod tests {
         let mut ctx = context(Duration::from_secs(60));
         ctx.disabled_steps = &[REVIEW_STEP];
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -1041,12 +1057,14 @@ mod tests {
         let mut ctx = context(Duration::from_secs(60));
         ctx.disabled_steps = &[TEST_STEP];
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -1074,12 +1092,14 @@ mod tests {
         let mut ctx = context(Duration::from_secs(60));
         ctx.disabled_steps = &[REVIEW_STEP, TEST_STEP];
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -1116,12 +1136,14 @@ mod tests {
             ..FakeGit::default()
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
@@ -1157,12 +1179,14 @@ mod tests {
             ..FakeGit::default()
         };
         run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
@@ -1189,12 +1213,14 @@ mod tests {
             ..FakeGit::default()
         };
         run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
@@ -1220,12 +1246,14 @@ mod tests {
             ..FakeGit::default()
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &NeverRun,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &NeverRun,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
@@ -1257,12 +1285,14 @@ mod tests {
             ..FakeGit::default()
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &NeverRun,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &NeverRun,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
@@ -1296,12 +1326,14 @@ mod tests {
             ..FakeGit::default()
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &NeverRun,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &NeverRun,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
@@ -1336,12 +1368,14 @@ mod tests {
             ..FakeGit::default()
         };
         run_queue(
-            &journal,
-            &clock(),
-            &NeverRun,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &NeverRun,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
@@ -1372,12 +1406,14 @@ mod tests {
             ..FakeGit::default()
         };
         run_queue(
-            &journal,
-            &clock(),
-            &NeverRun,
-            &failing_git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &NeverRun,
+                git: &failing_git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
@@ -1398,12 +1434,14 @@ mod tests {
             ..FakeGit::default()
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &reporting,
-            &passing_git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &reporting,
+                git: &passing_git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
@@ -1464,12 +1502,14 @@ mod tests {
         let mut ctx = context_tracking(Duration::from_secs(60));
         ctx.health_check_command = Some("make check");
         run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -1895,12 +1935,14 @@ mod tests {
             captured: &captured,
         };
         run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git_with_diff(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git_with_diff(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context(Duration::from_secs(60))),
         )
@@ -1926,12 +1968,14 @@ mod tests {
             captured: &captured,
         };
         run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git_with_diff(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git_with_diff(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context(Duration::from_secs(60))),
         )
@@ -1970,12 +2014,14 @@ mod tests {
             };
             let files = crate::fakes::FakeInstructionFiles::complete_in("/work/proj/docs");
             run_queue(
-                &journal,
-                &clock(),
-                &commands,
-                &git_with_diff(),
-                &FakeSessionLog::default(),
-                &FakeSleep::default(),
+                RunPorts {
+                    journal: &journal,
+                    clock: &clock(),
+                    commands: &commands,
+                    git: &git_with_diff(),
+                    session_log: &FakeSessionLog::default(),
+                    sleep: &FakeSleep::default(),
+                },
                 &FakeRunLock::free(),
                 request_with_files(&test_provider(), &files),
             )
@@ -1994,12 +2040,14 @@ mod tests {
         let files = crate::fakes::FakeInstructionFiles::complete_in("/work/proj/docs");
         files.remove(Path::new("/work/proj/docs/REVIEWER.md"));
         let report = run_queue(
-            &journal,
-            &clock(),
-            &NeverRun,
-            &git_with_diff(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &NeverRun,
+                git: &git_with_diff(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request_with_files(&test_provider(), &files),
         )
@@ -2034,16 +2082,18 @@ mod tests {
         let mut ctx = context(Duration::from_secs(60));
         ctx.disabled_steps = &[REVIEW_STEP];
         let report = run_queue(
-            &journal,
-            &clock(),
-            &CapturingStep {
+            RunPorts {
                 journal: &journal,
-                capture_step: IMPLEMENTATION,
-                captured: &RefCell::default(),
+                clock: &clock(),
+                commands: &CapturingStep {
+                    journal: &journal,
+                    capture_step: IMPLEMENTATION,
+                    captured: &RefCell::default(),
+                },
+                git: &git_with_diff(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
             },
-            &git_with_diff(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
             &FakeRunLock::free(),
             RunRequest {
                 context: ctx,
@@ -2209,12 +2259,14 @@ mod tests {
         add_task(&journal, &clock(), &draft("a"), Placement::End).unwrap();
         let commands = commands_ok(Exit::Code(0));
         run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context(Duration::from_secs(42))),
         )
@@ -2303,12 +2355,14 @@ mod tests {
         let commands = commands_ok(Exit::Code(0));
         let lock = FakeRunLock::held_by(Some(4_321));
         let error = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &lock,
             request(&test_provider(), context(Duration::from_secs(60))),
         )
@@ -2650,12 +2704,14 @@ mod tests {
             exit: Exit::Code(0),
         };
         let first = run_queue(
-            &journal,
-            &clock(),
-            &failing,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &failing,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context(Duration::from_secs(60))),
         )
@@ -2674,12 +2730,14 @@ mod tests {
             specs: RefCell::new(Vec::new()),
         };
         let second = run_queue(
-            &journal,
-            &clock(),
-            &recording,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &recording,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context(Duration::from_secs(60))),
         )
@@ -2719,12 +2777,14 @@ mod tests {
             ..FakeGit::default()
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
@@ -2758,12 +2818,14 @@ mod tests {
             ..FakeGit::default()
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context(Duration::from_secs(60))),
         )
@@ -2800,12 +2862,14 @@ mod tests {
             ..FakeGit::default()
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context(Duration::from_secs(60))),
         )
@@ -2838,12 +2902,14 @@ mod tests {
             ..FakeGit::default()
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context(Duration::from_secs(60))),
         )
@@ -2892,12 +2958,14 @@ mod tests {
             ..FakeGit::default()
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context(Duration::from_secs(60))),
         )
@@ -2936,12 +3004,14 @@ mod tests {
             ..FakeGit::default()
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
@@ -2980,12 +3050,14 @@ mod tests {
             ..FakeGit::default()
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
@@ -3021,12 +3093,14 @@ mod tests {
             ..FakeGit::default()
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_tracking(Duration::from_secs(60))),
         )
@@ -3062,12 +3136,14 @@ mod tests {
         let mut ctx = context(Duration::from_secs(60));
         ctx.disabled_steps = &[COMMIT_STEP];
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -3105,12 +3181,14 @@ mod tests {
         let mut ctx = context_tracking(Duration::from_secs(60));
         ctx.disabled_steps = &[SYNC_STEP, PUSH_STEP];
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -3214,11 +3292,13 @@ mod tests {
                         self.journal,
                         &clock(),
                         &token,
-                        None,
+                        RetryRequest {
+                            model: None,
+                            same_session: false,
+                            reset_tree: true,
+                            more_time: None,
+                        },
                         false,
-                        false,
-                        true,
-                        None,
                     )
                     .unwrap();
                 }
@@ -3254,12 +3334,14 @@ mod tests {
             ..FakeGit::default()
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &git,
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &git,
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_with_max_attempts(3)),
         )
@@ -3314,12 +3396,14 @@ mod tests {
         let mut ctx = context_with_max_attempts(3);
         ctx.resolver_model = "opus";
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), ctx),
         )
@@ -3372,12 +3456,14 @@ mod tests {
             resolve: |_| Some((Outcome::Stop, Some("not worth another try"))),
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_with_max_attempts(3)),
         )
@@ -3423,12 +3509,14 @@ mod tests {
             resolve: |_| Some((Outcome::Skip, Some("no longer relevant"))),
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_with_max_attempts(3)),
         )
@@ -3519,12 +3607,14 @@ mod tests {
         let commands = ResolverSupersedeCommands { journal: &journal };
 
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_with_max_attempts(3)),
         )
@@ -3575,12 +3665,14 @@ mod tests {
             resolve: |_| None,
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_with_max_attempts(3)),
         )
@@ -3610,12 +3702,14 @@ mod tests {
             resolve: |_| panic!("the resolver must not run once max-attempts is reached"),
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_with_max_attempts(1)),
         )
@@ -3693,12 +3787,14 @@ mod tests {
             },
         };
         let report = run_queue(
-            &journal,
-            &clock(),
-            &AlwaysFails(commands),
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &FakeSleep::default(),
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &AlwaysFails(commands),
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &FakeSleep::default(),
+            },
             &FakeRunLock::free(),
             request(&test_provider(), context_with_max_attempts(3)),
         )
@@ -3813,12 +3909,14 @@ mod tests {
         let mut ctx = context(Duration::from_secs(60));
         ctx.disabled_steps = &[REVIEW_STEP, TEST_STEP];
         let report = run_queue(
-            &journal,
-            &clock(),
-            &commands,
-            &FakeGit::default(),
-            &FakeSessionLog::default(),
-            &sleep,
+            RunPorts {
+                journal: &journal,
+                clock: &clock(),
+                commands: &commands,
+                git: &FakeGit::default(),
+                session_log: &FakeSessionLog::default(),
+                sleep: &sleep,
+            },
             &FakeRunLock::free(),
             request(&provider, ctx),
         )

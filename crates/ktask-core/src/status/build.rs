@@ -9,7 +9,8 @@ use crate::{
 use super::AttemptOutcome;
 use super::facts::{AttemptLine, DoneMark, OutputActivity, StatusEntry, StepLine};
 use super::lines::{
-    attempt_of, gate_stop_entry, running_step, step_outcome, step_provider, step_session,
+    StepIdentity, attempt_of, gate_stop_entry, running_step, step_outcome, step_provider,
+    step_session,
 };
 
 /// The [`StatusEntry`] for `task`, given its most recent attempt and the agent's own report of
@@ -39,10 +40,12 @@ fn step_lines(
         .map(|step| match &step.ended {
             Some(end) => ended_line_for(journal, task, attempt, step, end, provider, answer),
             None => Ok(running_step(
-                &step.name,
-                step.provider.as_deref().or(provider),
-                step.model.as_deref(),
-                session,
+                StepIdentity {
+                    name: &step.name,
+                    provider: step.provider.as_deref().or(provider),
+                    model: step.model.as_deref(),
+                    session,
+                },
                 step.started_at,
                 attempt.waiting_until,
                 attempt.waiting_reason,
@@ -56,7 +59,6 @@ fn step_lines(
 /// One already-ended step of `attempt` as a [`StepLine`], its own findings read back from the
 /// journal — [`step_lines`]'s own per-step work for a step that has ended, pulled out of it so
 /// it stays within the workspace's function-length limit.
-#[allow(clippy::too_many_arguments)]
 fn ended_line_for(
     journal: &impl Journal,
     task: TaskId,
@@ -68,10 +70,12 @@ fn ended_line_for(
 ) -> Result<StepLine, JournalError> {
     let findings = crate::attempt::findings_of_step(journal, task, attempt.number, &step.name)?;
     Ok(ended_step_line(
-        &step.name,
-        step.model.as_deref(),
-        step.provider.as_deref().or(provider),
-        attempt.session.as_deref(),
+        StepIdentity {
+            name: &step.name,
+            provider: step.provider.as_deref().or(provider),
+            model: step.model.as_deref(),
+            session: attempt.session.as_deref(),
+        },
         end,
         end.reported.map(|outcome| (outcome, end.reason.clone())),
         answer,
@@ -81,26 +85,22 @@ fn ended_line_for(
 
 /// A recorded provider or command step as one status line. A provider-reported model wins over
 /// the requested one because it describes what actually ran.
-#[allow(clippy::too_many_arguments)]
 fn ended_step_line(
-    name: &str,
-    requested_model: Option<&str>,
-    provider: Option<&str>,
-    session: Option<&str>,
+    identity: StepIdentity<'_>,
     end: &crate::AttemptEnd,
     reported: Option<(Outcome, Option<String>)>,
     answer: Option<&str>,
     findings: Vec<crate::Finding>,
 ) -> StepLine {
-    let (outcome, reason) = step_outcome(name, end, reported, answer);
+    let (outcome, reason) = step_outcome(identity.name, end, reported, answer);
     StepLine {
-        step: name.to_owned(),
-        provider: step_provider(name, provider),
+        step: identity.name.to_owned(),
+        provider: step_provider(identity.name, identity.provider),
         model: end
             .used_model
             .clone()
-            .or_else(|| requested_model.map(str::to_owned)),
-        session: step_session(name, session),
+            .or_else(|| identity.model.map(str::to_owned)),
+        session: step_session(identity.name, identity.session),
         time_spent: end.duration,
         outcome,
         reason,
@@ -117,7 +117,6 @@ fn ended_step_line(
 /// The current step line: the last of `steps` when there is one, else a fallback for the
 /// implementation step itself — pushed onto `steps` too, so it is never missing from what
 /// [`entry_for`] records.
-#[allow(clippy::too_many_arguments)]
 fn current_step_line(
     steps: &mut Vec<StepLine>,
     attempt: &crate::Attempt,
@@ -129,22 +128,16 @@ fn current_step_line(
     if let Some(last) = steps.last() {
         return last.clone();
     }
+    let identity = StepIdentity {
+        name: IMPLEMENTATION,
+        provider: attempt.provider.as_deref(),
+        model: None,
+        session: attempt.session.as_deref(),
+    };
     let fallback = match &attempt.ended {
-        Some(end) => ended_step_line(
-            IMPLEMENTATION,
-            None,
-            attempt.provider.as_deref(),
-            attempt.session.as_deref(),
-            end,
-            reported,
-            answer,
-            Vec::new(),
-        ),
+        Some(end) => ended_step_line(identity, end, reported, answer, Vec::new()),
         None => running_step(
-            IMPLEMENTATION,
-            attempt.provider.as_deref(),
-            None,
-            attempt.session.as_deref(),
+            identity,
             attempt.started_at,
             attempt.waiting_until,
             attempt.waiting_reason,
@@ -158,33 +151,47 @@ fn current_step_line(
 
 /// `attempt` as an [`AttemptLine`]: every step it has run so far, and the most recently started
 /// or ended one's own fields carried flat, given the agent's own report of it, when there was
-/// one; `run_alive` only matters for the attempt currently open, never for an earlier one in a
-/// task's history, which has always ended.
-#[allow(clippy::too_many_arguments)]
+/// one; `current.run_alive` only matters for the attempt currently open, never for an earlier
+/// one in a task's history, which has always ended.
 fn attempt_line(
     journal: &impl Journal,
-    attempt: &crate::Attempt,
-    reported: Option<(Outcome, Option<String>)>,
-    clock: &(impl Clock + ?Sized),
-    run_alive: bool,
-    answer: Option<&str>,
-    output: Option<(&dyn AttemptOutput, Duration)>,
     task: TaskId,
+    attempt: &crate::Attempt,
+    current: &CurrentAttempt<'_>,
 ) -> Result<AttemptLine, JournalError> {
-    let mut steps = step_lines(journal, task, attempt, clock, run_alive, answer)?;
-    let current = current_step_line(&mut steps, attempt, reported, clock, run_alive, answer);
-    let output_activity = output.and_then(|(output, silent_after)| {
+    let mut steps = step_lines(
+        journal,
+        task,
+        attempt,
+        current.clock,
+        current.run_alive,
+        current.answer,
+    )?;
+    let step_current = current_step_line(
+        &mut steps,
+        attempt,
+        current.reported.clone(),
+        current.clock,
+        current.run_alive,
+        current.answer,
+    );
+    let output_activity = current.output.and_then(|(output, silent_after)| {
         output_activity(
-            &current,
+            &step_current,
             attempt,
-            clock,
-            run_alive,
+            current.clock,
+            current.run_alive,
             output,
             silent_after,
             task,
         )
     });
-    Ok(attempt_of(attempt.number, current, output_activity, steps))
+    Ok(attempt_of(
+        attempt.number,
+        step_current,
+        output_activity,
+        steps,
+    ))
 }
 
 /// The live output state for this attempt's current step, when that step is an agent provider
@@ -226,8 +233,7 @@ struct CurrentAttempt<'a> {
     clock: &'a dyn Clock,
     run_alive: bool,
     answer: Option<&'a str>,
-    output: Option<&'a dyn AttemptOutput>,
-    silent_after: Duration,
+    output: Option<(&'a dyn AttemptOutput, Duration)>,
 }
 
 /// `task`'s latest `attempt` as its status entry, with the attempt facts already read.
@@ -236,23 +242,14 @@ fn entry_for(
     task: Task,
     attempt: &crate::Attempt,
     history: Vec<AttemptLine>,
-    current: CurrentAttempt<'_>,
+    current: &CurrentAttempt<'_>,
 ) -> Result<StatusEntry, JournalError> {
     let id = task.id;
     Ok(StatusEntry {
         task: task.id,
         title: task.title,
         status: task.status,
-        attempt: attempt_line(
-            journal,
-            attempt,
-            current.reported,
-            current.clock,
-            current.run_alive,
-            current.answer,
-            current.output.map(|output| (output, current.silent_after)),
-            id,
-        )?,
+        attempt: attempt_line(journal, id, attempt, current)?,
         history,
         done_by_user: None,
     })
@@ -293,10 +290,9 @@ pub(super) fn entry_for_task(
         clock,
         run_alive,
         answer: answer.as_deref(),
-        output,
-        silent_after,
+        output: output.map(|output| (output, silent_after)),
     };
-    let mut entry = entry_for(journal, task, &attempt, history, current)?;
+    let mut entry = entry_for(journal, task, &attempt, history, &current)?;
     entry.done_by_user = done_by_user;
     with_more_time(&mut entry.attempt, more_time);
     Ok(Some(entry))
@@ -339,16 +335,14 @@ fn attempt_history(
     for (index, earlier) in attempts.iter().enumerate() {
         let reported = crate::attempt::last_report(journal, id, earlier.number)?;
         let earlier_answer = crate::attempt::answer_of(journal, id, earlier.number)?;
-        let mut line = attempt_line(
-            journal,
-            earlier,
+        let current = CurrentAttempt {
             reported,
             clock,
-            false,
-            earlier_answer.as_deref(),
-            None,
-            id,
-        )?;
+            run_alive: false,
+            answer: earlier_answer.as_deref(),
+            output: None,
+        };
+        let mut line = attempt_line(journal, id, earlier, &current)?;
         let previous = index
             .checked_sub(1)
             .and_then(|before| attempts.get(before))
@@ -364,6 +358,7 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use crate::fakes::{FakeClock, FakeJournal, FakeRunLock, at, draft};
+    use crate::queue_state::StepEnd;
     use crate::{
         AttemptEnd, AttemptRun, COMMIT_STEP, HEALTH_CHECK_STEP, LimitWait, Outcome, Placement,
         SYNC_STEP, TaskId, TaskStatus, add_task, report, status, status_with_output,
@@ -703,21 +698,23 @@ mod tests {
             TaskId(1),
             1,
             IMPLEMENTATION,
-            AttemptRun {
-                duration: Duration::from_secs(105),
-                exit_code: Some(0),
-                status: TaskStatus::Done,
-                reason: None,
+            StepEnd {
+                run: AttemptRun {
+                    duration: Duration::from_secs(105),
+                    exit_code: Some(0),
+                    status: TaskStatus::Done,
+                    reason: None,
+                },
+                reported: Some(Outcome::Done),
+                limit_wait: Some(LimitWait {
+                    waited: Duration::from_secs(100),
+                    resumed_at: at(200),
+                }),
+                limit_warning: None,
+                usage: crate::Usage::default(),
+                used_model: None,
+                routed: None,
             },
-            Some(Outcome::Done),
-            Some(LimitWait {
-                waited: Duration::from_secs(100),
-                resumed_at: at(200),
-            }),
-            None,
-            crate::Usage::default(),
-            None,
-            None,
         )
         .unwrap();
         crate::attempt::end_attempt(
@@ -1155,18 +1152,20 @@ mod tests {
             TaskId(1),
             1,
             HEALTH_CHECK_STEP,
-            AttemptRun {
-                duration: Duration::from_secs(4),
-                exit_code: Some(0),
-                status: TaskStatus::Done,
-                reason: None,
+            StepEnd {
+                run: AttemptRun {
+                    duration: Duration::from_secs(4),
+                    exit_code: Some(0),
+                    status: TaskStatus::Done,
+                    reason: None,
+                },
+                reported: None,
+                limit_wait: None,
+                limit_warning: None,
+                usage: crate::Usage::default(),
+                used_model: None,
+                routed: None,
             },
-            None,
-            None,
-            None,
-            crate::Usage::default(),
-            None,
-            None,
         )
         .unwrap();
         crate::attempt::begin_step(

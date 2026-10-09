@@ -4,6 +4,7 @@
 
 use std::time::{Duration, SystemTime};
 
+use crate::queue_state::StepEnd;
 use crate::route::{Facts, Route, Signals, route};
 use crate::{
     AttemptRun, Clock, Journal, LimitWait, Outcome, Routed, RunContext, RunError, TaskId,
@@ -32,18 +33,20 @@ fn record_passed_step(
         id,
         number,
         step,
-        AttemptRun {
-            duration,
-            exit_code: Some(0),
-            status: TaskStatus::Done,
-            reason,
+        StepEnd {
+            run: AttemptRun {
+                duration,
+                exit_code: Some(0),
+                status: TaskStatus::Done,
+                reason,
+            },
+            reported: None,
+            limit_wait: None,
+            limit_warning: None,
+            usage: crate::Usage::default(),
+            used_model: None,
+            routed: None,
         },
-        None,
-        None,
-        None,
-        crate::Usage::default(),
-        None,
-        None,
     )?;
     Ok(())
 }
@@ -109,18 +112,20 @@ fn end_one_step(
         state.task.id,
         state.token.number,
         step,
-        AttemptRun {
-            duration: total,
-            exit_code: ending.exit_code,
-            status: ending.status,
-            reason: ending.reason.as_deref(),
+        StepEnd {
+            run: AttemptRun {
+                duration: total,
+                exit_code: ending.exit_code,
+                status: ending.status,
+                reason: ending.reason.as_deref(),
+            },
+            reported: ending.reported,
+            limit_wait: run.limit_wait,
+            limit_warning: limit_warning.as_ref(),
+            usage,
+            used_model: used_model.as_deref(),
+            routed: run.routed,
         },
-        ending.reported,
-        run.limit_wait,
-        limit_warning.as_ref(),
-        usage,
-        used_model.as_deref(),
-        run.routed,
     )?;
     Ok((total, ending.status, ending.reason))
 }

@@ -174,6 +174,34 @@ pub(crate) fn read_and_query<T>(
     Ok(query(&QueueState::fold(&events)))
 }
 
+/// What a resolver decided for an attempt's report: the outcome and reason it gave, the
+/// findings attached to it, and the retry instructions, when its decision was `retry` — the
+/// arguments [`QueueState::decide_record_report`] and the `record_report` use case share.
+#[derive(Clone, Copy)]
+pub(crate) struct ReportDecision<'a> {
+    pub(crate) outcome: Outcome,
+    pub(crate) reason: Option<&'a str>,
+    pub(crate) findings: &'a [Finding],
+    pub(crate) retry_model: Option<&'a str>,
+    pub(crate) retry_same_session: bool,
+    pub(crate) retry_reset_tree: bool,
+    pub(crate) retry_more_time: Option<u32>,
+}
+
+/// How a step ended: the run's own record, what the agent reported for it apart from
+/// `run.status`, and the usage, routing and limit-wait it generated — the arguments
+/// [`QueueState::decide_end_step`] and the `end_step` use case share.
+#[derive(Clone, Copy)]
+pub(crate) struct StepEnd<'a> {
+    pub(crate) run: AttemptRun<'a>,
+    pub(crate) reported: Option<Outcome>,
+    pub(crate) limit_wait: Option<LimitWait>,
+    pub(crate) limit_warning: Option<&'a crate::LimitWarning>,
+    pub(crate) usage: crate::Usage,
+    pub(crate) used_model: Option<&'a str>,
+    pub(crate) routed: Option<crate::Routed>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -278,8 +306,126 @@ mod tests {
     /// One randomly generated command against a queue that already holds `existing` ids,
     /// applied to both `journal` (through the real use cases) and `oracle` (independently),
     /// asserting the use case's own outcome matches what the oracle expects.
-    #[allow(clippy::too_many_lines)]
-    fn apply_random_command(
+    /// One command in ten is a cancel.
+    fn apply_cancel(
+        rng: &mut Rng,
+        journal: &FakeJournal,
+        clock: &FakeClock,
+        oracle: &mut Oracle,
+        existing: &[TaskId],
+    ) {
+        let id = existing[rng.below(existing.len())];
+        let status = oracle.status_of(id);
+        let result = remove_task(journal, clock, id);
+        match status {
+            TaskStatus::Cancelled => {
+                assert_eq!(result, Err(CancelError::AlreadyCancelled(id)));
+            }
+            TaskStatus::Running => {
+                assert_eq!(result, Err(CancelError::Running(id)));
+            }
+            _ => {
+                assert_eq!(result, Ok(()));
+                oracle.set_status(id, TaskStatus::Cancelled);
+            }
+        }
+    }
+
+    /// One in ten begins the attempt a pending task does not have yet.
+    fn apply_begin_attempt(
+        rng: &mut Rng,
+        journal: &FakeJournal,
+        clock: &FakeClock,
+        oracle: &mut Oracle,
+        existing: &[TaskId],
+    ) {
+        let id = existing[rng.below(existing.len())];
+        let status = oracle.status_of(id);
+        let result = crate::attempt::begin_attempt(journal, clock, id);
+        if status == TaskStatus::Pending {
+            assert_eq!(result, Ok(1));
+            oracle.set_status(id, TaskStatus::Running);
+            oracle.mark_attempted(id);
+        } else {
+            assert_eq!(result, Err(BeginAttemptError::NotPending(id)));
+        }
+    }
+
+    /// One in ten reports an outcome — recorded only while the attempt runs, never changing
+    /// the task's status itself.
+    fn apply_report(
+        rng: &mut Rng,
+        journal: &FakeJournal,
+        clock: &FakeClock,
+        oracle: &Oracle,
+        existing: &[TaskId],
+    ) {
+        let id = existing[rng.below(existing.len())];
+        let status = oracle.status_of(id);
+        let outcome = [
+            Outcome::Done,
+            Outcome::Failed,
+            Outcome::NeedsInput,
+            Outcome::TooLarge,
+        ][rng.below(4)];
+        let decision = ReportDecision {
+            outcome,
+            reason: Some("why"),
+            findings: &[],
+            retry_model: None,
+            retry_same_session: false,
+            retry_reset_tree: false,
+            retry_more_time: None,
+        };
+        let result = crate::attempt::record_report(journal, clock, id, 1, decision);
+        if status == TaskStatus::Running {
+            assert_eq!(result, Ok(()));
+        } else {
+            let attempted = oracle.attempted(id);
+            assert_eq!(
+                result,
+                Err(expected_attempt_refusal(id, 1, attempted, status))
+            );
+        }
+    }
+
+    /// One in ten ends the attempt, settling the task at the outcome given.
+    fn apply_end_attempt(
+        rng: &mut Rng,
+        journal: &FakeJournal,
+        clock: &FakeClock,
+        oracle: &mut Oracle,
+        existing: &[TaskId],
+    ) {
+        let id = existing[rng.below(existing.len())];
+        let status = oracle.status_of(id);
+        let ends_at = [
+            TaskStatus::Done,
+            TaskStatus::Failed,
+            TaskStatus::Blocked,
+            TaskStatus::FailedUnknown,
+        ][rng.below(4)];
+        let run = AttemptRun {
+            duration: Duration::ZERO,
+            exit_code: Some(0),
+            status: ends_at,
+            reason: None,
+        };
+        let result = crate::attempt::end_attempt(journal, id, 1, run, clock.0);
+        if status == TaskStatus::Running {
+            assert_eq!(result, Ok(()));
+            oracle.set_status(id, ends_at);
+        } else {
+            let attempted = oracle.attempted(id);
+            assert_eq!(
+                result,
+                Err(expected_attempt_refusal(id, 1, attempted, status))
+            );
+        }
+    }
+
+    /// The other nine in ten add a new task, at a random placement among the ones that exist.
+    fn apply_add(
         rng: &mut Rng,
         journal: &FakeJournal,
         clock: &FakeClock,
@@ -287,108 +433,6 @@ mod tests {
         existing: &mut Vec<TaskId>,
         next_title: &mut u32,
     ) {
-        if !existing.is_empty() {
-            match rng.below(10) {
-                // One command in ten is a cancel.
-                0 => {
-                    let id = existing[rng.below(existing.len())];
-                    let status = oracle.status_of(id);
-                    let result = remove_task(journal, clock, id);
-                    match status {
-                        TaskStatus::Cancelled => {
-                            assert_eq!(result, Err(CancelError::AlreadyCancelled(id)));
-                        }
-                        TaskStatus::Running => {
-                            assert_eq!(result, Err(CancelError::Running(id)));
-                        }
-                        _ => {
-                            assert_eq!(result, Ok(()));
-                            oracle.set_status(id, TaskStatus::Cancelled);
-                        }
-                    }
-                    return;
-                }
-                // One in ten begins the attempt a pending task does not have yet.
-                1 => {
-                    let id = existing[rng.below(existing.len())];
-                    let status = oracle.status_of(id);
-                    let result = crate::attempt::begin_attempt(journal, clock, id);
-                    if status == TaskStatus::Pending {
-                        assert_eq!(result, Ok(1));
-                        oracle.set_status(id, TaskStatus::Running);
-                        oracle.mark_attempted(id);
-                    } else {
-                        assert_eq!(result, Err(BeginAttemptError::NotPending(id)));
-                    }
-                    return;
-                }
-                // One in ten reports an outcome — recorded only while the attempt runs, never
-                // changing the task's status itself.
-                2 => {
-                    let id = existing[rng.below(existing.len())];
-                    let status = oracle.status_of(id);
-                    let outcome = [
-                        Outcome::Done,
-                        Outcome::Failed,
-                        Outcome::NeedsInput,
-                        Outcome::TooLarge,
-                    ][rng.below(4)];
-                    let result = crate::attempt::record_report(
-                        journal,
-                        clock,
-                        id,
-                        1,
-                        outcome,
-                        Some("why"),
-                        &[],
-                        None,
-                        false,
-                        false,
-                        None,
-                    );
-                    if status == TaskStatus::Running {
-                        assert_eq!(result, Ok(()));
-                    } else {
-                        let attempted = oracle.attempted(id);
-                        assert_eq!(
-                            result,
-                            Err(expected_attempt_refusal(id, 1, attempted, status))
-                        );
-                    }
-                    return;
-                }
-                // One in ten ends the attempt, settling the task at the outcome given.
-                3 => {
-                    let id = existing[rng.below(existing.len())];
-                    let status = oracle.status_of(id);
-                    let ends_at = [
-                        TaskStatus::Done,
-                        TaskStatus::Failed,
-                        TaskStatus::Blocked,
-                        TaskStatus::FailedUnknown,
-                    ][rng.below(4)];
-                    let run = AttemptRun {
-                        duration: Duration::ZERO,
-                        exit_code: Some(0),
-                        status: ends_at,
-                        reason: None,
-                    };
-                    let result = crate::attempt::end_attempt(journal, id, 1, run, clock.0);
-                    if status == TaskStatus::Running {
-                        assert_eq!(result, Ok(()));
-                        oracle.set_status(id, ends_at);
-                    } else {
-                        let attempted = oracle.attempted(id);
-                        assert_eq!(
-                            result,
-                            Err(expected_attempt_refusal(id, 1, attempted, status))
-                        );
-                    }
-                    return;
-                }
-                _ => {}
-            }
-        }
         let title = format!("t{next_title}");
         *next_title += 1;
         let placement = if existing.is_empty() || rng.below(3) == 0 {
@@ -416,6 +460,26 @@ mod tests {
             oracle.add(added.id, &title, placement);
             existing.push(added.id);
         }
+    }
+
+    fn apply_random_command(
+        rng: &mut Rng,
+        journal: &FakeJournal,
+        clock: &FakeClock,
+        oracle: &mut Oracle,
+        existing: &mut Vec<TaskId>,
+        next_title: &mut u32,
+    ) {
+        if !existing.is_empty() {
+            match rng.below(10) {
+                0 => return apply_cancel(rng, journal, clock, oracle, existing),
+                1 => return apply_begin_attempt(rng, journal, clock, oracle, existing),
+                2 => return apply_report(rng, journal, clock, oracle, existing),
+                3 => return apply_end_attempt(rng, journal, clock, oracle, existing),
+                _ => {}
+            }
+        }
+        apply_add(rng, journal, clock, oracle, existing, next_title);
     }
 
     #[test]

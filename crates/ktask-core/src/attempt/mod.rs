@@ -8,10 +8,10 @@
 use std::time::SystemTime;
 
 use crate::journal::{AttemptRun, WaitReason};
-use crate::queue_state::decide_and_append;
+use crate::queue_state::{ReportDecision, StepEnd, decide_and_append};
 use crate::{
-    BeginAttemptError, Clock, Event, Finding, Journal, JournalError, LimitWait, Outcome,
-    RecordReportError, Routed, Task, TaskDraft, TaskId,
+    BeginAttemptError, Clock, Event, Journal, JournalError, RecordReportError, Task, TaskDraft,
+    TaskId,
 };
 
 mod query;
@@ -81,35 +81,17 @@ pub(crate) fn begin_attempt(
 ///
 /// Fails, recording nothing, when no attempt numbered `number` was started for this task, when
 /// it was but has since ended, or when the journal cannot be read or written.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn record_report(
     journal: &dyn Journal,
     clock: &dyn Clock,
     id: TaskId,
     number: u32,
-    outcome: Outcome,
-    reason: Option<&str>,
-    findings: &[Finding],
-    retry_model: Option<&str>,
-    retry_same_session: bool,
-    retry_reset_tree: bool,
-    retry_more_time: Option<u32>,
+    decision: ReportDecision<'_>,
 ) -> Result<(), RecordReportError> {
     let at = clock.now();
     decide_and_append(journal, |state| {
         state
-            .decide_record_report(
-                id,
-                number,
-                outcome,
-                reason,
-                findings,
-                retry_model,
-                retry_same_session,
-                retry_reset_tree,
-                retry_more_time,
-                at,
-            )
+            .decide_record_report(id, number, decision, at)
             .map(|event| (vec![event], ()))
     })
 }
@@ -283,37 +265,18 @@ pub(crate) fn begin_step(
 ///
 /// Fails, recording nothing, when no attempt numbered `number` is running for this task, or
 /// when the journal cannot be read or written.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn end_step(
     journal: &dyn Journal,
     clock: &dyn Clock,
     id: TaskId,
     number: u32,
     step: &str,
-    run: AttemptRun<'_>,
-    reported: Option<Outcome>,
-    limit_wait: Option<LimitWait>,
-    limit_warning: Option<&crate::LimitWarning>,
-    usage: crate::Usage,
-    used_model: Option<&str>,
-    routed: Option<Routed>,
+    end: StepEnd<'_>,
 ) -> Result<(), RecordReportError> {
     let at = clock.now();
     decide_and_append(journal, |state| {
         state
-            .decide_end_step(
-                id,
-                number,
-                step,
-                run,
-                reported,
-                limit_wait,
-                limit_warning,
-                usage,
-                used_model,
-                routed,
-                at,
-            )
+            .decide_end_step(id, number, step, end, at)
             .map(|event| (vec![event], ()))
     })
 }
