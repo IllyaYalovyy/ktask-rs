@@ -1567,7 +1567,7 @@ fn recorded_claude_stream_json_runs_the_task_with_its_model() -> Result<()> {
     fixture.run(&["settings", "set", "model", "claude-haiku-4-5-20251001"])?;
     fixture.add_agent_task("a", "do the recorded work")?;
     let script = [
-        "[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-haiku-4-5-20251001 ] && [ \"$9\" = --disallowedTools ] || exit 9\nfor tool in CronCreate CronDelete CronList Monitor ScheduleWakeup TaskOutput TaskStop; do case \",${10},\" in *\",$tool,\"*) ;; *) exit 9 ;; esac; done\ncase \",${10},\" in *\",Agent,\"*) exit 9 ;; esac",
+        "[ \"$1\" = --print ] && [ \"$2\" = --output-format ] && [ \"$3\" = stream-json ] && [ \"$4\" = --verbose ] && [ \"$5\" = --permission-mode ] && [ \"$6\" = bypassPermissions ] && [ \"$7\" = --model ] && [ \"$8\" = claude-haiku-4-5-20251001 ] && [ \"$9\" = --disallowedTools ] || exit 9\nfor tool in CronCreate CronDelete CronList Monitor ReportFindings ScheduleWakeup TaskOutput TaskStop; do case \",${10},\" in *\",$tool,\"*) ;; *) exit 9 ;; esac; done\ncase \",${10},\" in *\",Agent,\"*) exit 9 ;; esac",
         &format!("printf '%s' '{}'", include_str!("../../../test-fixtures/claude/success.jsonl")),
         "prompt=$(cat)\nreport=$(printf '%s\\n' \"$prompt\" | sed -n 's/^    //; / report --token .* done$/p' | head -n 1)\neval \"$report\"",
     ]

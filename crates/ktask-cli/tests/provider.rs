@@ -333,6 +333,62 @@ fn recorded_claude_tool_catalogues_show_that_agent_denying_hides_task() -> Resul
 }
 
 #[test]
+fn recorded_claude_tool_catalogue_denies_every_tool_that_cannot_work_unattended() -> Result<()> {
+    // Every tool in the full catalogue that cannot deliver its result to ktask-rs without a
+    // human or a process outside this one invocation, paired with why. Anything else in the
+    // catalogue returns its result synchronously to this invocation and needs no denial.
+    let cannot_work_unattended: &[(&str, &str)] = &[
+        (
+            "CronCreate",
+            "creates scheduled work that runs after this invocation ends",
+        ),
+        (
+            "CronDelete",
+            "controls scheduled work that exists outside this invocation",
+        ),
+        (
+            "CronList",
+            "reads a schedule that changes outside this invocation",
+        ),
+        ("Monitor", "watches work that outlives this invocation"),
+        (
+            "ReportFindings",
+            "delivers findings to its own review mode's host UI, which does not exist under \
+             `--print`; ktask-rs never sees them unless the agent calls `ktask-rs report`",
+        ),
+        (
+            "ScheduleWakeup",
+            "schedules a wake-up after this invocation ends",
+        ),
+        ("TaskStop", "controls work outside this invocation"),
+    ];
+
+    let sandbox = Sandbox::new()?;
+    let (_keep, repository) = project(&sandbox)?;
+    let tools = init_tools(include_str!(
+        "../../../test-fixtures/claude/claude-2.1.283-success-nodeny.jsonl"
+    ))?;
+    let show = sandbox.run(&repository, &["provider", "show", "claude", "--json"])?;
+    assert_eq!(show.code, Some(0), "{}", show.stderr);
+    let value: serde_json::Value = serde_json::from_str(&show.stdout)?;
+    let denied = value["denied-tools"]
+        .as_array()
+        .ok_or("denied-tools is not an array")?;
+
+    for (tool, reason) in cannot_work_unattended {
+        assert!(
+            tools.iter().any(|t| t == tool),
+            "{tool} is no longer in the recorded catalogue; update this test ({reason})"
+        );
+        assert!(
+            denied.iter().any(|d| d == tool),
+            "{tool} cannot work unattended ({reason}) but is not denied"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn provider_check_exits_one_with_install_advice_when_claude_is_not_on_path() -> Result<()> {
     let sandbox = Sandbox::new()?;
     let (_keep, repository) = project(&sandbox)?;
@@ -583,6 +639,7 @@ fn provider_list_and_show_print_the_complete_built_in_and_project_definitions() 
             "CronDelete",
             "CronList",
             "Monitor",
+            "ReportFindings",
             "ScheduleWakeup",
             "TaskOutput",
             "TaskStop"

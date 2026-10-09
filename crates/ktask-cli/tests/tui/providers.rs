@@ -262,6 +262,7 @@ fn v_shows_the_same_provider_list_and_definition_the_cli_shows_then_returns_to_t
                 "CronDelete",
                 "CronList",
                 "Monitor",
+                "ReportFindings",
                 "ScheduleWakeup",
                 "TaskOutput",
                 "TaskStop (built-in)",

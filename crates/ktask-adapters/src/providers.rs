@@ -51,6 +51,9 @@ fn claude_denied_tools() -> Vec<String> {
         "CronList".to_owned(),
         // Cannot work unattended: watches work that outlives this invocation.
         "Monitor".to_owned(),
+        // Cannot work unattended: its own review mode's findings tool delivers to a host UI
+        // that does not exist under `--print`; a review must call `ktask-rs report` instead.
+        "ReportFindings".to_owned(),
         // Cannot work unattended: schedules a wake-up after this invocation ends.
         "ScheduleWakeup".to_owned(),
         // Cannot work unattended: reads output from work outside this invocation.
