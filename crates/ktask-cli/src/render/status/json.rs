@@ -1,5 +1,7 @@
-//! Rendering `status`: the run band first, then a task's own fields, plus every step run so
-//! far.
+//! `status --json`'s own shapes and how they are built from the typed facts `status` returns
+//! — pulled out of [`super`] so that file stays within the workspace's file-length limit.
+//! `show --json` and the run band's own `status --json` shape embed some of these same shapes,
+//! so the three never drift apart.
 
 use std::io::Write;
 
@@ -8,7 +10,7 @@ use ktask_core::{RunBand, StatusEntry};
 use ktask_tui::presentation;
 use serde::Serialize;
 
-use super::band::{RunBandJson, run_band_json};
+use super::super::band::{RunBandJson, run_band_json};
 
 /// How long a step waited, in total, for its provider's usage limit, and when it last resumed,
 /// as `status --json` shows it.
@@ -24,6 +26,28 @@ struct LimitWarningJson<'a> {
     utilization_percent: u8,
 }
 
+/// One reviewer's finding as `status --json` shows it.
+#[derive(Debug, Serialize)]
+struct FindingJson<'a> {
+    location: &'a str,
+    problem: &'a str,
+    fix: &'a str,
+    scope: &'static str,
+}
+
+/// `findings` as `status --json` shows them.
+fn findings_json(findings: &[ktask_core::Finding]) -> Vec<FindingJson<'_>> {
+    findings
+        .iter()
+        .map(|finding| FindingJson {
+            location: &finding.location,
+            problem: &finding.problem,
+            fix: &finding.fix,
+            scope: finding.scope.as_str(),
+        })
+        .collect()
+}
+
 /// One step of a task's attempt as `status --json` shows it.
 #[derive(Debug, Serialize)]
 struct StepJson<'a> {
@@ -36,6 +60,7 @@ struct StepJson<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     routed: Option<String>,
     reason: Option<String>,
+    findings: Vec<FindingJson<'a>>,
     limit_wait: Option<LimitWaitJson>,
     limit_warning: Option<LimitWarningJson<'a>>,
     input_tokens: Option<u64>,
@@ -46,7 +71,7 @@ struct StepJson<'a> {
 /// The live output state for a running provider attempt as `status --json` shows it.
 /// `pub(super)`: the run band's own `status --json` shape embeds this same shape.
 #[derive(Debug, Serialize)]
-pub(super) struct OutputActivityJson {
+pub(in crate::render) struct OutputActivityJson {
     last_output_seconds_ago: Option<u64>,
     silent_for_seconds: u64,
     active: bool,
@@ -57,7 +82,7 @@ pub(super) struct OutputActivityJson {
 /// fields, kept flat here for whatever only cares about that, plus `steps`, every step run so
 /// far, in order. `pub(super)`: `show --json` embeds this same shape.
 #[derive(Debug, Serialize)]
-pub(super) struct AttemptJson<'a> {
+pub(in crate::render) struct AttemptJson<'a> {
     number: u32,
     step: &'a str,
     provider: Option<&'a str>,
@@ -68,6 +93,7 @@ pub(super) struct AttemptJson<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     routed: Option<String>,
     reason: Option<String>,
+    findings: Vec<FindingJson<'a>>,
     limit_wait: Option<LimitWaitJson>,
     limit_warning: Option<LimitWarningJson<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -80,7 +106,9 @@ pub(super) struct AttemptJson<'a> {
 
 /// `activity` in the stable, machine-readable status form. `pub(super)`: also used to build
 /// the run band's own `status --json` shape.
-pub(super) fn output_activity_json(activity: &ktask_core::OutputActivity) -> OutputActivityJson {
+pub(in crate::render) fn output_activity_json(
+    activity: &ktask_core::OutputActivity,
+) -> OutputActivityJson {
     OutputActivityJson {
         last_output_seconds_ago: activity
             .last_output_at
@@ -94,7 +122,7 @@ pub(super) fn output_activity_json(activity: &ktask_core::OutputActivity) -> Out
 /// The reason and when a task was sealed `done` by hand, as `status --json` shows it.
 /// `pub(super)`: `show --json` embeds this same shape.
 #[derive(Debug, Serialize)]
-pub(super) struct DoneMarkJson<'a> {
+pub(in crate::render) struct DoneMarkJson<'a> {
     reason: &'a str,
     at: String,
 }
@@ -141,6 +169,7 @@ fn step_json(line: &ktask_core::StepLine) -> Result<StepJson<'_>, String> {
         outcome: presentation::outcome(line.outcome),
         routed: line.routed.map(presentation::routed_label),
         reason: presentation::reason_for(line.reason.as_deref(), line.waiting),
+        findings: findings_json(&line.findings),
         limit_wait: line.limit_wait.as_ref().map(limit_wait_json).transpose()?,
         limit_warning: line.limit_warning.as_ref().map(limit_warning_json),
         input_tokens: line.usage.input_tokens,
@@ -153,27 +182,11 @@ fn cost_usd(microusd: Option<u64>) -> Option<String> {
     microusd.map(|value| format!("{}.{:06}", value / 1_000_000, value % 1_000_000))
 }
 
-/// Writes the run band — what is running, where it most recently stopped and why, or that the
-/// queue is idle — as `status`'s own first line, then `entries`: for every task that was
-/// attempted, one `#ID<TAB>status<TAB>title` line followed by an indented line for its attempt
-/// — step, provider, time spent, outcome, and the reason when it did not succeed — or, with
-/// `json`, a JSON object with the band at `run` and the tasks at `tasks`.
-pub(crate) fn status(
-    band: &RunBand,
-    entries: &[StatusEntry],
-    json: bool,
-    out: &mut impl Write,
-) -> Result<(), String> {
-    if json {
-        status_json(band, entries, out)
-    } else {
-        status_text(band, entries, out)
-    }
-}
-
 /// `line` as an [`AttemptJson`]. `pub(super)`: also used to build `show --json`'s object, so
 /// the two commands' attempt shapes never drift apart.
-pub(super) fn attempt_json(line: &ktask_core::AttemptLine) -> Result<AttemptJson<'_>, String> {
+pub(in crate::render) fn attempt_json(
+    line: &ktask_core::AttemptLine,
+) -> Result<AttemptJson<'_>, String> {
     Ok(AttemptJson {
         number: line.number,
         step: &line.step,
@@ -184,6 +197,7 @@ pub(super) fn attempt_json(line: &ktask_core::AttemptLine) -> Result<AttemptJson
         outcome: presentation::outcome(line.outcome),
         routed: line.routed.map(presentation::routed_label),
         reason: presentation::reason_for(line.reason.as_deref(), line.waiting),
+        findings: findings_json(&line.findings),
         limit_wait: line.limit_wait.as_ref().map(limit_wait_json).transpose()?,
         limit_warning: line.limit_warning.as_ref().map(limit_warning_json),
         output_activity: line.output_activity.as_ref().map(output_activity_json),
@@ -199,7 +213,9 @@ pub(super) fn attempt_json(line: &ktask_core::AttemptLine) -> Result<AttemptJson
 }
 
 /// `mark`, timestamped, as a [`DoneMarkJson`].
-pub(super) fn done_mark_json(mark: &ktask_core::DoneMark) -> Result<DoneMarkJson<'_>, String> {
+pub(in crate::render) fn done_mark_json(
+    mark: &ktask_core::DoneMark,
+) -> Result<DoneMarkJson<'_>, String> {
     let at = Timestamp::try_from(mark.at).map_err(|e| format!("bad done time: {e}"))?;
     Ok(DoneMarkJson {
         reason: &mark.reason,
@@ -215,7 +231,7 @@ struct StatusWithBandJson<'a> {
 }
 
 /// Writes `band` and `entries` as one JSON object.
-fn status_json(
+pub(super) fn status_json(
     band: &RunBand,
     entries: &[StatusEntry],
     out: &mut impl Write,
@@ -251,149 +267,4 @@ fn status_json(
     };
     serde_json::to_writer(&mut *out, &shown).map_err(|e| e.to_string())?;
     writeln!(out).map_err(|e| e.to_string())
-}
-
-/// Writes one line saying `entry`'s task was sealed done by hand, with the reason and when,
-/// when it was.
-fn write_done_mark_line(out: &mut impl Write, entry: &StatusEntry) -> Result<(), String> {
-    let Some(mark) = &entry.done_by_user else {
-        return Ok(());
-    };
-    Timestamp::try_from(mark.at).map_err(|e| format!("bad done time: {e}"))?;
-    writeln!(out, "\t{}", presentation::done_mark_text(mark)).map_err(|e| e.to_string())
-}
-
-/// Writes `entries`: for every task, one `#ID<TAB>status<TAB>title` line — followed, for a
-/// task sealed done by hand, by one line naming the reason and when — then one indented line
-/// per step its attempt has run so far, in order — step, provider (`-` for a step the tool ran
-/// itself, which names none), time spent, outcome, and the reason when it did not succeed.
-fn status_text(
-    band: &RunBand,
-    entries: &[StatusEntry],
-    out: &mut impl Write,
-) -> Result<(), String> {
-    writeln!(out, "{}", presentation::run_band_text(band)).map_err(|e| e.to_string())?;
-    for entry in entries {
-        let status = presentation::task_status(entry.status, Some(entry.attempt.outcome));
-        writeln!(
-            out,
-            "#{}\t{}\t{}\t{}",
-            entry.task,
-            status,
-            entry.title,
-            presentation::usage_text(entry.total_usage())
-        )
-        .map_err(|e| e.to_string())?;
-        write_done_mark_line(out, entry)?;
-        entry
-            .history
-            .iter()
-            .try_for_each(|attempt| {
-                write_step_lines(
-                    out,
-                    &attempt.steps,
-                    &presentation::attempt_label(attempt.number),
-                    None,
-                )
-            })
-            .map_err(|e: std::io::Error| e.to_string())?;
-        write_step_lines(
-            out,
-            &entry.attempt.steps,
-            &presentation::attempt_label(entry.attempt.number),
-            entry.attempt.output_activity.as_ref(),
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// `wait`, as the trailing tab field a step's own text line carries it with, when it waited for
-/// its provider's usage limit at least once before it ended: how long, in total, and when it
-/// last resumed.
-fn limit_wait_suffix(wait: Option<&ktask_core::LimitWait>) -> String {
-    wait.map_or_else(String::new, |wait| {
-        format!("\t{}", presentation::limit_wait_text(wait))
-    })
-}
-
-fn limit_warning_suffix(warning: Option<&ktask_core::LimitWarning>) -> String {
-    warning.map_or_else(String::new, |warning| {
-        format!("\t{}", presentation::limit_warning_text(warning))
-    })
-}
-
-/// The optional session as its tab-separated status field.
-fn session_field(session: Option<&str>) -> String {
-    let session = presentation::session_suffix(session);
-    if session.is_empty() {
-        String::new()
-    } else {
-        format!("\t{session}")
-    }
-}
-
-/// Writes one indented line per step of `steps`, in order — step (named with `prefix` ahead of
-/// it, so every step line says which attempt it belongs to, the current attempt included)
-/// provider (`-` for a step the tool ran itself, which names none), the model, for the resolve
-/// step, when the project has set one, time spent, outcome, the reason when it did not succeed,
-/// and, when it waited at least once for its provider's usage limit before it ended, how long
-/// and when it last resumed.
-fn write_step_lines(
-    out: &mut impl Write,
-    steps: &[ktask_core::StepLine],
-    prefix: &str,
-    activity: Option<&ktask_core::OutputActivity>,
-) -> Result<(), std::io::Error> {
-    steps.iter().enumerate().try_for_each(|(index, step)| {
-        let provider = step.provider.as_deref().unwrap_or("-");
-        let seconds = step.time_spent.as_secs();
-        let name = match &step.model {
-            Some(model) => format!("{}\t{model}", step.step),
-            None => step.step.clone(),
-        };
-        let session = session_field(step.session.as_deref());
-        let limit_wait = limit_wait_suffix(step.limit_wait.as_ref());
-        let limit_warning = limit_warning_suffix(step.limit_warning.as_ref());
-        let usage = presentation::step_usage_text(step)
-            .map(|usage| format!("\t{usage}"))
-            .unwrap_or_default();
-        let routed = routed_field(step);
-        let more_time = step.more_time.map_or_else(String::new, |more_time| {
-            format!("\t{}", presentation::more_time_text(more_time))
-        });
-        let activity = activity_suffix(index + 1 == steps.len(), activity);
-        match presentation::reason(step) {
-            Some(reason) => writeln!(
-                out,
-                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{routed}\t{reason}{more_time}{session}{limit_wait}{limit_warning}{usage}{activity}",
-                presentation::outcome(step.outcome)
-            ),
-            None => writeln!(
-                out,
-                "\t{prefix}{name}\t{provider}\t{seconds}s\t{}{routed}{more_time}{session}{limit_wait}{limit_warning}{usage}{activity}",
-                presentation::outcome(step.outcome)
-            ),
-        }
-    })
-}
-
-/// What the router decided about `step`, as the tab field a status line carries right after
-/// its outcome and before its reason — the first thing to know about a failure — when it has
-/// one.
-fn routed_field(step: &ktask_core::StepLine) -> String {
-    step.routed.map_or_else(String::new, |routed| {
-        format!("\t{}", presentation::routed_text(routed))
-    })
-}
-
-/// The final step alone carries the live provider-output activity field.
-fn activity_suffix(current: bool, activity: Option<&ktask_core::OutputActivity>) -> String {
-    current
-        .then_some(activity)
-        .flatten()
-        .map_or_else(String::new, |value| {
-            let text = presentation::activity(value);
-            format!("\t{} {}", text.indicator, text.message)
-        })
 }

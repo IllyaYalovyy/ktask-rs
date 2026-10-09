@@ -539,6 +539,7 @@ mod tests {
                 number: 1,
                 outcome: Outcome::Failed,
                 reason: Some("it broke".to_owned()),
+                findings: Vec::new(),
                 retry_model: None,
                 retry_same_session: false,
                 retry_reset_tree: false,
@@ -563,6 +564,43 @@ mod tests {
             journal.events().unwrap()[1..],
             [started, running, reported, ended]
         );
+    }
+
+    #[test]
+    fn an_attempt_reported_events_findings_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let journal = open(&dir);
+        add(&journal, 1, "a", Placement::End);
+        let reported = append(
+            &journal,
+            Event::AttemptReported {
+                id: TaskId(1),
+                number: 1,
+                outcome: Outcome::ChangesRequested,
+                reason: None,
+                findings: vec![
+                    ktask_core::Finding {
+                        location: "src/a.rs:1".to_owned(),
+                        problem: "it is wrong".to_owned(),
+                        fix: "fix it".to_owned(),
+                        scope: ktask_core::FindingScope::Task,
+                    },
+                    ktask_core::Finding {
+                        location: "src/b.rs".to_owned(),
+                        problem: "unrelated".to_owned(),
+                        fix: "fix that too".to_owned(),
+                        scope: ktask_core::FindingScope::Elsewhere,
+                    },
+                ],
+                retry_model: None,
+                retry_same_session: false,
+                retry_reset_tree: false,
+                retry_more_time: None,
+                step: Some("review".to_owned()),
+                at: at(10),
+            },
+        );
+        assert_eq!(journal.events().unwrap()[1..], [reported]);
     }
 
     #[test]
@@ -635,6 +673,7 @@ mod tests {
                 number: 1,
                 outcome: Outcome::Retry,
                 reason: None,
+                findings: Vec::new(),
                 retry_model: Some("opus".to_owned()),
                 retry_same_session: true,
                 retry_reset_tree: false,
@@ -658,6 +697,7 @@ mod tests {
                 number: 1,
                 outcome: Outcome::Retry,
                 reason: None,
+                findings: Vec::new(),
                 retry_model: None,
                 retry_same_session: false,
                 retry_reset_tree: true,
@@ -797,6 +837,7 @@ mod tests {
                 number: 1,
                 outcome: Outcome::Done,
                 reason: None,
+                findings: Vec::new(),
                 retry_model: None,
                 retry_same_session: false,
                 retry_reset_tree: false,
@@ -987,6 +1028,7 @@ mod tests {
                 number: 1,
                 outcome: Outcome::Done,
                 reason: None,
+                findings: Vec::new(),
                 retry_model: None,
                 retry_same_session: false,
                 retry_reset_tree: false,

@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fmt;
 use std::time::{Duration, SystemTime};
 
-use crate::{LimitWarning, Usage};
+use crate::{Finding, LimitWarning, Usage};
 
 use crate::{Outcome, Placement, Routed, TaskDraft, TaskId, TaskStatus};
 
@@ -74,6 +74,9 @@ pub enum Event {
         outcome: Outcome,
         /// Why, when the outcome needs a reason.
         reason: Option<String>,
+        /// The reviewer's own findings, when `outcome` is `changes-requested`. Empty for every
+        /// other outcome.
+        findings: Vec<Finding>,
         /// The model the resolver named for the task's next attempt, when `outcome` is
         /// `retry` and it named one. `None` for every other outcome, and for a `retry` that
         /// named none.

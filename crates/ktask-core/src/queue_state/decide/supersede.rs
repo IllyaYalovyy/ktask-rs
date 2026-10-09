@@ -34,6 +34,7 @@ impl QueueState {
             number,
             outcome: Outcome::Supersede,
             reason: Some(supersede_reason(&added)),
+            findings: Vec::new(),
             retry_model: None,
             retry_same_session: false,
             retry_reset_tree: false,

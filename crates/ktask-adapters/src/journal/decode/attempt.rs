@@ -5,8 +5,8 @@
 use std::time::{Duration, SystemTime};
 
 use ktask_core::{
-    Event, JournalError, LimitWait, LimitWarning, Outcome, Routed, TaskId, TaskStatus, Usage,
-    WaitReason,
+    Event, Finding, FindingScope, JournalError, LimitWait, LimitWarning, Outcome, Routed, TaskId,
+    TaskStatus, Usage, WaitReason,
 };
 use serde_json::Value;
 
@@ -135,6 +135,44 @@ pub(super) fn decode_attempt_waiting(
     })
 }
 
+/// One [`Finding`] a `finding` value of an `attempt_reported` row's `findings` array decodes to.
+fn decode_finding(
+    value: &Value,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Finding, JournalError> {
+    let field = |name: &str| -> Result<String, JournalError> {
+        value
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| corrupt("findings", format!("missing {name}")))
+    };
+    let scope = field("scope")?
+        .parse::<FindingScope>()
+        .map_err(|e| corrupt("findings", e))?;
+    Ok(Finding {
+        location: field("location")?,
+        problem: field("problem")?,
+        fix: field("fix")?,
+        scope,
+    })
+}
+
+/// The findings an `attempt_reported` row's `payload` carries; empty when it carries none, or
+/// an older journal recorded it before findings existed at all.
+fn decode_findings(
+    payload: &Value,
+    corrupt: &impl Fn(&str, String) -> JournalError,
+) -> Result<Vec<Finding>, JournalError> {
+    payload
+        .get("findings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|value| decode_finding(value, corrupt))
+        .collect()
+}
+
 /// The [`Event::AttemptReported`] an `attempt_reported` row's `payload` decodes to.
 pub(super) fn decode_attempt_reported(
     payload: &Value,
@@ -150,11 +188,13 @@ pub(super) fn decode_attempt_reported(
         .ok_or_else(|| corrupt("outcome", "missing".to_owned()))?
         .parse::<Outcome>()
         .map_err(|e| corrupt("outcome", e))?;
+    let findings = decode_findings(payload, corrupt)?;
     Ok(Event::AttemptReported {
         id,
         number,
         outcome,
         reason,
+        findings,
         retry_model: string_field(payload, "retry_model"),
         retry_same_session: bool_field(payload, "retry_same_session"),
         retry_reset_tree: bool_field(payload, "retry_reset_tree"),

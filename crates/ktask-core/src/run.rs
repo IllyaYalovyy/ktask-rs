@@ -1684,14 +1684,29 @@ mod tests {
             } else {
                 (Outcome::Done, "because")
             };
-            report(
-                self.journal,
-                &FakeClock(SystemTime::UNIX_EPOCH),
-                &token,
-                outcome,
-                Some(reason),
-            )
-            .unwrap();
+            if outcome == Outcome::ChangesRequested {
+                crate::report_findings(
+                    self.journal,
+                    &FakeClock(SystemTime::UNIX_EPOCH),
+                    &token,
+                    &[crate::Finding {
+                        location: "src/a.rs:1".to_owned(),
+                        problem: reason.to_owned(),
+                        fix: "fix it".to_owned(),
+                        scope: crate::FindingScope::Task,
+                    }],
+                )
+                .unwrap();
+            } else {
+                report(
+                    self.journal,
+                    &FakeClock(SystemTime::UNIX_EPOCH),
+                    &token,
+                    outcome,
+                    Some(reason),
+                )
+                .unwrap();
+            }
             Ok(Output {
                 stdout: Vec::new(),
                 stderr: Vec::new(),
@@ -1701,7 +1716,7 @@ mod tests {
     }
 
     #[test]
-    fn changes_requested_ends_the_task_failed_with_the_findings_as_the_reason_and_stops_the_run() {
+    fn changes_requested_ends_the_task_failed_with_the_findings_recorded_and_stops_the_run() {
         let journal = journal_of_abc();
         let commands = ReviewCommands {
             journal: &journal,
@@ -1721,7 +1736,9 @@ mod tests {
                 attempted: vec![Attempted {
                     id: TaskId(1),
                     status: TaskStatus::Failed,
-                    reason: Some("fix the thing".to_owned()),
+                    // The findings replace the blob a reason once carried: the attempt's own
+                    // ending names none.
+                    reason: None,
                 }],
                 end: RunEnd::Stopped {
                     id: TaskId(1),
@@ -1738,7 +1755,11 @@ mod tests {
         let end = attempt.steps[1].ended.as_ref().unwrap();
         assert_eq!(end.status, TaskStatus::Failed);
         assert_eq!(end.reported, Some(Outcome::ChangesRequested));
-        assert_eq!(end.reason.as_deref(), Some("fix the thing"));
+        assert_eq!(end.reason, None);
+        let findings =
+            crate::attempt::findings_of_step(&journal, TaskId(1), 1, REVIEW_STEP).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].problem, "fix the thing");
         // The task's own status is `failed`, and the next task never started.
         let tasks = crate::list_all_tasks(&journal).unwrap();
         assert_eq!(tasks[0].status, TaskStatus::Failed);
@@ -1889,7 +1910,7 @@ mod tests {
         assert!(prompt.contains("+added line"), "{prompt}");
         assert!(prompt.contains("proj/1/1 approved"), "{prompt}");
         assert!(
-            prompt.contains("proj/1/1 changes-requested --reason"),
+            prompt.contains("proj/1/1 changes-requested --findings"),
             "{prompt}"
         );
     }

@@ -1063,24 +1063,28 @@ fn the_prompt_scratch_file_lives_under_the_state_directory_and_is_removed_once_t
     Ok(())
 }
 
-/// A bash block that reports `done` for the implementation step, `outcome` (with `reason`,
-/// when it is not empty) for the review step, and `accepted` for the test step, when reached.
-fn review_body(outcome: &str, reason: &str) -> String {
-    if reason.is_empty() {
-        format!(
-            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" {outcome}\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
-        )
-    } else {
-        format!(
-            "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" {outcome} --reason \"{reason}\"\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
-        )
-    }
+/// A bash block that reports `done` for the implementation step, `outcome` for the review
+/// step, and `accepted` for the test step, when reached.
+fn review_body(outcome: &str) -> String {
+    format!(
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" {outcome}\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
+    )
+}
+
+/// A bash block that reports `done` for the implementation step, then writes `findings` (one
+/// or more complete JSON object literals, comma-separated) to a file as a JSON array and
+/// reports `changes-requested --findings` with it for the review step; the test and resolve
+/// steps, when reached, are not expected to run.
+fn review_body_with_findings(findings: &str) -> String {
+    format!(
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  printf '[{findings}]' > findings.json\n  ktask-rs report --token \"$1\" changes-requested --findings findings.json\nelif [ \"$3\" = \"testing\" ]; then\n  ktask-rs report --token \"$1\" accepted\nelif [ \"$3\" = \"resolve\" ]; then\n  ktask-rs report --token \"$1\" stop --reason \"resolver not expected in this test\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n"
+    )
 }
 
 #[test]
 fn an_approving_review_carries_the_task_on_as_done_and_the_review_line_shows_it() -> Result<()> {
     let fixture = Fixture::new()?;
-    fixture.add_agent_task("a", &review_body("approved", ""))?;
+    fixture.add_agent_task("a", &review_body("approved"))?;
 
     let outcome = fixture.run_the_queue(&["run"])?;
 
@@ -1102,10 +1106,15 @@ fn an_approving_review_carries_the_task_on_as_done_and_the_review_line_shows_it(
 }
 
 #[test]
-fn a_reviewer_that_requests_changes_ends_the_task_failed_with_the_findings_as_the_reason_and_stops_the_run()
+fn a_reviewer_that_requests_changes_ends_the_task_failed_with_the_findings_and_stops_the_run()
 -> Result<()> {
     let fixture = Fixture::new()?;
-    fixture.add_agent_task("a", &review_body("changes-requested", "fix the thing"))?;
+    fixture.add_agent_task(
+        "a",
+        &review_body_with_findings(
+            r#"{"location": "src/a.rs:1", "problem": "fix the thing", "fix": "do it", "scope": "task"}, {"location": "src/b.rs", "problem": "unrelated", "fix": "fix that too", "scope": "elsewhere"}"#,
+        ),
+    )?;
     fixture.add_agent_task("b", &reporting_body("done"))?;
 
     let outcome = fixture.run_the_queue(&["run"])?;
@@ -1115,22 +1124,40 @@ fn a_reviewer_that_requests_changes_ends_the_task_failed_with_the_findings_as_th
     assert_eq!(fixture.task_status(2)?, "pending");
     let (_, _, status, reason) = fixture.attempt_ended(1)?;
     assert_eq!(status, "failed");
-    assert_eq!(reason.as_deref(), Some("fix the thing"));
+    // The findings replace the blob a reason once carried: the attempt's own ending names none.
+    assert_eq!(reason, None);
     assert!(outcome.stdout.contains("failed"), "{}", outcome.stdout);
-    assert!(
-        outcome.stdout.contains("fix the thing"),
-        "{}",
-        outcome.stdout
-    );
-    // Both interfaces show the review line and the findings.
+    // Both interfaces show the review line and the two findings underneath it.
     let status_lines = fixture.run(&["status"])?;
     assert_eq!(
         after_band(&status_lines.stdout),
         [
             "#1\tfailed\ta\tusage none",
             "\tattempt 1: implementation\techo\t0s\tdone\tusage none",
-            "\tattempt 1: review\techo\t0s\tchanges-requested\trouted: decide — rejected\tfix the thing\tusage none",
+            "\tattempt 1: review\techo\t0s\tchanges-requested\trouted: decide — rejected\tusage none",
+            "\t  - src/a.rs:1 · fix the thing",
+            "\t  - src/b.rs · unrelated",
         ]
+    );
+    let status_json = fixture.run(&["status", "--json"])?;
+    let value: serde_json::Value = serde_json::from_str(&status_json.stdout)?;
+    let findings = &value["tasks"][0]["attempt"]["steps"][1]["findings"];
+    assert_eq!(
+        *findings,
+        serde_json::json!([
+            {
+                "location": "src/a.rs:1",
+                "problem": "fix the thing",
+                "fix": "do it",
+                "scope": "task",
+            },
+            {
+                "location": "src/b.rs",
+                "problem": "unrelated",
+                "fix": "fix that too",
+                "scope": "elsewhere",
+            },
+        ])
     );
     Ok(())
 }

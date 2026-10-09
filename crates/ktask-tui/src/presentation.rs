@@ -6,8 +6,9 @@ mod transcript;
 
 use jiff::Timestamp;
 use ktask_core::{
-    AttemptOutcome, DecideWhy, DoneMark, LimitWait, LimitWarning, OutputActivity, ProviderCheck,
-    ProviderCheckKind, Routed, StepLine, StopCause, TaskStatus, Usage, Wait, WaitReason,
+    AttemptOutcome, DecideWhy, DoneMark, Finding, LimitWait, LimitWarning, OutputActivity,
+    ProviderCheck, ProviderCheckKind, Routed, StepLine, StopCause, TaskStatus, Usage, Wait,
+    WaitReason,
 };
 
 pub use band::run_band_text;
@@ -100,6 +101,17 @@ pub fn outcome(outcome: AttemptOutcome) -> &'static str {
 #[must_use]
 pub fn reason(step: &StepLine) -> Option<String> {
     reason_for(step.reason.as_deref(), step.waiting)
+}
+
+/// One line per finding of `findings`, in order, each `  - location · problem` — the same line
+/// every place a review's findings are shown — `status`, the queue screen, and a transcript's
+/// own `output --step review` — shows them with.
+#[must_use]
+pub fn finding_lines(findings: &[Finding]) -> Vec<String> {
+    findings
+        .iter()
+        .map(|finding| format!("  - {} · {}", finding.location, finding.problem))
+        .collect()
 }
 
 /// The common status reason for recorded text or a live wait. A wait names its one countdown:

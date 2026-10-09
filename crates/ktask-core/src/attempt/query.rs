@@ -4,7 +4,7 @@
 use std::time::SystemTime;
 
 use crate::queue_state::read_and_query;
-use crate::{Attempt, Journal, JournalError, Outcome, TaskId};
+use crate::{Attempt, Finding, Journal, JournalError, Outcome, TaskId};
 
 /// The step name, reason and when of the most recent gate stop recorded for task `id`. `None`
 /// when it was never stopped by a gate, or a later attempt has since begun for it.
@@ -181,6 +181,22 @@ pub(crate) fn report_of_step(
     step: &str,
 ) -> Result<Option<(Outcome, Option<String>)>, JournalError> {
     read_and_query(journal, |state| state.report_of_step(id, number, step))
+}
+
+/// The reviewer's own findings reported while step `step` of attempt `number` of task `id`
+/// was open, with [`crate::report_findings`]. Empty when nothing was reported during that
+/// step, or nothing it reported carried any.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub(crate) fn findings_of_step(
+    journal: &dyn Journal,
+    id: TaskId,
+    number: u32,
+    step: &str,
+) -> Result<Vec<Finding>, JournalError> {
+    read_and_query(journal, |state| state.findings_of_step(id, number, step))
 }
 
 /// The name of the step currently open — begun, not yet ended — for task `id`'s current

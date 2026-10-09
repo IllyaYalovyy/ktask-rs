@@ -32,8 +32,8 @@ pub(crate) use pipeline_state::PipelineState;
 
 use crate::run::Attempted;
 use crate::{
-    AttemptOutput, AttemptToken, Clock, Commands, Git, Journal, Provider, RunContext, RunError,
-    SessionLog, Sleep, Task, TaskStatus,
+    AttemptOutput, AttemptToken, Clock, Commands, Git, Journal, JournalError, Provider, RunContext,
+    RunError, SessionLog, Sleep, Task, TaskId, TaskStatus,
 };
 
 /// The reason recorded for an attempt a killed run left running, found still running when the
@@ -155,6 +155,37 @@ pub(crate) fn diff_since(
         return String::new();
     };
     git.diff_since(context.project_dir, start_commit)
+}
+
+/// The reviewer's own findings reported while the review step of attempt `number` of task `id`
+/// was open. Empty when it reported none. Named here, rather than in `implementation.rs`
+/// itself, so that file never names the review step's own journal constant.
+///
+/// # Errors
+///
+/// Fails when the journal cannot be read.
+pub(crate) fn review_findings_of(
+    journal: &dyn Journal,
+    id: TaskId,
+    number: u32,
+) -> Result<Vec<crate::Finding>, JournalError> {
+    crate::attempt::findings_of_step(journal, id, number, crate::REVIEW_STEP)
+}
+
+/// Appends one `  - location: problem (fix: fix) [scope]` line per finding of `findings` to
+/// `prompt` — the resolve step's own prompt, and an earlier attempt's own line in the
+/// implementation step's retry prompt, both show a review's findings this way, a list rather
+/// than the blob the agent's own report once carried. Does nothing when `findings` is empty.
+pub(crate) fn append_findings(prompt: &mut String, findings: &[crate::Finding]) {
+    use std::fmt::Write as _;
+
+    for finding in findings {
+        let _ = writeln!(
+            prompt,
+            "  - {}: {} (fix: {}) [{}]",
+            finding.location, finding.problem, finding.fix, finding.scope
+        );
+    }
 }
 
 /// Walks `steps`, in order: skips a disabled one entirely, otherwise runs it via

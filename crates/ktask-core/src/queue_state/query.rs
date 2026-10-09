@@ -3,7 +3,7 @@
 
 use std::time::SystemTime;
 
-use super::{Attempt, Outcome, QueueState, Step, Task, TaskId, TaskStatus};
+use super::{Attempt, Finding, Outcome, QueueState, Step, Task, TaskId, TaskStatus};
 
 impl QueueState {
     /// Every task, cancelled ones included, in queue order.
@@ -97,6 +97,16 @@ impl QueueState {
         self.step_reports
             .get(&(id, number, step.to_owned()))
             .cloned()
+    }
+
+    /// The reviewer's own findings reported while step `step` of attempt `number` of task `id`
+    /// was open. Empty when it reported none, including when no report was made for that step
+    /// at all.
+    pub(crate) fn findings_of_step(&self, id: TaskId, number: u32, step: &str) -> Vec<Finding> {
+        self.step_findings
+            .get(&(id, number, step.to_owned()))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// The model the resolver named for task `id`'s next attempt, with its `retry` decision

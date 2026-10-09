@@ -12,7 +12,7 @@ use std::time::SystemTime;
 use crate::journal::{AttemptRun, Event, LimitWait, WaitReason};
 use crate::{
     AcknowledgeError, AnswerError, AppendConflict, AppendError, Attempt, AttemptEnd,
-    BeginAttemptError, CancelError, DoneError, Journal, JournalError, Outcome, Placement,
+    BeginAttemptError, CancelError, DoneError, Finding, Journal, JournalError, Outcome, Placement,
     RecordReportError, RetryError, Step, Task, TaskDraft, TaskId, TaskStatus,
 };
 
@@ -57,6 +57,9 @@ pub(crate) struct QueueState {
     attempts: HashMap<TaskId, Vec<AttemptFold>>,
     reports: HashMap<(TaskId, u32), (Outcome, Option<String>)>,
     step_reports: HashMap<(TaskId, u32, String), (Outcome, Option<String>)>,
+    /// The reviewer's own findings recorded for each step that was given any:
+    /// [`QueueState::findings_of_step`].
+    step_findings: HashMap<(TaskId, u32, String), Vec<Finding>>,
     /// The model the resolver named for an attempt's own retry decision, when it named one:
     /// [`QueueState::retry_model_of`].
     retry_models: HashMap<(TaskId, u32), String>,
@@ -337,6 +340,7 @@ mod tests {
                         1,
                         outcome,
                         Some("why"),
+                        &[],
                         None,
                         false,
                         false,

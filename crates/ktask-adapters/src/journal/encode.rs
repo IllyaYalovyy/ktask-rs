@@ -4,7 +4,7 @@
 use std::time::SystemTime;
 
 use ktask_core::{
-    Event, LimitWait, LimitWarning, Outcome, Placement, TaskDraft, TaskId, WaitReason,
+    Event, Finding, LimitWait, LimitWarning, Outcome, Placement, TaskDraft, TaskId, WaitReason,
 };
 use serde_json::Value;
 
@@ -98,12 +98,23 @@ fn attempt_waiting_payload(event: &Event) -> String {
     serde_json::json!({ "number": number, "step": step, "until": to_seconds(*until), "transport_retry": retry }).to_string()
 }
 
+/// One [`Finding`] as the JSON object an `attempt_reported` row's `findings` array holds it in.
+fn finding_payload(finding: &Finding) -> Value {
+    serde_json::json!({
+        "location": finding.location,
+        "problem": finding.problem,
+        "fix": finding.fix,
+        "scope": finding.scope.as_str(),
+    })
+}
+
 /// The payload an `attempt_reported` row is written with.
 fn attempt_reported_payload(event: &Event) -> String {
     let Event::AttemptReported {
         number,
         outcome,
         reason,
+        findings,
         retry_model,
         retry_same_session,
         retry_reset_tree,
@@ -118,6 +129,7 @@ fn attempt_reported_payload(event: &Event) -> String {
         "number": number,
         "outcome": outcome.as_str(),
         "reason": reason,
+        "findings": findings.iter().map(finding_payload).collect::<Vec<_>>(),
         "retry_model": retry_model,
         "retry_same_session": retry_same_session,
         "retry_reset_tree": retry_reset_tree,

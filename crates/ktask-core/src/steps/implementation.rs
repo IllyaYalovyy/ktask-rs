@@ -1,19 +1,23 @@
 //! The implementation step: hands the task's own prompt to the provider. Always runs — it is
 //! the one step of the seven that cannot be switched off.
 
-use crate::steps::{Deps, PipelineState, Step, StepOutcome, diff_since, run_agent_step};
-use crate::{AttemptToken, Journal, JournalError, RunContext, RunError, Task, TaskId};
+use crate::steps::{
+    Deps, PipelineState, Step, StepOutcome, append_findings, diff_since, review_findings_of,
+    run_agent_step,
+};
+use crate::{AttemptToken, Finding, Journal, JournalError, RunContext, RunError, Task, TaskId};
 
 /// The journal name of the implementation step.
 pub const IMPLEMENTATION: &str = "implementation";
 
 /// One earlier attempt at the task this prompt is for, as [`earlier_attempts`] reads it back:
-/// its number, and what it ended at in the agent's own words when it reported one, or the
-/// tool's when it never did.
+/// its number, what it ended at in the agent's own words when it reported one, or the tool's
+/// when it never did, and the reviewer's own findings, when its review step gave it any.
 pub(crate) struct EarlierAttempt {
     pub(crate) number: u32,
     pub(crate) outcome: String,
     pub(crate) reason: Option<String>,
+    pub(crate) findings: Vec<Finding>,
 }
 
 /// Every attempt at task `id` numbered before `before`, oldest first, with what each one
@@ -52,10 +56,12 @@ pub(crate) fn earlier_attempts(
             } else {
                 reason
             };
+            let findings = review_findings_of(journal, id, attempt.number)?;
             Ok(EarlierAttempt {
                 number: attempt.number,
                 outcome,
                 reason,
+                findings,
             })
         })
         .collect()
@@ -102,6 +108,7 @@ fn append_history(prompt: &mut String, earlier: &[EarlierAttempt], diff: &str) {
                 let _ = writeln!(prompt, "- attempt {}: {}", attempt.number, attempt.outcome);
             }
         }
+        append_findings(prompt, &attempt.findings);
     }
     prompt.push_str("\n## What the task has changed so far\n\n```diff\n");
     prompt.push_str(diff);
@@ -310,11 +317,13 @@ mod tests {
                 number: 1,
                 outcome: "failed".to_owned(),
                 reason: Some("it broke".to_owned()),
+                findings: Vec::new(),
             },
             EarlierAttempt {
                 number: 2,
                 outcome: "needs-input".to_owned(),
                 reason: Some("which path?".to_owned()),
+                findings: Vec::new(),
             },
         ];
         let diff = "--- a/file\n+++ b/file\n+added line\n";
@@ -450,6 +459,7 @@ mod tests {
             number: 1,
             outcome: earlier[0].outcome.clone(),
             reason: earlier[0].reason.clone(),
+            findings: Vec::new(),
         }];
         let prompt = build_prompt_with_history(&task, &next_token, binary_path, &earlier, "");
         assert!(prompt.contains("which path?"), "{prompt}");

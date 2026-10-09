@@ -651,7 +651,7 @@ fn a_changes_requested_review_shows_its_own_outcome_and_findings() -> Result<()>
     let fixture = Fixture::new()?;
     fixture.add_agent_task(
         "a",
-        "```bash\nif [ \"$3\" = \"review\" ]; then\n  ktask-rs report --token \"$1\" changes-requested --reason \"needs docs\"\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  printf '[{\"location\": \"src/a.rs:1\", \"problem\": \"needs docs\", \"fix\": \"add docs\", \"scope\": \"task\"}, {\"location\": \"src/b.rs\", \"problem\": \"unrelated\", \"fix\": \"fix that too\", \"scope\": \"elsewhere\"}]' > findings.json\n  ktask-rs report --token \"$1\" changes-requested --findings findings.json\nelse\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
     )?;
     fixture.run_the_queue()?;
 
@@ -660,23 +660,26 @@ fn a_changes_requested_review_shows_its_own_outcome_and_findings() -> Result<()>
         screen.contents().contains("changes-requested") && screen.contents().ends_with('┘')
     })?;
     let lines = lines_inside_frame(&screen);
-    // The band's own "run stopped" report is long enough to wrap onto a second row here, so
-    // the task list below it starts one row further down than it usually would.
-    assert_eq!(lines[6], ">1  #1  failed  agent  a · usage none");
+    assert_eq!(lines[5], ">1  #1  failed  agent  a · usage none");
     // The implementation step that passed stays visible above the review that failed it.
     assert!(
-        lines[7].contains("implementation · echo") && lines[7].ends_with("done · usage none"),
+        lines[6].contains("implementation · echo") && lines[6].ends_with("done · usage none"),
+        "{}",
+        lines[6]
+    );
+    assert!(
+        lines[7].contains("review · echo")
+            && lines[7].ends_with("changes-requested · routed: decide — rejected · usage none"),
         "{}",
         lines[7]
     );
+    // Both findings are their own line, under the review line, the same bullets `status` shows.
     assert!(
-        lines[8].contains("review · echo")
-            && lines[8].ends_with(
-                "changes-requested · routed: decide — rejected · needs docs · usage none"
-            ),
+        lines[8].contains("- src/a.rs:1 · needs docs"),
         "{}",
         lines[8]
     );
+    assert!(lines[9].contains("- src/b.rs · unrelated"), "{}", lines[9]);
 
     terminal.send("q")?;
     assert_eq!(terminal.wait_for_exit()?, 0);

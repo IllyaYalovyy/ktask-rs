@@ -183,6 +183,7 @@ mod tests {
                     name,
                     Some("echo"),
                     None,
+                    Vec::new(),
                     ProviderParser::Plain,
                     name.as_bytes(),
                 )

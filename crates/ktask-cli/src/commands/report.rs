@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use ktask_adapters::{
     SystemClock, TomlSettingsStore, builtin_providers, echo, read_text, settings_path,
 };
-use ktask_core::{AttemptToken, Outcome, SettingsStore, TaskFormat};
+use ktask_core::{AttemptToken, Outcome, SettingsStore, TaskFormat, parse_findings};
 
 use crate::context::{open_journal, open_registry, reject_project, resolve};
 use crate::error::Failure;
@@ -24,8 +24,8 @@ pub(crate) struct Args {
     /// outcome that does not belong to the step currently running is refused
     #[arg(value_name = "OUTCOME")]
     outcome: String,
-    /// Why it ended that way; required unless the outcome is done, approved, accepted, retry or
-    /// supersede
+    /// Why it ended that way; required unless the outcome is done, approved, accepted, retry,
+    /// supersede or changes-requested, which `--findings` carries instead
     #[arg(long)]
     reason: Option<String>,
     /// The provider the task's next attempt should run with; only valid with the `retry`
@@ -55,6 +55,11 @@ pub(crate) struct Args {
     /// refused with every other one
     #[arg(long, value_name = "FILE")]
     tasks: Option<String>,
+    /// The .json or .toml file of findings, a list with `location`, `problem`, `fix` and
+    /// `scope` (`task` or `elsewhere`) for each, or - for standard input (JSON); required with
+    /// the `changes-requested` outcome, refused with every other one
+    #[arg(long, value_name = "FILE")]
+    findings: Option<String>,
 }
 
 /// Checks `args.provider`, `args.model`, `args.same_session`, `args.reset_tree` and
@@ -132,6 +137,45 @@ fn check_tasks_flag(outcome: Outcome, args: &Args) -> Result<(), Failure> {
     }
 }
 
+/// Checks `args.findings` and `args.reason` against `outcome`: `changes-requested` needs
+/// `--findings` and does not accept `--reason`, which `--findings` replaces; every other
+/// outcome refuses `--findings`.
+fn check_findings_flag(outcome: Outcome, args: &Args) -> Result<(), Failure> {
+    match (outcome, &args.findings) {
+        (Outcome::ChangesRequested, None) => Err(Failure {
+            message: "outcome changes-requested needs --findings".to_owned(),
+            code: 2,
+        }),
+        (Outcome::ChangesRequested, Some(_)) if args.reason.is_some() => Err(Failure {
+            message: "outcome changes-requested does not accept --reason: only --findings does"
+                .to_owned(),
+            code: 2,
+        }),
+        (Outcome::ChangesRequested, Some(_)) | (_, None) => Ok(()),
+        (_, Some(_)) => Err(Failure {
+            message: format!(
+                "outcome {outcome} does not accept --findings: only changes-requested does"
+            ),
+            code: 2,
+        }),
+    }
+}
+
+/// The text of the `--findings` file and its format, when one is given — read before anything
+/// is registered or opened, so that a missing file or one of an unsupported format changes
+/// nothing.
+fn read_findings_file(args: &Args) -> Result<Option<(String, TaskFormat)>, Failure> {
+    args.findings
+        .as_deref()
+        .map(|path| {
+            let format = TaskFormat::of_path(path)?;
+            read_text(path)
+                .map(|text| (text, format))
+                .map_err(|message| Failure { message, code: 2 })
+        })
+        .transpose()
+}
+
 /// Records `args.outcome` (and `args.reason`, or — for `retry` — `args.model`,
 /// `args.same_session` and `args.reset_tree`) for the attempt `token` names, as the step
 /// currently running for it allows.
@@ -197,7 +241,9 @@ pub(crate) fn run(
     check_provider_and_model(outcome, args)?;
     check_defined_provider(&token, args.provider.as_deref())?;
     check_tasks_flag(outcome, args)?;
+    check_findings_flag(outcome, args)?;
     let tasks = read_tasks_file(args)?;
+    let findings_file = read_findings_file(args)?;
     let registry = open_registry()?;
     let (project, _settings) = resolve(&registry, Some(&token.project))?;
     let journal = open_journal(&project)?;
@@ -205,6 +251,10 @@ pub(crate) fn run(
         let supersede =
             ktask_core::report_supersede(&journal, &SystemClock, &token, &text, format)?;
         render::reported_supersede(token.task, &supersede, stdout)?;
+    } else if let Some((text, format)) = findings_file {
+        let findings = parse_findings(&text, format)?;
+        ktask_core::report_findings(&journal, &SystemClock, &token, &findings)?;
+        render::reported(&token, outcome, stdout)?;
     } else {
         record(&journal, &token, outcome, args)?;
         render::reported(&token, outcome, stdout)?;

@@ -187,6 +187,7 @@ impl QueueState {
             number,
             outcome,
             reason,
+            findings,
             step,
             ..
         } = event
@@ -198,6 +199,10 @@ impl QueueState {
         if let Some(step) = step {
             self.step_reports
                 .insert((*id, *number, step.clone()), (*outcome, reason.clone()));
+            if !findings.is_empty() {
+                self.step_findings
+                    .insert((*id, *number, step.clone()), findings.clone());
+            }
         }
         self.apply_retry_choices(event);
     }

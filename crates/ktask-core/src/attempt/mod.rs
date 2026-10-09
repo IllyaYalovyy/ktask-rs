@@ -10,17 +10,17 @@ use std::time::SystemTime;
 use crate::journal::{AttemptRun, WaitReason};
 use crate::queue_state::decide_and_append;
 use crate::{
-    BeginAttemptError, Clock, Event, Journal, JournalError, LimitWait, Outcome, RecordReportError,
-    Routed, Task, TaskDraft, TaskId,
+    BeginAttemptError, Clock, Event, Finding, Journal, JournalError, LimitWait, Outcome,
+    RecordReportError, Routed, Task, TaskDraft, TaskId,
 };
 
 mod query;
 
 pub(crate) use query::{
     all_attempts, answer_of, current_step, done_mark_of, ended_at, ended_at_time_limit,
-    gate_stop_of, last_attempt, last_report, last_retry_model, last_retry_more_time,
-    last_retry_reset_tree, last_retry_same_session, last_session, report_of_step, running,
-    with_answer,
+    findings_of_step, gate_stop_of, last_attempt, last_report, last_retry_model,
+    last_retry_more_time, last_retry_reset_tree, last_retry_same_session, last_session,
+    report_of_step, running, with_answer,
 };
 
 /// Use case: records that the gate named `step` refused to let task `id`'s attempt begin, with
@@ -89,6 +89,7 @@ pub(crate) fn record_report(
     number: u32,
     outcome: Outcome,
     reason: Option<&str>,
+    findings: &[Finding],
     retry_model: Option<&str>,
     retry_same_session: bool,
     retry_reset_tree: bool,
@@ -102,6 +103,7 @@ pub(crate) fn record_report(
                 number,
                 outcome,
                 reason,
+                findings,
                 retry_model,
                 retry_same_session,
                 retry_reset_tree,

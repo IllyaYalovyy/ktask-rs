@@ -2,187 +2,16 @@
 
 use std::error::Error;
 use std::fmt;
-use std::str::FromStr;
 
-use crate::{Clock, ImportError, Journal, RecordReportError, TaskId};
+use crate::{Clock, Finding, ImportError, Journal, RecordReportError, TaskId};
 
-/// What an attempt ended with, as the agent that ran it reports it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Outcome {
-    /// The task is done.
-    Done,
-    /// The attempt failed.
-    Failed,
-    /// The agent needs a decision from the operator before it can continue.
-    NeedsInput,
-    /// The task is too big to do in one attempt.
-    TooLarge,
-    /// The reviewer accepted the task's implementation.
-    Approved,
-    /// The reviewer found something to fix: its findings are the reason.
-    ChangesRequested,
-    /// The tester accepted the task's implementation.
-    Accepted,
-    /// The tester found something that failed: what failed is the reason.
-    Rejected,
-    /// The resolver decided a fresh attempt at the implementation step is worth trying.
-    Retry,
-    /// The resolver decided the task should end `failed`: the reason is why.
-    Stop,
-    /// The resolver decided the task is no longer the right thing to do: the reason is why.
-    Skip,
-    /// The resolver decided the task is too large to finish as written, and replaced it with
-    /// smaller tasks.
-    Supersede,
-}
+mod outcome;
+mod token;
 
-impl Outcome {
-    /// The name the outcome is written with.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Done => "done",
-            Self::Failed => "failed",
-            Self::NeedsInput => "needs-input",
-            Self::TooLarge => "too-large",
-            Self::Approved => "approved",
-            Self::ChangesRequested => "changes-requested",
-            Self::Accepted => "accepted",
-            Self::Rejected => "rejected",
-            Self::Retry => "retry",
-            Self::Stop => "stop",
-            Self::Skip => "skip",
-            Self::Supersede => "supersede",
-        }
-    }
+pub use outcome::Outcome;
+pub use token::AttemptToken;
 
-    /// Whether this outcome must be reported with a reason.
-    #[must_use]
-    pub fn needs_reason(self) -> bool {
-        !matches!(
-            self,
-            Self::Done | Self::Approved | Self::Accepted | Self::Retry
-        )
-    }
-}
-
-impl fmt::Display for Outcome {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for Outcome {
-    type Err = String;
-
-    fn from_str(text: &str) -> Result<Self, Self::Err> {
-        [
-            Self::Done,
-            Self::Failed,
-            Self::NeedsInput,
-            Self::TooLarge,
-            Self::Approved,
-            Self::ChangesRequested,
-            Self::Accepted,
-            Self::Rejected,
-            Self::Retry,
-            Self::Stop,
-            Self::Skip,
-            Self::Supersede,
-        ]
-        .into_iter()
-        .find(|outcome| outcome.as_str() == text)
-        .ok_or_else(|| {
-            format!(
-                "unknown outcome {text:?}: expected done, failed, needs-input, too-large, \
-                 approved, changes-requested, accepted, rejected, retry, stop, skip or supersede"
-            )
-        })
-    }
-}
-
-/// The outcomes that belong to step `step`, in the order they should be named when one that
-/// does not belong is refused. `None` when `step` is not one an agent reports an outcome for
-/// itself — the sync and health-check steps, which the tool records as already having passed —
-/// so any outcome is accepted rather than refused against an empty list.
-#[must_use]
-fn outcomes_for_step(step: &str) -> Option<&'static [Outcome]> {
-    if step == crate::IMPLEMENTATION {
-        Some(&[
-            Outcome::Done,
-            Outcome::Failed,
-            Outcome::NeedsInput,
-            Outcome::TooLarge,
-        ])
-    } else if step == crate::REVIEW_STEP {
-        Some(&[Outcome::Approved, Outcome::ChangesRequested])
-    } else if step == crate::TEST_STEP {
-        Some(&[Outcome::Accepted, Outcome::Rejected])
-    } else if step == crate::RESOLVE_STEP {
-        Some(&[
-            Outcome::Retry,
-            Outcome::Stop,
-            Outcome::Skip,
-            Outcome::Supersede,
-        ])
-    } else {
-        None
-    }
-}
-
-/// The token an attempt is reported with: names the project, task and attempt it belongs to,
-/// so `ktask-rs report` needs no `--project` and works from any directory.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttemptToken {
-    /// The project the attempt belongs to.
-    pub project: String,
-    /// The task the attempt belongs to.
-    pub task: TaskId,
-    /// The attempt's number.
-    pub number: u32,
-}
-
-impl AttemptToken {
-    /// The token for attempt `number` of `task` in `project`.
-    #[must_use]
-    pub fn new(project: impl Into<String>, task: TaskId, number: u32) -> Self {
-        Self {
-            project: project.into(),
-            task,
-            number,
-        }
-    }
-}
-
-impl fmt::Display for AttemptToken {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}/{}", self.project, self.task, self.number)
-    }
-}
-
-impl FromStr for AttemptToken {
-    type Err = String;
-
-    fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let malformed = || format!("malformed token {text:?}: expected PROJECT/TASK/ATTEMPT");
-        let mut parts = text.split('/');
-        let (Some(project), Some(task), Some(number), None) =
-            (parts.next(), parts.next(), parts.next(), parts.next())
-        else {
-            return Err(malformed());
-        };
-        if project.is_empty() {
-            return Err(malformed());
-        }
-        let task = task.parse::<u64>().map_err(|_| malformed())?;
-        let number = number.parse::<u32>().map_err(|_| malformed())?;
-        Ok(Self {
-            project: project.to_owned(),
-            task: TaskId(task),
-            number,
-        })
-    }
-}
+use outcome::outcomes_for_step;
 
 /// Why a report was not recorded.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +41,9 @@ pub enum ReportError {
     /// `supersede`'s own tasks file is refused — the same way, with the same messages,
     /// [`crate::import_tasks`] refuses one.
     Import(ImportError),
+    /// `changes-requested` was given no finding at all, or [`report`] was asked to record it
+    /// directly instead of through [`report_findings`].
+    FindingsRequired,
 }
 
 impl fmt::Display for ReportError {
@@ -247,6 +79,9 @@ impl fmt::Display for ReportError {
                 "this attempt did not end at its time limit: --more-time only follows a timeout",
             ),
             Self::Import(error) => error.fmt(f),
+            Self::FindingsRequired => {
+                f.write_str("outcome changes-requested needs at least one finding: pass --findings")
+            }
         }
     }
 }
@@ -288,8 +123,9 @@ pub fn start_attempt(
 /// # Errors
 ///
 /// Fails, recording nothing, when `outcome` needs a reason and none, or only a blank one, was
-/// given; when `outcome` does not belong to the step currently running for this attempt; or
-/// when the journal reports the attempt is unknown or has ended.
+/// given; when `outcome` is `changes-requested`, which [`report_findings`] records instead;
+/// when `outcome` does not belong to the step currently running for this attempt; or when the
+/// journal reports the attempt is unknown or has ended.
 pub fn report(
     journal: &impl Journal,
     clock: &impl Clock,
@@ -297,8 +133,53 @@ pub fn report(
     outcome: Outcome,
     reason: Option<&str>,
 ) -> Result<(), ReportError> {
+    if outcome == Outcome::ChangesRequested {
+        return Err(ReportError::FindingsRequired);
+    }
     report_impl(
-        journal, clock, token, outcome, reason, None, false, false, None,
+        journal,
+        clock,
+        token,
+        outcome,
+        reason,
+        &[],
+        None,
+        false,
+        false,
+        None,
+    )
+}
+
+/// Use case: records the reviewer's `changes-requested` verdict for the attempt `token` names,
+/// carrying `findings` — the reviewer's own findings, a list the fixer, the operator and the
+/// next reviewer all read the same way.
+///
+/// # Errors
+///
+/// Fails, recording nothing, when `findings` is empty ([`ReportError::FindingsRequired`]);
+/// when `changes-requested` does not belong to the step currently running for this attempt —
+/// only the review step accepts it; or when the journal reports the attempt is unknown or has
+/// ended.
+pub fn report_findings(
+    journal: &impl Journal,
+    clock: &impl Clock,
+    token: &AttemptToken,
+    findings: &[Finding],
+) -> Result<(), ReportError> {
+    if findings.is_empty() {
+        return Err(ReportError::FindingsRequired);
+    }
+    report_impl(
+        journal,
+        clock,
+        token,
+        Outcome::ChangesRequested,
+        None,
+        findings,
+        None,
+        false,
+        false,
+        None,
     )
 }
 
@@ -352,6 +233,7 @@ pub fn report_retry(
         token,
         Outcome::Retry,
         None,
+        &[],
         model,
         same_session,
         reset_tree,
@@ -359,9 +241,9 @@ pub fn report_retry(
     )
 }
 
-/// [`report`] and [`report_retry`]'s shared work: both are this, differing only in whether
-/// `retry_model` is ever anything but `None`, and `retry_same_session` and `retry_reset_tree`
-/// ever `true`.
+/// [`report`], [`report_findings`] and [`report_retry`]'s shared work: all three are this,
+/// differing only in whether `findings` is ever non-empty, `retry_model` is ever anything but
+/// `None`, and `retry_same_session` and `retry_reset_tree` ever `true`.
 #[allow(clippy::too_many_arguments)]
 fn report_impl(
     journal: &impl Journal,
@@ -369,6 +251,7 @@ fn report_impl(
     token: &AttemptToken,
     outcome: Outcome,
     reason: Option<&str>,
+    findings: &[Finding],
     retry_model: Option<&str>,
     retry_same_session: bool,
     retry_reset_tree: bool,
@@ -386,6 +269,7 @@ fn report_impl(
         token.number,
         outcome,
         reason,
+        findings,
         retry_model,
         retry_same_session,
         retry_reset_tree,
@@ -401,7 +285,7 @@ pub use supersede::{Supersede, report_supersede};
 #[cfg(test)]
 mod tests {
     use crate::fakes::{FakeClock, FakeJournal, at, draft};
-    use crate::{BeginAttemptError, Placement, TaskId, TaskStatus, add_task};
+    use crate::{BeginAttemptError, FindingScope, Placement, TaskId, TaskStatus, add_task};
 
     use super::*;
 
@@ -424,33 +308,6 @@ mod tests {
             crate::list_all_tasks(&journal).unwrap()[0].status,
             TaskStatus::Running
         );
-    }
-
-    #[test]
-    fn a_token_reads_back_from_its_display_form() {
-        let token = AttemptToken::new("proj", TaskId(7), 3);
-        assert_eq!(token.to_string(), "proj/7/3");
-        assert_eq!(token.to_string().parse(), Ok(token));
-    }
-
-    #[test]
-    fn a_malformed_token_names_the_problem() {
-        for text in [
-            "",
-            "proj",
-            "proj/7",
-            "proj/7/3/extra",
-            "/7/3",
-            "proj/x/3",
-            "proj/7/x",
-        ] {
-            assert!(
-                text.parse::<AttemptToken>()
-                    .unwrap_err()
-                    .contains("malformed token"),
-                "{text}"
-            );
-        }
     }
 
     #[test]
@@ -634,28 +491,77 @@ mod tests {
     }
 
     #[test]
-    fn approved_needs_no_reason_but_changes_requested_does() {
+    fn approved_needs_no_reason() {
         let journal = journal_with_a_running_step(crate::REVIEW_STEP);
         let token = AttemptToken::new("proj", TaskId(1), 1);
-        for blank in [None, Some(""), Some("   ")] {
-            assert_eq!(
-                report(&journal, &clock(), &token, Outcome::ChangesRequested, blank),
-                Err(ReportError::ReasonRequired(Outcome::ChangesRequested))
-            );
-        }
-        assert_eq!(
-            report(
-                &journal,
-                &clock(),
-                &token,
-                Outcome::ChangesRequested,
-                Some("fix this")
-            ),
-            Ok(())
-        );
         assert_eq!(
             report(&journal, &clock(), &token, Outcome::Approved, None),
             Ok(())
+        );
+    }
+
+    /// A finding with `location` and nothing else that matters.
+    fn finding(location: &str) -> Finding {
+        Finding {
+            location: location.to_owned(),
+            problem: "it is wrong".to_owned(),
+            fix: "fix it".to_owned(),
+            scope: FindingScope::Task,
+        }
+    }
+
+    #[test]
+    fn report_refuses_changes_requested_directly_naming_report_findings() {
+        let journal = journal_with_a_running_step(crate::REVIEW_STEP);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+        for reason in [None, Some("fix this")] {
+            assert_eq!(
+                report(
+                    &journal,
+                    &clock(),
+                    &token,
+                    Outcome::ChangesRequested,
+                    reason
+                ),
+                Err(ReportError::FindingsRequired)
+            );
+        }
+    }
+
+    #[test]
+    fn report_findings_is_refused_empty_and_recorded_once_given_any() {
+        let journal = journal_with_a_running_step(crate::REVIEW_STEP);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+        assert_eq!(
+            report_findings(&journal, &clock(), &token, &[]),
+            Err(ReportError::FindingsRequired)
+        );
+        assert_eq!(
+            report_findings(&journal, &clock(), &token, &[finding("src/a.rs:1")]),
+            Ok(())
+        );
+        assert_eq!(
+            crate::attempt::last_report(&journal, TaskId(1), 1),
+            Ok(Some((Outcome::ChangesRequested, None)))
+        );
+    }
+
+    #[test]
+    fn report_findings_outside_the_review_step_is_refused_naming_it() {
+        let journal = journal_with_a_running_step(crate::IMPLEMENTATION);
+        let token = AttemptToken::new("proj", TaskId(1), 1);
+        assert_eq!(
+            report_findings(&journal, &clock(), &token, &[finding("src/a.rs:1")]),
+            Err(ReportError::WrongStep {
+                outcome: Outcome::ChangesRequested,
+                step: crate::IMPLEMENTATION.to_owned(),
+                expected: vec![
+                    Outcome::Done,
+                    Outcome::Failed,
+                    Outcome::NeedsInput,
+                    Outcome::TooLarge
+                ],
+            })
         );
     }
 

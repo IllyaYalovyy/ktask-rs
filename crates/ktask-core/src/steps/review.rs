@@ -10,17 +10,9 @@ use crate::{AttemptToken, RunContext, RunError, Task};
 /// The journal name of the review step.
 pub const REVIEW_STEP: &str = "review";
 
-/// The prompt for the review step of attempt `token` of `task`: its title, body and acceptance
-/// criteria, the diff the implementation step made — `diff`, empty when there was nothing to
-/// compare against or git could not produce one — and the exact `report` command, run through
-/// `binary_path`, to run for each possible outcome.
-#[must_use]
-pub fn build_review_prompt(
-    task: &Task,
-    token: &AttemptToken,
-    binary_path: &Path,
-    diff: &str,
-) -> String {
+/// `task`'s title, body, acceptance criteria and `diff` — everything the review prompt opens
+/// with, ahead of its own reporting section.
+fn review_header_and_diff(task: &Task, diff: &str) -> String {
     let mut prompt = format!("# Review: {}\n", task.title);
     if !task.body.is_empty() {
         prompt.push('\n');
@@ -39,14 +31,36 @@ pub fn build_review_prompt(
         prompt.push('\n');
     }
     prompt.push_str("```\n");
+    prompt
+}
+
+/// The prompt for the review step of attempt `token` of `task`: its title, body and acceptance
+/// criteria, the diff the implementation step made — `diff`, empty when there was nothing to
+/// compare against or git could not produce one — and the exact `report` command, run through
+/// `binary_path`, to run for each possible outcome.
+#[must_use]
+pub fn build_review_prompt(
+    task: &Task,
+    token: &AttemptToken,
+    binary_path: &Path,
+    diff: &str,
+) -> String {
+    let mut prompt = review_header_and_diff(task, diff);
     let binary = binary_path.display();
     let _ = write!(
         prompt,
         "\n## Reporting\n\n\
-         Review the diff above against the task and its acceptance criteria. When you are \
-         done, run exactly one of these, with the outcome that fits:\n\n\
+         Review the diff above against the task and its acceptance criteria. If you have \
+         findings, write them to a file as a JSON array (or TOML with a [[findings]] table), \
+         each with `location` (`path:line` or `path`), `problem`, `fix`, and `scope` — `task` \
+         for a problem inside this change, `elsewhere` for one outside it. For example:\n\n\
+         \x20\x20\x20\x20[\n\
+         \x20\x20\x20\x20\x20\x20{{\"location\": \"src/lib.rs:42\", \"problem\": \"what is \
+         wrong\", \"fix\": \"what would make it right\", \"scope\": \"task\"}}\n\
+         \x20\x20\x20\x20]\n\n\
+         When you are done, run exactly one of these, with the outcome that fits:\n\n\
          \x20\x20\x20\x20{binary} report --token {token} approved\n\
-         \x20\x20\x20\x20{binary} report --token {token} changes-requested --reason \"<findings>\"\n"
+         \x20\x20\x20\x20{binary} report --token {token} changes-requested --findings <file>\n"
     );
     prompt
 }
@@ -115,10 +129,13 @@ mod tests {
         );
         assert!(
             prompt.contains(
-                "/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 changes-requested --reason"
+                "/opt/ktask-rs/bin/ktask-rs report --token proj/7/3 changes-requested --findings <file>"
             ),
             "{prompt}"
         );
+        assert!(prompt.contains("\"location\""), "{prompt}");
+        assert!(prompt.contains("\"scope\""), "{prompt}");
+        assert!(prompt.contains("elsewhere"), "{prompt}");
         assert!(!prompt.contains("\n    ktask-rs report"), "{prompt}");
     }
 

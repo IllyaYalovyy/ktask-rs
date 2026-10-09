@@ -4,7 +4,7 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::{ProviderParser, ProviderView, StatusEntry, StepLine, TaskId};
+use crate::{Finding, ProviderParser, ProviderView, StatusEntry, StepLine, TaskId};
 
 /// Port: the retained provider bytes of each agent step of an attempt.
 pub trait StepOutputStore {
@@ -63,18 +63,23 @@ pub struct StepTranscript {
     pub provider: Option<String>,
     /// The model the step ran with, when it has one.
     pub model: Option<String>,
+    /// The reviewer's own findings, when this is a review step the reviewer gave any to. Empty
+    /// for every other step.
+    pub findings: Vec<Finding>,
     parser: ProviderParser,
     raw: Vec<u8>,
 }
 
 impl StepTranscript {
     /// What `step`, run by `provider` (`None` when a command ran it) with `model`, retained as
-    /// `raw` in `parser`'s encoding.
+    /// `raw` in `parser`'s encoding, with `findings`, the reviewer's own findings, when this is
+    /// a review step the reviewer gave any to.
     #[must_use]
     pub fn new(
         step: &str,
         provider: Option<&str>,
         model: Option<&str>,
+        findings: Vec<Finding>,
         parser: ProviderParser,
         raw: &[u8],
     ) -> Self {
@@ -82,6 +87,7 @@ impl StepTranscript {
             step: step.to_owned(),
             provider: provider.map(str::to_owned),
             model: model.map(str::to_owned),
+            findings,
             parser,
             raw: raw.to_vec(),
         }
@@ -128,6 +134,7 @@ pub fn attempt_transcripts(
                 &line.step,
                 provider,
                 line.model.as_deref(),
+                line.findings.clone(),
                 parser,
                 &raw,
             ))
@@ -204,6 +211,7 @@ mod tests {
             time_spent: Duration::ZERO,
             outcome: AttemptOutcome::Passed,
             reason: None,
+            findings: Vec::new(),
             waiting: None,
             limit_wait: None,
             limit_warning: None,
@@ -227,6 +235,7 @@ mod tests {
                 time_spent: Duration::ZERO,
                 outcome: AttemptOutcome::Passed,
                 reason: None,
+                findings: Vec::new(),
                 waiting: None,
                 limit_wait: None,
                 limit_warning: None,

@@ -40,27 +40,7 @@ impl Step for Resolve {
         context: RunContext<'_>,
         state: &mut PipelineState<'_>,
     ) -> Result<StepOutcome, RunError> {
-        let (current_status, current_reason) = state
-            .failure
-            .clone()
-            .unwrap_or((TaskStatus::FailedUnknown, None));
-        let earlier = earlier_attempts(deps.journal, state.task.id, state.token.number)?;
-        let diff = crate::steps::implementation::diff_since_first_attempt(
-            deps.journal,
-            deps.git,
-            context,
-            state.task.id,
-        )?;
-        let prompt = build_resolve_prompt(
-            state.task,
-            state.token,
-            context.binary_path,
-            &earlier,
-            current_status,
-            current_reason.as_deref(),
-            &diff,
-            state.decision.as_ref(),
-        );
+        let prompt = resolve_prompt(deps, context, state)?;
         let model = self.model(context, state);
         let outcome = run_agent_step(
             deps,
@@ -72,6 +52,39 @@ impl Step for Resolve {
         )?;
         mark_reset_tree(deps.journal, state, outcome)
     }
+}
+
+/// The resolve step's own prompt for `state`'s attempt — [`Resolve::run`]'s own work, pulled
+/// out of it so it stays within the workspace's function-length limit.
+fn resolve_prompt(
+    deps: &Deps<'_>,
+    context: RunContext<'_>,
+    state: &PipelineState<'_>,
+) -> Result<String, RunError> {
+    let (current_status, current_reason) = state
+        .failure
+        .clone()
+        .unwrap_or((TaskStatus::FailedUnknown, None));
+    let current_findings =
+        crate::steps::review_findings_of(deps.journal, state.task.id, state.token.number)?;
+    let earlier = earlier_attempts(deps.journal, state.task.id, state.token.number)?;
+    let diff = crate::steps::implementation::diff_since_first_attempt(
+        deps.journal,
+        deps.git,
+        context,
+        state.task.id,
+    )?;
+    Ok(build_resolve_prompt(
+        state.task,
+        state.token,
+        context.binary_path,
+        &earlier,
+        current_status,
+        current_reason.as_deref(),
+        &current_findings,
+        &diff,
+        state.decision.as_ref(),
+    ))
 }
 
 /// `outcome`, with its own reason set to say the working tree was reset, when the resolver's
@@ -379,6 +392,7 @@ mod tests {
             number: 1,
             outcome: "failed".to_owned(),
             reason: Some("it broke".to_owned()),
+            findings: Vec::new(),
         }];
         let diff = "--- a/file\n+++ b/file\n+added line\n";
         let prompt = build_resolve_prompt(
@@ -388,6 +402,7 @@ mod tests {
             &earlier,
             TaskStatus::FailedUnknown,
             Some("crashed"),
+            &[],
             diff,
             None,
         );
@@ -418,6 +433,45 @@ mod tests {
             "{prompt}"
         );
         assert!(!prompt.contains("\n    ktask-rs report"), "{prompt}");
+    }
+
+    #[test]
+    fn a_review_that_ended_the_attempt_carries_its_findings_as_a_list_not_a_blob() {
+        let token = AttemptToken::new("proj", TaskId(7), 3);
+        let binary_path = Path::new("/opt/ktask-rs/bin/ktask-rs");
+        let findings = [
+            crate::Finding {
+                location: "src/a.rs:10".to_owned(),
+                problem: "it is wrong".to_owned(),
+                fix: "fix it".to_owned(),
+                scope: crate::FindingScope::Task,
+            },
+            crate::Finding {
+                location: "src/b.rs".to_owned(),
+                problem: "unrelated issue".to_owned(),
+                fix: "fix that too".to_owned(),
+                scope: crate::FindingScope::Elsewhere,
+            },
+        ];
+        let prompt = build_resolve_prompt(
+            &task(),
+            &token,
+            binary_path,
+            &[],
+            TaskStatus::Failed,
+            None,
+            &findings,
+            "",
+            None,
+        );
+        assert!(
+            prompt.contains("src/a.rs:10: it is wrong (fix: fix it) [task]"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("src/b.rs: unrelated issue (fix: fix that too) [elsewhere]"),
+            "{prompt}"
+        );
     }
 
     #[test]

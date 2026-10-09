@@ -2,7 +2,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use crate::{LimitWait, LimitWarning, Routed, TaskId, TaskStatus, Usage, WaitReason};
+use crate::{Finding, LimitWait, LimitWarning, Routed, TaskId, TaskStatus, Usage, WaitReason};
 
 use super::AttemptOutcome;
 
@@ -44,6 +44,9 @@ pub struct StepLine {
     pub outcome: AttemptOutcome,
     /// The recorded reason, when the journal has one.
     pub reason: Option<String>,
+    /// The reviewer's own findings, when this is a review step the reviewer gave any to. Empty
+    /// for every other step, and for a review step that reported `approved`.
+    pub findings: Vec<Finding>,
     /// What the step is waiting for, and how long remains, while it waits.
     pub waiting: Option<Wait>,
     /// The provider-limit wait recorded after the step resumed.
@@ -77,6 +80,8 @@ pub struct AttemptLine {
     pub outcome: AttemptOutcome,
     /// The current step's recorded reason.
     pub reason: Option<String>,
+    /// The current step's own findings, the same as [`StepLine::findings`].
+    pub findings: Vec<Finding>,
     /// What the current step is waiting for, and how long remains, while it waits.
     pub waiting: Option<Wait>,
     /// The current step's completed provider-limit wait.

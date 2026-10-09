@@ -6,10 +6,12 @@ use std::path::Path;
 
 use crate::DecideWhy;
 use crate::route::Decision;
+use crate::steps::append_findings;
 use crate::steps::implementation::EarlierAttempt;
-use crate::{AttemptToken, Task, TaskStatus};
+use crate::{AttemptToken, Finding, Task, TaskStatus};
 
-/// Appends one `- attempt N: outcome — reason` line per entry of `attempts` to `prompt`.
+/// Appends one `- attempt N: outcome — reason` line per entry of `attempts` to `prompt`, then
+/// — a list, not a blob — one line per finding its review step gave it, when it gave any.
 fn append_attempts(prompt: &mut String, attempts: &[EarlierAttempt]) {
     for attempt in attempts {
         match &attempt.reason {
@@ -24,6 +26,7 @@ fn append_attempts(prompt: &mut String, attempts: &[EarlierAttempt]) {
                 let _ = writeln!(prompt, "- attempt {}: {}", attempt.number, attempt.outcome);
             }
         }
+        append_findings(prompt, &attempt.findings);
     }
 }
 
@@ -106,10 +109,11 @@ fn append_decision(prompt: &mut String, decision: Option<&Decision>) {
 }
 
 /// The prompt for the resolve step of attempt `token` of `task`: its title, body and
-/// acceptance criteria; every attempt so far, `earlier` then this one's own `current_status`
-/// and `current_reason`, each with its own outcome and reason; `diff`, everything the task has
-/// changed since its first attempt began; and the exact `report` command, run through
-/// `binary_path`, to run for each possible decision.
+/// acceptance criteria; every attempt so far, `earlier` then this one's own `current_status`,
+/// `current_reason` and `current_findings`, each with its own outcome and why — a list, not a
+/// blob, when a review ended it; `diff`, everything the task has changed since its first
+/// attempt began; and the exact `report` command, run through `binary_path`, to run for each
+/// possible decision.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_resolve_prompt(
@@ -119,6 +123,7 @@ pub(crate) fn build_resolve_prompt(
     earlier: &[EarlierAttempt],
     current_status: TaskStatus,
     current_reason: Option<&str>,
+    current_findings: &[Finding],
     diff: &str,
     decision: Option<&Decision>,
 ) -> String {
@@ -132,6 +137,7 @@ pub(crate) fn build_resolve_prompt(
             number: token.number,
             outcome: current_status.as_str().to_owned(),
             reason: current_reason.map(str::to_owned),
+            findings: current_findings.to_vec(),
         }],
     );
     append_decision(&mut prompt, decision);

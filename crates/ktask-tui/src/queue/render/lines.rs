@@ -13,7 +13,8 @@ use crate::widgets::elide;
 /// attempt, from the same use case: step (named with `label` ahead of it, so every step line
 /// says which attempt it belongs to), provider (`-` for a step the tool ran itself, which names
 /// none), time spent, outcome, and the reason when there is one, cut to fit `width` with a
-/// trailing `…` when it does not.
+/// trailing `…` when it does not — followed by one line per finding its review gave it, when
+/// it gave any.
 pub(super) fn step_lines_named(
     steps: &[StepLine],
     width: usize,
@@ -23,12 +24,26 @@ pub(super) fn step_lines_named(
     steps
         .iter()
         .enumerate()
-        .map(|(index, step)| {
-            step_line(
+        .flat_map(|(index, step)| {
+            let line = step_line(
                 step,
                 width,
                 label,
                 (index + 1 == steps.len()).then_some(activity).flatten(),
+            );
+            std::iter::once(line).chain(finding_lines(step, width))
+        })
+        .collect()
+}
+
+/// One dimmed line per finding of `step`'s own review, cut to fit `width`.
+fn finding_lines(step: &StepLine, width: usize) -> Vec<Line<'static>> {
+    presentation::finding_lines(&step.findings)
+        .into_iter()
+        .map(|line| {
+            Line::styled(
+                elide(&line, width),
+                Style::new().add_modifier(Modifier::DIM),
             )
         })
         .collect()

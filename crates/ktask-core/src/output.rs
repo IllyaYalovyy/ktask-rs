@@ -183,6 +183,7 @@ mod tests {
             time_spent: Duration::ZERO,
             outcome: AttemptOutcome::Passed,
             reason: None,
+            findings: Vec::new(),
             waiting: None,
             limit_wait: None,
             limit_warning: None,

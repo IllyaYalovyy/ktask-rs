@@ -3,6 +3,8 @@
 
 use ktask_core::StepTranscript;
 
+use super::finding_lines;
+
 /// The sections of one attempt's output, in the order the steps ran.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Transcript {
@@ -35,6 +37,10 @@ impl Transcript {
             heading_lines.push(text.matches('\n').count());
             text.push_str(&step_heading(step));
             text.push('\n');
+            for line in finding_lines(&step.findings) {
+                text.push_str(&line);
+                text.push('\n');
+            }
             text.push_str(&step.readable());
         }
         Self {
@@ -73,6 +79,7 @@ mod tests {
             name,
             Some("echo"),
             model,
+            Vec::new(),
             ProviderParser::Plain,
             said.as_bytes(),
         )
@@ -92,7 +99,8 @@ mod tests {
 
     #[test]
     fn the_check_has_no_provider_so_its_heading_names_only_the_step() {
-        let check = StepTranscript::new("check", None, None, ProviderParser::Plain, b"");
+        let check =
+            StepTranscript::new("check", None, None, Vec::new(), ProviderParser::Plain, b"");
         assert_eq!(step_heading(&check), "--- check ---");
     }
 
@@ -118,5 +126,27 @@ mod tests {
     #[test]
     fn no_steps_is_no_text() {
         assert_eq!(Transcript::new(&[]).text(), "");
+    }
+
+    #[test]
+    fn a_reviews_findings_print_before_its_transcript() {
+        let review = StepTranscript::new(
+            "review",
+            Some("echo"),
+            None,
+            vec![ktask_core::Finding {
+                location: "src/a.rs:1".to_owned(),
+                problem: "it is wrong".to_owned(),
+                fix: "fix it".to_owned(),
+                scope: ktask_core::FindingScope::Task,
+            }],
+            ProviderParser::Plain,
+            b"looks fine",
+        );
+        let transcript = Transcript::new(&[review]);
+        assert_eq!(
+            transcript.text(),
+            "--- review · echo ---\n  - src/a.rs:1 · it is wrong\nlooks fine"
+        );
     }
 }

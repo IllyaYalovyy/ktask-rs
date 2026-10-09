@@ -143,6 +143,36 @@ fn step_prints_one_steps_transcript_only() -> Result<()> {
 }
 
 #[test]
+fn a_changes_requested_reviews_findings_print_before_its_transcript() -> Result<()> {
+    let fixture = Fixture::new()?;
+    assert_eq!(
+        fixture.run(&["settings", "set", "max-attempts", "1"])?.code,
+        Some(0)
+    );
+    fixture.add(
+        "```bash\nif [ \"$3\" = \"review\" ]; then\n  echo said-by-review\n  printf '[{\"location\": \"src/a.rs:1\", \"problem\": \"needs docs\", \"fix\": \"add docs\", \"scope\": \"task\"}, {\"location\": \"src/b.rs\", \"problem\": \"unrelated\", \"fix\": \"fix that too\", \"scope\": \"elsewhere\"}]' > findings.json\n  ktask-rs report --token \"$1\" changes-requested --findings findings.json\nelse\n  echo said-by-implementation\n  ktask-rs report --token \"$1\" done\nfi\n```\n",
+    )?;
+    fixture.run(&["run"])?;
+
+    let review = output(&fixture, &["--step", "review"])?;
+
+    assert_eq!(review.code, Some(0), "{}", review.stderr);
+    assert_eq!(
+        review.stdout,
+        format!(
+            "{REVIEW}\n  - src/a.rs:1 · needs docs\n  - src/b.rs · unrelated\nsaid-by-review\nrecorded changes-requested for task 1 attempt 1\n"
+        )
+    );
+    // Raw output never carries the findings: it is exactly the provider's own bytes.
+    let raw = output(&fixture, &["--raw", "--step", "review"])?;
+    assert_eq!(
+        raw.stdout,
+        "said-by-review\nrecorded changes-requested for task 1 attempt 1\n"
+    );
+    Ok(())
+}
+
+#[test]
 fn step_refuses_a_step_the_attempt_kept_no_output_for() -> Result<()> {
     let fixture = Fixture::new()?;
     fixture.add(FAILED_THEN_RESOLVED)?;

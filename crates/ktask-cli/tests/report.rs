@@ -283,6 +283,266 @@ fn report_works_from_any_directory_with_no_project_flag() -> Result<()> {
     Ok(())
 }
 
+impl Fixture {
+    /// The `findings` array of the most recent `attempt_reported` event's payload.
+    fn last_report_findings(&self) -> Result<serde_json::Value> {
+        let database = rusqlite::Connection::open(self.journal())?;
+        let payload: String = database.query_row(
+            "SELECT payload FROM events WHERE kind = 'attempt_reported'
+             ORDER BY seq DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let payload: serde_json::Value = serde_json::from_str(&payload)?;
+        Ok(payload.get("findings").cloned().unwrap_or_default())
+    }
+
+    /// Writes `text` to a file named `name` in the sandbox's own working directory, so a
+    /// `--findings` or `--tasks` flag can name it by a relative path.
+    fn write_file(&self, name: &str, text: &str) -> Result<PathBuf> {
+        let path = self.repository.join(name);
+        std::fs::write(&path, text)?;
+        Ok(path)
+    }
+}
+
+#[test]
+fn changes_requested_with_a_json_findings_file_is_recorded() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let token = fixture.start_attempt(1)?;
+    fixture.write_file(
+        "findings.json",
+        r#"[{"location": "src/a.rs:1", "problem": "p", "fix": "f", "scope": "task"}]"#,
+    )?;
+
+    let outcome = fixture.run(&[
+        "report",
+        "--token",
+        &token,
+        "changes-requested",
+        "--findings",
+        "findings.json",
+    ])?;
+
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    assert_eq!(
+        fixture.last_report()?.1,
+        Some("changes-requested".to_owned())
+    );
+    assert_eq!(
+        fixture.last_report_findings()?,
+        serde_json::json!([{
+            "location": "src/a.rs:1",
+            "problem": "p",
+            "fix": "f",
+            "scope": "task",
+        }])
+    );
+    Ok(())
+}
+
+#[test]
+fn changes_requested_with_a_toml_findings_file_is_recorded() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let token = fixture.start_attempt(1)?;
+    fixture.write_file(
+        "findings.toml",
+        "[[findings]]\nlocation = \"src/a.rs:1\"\nproblem = \"p\"\nfix = \"f\"\nscope = \"elsewhere\"\n",
+    )?;
+
+    let outcome = fixture.run(&[
+        "report",
+        "--token",
+        &token,
+        "changes-requested",
+        "--findings",
+        "findings.toml",
+    ])?;
+
+    assert_eq!(outcome.code, Some(0), "{}", outcome.stderr);
+    let findings = fixture.last_report_findings()?;
+    assert_eq!(
+        findings.get(0).and_then(|f| f.get("scope")),
+        Some(&serde_json::json!("elsewhere"))
+    );
+    Ok(())
+}
+
+#[test]
+fn changes_requested_without_findings_is_refused_and_records_nothing() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let token = fixture.start_attempt(1)?;
+
+    let outcome = fixture.run(&["report", "--token", &token, "changes-requested"])?;
+
+    assert_eq!(outcome.code, Some(2), "{}", outcome.stderr);
+    assert!(outcome.stderr.contains("--findings"), "{}", outcome.stderr);
+    assert_eq!(fixture.last_report()?, (0, None, None));
+    Ok(())
+}
+
+#[test]
+fn changes_requested_with_reason_but_no_findings_is_refused() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let token = fixture.start_attempt(1)?;
+
+    let outcome = fixture.run(&[
+        "report",
+        "--token",
+        &token,
+        "changes-requested",
+        "--reason",
+        "fix it",
+    ])?;
+
+    assert_eq!(outcome.code, Some(2), "{}", outcome.stderr);
+    assert!(outcome.stderr.contains("--findings"), "{}", outcome.stderr);
+    assert_eq!(fixture.last_report()?, (0, None, None));
+    Ok(())
+}
+
+#[test]
+fn approved_takes_no_findings_file() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let token = fixture.start_attempt(1)?;
+    fixture.write_file(
+        "findings.json",
+        r#"[{"location": "a", "problem": "p", "fix": "f", "scope": "task"}]"#,
+    )?;
+
+    let outcome = fixture.run(&[
+        "report",
+        "--token",
+        &token,
+        "approved",
+        "--findings",
+        "findings.json",
+    ])?;
+
+    assert_eq!(outcome.code, Some(2), "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("approved") && outcome.stderr.contains("--findings"),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(fixture.last_report()?, (0, None, None));
+    Ok(())
+}
+
+#[test]
+fn an_empty_findings_list_is_refused() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let token = fixture.start_attempt(1)?;
+    fixture.write_file("findings.json", "[]")?;
+
+    let outcome = fixture.run(&[
+        "report",
+        "--token",
+        &token,
+        "changes-requested",
+        "--findings",
+        "findings.json",
+    ])?;
+
+    assert_eq!(outcome.code, Some(2), "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("at least one finding"),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(fixture.last_report()?, (0, None, None));
+    Ok(())
+}
+
+#[test]
+fn a_finding_missing_a_field_is_refused_naming_its_index_and_the_field() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let token = fixture.start_attempt(1)?;
+    fixture.write_file(
+        "findings.json",
+        r#"[
+            {"location": "a", "problem": "p", "fix": "f", "scope": "task"},
+            {"location": "a", "problem": "p", "fix": "f"}
+        ]"#,
+    )?;
+
+    let outcome = fixture.run(&[
+        "report",
+        "--token",
+        &token,
+        "changes-requested",
+        "--findings",
+        "findings.json",
+    ])?;
+
+    assert_eq!(outcome.code, Some(2), "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("finding 2") && outcome.stderr.contains("scope"),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(fixture.last_report()?, (0, None, None));
+    Ok(())
+}
+
+#[test]
+fn a_finding_with_an_unknown_scope_is_refused_naming_its_index_and_the_field() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let token = fixture.start_attempt(1)?;
+    fixture.write_file(
+        "findings.json",
+        r#"[{"location": "a", "problem": "p", "fix": "f", "scope": "urgent"}]"#,
+    )?;
+
+    let outcome = fixture.run(&[
+        "report",
+        "--token",
+        &token,
+        "changes-requested",
+        "--findings",
+        "findings.json",
+    ])?;
+
+    assert_eq!(outcome.code, Some(2), "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("finding 1")
+            && outcome.stderr.contains("scope")
+            && outcome.stderr.contains("urgent"),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(fixture.last_report()?, (0, None, None));
+    Ok(())
+}
+
+#[test]
+fn findings_is_refused_for_every_outcome_but_changes_requested() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let token = fixture.start_attempt(1)?;
+    fixture.write_file(
+        "findings.json",
+        r#"[{"location": "a", "problem": "p", "fix": "f", "scope": "task"}]"#,
+    )?;
+
+    let outcome = fixture.run(&[
+        "report",
+        "--token",
+        &token,
+        "done",
+        "--findings",
+        "findings.json",
+    ])?;
+
+    assert_eq!(outcome.code, Some(2), "{}", outcome.stderr);
+    assert!(
+        outcome.stderr.contains("only changes-requested"),
+        "{}",
+        outcome.stderr
+    );
+    assert_eq!(fixture.last_report()?, (0, None, None));
+    Ok(())
+}
+
 #[test]
 fn report_and_its_options_are_in_the_help() -> Result<()> {
     let fixture = Fixture::new()?;
@@ -290,7 +550,7 @@ fn report_and_its_options_are_in_the_help() -> Result<()> {
     assert!(top.stdout.contains("report"), "{}", top.stdout);
     let help = fixture.run(&["report", "--help"])?;
     assert_eq!(help.code, Some(0), "{}", help.stderr);
-    for word in ["--token", "OUTCOME", "--reason"] {
+    for word in ["--token", "OUTCOME", "--reason", "--findings"] {
         assert!(help.stdout.contains(word), "{word}: {}", help.stdout);
     }
     Ok(())

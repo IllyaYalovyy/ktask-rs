@@ -142,15 +142,7 @@ impl fmt::Display for ImportError {
 
 impl Error for ImportError {}
 
-/// What went wrong reading one task, naming the field it is about when it is about one.
-fn field_error(error: &serde_path_to_error::Error<serde_json::Error>) -> String {
-    let path = error.path().to_string();
-    if path == "." || error.inner().to_string().contains(&format!("`{path}`")) {
-        error.inner().to_string()
-    } else {
-        format!("{path}: {}", error.inner())
-    }
-}
+use crate::json_field::field_error;
 
 /// What `value` describes — a task to add, or one to leave out because it is cancelled — or
 /// everything wrong with it.

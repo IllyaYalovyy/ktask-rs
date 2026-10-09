@@ -570,6 +570,7 @@ mod tests {
             time_spent: std::time::Duration::from_secs(1),
             outcome: AttemptOutcome::Reported(Outcome::NeedsInput),
             reason: Some(reason.to_owned()),
+            findings: Vec::new(),
             waiting: None,
             limit_wait: None,
             limit_warning: None,

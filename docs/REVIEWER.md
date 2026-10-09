@@ -26,10 +26,14 @@ Check, in this order:
 
 ## Output
 
-`APPROVE` or `CHANGES REQUESTED`, then findings — each with `file:line`, what is wrong, and
-what would fix it. No praise, no summary of the change.
+Report your verdict with the exact command the prompt gives you for it — `approved`, or
+`changes-requested --findings <file>` naming a JSON or TOML file of your findings. No praise,
+no summary of the change: the file is the review.
 
 A finding is something that must change. There are no severities and no notes: if a thing
 has no impact, it is not a finding and costs nobody a word; if it is a risk, it is a finding
-and it will be fixed. A problem outside the change under review is still a finding — mark it
-`elsewhere`; it becomes a task of its own instead of a fix in this one.
+and it will be fixed. Each finding has four fields: `location` (`path:line` or `path`),
+`problem` (what is wrong), `fix` (what would make it right), and `scope` — `task` for a
+problem inside the change under review, `elsewhere` for one outside it, which becomes a task
+of its own instead of a fix in this one. `changes-requested` is refused without at least one
+finding; `approved` takes no file.

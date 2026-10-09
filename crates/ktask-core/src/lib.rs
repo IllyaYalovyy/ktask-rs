@@ -7,11 +7,13 @@ mod band;
 mod channel;
 mod clock;
 mod commands;
+mod finding;
 mod forget;
 mod git;
 mod import;
 mod instruction_files;
 mod journal;
+mod json_field;
 mod lock;
 mod output;
 mod pick;
@@ -39,6 +41,7 @@ pub use band::{RunBand, RunningBand, StopKind, StoppedBand, run_band, run_band_w
 pub use channel::Channel;
 pub use clock::Clock;
 pub use commands::{CommandSpec, Commands, CommandsError, Exit, Output};
+pub use finding::{Finding, FindingScope, FindingsError, InvalidFinding, parse_findings};
 pub use forget::{ForgetError, forget_project};
 pub use git::{CommitAllError, Git, GitError, PullRebase, PullRebaseError, PushError};
 pub use import::{Import, ImportError, InvalidTask, import_tasks, import_tasks_with_providers};
@@ -70,8 +73,8 @@ pub use providers::{
 pub use queue::{QueueView, StatusSummary, queue_view, queue_view_with_output};
 pub use register::{RegisterError, register_project};
 pub use report::{
-    AttemptToken, Outcome, ReportError, Supersede, report, report_retry, report_supersede,
-    start_attempt,
+    AttemptToken, Outcome, ReportError, Supersede, report, report_findings, report_retry,
+    report_supersede, start_attempt,
 };
 pub use resolve::{Resolution, ResolveError, resolve_project};
 pub use route::{DecideWhy, Routed, StopCause};

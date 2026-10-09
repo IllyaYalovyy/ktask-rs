@@ -6,8 +6,8 @@ use std::time::SystemTime;
 
 use super::{
     AnswerError, AppendError, AttemptRun, BeginAttemptError, CancelError, DoneError, Event,
-    LimitWait, Outcome, Placement, QueueState, RecordReportError, RetryError, Task, TaskDraft,
-    TaskId, TaskStatus, WaitReason,
+    Finding, LimitWait, Outcome, Placement, QueueState, RecordReportError, RetryError, Task,
+    TaskDraft, TaskId, TaskStatus, WaitReason,
 };
 
 impl QueueState {
@@ -217,6 +217,7 @@ impl QueueState {
         number: u32,
         outcome: Outcome,
         reason: Option<&str>,
+        findings: &[Finding],
         retry_model: Option<&str>,
         retry_same_session: bool,
         retry_reset_tree: bool,
@@ -229,6 +230,7 @@ impl QueueState {
             number,
             outcome,
             reason: reason.map(str::to_owned),
+            findings: findings.to_vec(),
             retry_model: retry_model.map(str::to_owned),
             retry_same_session,
             retry_reset_tree,

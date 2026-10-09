@@ -410,6 +410,7 @@ mod tests {
             time_spent: Duration::from_secs(1),
             outcome: AttemptOutcome::Reported(ktask_core::Outcome::NeedsInput),
             reason: Some("which path?".to_owned()),
+            findings: Vec::new(),
             waiting: None,
             limit_wait: None,
             limit_warning: None,
