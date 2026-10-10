@@ -237,6 +237,36 @@ fn a_failed_check_goes_to_the_decider_with_the_end_of_its_output() {
 }
 
 #[test]
+fn a_step_still_unreported_after_a_nudge_goes_to_the_decider_with_the_end_of_its_output() {
+    let signals = Signals {
+        unreported_tail: Some("the nudge was heard but ignored".to_owned()),
+        ..Signals::default()
+    };
+    let mut failed = facts(&signals);
+    failed.exit_code = Some(0);
+    failed.reason = Some("the provider exited with code 0 and reported nothing");
+    let decision = decision(route(&failed));
+    assert_eq!(decision.why, DecideWhy::NoReport);
+    assert_eq!(decision.reason, None);
+    let detail = decision.detail.expect("the output is carried");
+    assert!(
+        detail.contains("the nudge was heard but ignored"),
+        "{detail}"
+    );
+}
+
+#[test]
+fn an_unreported_step_with_nothing_to_resume_is_unmatched_not_no_report() {
+    let signals = Signals::default();
+    let mut failed = facts(&signals);
+    failed.exit_code = Some(0);
+    failed.reason = Some("the provider exited with code 0 and reported nothing");
+    let decision = decision(route(&failed));
+    assert_eq!(decision.why, DecideWhy::Unmatched);
+    assert_eq!(decision.detail, None);
+}
+
+#[test]
 fn a_check_that_could_not_find_its_program_stops_the_run_instead() {
     let signals = Signals {
         check_output: Some("bash: nope: command not found".to_owned()),

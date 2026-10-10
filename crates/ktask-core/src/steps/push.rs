@@ -70,6 +70,7 @@ impl Step for Push {
                 exit_code: Some(0),
                 reason: Some(format!("pushed {hash} to {tracked_branch}")),
                 reported: None,
+                routed: None,
             },
             PushOutcome::Refused(why) => StepOutcome::Ended {
                 duration,

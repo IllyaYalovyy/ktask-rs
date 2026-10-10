@@ -17,6 +17,7 @@ pub(crate) mod implementation;
 pub(crate) mod instructions;
 mod outcome;
 mod pipeline_state;
+mod pre_steps;
 pub(crate) mod push;
 pub(crate) mod resolve;
 pub(crate) mod review;
@@ -26,9 +27,10 @@ pub(crate) mod test_step;
 use std::time::Duration;
 
 pub(crate) use agent::run_agent_step;
-pub(crate) use execute::{record_pre_steps, run_one_step};
+pub(crate) use execute::run_one_step;
 pub(crate) use outcome::StepOutcome;
 pub(crate) use pipeline_state::PipelineState;
+pub(crate) use pre_steps::record_pre_steps;
 
 use crate::run::Attempted;
 use crate::{
@@ -472,6 +474,7 @@ mod tests {
                     exit_code: Some(0),
                     reason: self.pass_reason.map(str::to_owned),
                     reported: None,
+                    routed: None,
                 }
             } else {
                 StepOutcome::Ended {
@@ -642,6 +645,7 @@ mod tests {
                     exit_code: Some(0),
                     reason: None,
                     reported: None,
+                    routed: None,
                 }
             } else {
                 StepOutcome::Ended {

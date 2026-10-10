@@ -74,6 +74,7 @@ fn check_outcome(result: Result<Output, CommandsError>, duration: Duration) -> S
             exit_code: Some(0),
             reason: None,
             reported: None,
+            routed: None,
         },
         Exit::Code(code) => failed(duration, Some(code), format!("exit {code}"), &output),
         Exit::Killed => failed(

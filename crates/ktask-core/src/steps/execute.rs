@@ -1,55 +1,14 @@
-//! Running one step of an attempt already begun, and recording one that ran and passed before
-//! the attempt itself began — the two places a step's own outcome is turned into the journal
-//! events [`super::run_attempt_steps`] and [`super::run_one_attempt`] build on.
+//! Running one step of an attempt already begun: the one place a step's own outcome is turned
+//! into the journal events [`super::run_attempt_steps`] and [`super::run_one_attempt`] build
+//! on.
 
 use std::time::{Duration, SystemTime};
 
 use crate::queue_state::StepEnd;
 use crate::route::{Facts, Route, Signals, route};
-use crate::{
-    AttemptRun, Clock, Journal, LimitWait, Outcome, Routed, RunContext, RunError, TaskId,
-    TaskStatus, WaitReason,
-};
+use crate::{AttemptRun, LimitWait, Outcome, Routed, RunContext, RunError, TaskStatus, WaitReason};
 
-use super::{Deps, PipelineState, PreStep, Step, StepOutcome};
-
-/// Records a step, named `step`, that already ran and passed, in `duration`, with `reason` —
-/// `Some` when it has something to say even though it passed — as one of the steps of attempt
-/// `number` of task `id`'s own steps ahead of the list's own: begun and ended in the same call,
-/// since it ran before the attempt itself was begun.
-fn record_passed_step(
-    journal: &dyn Journal,
-    clock: &dyn Clock,
-    id: TaskId,
-    number: u32,
-    step: &str,
-    duration: Duration,
-    reason: Option<&str>,
-) -> Result<(), RunError> {
-    crate::attempt::begin_step(journal, clock, id, number, step, None, None)?;
-    crate::attempt::end_step(
-        journal,
-        clock,
-        id,
-        number,
-        step,
-        StepEnd {
-            run: AttemptRun {
-                duration,
-                exit_code: Some(0),
-                status: TaskStatus::Done,
-                reason,
-            },
-            reported: None,
-            limit_wait: None,
-            limit_warning: None,
-            usage: crate::Usage::default(),
-            used_model: None,
-            routed: None,
-        },
-    )?;
-    Ok(())
-}
+use super::{Deps, PipelineState, Step, StepOutcome};
 
 /// A step's end, before it is recorded: what the step itself ended at, or — when the router
 /// overrode them — what it routed them to.
@@ -188,7 +147,7 @@ fn process_step_outcome(
     run: &mut StepRunState,
     outcome: StepOutcome,
 ) -> Result<Option<(Duration, TaskStatus, Option<String>)>, RunError> {
-    let (mut ending, signals) = ending_of(outcome);
+    let (mut ending, signals) = ending_of(outcome, run);
     let Some(signals) = signals else {
         return end_one_step(deps, state, step, run, ending).map(Some);
     };
@@ -207,25 +166,41 @@ fn process_step_outcome(
     apply_route(deps, state, step, run, route, &mut ending)
 }
 
+/// `Ending` for a step that passed, recording its own [`Routed`](crate::Routed) on `run`
+/// directly when it carried one — the router never sees a step that did not fail.
+fn passed_ending(
+    duration: Duration,
+    exit_code: Option<i32>,
+    reason: Option<String>,
+    reported: Option<Outcome>,
+    routed: Option<Routed>,
+    run: &mut StepRunState,
+) -> Ending {
+    if let Some(routed) = routed {
+        run.routed = Some(routed);
+    }
+    Ending {
+        duration,
+        exit_code,
+        status: TaskStatus::Done,
+        reason,
+        reported,
+    }
+}
+
 /// How `outcome` ended its step, and the signals the router reads when it ended badly.
-fn ending_of(outcome: StepOutcome) -> (Ending, Option<Signals>) {
+fn ending_of(outcome: StepOutcome, run: &mut StepRunState) -> (Ending, Option<Signals>) {
     match outcome {
         StepOutcome::Passed {
             duration,
             exit_code,
             reason,
             reported,
-        } => {
-            let status = TaskStatus::Done;
-            let ending = Ending {
-                duration,
-                exit_code,
-                status,
-                reason,
-                reported,
-            };
-            (ending, None)
-        }
+            routed,
+        } => (
+            passed_ending(duration, exit_code, reason, reported, routed, run),
+            None,
+        ),
         StepOutcome::Ended {
             duration,
             exit_code,
@@ -363,33 +338,4 @@ fn begin_one_step(
         step.model(context, state).as_deref(),
     )?;
     Ok(())
-}
-
-/// Records every one of `pre_steps` as attempt `number` of task `id`'s own first steps, in
-/// order, via [`record_passed_step`]; their combined duration.
-///
-/// # Errors
-///
-/// Fails when the journal cannot be read or written.
-pub(crate) fn record_pre_steps(
-    journal: &dyn Journal,
-    clock: &dyn Clock,
-    id: TaskId,
-    number: u32,
-    pre_steps: &[PreStep],
-) -> Result<Duration, RunError> {
-    let mut total = Duration::ZERO;
-    for pre_step in pre_steps {
-        record_passed_step(
-            journal,
-            clock,
-            id,
-            number,
-            pre_step.name,
-            pre_step.duration,
-            pre_step.reason.as_deref(),
-        )?;
-        total += pre_step.duration;
-    }
-    Ok(total)
 }

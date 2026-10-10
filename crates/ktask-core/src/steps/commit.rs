@@ -83,6 +83,7 @@ impl Step for Commit {
                 exit_code: Some(0),
                 reason: Some("nothing was changed".to_owned()),
                 reported: None,
+                routed: None,
             },
             CommitOutcome::Committed(hash) => {
                 state.committed = Some(hash.clone());
@@ -91,6 +92,7 @@ impl Step for Commit {
                     exit_code: Some(0),
                     reason: Some(format!("committed as {hash}")),
                     reported: None,
+                    routed: None,
                 }
             }
             CommitOutcome::Refused(why) => StepOutcome::Ended {

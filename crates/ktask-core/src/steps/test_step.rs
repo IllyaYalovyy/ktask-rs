@@ -39,16 +39,27 @@ pub fn build_test_prompt(
         prompt.push('\n');
     }
     prompt.push_str("```\n");
-    let binary = binary_path.display();
     let _ = write!(
         prompt,
         "\n## Reporting\n\n\
          Try out the change above against the task and its acceptance criteria. When you are \
          done, run exactly one of these, with the outcome that fits:\n\n\
-         \x20\x20\x20\x20{binary} report --token {token} accepted\n\
-         \x20\x20\x20\x20{binary} report --token {token} rejected --reason \"<what failed>\"\n"
+         {}",
+        report_commands(token, binary_path)
     );
     prompt
+}
+
+/// The exact `report` command, run through `binary_path`, for each outcome the test step
+/// itself may report — shared by its own prompt and the nudge that asks it to run one when it
+/// ended without.
+#[must_use]
+pub(crate) fn report_commands(token: &AttemptToken, binary_path: &Path) -> String {
+    let binary = binary_path.display();
+    format!(
+        "\x20\x20\x20\x20{binary} report --token {token} accepted\n\
+         \x20\x20\x20\x20{binary} report --token {token} rejected --reason \"<what failed>\"\n"
+    )
 }
 
 /// The test step of a task's attempt.

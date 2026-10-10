@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use crate::route::Signals;
-use crate::{Outcome, TaskStatus};
+use crate::{Outcome, Routed, TaskStatus};
 
 /// What running one step produced.
 pub(crate) enum StepOutcome {
@@ -22,6 +22,10 @@ pub(crate) enum StepOutcome {
         /// The agent's own fine-grained outcome, when this step ran a provider and it reported
         /// one.
         reported: Option<Outcome>,
+        /// Set to [`Routed::Nudged`] when the step ended without reporting, was nudged to
+        /// report in the same session, and reported on the nudge. `None` for every other step,
+        /// which the router — not the step itself — is the only one to route.
+        routed: Option<Routed>,
     },
     /// It ended the whole attempt right here: `status` other than `done`, why, and — for a
     /// step that ran a provider and it reported an outcome of its own — what.

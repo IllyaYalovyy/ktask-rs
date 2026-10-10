@@ -9,7 +9,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use ktask_core::{LimitSignal, Output, Provider, ProviderCommand, StepCall};
+use ktask_core::{LimitSignal, Output, Provider, ProviderCommand, Resume, StepCall};
 
 /// The name the `echo` provider is known by.
 pub const NAME: &str = "echo";
@@ -77,13 +77,21 @@ fn detect_limit(output: &Output) -> Option<LimitSignal> {
 /// session and model it was run with, read back what an earlier invocation under the same
 /// session wrote, and read everything its own prompt said, not only the block chosen to run.
 ///
+/// A nudge's own prompt carries no block of its own — only the sentence and the exact report
+/// commands a real agent would be asked with no script to run at all — so a resumed call with
+/// none is run with the block its own session's earlier call ran instead, read back from its
+/// own transcript: the same script, now able to see on `$4` that it is the one being resumed.
+///
 /// # Errors
 ///
-/// Fails when `prompt` has no fenced `bash` code block.
+/// Fails when `prompt` has no fenced `bash` code block, and `call.resume` names no session
+/// whose own transcript has one either.
 fn command(prompt: &str, call: StepCall<'_>) -> Result<ProviderCommand, String> {
-    let block = first_bash_block(prompt).ok_or_else(|| {
-        "the prompt has no fenced bash code block for the echo provider to run".to_owned()
-    })?;
+    let block = first_bash_block(prompt)
+        .or_else(|| resumed_block(call.resume))
+        .ok_or_else(|| {
+            "the prompt has no fenced bash code block for the echo provider to run".to_owned()
+        })?;
     let (resume_session, resume_transcript) = match call.resume {
         Some(resume) => (
             resume.session.to_owned(),
@@ -105,6 +113,15 @@ fn command(prompt: &str, call: StepCall<'_>) -> Result<ProviderCommand, String> 
         ],
         stdin: block.into_bytes(),
     })
+}
+
+/// The first fenced `bash` code block in the transcript of `resume`'s own session, when it
+/// names one — the block an earlier call in that same session ran, kept under
+/// `=== prompt ===` at the top of its own transcript file. `None` when `resume` is `None`, or
+/// its transcript cannot be read or has no such block.
+fn resumed_block(resume: Option<Resume<'_>>) -> Option<String> {
+    let transcript = std::fs::read_to_string(resume?.transcript_path).ok()?;
+    first_bash_block(&transcript)
 }
 
 /// The content of the first fenced `bash` code block in `prompt`, or `None` when it has none.
@@ -152,6 +169,57 @@ mod tests {
         let result = command(
             "just some text\n```ruby\nputs 1\n```\n",
             call("tok", 1, "implementation"),
+        );
+        assert_eq!(
+            result,
+            Err("the prompt has no fenced bash code block for the echo provider to run".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_prompt_with_no_block_but_a_resume_runs_the_block_from_its_own_transcript() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let transcript_path = dir.path().join("the-session.log");
+        std::fs::write(
+            &transcript_path,
+            "=== prompt ===\n# Review\n```bash\necho from-transcript\n```\n\n=== output ===\nhi\n",
+        )
+        .expect("a written transcript");
+        let built = command(
+            "You ended without running the report command. Run exactly one of these now:\n",
+            StepCall {
+                token: "tok",
+                attempt: 1,
+                step: "review",
+                model: None,
+                resume: Some(Resume {
+                    session: "the-session",
+                    transcript_path: &transcript_path,
+                }),
+                prompt_path: Path::new("/state/prompts/the-prompt.prompt"),
+                project_dir: Path::new("/work/app"),
+            },
+        )
+        .unwrap();
+        assert_eq!(built.stdin, b"echo from-transcript\n");
+    }
+
+    #[test]
+    fn a_prompt_with_no_block_and_an_unreadable_transcript_is_still_an_error() {
+        let result = command(
+            "nothing to run here\n",
+            StepCall {
+                token: "tok",
+                attempt: 1,
+                step: "review",
+                model: None,
+                resume: Some(Resume {
+                    session: "missing-session",
+                    transcript_path: Path::new("/does/not/exist.log"),
+                }),
+                prompt_path: Path::new("/state/prompts/the-prompt.prompt"),
+                project_dir: Path::new("/work/app"),
+            },
         );
         assert_eq!(
             result,
@@ -221,7 +289,7 @@ mod tests {
                 attempt: 3,
                 step: "implementation",
                 model: None,
-                resume: Some(ktask_core::Resume {
+                resume: Some(Resume {
                     session: "the-session",
                     transcript_path: Path::new("/state/sessions/the-session.log"),
                 }),

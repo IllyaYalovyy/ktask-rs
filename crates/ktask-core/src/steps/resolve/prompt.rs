@@ -70,22 +70,32 @@ fn append_reporting(
     binary_path: &Path,
     timed_out: bool,
 ) {
+    prompt.push_str(
+        "\n## Reporting\n\n\
+         You may change files. When you are done, run exactly one of these, with the decision \
+         that fits:\n\n",
+    );
+    prompt.push_str(&report_commands(token, binary_path, timed_out));
+}
+
+/// The exact `report` command, run through `binary_path`, for each decision of attempt
+/// `token` the resolve step itself may report — shared by its own prompt and the nudge that
+/// asks it to run one when it ended without. `timed_out` adds the extra flags only a timeout
+/// decision offers.
+#[must_use]
+pub(super) fn report_commands(token: &AttemptToken, binary_path: &Path, timed_out: bool) -> String {
     let binary = binary_path.display();
     let more_time = if timed_out {
         " [--same-session] [--more-time <minutes>]"
     } else {
         ""
     };
-    let _ = write!(
-        prompt,
-        "\n## Reporting\n\n\
-         You may change files. When you are done, run exactly one of these, with the decision \
-         that fits:\n\n\
-         \x20\x20\x20\x20{binary} report --token {token} retry [--model <name>]{more_time}\n\
+    format!(
+        "\x20\x20\x20\x20{binary} report --token {token} retry [--model <name>]{more_time}\n\
          \x20\x20\x20\x20{binary} report --token {token} stop --reason \"<why>\"\n\
          \x20\x20\x20\x20{binary} report --token {token} skip --reason \"<why>\"\n\
          \x20\x20\x20\x20{binary} report --token {token} supersede --tasks <file>\n"
-    );
+    )
 }
 
 /// Appends what the router saw of the failure that came to the decider, when it kept any, with

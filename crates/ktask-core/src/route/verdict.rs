@@ -15,6 +15,9 @@ pub enum DecideWhy {
     Rejected,
     /// The project's own check failed.
     CheckFailed,
+    /// The provider ended with exit 0 and reported nothing, even after being nudged once to
+    /// report.
+    NoReport,
     /// No rule matched, so a decider reads it.
     Unmatched,
 }
@@ -31,6 +34,10 @@ pub enum Routed {
         /// How many the project allows.
         of: u32,
     },
+    /// The step ended without reporting, was nudged to run its report command in the same
+    /// session, and reported on the nudge: the attempt continues as if it had reported first
+    /// time.
+    Nudged,
     /// The failure went to the decider.
     Decide(DecideWhy),
     /// The run stopped at a fault the operator fixes.
@@ -38,12 +45,13 @@ pub enum Routed {
 }
 
 impl DecideWhy {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::TimeLimit,
         Self::RetriesExhausted,
         Self::AgentFailed,
         Self::Rejected,
         Self::CheckFailed,
+        Self::NoReport,
         Self::Unmatched,
     ];
 
@@ -56,6 +64,7 @@ impl DecideWhy {
             Self::AgentFailed => "agent-failed",
             Self::Rejected => "rejected",
             Self::CheckFailed => "check-failed",
+            Self::NoReport => "no-report",
             Self::Unmatched => "unmatched",
         }
     }
@@ -68,6 +77,7 @@ impl Routed {
         match self {
             Self::Wait => "wait".to_owned(),
             Self::Retry { n, of } => format!("retry:{n}:{of}"),
+            Self::Nudged => "nudged".to_owned(),
             Self::Decide(why) => format!("decide:{}", why.token()),
             Self::Stop(cause) => format!("stop:{}", cause.token()),
         }
@@ -78,6 +88,9 @@ impl Routed {
     pub fn from_token(token: &str) -> Option<Self> {
         if token == "wait" {
             return Some(Self::Wait);
+        }
+        if token == "nudged" {
+            return Some(Self::Nudged);
         }
         let (kind, rest) = token.split_once(':')?;
         match kind {
@@ -104,7 +117,7 @@ mod tests {
 
     #[test]
     fn every_verdict_round_trips_through_its_token() {
-        let mut every = vec![Routed::Wait, Routed::Retry { n: 2, of: 3 }];
+        let mut every = vec![Routed::Wait, Routed::Retry { n: 2, of: 3 }, Routed::Nudged];
         every.extend(DecideWhy::ALL.map(Routed::Decide));
         every.extend(StopCause::ALL.map(Routed::Stop));
         for routed in every {

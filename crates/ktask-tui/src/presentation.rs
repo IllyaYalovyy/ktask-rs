@@ -200,6 +200,7 @@ pub fn routed_label(routed: Routed) -> String {
     match routed {
         Routed::Wait => "wait".to_owned(),
         Routed::Retry { n, of } => format!("retry {n} of {of}"),
+        Routed::Nudged => "nudged".to_owned(),
         Routed::Decide(why) => format!("decide — {}", decide_label(why)),
         Routed::Stop(cause) => format!("stop — {}", stop_label(cause)),
     }
@@ -224,6 +225,7 @@ fn decide_label(why: DecideWhy) -> &'static str {
         DecideWhy::AgentFailed => "agent failed",
         DecideWhy::Rejected => "rejected",
         DecideWhy::CheckFailed => "check failed",
+        DecideWhy::NoReport => "no report",
         DecideWhy::Unmatched => "unmatched",
     }
 }
@@ -407,6 +409,11 @@ mod tests {
         assert_eq!(
             words(Routed::Stop(StopCause::GitIdentityMissing)),
             "routed: stop — no git identity"
+        );
+        assert_eq!(words(Routed::Nudged), "routed: nudged");
+        assert_eq!(
+            words(Routed::Decide(DecideWhy::NoReport)),
+            "routed: decide — no report"
         );
         assert_eq!(more_time_text(Duration::from_mins(30)), "+30 min");
     }

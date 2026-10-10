@@ -46,7 +46,6 @@ pub fn build_review_prompt(
     diff: &str,
 ) -> String {
     let mut prompt = review_header_and_diff(task, diff);
-    let binary = binary_path.display();
     let _ = write!(
         prompt,
         "\n## Reporting\n\n\
@@ -59,10 +58,22 @@ pub fn build_review_prompt(
          wrong\", \"fix\": \"what would make it right\", \"scope\": \"task\"}}\n\
          \x20\x20\x20\x20]\n\n\
          When you are done, run exactly one of these, with the outcome that fits:\n\n\
-         \x20\x20\x20\x20{binary} report --token {token} approved\n\
-         \x20\x20\x20\x20{binary} report --token {token} changes-requested --findings <file>\n"
+         {}",
+        report_commands(token, binary_path)
     );
     prompt
+}
+
+/// The exact `report` command, run through `binary_path`, for each outcome the review step
+/// itself may report — shared by its own prompt and the nudge that asks it to run one when it
+/// ended without.
+#[must_use]
+pub(crate) fn report_commands(token: &AttemptToken, binary_path: &Path) -> String {
+    let binary = binary_path.display();
+    format!(
+        "\x20\x20\x20\x20{binary} report --token {token} approved\n\
+         \x20\x20\x20\x20{binary} report --token {token} changes-requested --findings <file>\n"
+    )
 }
 
 /// The review step of a task's attempt.

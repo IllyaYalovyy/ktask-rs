@@ -41,6 +41,9 @@ pub(crate) struct Signals {
     pub(crate) killed: Option<Killed>,
     /// The end of the output of the project's check, when it ran and failed.
     pub(crate) check_output: Option<String>,
+    /// The end of what the provider wrote, when it ended with exit 0 and reported nothing —
+    /// even after being nudged once to report. `None` otherwise.
+    pub(crate) unreported_tail: Option<String>,
 }
 
 /// How a step ended, as far as routing is concerned.
@@ -97,13 +100,14 @@ impl Route {
 type Rule = fn(&Facts<'_>) -> Option<Route>;
 
 /// The rules, first match wins; a failure none of them matches goes to the decider.
-const RULES: [Rule; 6] = [
+const RULES: [Rule; 7] = [
     rate_limit,
     time_limit,
     intermittent,
     environment_fault,
     reported_failure,
     check_failed,
+    no_report,
 ];
 
 /// The verdict for a step that ended as `facts` say; `None` when it did not fail.
@@ -193,6 +197,18 @@ fn check_failed(facts: &Facts<'_>) -> Option<Route> {
             "The project's check failed ({how}). Review and testing did not run.\n\n\
              The end of its output:\n{tail}"
         )),
+    }))
+}
+
+/// The step ended with exit 0 and reported nothing, even after a nudge asked it, in the same
+/// session, to run its report command — the only way this came to the decider at all, since a
+/// provider that reports nothing on its first try is nudged before ever reaching the router.
+fn no_report(facts: &Facts<'_>) -> Option<Route> {
+    let tail = facts.signals.unreported_tail.as_ref()?;
+    Some(Route::Decide(Decision {
+        why: DecideWhy::NoReport,
+        reason: None,
+        detail: Some(format!("The end of its output:\n{tail}")),
     }))
 }
 

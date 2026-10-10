@@ -10,7 +10,7 @@ use crate::steps::{
     AttemptEnding, Deps, PipelineState, RetryInputs, Step, StepOutcome, run_agent_step,
     run_one_step,
 };
-use crate::{AttemptRun, Journal, RunContext, RunError, Task, TaskId, TaskStatus};
+use crate::{AttemptRun, AttemptToken, Journal, RunContext, RunError, Task, TaskId, TaskStatus};
 
 /// The journal name of the resolve step.
 pub const RESOLVE_STEP: &str = "resolve";
@@ -18,6 +18,14 @@ pub const RESOLVE_STEP: &str = "resolve";
 mod prompt;
 
 use prompt::{CurrentOutcome, build_resolve_prompt};
+
+/// The resolve step's own `report` command, for each decision, for the nudge that asks it to
+/// run one when it ended without — never the extra flags a timeout decision alone offers,
+/// since a nudge is never that.
+#[must_use]
+pub(crate) fn report_commands(token: &AttemptToken, binary_path: &std::path::Path) -> String {
+    prompt::report_commands(token, binary_path, false)
+}
 
 /// The resolve step of a task's attempt: run only when the step ahead of it in the pipeline
 /// ended `failed` or `failed-unknown` and the task has attempts left — [`crate::steps::mod`]'s
@@ -104,6 +112,7 @@ fn mark_reset_tree(
         duration,
         exit_code,
         reported,
+        routed,
         ..
     } = outcome
     else {
@@ -117,6 +126,7 @@ fn mark_reset_tree(
         exit_code,
         reason,
         reported,
+        routed,
     })
 }
 

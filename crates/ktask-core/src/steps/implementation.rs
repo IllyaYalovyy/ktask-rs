@@ -148,17 +148,28 @@ fn build_prompt_with_history(
         prompt.push('\n');
     }
     append_history(&mut prompt, earlier, diff);
-    let binary = binary_path.display();
     let _ = write!(
         prompt,
         "\n## Reporting\n\n\
          When you are done, run exactly one of these, with the outcome that fits:\n\n\
-         \x20\x20\x20\x20{binary} report --token {token} done\n\
+         {}",
+        report_commands(token, binary_path)
+    );
+    prompt
+}
+
+/// The exact `report` command, run through `binary_path`, for each outcome the implementation
+/// step itself may report — shared by its own prompt and the nudge that asks it to run one
+/// when it ended without.
+#[must_use]
+pub(crate) fn report_commands(token: &AttemptToken, binary_path: &std::path::Path) -> String {
+    let binary = binary_path.display();
+    format!(
+        "\x20\x20\x20\x20{binary} report --token {token} done\n\
          \x20\x20\x20\x20{binary} report --token {token} failed --reason \"<why>\"\n\
          \x20\x20\x20\x20{binary} report --token {token} needs-input --reason \"<why>\"\n\
          \x20\x20\x20\x20{binary} report --token {token} too-large --reason \"<why>\"\n"
-    );
-    prompt
+    )
 }
 
 /// The prompt for attempt `token` of `task`, with no earlier attempt: its title, body and
