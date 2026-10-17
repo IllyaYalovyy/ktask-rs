@@ -728,6 +728,9 @@ impl App {
             DialogKind::Repair(id) => {
                 self.remediate(id, dialog.value(0) == "Insert repair task")?
             }
+            DialogKind::RemediationPending | DialogKind::RemediationReview { .. } => {
+                return Err("Persistent remediation proposal is unavailable in demo mode".into());
+            }
             DialogKind::Models(id) => self.save_models(dialog, id)?,
             DialogKind::Resolve(id) => self.resolve_failed(dialog, id)?,
             DialogKind::Reject(id) => self.reject_revision(dialog, id)?,

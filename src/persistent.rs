@@ -12,6 +12,22 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(crate) struct ProposalJob {
+    target: VersionedTask,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle:
+        Option<std::thread::JoinHandle<Result<crate::runner::codex::RemediationProposal, String>>>,
+}
+impl Drop for ProposalJob {
+    fn drop(&mut self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 impl App {
     pub(crate) fn stored_cost(&self, id: usize) -> String {
         cost_label(self.stored.get(&id).and_then(|t| {
@@ -103,8 +119,14 @@ impl App {
         if !self.enabled(action) {
             return false;
         }
+        if matches!(action, Action::Diagnose) {
+            if let Err(error) = self.propose_remediation() {
+                self.message(error);
+            }
+            return true;
+        }
         let result = match action {
-            Action::Run | Action::Retry | Action::Diagnose => self
+            Action::Run | Action::Retry => self
                 .instance
                 .paths()
                 .map_err(|e| e.to_string())
@@ -195,7 +217,7 @@ impl App {
         };
         match result {
             Ok(()) => self.committed(match action {
-                Action::Run | Action::Retry | Action::Diagnose => {
+                Action::Run | Action::Retry => {
                     "Supervisor started · close TUI safely · Pause stops execution"
                 }
                 Action::Pause => "Pause requested · waiting for worker shutdown and cleanup",
@@ -204,6 +226,135 @@ impl App {
             Err(error) => self.message(error),
         }
         true
+    }
+
+    fn propose_remediation(&mut self) -> Result<(), String> {
+        let id = self.current().ok_or("No current task")?.id;
+        let task = self
+            .service
+            .as_mut()
+            .unwrap()
+            .task(id as i64)
+            .map_err(|e| e.to_string())?
+            .ok_or("Current task disappeared")?;
+        let definition = task.definition().definition.clone();
+        let model = definition.models[3]
+            .clone()
+            .ok_or("Configure a remediation model first")?;
+        let paths = self.instance.paths().map_err(|e| e.to_string())?;
+        let evidence = self
+            .service
+            .as_ref()
+            .unwrap()
+            .remediation_evidence(id as i64, &paths.state)
+            .map_err(|e| e.to_string())?;
+        let cwd = self
+            .service
+            .as_ref()
+            .unwrap()
+            .project_root()
+            .map_err(|e| e.to_string())?;
+        let target = self.target(id)?;
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop = cancelled.clone();
+        self.proposal_job = Some(ProposalJob {
+            target,
+            cancelled,
+            handle: Some(std::thread::spawn(move || {
+                crate::runner::codex::propose_remediation(
+                    &stop,
+                    &model,
+                    &definition.title,
+                    &definition.goal,
+                    &evidence,
+                    &paths.cache.join("workers"),
+                    &cwd,
+                )
+                .map_err(|e| e.to_string())
+            })),
+        });
+        self.dialog = Some(Dialog::new(
+            DialogKind::RemediationPending,
+            "Requesting remediation proposal",
+            "Reading failure evidence with the remediation model.\nCancel stops the request and changes nothing. Timeout: 120 seconds.",
+            vec![],
+        ));
+        Ok(())
+    }
+
+    pub(crate) fn poll_remediation(&mut self) -> bool {
+        let Some(job) = &self.proposal_job else {
+            return false;
+        };
+        if !matches!(
+            self.dialog.as_ref().map(|d| &d.kind),
+            Some(DialogKind::RemediationPending)
+        ) {
+            self.proposal_job.take();
+            return true;
+        }
+        if !job.handle.as_ref().unwrap().is_finished() {
+            return false;
+        }
+        let mut job = self.proposal_job.take().unwrap();
+        let result = job
+            .handle
+            .take()
+            .unwrap()
+            .join()
+            .unwrap_or_else(|_| Err("Remediation worker panicked".into()));
+        self.dialog = None;
+        match result {
+            Ok(proposal) => self.show_remediation(job.target, proposal),
+            Err(error) => self.message(error),
+        }
+        true
+    }
+
+    fn show_remediation(
+        &mut self,
+        target: VersionedTask,
+        proposal: crate::runner::codex::RemediationProposal,
+    ) {
+        let id = target.id as usize;
+        let (title, body) = match &proposal {
+            crate::runner::codex::RemediationProposal::Escalate { model, reason } => (
+                "Remediation proposal · escalate model".to_owned(),
+                format!(
+                    "Execution model: {}/{} · {}\nReason: {reason}\n\nApply creates an approved revision; failed attempts remain unchanged. Cancel changes nothing.",
+                    model.provider,
+                    model.model,
+                    model.effort.as_deref().unwrap_or("no effort")
+                ),
+            ),
+            crate::runner::codex::RemediationProposal::Insert { tasks, reason } => (
+                "Remediation proposal · insert repair tasks".to_owned(),
+                format!(
+                    "{} repair task(s) before current:\n{}\nReason: {reason}\n\nApproval follows planner preference. Cancel changes nothing.",
+                    tasks.len(),
+                    tasks
+                        .iter()
+                        .map(|t| format!(
+                            "• {}\n  {}\n  Criteria: {}",
+                            t.title,
+                            t.goal,
+                            t.criteria.join("; ")
+                        ))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ),
+            ),
+        };
+        let expected = Some(target);
+        self.dialog = Some(Dialog::new(
+            crate::dialog::DialogKind::RemediationReview { id, proposal },
+            &title,
+            &body,
+            vec![],
+        ));
+        if let Some(dialog) = &mut self.dialog {
+            dialog.expected = expected;
+        }
     }
 
     /// Called after opening an existing form. Capture the revision version once, not at Save.
@@ -218,6 +369,7 @@ impl App {
             | DialogKind::Models(id)
             | DialogKind::Resolve(id)
             | DialogKind::Reject(id) => Some(id),
+            DialogKind::RemediationReview { id, .. } => Some(id),
             _ => None,
         };
         if dialog.expected.is_some() {
@@ -343,6 +495,46 @@ impl App {
                 .ok_or_else(|| "Missing task version; reopen the form".to_owned())
         };
         match &dialog.kind {
+            DialogKind::RemediationPending => return Ok(false),
+            DialogKind::RemediationReview { id: _, proposal } => {
+                let mut repairs = Vec::new();
+                let model = match proposal {
+                    crate::runner::codex::RemediationProposal::Escalate { model, .. } => {
+                        Some(model.clone())
+                    }
+                    crate::runner::codex::RemediationProposal::Insert { tasks, .. } => {
+                        let defaults = self
+                            .service
+                            .as_ref()
+                            .unwrap()
+                            .defaults()
+                            .map_err(|e| e.to_string())?;
+                        repairs = tasks
+                            .iter()
+                            .map(|t| Definition {
+                                title: t.title.clone(),
+                                goal: t.goal.clone(),
+                                kind: domain::Kind::Ai,
+                                criteria: t.criteria.clone(),
+                                models: defaults.clone(),
+                                attempt_limit: Some(3),
+                                timeout_ms: Some(600_000),
+                            })
+                            .collect();
+                        None
+                    }
+                };
+                let reason = match proposal {
+                    crate::runner::codex::RemediationProposal::Escalate { reason, .. }
+                    | crate::runner::codex::RemediationProposal::Insert { reason, .. } => reason,
+                };
+                let ready = !self.review_required;
+                self.service
+                    .as_mut()
+                    .unwrap()
+                    .apply_remediation(target()?, model, &repairs, reason, ready)
+                    .map_err(|e| e.to_string())?;
+            }
             DialogKind::Answer(_) => {
                 self.service
                     .as_mut()

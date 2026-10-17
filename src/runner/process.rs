@@ -34,6 +34,47 @@ pub struct Invocation {
     pub scratch_root: PathBuf,
     pub worker_lock: PathBuf,
 }
+
+/// Use the isolated guardian so descendants cannot retain pipes or outlive cancellation.
+pub fn capture_readonly(
+    spec: &Invocation,
+    cancelled: &AtomicBool,
+    timeout: Duration,
+) -> Result<(i32, Vec<u8>, Vec<u8>)> {
+    let mut worker = Worker::spawn(&std::env::current_exe()?, spec)?;
+    let started = std::time::Instant::now();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    loop {
+        if cancelled.load(Ordering::Relaxed) || started.elapsed() >= timeout {
+            worker.join()?;
+            return Err(Error::Conflict("Remediation cancelled or timed out".into()));
+        }
+        match worker.messages.recv_timeout(Duration::from_millis(25)) {
+            Ok(Message::Output { stream, bytes }) => {
+                let output = if stream == "stdout" {
+                    &mut stdout
+                } else {
+                    &mut stderr
+                };
+                if output.len() + bytes.len() > 8 * 1024 * 1024 {
+                    worker.join()?;
+                    return Err(Error::Conflict("Remediation response exceeds limit".into()));
+                }
+                output.extend(bytes);
+            }
+            Ok(Message::Exit { code }) => {
+                worker.join()?;
+                return Ok((code, stdout, stderr));
+            }
+            Ok(Message::Error(error)) => return Err(Error::Conflict(error)),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(Error::Conflict("Remediation worker disconnected".into()));
+            }
+        }
+    }
+}
 #[derive(Serialize, Deserialize)]
 pub enum Message {
     Output { stream: String, bytes: Vec<u8> },
@@ -142,7 +183,7 @@ pub fn worker() -> Result<()> {
     let stdin = io::stdin();
     let mut input = stdin.lock();
     let mut line = String::new();
-    input.by_ref().take(4 * 1024 * 1024).read_line(&mut line)?;
+    input.by_ref().take(32 * 1024 * 1024).read_line(&mut line)?;
     let spec: Invocation = serde_json::from_str(&line).map_err(io::Error::other)?;
     drop(input);
     let mut lease = lock(&spec.worker_lock)?;

@@ -181,7 +181,9 @@ fn panel(title: impl Into<Line<'static>>) -> Block<'static> {
     Block::bordered()
         .border_type(BorderType::Rounded)
         .title(title)
-        .style(Style::new().bg(PANEL))
+        // Explicit text color: popups clear the root style, and a terminal's default
+        // foreground may be dark.
+        .style(Style::new().bg(PANEL).fg(TEXT))
         .border_style(Style::new().fg(MUTED))
 }
 
@@ -677,7 +679,9 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
             .style(Style::new().fg(if dialog.error.is_empty() { MUTED } else { WARN })),
         error,
     );
-    let mut controls = if dialog.read_only() {
+    let mut controls = if matches!(dialog.kind, DialogKind::RemediationPending) {
+        vec![("Cancel", Action::Cancel)]
+    } else if dialog.read_only() {
         vec![("Close", Action::Cancel)]
     } else {
         vec![("Apply", Action::Submit), ("Cancel", Action::Cancel)]

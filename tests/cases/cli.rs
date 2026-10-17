@@ -65,6 +65,158 @@ fn add(root: &Path, title: &str) -> Result<i64> {
 }
 
 #[test]
+fn cli_remediate_json_returns_proposal_receipts_and_exit_four_for_noncurrent() -> Result {
+    use ktask_rs_mk3::application::{Definition, Kind, ModelConfig, Service, VersionedTask};
+    use ktask_rs_mk3::storage::Database;
+    use std::{fs, os::unix::fs::PermissionsExt};
+    for action in ["insert", "escalate"] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        let mut service = Service::open(
+            Database::open_in(&root.join("state/ktask-dev"))?,
+            root,
+            None,
+        )?;
+        let mut definition = Definition {
+            title: "Failed for CLI".into(),
+            goal: "Exercise remediation CLI".into(),
+            kind: Kind::Ai,
+            criteria: vec!["Evidence is preserved".into()],
+            models: std::array::from_fn(|_| None),
+            attempt_limit: Some(2),
+            timeout_ms: Some(600_000),
+        };
+        for model in &mut definition.models {
+            *model = Some(ModelConfig {
+                provider: "codex".into(),
+                model: "fixture-model".into(),
+                effort: Some("high".into()),
+            });
+        }
+        let id = service.create(&[definition], None, true)?[0];
+        let current = service.current_task()?.unwrap();
+        let run = service.begin_run(
+            VersionedTask {
+                id,
+                version: current.version,
+            },
+            "cli-failure",
+            "base",
+        )?;
+        service.finish_run(&run, "failed", Some("check"), "fixture failure", None)?;
+        let other = service.create(
+            &[Definition {
+                title: "Not current".into(),
+                goal: "Remain pending".into(),
+                kind: Kind::Ai,
+                criteria: vec!["No change".into()],
+                models: std::array::from_fn(|_| None),
+                attempt_limit: Some(1),
+                timeout_ms: Some(1000),
+            }],
+            None,
+            true,
+        )?[0];
+        if action == "escalate" {
+            let config = root.join("config/ktask-dev");
+            let before = service.preferences(&config)?;
+            let mut reviewed = before.clone();
+            reviewed.planner_approval =
+                ktask_rs_mk3::application::preferences::PlannerApproval::ReviewRequired;
+            service.save_preferences(&config, &before, &reviewed)?;
+        }
+        let attempt_before = format!("{:?}", service.task(id)?.unwrap().attempts);
+        drop(service);
+
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin)?;
+        let proposal = serde_json::json!({"action":"insert","tasks":[{"title":"Repair via CLI","goal":"Fix the failure before retry.","criteria":["Check passes"]}],"reason":"The failed check needs a focused repair."});
+        let proposal = if action == "escalate" {
+            serde_json::json!({"action":"escalate","model":{"provider":"codex","model":"stronger-model","effort":"max"},"reason":"Use stronger reasoning for the failure."})
+        } else {
+            proposal
+        };
+        let events = [serde_json::json!({"type":"thread.started","thread_id":"cli-fixture"}), serde_json::json!({"type":"item.completed","item":{"type":"agent_message","text":serde_json::json!({"proposal":proposal}).to_string()}}), serde_json::json!({"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}})].iter().map(serde_json::Value::to_string).collect::<Vec<_>>().join("\n") + "\n";
+        let output_file = root.join("events.jsonl");
+        fs::write(&output_file, events)?;
+        let executable = bin.join("codex");
+        fs::write(
+            &executable,
+            format!(
+                "#!/bin/sh\ncat >/dev/null\ncat '{}'\n",
+                output_file.display()
+            ),
+        )?;
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))?;
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let mut command = process(DEV, root);
+        command
+            .env("PATH", &path)
+            .arg("--json")
+            .args(["remediate", &id.to_string()]);
+        let preview = json_result(command.output()?, 0)?;
+        assert_eq!(preview["data"]["proposal"]["action"], action);
+        assert_eq!(preview["data"]["receipts"].as_array().unwrap().len(), 0);
+        let mut command = process(DEV, root);
+        command
+            .env("PATH", &path)
+            .arg("--json")
+            .args(["remediate", &id.to_string(), "--apply"]);
+        let applied = json_result(command.output()?, 0)?;
+        assert_eq!(applied["schema_version"], 1);
+        assert_eq!(applied["data"]["receipts"].as_array().unwrap().len(), 1);
+        let mut verify = Service::open(
+            Database::open_in(&root.join("state/ktask-dev"))?,
+            root,
+            None,
+        )?;
+        let original = verify.task(id)?.unwrap();
+        assert_eq!(format!("{:?}", original.attempts), attempt_before);
+        if action == "escalate" {
+            assert_eq!(
+                original.definition().definition.models[0]
+                    .as_ref()
+                    .unwrap()
+                    .model,
+                "stronger-model"
+            );
+            assert_eq!(original.revisions.len(), 2);
+        }
+        let snapshot = verify.snapshot()?;
+        let receipt = applied["data"]["receipts"][0].as_i64().unwrap();
+        let inserted = snapshot
+            .queue
+            .iter()
+            .find(|task| task.id == receipt)
+            .unwrap();
+        assert_eq!(inserted.definition().lifecycle, "ready");
+        assert_eq!(
+            inserted.definition().actor.as_deref(),
+            Some("ai: remediator")
+        );
+        let rejected = json(root, &["remediate", &other.to_string()], 4)?;
+        assert_eq!(rejected["error"]["code"], "conflict");
+        println!(
+            "CLI REMEDIATE PREVIEW\n{}\nCLI REMEDIATE APPLY\n{}",
+            preview, applied
+        );
+        let mut command = process(DEV, root);
+        fs::write(
+            &executable,
+            "#!/bin/sh\ncat >/dev/null\necho provider-failed >&2\nexit 9\n",
+        )?;
+        command
+            .env("PATH", &path)
+            .args(["--json", "remediate", &id.to_string(), "--apply"]);
+        let failed = json_result(command.output()?, 4)?;
+        assert_eq!(failed["error"]["code"], "conflict");
+        assert_eq!(verify.task(id)?.unwrap().version, original.version);
+        println!("CLI REMEDIATE FAILURE\n{failed}");
+    }
+    Ok(())
+}
+
+#[test]
 fn cli_help_usage_and_read_commands_do_not_create_storage() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();
@@ -736,7 +888,7 @@ fn self_host_script_configures_a_private_checkout_with_the_given_executable() ->
     assert_eq!(models["execution"]["provider"], "codex");
     assert_eq!(models["execution"]["model"], "cheap");
     assert_eq!(models["execution"]["effort"], "low");
-    assert_eq!(models["review"]["model"], "gpt-6-astra");
+    assert_eq!(models["review"]["model"], "gpt-6-sol");
     assert!(models["review"]["effort"].is_null(), "{models}");
     assert_eq!(models["validation"]["effort"], "high");
     assert_eq!(checks["data"]["checks"].as_array().map(Vec::len), Some(1));

@@ -32,7 +32,7 @@ impl Kind {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct ModelConfig {
     pub provider: String,
     pub model: String,

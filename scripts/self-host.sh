@@ -13,11 +13,11 @@
 #   --instance NAME  Expected instance reported by --paths (default: ktask).
 # Environment overrides:
 #   KTASK_PROVIDER             (codex)
-#   KTASK_EXECUTION_MODEL      KTASK_EXECUTION_EFFORT      (gpt-6-luna, medium)
-#   KTASK_PLANNING_MODEL       KTASK_PLANNING_EFFORT       (gpt-6-astra, high)
-#   KTASK_REVIEW_MODEL         KTASK_REVIEW_EFFORT         (gpt-6-astra, high)
-#   KTASK_VALIDATION_MODEL     KTASK_VALIDATION_EFFORT     (gpt-6-astra, high)
-#   KTASK_REMEDIATION_MODEL    KTASK_REMEDIATION_EFFORT    (gpt-6-astra, high)
+#   KTASK_EXECUTION_MODEL      KTASK_EXECUTION_EFFORT      (gpt-6-sol, high)
+#   KTASK_PLANNING_MODEL       KTASK_PLANNING_EFFORT       (gpt-6-sol, high)
+#   KTASK_REVIEW_MODEL         KTASK_REVIEW_EFFORT         (gpt-6-sol, high)
+#   KTASK_VALIDATION_MODEL     KTASK_VALIDATION_EFFORT     (gpt-6-sol, high)
+#   KTASK_REMEDIATION_MODEL    KTASK_REMEDIATION_EFFORT    (gpt-6-sol, high)
 #   KTASK_CHECK_COMMAND        KTASK_CHECK_TIMEOUT_MS      (make check, 600000)
 set -euo pipefail
 
@@ -98,11 +98,11 @@ set_default() {
         run model-default "$role" --provider "$provider" --model "$model"
     fi
 }
-set_default execution "${KTASK_EXECUTION_MODEL:-gpt-6-luna}" "${KTASK_EXECUTION_EFFORT-medium}"
-set_default planning "${KTASK_PLANNING_MODEL:-gpt-6-astra}" "${KTASK_PLANNING_EFFORT-high}"
-set_default review "${KTASK_REVIEW_MODEL:-gpt-6-astra}" "${KTASK_REVIEW_EFFORT-high}"
-set_default validation "${KTASK_VALIDATION_MODEL:-gpt-6-astra}" "${KTASK_VALIDATION_EFFORT-high}"
-set_default remediation "${KTASK_REMEDIATION_MODEL:-gpt-6-astra}" "${KTASK_REMEDIATION_EFFORT-high}"
+set_default execution "${KTASK_EXECUTION_MODEL:-gpt-6-sol}" "${KTASK_EXECUTION_EFFORT-high}"
+set_default planning "${KTASK_PLANNING_MODEL:-gpt-6-sol}" "${KTASK_PLANNING_EFFORT-high}"
+set_default review "${KTASK_REVIEW_MODEL:-gpt-6-sol}" "${KTASK_REVIEW_EFFORT-high}"
+set_default validation "${KTASK_VALIDATION_MODEL:-gpt-6-sol}" "${KTASK_VALIDATION_EFFORT-high}"
+set_default remediation "${KTASK_REMEDIATION_MODEL:-gpt-6-sol}" "${KTASK_REMEDIATION_EFFORT-high}"
 
 echo
 echo "Checks:"

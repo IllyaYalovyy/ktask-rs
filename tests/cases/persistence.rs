@@ -4,6 +4,7 @@ use ktask_rs_mk3::{
     storage::Database,
 };
 use std::path::Path;
+use std::{fs, os::unix::fs::PermissionsExt};
 
 fn definition(title: &str) -> Definition {
     Definition {
@@ -46,6 +47,438 @@ fn key(t: &mut Terminal, keys: &str, text: &str) -> Result<String> {
 fn quit(t: &mut Terminal) -> Result {
     t.send("\x03")?;
     t.finish()
+}
+
+fn table_contents(root: &Path, table: &str) -> Result<Vec<String>> {
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let mut stmt = db.connection().prepare(&format!("SELECT * FROM {table}"))?;
+    let count = stmt.column_count();
+    Ok(stmt
+        .query_map([], |row| {
+            (0..count)
+                .map(|i| {
+                    row.get::<_, rusqlite::types::Value>(i)
+                        .map(|v| format!("{v:?}"))
+                })
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map(|v| v.join("|"))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+fn attempts_contents(root: &Path) -> Result<Vec<String>> {
+    table_contents(root, "attempts")
+}
+fn storage_contents(root: &Path) -> Result<Vec<Vec<String>>> {
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let mut stmt = db
+        .connection()
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")?;
+    let tables = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    tables
+        .iter()
+        .map(|name| table_contents(root, name))
+        .collect()
+}
+
+fn failed_task(root: &Path) -> Result<(i64, i64)> {
+    let mut service = service(root)?;
+    let mut d = definition("Failed current");
+    for role in 0..4 {
+        d.models[role] = Some(ModelConfig {
+            provider: "codex".into(),
+            model: "fixture-model".into(),
+            effort: Some("high".into()),
+        });
+    }
+    let id = service.create(&[d], None, true)?[0];
+    let target = target(&mut service, id)?;
+    let run = service.begin_run(target, "fixture-token", "fixture-base")?;
+    service.output(&run, "stderr", "Check failed: transcript evidence")?;
+    for role in ["review", "validation"] {
+        let model = ModelConfig {
+            provider: "codex".into(),
+            model: "fixture-model".into(),
+            effort: None,
+        };
+        let step = service.start_ai_step(&run, role, &model, "fixture")?;
+        service.criterion(&run, &step, 1, false, &format!("{role} criterion evidence"))?;
+        service.finish_step(&step, false, &format!("{role} structured finding"), None)?;
+    }
+    service.finish_run(
+        &run,
+        "failed",
+        Some("check"),
+        "Failed check with review finding",
+        None,
+    )?;
+    Ok((id, run.attempt))
+}
+
+fn provider_fixture(root: &Path, proposal: serde_json::Value, fail: bool) -> Result<()> {
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin)?;
+    let fixture = root.join("provider-events.jsonl");
+    let body = if fail {
+        "not-json\n".to_owned()
+    } else {
+        let message = serde_json::json!({"proposal": proposal}).to_string();
+        [serde_json::json!({"type":"thread.started","thread_id":"fixture"}),
+         serde_json::json!({"type":"item.completed","item":{"type":"agent_message","text":message}}),
+         serde_json::json!({"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}})]
+            .iter().map(serde_json::Value::to_string).collect::<Vec<_>>().join("\n") + "\n"
+    };
+    fs::write(&fixture, body)?;
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}/provider-args'\ncat > '{}/provider-prompt'\nwhile [ \"$#\" -gt 0 ]; do if [ \"$1\" = --output-schema ]; then shift; cat \"$1\" > '{}/provider-schema'; break; fi; shift; done\ncat '{}'\n",
+        root.display(),
+        root.display(),
+        root.display(),
+        fixture.display()
+    );
+    let executable = bin.join("codex");
+    fs::write(&executable, script)?;
+    fs::set_permissions(executable, fs::Permissions::from_mode(0o755))?;
+    Ok(())
+}
+
+#[test]
+fn failed_current_remediation_proposals_use_real_pty_apply_cancel_and_provider_errors() -> Result {
+    use ktask_rs_mk3::application::preferences::PlannerApproval;
+    for mouse in [false, true] {
+        for approval in [PlannerApproval::Automatic, PlannerApproval::ReviewRequired] {
+            for (name, proposal, expected) in [
+                (
+                    "escalate",
+                    serde_json::json!({"action":"escalate","model":{"provider":"codex","model":"fixture-strong","effort":"max"},"reason":"The failed check needs a stronger execution model."}),
+                    "Remediation proposal · escalate model",
+                ),
+                (
+                    "insert",
+                    serde_json::json!({"action":"insert","tasks":[{"title":"Repair the check boundary","goal":"Fix the failing boundary before retrying current.","criteria":["The check passes"]},{"title":"Verify repaired boundary","goal":"Confirm the repair.","criteria":["Regression passes"]}],"reason":"Isolate the failing boundary first."}),
+                    "Remediation proposal · insert repair tasks",
+                ),
+                (
+                    "cancel",
+                    serde_json::json!({"action":"escalate","model":{"provider":"codex","model":"cancelled-model","effort":"high"},"reason":"Cancel must preserve state."}),
+                    "Remediation proposal · escalate model",
+                ),
+            ] {
+                exercise_remediation(name, proposal, expected, mouse, approval)?;
+            }
+        }
+    }
+
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (id, _) = failed_task(root)?;
+    let before = service(root)?.task(id)?.unwrap();
+    let storage_before = storage_contents(root)?;
+    let events_before = service(root)?.events_after(0, 1000)?.len();
+    provider_fixture(root, serde_json::Value::Null, true)?;
+    let mut terminal = terminal(root)?;
+    terminal.send("d")?;
+    let screen = terminal.screen("provider error", |s| s.contains("Invalid Codex event"))?;
+    println!("REMEDIATION INVALID PROVIDER\n{screen}");
+    assert_eq!(storage_contents(root)?, storage_before);
+    let after = service(root)?.task(id)?.unwrap();
+    assert_eq!(after.revisions.len(), 1);
+    assert_eq!(after.version, before.version);
+    assert_eq!(service(root)?.events_after(0, 1000)?.len(), events_before);
+    quit(&mut terminal)?;
+    Ok(())
+}
+
+fn exercise_remediation(
+    name: &str,
+    proposal: serde_json::Value,
+    expected: &str,
+    mouse: bool,
+    approval: ktask_rs_mk3::application::preferences::PlannerApproval,
+) -> Result {
+    use ktask_rs_mk3::application::preferences::{Continuation, PlannerApproval, Preferences};
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (id, attempt) = failed_task(root)?;
+    let mut service = service(root)?;
+    let before = service.task(id)?.unwrap();
+    let event_count = service.events_after(0, 1000)?.len();
+    if approval == PlannerApproval::ReviewRequired {
+        let config = root.join("config/ktask-dev");
+        let expected_preferences = service.preferences(&config)?;
+        service.save_preferences(
+            &config,
+            &expected_preferences,
+            &Preferences {
+                version: 0,
+                mouse: true,
+                planner_approval: approval,
+                continuation: Continuation::Single,
+            },
+        )?;
+    }
+    let storage_before = storage_contents(root)?;
+    let attempts_before = attempts_contents(root)?;
+    provider_fixture(root, proposal, false)?;
+    let mut terminal = terminal(root)?;
+    terminal.screen("failed current", |s| s.contains("Failed current"))?;
+    if mouse {
+        terminal.click("d Remediate")?;
+    } else {
+        terminal.send("d")?;
+    }
+    let screen = terminal.screen(expected, |s| s.contains(expected))?;
+    println!("REMEDIATION {name} mouse={mouse} approval={approval:?} PROPOSAL\n{screen}");
+    assert!(fs::read_to_string(root.join("provider-args"))?.contains("sandbox_mode=\"read-only\""));
+    let schema: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("provider-schema"))?)?;
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(schema["required"], serde_json::json!(["proposal"]));
+    assert!(schema["properties"]["proposal"]["anyOf"].is_array());
+    assert!(fs::read_to_string(root.join("provider-prompt"))?.contains("transcript evidence"));
+    if name == "cancel" {
+        if mouse {
+            terminal.click("Cancel")?;
+        } else {
+            terminal.send("\x1b")?;
+        }
+    } else if mouse {
+        terminal.click("Apply")?;
+    } else {
+        terminal.send("\x13")?;
+    }
+    if name != "cancel" {
+        println!(
+            "REMEDIATION {name} APPLIED\n{}",
+            terminal.screen("applied", |s| s.contains("Saved to SQLite"))?
+        );
+    } else {
+        println!(
+            "REMEDIATION CANCELLED\n{}",
+            terminal.screen("cancelled", |s| !s.contains("Remediation proposal"))?
+        );
+    }
+    let after = service.task(id)?.unwrap();
+    assert_eq!(attempts_contents(root)?, attempts_before);
+    assert_eq!(after.attempts[0].id, attempt);
+    assert_eq!(after.attempts[0].state, "failed");
+    if name == "cancel" {
+        assert_eq!(storage_contents(root)?, storage_before);
+        assert_eq!(after.revisions.len(), before.revisions.len());
+        assert_eq!(after.version, before.version);
+        assert_eq!(service.events_after(0, 1000)?.len(), event_count);
+    } else {
+        verify_applied_remediation(root, id, name, approval)?;
+    }
+    quit(&mut terminal)?;
+    Ok(())
+}
+
+fn verify_applied_remediation(
+    root: &Path,
+    id: i64,
+    name: &str,
+    approval: ktask_rs_mk3::application::preferences::PlannerApproval,
+) -> Result {
+    use ktask_rs_mk3::application::preferences::PlannerApproval;
+    let mut service = service(root)?;
+    let after = service.task(id)?.unwrap();
+    match name {
+        "escalate" => {
+            assert_eq!(after.revisions.len(), 2);
+            let revision = after.revisions.last().unwrap();
+            assert_eq!(revision.lifecycle, "ready");
+            assert_eq!(after.definition().number, revision.number);
+            assert_eq!(revision.actor.as_deref(), Some("ai: remediator"));
+            assert_eq!(
+                revision.definition.models[0].as_ref().unwrap().model,
+                "fixture-strong"
+            );
+            let db = Database::open_in(&root.join("state/ktask-dev"))?;
+            let reason: String = db.connection().query_row(
+                "SELECT change_reason FROM task_revisions WHERE task_id=?1 AND revision=?2",
+                rusqlite::params![id, revision.number],
+                |row| row.get(0),
+            )?;
+            assert_eq!(reason, "The failed check needs a stronger execution model.");
+        }
+        "insert" => {
+            let snapshot = service.snapshot()?;
+            assert_eq!(snapshot.queue.len(), 3);
+            assert_eq!(
+                snapshot.queue[1].definition().definition.title,
+                "Verify repaired boundary"
+            );
+            assert_eq!(snapshot.queue[2].id, id);
+            assert_eq!(
+                snapshot.queue[0].definition().definition.title,
+                "Repair the check boundary"
+            );
+            assert_eq!(
+                snapshot.queue[0].definition().lifecycle,
+                if approval == PlannerApproval::Automatic {
+                    "ready"
+                } else {
+                    "draft"
+                }
+            );
+            assert_eq!(
+                snapshot.queue[0].revisions[0].actor.as_deref(),
+                Some("ai: remediator")
+            );
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+#[test]
+fn remediation_stalled_provider_can_cancel_and_quit_without_leaking_children() -> Result {
+    for input in ["keyboard", "mouse", "quit"] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        let (_, attempt) = failed_task(root)?;
+        // Fill stdin beyond pipe capacity, while the fixture never reads its prompt.
+        let db = Database::open_in(&root.join("state/ktask-dev"))?;
+        db.connection().execute(
+            "INSERT INTO attempt_output(attempt_id,sequence,recorded_at_ms,stream,content) VALUES (?1,2,1,'stderr',?2)",
+            rusqlite::params![attempt, "界".repeat(100_000)],
+        )?;
+        provider_fixture(root, serde_json::Value::Null, false)?;
+        fs::write(
+            root.join("bin/codex"),
+            format!(
+                "#!/bin/sh\necho $$ > '{0}/provider-pid'\nsleep 60 &\necho $! > '{0}/descendant-pid'\nwait\n",
+                root.display()
+            ),
+        )?;
+        let before = storage_contents(root)?;
+        let mut terminal = terminal(root)?;
+        terminal.send("d")?;
+        println!(
+            "REMEDIATION STALLED {input}\n{}",
+            terminal.screen("pending proposal", |s| s
+                .contains("Requesting remediation proposal"))?
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !root.join("descendant-pid").exists() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        terminal.send("\r")?;
+        terminal.screen("pending Enter is inert", |s| {
+            s.contains("Requesting remediation proposal") && !s.contains("Simulation")
+        })?;
+        match input {
+            "mouse" => terminal.click("Cancel")?,
+            "quit" => quit(&mut terminal)?,
+            _ => terminal.send("\x1b")?,
+        }
+        if input != "quit" {
+            println!(
+                "REMEDIATION REQUEST CANCELLED {input}\n{}",
+                terminal.screen("cancelled pending request", |s| !s
+                    .contains("Requesting remediation proposal"))?
+            );
+            terminal.send("2")?;
+            println!(
+                "RESPONSIVE QUEUE {input}\n{}",
+                terminal.screen("responsive queue", |s| s.contains("Queue · 1 shown"))?
+            );
+            quit(&mut terminal)?;
+        }
+        for file in ["provider-pid", "descendant-pid"] {
+            let pid = fs::read_to_string(root.join(file))?;
+            assert!(
+                !Path::new("/proc").join(pid.trim()).exists(),
+                "leaked {file}: {pid}"
+            );
+        }
+        assert_eq!(storage_contents(root)?, before);
+        let workers = root.join("cache/ktask-dev/workers");
+        assert!(
+            !fs::read_dir(workers)?.any(|e| e
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("run-"))
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn remediation_reaps_pipe_holding_descendants_and_reports_provider_failure() -> Result {
+    for fail in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        failed_task(root)?;
+        provider_fixture(
+            root,
+            serde_json::json!({"action":"escalate","model":{"provider":"codex","model":"stronger","effort":"high"},"reason":"Repair the failed boundary."}),
+            false,
+        )?;
+        fs::write(
+            root.join("bin/codex"),
+            format!(
+                "#!/bin/sh\ncat >/dev/null\nsleep 60 &\necho $! > '{0}/descendant-pid'\n{1}\n",
+                root.display(),
+                if fail {
+                    "echo fixture-provider-failed >&2\nexit 9"
+                } else {
+                    "cat provider-events.jsonl"
+                }
+            ),
+        )?;
+        let before = storage_contents(root)?;
+        let mut terminal = terminal(root)?;
+        terminal.send("d")?;
+        let expected = if fail {
+            "fixture-provider-failed"
+        } else {
+            "Remediation proposal · escalate model"
+        };
+        println!(
+            "REMEDIATION PIPE HOLDER fail={fail}\n{}",
+            terminal.screen(expected, |s| s.contains(expected))?
+        );
+        quit(&mut terminal)?;
+        let pid = fs::read_to_string(root.join("descendant-pid"))?;
+        assert!(!Path::new("/proc").join(pid.trim()).exists());
+        assert_eq!(storage_contents(root)?, before);
+    }
+    Ok(())
+}
+
+#[test]
+fn remediation_large_unicode_evidence_retains_latest_output_transcripts_and_findings() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (id, attempt) = failed_task(root)?;
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let output = format!("{}LATEST_OUTPUT", "界".repeat(1_500_000));
+    db.connection().execute(
+        "INSERT INTO attempt_output(attempt_id,sequence,recorded_at_ms,stream,content) VALUES (?1,2,1,'stderr',?2)",
+        rusqlite::params![attempt, output],
+    )?;
+    let transcript = format!("{}FAILED_TRANSCRIPT", "界".repeat(400_000));
+    fs::write(root.join("state/ktask-dev/check.log"), &transcript)?;
+    db.connection().execute("INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,'failed check','text/plain','check.log',?2,1)", rusqlite::params![attempt,transcript.len() as i64])?;
+    let evidence = service(root)?.remediation_evidence(id, &root.join("state/ktask-dev"))?;
+    assert!(evidence.len() <= 4 * 1024 * 1024);
+    for expected in [
+        "LATEST_OUTPUT",
+        "FAILED_TRANSCRIPT",
+        "review structured finding",
+        "validation structured finding",
+        "review criterion evidence",
+        "validation criterion evidence",
+    ] {
+        assert!(evidence.contains(expected), "missing {expected}");
+    }
+    Ok(())
 }
 
 #[test]

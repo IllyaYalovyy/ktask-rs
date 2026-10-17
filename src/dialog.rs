@@ -10,6 +10,11 @@ pub enum DialogKind {
     Delete(usize),
     Move(usize),
     Repair(usize),
+    RemediationPending,
+    RemediationReview {
+        id: usize,
+        proposal: crate::runner::codex::RemediationProposal,
+    },
     Models(usize),
     Resolve(usize),
     Reject(usize),
@@ -186,7 +191,11 @@ impl Dialog {
     pub fn read_only(&self) -> bool {
         matches!(
             self.kind,
-            DialogKind::Help | DialogKind::Stats | DialogKind::Events | DialogKind::Inspect { .. }
+            DialogKind::RemediationPending
+                | DialogKind::Help
+                | DialogKind::Stats
+                | DialogKind::Events
+                | DialogKind::Inspect { .. }
         )
     }
 

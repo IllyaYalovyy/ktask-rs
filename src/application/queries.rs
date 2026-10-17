@@ -1,5 +1,6 @@
 use super::*;
 use rusqlite::Connection;
+use std::io::{Read, Seek};
 
 #[derive(Serialize)]
 pub struct Event {
@@ -38,6 +39,81 @@ fn complete_task(db: &Connection, mut task: Task) -> Result<Task> {
 }
 
 impl Service {
+    /// Gather the latest attempt's durable output and retained check transcripts for a proposal.
+    pub fn remediation_evidence(
+        &self,
+        task: i64,
+        artifact_root: &std::path::Path,
+    ) -> Result<String> {
+        let attempt: Option<i64> = self.db.connection().query_row(
+            "SELECT id FROM attempts WHERE project_id=?1 AND task_id=?2 ORDER BY number DESC LIMIT 1",
+            params![self.project_id, task],
+            |r| r.get(0),
+        ).optional()?;
+        let Some(attempt) = attempt else {
+            return Ok("No previous attempt output is recorded.".into());
+        };
+        let mut evidence = String::from(
+            "Latest attempt output, including execution, checks, review, and validation:\n",
+        );
+        let mut output = self.db.connection().prepare("SELECT stream,content FROM attempt_output WHERE attempt_id=?1 ORDER BY sequence DESC LIMIT 2000")?;
+        let rows = output.query_map([attempt], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut chunks = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        chunks.reverse();
+        for (stream, text) in chunks {
+            evidence.push_str(&format!("\n[{stream}] {text}"));
+            retain_tail(&mut evidence, 2 * 1024 * 1024);
+        }
+        // Reserve independent budgets: verbose runner output must not erase check failures.
+        retain_tail(&mut evidence, 2 * 1024 * 1024);
+        let mut transcripts = String::new();
+        let mut artifacts = self.db.connection().prepare("SELECT name,relative_path FROM artifacts WHERE attempt_id=?1 AND pruned_at_ms IS NULL ORDER BY id")?;
+        let paths = artifacts.query_map([attempt], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for (name, relative) in paths.collect::<rusqlite::Result<Vec<_>>>()? {
+            let relative = std::path::Path::new(&relative);
+            if relative
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+            {
+                continue;
+            }
+            let path = artifact_root.join(relative);
+            if let Ok(mut file) = std::fs::File::open(path) {
+                let start = file.metadata()?.len().saturating_sub(1024 * 1024);
+                file.seek(std::io::SeekFrom::Start(start))?;
+                let mut bytes = Vec::new();
+                file.take(1024 * 1024).read_to_end(&mut bytes)?;
+                transcripts.push_str(&format!(
+                    "\n\nFailed check transcript ({name}):\n{}",
+                    String::from_utf8_lossy(&bytes)
+                ));
+                retain_tail(&mut transcripts, 1024 * 1024);
+            }
+        }
+        evidence.push_str(&transcripts);
+        // Structured findings can be absent from output, or precede a verbose final check.
+        let mut reports = String::new();
+        let mut stmt = self.db.connection().prepare(
+            "SELECT 'attempt', coalesce(report,outcome,'') FROM attempts WHERE id=?1
+             UNION ALL SELECT role, report FROM attempt_steps WHERE attempt_id=?1 AND report IS NOT NULL
+             UNION ALL SELECT s.role || ' criterion ' || r.criterion_ordinal, r.evidence
+             FROM criterion_results r JOIN attempt_steps s ON s.id=r.step_id
+             WHERE s.attempt_id=?1 AND r.evidence IS NOT NULL"
+        )?;
+        for row in stmt.query_map([attempt], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })? {
+            let (role, report) = row?;
+            reports.push_str(&format!("\n[{role} finding] {report}"));
+            retain_tail(&mut reports, 1024 * 1024);
+        }
+        evidence.push_str(&reports);
+        Ok(evidence)
+    }
     /// Includes deleted tasks for inspection/restore, but never another project's task.
     pub fn task(&mut self, id: i64) -> Result<Option<Task>> {
         let tx = self.db.connection_mut().transaction()?;
@@ -151,7 +227,7 @@ impl Service {
 }
 
 fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
-    let mut stmt = db.prepare_cached("SELECT revision, lifecycle, title, goal, kind, attempt_limit, attempt_timeout_ms, decided_by_kind || ': ' || decided_by FROM task_revisions WHERE task_id = ?1 ORDER BY revision")?;
+    let mut stmt = db.prepare_cached("SELECT revision, lifecycle, title, goal, kind, attempt_limit, attempt_timeout_ms, coalesce(decided_by_kind, created_by_kind) || ': ' || coalesce(decided_by, created_by) FROM task_revisions WHERE task_id = ?1 ORDER BY revision")?;
     let mut revisions = stmt
         .query_map([task], |r| {
             Ok(Revision {
@@ -224,4 +300,15 @@ fn attempts(db: &Connection, task: i64) -> Result<Vec<Attempt>> {
             .collect::<rusqlite::Result<Vec<_>>>()?;
     }
     Ok(attempts)
+}
+
+/// Keep the newest evidence, advancing over any partial UTF-8 character.
+fn retain_tail(text: &mut String, limit: usize) {
+    let mut start = text.len().saturating_sub(limit);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    if start > 0 {
+        text.drain(..start);
+    }
 }

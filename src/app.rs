@@ -97,6 +97,7 @@ pub struct Catalog {
 
 pub struct App {
     pub service: Option<crate::application::Service>,
+    pub(crate) proposal_job: Option<crate::persistent::ProposalJob>,
     pub stored: BTreeMap<usize, crate::application::Task>,
     pub durable_undo: Option<crate::application::VersionedTask>,
     pub project_name: String,
@@ -148,6 +149,7 @@ impl App {
         };
         Self {
             service: None,
+            proposal_job: None,
             stored: BTreeMap::new(),
             durable_undo: None,
             project_name: "demo workspace".into(),
@@ -508,6 +510,9 @@ impl App {
         }
     }
     pub fn tick(&mut self) -> bool {
+        if self.poll_remediation() {
+            return true;
+        }
         if self.service.is_some() {
             if self.dialog.is_none() && self.last_tick.elapsed() >= Duration::from_millis(500) {
                 self.last_tick = Instant::now();

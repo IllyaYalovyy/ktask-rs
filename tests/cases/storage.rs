@@ -26,7 +26,7 @@ pub(super) fn task(db: &Connection, project: i64, key: &str) -> rusqlite::Result
     let tx = db.unchecked_transaction()?;
     tx.execute("INSERT INTO tasks(project_id, order_key, lifecycle, origin, created_at_ms, updated_at_ms) VALUES (?1, ?2, 'ready', 'human', 100, 100)", params![project, key])?;
     let id = tx.last_insert_rowid();
-    tx.execute("INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, created_at_ms, decided_at_ms, decided_by_kind, decided_by) VALUES (?1, 1, 'ready', 'ai', 'Task title', 'Task goal', 100, 100, 'human', 'test-user')", [id])?;
+    tx.execute("INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, created_by_kind, created_by, created_at_ms, decided_at_ms, decided_by_kind, decided_by) VALUES (?1, 1, 'ready', 'ai', 'Task title', 'Task goal', 'human', 'test-user', 100, 100, 'human', 'test-user')", [id])?;
     tx.execute(
         "INSERT INTO acceptance_criteria VALUES (?1, 1, 1, 'Goal is met')",
         [id],
@@ -192,14 +192,14 @@ fn rejected_and_retired_revisions_do_not_replace_ready_and_drafts_are_separate()
     let p = project(store.connection(), "revisions")?;
     let id = task(store.connection(), p, "5")?;
     for (number, state) in [(2, "rejected"), (3, "retired")] {
-        store.connection().execute("INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal,
+        store.connection().execute("INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, created_by_kind, created_by,
             created_at_ms, decided_at_ms, decided_by_kind, decided_by)
-            VALUES (?1, ?2, ?3, 'ai', 'Unusable title', 'Unusable goal', 100, 110, 'human', 'owner')",
+            VALUES (?1, ?2, ?3, 'ai', 'Unusable title', 'Unusable goal', 'human', 'owner', 100, 110, 'human', 'owner')",
             params![id, number, state])?;
     }
     store.connection().execute(
-        "INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, created_at_ms)
-        VALUES (?1, 4, 'draft', 'ai', 'Pending escalation', 'Pending goal', 120)",
+        "INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, created_by_kind, created_by, created_at_ms)
+        VALUES (?1, 4, 'draft', 'ai', 'Pending escalation', 'Pending goal', 'ai', 'remediator', 120)",
         [id],
     )?;
     assert_eq!(
@@ -394,7 +394,7 @@ fn task_override_and_revision_escalation_do_not_rewrite_attempt_failure() -> Res
     let p = project(db, "retry")?;
     let id = task(db, p, "5")?;
     db.execute("INSERT INTO attempts(project_id, task_id, revision, number, state, execution_token, started_at_ms, finished_at_ms, outcome, failure_category) VALUES (?1, ?2, 1, 1, 'failed', 'failed-attempt', 100, 110, 'Tests failed', 'check')", params![p, id])?;
-    db.execute("INSERT INTO task_revisions SELECT task_id, 2, 'ready', kind, title, goal, 'Increase execution effort', NULL, NULL, 120, 120, 'ai', 'remediator' FROM task_revisions WHERE task_id = ?1", [id])?;
+    db.execute("INSERT INTO task_revisions SELECT task_id, 2, 'ready', kind, title, goal, 'Increase execution effort', 'ai', 'remediator', NULL, NULL, 120, 120, 'ai', 'remediator' FROM task_revisions WHERE task_id = ?1", [id])?;
     db.execute("INSERT INTO revision_models SELECT task_id, 2, role, provider, 'stronger-model', 'high' FROM revision_models WHERE task_id = ?1 AND revision = 1", [id])?;
     assert_eq!(scalar(db, "SELECT revision FROM current_tasks")?, 2);
     assert_eq!(scalar(db, "SELECT revision FROM attempts")?, 1);

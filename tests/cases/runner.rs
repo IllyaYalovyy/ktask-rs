@@ -413,6 +413,42 @@ fn questions_require_answer_and_reuse_attempt() -> Result {
     Ok(())
 }
 #[test]
+fn waiting_attempt_can_be_abandoned_then_resolved_without_spending_budget() -> Result {
+    let f = Fixture::new()?;
+    f.provider("question")?;
+    f.add("Question")?;
+    let refused = f
+        .process()
+        .args(["abandon", "1", "--reason", "x"])
+        .output()?;
+    assert_eq!(refused.status.code(), Some(4));
+    f.ok(&["run"])?;
+    f.state("waiting")?;
+    f.ok(&["abandon", "1", "--reason", "Owner stopped this attempt"])?;
+    f.state("interrupted")?;
+    let shown = f.ok(&["show", "1"])?;
+    assert_eq!(shown["attempts_used"], 0);
+    let attempt = &shown["attempts"].as_array().unwrap()[0];
+    assert_eq!(attempt["state"], "interrupted");
+    assert!(
+        attempt["outcome"]
+            .as_str()
+            .unwrap()
+            .contains("Owner stopped")
+    );
+    f.ok(&[
+        "resolve",
+        "1",
+        "--outcome",
+        "failed-skipped",
+        "--reason",
+        "Superseded by manual work",
+    ])?;
+    assert_eq!(f.ok(&["list", "--scope", "history"])?["count"], 1);
+    f.no_scratch()?;
+    Ok(())
+}
+#[test]
 fn supervisor_death_stops_worker_and_recovery_is_explicit() -> Result {
     let f = Fixture::new()?;
     f.provider("slow")?;

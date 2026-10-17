@@ -142,7 +142,8 @@ An unresolved failure never advances the queue. Human work/approval/questions st
 
 CLI: `run` executes current; `run --queue` continues, and `--background` detaches. `resume` and
 `retry` are aliases that still target only current. `pause ID` requests shutdown; `answer ID
---text TEXT` saves an answer, then `resume` continues. `recover` marks a crashed supervisor's
+--text TEXT` saves an answer, then `resume` continues. `abandon ID --reason TEXT` gives up a paused or
+waiting attempt nobody will resume (it spends no budget); then resolve the task or run it again. `recover` marks a crashed supervisor's
 attempt interrupted only when repository and worker locks are free. Inspect its work first.
 If the guardian itself died without confirming cleanup, execution stays blocked; only after
 stopping orphaned processes and preserving work, use `recover --confirm-worker-cleanup`.

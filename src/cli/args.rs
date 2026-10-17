@@ -83,6 +83,13 @@ pub enum Command {
         #[arg(long, value_parser=nonempty)]
         text: String,
     },
+    /// Give up a paused or waiting attempt nobody will resume; then resolve or run again.
+    Abandon {
+        #[command(flatten)]
+        target: Target,
+        #[arg(long, value_parser = nonempty)]
+        reason: String,
+    },
     /// Recover an abandoned attempt, only when both supervisor and worker leases are free.
     Recover {
         /// Operator confirms all orphaned workers are stopped and useful work is preserved.
@@ -166,6 +173,13 @@ pub enum Command {
         outcome: Outcome,
         #[arg(long, value_parser = nonempty)]
         reason: String,
+    },
+    /// Ask the configured remediation model for a proposal; --apply commits it.
+    Remediate {
+        #[arg(value_parser = positive)]
+        id: i64,
+        #[arg(long)]
+        apply: bool,
     },
     /// Acknowledge current Human work; creates no AI attempt.
     Ack {

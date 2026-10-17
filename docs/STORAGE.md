@@ -483,6 +483,8 @@ Versioned definition, limits, and approval decision. Select the newest ready rev
 | `title` | TEXT | no | Nonblank task title. |
 | `goal` | TEXT | no | Nonblank task goal. |
 | `change_reason` | TEXT | yes | Why this revision was created. |
+| `created_by_kind` | TEXT | no | human, ai, or system; creator attribution, including drafts. |
+| `created_by` | TEXT | no | Nonblank creator identifier. |
 | `attempt_limit` | INTEGER | yes | Maximum charged attempts for the task across revisions; positive, NULL = unlimited. |
 | `attempt_timeout_ms` | INTEGER | yes | Active-time limit per attempt in milliseconds; positive, NULL = unlimited. Waiting/paused time is excluded. |
 | `created_at_ms` | INTEGER | no | Creation time. |
@@ -597,8 +599,8 @@ can perform creation and approval in one command. Import repeats creation under 
 BEGIN IMMEDIATE;
 INSERT INTO tasks(project_id, order_key, lifecycle, origin, created_at_ms, updated_at_ms)
 VALUES (:project_id, :order_key, 'new', :origin, :now_ms, :now_ms) RETURNING id;
-INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, attempt_limit, attempt_timeout_ms, created_at_ms)
-VALUES (:task_id, 1, 'draft', :kind, :title, :goal, :attempt_limit, :attempt_timeout_ms, :now_ms);
+INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, created_by_kind, created_by, attempt_limit, attempt_timeout_ms, created_at_ms)
+VALUES (:task_id, 1, 'draft', :kind, :title, :goal, :actor_kind, :actor, :attempt_limit, :attempt_timeout_ms, :now_ms);
 INSERT INTO acceptance_criteria VALUES (:task_id, 1, 1, :criterion);
 INSERT INTO revision_models(task_id, revision, role, provider, model, effort)
 SELECT :task_id, 1, role, provider, model, effort FROM project_models

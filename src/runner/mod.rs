@@ -1,4 +1,4 @@
-mod codex;
+pub(crate) mod codex;
 mod output;
 pub(crate) mod process;
 mod workspace;
@@ -564,6 +564,17 @@ fn execute(
             }
         }
     }
+}
+
+/// Abandon a paused/waiting attempt while holding the runner lease, so a live supervisor
+/// (for example one sleeping through a rate-limit wait) can never lose its attempt underneath it.
+pub fn abandon(
+    service: &mut Service,
+    target: crate::application::VersionedTask,
+    reason: &str,
+) -> Result<()> {
+    let _workspace = Workspace::acquire(&service.project_root()?)?;
+    service.abandon_run(target, reason)
 }
 
 /// Launch the exact supervisor executable, never a PATH-selected ktask or a rebuild target.

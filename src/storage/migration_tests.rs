@@ -156,8 +156,8 @@ fn table_rebuild_keeps_referenced_data_and_invalid_rebuild_rolls_back() -> Resul
          INSERT INTO projects VALUES (1, 'Keep project', x'2f776f726b', 100);
          INSERT INTO tasks(id, project_id, order_key, lifecycle, origin, created_at_ms, updated_at_ms)
              VALUES (1, 1, '8', 'new', 'human', 100, 100);
-         INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, created_at_ms)
-             VALUES (1, 1, 'draft', 'ai', 'Keep task', 'Keep goal', 100);
+         INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, created_by_kind, created_by, created_at_ms)
+             VALUES (1, 1, 'draft', 'ai', 'Keep task', 'Keep goal', 'ai', 'test', 100);
          INSERT INTO acceptance_criteria VALUES (1, 1, 1, 'Keep check');
          COMMIT;",
     )?;

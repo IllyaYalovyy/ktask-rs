@@ -26,9 +26,9 @@ fn insert_revision(
     actor: &Actor,
 ) -> Result<()> {
     definition.validate()?;
-    tx.execute("INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, attempt_limit, attempt_timeout_ms, created_at_ms, decided_at_ms, decided_by_kind, decided_by)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        params![task, number, if ready { "ready" } else { "draft" }, definition.kind.as_str(), definition.title, definition.goal, definition.attempt_limit, definition.timeout_ms, now,
+    tx.execute("INSERT INTO task_revisions(task_id, revision, lifecycle, kind, title, goal, created_by_kind, created_by, attempt_limit, attempt_timeout_ms, created_at_ms, decided_at_ms, decided_by_kind, decided_by)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![task, number, if ready { "ready" } else { "draft" }, definition.kind.as_str(), definition.title, definition.goal, actor.kind.as_str(), actor.name, definition.attempt_limit, definition.timeout_ms, now,
             ready.then_some(now), ready.then_some(actor.kind.as_str()), ready.then_some(&actor.name)])?;
     for (index, criterion) in definition.criteria.iter().enumerate() {
         tx.execute("INSERT INTO acceptance_criteria(task_id, revision, ordinal, description) VALUES (?1, ?2, ?3, ?4)", params![task, number, index as i64 + 1, criterion])?;
@@ -42,6 +42,114 @@ fn insert_revision(
 }
 
 impl Service {
+    /// Apply a validated remediation proposal atomically to failed current.
+    pub fn apply_remediation(
+        &mut self,
+        target: VersionedTask,
+        model: Option<ModelConfig>,
+        repairs: &[Definition],
+        reason: &str,
+        ready: bool,
+    ) -> Result<Vec<i64>> {
+        require(
+            !reason.trim().is_empty(),
+            "A remediation reason is required",
+        )?;
+        require(
+            model.is_some() ^ !repairs.is_empty(),
+            "Choose one remediation strategy",
+        )?;
+        let existing = if model.is_some() {
+            Some(
+                self.task(target.id)?
+                    .ok_or_else(|| Error::Conflict("Task disappeared".into()))?
+                    .definition()
+                    .definition
+                    .clone(),
+            )
+        } else {
+            None
+        };
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (lifecycle, status) = checked(&tx, self.project_id, target)?;
+        require(
+            lifecycle == "ready" && status == "failed",
+            "Only failed current can be remediated",
+        )?;
+        let current: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM current_tasks WHERE project_id=?1",
+                [self.project_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        require(
+            current == Some(target.id),
+            "Only failed current can be remediated",
+        )?;
+        let now = now_ms();
+        let remediator = Actor {
+            kind: ActorKind::Ai,
+            name: "remediator".into(),
+        };
+        let mut ids = Vec::new();
+        if let Some(model) = model {
+            let mut definition = existing.expect("escalation definition loaded");
+            require(
+                definition.models[0].as_ref() != Some(&model),
+                "Escalation must change the execution model or effort",
+            )?;
+            definition.models[0] = Some(model);
+            let number: i64 = tx.query_row(
+                "SELECT max(revision)+1 FROM task_revisions WHERE task_id=?1",
+                [target.id],
+                |r| r.get(0),
+            )?;
+            insert_revision(&tx, target.id, number, &definition, true, now, &remediator)?;
+            tx.execute(
+                "UPDATE task_revisions SET change_reason=?3 WHERE task_id=?1 AND revision=?2",
+                params![target.id, number, reason],
+            )?;
+            bump(&tx, target, now)?;
+            event(
+                &tx,
+                self.project_id,
+                target.id,
+                now,
+                "remediation.escalated",
+                reason,
+            )?;
+            ids.push(target.id);
+        } else {
+            for definition in repairs {
+                definition.validate()?;
+            }
+            let keys = ordering::keys_before(&tx, self.project_id, Some(target.id), repairs.len())?;
+            for (definition, key) in repairs.iter().zip(keys) {
+                tx.execute("INSERT INTO tasks(project_id,order_key,lifecycle,origin,created_at_ms,updated_at_ms) VALUES (?1,?2,?3,'remediator',?4,?4)", params![self.project_id,key,if ready {"ready"} else {"new"},now])?;
+                let id = tx.last_insert_rowid();
+                insert_revision(&tx, id, 1, definition, ready, now, &remediator)?;
+                tx.execute(
+                    "UPDATE task_revisions SET change_reason=?2 WHERE task_id=?1 AND revision=1",
+                    params![id, reason],
+                )?;
+                event(
+                    &tx,
+                    self.project_id,
+                    id,
+                    now,
+                    "task.remediation_inserted",
+                    reason,
+                )?;
+                ids.push(id);
+            }
+        }
+        tx.commit()?;
+        Ok(ids)
+    }
     /// Atomic batch command, also used for imports. No partially imported queue on failure.
     pub fn create(
         &mut self,

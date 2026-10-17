@@ -134,6 +134,17 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
                 text: "Pause requested; worker shutdown pending\n".into(),
             })
         }
+        Command::Abandon {
+            target: input,
+            reason,
+        } => {
+            let (_, target) = target(service, input)?;
+            crate::runner::abandon(service, target, reason)?;
+            Ok(Reply {
+                data: json!({"action":"abandoned","id":target.id}),
+                text: "Attempt abandoned; resolve the task or run it again\n".into(),
+            })
+        }
         Command::Answer {
             target: input,
             text,
@@ -345,6 +356,7 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
             })
         }
         Command::Stats => stats(service),
+        Command::Remediate { .. } => Err(Failure::usage("remediate command was not dispatched")),
     }
 }
 
