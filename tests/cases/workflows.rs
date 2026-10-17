@@ -48,10 +48,10 @@ fn all_screens_mouse_navigation_minimum_size_and_help() -> Result {
     ] {
         click(&mut t, tab, marker)?;
         t.resize(70, 22)?;
-        let screen = t.screen("minimum view", |s| {
-            s.contains(marker) && s.lines().count() <= 22
+        let screen = t.screen("minimum view with controls", |s| {
+            // Wait for the application redraw, not the parser's cropped old frame.
+            s.contains(marker) && s.lines().count() <= 22 && s.contains("q Quit")
         })?;
-        assert!(screen.contains("q Quit"), "controls clipped:\n{screen}");
         println!("MINIMUM {tab}\n{screen}");
         t.resize(120, 30)?;
         t.screen("restored", |s| s.contains(marker))?;
@@ -397,10 +397,18 @@ fn resize_modal_unicode_editing_and_quit_paths() -> Result {
     println!("MINIMUM INSERT FORM\n{form}");
     key(&mut t, "界🙂 task\x1b[D\x7fX\x1b[H!\x1b[F", "!界🙂 taXk")?;
     t.resize(40, 10)?;
-    t.screen("tiny", |s| s.contains("Please resize"))?;
+    println!(
+        "TINY RESIZE\n{}",
+        t.screen("tiny", |s| s.contains("Please resize"))?
+    );
     key(&mut t, "?j2", "Please resize")?;
     t.resize(70, 22)?;
-    t.screen("restored form", |s| s.contains("!界🙂 taXk"))?;
+    println!(
+        "RESTORED FORM\n{}",
+        t.screen("restored form", |s| {
+            s.contains("!界🙂 taXk") && s.contains("Cancel")
+        })?
+    );
     key(&mut t, "\x1b", "Queue · 120 shown")?;
     key(&mut t, "/\x1b[200~#98\x1b[201~", "Search: #98")?;
     t.resize(40, 10)?;

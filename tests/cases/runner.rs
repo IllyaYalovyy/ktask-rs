@@ -61,6 +61,7 @@ impl Fixture {
         c.current_dir(&self.root)
             .env_clear()
             .env("HOME", self.scratch.path())
+            .env("TMPDIR", self.scratch.path())
             .env("XDG_STATE_HOME", self.scratch.path().join("state"))
             .env("XDG_CACHE_HOME", self.scratch.path().join("cache"))
             .env("XDG_CONFIG_HOME", self.scratch.path().join("config"))
@@ -119,8 +120,10 @@ while [ "$#" -gt 0 ]; do
  shift
 done
 prompt=$(cat)
+printf '%s' "$prompt" > "$HOME/prompt-$model"
 [ -n "$session" ] || session="session-$model-$$"
 printf '{{"type":"thread.started","thread_id":"%s"}}\n' "$session"
+printf '%s\n' "$model" >> "$HOME/provider-invocations"
 mkdir -p "$TMPDIR/generated/deep"
 printf debris > "$TMPDIR/generated/deep/file"
 case '{mode}' in
@@ -158,6 +161,128 @@ impl Drop for Running {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+#[test]
+fn check_evidence_preserves_unicode_split_across_pipe_reads() -> Result {
+    for exit_code in [0, 7] {
+        let f = Fixture::new()?;
+        let command = format!(
+            r"printf '\342'; printf '\360' >&2; sleep 0.1; printf '\234\223\n'; printf '\237\231\202\n' >&2; exit {exit_code}"
+        );
+        f.ok(&["check-set", "build", "--command", &command])?;
+        f.add("Unicode evidence")?;
+        let result = f.process().args(["run", "--json"]).output()?;
+        assert_eq!(
+            result.status.code(),
+            Some(if exit_code == 0 { 0 } else { 4 })
+        );
+        let db = f.db()?;
+        let artifacts = db
+            .connection()
+            .prepare("SELECT relative_path,size_bytes FROM artifacts ORDER BY attempt_id")?
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert_eq!(artifacts.len(), if exit_code == 0 { 1 } else { 3 });
+        for (relative, size) in artifacts {
+            let text =
+                fs::read_to_string(f.scratch.path().join("state/ktask-dev").join(&relative))?;
+            assert!(matches!(text.as_str(), "✓\n🙂\n" | "🙂\n✓\n"), "{text:?}");
+            assert_eq!(size as usize, text.len());
+            println!("UTF-8 CHECK EVIDENCE (exit={exit_code}, {relative})\n{text}");
+        }
+        let task = f.ok(&["show", "1"])?;
+        for attempt in task["attempts"].as_array().unwrap() {
+            let logs = attempt["logs"].to_string();
+            assert!(logs.contains('✓') && logs.contains('🙂'));
+            assert!(!logs.contains('\u{fffd}'));
+        }
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn reviewers_receive_durable_supervisor_evidence_not_stale_attempt_claims() -> Result {
+    let f = Fixture::new()?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "if [ ! -f \"$HOME/checked-once\" ]; then touch \"$HOME/checked-once\"; printf 'previous failed check\\n'; exit 7; fi; printf 'real check output\\n'; printf 'stderr evidence\\n' >&2; test -f result.txt",
+    ])?;
+    f.add("Evidence handoff")?;
+    f.ok(&["run"])?;
+    let db = f.db()?;
+    let (relative, size): (String, i64) = db.connection().query_row(
+        "SELECT relative_path,size_bytes FROM artifacts WHERE attempt_id=2",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let artifact = f.scratch.path().join("state/ktask-dev").join(relative);
+    let text = fs::read_to_string(&artifact)?;
+    assert!(text.contains("real check output\n"));
+    assert!(text.contains("stderr evidence\n"));
+    assert!(!text.contains("execution:"));
+    assert!(!text.contains("previous failed check"));
+    assert_eq!(size as usize, text.len());
+    let failed_relative: String = db.connection().query_row(
+        "SELECT relative_path FROM artifacts WHERE attempt_id=1",
+        [],
+        |r| r.get(0),
+    )?;
+    let failed_artifact = f
+        .scratch
+        .path()
+        .join("state/ktask-dev")
+        .join(failed_relative);
+    assert_eq!(
+        fs::read_to_string(&failed_artifact)?,
+        "previous failed check\n"
+    );
+    let remediation = fs::read_to_string(f.scratch.path().join("prompt-remediation"))?;
+    assert!(remediation.contains(failed_artifact.to_str().unwrap()));
+    assert!(remediation.contains("Check exited 7"));
+    for role in ["review", "validation"] {
+        let prompt = fs::read_to_string(f.scratch.path().join(format!("prompt-{role}")))?;
+        assert!(prompt.contains(artifact.to_str().unwrap()));
+        assert!(prompt.contains("\"exit_code\":0"));
+        assert!(prompt.contains("read-only"));
+        assert!(!prompt.contains("Previous attempt:"));
+        assert!(!prompt.contains(failed_artifact.to_str().unwrap()));
+        assert!(!prompt.contains("Check exited 7"));
+    }
+    let execution = fs::read_to_string(f.scratch.path().join("prompt-execution"))?;
+    assert!(execution.contains("temporary files only under the supplied TMPDIR"));
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn failed_check_transcript_is_retained_for_remediation() -> Result {
+    let f = Fixture::new()?;
+    f.ok(&[
+        "check-set",
+        "build",
+        "--command",
+        "printf 'concrete failure evidence\\n'; exit 1",
+    ])?;
+    f.add("Preserve failure evidence")?;
+    let result = f.process().args(["run", "--json"]).output()?;
+    assert_eq!(result.status.code(), Some(4));
+    let prompt = fs::read_to_string(f.scratch.path().join("prompt-remediation"))?;
+    let db = f.db()?;
+    let relative: String = db.connection().query_row(
+        "SELECT relative_path FROM artifacts WHERE attempt_id=2",
+        [],
+        |r| r.get(0),
+    )?;
+    let artifact = f.scratch.path().join("state/ktask-dev").join(relative);
+    assert!(prompt.contains(artifact.to_str().unwrap()));
+    assert_eq!(fs::read_to_string(artifact)?, "concrete failure evidence\n");
+    assert!(!f.scratch.path().join("prompt-review").exists());
+    f.no_scratch()?;
+    Ok(())
 }
 
 #[test]
@@ -458,29 +583,88 @@ fn escaped_descendants_are_stopped_and_duplicate_runners_are_rejected() -> Resul
 }
 #[test]
 fn real_tui_question_answer_mouse_and_keyboard_resume() -> Result {
-    let f = Fixture::new()?;
-    f.provider("question")?;
-    f.add("Ask owner")?;
-    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
-    t.screen("current", |s| s.contains("Ask owner"))?;
-    t.send("r")?;
-    println!(
-        "QUESTION\n{}",
-        t.screen("question", |s| s.contains("QUESTION"))?
-    );
-    t.click("Answer")?;
-    println!(
-        "ANSWER FORM\n{}",
-        t.screen("answer", |s| s.contains("Which content?"))?
-    );
-    t.send("Human answer: verified")?;
-    t.click("Apply")?;
-    t.screen("saved answer", |s| s.contains("Saved to SQLite"))?;
-    t.send("r")?;
-    t.screen("complete", |s| s.contains("Queue complete."))?;
-    t.send("q")?;
-    t.finish()?;
-    f.no_scratch()?;
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("question")?;
+        f.add("Ask owner")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        t.screen("current", |s| s.contains("Ask owner"))?;
+        if mouse {
+            t.click("r Run/resume")?;
+        } else {
+            t.send("r")?;
+        }
+        let waiting = t.screen("question", |s| s.contains("QUESTION"))?;
+        println!("QUESTION CONTROLS (mouse={mouse})\n{waiting}");
+        assert!(waiting.contains("w Answer"));
+        assert!(!waiting.contains("r Run/resume"));
+        let waiting_task = f.ok(&["show", "1"])?;
+        let attempts = waiting_task["attempts"].as_array().unwrap();
+        assert_eq!(attempts.len(), 1);
+        let attempt_id = attempts[0]["id"].clone();
+        let invocations = f.scratch.path().join("provider-invocations");
+        let calls_before = fs::read_to_string(&invocations)?;
+        assert_eq!(calls_before, "execution\n");
+        let log = f.scratch.path().join("state/ktask-dev/runner-1.log");
+        let log_before = fs::read(&log)?;
+        t.send("r")?;
+        let still_waiting = t.screen("premature Run rejected", |s| {
+            s.contains("Unavailable here") && s.contains("QUESTION")
+        })?;
+        println!("PREMATURE RUN REJECTED (mouse={mouse})\n{still_waiting}");
+        assert!(still_waiting.contains("w Answer"));
+        assert!(!still_waiting.contains("r Run/resume"));
+        assert_eq!(f.ok(&["show", "1"])?["attempts"], waiting_task["attempts"]);
+        assert_eq!(fs::read_to_string(&invocations)?, calls_before);
+        assert_eq!(fs::read(&log)?, log_before);
+        if mouse {
+            t.click("w Answer")?;
+        } else {
+            t.send("w")?;
+        }
+        println!(
+            "ANSWER FORM (mouse={mouse})\n{}",
+            t.screen("answer", |s| s.contains("Which content?"))?
+        );
+        t.send("Human answer: verified")?;
+        t.screen("entered answer", |s| s.contains("Human answer: verified"))?;
+        if mouse {
+            t.click("Apply")?;
+        } else {
+            t.send("\r")?;
+        }
+        let answered = t.screen("answer controls", |s| {
+            s.contains("Saved to SQLite") && s.contains("r Run/resume")
+        })?;
+        println!("ANSWERED CONTROLS (mouse={mouse})\n{answered}");
+        assert!(!answered.contains("w Answer"));
+        t.send("w")?;
+        t.screen("answered question cannot reopen", |s| {
+            s.contains("Unavailable here") && !s.contains("Answer AI question")
+        })?;
+        if mouse {
+            t.click("r Run/resume")?;
+        } else {
+            t.send("r")?;
+        }
+        let complete = t.screen("complete", |s| s.contains("Queue complete."))?;
+        println!("RESUMED SAME ATTEMPT (mouse={mouse})\n{complete}");
+        let completed = f.ok(&["show", "1"])?;
+        assert_eq!(completed["status"], "succeeded");
+        assert_eq!(completed["attempts"][0]["id"], attempt_id);
+        assert_eq!(completed["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            fs::read_to_string(&invocations)?,
+            "execution\nexecution\nreview\nvalidation\n"
+        );
+        for role in ["execution", "review", "validation"] {
+            let prompt = fs::read_to_string(f.scratch.path().join(format!("prompt-{role}")))?;
+            assert!(prompt.contains("Which content?\nHuman answer: verified"));
+        }
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
     Ok(())
 }
 #[test]

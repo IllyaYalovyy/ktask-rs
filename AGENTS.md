@@ -16,6 +16,8 @@
 - For every view and interaction, drive the real binary in a pseudo-terminal and inspect
   its rendered screen. Unit tests alone do not count. If you cannot inspect or test it, STOP
   and report the blocker; do not mark it done or continue dependent work.
+  Read-only review/validation agents inspect the supervisor's recorded PTY screens and check
+  transcripts instead of rerunning writable tests. Missing evidence still blocks acceptance.
 - The owner authorized persistence, CLI and real orchestration. All use shared application
   commands. Codex execution must pass supervisor checks plus independent review/validation
   before success. Never present simulated outcomes as real. CLI JSON and exit codes are contracts.

@@ -96,9 +96,11 @@ fn run(terminal: &mut ratatui::DefaultTerminal, mut app: app::App) -> io::Result
             captured = app.mouse_enabled;
         }
         execute!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
-        let drawn = terminal.draw(|frame| ui::draw(frame, &mut app)).map(|_| ());
+        let drawn = terminal
+            .draw(|frame| ui::draw(frame, &mut app))
+            .map(|frame| frame.area.as_size());
         execute!(terminal.backend_mut(), EndSynchronizedUpdate)?;
-        drawn?;
+        let drawn_size = drawn?;
         loop {
             if event::poll(std::time::Duration::from_millis(40))? {
                 let fits = ui::fits(terminal.size()?);
@@ -110,7 +112,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal, mut app: app::App) -> io::Result
                 }
                 break;
             }
-            if app.tick() {
+            // Resize notifications can be lost (e.g. a sandbox blocks the signal wakeup).
+            if app.tick() || terminal.size()? != drawn_size {
                 break;
             }
         }

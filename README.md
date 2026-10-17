@@ -17,8 +17,8 @@ config, state, cache, and runtime locations; the header identifies the instance.
 
 Scratch files belong to one run and are removed on exit. After a crash or forced kill,
 the next launch reclaims abandoned scratch directories; ownership locks protect live runs.
-Tests use private homes and app roots under `target/tmp/test-scratch/`, cleaned on success
-or panic, with crash debris reclaimed by the next test. No per-test directories in `/tmp`.
+Tests use private homes and app roots under `$TMPDIR/ktask-test-scratch/` (system temporary
+directory when unset), cleaned on success or panic. The next test reclaims crash debris.
 
 The TUI opens **Current Task**, with separate **Queue**, **History**, **Configuration**,
 and **About** screens. Normal startup opens real SQLite tasks for the current directory.
@@ -141,6 +141,11 @@ and read-only review/validation. User Codex configuration/rules are not inherite
 still uses the existing Codex home. No approval/sandbox bypass flags. Provider cost remains unknown
 unless reported. The guardian supplies owned `TMPDIR`, kills/reaps descendants, and cleans scratch
 before another worker starts. Repository files and provider session history are not scratch.
+Codex execution excludes general `/tmp` writes while allowing the owned `TMPDIR`.
+Supervisor check transcripts are durable artifacts under the instance state directory, with
+relational artifact records. Read-only reviewers receive their paths and inspect actual output,
+not just an executor's summary. `make check` retains passing-test output, including rendered PTY
+screens. Include `--show-output` or `--nocapture` in custom PTY checks to preserve those screens.
 
 Opt-in live verification (incurs model usage; disposable project and app state):
 `KTASK_LIVE_MODEL=YOUR_MODEL cargo test --test tui runner::live_codex -- --ignored --nocapture`.

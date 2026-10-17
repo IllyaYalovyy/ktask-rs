@@ -486,7 +486,7 @@ fn cli_project_and_instance_isolation_survives_renaming_and_callbacks() -> Resul
     add(root, "Dev only")?;
     json_result(process(PROD, root).args(["--json", "list"]).output()?, 3)?;
     let renamed = root.join("ktask");
-    std::fs::hard_link(DEV, &renamed)?;
+    std::fs::copy(DEV, &renamed)?;
     let paths = json_result(
         process(renamed.to_str().unwrap(), root)
             .args(["--paths", "--json"])

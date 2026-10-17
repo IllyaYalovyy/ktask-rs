@@ -1,4 +1,5 @@
 mod codex;
+mod output;
 pub(crate) mod process;
 mod workspace;
 
@@ -271,10 +272,14 @@ fn pipeline(
                 .join("\n")
         })
         .unwrap_or_default();
-    let mut evidence = format!("{answers}\nPrevious attempt: {prior}");
+    let context = format!("{answers}\nPrevious attempt: {prior}");
     let role = if repair { "remediation" } else { "execution" };
-    match ai(service, run, ctx, role, &evidence)? {
-        Outcome::Passed(s) => evidence.push_str(&s),
+    let mut evidence = match ai(service, run, ctx, role, &context)? {
+        Outcome::Passed(s) => {
+            format!(
+                "{answers}\nCurrent attempt executor assessment (not independent evidence):\n{s}"
+            )
+        }
         other => return Ok(other),
     };
     for check in checks {
@@ -299,6 +304,7 @@ fn pipeline(
             worker_lock: ctx.workspace.worker_lock.clone(),
         };
         let mut stream = codex::Stream::default();
+        let output_cursor = service.output_cursor(run)?;
         let result = execute(
             service,
             run,
@@ -308,13 +314,33 @@ fn pipeline(
             Some(check.timeout_ms),
             false,
             &mut stream,
+        );
+        // Keep supervisor evidence outside the worktree and disposable worker scratch.
+        let relative = format!("evidence/attempt-{}/step-{}.log", run.attempt, step.id);
+        let path = ctx.paths.state.join(&relative);
+        std::fs::create_dir_all(path.parent().expect("evidence directory"))?;
+        let mut transcript = std::fs::File::create_new(&path)?;
+        service.write_output_since(run, output_cursor, &mut transcript)?;
+        transcript.sync_all()?;
+        service.record_artifact(
+            run,
+            &check.name,
+            &relative,
+            transcript.metadata()?.len() as i64,
         )?;
-        match result {
+        match result? {
             Outcome::Passed(_) => {
                 service.finish_step(&step, true, "Check passed", Some(0))?;
-                evidence.push_str(&format!("\nSupervisor check {} passed.", check.name));
+                evidence.push_str(&format!(
+                    "\nSupervisor check evidence: {}",
+                    serde_json::json!({
+                        "name": check.name, "command": check.command, "exit_code": 0,
+                        "transcript": path,
+                    })
+                ));
             }
             Outcome::Failed(category, message) => {
+                let message = format!("{message}; supervisor transcript: {}", path.display());
                 service.finish_step(&step, false, &message, None)?;
                 return Ok(Outcome::Failed(category, message));
             }
@@ -441,6 +467,8 @@ fn execute(
     let started = Instant::now();
     let mut interrupted = None;
     let mut last_tick = Instant::now();
+    let mut stdout = output::Utf8Stream::default();
+    let mut stderr = output::Utf8Stream::default();
     loop {
         let active = ctx.prior_ms + ctx.started.elapsed().as_millis() as i64;
         if interrupted.is_none() {
@@ -475,11 +503,25 @@ fn execute(
                         }
                     }
                 } else {
-                    service.output(run, &source, &String::from_utf8_lossy(&bytes))?;
+                    let decoder = if source == "stdout" {
+                        &mut stdout
+                    } else {
+                        &mut stderr
+                    };
+                    let text = decoder.feed(&bytes);
+                    if !text.is_empty() {
+                        service.output(run, &source, &text)?;
+                    }
                 }
             }
             Ok(Message::Exit { code }) => {
                 worker.join()?;
+                for (source, decoder) in [("stdout", &mut stdout), ("stderr", &mut stderr)] {
+                    let text = decoder.finish();
+                    if !text.is_empty() {
+                        service.output(run, source, &text)?;
+                    }
+                }
                 service.active_time(run, active)?;
                 if interrupted.is_none() && ai && stream.rate_limited {
                     return Ok(Outcome::RateLimit);

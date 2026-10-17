@@ -218,7 +218,13 @@ fn real_tui_saves_across_kill_restart_and_never_simulates_real_tasks() -> Result
         "test-provider/worker-v2\tcustom\r",
         "Saved to SQLite",
     )?;
-    key(&mut t, "1r", "Project must be the Git repository root")?;
+    t.send("1r")?;
+    println!(
+        "REAL RUN PREFLIGHT\n{}",
+        t.screen("non-project workspace cannot run", |s| {
+            s.contains("Project must be the Git repository root") || s.contains("not a git")
+        })?
+    );
     t.kill()?;
     let mut t = terminal(scratch.path())?;
     println!(

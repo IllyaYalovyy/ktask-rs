@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use rusqlite::Connection;
 
 use super::{ALL, Migration, apply};
@@ -8,7 +6,7 @@ use crate::{scratch::Scratch, storage::Database};
 type Result = std::result::Result<(), Box<dyn std::error::Error>>;
 
 fn sandbox() -> std::io::Result<Scratch> {
-    Scratch::new(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/tmp/test-scratch"))
+    Scratch::new(&std::env::temp_dir().join("ktask-test-scratch"))
 }
 
 fn count(connection: &Connection, table: &str) -> i64 {

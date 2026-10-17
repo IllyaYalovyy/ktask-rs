@@ -18,9 +18,17 @@ impl App {
                 self.view == View::Current
                     && current.is_some_and(|t| {
                         t.definition().kind == Kind::Ai
-                            && (matches!(t.status(), Status::Pending | Status::Paused)
-                                || (self.service.is_some()
-                                    && matches!(t.status(), Status::Waiting | Status::Question)))
+                            && match t.status() {
+                                Status::Pending | Status::Paused => true,
+                                Status::Waiting => self.service.is_some(),
+                                // Saving an answer retains the waiting attempt until resumed.
+                                Status::Question => self.service.as_ref().is_some_and(|service| {
+                                    service
+                                        .open_question(t.id as i64)
+                                        .is_ok_and(|question| question.is_none())
+                                }),
+                                _ => false,
+                            }
                     })
             }
             Action::Retry | Action::Diagnose => {
@@ -52,7 +60,14 @@ impl App {
             }
             Action::Answer => {
                 self.view == View::Current
-                    && current.is_some_and(|t| t.status() == Status::Question)
+                    && current.is_some_and(|t| {
+                        t.status() == Status::Question
+                            && self.service.as_ref().is_none_or(|service| {
+                                service
+                                    .open_question(t.id as i64)
+                                    .is_ok_and(|question| question.is_some())
+                            })
+                    })
             }
             Action::Acknowledge => {
                 self.view == View::Current

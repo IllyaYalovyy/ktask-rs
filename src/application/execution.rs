@@ -154,6 +154,35 @@ impl Service {
         self.db.connection().execute("INSERT INTO attempt_output(attempt_id,sequence,stream,recorded_at_ms,content) SELECT ?1,coalesce(max(sequence),0)+1,?2,?3,?4 FROM attempt_output WHERE attempt_id=?1", params![run.attempt,stream,now_ms(),text])?;
         Ok(())
     }
+    pub fn output_cursor(&self, run: &Run) -> Result<i64> {
+        Ok(self.db.connection().query_row(
+            "SELECT coalesce(max(sequence),0) FROM attempt_output WHERE attempt_id=?1",
+            [run.attempt],
+            |r| r.get(0),
+        )?)
+    }
+    pub fn write_output_since(
+        &self,
+        run: &Run,
+        cursor: i64,
+        writer: &mut impl std::io::Write,
+    ) -> Result<()> {
+        let mut query = self.db.connection().prepare(
+            "SELECT content FROM attempt_output WHERE attempt_id=?1 AND sequence>?2 ORDER BY sequence",
+        )?;
+        let mut rows = query.query(params![run.attempt, cursor])?;
+        while let Some(row) = rows.next()? {
+            writer.write_all(row.get::<_, String>(0)?.as_bytes())?;
+        }
+        Ok(())
+    }
+    pub fn record_artifact(&self, run: &Run, name: &str, path: &str, size: i64) -> Result<()> {
+        self.db.connection().execute(
+            "INSERT INTO artifacts(attempt_id,name,media_type,relative_path,size_bytes,created_at_ms) VALUES (?1,?2,'text/plain',?3,?4,?5)",
+            params![run.attempt, name, path, size, now_ms()],
+        )?;
+        Ok(())
+    }
     pub fn active_time(&self, run: &Run, active_ms: i64) -> Result<()> {
         require(self.db.connection().execute("UPDATE attempts SET active_ms=?2 WHERE id=?1 AND execution_token=?3 AND state='running' AND active_ms<=?2", params![run.attempt,active_ms,run.token])? == 1, "Runner lost ownership of attempt")
     }

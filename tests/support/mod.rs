@@ -1,6 +1,6 @@
 use std::{
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
@@ -189,12 +189,16 @@ impl Terminal {
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result {
+        while self.frames.try_recv().is_ok() {}
         self.parser
             .lock()
             .unwrap()
             .screen_mut()
             .set_size(rows, cols);
         self.master.resize(size(cols, rows))?;
+        // Resizing the parser only crops its old contents. Wait for a real redraw
+        // before a caller can match that stale screen or click during its replacement.
+        self.frames.recv_timeout(TIMEOUT)?;
         Ok(())
     }
 
@@ -254,7 +258,7 @@ impl Drop for Terminal {
 }
 
 pub fn sandbox() -> std::io::Result<Scratch> {
-    Scratch::new(&PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("test-scratch"))
+    Scratch::new(&std::env::temp_dir().join("ktask-test-scratch"))
 }
 
 fn size(cols: u16, rows: u16) -> PtySize {
