@@ -38,7 +38,9 @@ and disk import/export. SQL and validation live in shared transactional applicat
 not the TUI. Concurrent stale edits fail without overwriting data; other windows refresh.
 New AI tasks have no invented model defaults. **Models** accepts `provider/model`, optional
 effort, and limits. Saving makes a new approved revision; previous attempts keep their inputs.
-Mouse configuration is currently session-only.
+Configuration provides project model defaults, check management, and saved preferences.
+Mouse, run-one/continue-queue, and planner approval preferences persist per project and instance.
+Planner defaults and approval policy are stored but do not enable task breakdown yet.
 
 Codex execution, shell checks, independent AI review/validation, and bounded remediation are real.
 AI task breakdown and other provider adapters are not connected. Normal mode never simulates
@@ -108,7 +110,13 @@ to supervise this source tree. `cargo build` only replaces development build pro
 installed supervisor. Tests and `ktask-dev` use separate databases; execution in the **same** Git
 repository is mutually exclusive across instances. Use private checkouts for concurrent test runs.
 
-Configure checks and model defaults before adding tasks (replace model placeholders):
+Open **Configuration → Defaults** to set models, **Checks** to add an enabled check,
+and **Preferences** to select Run one (default) or Continue queue. Check edits are blocked
+during running, paused, or waiting attempts. Cancel and invalid edits leave saved values unchanged;
+stale forms must be reopened. Defaults and checks use relational SQLite rows; preferences use
+a typed, atomically replaced file under the instance config directory.
+
+Alternatively, configure checks and model defaults through CLI (replace model placeholders):
 
 ```sh
 ktask check-set build --command 'make check' --timeout-ms 600000
@@ -120,7 +128,8 @@ ktask
 ```
 
 Defaults apply to new tasks only. Use **Models** or `edit --model` for existing tasks.
-In Current, **Run** starts a detached supervisor and continues the queue after verified success.
+In Current, **Run** starts a detached supervisor using the saved run mode. Run one stops after
+current succeeds; Continue queue advances after verified success.
 **Pause** stops/reaps workers before recording paused state; **Run/resume** retains the attempt
 and compatible session. Closing the TUI does not stop the supervisor. Failed checks/review/
 validation use the remediation model on a new attempt, bounded by the task's attempt limit.
