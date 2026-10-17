@@ -1,3 +1,5 @@
+/// User-facing product name; instance names stay `ktask`/`ktask-dev` for paths.
+pub const PRODUCT: &str = "ktask RS";
 mod actions;
 mod app;
 pub mod application;

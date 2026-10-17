@@ -38,6 +38,9 @@
 - Before switching tasks, preserve useful work, stop/reap workers, and clean owned scratch.
   Same-task retries may keep their workspace and reuse a compatible AI session. Never discard
   useful changes to satisfy cleanup or rewrite failed attempts when resolving their task.
+- Versioning: the product name is `ktask RS`; the Cargo package version is the release version.
+  Every small change increments the patch version and every large change increments the minor
+  version, in the same commit; the major version changes only on the owner's direct request.
 - Run `make check`. Use compiler/Clippy diagnostics and behavioral tests, not custom
   file/function line limits. Use complexity and duplication measurements to guide review;
   do not invent metric gates or refactor solely to satisfy a number.

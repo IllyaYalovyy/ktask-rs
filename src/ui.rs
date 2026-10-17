@@ -524,7 +524,8 @@ fn draw_information(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect)
             )
         } else {
             format!(
-                "ktask mk3 · {} · {}\nA visual workspace for supervising AI coding tasks.\n\nTasks, revisions, approvals, history and events:\nrelational SQLite. Import/export uses real files.\nCodex execution, checks, review, validation and remediation are real.\nAI task breakdown and other providers are not connected yet.\n\nProduction and development use separate data roots.\n--demo never opens SQLite. --paths shows data locations.",
+                "{} · {} · {}\nA visual workspace for supervising AI coding tasks.\n\nTasks, revisions, approvals, history and events:\nrelational SQLite. Import/export uses real files.\nCodex execution, checks, review, validation and remediation are real.\nAI task breakdown and other providers are not connected yet.\n\nProduction and development use separate data roots.\n--demo never opens SQLite. --paths shows data locations.",
+                crate::PRODUCT,
                 env!("CARGO_PKG_VERSION"),
                 app.instance.name()
             )
@@ -561,7 +562,8 @@ fn draw_information(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect)
         )
     } else {
         format!(
-            "ktask mk3 · {}\nInstance: {}\n\nA visual workspace for supervising AI coding tasks.\n\nMOCK DATA: tasks, models, execution, and file operations\nare simulated; no backend, AI calls, or task CLI yet.\n\nDevelopment and production have separate app roots.\nUse --paths to inspect this instance's paths.",
+            "{} · {}\nInstance: {}\n\nA visual workspace for supervising AI coding tasks.\n\nMOCK DATA: tasks, models, execution, and file operations\nare simulated; no backend, AI calls, or task CLI yet.\n\nDevelopment and production have separate app roots.\nUse --paths to inspect this instance's paths.",
+            crate::PRODUCT,
             env!("CARGO_PKG_VERSION"),
             app.instance.name()
         )

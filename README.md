@@ -1,4 +1,4 @@
-# ktask mk3
+# ktask RS
 
 A TUI-first workspace for supervising AI coding tasks.
 

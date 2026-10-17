@@ -35,16 +35,16 @@ fn all_screens_mouse_navigation_minimum_size_and_help() -> Result {
     assert!(!history.contains("› #1 "));
     println!("HISTORY\n{history}");
     println!("CONFIG\n{}", click(&mut t, "4 Config", "Mouse: Enabled")?);
-    println!("ABOUT\n{}", click(&mut t, "5 About", "ktask mk3 ·")?);
+    println!("ABOUT\n{}", click(&mut t, "5 About", "ktask RS ·")?);
     click(&mut t, "Esc Back", "Mouse: Enabled")?;
-    key(&mut t, "\t", "ktask mk3 ·")?;
+    key(&mut t, "\t", "ktask RS ·")?;
     key(&mut t, "\x1b[Z", "Mouse: Enabled")?;
     for (tab, marker) in [
         ("1 Current", "Output · Following"),
         ("2 Queue", "Queue · 120 shown"),
         ("3 History", "History · 120 shown"),
         ("4 Config", "Mouse: Enabled"),
-        ("5 About", "ktask mk3 ·"),
+        ("5 About", "ktask RS ·"),
     ] {
         click(&mut t, tab, marker)?;
         t.resize(70, 22)?;
@@ -60,7 +60,7 @@ fn all_screens_mouse_navigation_minimum_size_and_help() -> Result {
     println!("HELP\n{help}");
     click(&mut t, "Down", "All tasks, models")?;
     click(&mut t, "Up", "1 Current  2 Queue")?;
-    click(&mut t, "Close", "ktask mk3 ·")?;
+    click(&mut t, "Close", "ktask RS ·")?;
     t.click("q Quit")?;
     t.finish()
 }

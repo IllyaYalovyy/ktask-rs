@@ -292,7 +292,7 @@ fn review_all_views_at_minimum_size() -> Result {
         ("2 Queue", "Queue · 120 shown"),
         ("3 History", "History · 120 shown"),
         ("4 Config", "Planner approval:"),
-        ("5 About", "ktask mk3 ·"),
+        ("5 About", "ktask RS ·"),
     ] {
         let screen = click(&mut t, tab, marker)?;
         assert!(screen.contains("q Quit"), "{screen}");

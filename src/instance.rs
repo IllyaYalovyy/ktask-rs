@@ -15,6 +15,14 @@ impl Instance {
         }
     }
 
+    /// Package version followed by the instance, e.g. `0.1.1 (ktask-dev)`.
+    pub const fn version(self) -> &'static str {
+        match self {
+            Self::Development => concat!(env!("CARGO_PKG_VERSION"), " (ktask-dev)"),
+            Self::Production => concat!(env!("CARGO_PKG_VERSION"), " (ktask)"),
+        }
+    }
+
     pub fn paths(self) -> io::Result<Paths> {
         let home = || {
             absolute_env("HOME")?

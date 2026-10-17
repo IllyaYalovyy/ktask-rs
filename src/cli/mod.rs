@@ -70,8 +70,9 @@ pub fn launch(instance: Instance) -> ExitCode {
         .take_while(|a| *a != "--")
         .any(|a| a == "--json");
     let command = Cli::command()
-        .name(instance.name())
-        .bin_name(instance.name());
+        .name(crate::PRODUCT)
+        .bin_name(instance.name())
+        .version(instance.version());
     let matches = match command.try_get_matches_from(arguments) {
         Ok(matches) => matches,
         Err(error) if !error.use_stderr() => {
