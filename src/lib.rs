@@ -2,6 +2,7 @@ mod actions;
 mod app;
 pub mod application;
 mod cli;
+mod configuration_ui;
 mod dialog;
 pub mod instance;
 mod mock;

@@ -2,6 +2,8 @@
 mod cleanup;
 #[path = "cases/cli.rs"]
 mod cli;
+#[path = "cases/configuration.rs"]
+mod configuration;
 #[path = "cases/isolation.rs"]
 mod isolation;
 #[path = "cases/lifecycle.rs"]

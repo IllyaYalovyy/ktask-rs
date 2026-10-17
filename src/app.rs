@@ -80,6 +80,8 @@ pub enum Action {
     PreviousAttempt,
     NextAttempt,
     Configure,
+    ProjectModels,
+    ProjectChecks,
     Scroll(i32),
     Position(i32),
     Fields(i32),
@@ -358,6 +360,12 @@ impl App {
                     None
                 }
             },
+            View::Config if self.service.is_some() && code == KeyCode::Char('m') => {
+                Some(Action::ProjectModels)
+            }
+            View::Config if self.service.is_some() && code == KeyCode::Char('c') => {
+                Some(Action::ProjectChecks)
+            }
             View::Config if matches!(code, KeyCode::Enter | KeyCode::Char('e')) => {
                 Some(Action::Configure)
             }

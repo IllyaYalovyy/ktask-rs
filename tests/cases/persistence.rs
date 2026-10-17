@@ -285,7 +285,7 @@ fn real_tui_mouse_approval_history_delete_undo_and_all_views() -> Result {
         t.click(tab)?;
         println!("REAL {tab}\n{}", t.screen(tab, |s| s.contains(text))?);
     }
-    key(&mut t, "4e", "Mouse preference applies")?;
+    key(&mut t, "4e", "Project preferences")?;
     t.click("< Enabled >")?;
     t.screen("disabled", |s| s.contains("< Disabled >"))?;
     key(&mut t, "\r", "Mouse: Disabled")?;

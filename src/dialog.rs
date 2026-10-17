@@ -28,6 +28,13 @@ pub enum DialogKind {
         path: String,
         data: String,
     },
+    ProjectModels(Box<crate::application::configuration::Defaults>),
+    ProjectChecks(Vec<crate::application::configuration::ProjectCheck>),
+    ProjectCheck {
+        expected: Vec<crate::application::configuration::ProjectCheck>,
+        id: Option<i64>,
+    },
+    Preferences(crate::application::preferences::Preferences),
     Config,
     ResetConfig,
     Help,

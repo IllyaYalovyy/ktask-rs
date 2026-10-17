@@ -153,7 +153,13 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
                 "Execution started; results require checks, review and validation"
             },
         )?;
-        let result = pipeline(service, &run, &mut context, &checks, repair);
+        let result = service.checks().and_then(|checks| {
+            require(
+                !checks.is_empty(),
+                "Configure at least one enabled project check",
+            )?;
+            pipeline(service, &run, &mut context, &checks, repair)
+        });
         let outcome = match result {
             Ok(outcome) => outcome,
             Err(error) => Outcome::Failed("environment", error.to_string()),
@@ -561,12 +567,20 @@ fn execute(
 }
 
 /// Launch the exact supervisor executable, never a PATH-selected ktask or a rebuild target.
-pub fn background(service: &Service, paths: &Paths, queue: bool) -> Result<()> {
+pub fn background(service: &mut Service, paths: &Paths, queue: bool) -> Result<()> {
     drop(Workspace::acquire(&service.project_root()?)?);
     require(
         !service.checks()?.is_empty(),
-        "Configure a check first: check-set build --command 'make check'",
+        "Configure an enabled check in Configuration > Checks (or CLI check-set)",
     )?;
+    if let Some(task) = service.current_task()? {
+        for model in &task.definition().definition.models {
+            require(
+                model.as_ref().is_some_and(|m| m.provider == "codex"),
+                "Configure all four task roles with provider codex in Models; defaults only apply to new tasks",
+            )?;
+        }
+    }
     std::fs::create_dir_all(&paths.state)?;
     let log = std::fs::OpenOptions::new().create(true).append(true).open(
         paths

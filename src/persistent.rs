@@ -32,6 +32,7 @@ impl App {
         app.queue_catalog = Catalog::default();
         app.history_catalog = Catalog::default();
         app.last_workspace = None;
+        app.load_preferences()?;
         app.reload()?;
         app.message("SQLite tasks · Run starts the supervisor · closing the TUI keeps it running");
         Ok(app)
@@ -86,6 +87,15 @@ impl App {
         }
     }
     pub(crate) fn persistent_action(&mut self, action: Action) -> bool {
+        if matches!(
+            action,
+            Action::Configure | Action::ProjectModels | Action::ProjectChecks
+        ) {
+            if let Err(error) = self.open_project_config(action) {
+                self.message(error);
+            }
+            return true;
+        }
         if matches!(action, Action::Breakdown) {
             self.message("AI task breakdown is not connected yet; add well-defined tasks to Queue");
             return true;
@@ -100,9 +110,9 @@ impl App {
                 .map_err(|e| e.to_string())
                 .and_then(|paths| {
                     crate::runner::background(
-                        self.service.as_ref().expect("SQLite mode"),
+                        self.service.as_mut().expect("SQLite mode"),
                         &paths,
-                        true,
+                        self.auto_advance,
                     )
                     .map_err(|e| e.to_string())
                 }),
@@ -302,6 +312,15 @@ impl App {
     }
 
     pub(crate) fn apply_persistent_dialog(&mut self, dialog: &mut Dialog) -> Result<bool, String> {
+        if matches!(
+            dialog.kind,
+            DialogKind::ProjectModels(_)
+                | DialogKind::ProjectChecks(_)
+                | DialogKind::ProjectCheck { .. }
+                | DialogKind::Preferences(_)
+        ) {
+            return self.save_project_config(dialog);
+        }
         let readonly = dialog.read_only() || matches!(dialog.kind, DialogKind::Config);
         let exporting = matches!(
             dialog.kind,

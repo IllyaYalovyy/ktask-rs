@@ -160,6 +160,12 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
             ("x Export", Action::Export),
             ("s Stats", Action::Stats),
         ],
+        View::Config if app.service.is_some() => vec![
+            ("m Defaults", Action::ProjectModels),
+            ("c Checks", Action::ProjectChecks),
+            ("e Preferences", Action::Configure),
+            ("Esc Back", Action::Back),
+        ],
         View::Config => vec![
             ("e Configure", Action::Configure),
             ("Esc Back", Action::Back),
@@ -308,7 +314,7 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
             } else if task.definition().kind == crate::presentation::Kind::Human {
                 "Human task: inspect the goal and acknowledge when done.".into()
             } else {
-                if app.service.is_some() { "Ready. Configure codex/model and limits with Models; add project checks with check-set. Run starts execution.".into() } else { "Ready. Run current to begin a simulated attempt.".into() }
+                if app.service.is_some() { "Ready. Set defaults and checks in Config; task Models edits pinned settings. Run starts execution.".into() } else { "Ready. Run current to begin a simulated attempt.".into() }
             }]
         },
         |a| a.logs.clone(),
@@ -498,12 +504,22 @@ fn draw_information(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect)
     let text = if app.service.is_some() {
         if app.view == View::Config {
             format!(
-                "Project: {}\nStorage: SQLite (changes save immediately)\nMouse: {} (session preference)\n\nTask models and limits: select a task, then Models.\nProvider: codex; model/effort are explicit per role.\nProject checks: CLI check-set NAME --command COMMAND.\n\nRun starts a separate supervisor; closing TUI does not stop it.\nSuccess requires checks, review, validation and a Git checkpoint.\n--demo is isolated; --paths shows instance-specific data paths.",
+                "Project: {}\nStorage: SQLite (defaults and checks).\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {} (not connected yet)\n\nDefaults apply to new tasks; existing revisions stay pinned.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
                 app.project_name,
                 if app.mouse_enabled {
                     "Enabled"
                 } else {
                     "Disabled"
+                },
+                if app.auto_advance {
+                    "Continue queue"
+                } else {
+                    "Run one"
+                },
+                if app.review_required {
+                    "Review required"
+                } else {
+                    "Automatic"
                 }
             )
         } else {

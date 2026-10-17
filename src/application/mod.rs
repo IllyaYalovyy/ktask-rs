@@ -1,6 +1,8 @@
 //! Shared application commands. Neither terminal state nor demo fixtures enter this layer.
 mod commands;
+pub mod configuration;
 pub mod execution;
+pub mod preferences;
 mod queries;
 pub use queries::Event;
 pub mod transfer;

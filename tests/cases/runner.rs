@@ -720,6 +720,13 @@ fn real_tui_rate_wait_and_mouse_pause_stop_automatic_retry() -> Result {
     f.add("Rate limited")?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
     t.screen("current", |s| s.contains("Rate limited"))?;
+    t.send("4e")?;
+    t.screen("preferences", |s| s.contains("Project preferences"))?;
+    t.send("\t\t \x13")?;
+    t.screen("queue continuation selected", |s| {
+        s.contains("Run mode: Continue queue")
+    })?;
+    t.send("1")?;
     t.send("r")?;
     println!(
         "RATE WAIT\n{}",
@@ -756,6 +763,139 @@ fn unconfirmed_worker_death_blocks_execution_until_explicit_operator_confirmatio
     f.ok(&["recover", "--confirm-worker-cleanup"])?;
     assert_eq!(fs::metadata(marker)?.len(), 0);
     f.ok(&["run"])?;
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn real_tui_persisted_single_and_continue_modes_with_two_tasks() -> Result {
+    for mouse in [false, true] {
+        for queue in [false, true] {
+            let f = Fixture::new()?;
+            f.add("First configured task")?;
+            f.add("Second configured task")?;
+            let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
+            t.screen("startup", |s| s.contains("First configured task"))?;
+            if mouse {
+                t.click("4 Config")?;
+            } else {
+                t.send("4")?;
+            }
+            t.screen("configuration", |s| s.contains("e Preferences"))?;
+            if mouse {
+                t.click("e Preferences")?;
+            } else {
+                t.send("e")?;
+            }
+            println!(
+                "RUN PREFERENCES mouse={mouse} queue={queue}\n{}",
+                t.screen("preferences", |s| s.contains("Project preferences"))?
+            );
+            if queue {
+                if mouse {
+                    t.click("< Run one >")?;
+                } else {
+                    t.send("\t\t ")?;
+                }
+            }
+            if mouse {
+                t.click("Apply")?;
+            } else {
+                t.send("\x13")?;
+            }
+            t.screen("saved", |s| s.contains("Project configuration saved"))?;
+            t.send("q")?;
+            t.finish()?;
+            let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
+            t.screen("restart", |s| s.contains("First configured task"))?;
+            if mouse {
+                t.click("r Run")?;
+            } else {
+                t.send("r")?;
+            }
+            let final_screen = t.screen("run mode outcome", |s| {
+                if queue {
+                    s.contains("Queue 0") && s.contains("History 2")
+                } else {
+                    s.contains("Second configured task") && s.contains("History 1")
+                }
+            })?;
+            println!("RUN RESULT mouse={mouse} queue={queue}\n{final_screen}");
+            let second = f.ok(&["show", "2"])?;
+            assert_eq!(second["status"], if queue { "succeeded" } else { "ready" });
+            assert_eq!(
+                second["attempts"].as_array().unwrap().len(),
+                usize::from(queue)
+            );
+            t.send("q")?;
+            t.finish()?;
+            f.no_scratch()?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn real_tui_configuration_errors_and_live_check_guard() -> Result {
+    use ktask_rs_mk3::application::{Service, VersionedTask};
+    let f = Fixture::new()?;
+    f.add("Configuration preflight")?;
+    let mut service = Service::open(f.db()?, &f.root, None)?;
+    let original = service.task(1)?.unwrap().definition().definition.clone();
+    let mut missing = original.clone();
+    missing.models[0] = None;
+    let task = service.task(1)?.unwrap();
+    service.revise(
+        VersionedTask {
+            id: 1,
+            version: task.version,
+        },
+        &missing,
+        true,
+    )?;
+    let checks = service.project_checks()?;
+    let mut disabled = checks[0].clone();
+    disabled.enabled = false;
+    service.save_check(&checks, &disabled)?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
+    t.screen("startup", |s| s.contains("Configuration preflight"))?;
+    t.send("r")?;
+    println!(
+        "MISSING CHECKS\n{}",
+        t.screen("missing checks", |s| s
+            .contains("Configure an enabled check"))?
+    );
+    service.save_check(&service.project_checks()?, &checks[0])?;
+    t.send("r")?;
+    println!(
+        "MISSING MODELS\n{}",
+        t.screen("missing models", |s| s
+            .contains("Configure all four task roles"))?
+    );
+    assert!(service.task(1)?.unwrap().attempts.is_empty());
+    let task = service.task(1)?.unwrap();
+    service.revise(
+        VersionedTask {
+            id: 1,
+            version: task.version,
+        },
+        &original,
+        true,
+    )?;
+    f.provider("rate")?;
+    t.send("r")?;
+    t.screen("rate wait", |s| s.contains("WAITING"))?;
+    t.send("4c \r")?;
+    t.screen("edit check", |s| s.contains("Edit project check"))?;
+    t.send("\t\x01false\x13")?;
+    println!(
+        "LIVE CHECK GUARD\n{}",
+        t.screen("live inputs guarded", |s| s
+            .contains("Cannot change checks during a live attempt"))?
+    );
+    assert_eq!(service.project_checks()?, checks);
+    t.send("\x1b\x03")?;
+    t.finish()?;
     f.no_scratch()?;
     Ok(())
 }

@@ -234,7 +234,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
     } = command
     {
         let message = if *background {
-            crate::runner::background(&service, &paths, *queue)?;
+            crate::runner::background(&mut service, &paths, *queue)?;
             "Runner started; inspect Current in the TUI".to_owned()
         } else {
             crate::runner::run(
