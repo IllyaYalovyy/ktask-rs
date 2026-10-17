@@ -1,0 +1,122 @@
+mod actions;
+mod app;
+pub mod application;
+mod cli;
+mod dialog;
+pub mod instance;
+mod mock;
+mod persistent;
+mod presentation;
+pub mod runner;
+pub mod scratch;
+pub mod storage;
+mod task_actions;
+mod ui;
+
+use std::io;
+
+use ratatui::crossterm::{
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyEventKind,
+    },
+    execute,
+    terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate},
+};
+
+pub fn launch(instance: instance::Instance) -> std::process::ExitCode {
+    if std::env::args_os().nth(1).is_some_and(|a| a == "__worker") {
+        return match runner::process::worker() {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(error) => {
+                println!(
+                    "{}",
+                    serde_json::to_string(&runner::process::Message::Error(error.to_string()))
+                        .expect("error JSON")
+                );
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
+    cli::launch(instance)
+}
+
+pub(crate) fn launch_tui(
+    instance: instance::Instance,
+    root: &std::path::Path,
+    project_name: Option<&str>,
+    demo: bool,
+) -> io::Result<()> {
+    let paths = instance.paths()?;
+    let app = if demo {
+        app::App::new(instance)
+    } else {
+        let db = storage::Database::open(&paths).map_err(io::Error::other)?;
+        let service =
+            application::Service::open(db, root, project_name).map_err(io::Error::other)?;
+        app::App::persistent(instance, service).map_err(io::Error::other)?
+    };
+    let scratch = scratch::Scratch::new(&paths.cache.join("scratch"))?;
+    let result = terminal_session(app);
+    let cleanup = scratch.close();
+    result.and(cleanup)
+}
+
+fn terminal_session(app: app::App) -> io::Result<()> {
+    let mut terminal = ratatui::try_init()?;
+    let _input_restore = RestoreInput;
+    let result = execute!(terminal.backend_mut(), EnableBracketedPaste)
+        .and_then(|_| run(&mut terminal, app));
+    let mouse_restored = execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        DisableBracketedPaste
+    );
+    ratatui::restore();
+    result.and(mouse_restored)
+}
+
+struct RestoreInput;
+impl Drop for RestoreInput {
+    fn drop(&mut self) {
+        // Also runs during unwinding; ratatui's panic hook restores raw/alternate mode.
+        let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
+    }
+}
+
+fn run(terminal: &mut ratatui::DefaultTerminal, mut app: app::App) -> io::Result<()> {
+    let mut captured = false;
+    loop {
+        if captured != app.mouse_enabled {
+            if app.mouse_enabled {
+                execute!(terminal.backend_mut(), EnableMouseCapture)?;
+            } else {
+                execute!(terminal.backend_mut(), DisableMouseCapture)?;
+            }
+            captured = app.mouse_enabled;
+        }
+        execute!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
+        let drawn = terminal.draw(|frame| ui::draw(frame, &mut app)).map(|_| ());
+        execute!(terminal.backend_mut(), EndSynchronizedUpdate)?;
+        drawn?;
+        loop {
+            if event::poll(std::time::Duration::from_millis(40))? {
+                let fits = ui::fits(terminal.size()?);
+                match event::read()? {
+                    Event::Key(key) if key.kind != KeyEventKind::Release => app.key(key, fits),
+                    Event::Mouse(mouse) => app.mouse(mouse, fits),
+                    Event::Paste(text) => app.paste(&text, fits),
+                    _ => {}
+                }
+                break;
+            }
+            if app.tick() {
+                break;
+            }
+        }
+        if app.quit {
+            return Ok(());
+        }
+        app.tick();
+    }
+}
