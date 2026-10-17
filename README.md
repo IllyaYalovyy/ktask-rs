@@ -105,7 +105,7 @@ automatic resets, or deletion of project files. Successful work is committed loc
 failed/paused work stays in place for the same task. Commit/preserve it yourself before switching
 to another task. Project checks are trusted shell commands, not an additional sandbox.
 
-For self-hosting, explicitly install `ktask` with `make install` (`scripts/install.sh [--root DIR]`),
+For self-hosting, explicitly install `ktask` with `make install` (`scripts/install-user.sh [--root DIR]`),
 then use that installed executable to supervise this source tree. The script installs outside build
 outputs, refuses to overwrite a supervisor that is currently running, and verifies the installed
 instance and path. `make self-host` (`scripts/self-host.sh`) then registers this checkout with the

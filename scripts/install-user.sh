@@ -5,7 +5,7 @@
 # `cargo build`/`cargo run` never replace it. A supervisor that is currently
 # running from the install path is never overwritten.
 #
-# Usage: scripts/install.sh [--root DIR]
+# Usage: scripts/install-user.sh [--root DIR]
 #   --root DIR   Install into DIR/bin/ktask (default: $CARGO_INSTALL_ROOT,
 #                else $CARGO_HOME, else ~/.cargo).
 set -euo pipefail

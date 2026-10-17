@@ -10,7 +10,7 @@ check:
 	cargo build --locked
 
 install:
-	scripts/install.sh
+	scripts/install-user.sh
 
 self-host:
 	scripts/self-host.sh

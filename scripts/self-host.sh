@@ -57,13 +57,13 @@ check_command=${KTASK_CHECK_COMMAND:-make check}
 check_timeout=${KTASK_CHECK_TIMEOUT_MS:-600000}
 
 if [ -z "$ktask" ]; then
-    ktask=$(command -v ktask 2> /dev/null) || fail "ktask is not on PATH; run scripts/install.sh first or pass --ktask PATH"
+    ktask=$(command -v ktask 2> /dev/null) || fail "ktask is not on PATH; run scripts/install-user.sh first or pass --ktask PATH"
 fi
 [ -x "$ktask" ] || fail "$ktask is not executable"
 ktask=$(readlink -f -- "$ktask")
 if [ "$instance" = ktask ]; then
     case "$ktask" in
-        "$repo"/target/*) fail "$ktask is a build output; install the supervisor with scripts/install.sh" ;;
+        "$repo"/target/*) fail "$ktask is a build output; install the supervisor with scripts/install-user.sh" ;;
     esac
 fi
 paths=$("$ktask" --paths) || fail "$ktask failed to report its paths"
