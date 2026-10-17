@@ -644,3 +644,111 @@ fn cli_running_guards_and_failure_resolution_keep_attempts_immutable() -> Result
     json(root, &["ack", "2"], 0)?;
     Ok(())
 }
+
+#[test]
+fn self_host_script_configures_a_private_checkout_with_the_given_executable() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let project = root.join("project");
+    std::fs::create_dir(&project)?;
+    std::fs::create_dir(project.join("src"))?;
+    std::fs::write(project.join("README.md"), "baseline\n")?;
+    let git = |args: &[&str]| -> Result {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&project)
+            .args(args)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
+    };
+    git(&["init", "-q"])?;
+    git(&["add", "README.md"])?;
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-qm",
+        "baseline",
+    ])?;
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/self-host.sh");
+    let self_host = |project: &Path, instance: &str| -> std::io::Result<Output> {
+        Command::new("bash")
+            .arg(&script)
+            .args(["--ktask", DEV, "--instance", instance, "--project"])
+            .arg(project)
+            .env_clear()
+            .env("HOME", root)
+            .env("XDG_STATE_HOME", root.join("state"))
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .env("XDG_RUNTIME_DIR", root.join("runtime"))
+            .env("TMPDIR", root)
+            .env("PATH", "/usr/bin:/bin")
+            .env("KTASK_EXECUTION_MODEL", "cheap")
+            .env("KTASK_EXECUTION_EFFORT", "low")
+            .env("KTASK_REVIEW_EFFORT", "")
+            .env("KTASK_CHECK_TIMEOUT_MS", "120000")
+            .current_dir(root)
+            .output()
+    };
+    let project_arg = project.to_str().unwrap();
+
+    let output = self_host(&project, "ktask-dev")?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("Check saved: build"), "{stdout}");
+    assert!(stdout.contains("Default saved for planning"), "{stdout}");
+    let checks = json(root, &["--project", project_arg, "checks"], 0)?;
+    assert_eq!(checks["data"]["checks"][0]["name"], "build");
+    assert_eq!(checks["data"]["checks"][0]["command"], "make check");
+    assert_eq!(checks["data"]["checks"][0]["timeout_ms"], 120000);
+
+    // Rerunning is idempotent, and new tasks pick up the configured defaults.
+    assert!(self_host(&project, "ktask-dev")?.status.success());
+    json(
+        root,
+        &[
+            "--project",
+            project_arg,
+            "add",
+            "--title",
+            "Self-hosted",
+            "--goal",
+            "Goal",
+            "--criterion",
+            "Check",
+        ],
+        0,
+    )?;
+    let shown = json(root, &["--project", project_arg, "show", "1"], 0)?;
+    let models = &shown["data"]["definition"]["models"];
+    assert_eq!(models["execution"]["provider"], "codex");
+    assert_eq!(models["execution"]["model"], "cheap");
+    assert_eq!(models["execution"]["effort"], "low");
+    assert_eq!(models["review"]["model"], "gpt-6-astra");
+    assert!(models["review"]["effort"].is_null(), "{models}");
+    assert_eq!(models["validation"]["effort"], "high");
+    assert_eq!(checks["data"]["checks"].as_array().map(Vec::len), Some(1));
+
+    // A non-root directory and a build-output production executable are refused unchanged.
+    let output = self_host(&project.join("src"), "ktask-dev")?;
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Git repository root"));
+    let output = self_host(&project, "ktask")?;
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("build output"));
+    let checks = json(root, &["--project", project_arg, "checks"], 0)?;
+    assert_eq!(checks["data"]["checks"][0]["timeout_ms"], 120000);
+    Ok(())
+}

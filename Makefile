@@ -1,4 +1,4 @@
-.PHONY: run check install
+.PHONY: run check install self-host
 
 run:
 	cargo run --locked
@@ -10,4 +10,7 @@ check:
 	cargo build --locked
 
 install:
-	cargo install --locked --path . --bin ktask
+	scripts/install.sh
+
+self-host:
+	scripts/self-host.sh

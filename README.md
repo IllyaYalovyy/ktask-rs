@@ -105,8 +105,13 @@ automatic resets, or deletion of project files. Successful work is committed loc
 failed/paused work stays in place for the same task. Commit/preserve it yourself before switching
 to another task. Project checks are trusted shell commands, not an additional sandbox.
 
-For self-hosting, explicitly install `ktask` with `make install`, then use that installed executable
-to supervise this source tree. `cargo build` only replaces development build products, not the
+For self-hosting, explicitly install `ktask` with `make install` (`scripts/install.sh [--root DIR]`),
+then use that installed executable to supervise this source tree. The script installs outside build
+outputs, refuses to overwrite a supervisor that is currently running, and verifies the installed
+instance and path. `make self-host` (`scripts/self-host.sh`) then registers this checkout with the
+installed `ktask`, sets the `make check` project check, and sets model defaults for every role;
+environment variables documented in the script override the models, efforts, and check timeout.
+Rerunning it only updates those values. `cargo build` only replaces development build products, not the
 installed supervisor. Tests and `ktask-dev` use separate databases; execution in the **same** Git
 repository is mutually exclusive across instances. Use private checkouts for concurrent test runs.
 
