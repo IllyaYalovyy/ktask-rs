@@ -36,6 +36,12 @@ runs; `o` switches between them. The status panel lists budget, model, and each 
 with its result. Activity shows events for the current task; `l` opens all events. A waiting or
 paused attempt with no supervisor can be abandoned with `x` (or `ktask abandon ID --reason TEXT`)
 without spending budget.
+
+Workers do not get to ask for permission. Review and validation run in a read-only sandbox by
+design and are told so; every role is told that permissions, sandbox limits and tooling are never
+questions for the owner. A worker that still returns `blocked` is nudged once, in the same
+session, to decide on its own. Only a repeated product question reaches you; a reviewer that
+refuses to decide twice stops the task as a protocol failure, which spends no budget.
 Forms support paste, cursor editing, `Ctrl-A` to clear, `Ctrl-S` to apply, and `Esc` to cancel.
 Insertion/move dialogs offer Earlier/Later buttons (`Alt-Up/Down`) and show neighboring IDs.
 Mouse can be disabled in Configuration; keyboard controls always remain available.

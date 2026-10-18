@@ -370,6 +370,19 @@ fn ai(
     role: &'static str,
     evidence: &str,
 ) -> Result<Outcome> {
+    ai_turn(service, run, ctx, role, evidence, None)
+}
+/// One provider turn. A first `blocked` answer is nudged once in the same session, because
+/// permission and sandbox limits are not questions for the owner; only a repeated, genuine
+/// product question reaches the owner, and reviewers that still refuse to decide stop the task.
+fn ai_turn(
+    service: &mut Service,
+    run: &Run,
+    ctx: &mut Context<'_>,
+    role: &'static str,
+    evidence: &str,
+    nudge: Option<&str>,
+) -> Result<Outcome> {
     let index = crate::application::ROLES
         .iter()
         .position(|r| *r == role)
@@ -381,7 +394,8 @@ fn ai(
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex")))
         .ok_or_else(|| Error::Conflict("Codex auth home is not configured".into()))?;
-    let step = service.start_ai_step(run, role, model, &scope.to_string_lossy())?;
+    let step =
+        service.start_ai_step(run, role, model, &scope.to_string_lossy(), nudge.is_some())?;
     service.output(
         run,
         "system",
@@ -389,7 +403,9 @@ fn ai(
             "{role}: {}/{} · {}",
             model.provider,
             model.model,
-            if step.provider_session.is_some() {
+            if nudge.is_some() {
+                "nudge: decide without asking"
+            } else if step.provider_session.is_some() {
                 "resume session"
             } else {
                 "new session"
@@ -400,7 +416,10 @@ fn ai(
         executable: ctx.codex.clone(),
         args: codex::args(model, &step, role)?,
         cwd: ctx.workspace.root.clone(),
-        prompt: codex::prompt(run, role, evidence),
+        prompt: nudge.map_or_else(
+            || codex::prompt(run, role, evidence),
+            |question| codex::nudge(role, question),
+        ),
         schema: Some(codex::schema()),
         scratch_root: ctx.paths.cache.join("workers"),
         worker_lock: ctx.workspace.worker_lock.clone(),
@@ -432,7 +451,17 @@ fn ai(
     };
     if assessment.outcome == "blocked" {
         service.finish_step(&step, false, &assessment.summary, None)?;
-        return Ok(Outcome::Question(assessment.question.expect("validated")));
+        let question = assessment.question.expect("validated");
+        if nudge.is_none() {
+            return ai_turn(service, run, ctx, role, evidence, Some(&question));
+        }
+        if matches!(role, "review" | "validation") {
+            return Ok(Outcome::Failed(
+                "protocol",
+                format!("{role} asked instead of deciding from the evidence: {question}"),
+            ));
+        }
+        return Ok(Outcome::Question(question));
     }
     let passed = assessment.outcome == "complete" && assessment.criteria.iter().all(|c| c.passed);
     for criterion in &assessment.criteria {

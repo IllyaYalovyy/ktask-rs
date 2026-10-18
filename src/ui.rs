@@ -706,7 +706,7 @@ fn draw_information(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect)
     let text = if app.service.is_some() {
         if app.view == View::Config {
             format!(
-                "Project: {}\nStorage: SQLite (defaults and checks).\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {} (not connected yet)\n\nDefaults apply to new tasks; existing revisions stay pinned.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
+                "Project: {}\nStorage: SQLite (defaults and checks).\nPreferences: saved per project and instance.\n\nMouse: {}\nRun mode: {}\nPlanner approval: {}\n\nDefaults apply to new tasks; existing revisions stay pinned.\nChecks: list, add, edit, enable or disable.\nKeyboard remains available with mouse disabled.",
                 app.project_name,
                 if app.mouse_enabled {
                     "Enabled"
@@ -726,7 +726,7 @@ fn draw_information(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect)
             )
         } else {
             format!(
-                "{} · {} · {}\nA visual workspace for supervising AI coding tasks.\n\nTasks, revisions, approvals, history and events:\nrelational SQLite. Import/export uses real files.\nCodex execution, checks, review, validation and remediation are real.\nAI task breakdown and other providers are not connected yet.\n\nProduction and development use separate data roots.\n--demo never opens SQLite. --paths shows data locations.",
+                "{} · {} · {}\nA visual workspace for supervising AI coding tasks.\n\nTasks, revisions, approvals, history and events:\nrelational SQLite. Import/export uses real files.\nCodex execution, checks, review, validation, remediation and task breakdown are real.\nOther providers are not connected yet.\n\nProduction and development use separate data roots.\n--demo never opens SQLite. --paths shows data locations.",
                 crate::PRODUCT,
                 env!("CARGO_PKG_VERSION"),
                 app.instance.name()
@@ -879,7 +879,10 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
             .style(Style::new().fg(if dialog.error.is_empty() { MUTED } else { WARN })),
         error,
     );
-    let mut controls = if matches!(dialog.kind, DialogKind::RemediationPending) {
+    let mut controls = if matches!(
+        dialog.kind,
+        DialogKind::RemediationPending | DialogKind::BreakdownPending
+    ) {
         vec![("Cancel", Action::Cancel)]
     } else if dialog.read_only() {
         vec![("Close", Action::Cancel)]

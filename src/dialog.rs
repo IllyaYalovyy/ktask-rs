@@ -11,6 +11,10 @@ pub enum DialogKind {
     Move(usize),
     Repair(usize),
     RemediationPending,
+    BreakdownPending,
+    BreakdownReview {
+        proposal: crate::runner::codex::BreakdownProposal,
+    },
     RemediationReview {
         id: usize,
         proposal: crate::runner::codex::RemediationProposal,
@@ -193,6 +197,7 @@ impl Dialog {
         matches!(
             self.kind,
             DialogKind::RemediationPending
+                | DialogKind::BreakdownPending
                 | DialogKind::Help
                 | DialogKind::Stats
                 | DialogKind::Events

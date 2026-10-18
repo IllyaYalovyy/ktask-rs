@@ -35,7 +35,12 @@ fn open(t: &mut Terminal, mouse: bool, key: &str, label: &str, title: &str) -> R
     Ok(())
 }
 fn apply(t: &mut Terminal, mouse: bool) -> Result {
-    open(t, mouse, "\x13", "Apply", "Project configuration saved")
+    activate(t, mouse, "\x13", "Apply")?;
+    let rendered = t.screen("saved", |s| {
+        s.contains("Project configuration saved") && !s.contains("[Apply]")
+    })?;
+    println!("Project configuration saved\n{rendered}");
+    Ok(())
 }
 fn cancel(t: &mut Terminal, mouse: bool) -> Result {
     open(t, mouse, "\x1b", "Cancel", "Storage: SQLite")
@@ -169,7 +174,7 @@ fn real_configuration_forms_mouse_keyboard_restart_and_validation() -> Result {
         t.send("4")?;
         let restored = screen(&t, "Mouse: Disabled")?;
         assert!(restored.contains("Run mode: Continue queue"));
-        assert!(restored.contains("Review required (not connected yet)"));
+        assert!(restored.contains("Planner approval: Review required"));
         t.send("e")?; // Keyboard re-enables mouse.
         screen(&t, "Project preferences")?;
         t.send(" \x13")?;

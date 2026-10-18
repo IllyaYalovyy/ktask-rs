@@ -8,9 +8,6 @@ use std::time::Instant;
 
 impl App {
     pub fn enabled(&self, action: Action) -> bool {
-        if self.service.is_some() && matches!(action, Action::Breakdown) {
-            return false;
-        }
         let current = self.current();
         let selected = self.selected_task();
         match action {
@@ -94,10 +91,17 @@ impl App {
                             .is_some_and(|a| !a.report.is_empty() || a.question.is_some())
                     })
             }
-            Action::Edit | Action::Breakdown => {
+            Action::Edit => {
                 self.view != View::History
                     && selected.is_some_and(|t| {
                         matches!(t.status(), Status::New | Status::Pending) || t.status().failed()
+                    })
+            }
+            Action::Breakdown => {
+                self.view != View::History
+                    && selected.is_some_and(|t| {
+                        matches!(t.status(), Status::New | Status::Pending)
+                            || (t.status().failed() && self.current().is_some_and(|c| c.id == t.id))
                     })
             }
             Action::Delete | Action::Move => {
@@ -755,8 +759,11 @@ impl App {
             DialogKind::Repair(id) => {
                 self.remediate(id, dialog.value(0) == "Insert repair task")?
             }
-            DialogKind::RemediationPending | DialogKind::RemediationReview { .. } => {
-                return Err("Persistent remediation proposal is unavailable in demo mode".into());
+            DialogKind::RemediationPending
+            | DialogKind::RemediationReview { .. }
+            | DialogKind::BreakdownPending
+            | DialogKind::BreakdownReview { .. } => {
+                return Err("Persistent proposal is unavailable in demo mode".into());
             }
             DialogKind::Models(id) => self.save_models(dialog, id)?,
             DialogKind::Resolve(id) => self.resolve_failed(dialog, id)?,

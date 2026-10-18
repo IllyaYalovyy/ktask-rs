@@ -15,8 +15,11 @@ use std::{
 pub(crate) struct ProposalJob {
     target: VersionedTask,
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    handle:
-        Option<std::thread::JoinHandle<Result<crate::runner::codex::RemediationProposal, String>>>,
+    handle: Option<std::thread::JoinHandle<Result<ProposalResult, String>>>,
+}
+pub(crate) enum ProposalResult {
+    Remediation(crate::runner::codex::RemediationProposal),
+    Breakdown(crate::runner::codex::BreakdownProposal),
 }
 impl Drop for ProposalJob {
     fn drop(&mut self) {
@@ -126,12 +129,14 @@ impl App {
             }
             return true;
         }
-        if matches!(action, Action::Breakdown) {
-            self.message("AI task breakdown is not connected yet; add well-defined tasks to Queue");
-            return true;
-        }
         if !self.enabled(action) {
             return false;
+        }
+        if matches!(action, Action::Breakdown) {
+            if let Err(error) = self.propose_breakdown() {
+                self.message(error);
+            }
+            return true;
         }
         if matches!(action, Action::Diagnose) {
             if let Err(error) = self.propose_remediation() {
@@ -296,6 +301,7 @@ impl App {
                     &paths.cache.join("workers"),
                     &cwd,
                 )
+                .map(ProposalResult::Remediation)
                 .map_err(|e| e.to_string())
             })),
         });
@@ -308,13 +314,67 @@ impl App {
         Ok(())
     }
 
+    fn propose_breakdown(&mut self) -> Result<(), String> {
+        let id = self.selected_task().ok_or("No selected task")?.id;
+        let task = self
+            .service
+            .as_mut()
+            .unwrap()
+            .task(id as i64)
+            .map_err(|e| e.to_string())?
+            .ok_or("Task disappeared")?;
+        let definition = task.definition().definition.clone();
+        let model = self
+            .service
+            .as_ref()
+            .unwrap()
+            .project_defaults()
+            .map_err(|e| e.to_string())?[0]
+            .clone()
+            .ok_or("Configure a planning model first")?;
+        let paths = self.instance.paths().map_err(|e| e.to_string())?;
+        let cwd = self
+            .service
+            .as_ref()
+            .unwrap()
+            .project_root()
+            .map_err(|e| e.to_string())?;
+        let target = self.target(id)?;
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop = cancelled.clone();
+        self.proposal_job = Some(ProposalJob {
+            target,
+            cancelled,
+            handle: Some(std::thread::spawn(move || {
+                crate::runner::codex::propose_breakdown(
+                    &stop,
+                    &model,
+                    &definition.title,
+                    &definition.goal,
+                    &definition.criteria,
+                    &paths.cache.join("workers"),
+                    &cwd,
+                )
+                .map(ProposalResult::Breakdown)
+                .map_err(|e| e.to_string())
+            })),
+        });
+        self.dialog = Some(Dialog::new(
+            DialogKind::BreakdownPending,
+            "Requesting breakdown proposal",
+            "Planning subtasks in execution order.\nCancel stops the request and changes nothing. Timeout: 120 seconds.",
+            vec![],
+        ));
+        Ok(())
+    }
+
     pub(crate) fn poll_remediation(&mut self) -> bool {
         let Some(job) = &self.proposal_job else {
             return false;
         };
         if !matches!(
             self.dialog.as_ref().map(|d| &d.kind),
-            Some(DialogKind::RemediationPending)
+            Some(DialogKind::RemediationPending | DialogKind::BreakdownPending)
         ) {
             self.proposal_job.take();
             return true;
@@ -331,10 +391,44 @@ impl App {
             .unwrap_or_else(|_| Err("Remediation worker panicked".into()));
         self.dialog = None;
         match result {
-            Ok(proposal) => self.show_remediation(job.target, proposal),
+            Ok(ProposalResult::Remediation(proposal)) => {
+                self.show_remediation(job.target, proposal)
+            }
+            Ok(ProposalResult::Breakdown(proposal)) => self.show_breakdown(job.target, proposal),
             Err(error) => self.message(error),
         }
         true
+    }
+
+    fn show_breakdown(
+        &mut self,
+        target: VersionedTask,
+        proposal: crate::runner::codex::BreakdownProposal,
+    ) {
+        let body = format!(
+            "{} subtask(s) before original:\n{}\nReason: {}\n\nApply supersedes the original; attempts stay in History. Approval follows planner preference. Cancel changes nothing.",
+            proposal.tasks.len(),
+            proposal
+                .tasks
+                .iter()
+                .map(|t| format!(
+                    "• {}\n  {}\n  Criteria: {}",
+                    t.title,
+                    t.goal,
+                    t.criteria.join("; ")
+                ))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            proposal.reason,
+        );
+        let mut dialog = Dialog::new(
+            DialogKind::BreakdownReview { proposal },
+            "Breakdown proposal · replace task",
+            &body,
+            vec![],
+        );
+        dialog.expected = Some(target);
+        self.dialog = Some(dialog);
     }
 
     fn show_remediation(
@@ -484,13 +578,43 @@ impl App {
                     .push_str("\nOutput is recorded execution evidence, not simulation.");
             }
             DialogKind::Help => {
-                dialog.body = dialog.body.replace("All tasks, models, runs, and files are simulated.", "Changes save immediately. Run starts Codex in a background supervisor; Pause stops it.\nChecks, review and validation gate success. Failed work uses the remediation model.\nx abandons a waiting attempt without spending budget. Task breakdown is not connected yet.");
+                dialog.body = dialog.body.replace("All tasks, models, runs, and files are simulated.", "Changes save immediately. Run starts Codex in a background supervisor; Pause stops it.\nChecks, review and validation gate success. Failed work uses the remediation model.\nx abandons a waiting attempt without spending budget. Break down uses the planning model.");
             }
             _ => {}
         }
     }
 
     pub(crate) fn apply_persistent_dialog(&mut self, dialog: &mut Dialog) -> Result<bool, String> {
+        if let DialogKind::BreakdownReview { proposal } = &dialog.kind {
+            let target = dialog
+                .expected
+                .ok_or("Missing task version; reopen the form")?;
+            let paths = self.instance.paths().map_err(|e| e.to_string())?;
+            let ready = self
+                .service
+                .as_ref()
+                .unwrap()
+                .preferences(&paths.config)
+                .map_err(|e| e.to_string())?
+                .planner_approval
+                == domain::preferences::PlannerApproval::Automatic;
+            let defaults = self
+                .service
+                .as_ref()
+                .unwrap()
+                .defaults()
+                .map_err(|e| e.to_string())?;
+            let definitions = crate::runner::codex::breakdown_definitions(proposal, defaults);
+            let ids = self
+                .service
+                .as_mut()
+                .unwrap()
+                .apply_breakdown(target, &definitions, &proposal.reason, ready)
+                .map_err(|e| e.to_string())?;
+            self.committed("Saved to SQLite");
+            self.reveal(ids[0] as usize);
+            return Ok(true);
+        }
         if matches!(
             dialog.kind,
             DialogKind::ProjectModels(_)
@@ -522,7 +646,8 @@ impl App {
                 .ok_or_else(|| "Missing task version; reopen the form".to_owned())
         };
         match &dialog.kind {
-            DialogKind::RemediationPending => return Ok(false),
+            DialogKind::RemediationPending | DialogKind::BreakdownPending => return Ok(false),
+            DialogKind::BreakdownReview { .. } => unreachable!("handled before generic forms"),
             DialogKind::RemediationReview { id: _, proposal } => {
                 let mut repairs = Vec::new();
                 let model = match proposal {

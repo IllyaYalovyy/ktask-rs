@@ -181,6 +181,13 @@ pub enum Command {
         #[arg(long)]
         apply: bool,
     },
+    /// Ask the planning model for ordered subtasks; --apply supersedes the original.
+    Breakdown {
+        #[command(flatten)]
+        target: Target,
+        #[arg(long)]
+        apply: bool,
+    },
     /// Acknowledge current Human work; creates no AI attempt.
     Ack {
         #[command(flatten)]

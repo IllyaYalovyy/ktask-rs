@@ -42,6 +42,68 @@ fn insert_revision(
 }
 
 impl Service {
+    /// Replace pending work or failed current with planner tasks in one transaction.
+    pub fn apply_breakdown(
+        &mut self,
+        target: VersionedTask,
+        subtasks: &[Definition],
+        reason: &str,
+        ready: bool,
+    ) -> Result<Vec<i64>> {
+        require(!subtasks.is_empty(), "Breakdown needs subtasks")?;
+        require(!reason.trim().is_empty(), "Breakdown needs a reason")?;
+        for definition in subtasks {
+            definition.validate()?;
+        }
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (lifecycle, status) = checked(&tx, self.project_id, target)?;
+        let current: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM current_tasks WHERE project_id=?1",
+                [self.project_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        require(
+            (matches!(lifecycle.as_str(), "new" | "ready")
+                && matches!(status.as_str(), "new" | "ready"))
+                || (lifecycle == "ready" && status == "failed" && current == Some(target.id)),
+            "Only pending work or failed current can be broken down",
+        )?;
+        let keys = ordering::keys_before(&tx, self.project_id, Some(target.id), subtasks.len())?;
+        let now = now_ms();
+        let planner = Actor {
+            kind: ActorKind::Ai,
+            name: "planner".into(),
+        };
+        let mut ids = Vec::new();
+        for (definition, key) in subtasks.iter().zip(keys) {
+            tx.execute("INSERT INTO tasks(project_id,order_key,lifecycle,origin,created_at_ms,updated_at_ms) VALUES (?1,?2,?3,'planner',?4,?4)", params![self.project_id,key,if ready {"ready"} else {"new"},now])?;
+            let id = tx.last_insert_rowid();
+            insert_revision(&tx, id, 1, definition, ready, now, &planner)?;
+            tx.execute(
+                "UPDATE task_revisions SET change_reason=?2 WHERE task_id=?1 AND revision=1",
+                params![id, reason],
+            )?;
+            event(&tx, self.project_id, id, now, "task.planned", reason)?;
+            ids.push(id);
+        }
+        tx.execute("UPDATE tasks SET lifecycle='superseded', closed_at_ms=max(created_at_ms,?2), resolution_reason=?3, resolved_by_kind='ai', resolved_by='planner' WHERE id=?1", params![target.id,now,reason])?;
+        bump(&tx, target, now)?;
+        event(
+            &tx,
+            self.project_id,
+            target.id,
+            now,
+            "task.superseded",
+            reason,
+        )?;
+        tx.commit()?;
+        Ok(ids)
+    }
     /// Apply a validated remediation proposal atomically to failed current.
     pub fn apply_remediation(
         &mut self,

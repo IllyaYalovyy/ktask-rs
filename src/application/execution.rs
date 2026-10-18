@@ -290,6 +290,7 @@ impl Service {
         role: &str,
         model: &ModelConfig,
         scope: &str,
+        nudge: bool,
     ) -> Result<Step> {
         let tx = self
             .db
@@ -302,7 +303,7 @@ impl Service {
             tx.execute("INSERT INTO ai_sessions(project_id,task_id,role,provider,provider_scope,state,created_at_ms,last_used_at_ms) VALUES (?1,?2,?3,?4,?5,'open',?6,?6)", params![self.project_id,run.task,role,model.provider,scope,now_ms()])?;
             (tx.last_insert_rowid(), None)
         };
-        tx.execute("INSERT INTO attempt_steps(attempt_id,project_id,task_id,revision,ordinal,role,state,session_id,provider,model,effort,invocation,started_at_ms) SELECT ?1,?2,?3,?4,coalesce(max(ordinal),0)+1,?5,'running',?6,?7,?8,?9,?10,?11 FROM attempt_steps WHERE attempt_id=?1", params![run.attempt,self.project_id,run.task,run.revision,role,session,model.provider,model.model,model.effort,if provider_session.is_some() {"resume"} else {"start"},now_ms()])?;
+        tx.execute("INSERT INTO attempt_steps(attempt_id,project_id,task_id,revision,ordinal,role,state,session_id,provider,model,effort,invocation,started_at_ms) SELECT ?1,?2,?3,?4,coalesce(max(ordinal),0)+1,?5,'running',?6,?7,?8,?9,?10,?11 FROM attempt_steps WHERE attempt_id=?1", params![run.attempt,self.project_id,run.task,run.revision,role,session,model.provider,model.model,model.effort,if nudge {"nudge"} else if provider_session.is_some() {"resume"} else {"start"},now_ms()])?;
         let id = tx.last_insert_rowid();
         tx.execute("INSERT INTO model_calls(project_id,task_id,revision,step_id,session_id,role,provider,model,effort,request_key,state,started_at_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'running',?11)", params![self.project_id,run.task,run.revision,id,session,role,model.provider,model.model,model.effort,format!("{}:{id}",run.token),now_ms()])?;
         tx.commit()?;

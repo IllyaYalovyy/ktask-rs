@@ -356,7 +356,9 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
             })
         }
         Command::Stats => stats(service),
-        Command::Remediate { .. } => Err(Failure::usage("remediate command was not dispatched")),
+        Command::Remediate { .. } | Command::Breakdown { .. } => {
+            Err(Failure::usage("proposal command was not dispatched"))
+        }
     }
 }
 

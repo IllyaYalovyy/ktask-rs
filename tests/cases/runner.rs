@@ -133,6 +133,8 @@ case '{mode}' in
  malformed) printf '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}\n'; exit 0;;
  fail) printf '{{"type":"turn.failed","error":{{"message":"transport lost"}}}}\n'; exit 2;;
  question) case "$prompt" in *"Human answer"*) :;; *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
+ ask-once) case "$prompt" in *"You returned blocked"*) :;; *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
+ review-asks) case "$model" in review) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"blocked\",\"summary\":\"Need direction\",\"question\":\"Which content?\",\"criteria\":[]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;; esac;;
 esac
 case "$model" in execution|remediation) printf 'verified\n' > result.txt;; esac
 printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"complete\",\"summary\":\"Verified result\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":true,\"evidence\":\"Inspected result.txt\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'
@@ -250,11 +252,7 @@ fn reviewers_receive_durable_supervisor_evidence_not_stale_attempt_claims() -> R
         assert!(prompt.contains(artifact.to_str().unwrap()));
         assert!(prompt.contains("\"exit_code\":0"));
         assert!(prompt.contains("read-only"));
-        assert!(
-            prompt
-                .to_lowercase()
-                .contains("do not rerun writable tests")
-        );
+        assert!(prompt.contains("must not ask to"));
         assert!(!prompt.contains(writable_checks));
         assert!(!prompt.contains("Previous attempt:"));
         assert!(!prompt.contains(failed_artifact.to_str().unwrap()));
@@ -417,6 +415,65 @@ fn questions_require_answer_and_reuse_attempt() -> Result {
     assert_eq!(
         f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
         1
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+#[test]
+fn permission_style_questions_are_nudged_away_without_asking_the_owner() -> Result {
+    let f = Fixture::new()?;
+    f.provider("ask-once")?;
+    f.add("Just do it")?;
+    f.ok(&["run"])?;
+    f.state("succeeded")?;
+    // Every role asked once and was nudged once; nothing reached the owner.
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+        "execution\nexecution\nreview\nreview\nvalidation\nvalidation\n"
+    );
+    let nudge = fs::read_to_string(f.scratch.path().join("prompt-review"))?;
+    assert!(nudge.contains("read-only by design"), "{nudge}");
+    let db = f.db()?;
+    assert_eq!(
+        db.connection()
+            .query_row("SELECT count(*) FROM questions", [], |r| r.get::<_, i64>(0))?,
+        0
+    );
+    assert_eq!(
+        db.connection().query_row(
+            "SELECT count(*) FROM attempt_steps WHERE invocation='nudge' AND role='execution'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+#[test]
+fn reviewer_that_keeps_asking_stops_the_task_without_a_question_or_budget() -> Result {
+    let f = Fixture::new()?;
+    f.provider("review-asks")?;
+    f.add("Review me")?;
+    let output = f.process().arg("run").output()?;
+    assert!(!output.status.success());
+    f.state("failed")?;
+    let shown = f.ok(&["show", "1"])?;
+    assert_eq!(shown["attempts_used"], 0);
+    let outcome = shown["attempts"][0]["outcome"].as_str().unwrap_or_default();
+    assert!(
+        outcome.contains("review asked instead of deciding"),
+        "{shown}"
+    );
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+        "execution\nreview\nreview\n"
+    );
+    assert_eq!(
+        f.db()?
+            .connection()
+            .query_row("SELECT count(*) FROM questions", [], |r| r.get::<_, i64>(0))?,
+        0
     );
     f.no_scratch()?;
     Ok(())
@@ -710,7 +767,8 @@ fn real_tui_question_answer_mouse_and_keyboard_resume() -> Result {
         let attempt_id = attempts[0]["id"].clone();
         let invocations = f.scratch.path().join("provider-invocations");
         let calls_before = fs::read_to_string(&invocations)?;
-        assert_eq!(calls_before, "execution\n");
+        // The first blocked answer is nudged once before the owner is asked.
+        assert_eq!(calls_before, "execution\nexecution\n");
         let log = f.scratch.path().join("state/ktask-dev/runner-1.log");
         let log_before = fs::read(&log)?;
         t.send("r")?;
@@ -761,7 +819,7 @@ fn real_tui_question_answer_mouse_and_keyboard_resume() -> Result {
         assert_eq!(completed["attempts"].as_array().unwrap().len(), 1);
         assert_eq!(
             fs::read_to_string(&invocations)?,
-            "execution\nexecution\nreview\nvalidation\n"
+            "execution\nexecution\nexecution\nreview\nvalidation\n"
         );
         for role in ["execution", "review", "validation"] {
             let prompt = fs::read_to_string(f.scratch.path().join(format!("prompt-{role}")))?;

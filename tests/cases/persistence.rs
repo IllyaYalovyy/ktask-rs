@@ -102,7 +102,7 @@ fn failed_task(root: &Path) -> Result<(i64, i64)> {
             model: "fixture-model".into(),
             effort: None,
         };
-        let step = service.start_ai_step(&run, role, &model, "fixture")?;
+        let step = service.start_ai_step(&run, role, &model, "fixture", false)?;
         service.criterion(&run, &step, 1, false, &format!("{role} criterion evidence"))?;
         service.finish_step(&step, false, &format!("{role} structured finding"), None)?;
     }
@@ -123,7 +123,11 @@ fn provider_fixture(root: &Path, proposal: serde_json::Value, fail: bool) -> Res
     let body = if fail {
         "not-json\n".to_owned()
     } else {
-        let message = serde_json::json!({"proposal": proposal}).to_string();
+        let message = if proposal.get("action").is_some() {
+            serde_json::json!({"proposal": proposal}).to_string()
+        } else {
+            proposal.to_string()
+        };
         [serde_json::json!({"type":"thread.started","thread_id":"fixture"}),
          serde_json::json!({"type":"item.completed","item":{"type":"agent_message","text":message}}),
          serde_json::json!({"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}})]
@@ -140,6 +144,418 @@ fn provider_fixture(root: &Path, proposal: serde_json::Value, fail: bool) -> Res
     let executable = bin.join("codex");
     fs::write(&executable, script)?;
     fs::set_permissions(executable, fs::Permissions::from_mode(0o755))?;
+    Ok(())
+}
+
+fn breakdown_proposal() -> serde_json::Value {
+    serde_json::json!({"tasks":[
+        {"title":"Plan the implementation","goal":"Implement the first part","criteria":["First part works"]},
+        {"title":"Verify the result","goal":"Verify the second part","criteria":["All checks pass"]}
+    ],"reason":"Work is easier to verify in two steps."})
+}
+
+#[test]
+fn breakdown_pty_keyboard_mouse_pending_failed_approval_cancel() -> Result {
+    use ktask_rs_mk3::application::preferences::{Continuation, PlannerApproval, Preferences};
+    for mouse in [false, true] {
+        for failed in [false, true] {
+            for approval in [PlannerApproval::Automatic, PlannerApproval::ReviewRequired] {
+                for cancel in [false, true] {
+                    let scratch = support::sandbox()?;
+                    let root = scratch.path();
+                    let id = if failed {
+                        failed_task(root)?.0
+                    } else {
+                        service(root)?.create(&[definition("Pending original")], None, true)?[0]
+                    };
+                    let mut service = service(root)?;
+                    let mut models = service.project_defaults()?;
+                    let old = models.clone();
+                    models[0] = Some(ModelConfig {
+                        provider: "codex".into(),
+                        model: "planning-fixture".into(),
+                        effort: Some("high".into()),
+                    });
+                    service.save_defaults(&old, &models)?;
+                    if approval == PlannerApproval::ReviewRequired {
+                        let config = root.join("config/ktask-dev");
+                        let previous = service.preferences(&config)?;
+                        service.save_preferences(
+                            &config,
+                            &previous,
+                            &Preferences {
+                                version: 0,
+                                mouse: true,
+                                planner_approval: approval,
+                                continuation: Continuation::Single,
+                            },
+                        )?;
+                    }
+                    let before = storage_contents(root)?;
+                    let attempts = attempts_contents(root)?;
+                    provider_fixture(root, breakdown_proposal(), false)?;
+                    let mut terminal = terminal(root)?;
+                    terminal.screen("original", |s| {
+                        s.contains(if failed {
+                            "Failed current"
+                        } else {
+                            "Pending original"
+                        })
+                    })?;
+                    if mouse {
+                        terminal.click("b Break down")?;
+                    } else {
+                        terminal.send("b")?;
+                    }
+                    let screen = terminal.screen("Breakdown proposal", |s| {
+                        s.contains("Breakdown proposal · replace task")
+                    })?;
+                    println!(
+                        "BREAKDOWN mouse={mouse} failed={failed} approval={approval:?} cancel={cancel} PROPOSAL\n{screen}"
+                    );
+                    assert!(
+                        fs::read_to_string(root.join("provider-prompt"))?
+                            .contains("Acceptance checks:")
+                    );
+                    assert!(
+                        fs::read_to_string(root.join("provider-args"))?
+                            .contains("planning-fixture")
+                    );
+                    assert!(
+                        fs::read_to_string(root.join("provider-args"))?
+                            .contains("sandbox_mode=\"read-only\"")
+                    );
+                    if cancel {
+                        if mouse {
+                            terminal.click("Cancel")?;
+                        } else {
+                            terminal.send("\x1b")?;
+                        }
+                        println!(
+                            "BREAKDOWN CANCELLED\n{}",
+                            terminal.screen("cancelled", |s| !s.contains("Breakdown proposal"))?
+                        );
+                        assert_eq!(storage_contents(root)?, before);
+                    } else {
+                        if mouse {
+                            terminal.click("Apply")?;
+                        } else {
+                            terminal.send("\x13")?;
+                        }
+                        let screen =
+                            terminal.screen("applied", |s| s.contains("Saved to SQLite"))?;
+                        println!("BREAKDOWN APPLIED\n{screen}");
+                        let snapshot = service.snapshot()?;
+                        assert_eq!(snapshot.queue.len(), 2);
+                        assert_eq!(
+                            snapshot.queue[0].definition().definition.title,
+                            "Plan the implementation"
+                        );
+                        assert_eq!(
+                            snapshot.queue[1].definition().definition.title,
+                            "Verify the result"
+                        );
+                        assert_eq!(
+                            snapshot.queue[0].revisions[0].actor.as_deref(),
+                            Some("ai: planner")
+                        );
+                        assert_eq!(
+                            snapshot.queue[0].definition().lifecycle,
+                            if approval == PlannerApproval::Automatic {
+                                "ready"
+                            } else {
+                                "draft"
+                            }
+                        );
+                        assert_eq!(snapshot.history[0].id, id);
+                        assert_eq!(snapshot.history[0].lifecycle, "superseded");
+                    }
+                    assert_eq!(attempts_contents(root)?, attempts);
+                    quit(&mut terminal)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn breakdown_pty_uses_approval_preference_at_apply() -> Result {
+    use ktask_rs_mk3::application::preferences::PlannerApproval;
+    for mouse in [false, true] {
+        for updated in [PlannerApproval::Automatic, PlannerApproval::ReviewRequired] {
+            let scratch = support::sandbox()?;
+            let root = scratch.path();
+            let mut service = service(root)?;
+            let id = service.create(&[definition("Preference change target")], None, true)?[0];
+            let old = service.project_defaults()?;
+            let mut models = old.clone();
+            models[0] = Some(ModelConfig {
+                provider: "codex".into(),
+                model: "planning-fixture".into(),
+                effort: None,
+            });
+            service.save_defaults(&old, &models)?;
+            let config = root.join("config/ktask-dev");
+            let previous = service.preferences(&config)?;
+            let initial = if updated == PlannerApproval::Automatic {
+                PlannerApproval::ReviewRequired
+            } else {
+                PlannerApproval::Automatic
+            };
+            service.save_preferences(
+                &config,
+                &previous,
+                &ktask_rs_mk3::application::preferences::Preferences {
+                    planner_approval: initial,
+                    ..previous
+                },
+            )?;
+            provider_fixture(root, breakdown_proposal(), false)?;
+            let mut terminal = terminal(root)?;
+            terminal.screen("original", |s| s.contains("Preference change target"))?;
+            if mouse {
+                terminal.click("b Break down")?;
+            } else {
+                terminal.send("b")?;
+            }
+            println!(
+                "BREAKDOWN PREFERENCE mouse={mouse} initial={initial:?} PROPOSAL\n{}",
+                terminal.screen("proposal", |s| s
+                    .contains("Breakdown proposal · replace task"))?
+            );
+            let previous = service.preferences(&config)?;
+            service.save_preferences(
+                &config,
+                &previous,
+                &ktask_rs_mk3::application::preferences::Preferences {
+                    planner_approval: updated,
+                    ..previous
+                },
+            )?;
+            if mouse {
+                terminal.click("Apply")?;
+            } else {
+                terminal.send("\x13")?;
+            }
+            println!(
+                "BREAKDOWN PREFERENCE mouse={mouse} updated={updated:?} APPLIED\n{}",
+                terminal.screen("applied", |s| s.contains("Saved to SQLite"))?
+            );
+            let snapshot = service.snapshot()?;
+            assert_eq!(snapshot.queue.len(), 2);
+            assert!(snapshot.queue.iter().all(|task| task.definition().lifecycle
+                == if updated == PlannerApproval::Automatic {
+                    "ready"
+                } else {
+                    "draft"
+                }));
+            assert_eq!(snapshot.history[0].id, id);
+            quit(&mut terminal)?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn breakdown_cli_preview_apply_and_version_guard() -> Result {
+    use ktask_rs_mk3::application::preferences::{PlannerApproval, Preferences};
+    use std::process::Command;
+    for failed in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        let id = if failed {
+            failed_task(root)?.0
+        } else {
+            service(root)?.create(&[definition("CLI original")], None, true)?[0]
+        };
+        let mut service = service(root)?;
+        let old = service.project_defaults()?;
+        let mut models = old.clone();
+        models[0] = Some(ModelConfig {
+            provider: "codex".into(),
+            model: "planning-fixture".into(),
+            effort: None,
+        });
+        service.save_defaults(&old, &models)?;
+        let config = root.join("config/ktask-dev");
+        let previous = service.preferences(&config)?;
+        let initial = if failed {
+            PlannerApproval::Automatic
+        } else {
+            PlannerApproval::ReviewRequired
+        };
+        service.save_preferences(
+            &config,
+            &previous,
+            &Preferences {
+                planner_approval: initial,
+                ..previous
+            },
+        )?;
+        provider_fixture(root, breakdown_proposal(), false)?;
+        let invoke = |args: &[&str]| -> Result<serde_json::Value> {
+            let output = Command::new(env!("CARGO_BIN_EXE_ktask-dev"))
+                .env_clear()
+                .env("HOME", root)
+                .env("XDG_STATE_HOME", root.join("state"))
+                .env("XDG_CONFIG_HOME", root.join("config"))
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .env("XDG_RUNTIME_DIR", root.join("runtime"))
+                .env("TMPDIR", root)
+                .env(
+                    "PATH",
+                    format!("{}:/usr/bin:/bin", root.join("bin").display()),
+                )
+                .current_dir(root)
+                .arg("--json")
+                .args(args)
+                .output()?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(serde_json::from_slice(&output.stdout)?)
+        };
+        let id_string = id.to_string();
+        let before = storage_contents(root)?;
+        let preview = invoke(&["breakdown", &id_string])?;
+        assert_eq!(preview["data"]["applied"], false);
+        assert_eq!(
+            preview["data"]["proposal"]["tasks"][0]["title"],
+            "Plan the implementation"
+        );
+        assert_eq!(storage_contents(root)?, before);
+        let previous = service.preferences(&config)?;
+        let updated = if failed {
+            PlannerApproval::ReviewRequired
+        } else {
+            PlannerApproval::Automatic
+        };
+        service.save_preferences(
+            &config,
+            &previous,
+            &Preferences {
+                planner_approval: updated,
+                ..previous
+            },
+        )?;
+        let version = service.task(id)?.unwrap().version.to_string();
+        let applied = invoke(&["breakdown", &id_string, "--if-version", &version, "--apply"])?;
+        assert_eq!(applied["data"]["receipts"].as_array().unwrap().len(), 2);
+        let snapshot = service.snapshot()?;
+        assert_eq!(
+            snapshot
+                .queue
+                .iter()
+                .map(|t| t.definition().definition.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Plan the implementation", "Verify the result"]
+        );
+        assert_eq!(snapshot.history[0].id, id);
+        assert_eq!(snapshot.history[0].lifecycle, "superseded");
+        assert!(snapshot.queue.iter().all(|task| task.definition().lifecycle
+            == if updated == PlannerApproval::Automatic {
+                "ready"
+            } else {
+                "draft"
+            }));
+        assert_eq!(
+            snapshot.history[0].attempts.len(),
+            if failed { 1 } else { 0 }
+        );
+        let output = Command::new(env!("CARGO_BIN_EXE_ktask-dev"))
+            .env_clear()
+            .env("HOME", root)
+            .env("XDG_STATE_HOME", root.join("state"))
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .env("XDG_RUNTIME_DIR", root.join("runtime"))
+            .env("TMPDIR", root)
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", root.join("bin").display()),
+            )
+            .current_dir(root)
+            .args([
+                "--json",
+                "breakdown",
+                &id_string,
+                "--if-version",
+                &version,
+                "--apply",
+            ])
+            .output()?;
+        assert_eq!(output.status.code(), Some(4));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output.stderr)?["error"]["code"],
+            "conflict"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn breakdown_pending_queue_row_keeps_failed_current_in_place() -> Result {
+    for mouse in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        let (failed_id, _) = failed_task(root)?;
+        let mut service = service(root)?;
+        let pending_id = service.create(&[definition("Pending after failure")], None, true)?[0];
+        let old = service.project_defaults()?;
+        let mut models = old.clone();
+        models[0] = Some(ModelConfig {
+            provider: "codex".into(),
+            model: "planning-fixture".into(),
+            effort: None,
+        });
+        service.save_defaults(&old, &models)?;
+        provider_fixture(root, breakdown_proposal(), false)?;
+        let mut t = terminal(root)?;
+        t.screen("failed current", |s| s.contains("Failed current"))?;
+        if mouse {
+            t.click("2 Queue")?;
+        } else {
+            t.send("2")?;
+        }
+        t.screen("queue", |s| s.contains("Pending after failure"))?;
+        if mouse {
+            t.click("Pending after failure")?;
+        } else {
+            t.send("j")?;
+        }
+        let selected = t.screen("selected", |s| s.contains("› #2"))?;
+        println!("BREAKDOWN QUEUE mouse={mouse} SELECTED\n{selected}");
+        if mouse {
+            t.click("b Break down")?;
+        } else {
+            t.send("b")?;
+        }
+        println!(
+            "BREAKDOWN QUEUE PROPOSAL\n{}",
+            t.screen("proposal", |s| s
+                .contains("Breakdown proposal · replace task"))?
+        );
+        if mouse {
+            t.click("Apply")?;
+        } else {
+            t.send("\x13")?;
+        }
+        println!(
+            "BREAKDOWN QUEUE APPLIED\n{}",
+            t.screen("applied", |s| s.contains("Saved to SQLite"))?
+        );
+        let snapshot = service.snapshot()?;
+        assert_eq!(
+            snapshot.queue.iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![failed_id, pending_id + 1, pending_id + 2]
+        );
+        assert_eq!(snapshot.queue[0].status, "failed");
+        assert_eq!(snapshot.history[0].id, pending_id);
+        quit(&mut t)?;
+    }
     Ok(())
 }
 

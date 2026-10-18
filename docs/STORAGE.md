@@ -897,7 +897,7 @@ inspectable/restorable by ID within their project. JSON is an API representation
 `--demo` retains session-only fixtures and never opens SQLite. Real orchestration uses the same
 schema without changes. CLI/TUI request controls; only the supervisor finalizes running attempts
 after worker cleanup. Check commands and defaults are configured through shared application commands.
-Still not connected: AI task breakdown/planner queue generation, other providers and output retention.
+Still not connected: other providers and output retention.
 
 Documentation tests check every table/column/PK/FK/index and ERD relationship against SQLite,
 prepare all SQL examples, and execute representative workflows. Run make check.

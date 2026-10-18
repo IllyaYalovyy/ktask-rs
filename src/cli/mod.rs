@@ -358,6 +358,67 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             cli.json,
         );
     }
+    if let Command::Breakdown { target, apply } = command {
+        let task = service
+            .task(target.id)?
+            .ok_or_else(|| Failure::missing("Task not found"))?;
+        if target
+            .if_version
+            .is_some_and(|version| version != task.version)
+        {
+            return Err(storage::Error::Conflict(format!(
+                "Task #{} changed; read it again before retrying",
+                target.id
+            ))
+            .into());
+        }
+        let current_id = service.current_task()?.map(|t| t.id);
+        if !matches!(task.status.as_str(), "new" | "ready")
+            && !(task.status == "failed" && current_id == Some(task.id))
+        {
+            return Err(storage::Error::Conflict(
+                "Only pending work or failed current can be broken down".into(),
+            )
+            .into());
+        }
+        let model = service.project_defaults()?[0]
+            .clone()
+            .ok_or_else(|| storage::Error::Conflict("Configure a planning model first".into()))?;
+        let definition = &task.definition().definition;
+        let proposal = crate::runner::codex::propose_breakdown(
+            crate::runner::process::stopped()?.as_ref(),
+            &model,
+            &definition.title,
+            &definition.goal,
+            &definition.criteria,
+            &paths.cache.join("workers"),
+            &root,
+        )?;
+        let mut receipts = Vec::new();
+        if *apply {
+            let definitions =
+                crate::runner::codex::breakdown_definitions(&proposal, service.defaults()?);
+            let ready = service.preferences(&paths.config)?.planner_approval
+                == application::preferences::PlannerApproval::Automatic;
+            receipts = service.apply_breakdown(
+                application::VersionedTask {
+                    id: task.id,
+                    version: task.version,
+                },
+                &definitions,
+                &proposal.reason,
+                ready,
+            )?;
+        }
+        let data = json!({"proposal":proposal,"applied":apply,"receipts":receipts});
+        return emit(
+            output::Reply {
+                text: format!("{}\n", serde_json::to_string(&data).unwrap()),
+                data,
+            },
+            cli.json,
+        );
+    }
     emit(execute::command(&mut service, command)?, cli.json)
 }
 

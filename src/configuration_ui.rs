@@ -60,7 +60,7 @@ impl App {
                 Dialog::new(
                     DialogKind::ProjectModels(Box::new(values)),
                     "Project model defaults",
-                    "New tasks copy these defaults; existing revisions stay pinned.\nPlanning is stored for the forthcoming planner (not connected).\nUse provider/model; blank clears the default.",
+                    "New tasks copy these defaults; existing revisions stay pinned.\nBreak down uses the planning model.\nUse provider/model; blank clears the default.",
                     fields,
                 )
             }
@@ -101,7 +101,7 @@ impl App {
                         if saved.mouse { "Enabled" } else { "Disabled" },
                     ),
                     Field::choice(
-                        "Planner approval (not connected yet)",
+                        "Planner approval",
                         &["Automatic", "Review required"],
                         if self.review_required {
                             "Review required"
@@ -122,7 +122,7 @@ impl App {
                 Dialog::new(
                     DialogKind::Preferences(saved),
                     "Project preferences",
-                    "Saved per project in this instance. Keyboard stays available.\nApproval policy is reserved for the forthcoming planner.\nRun mode applies to the next Run/resume/retry.",
+                    "Saved per project in this instance. Keyboard stays available.\nThis policy controls new breakdown and repair tasks.\nRun mode applies to the next Run/resume/retry.",
                     fields,
                 )
             }
