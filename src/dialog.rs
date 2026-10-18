@@ -20,6 +20,7 @@ pub enum DialogKind {
     Reject(usize),
     Breakdown(usize),
     Answer(usize),
+    Abandon(usize),
     Import,
     ImportPreview(Vec<Task>),
     StoredImport(Vec<crate::application::Definition>),

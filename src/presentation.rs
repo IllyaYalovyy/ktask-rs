@@ -145,6 +145,12 @@ pub struct Attempt {
     pub resume_at: Option<Instant>,
     pub logs: Vec<String>,
     pub outcome: String,
+    /// Final report: worker summary, supervisor verdict and step findings. Empty while unknown.
+    pub report: String,
+    /// Question the worker is waiting on, while open.
+    pub question: Option<String>,
+    /// Supervisor steps in order: (role label, state).
+    pub steps: Vec<(String, String)>,
     pub step: usize,
     pub cost_cents: usize,
     pub elapsed_ms: u64,
@@ -164,6 +170,9 @@ impl Attempt {
             state: Status::Running,
             resume_at: None,
             outcome: "Running".into(),
+            report: String::new(),
+            question: None,
+            steps: Vec::new(),
             step: 0,
             cost_cents: 0,
             elapsed_ms: 0,

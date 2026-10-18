@@ -449,6 +449,67 @@ fn waiting_attempt_can_be_abandoned_then_resolved_without_spending_budget() -> R
     Ok(())
 }
 #[test]
+fn real_tui_shows_the_open_question_and_abandons_by_keyboard_and_mouse() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("question")?;
+        f.add("Ask owner")?;
+        f.ok(&["run"])?;
+        f.state("waiting")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        // The question itself is on the screen, before any dialog opens.
+        let waiting = t.screen("question panel", |s| {
+            s.contains("Question from the worker") && s.contains("Which content?")
+        })?;
+        println!("QUESTION SCREEN (mouse={mouse})\n{waiting}");
+        assert!(waiting.contains("The worker needs your answer"));
+        assert!(waiting.contains("Attempt 1"));
+        assert!(waiting.contains("Execution   ! waiting"));
+        assert!(waiting.contains("Activity · #1"));
+        assert!(!waiting.contains("Execution controls always target current"));
+        assert!(waiting.contains("[w Answer]") && waiting.contains("[x Abandon]"));
+        if mouse {
+            t.click("Which content?")?;
+            t.screen("click opens answer", |s| s.contains("Answer AI question"))?;
+            t.send("\x1b")?;
+            t.screen("closed", |s| !s.contains("Answer AI question"))?;
+            t.click("x Abandon")?;
+        } else {
+            t.send("x")?;
+        }
+        t.screen("abandon form", |s| s.contains("Abandon this attempt"))?;
+        t.send("Not worth answering")?;
+        t.screen("reason typed", |s| s.contains("Not worth answering"))?;
+        if mouse {
+            t.click("Apply")?;
+        } else {
+            t.send("\r")?;
+        }
+        let interrupted = t.screen("interrupted", |s| {
+            s.contains("Current #1 · INTERRUPTED") && s.contains("Report · attempt 1")
+        })?;
+        println!("ABANDONED SCREEN (mouse={mouse})\n{interrupted}");
+        assert!(interrupted.contains("Abandoned: Not worth answering"));
+        assert!(interrupted.contains("[t Retry]") && interrupted.contains("[z Resolve]"));
+        assert!(!interrupted.contains("Question from the worker"));
+        if mouse {
+            t.click("o Log")?;
+        } else {
+            t.send("o")?;
+        }
+        t.screen("raw log", |s| {
+            s.contains("Log · following · attempt 1 · o: report")
+        })?;
+        t.send("q")?;
+        t.finish()?;
+        let shown = f.ok(&["show", "1"])?;
+        assert_eq!(shown["attempts_used"], 0);
+        assert_eq!(shown["attempts"][0]["state"], "interrupted");
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+#[test]
 fn supervisor_death_stops_worker_and_recovery_is_explicit() -> Result {
     let f = Fixture::new()?;
     f.provider("slow")?;
@@ -481,7 +542,7 @@ fn real_tui_runner_mouse_pause_keyboard_resume_and_live_history() -> Result {
     f.add("Observed execution")?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
     t.screen("ready", |s| s.contains("Observed execution"))?;
-    t.click("r Run/resume")?;
+    t.click("r Run")?;
     println!(
         "RUNNING\n{}",
         t.screen("running", |s| s.contains("RUNNING")
@@ -626,14 +687,14 @@ fn real_tui_question_answer_mouse_and_keyboard_resume() -> Result {
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
         t.screen("current", |s| s.contains("Ask owner"))?;
         if mouse {
-            t.click("r Run/resume")?;
+            t.click("r Run")?;
         } else {
             t.send("r")?;
         }
         let waiting = t.screen("question", |s| s.contains("QUESTION"))?;
         println!("QUESTION CONTROLS (mouse={mouse})\n{waiting}");
         assert!(waiting.contains("w Answer"));
-        assert!(!waiting.contains("r Run/resume"));
+        assert!(!waiting.contains("[r R"));
         let waiting_task = f.ok(&["show", "1"])?;
         let attempts = waiting_task["attempts"].as_array().unwrap();
         assert_eq!(attempts.len(), 1);
@@ -649,7 +710,7 @@ fn real_tui_question_answer_mouse_and_keyboard_resume() -> Result {
         })?;
         println!("PREMATURE RUN REJECTED (mouse={mouse})\n{still_waiting}");
         assert!(still_waiting.contains("w Answer"));
-        assert!(!still_waiting.contains("r Run/resume"));
+        assert!(!still_waiting.contains("[r R"));
         assert_eq!(f.ok(&["show", "1"])?["attempts"], waiting_task["attempts"]);
         assert_eq!(fs::read_to_string(&invocations)?, calls_before);
         assert_eq!(fs::read(&log)?, log_before);
@@ -670,7 +731,7 @@ fn real_tui_question_answer_mouse_and_keyboard_resume() -> Result {
             t.send("\r")?;
         }
         let answered = t.screen("answer controls", |s| {
-            s.contains("Saved to SQLite") && s.contains("r Run/resume")
+            s.contains("Saved to SQLite") && s.contains("r Resume")
         })?;
         println!("ANSWERED CONTROLS (mouse={mouse})\n{answered}");
         assert!(!answered.contains("w Answer"));
@@ -679,7 +740,7 @@ fn real_tui_question_answer_mouse_and_keyboard_resume() -> Result {
             s.contains("Unavailable here") && !s.contains("Answer AI question")
         })?;
         if mouse {
-            t.click("r Run/resume")?;
+            t.click("r Resume")?;
         } else {
             t.send("r")?;
         }
@@ -767,7 +828,7 @@ fn real_tui_rate_wait_and_mouse_pause_stop_automatic_retry() -> Result {
     println!(
         "RATE WAIT\n{}",
         t.screen("waiting", |s| s.contains("WAITING")
-            && s.contains("resume in"))?
+            && s.contains("Resumes in"))?
     );
     t.click("p Pause")?;
     t.screen("scheduler stopped", |s| {

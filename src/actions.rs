@@ -75,6 +75,25 @@ impl App {
                         t.definition().kind == Kind::Human && t.status() == Status::Pending
                     })
             }
+            // Only a stored attempt that no supervisor owns can be abandoned.
+            Action::Abandon => {
+                self.view == View::Current
+                    && self.service.is_some()
+                    && current.is_some_and(|t| {
+                        matches!(
+                            t.status(),
+                            Status::Question | Status::Waiting | Status::Paused
+                        )
+                    })
+            }
+            Action::Output => {
+                self.view == View::Current
+                    && current.is_some_and(|t| {
+                        t.attempts
+                            .last()
+                            .is_some_and(|a| !a.report.is_empty() || a.question.is_some())
+                    })
+            }
             Action::Edit | Action::Breakdown => {
                 self.view != View::History
                     && selected.is_some_and(|t| {
@@ -269,6 +288,13 @@ impl App {
                 ))
             }
             Action::Help => self.open_help(),
+            Action::Output => {
+                self.show_log = !self.show_log;
+                self.follow = true;
+            }
+            Action::Abandon => {
+                self.message("Abandon applies to stored attempts only");
+            }
             Action::Inspect => {
                 if let Some(task) = self.selected_task() {
                     self.open_inspect(task.id, task.attempts.len().saturating_sub(1));
@@ -556,7 +582,7 @@ impl App {
         self.dialog = Some(Dialog::new(
             DialogKind::Help,
             "Keyboard help",
-            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nCurrent: r run/resume, p pause, t retry, d remediate\nCurrent: z resolve failed; c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nQueue: a add, i insert, e edit, d delete, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C always quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
+            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nCurrent: r run/resume, p pause, t retry, d remediate\nCurrent: z resolve failed; x abandon a waiting attempt\nCurrent: c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nCurrent: o toggles report / raw log; l all events\nQueue: a add, i insert, e edit, d delete, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C always quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
             vec![],
         ));
     }
@@ -703,6 +729,7 @@ impl App {
         }
         match dialog.kind.clone() {
             DialogKind::Task { id, insert } => self.save_task(dialog, id, insert)?,
+            DialogKind::Abandon(_) => return Err("Abandon applies to stored attempts only".into()),
             DialogKind::Delete(id) => {
                 let pos = self
                     .queue
@@ -848,6 +875,7 @@ impl App {
                     self.follow = true;
                     self.log_offset = 0;
                     self.events = vec!["Mock workspace reset".into()];
+                    self.task_events = self.events.clone();
                     self.last_workspace = self.current().map(|t| t.id);
                 }
                 self.record("Configuration applied · session only");

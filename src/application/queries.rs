@@ -211,9 +211,9 @@ impl Service {
         }
         let events = {
             let mut stmt = tx.prepare(
-                "SELECT message FROM events WHERE project_id = ?1 ORDER BY id DESC LIMIT 500",
+                "SELECT task_id, message FROM events WHERE project_id = ?1 ORDER BY id DESC LIMIT 500",
             )?;
-            stmt.query_map([self.project_id], |r| r.get(0))?
+            stmt.query_map([self.project_id], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
         tx.commit()?;
@@ -276,7 +276,7 @@ fn revisions(db: &Connection, task: i64) -> Result<Vec<Revision>> {
 }
 
 fn attempts(db: &Connection, task: i64) -> Result<Vec<Attempt>> {
-    let mut stmt = db.prepare_cached("SELECT a.id, a.revision, a.state, a.outcome, a.active_ms, a.wait_reason, a.resume_at_ms, (SELECT session_id FROM attempt_steps WHERE attempt_id = a.id AND role = 'execution' ORDER BY ordinal DESC LIMIT 1), (SELECT sum(cost_microusd) FROM model_calls WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id = a.id)) FROM attempts a WHERE task_id = ?1 ORDER BY number")?;
+    let mut stmt = db.prepare_cached("SELECT a.id, a.revision, a.state, a.outcome, a.active_ms, a.wait_reason, a.resume_at_ms, (SELECT session_id FROM attempt_steps WHERE attempt_id = a.id AND role = 'execution' ORDER BY ordinal DESC LIMIT 1), (SELECT sum(cost_microusd) FROM model_calls WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id = a.id)), a.report, (SELECT prompt FROM questions WHERE attempt_id = a.id AND state = 'open' ORDER BY id DESC LIMIT 1) FROM attempts a WHERE task_id = ?1 ORDER BY number")?;
     let mut attempts = stmt
         .query_map([task], |r| {
             Ok(Attempt {
@@ -290,6 +290,9 @@ fn attempts(db: &Connection, task: i64) -> Result<Vec<Attempt>> {
                 session: r.get(7)?,
                 cost_microusd: r.get(8)?,
                 logs: Vec::new(),
+                report: r.get(9)?,
+                question: r.get(10)?,
+                steps: Vec::new(),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -297,6 +300,18 @@ fn attempts(db: &Connection, task: i64) -> Result<Vec<Attempt>> {
         let mut output = db.prepare_cached("SELECT content FROM (SELECT sequence, content FROM attempt_output WHERE attempt_id = ?1 ORDER BY sequence DESC LIMIT 2000) ORDER BY sequence")?;
         attempt.logs = output
             .query_map([attempt.id], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut steps = db.prepare_cached(
+            "SELECT role, state, report FROM attempt_steps WHERE attempt_id = ?1 ORDER BY ordinal",
+        )?;
+        attempt.steps = steps
+            .query_map([attempt.id], |r| {
+                Ok(Step {
+                    role: r.get(0)?,
+                    state: r.get(1)?,
+                    report: r.get(2)?,
+                })
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
     }
     Ok(attempts)

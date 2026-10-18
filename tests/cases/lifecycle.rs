@@ -9,7 +9,7 @@ fn planner_subtasks_need_approval_only_by_policy() -> Result {
     key(&mut t, "j", "› #242 ")?;
     key(&mut t, "nDiscard duplicate\r", "revision 1 rejected")?;
     key(&mut t, "1", "Current #241 · PENDING")?;
-    click(&mut t, "r Run/resume", "Current #241 · RUNNING")?;
+    click(&mut t, "r Run", "Current #241 · RUNNING")?;
     quit(&mut t)
 }
 
@@ -76,14 +76,14 @@ fn model_form_all_fields_mouse_keyboard_validation_and_attempt_snapshot() -> Res
     t.screen("old snapshot retained", |s| {
         s.contains("Execution: economy / medium")
     })?;
-    key(&mut t, "\x1b", "Model: worker-v2")?;
+    key(&mut t, "\x1b", "Model worker-v2")?;
     key(&mut t, "t", "Current #1 · RUNNING")?;
     t.screen("new active time limit applies", |s| {
         s.contains("Active time limit reached")
     })?;
     key(&mut t, "c", "Execution model")?;
     key(&mut t, "\x01discard-this", "discard-this")?;
-    click(&mut t, "Cancel", "Model: worker-v2")?;
+    click(&mut t, "Cancel", "Model worker-v2")?;
     key(&mut t, "2x\r", "Exported to /demo/export.tsv")?;
     key(&mut t, "o\x01/demo/export.tsv\r\r", "Imported 120 tasks")?;
     key(&mut t, "c", "worker-v2")?;
@@ -116,7 +116,7 @@ fn approval_and_rejection_use_normal_tasks_without_losing_ready_revision() -> Re
         "approved inputs and attempts retained",
     )?;
     t.screen("still usable", |s| {
-        s.contains("Model: economy") && !s.contains("Pending revision")
+        s.contains("Model economy") && !s.contains("Pending revision")
     })?;
     key(&mut t, "d\r", "Remediation needs approval")?;
     click(&mut t, "v Approve", "approved by Human")?;
@@ -196,7 +196,7 @@ fn insertion_before_stopped_current_cleanup_failure_and_running_guard() -> Resul
     key(&mut t, "1r", "Cleanup blocked")?;
     println!(
         "CLEANUP BLOCKED\n{}",
-        t.screen("blocked start", |s| s.contains("Attempt 0"))?
+        t.screen("blocked start", |s| s.contains("No attempts yet"))?
     );
     key(&mut t, "r", "Current #241 · RUNNING")?;
     key(
@@ -288,7 +288,7 @@ fn new_task_rejection_mouse_and_configuration_field_paging() -> Result {
 fn review_all_views_at_minimum_size() -> Result {
     let mut t = open()?;
     for (tab, marker) in [
-        ("1 Current", "Output · Following"),
+        ("1 Current", "Log · following"),
         ("2 Queue", "Queue · 120 shown"),
         ("3 History", "History · 120 shown"),
         ("4 Config", "Planner approval:"),

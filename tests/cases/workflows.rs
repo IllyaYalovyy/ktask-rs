@@ -2,7 +2,7 @@ use crate::support::{Result, Terminal};
 
 fn ready(t: &Terminal) -> Result<String> {
     t.screen("current at startup", |s| {
-        s.contains("Current #1") && s.contains("Output · Following")
+        s.contains("Current #1") && s.contains("Log · following")
     })
 }
 fn key(t: &mut Terminal, keys: &str, text: &str) -> Result<String> {
@@ -40,7 +40,7 @@ fn all_screens_mouse_navigation_minimum_size_and_help() -> Result {
     key(&mut t, "\t", "ktask RS ·")?;
     key(&mut t, "\x1b[Z", "Mouse: Enabled")?;
     for (tab, marker) in [
-        ("1 Current", "Output · Following"),
+        ("1 Current", "Log · following"),
         ("2 Queue", "Queue · 120 shown"),
         ("3 History", "History · 120 shown"),
         ("4 Config", "Mouse: Enabled"),
@@ -237,11 +237,11 @@ fn mouse_execution_logs_attempts_and_statistics() -> Result {
     ready(&t)?;
     guided(&mut t)?;
     t.wheel(false, 40, 10)?;
-    t.screen("mouse output scroll", |s| s.contains("Output · Scrolled"))?;
+    t.screen("mouse output scroll", |s| s.contains("Log · scrolled"))?;
     key(&mut t, "\x1b[H", "PASS  queue fixture 01")?;
     key(&mut t, "\x1b[6~", "PASS  queue fixture 11")?;
     key(&mut t, "\x1b[5~", "PASS  queue fixture 01")?;
-    click(&mut t, "End Follow", "Output · Following")?;
+    click(&mut t, "End Follow", "Log · following")?;
     println!(
         "MINIMUM RUNNING\n{}",
         click(&mut t, "t Retry", "Current #1 · RUNNING")?
@@ -250,7 +250,7 @@ fn mouse_execution_logs_attempts_and_statistics() -> Result {
         "MINIMUM PAUSED\n{}",
         click(&mut t, "p Pause", "Current #1 · PAUSED")?
     );
-    click(&mut t, "r Run/resume", "Current #1 · RUNNING")?;
+    click(&mut t, "r Resume", "Current #1 · RUNNING")?;
     t.screen("retry failed", |s| {
         s.contains("Current #1 · FAILED") && s.contains("Attempt 2")
     })?;
@@ -263,7 +263,7 @@ fn mouse_execution_logs_attempts_and_statistics() -> Result {
         t.screen("next human", |s| s.contains("Current #2 · PENDING"))?
     );
     click(&mut t, "y Acknowledge", "Current #3 · PENDING")?;
-    click(&mut t, "r Run/resume", "Current #3 · RUNNING")?;
+    click(&mut t, "r Run", "Current #3 · RUNNING")?;
     t.screen("question", |s| s.contains("Current #3 · QUESTION"))?;
     println!(
         "MINIMUM QUESTION\n{}",
@@ -419,7 +419,7 @@ fn resize_modal_unicode_editing_and_quit_paths() -> Result {
     for (cols, rows, modal) in [(100, 26, "?"), (100, 26, "a"), (40, 10, "")] {
         let mut t = Terminal::open(cols, rows)?;
         t.screen("startup", |s| {
-            s.contains("Output") || s.contains("Please resize")
+            s.contains("Log · following") || s.contains("Please resize")
         })?;
         if !modal.is_empty() {
             key(
@@ -523,7 +523,7 @@ fn all_dialog_types_fit_at_minimum_and_mouse_search_cancel() -> Result {
             "{screen}"
         );
         println!("MINIMUM DIALOG {title}\n{screen}");
-        key(&mut t, "\x1b", "Output · Following")?;
+        key(&mut t, "\x1b", "Log · following")?;
     }
     key(&mut t, "2j", "› #2 ")?;
     for (keys, title) in [

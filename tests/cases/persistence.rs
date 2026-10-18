@@ -709,7 +709,7 @@ fn real_tui_mouse_approval_history_delete_undo_and_all_views() -> Result {
     t.click("u Undo")?;
     t.screen("restored", |s| s.contains("Queue 1"))?;
     for (tab, text) in [
-        ("1 Current", "Codex supervisor"),
+        ("1 Current", "No attempts yet"),
         ("2 Queue", "Delete and restore"),
         ("3 History", "Human approval"),
         ("4 Config", "Storage: SQLite"),

@@ -28,6 +28,14 @@ use, launch with `--project-name UNIQUE_NAME`. Each instance retains its own dat
 
 Click tabs, rows, buttons, and form fields; use the wheel to scroll. `1`–`5` or `Tab`
 switches screens; `j/k`, arrows, `PgUp/PgDn`, and `Home/End` navigate. `?` shows shortcuts.
+
+**Current Task** leads with the situation: one line says what is happening and which action it
+calls for, and the action bar lists that action first. An open question from the worker gets its
+own panel. The output pane shows the attempt report once work settles and the raw log while it
+runs; `o` switches between them. The status panel lists budget, model, and each supervisor step
+with its result. Activity shows events for the current task; `l` opens all events. A waiting or
+paused attempt with no supervisor can be abandoned with `x` (or `ktask abandon ID --reason TEXT`)
+without spending budget.
 Forms support paste, cursor editing, `Ctrl-A` to clear, `Ctrl-S` to apply, and `Esc` to cancel.
 Insertion/move dialogs offer Earlier/Later buttons (`Alt-Up/Down`) and show neighboring IDs.
 Mouse can be disabled in Configuration; keyboard controls always remain available.

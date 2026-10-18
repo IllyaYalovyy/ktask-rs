@@ -96,6 +96,18 @@ pub struct Attempt {
     pub session: Option<i64>,
     pub logs: Vec<String>,
     pub cost_microusd: Option<i64>,
+    /// Final structured report (worker summary, supervisor verdict, or wait message).
+    pub report: Option<String>,
+    /// Open question text while the attempt waits for an answer.
+    pub question: Option<String>,
+    pub steps: Vec<Step>,
+}
+/// One supervisor step of an attempt (execution, check, review, validation, remediation).
+#[derive(Clone, Debug, Serialize)]
+pub struct Step {
+    pub role: String,
+    pub state: String,
+    pub report: Option<String>,
 }
 #[derive(Clone, Debug)]
 pub struct Task {
@@ -127,7 +139,8 @@ impl Task {
 pub struct Snapshot {
     pub queue: Vec<Task>,
     pub history: Vec<Task>,
-    pub events: Vec<String>,
+    /// Newest first: (task id, message).
+    pub events: Vec<(Option<i64>, String)>,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct VersionedTask {

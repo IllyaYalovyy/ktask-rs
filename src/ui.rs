@@ -17,6 +17,22 @@ const TEXT: Color = Color::Rgb(222, 230, 241);
 const MUTED: Color = Color::Rgb(144, 160, 180);
 const ACCENT: Color = Color::Rgb(94, 218, 210);
 const WARN: Color = Color::Rgb(255, 199, 105);
+const OK: Color = Color::Rgb(126, 211, 141);
+const BAD: Color = Color::Rgb(255, 128, 128);
+
+fn status_color(status: Status) -> Color {
+    match status {
+        Status::Running => ACCENT,
+        Status::Done | Status::Override => OK,
+        Status::Failed
+        | Status::Interrupted
+        | Status::Cancelled
+        | Status::Rejected
+        | Status::Blocked => BAD,
+        Status::Question | Status::Waiting | Status::Paused => WARN,
+        _ => MUTED,
+    }
+}
 
 pub fn fits(size: Size) -> bool {
     size.width >= 70 && size.height >= 22
@@ -54,7 +70,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Span::raw(format!(" / {}   ", shortened(&app.project_name, 24))),
             Span::styled(
                 if app.service.is_some() {
-                    "SQLITE · real tasks"
+                    "SQLite · real tasks"
                 } else {
                     "MOCK DATA · session only"
                 },
@@ -82,12 +98,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         format!("Current #{} · {}", t.id, t.status().label())
     });
     frame.render_widget(
-        Paragraph::new(format!(
-            " {current}   |   Queue {} · History {}",
-            app.queue.len(),
-            app.history.len()
-        ))
-        .style(Style::new().fg(WARN)),
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                format!(" {current}"),
+                Style::new()
+                    .fg(app.current().map_or(MUTED, |t| status_color(t.status())))
+                    .bold(),
+            ),
+            Span::styled(
+                format!(
+                    "   |   Queue {} · History {}",
+                    app.queue.len(),
+                    app.history.len()
+                ),
+                Style::new().fg(MUTED),
+            ),
+        ])),
         status,
     );
     match app.view {
@@ -114,25 +140,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 fn controls(app: &App) -> Vec<(&'static str, Action)> {
     let mut controls = match app.view {
-        View::Current => vec![
-            ("r Run/resume", Action::Run),
-            ("p Pause", Action::Pause),
-            ("t Retry", Action::Retry),
-            ("d Remediate", Action::Diagnose),
-            ("z Resolve", Action::Resolve),
-            ("v Approve", Action::Approve),
-            ("n Reject", Action::Reject),
-            ("c Models", Action::Models),
-            ("w Answer", Action::Answer),
-            ("y Acknowledge", Action::Acknowledge),
-            ("Enter Details", Action::Inspect),
-            ("End Follow", Action::Follow),
-            ("e Edit", Action::Edit),
-            ("b Break down", Action::Breakdown),
-            ("a Add", Action::Add),
-            ("s Stats", Action::Stats),
-            ("l Events", Action::Events),
-        ],
+        View::Current => current_controls(app),
         View::Queue => vec![
             ("a Add", Action::Add),
             ("i Insert", Action::Insert),
@@ -174,6 +182,68 @@ fn controls(app: &App) -> Vec<(&'static str, Action)> {
         View::About => vec![("Esc Back", Action::Back)],
     };
     controls.retain(|(_, action)| app.enabled(*action));
+    controls
+}
+
+/// The one or two actions the current situation calls for come first; browsing follows.
+fn current_controls(app: &App) -> Vec<(&'static str, Action)> {
+    let status = app.current().map(|t| t.status());
+    let run = if matches!(
+        status,
+        Some(Status::Paused | Status::Question | Status::Waiting)
+    ) {
+        "r Resume"
+    } else {
+        "r Run"
+    };
+    let mut controls = match status {
+        Some(Status::Question) => vec![
+            ("w Answer", Action::Answer),
+            (run, Action::Run),
+            ("x Abandon", Action::Abandon),
+        ],
+        Some(Status::Waiting) => vec![
+            ("p Pause", Action::Pause),
+            (run, Action::Run),
+            ("x Abandon", Action::Abandon),
+        ],
+        Some(Status::Running) => vec![("p Pause", Action::Pause)],
+        Some(Status::Paused) => vec![(run, Action::Run), ("x Abandon", Action::Abandon)],
+        Some(s) if s.failed() => vec![
+            ("t Retry", Action::Retry),
+            ("d Remediate", Action::Diagnose),
+            ("z Resolve", Action::Resolve),
+        ],
+        _ => vec![
+            (run, Action::Run),
+            ("y Acknowledge", Action::Acknowledge),
+            ("v Approve", Action::Approve),
+            ("n Reject", Action::Reject),
+        ],
+    };
+    if matches!(status, Some(s) if s.failed()) {
+        controls.extend([("v Approve", Action::Approve), ("n Reject", Action::Reject)]);
+    }
+    controls.extend([
+        ("c Models", Action::Models),
+        ("Enter Details", Action::Inspect),
+        (
+            if showing_report(app) {
+                "o Log"
+            } else {
+                "o Report"
+            },
+            Action::Output,
+        ),
+        ("End Follow", Action::Follow),
+        ("e Edit", Action::Edit),
+        ("b Break down", Action::Breakdown),
+        ("a Add", Action::Add),
+        ("s Stats", Action::Stats),
+    ]);
+    if app.follow {
+        controls.retain(|(label, _)| *label != "End Follow");
+    }
     controls
 }
 
@@ -231,111 +301,256 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         );
         return;
     };
+    let status = task.status();
+    let (situation, tone) = situation(app, task);
     frame.render_widget(
         Paragraph::new(vec![
             Line::styled(
                 format!(" #{} {}", task.id, task.definition().title),
                 Style::new().bold(),
             ),
-            Line::styled(
-                task.draft()
-                    .map_or(" Execution controls always target current".into(), |r| {
-                        format!(
-                            " Pending revision {} · needs approval · v Approve / n Reject",
-                            r.number
-                        )
-                    }),
-                Style::new().fg(MUTED),
-            ),
+            Line::styled(format!(" {situation}"), Style::new().fg(tone)),
         ]),
         toolbar,
     );
-    let [left, output] =
-        Layout::horizontal([Constraint::Length(27), Constraint::Min(0)]).areas(area);
+    let [left, right] =
+        Layout::horizontal([Constraint::Length(30), Constraint::Min(0)]).areas(area);
     let [summary, events] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(5)]).areas(left);
     let attempt = task.attempts.last();
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::styled(
-                format!(
-                    "{} · {}",
-                    task.status().label(),
-                    task.definition().kind.label()
-                ),
-                Style::new().fg(WARN).bold(),
+    let inner = summary.width.saturating_sub(2) as usize;
+    let settings = &task.definition().settings;
+    let mut lines = vec![
+        Line::styled(
+            format!("{} · {}", status.label(), task.definition().kind.label()),
+            Style::new().fg(status_color(status)).bold(),
+        ),
+        Line::raw(if task.attempts.is_empty() {
+            "No attempts yet".to_owned()
+        } else if app.service.is_some() {
+            format!("Attempt {}", task.attempts.len())
+        } else {
+            format!(
+                "Attempt {} · step {}/6",
+                task.attempts.len(),
+                attempt.map_or(0, |a| a.step)
+            )
+        }),
+        Line::raw(if settings.attempt_limit == 0 {
+            format!("Budget {} used · no limit", task.used())
+        } else {
+            format!("Budget {} of {} used", task.used(), settings.attempt_limit)
+        }),
+    ];
+    let model = &settings.models[0];
+    lines.push(Line::raw(shortened(
+        &format!("Model {}", model.name),
+        inner,
+    )));
+    if let Some(effort) = &model.effort {
+        lines.push(Line::raw(shortened(&format!("Effort {effort}"), inner)));
+    }
+    if app.service.is_none() {
+        lines.push(Line::raw(format!(
+            "Cost ${:.2} (mock)",
+            task.cost() as f64 / 100.0
+        )));
+    }
+    match status {
+        Status::Waiting => lines.push(Line::styled(
+            format!(
+                "Resumes in {}s",
+                attempt.and_then(|a| a.resume_at).map_or(0, |at| at
+                    .saturating_duration_since(std::time::Instant::now())
+                    .as_secs()
+                    + 1)
             ),
-            Line::raw(if app.service.is_some() {
-                format!("Attempts: {}", task.attempts.len())
-            } else {
-                format!(
-                    "Attempt {} · step {}/6",
-                    task.attempts.len(),
-                    attempt.map_or(0, |a| a.step)
-                )
-            }),
-            Line::raw(if task.status() == Status::Waiting {
-                format!(
-                    "Rate limit · resume in {}s",
-                    attempt.and_then(|a| a.resume_at).map_or(0, |at| at
-                        .saturating_duration_since(std::time::Instant::now())
-                        .as_secs()
-                        + 1)
-                )
-            } else if task.status() == Status::Question {
-                "Waiting for your answer".into()
-            } else {
-                format!(
-                    "Budget {} / {}",
-                    task.used(),
-                    if task.definition().settings.attempt_limit == 0 {
-                        "unlimited".into()
-                    } else {
-                        task.definition().settings.attempt_limit.to_string()
-                    }
-                )
-            }),
-            Line::raw(format!(
-                "Model: {}",
-                task.definition().settings.models[0].name
-            )),
-            Line::raw(if app.service.is_some() {
-                "Codex supervisor · durable logs".into()
-            } else {
-                format!("Cost ${:.2} (mock)", task.cost() as f64 / 100.0)
-            }),
-            Line::raw("Enter: full task details"),
-        ])
-        .block(panel(" Run status ")),
+            Style::new().fg(WARN),
+        )),
+        Status::Question if app.enabled(Action::Run) => {
+            lines.push(Line::styled("Answer saved · r Resume", Style::new().fg(OK)))
+        }
+        Status::Question => lines.push(Line::styled(
+            "Waiting for your answer",
+            Style::new().fg(WARN),
+        )),
+        _ => {}
+    }
+    if let Some(attempt) = attempt.filter(|a| !a.steps.is_empty()) {
+        lines.push(Line::raw(""));
+        for (label, state) in &attempt.steps {
+            let (glyph, color) = match state.as_str() {
+                "succeeded" => ("✓", OK),
+                "failed" => ("✗", BAD),
+                "running" => ("…", ACCENT),
+                "skipped" => ("–", MUTED),
+                _ => ("!", WARN),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("{label:<12}"), Style::new().fg(MUTED)),
+                Span::styled(format!("{glyph} {state}"), Style::new().fg(color)),
+            ]));
+        }
+    }
+    // An open question is the one thing that needs the owner; it gets its own panel.
+    let question = attempt
+        .filter(|a| a.state == Status::Question)
+        .and_then(|a| a.question.clone());
+    let task_id = task.id;
+    frame.render_widget(
+        Paragraph::new(lines).block(panel(" Status · Enter: details ")),
         summary,
     );
-    let logs = attempt.map_or_else(
-        || {
-            vec![if task.ready().is_none() {
-                "Needs approval. Review the task, then Approve or Reject.".into()
-            } else if task.definition().kind == crate::presentation::Kind::Human {
-                "Human task: inspect the goal and acknowledge when done.".into()
-            } else {
-                if app.service.is_some() { "Ready. Set defaults and checks in Config; task Models edits pinned settings. Run starts execution.".into() } else { "Ready. Run current to begin a simulated attempt.".into() }
-            }]
-        },
-        |a| a.logs.clone(),
-    );
     app.hits.push((summary, Action::Inspect));
+    let activity: Vec<_> = app.task_events.iter().take(3).collect();
     frame.render_widget(
-        Paragraph::new(
-            app.events
+        Paragraph::new(if activity.is_empty() {
+            "Nothing recorded yet".to_owned()
+        } else {
+            activity
                 .iter()
-                .take(3)
                 .map(|s| shortened(s, events.width.saturating_sub(2) as usize))
                 .collect::<Vec<_>>()
-                .join("\n"),
-        )
-        .block(panel(" Events ")),
+                .join("\n")
+        })
+        .style(Style::new().fg(if activity.is_empty() { MUTED } else { TEXT }))
+        .block(panel(if app.service.is_some() {
+            format!(" Activity · #{task_id} · l: all ")
+        } else {
+            " Activity · l: all ".to_owned()
+        })),
         events,
     );
     app.hits.push((events, Action::Events));
-    let lines = wrapped(&logs.join("\n"), output.width.saturating_sub(2) as usize);
+    let output = if let Some(question) = question {
+        let text = wrapped(&question, right.width.saturating_sub(2) as usize);
+        let height = (text.len() as u16 + 2).min(right.height / 2).max(3);
+        let [ask, rest] =
+            Layout::vertical([Constraint::Length(height), Constraint::Min(3)]).areas(right);
+        frame.render_widget(
+            Paragraph::new(
+                text.into_iter()
+                    .map(|l| Line::styled(l, Style::new().fg(TEXT)))
+                    .collect::<Vec<_>>(),
+            )
+            .block(
+                panel(" Question from the worker · w: answer ").border_style(Style::new().fg(WARN)),
+            ),
+            ask,
+        );
+        app.hits.push((ask, Action::Answer));
+        rest
+    } else {
+        right
+    };
+    draw_output(frame, app, output);
+}
+
+/// One line that says what is happening and what the owner can do about it.
+fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
+    if let Some(draft) = task.draft() {
+        return (
+            format!(
+                "Pending revision {} · needs approval · v Approve / n Reject",
+                draft.number
+            ),
+            WARN,
+        );
+    }
+    let human = task.definition().kind == crate::presentation::Kind::Human;
+    let abandon = if app.service.is_some() {
+        " · x Abandon"
+    } else {
+        ""
+    };
+    match task.status() {
+        Status::Question if app.enabled(Action::Run) => (
+            "Answer saved · r Resume continues the same attempt".into(),
+            OK,
+        ),
+        Status::Question => (
+            format!("The worker needs your answer · w Answer{abandon}"),
+            WARN,
+        ),
+        Status::Waiting => (
+            format!("Provider rate limit · resumes by itself{abandon}"),
+            WARN,
+        ),
+        Status::Running if app.service.is_some() => (
+            "Running in the background supervisor · p Pause".into(),
+            ACCENT,
+        ),
+        Status::Running => ("Running (simulated) · p Pause".into(), ACCENT),
+        Status::Paused => (format!("Paused · r Resume{abandon}"), WARN),
+        s if s.failed() => (
+            "Attempt failed · t Retry · d Remediate · z Resolve".into(),
+            BAD,
+        ),
+        Status::Pending if human => ("Human task · y Acknowledge when it is done".into(), MUTED),
+        Status::Pending if app.service.is_some() => (
+            "Ready · r Run starts an attempt in the background".into(),
+            MUTED,
+        ),
+        Status::Pending => ("Ready · r Run starts a simulated attempt".into(), MUTED),
+        Status::New => ("Draft · needs approval before it can run".into(), MUTED),
+        _ => ("Execution controls always target current".into(), MUTED),
+    }
+}
+
+/// A finished attempt or an open question leads with its report; live work follows the log.
+/// `o` switches to the other one.
+fn showing_report(app: &App) -> bool {
+    app.current()
+        .and_then(|t| t.attempts.last())
+        .is_some_and(|a| {
+            let settled = !matches!(a.state, Status::Running | Status::Waiting | Status::Paused);
+            !a.report.is_empty() && (settled != app.show_log)
+        })
+}
+
+/// Report when the attempt recorded one, otherwise the raw log; `o` toggles.
+fn draw_output(frame: &mut Frame, app: &mut App, output: Rect) {
+    let showing_report = showing_report(app);
+    let task = app.current().expect("current task");
+    let attempt = task.attempts.last();
+    let report = attempt.filter(|_| showing_report);
+    let (title, text, warn_prefixes): (String, String, &[&str]) = match (attempt, report) {
+        (_, Some(a)) => (
+            format!(" Report · attempt {} · o: raw log ", task.attempts.len()),
+            format!("Outcome: {}\n\n{}", a.outcome, a.report)
+                .trim_end()
+                .to_owned(),
+            &["Outcome: Failed", "Outcome: failed", "FAIL", "Expected"],
+        ),
+        (Some(a), None) => (
+            format!(
+                " Log · {} · attempt {}{} ",
+                if app.follow { "following" } else { "scrolled" },
+                task.attempts.len(),
+                if a.report.is_empty() {
+                    ""
+                } else {
+                    " · o: report"
+                }
+            ),
+            a.logs.join("\n"),
+            &["FAIL", "Expected", "QUESTION", "Failed", "Error"],
+        ),
+        (None, None) => (
+            " Log · following ".to_owned(),
+            if task.ready().is_none() {
+                "Needs approval. Review the task, then Approve or Reject.".to_owned()
+            } else if task.definition().kind == crate::presentation::Kind::Human {
+                "Human task: inspect the goal and acknowledge when done.".to_owned()
+            } else if app.service.is_some() {
+                "Ready. r starts an attempt in the background supervisor; this pane follows its log.\nDefaults and checks live in Config; c pins models for this task.".to_owned()
+            } else {
+                "Ready. Run current to begin a simulated attempt.".to_owned()
+            },
+            &[],
+        ),
+    };
+    let lines = wrapped(&text, output.width.saturating_sub(2) as usize);
     app.log_height = output.height.saturating_sub(2) as usize;
     app.log_rows = lines.len();
     app.log_rect = output;
@@ -352,20 +567,12 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                 .skip(app.log_offset)
                 .take(app.log_height)
                 .map(|line| {
-                    let warning = line.contains("FAIL")
-                        || line.contains("Expected")
-                        || line.contains("QUESTION");
+                    let warning = warn_prefixes.iter().any(|p| line.starts_with(p));
                     Line::styled(line, Style::new().fg(if warning { WARN } else { TEXT }))
                 })
                 .collect::<Vec<_>>(),
         )
-        .block(
-            panel(format!(
-                " Output · {} ",
-                if app.follow { "Following" } else { "Scrolled" }
-            ))
-            .border_style(Style::new().fg(ACCENT)),
-        ),
+        .block(panel(title).border_style(Style::new().fg(ACCENT))),
         output,
     );
 }
@@ -443,14 +650,7 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                         - prefix.len().min(list.width.saturating_sub(4) as usize),
                 );
                 ListItem::new(Line::from(vec![
-                    Span::styled(
-                        prefix,
-                        Style::new().fg(if task.status() == Status::Failed {
-                            WARN
-                        } else {
-                            MUTED
-                        }),
-                    ),
+                    Span::styled(prefix, Style::new().fg(status_color(task.status()))),
                     Span::raw(text),
                 ]))
             })

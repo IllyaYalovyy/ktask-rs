@@ -63,6 +63,8 @@ pub enum Action {
     Move,
     Breakdown,
     Answer,
+    Abandon,
+    Output,
     Acknowledge,
     Stats,
     Events,
@@ -112,6 +114,8 @@ pub struct App {
     pub search_before: Option<Catalog>,
     pub notice: String,
     pub events: Vec<String>,
+    /// Events about the current task only (SQLite); mirrors `events` in demo mode.
+    pub task_events: Vec<String>,
     pub files: BTreeMap<String, String>,
     pub next_id: usize,
     pub undo: Option<(usize, Task)>,
@@ -130,6 +134,8 @@ pub struct App {
     pub log_rows: usize,
     pub log_height: usize,
     pub follow: bool,
+    /// Show the raw log instead of the attempt report when a report exists.
+    pub show_log: bool,
     pub quit: bool,
     pub last_tick: Instant,
 }
@@ -178,6 +184,15 @@ impl App {
             } else {
                 Vec::new()
             },
+            task_events: if demo {
+                vec![
+                    "Check failed · #1".into(),
+                    "Execution stopped".into(),
+                    "Ready for diagnosis".into(),
+                ]
+            } else {
+                Vec::new()
+            },
             files: if demo { mock::files() } else { BTreeMap::new() },
             next_id: 241,
             undo: None,
@@ -196,6 +211,7 @@ impl App {
             log_rows: 0,
             log_height: 1,
             follow: true,
+            show_log: false,
             quit: false,
             last_tick: Instant::now(),
         }
@@ -275,8 +291,10 @@ impl App {
     pub fn record(&mut self, text: impl Into<String>) {
         let text = text.into();
         self.notice.clone_from(&text);
-        self.events.insert(0, text);
+        self.events.insert(0, text.clone());
         self.events.truncate(30);
+        self.task_events.insert(0, text);
+        self.task_events.truncate(30);
     }
     pub fn key(&mut self, key: KeyEvent, fits: bool) {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -333,6 +351,8 @@ impl App {
                 KeyCode::Char('z') => Some(Action::Resolve),
                 KeyCode::Char('y') => Some(Action::Acknowledge),
                 KeyCode::Char('w') => Some(Action::Answer),
+                KeyCode::Char('x') => Some(Action::Abandon),
+                KeyCode::Char('o') => Some(Action::Output),
                 KeyCode::Char('e') => Some(Action::Edit),
                 KeyCode::Char('b') => Some(Action::Breakdown),
                 KeyCode::Enter => Some(Action::Inspect),
@@ -589,6 +609,7 @@ impl App {
         if task.needs_question && task.answer.is_empty() && attempt.step == 2 {
             attempt.state = Status::Question;
             attempt.outcome = "Waiting for answer".into();
+            attempt.question = Some("Which export format should be used?".into());
             attempt
                 .logs
                 .push("QUESTION: Which export format should be used?".into());
@@ -653,6 +674,7 @@ impl App {
         self.history_catalog.selected = Some(task.id);
         self.history.insert(0, task);
         self.follow = true;
+        self.show_log = false;
         self.log_offset = 0;
         self.reconcile();
         if (self.auto_advance || repaired.is_some())

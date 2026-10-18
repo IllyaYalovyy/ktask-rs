@@ -50,7 +50,9 @@ impl App {
         app.last_workspace = None;
         app.load_preferences()?;
         app.reload()?;
-        app.message("SQLite tasks · Run starts the supervisor · closing the TUI keeps it running");
+        app.message(
+            "Runs happen in a background supervisor; quitting this screen does not stop them",
+        );
         Ok(app)
     }
     pub(crate) fn reload(&mut self) -> Result<(), String> {
@@ -79,9 +81,21 @@ impl App {
             .collect();
         self.queue = queue;
         self.history = history;
-        self.events = snapshot.events;
+        let current = self.current().map(|t| t.id as i64);
+        self.task_events = snapshot
+            .events
+            .iter()
+            .filter(|(task, _)| current.is_some() && (*task == current || task.is_none()))
+            .map(|(_, message)| message.clone())
+            .collect();
+        self.events = snapshot
+            .events
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect();
         if self.current().map(|t| t.id) != previous {
             self.follow = true;
+            self.show_log = false;
             self.log_offset = 0;
         }
         self.reconcile();
@@ -164,6 +178,18 @@ impl App {
                     Ok(None) => self.message("No open question; use Run/resume to continue"),
                     Err(error) => self.message(error.to_string()),
                 }
+                return true;
+            }
+            Action::Abandon => {
+                let id = self.current().expect("enabled current").id;
+                let mut dialog = Dialog::new(
+                    DialogKind::Abandon(id),
+                    "Abandon this attempt",
+                    "Marks the waiting or paused attempt interrupted without spending budget.\nThe task stays current; afterwards Run starts a fresh attempt or Resolve closes it.",
+                    vec![Field::text("Reason", "")],
+                );
+                dialog.expected = self.target(id).ok();
+                self.dialog = Some(dialog);
                 return true;
             }
             Action::Approve | Action::Acknowledge => {
@@ -368,6 +394,7 @@ impl App {
             | DialogKind::Move(id)
             | DialogKind::Models(id)
             | DialogKind::Resolve(id)
+            | DialogKind::Abandon(id)
             | DialogKind::Reject(id) => Some(id),
             DialogKind::RemediationReview { id, .. } => Some(id),
             _ => None,
@@ -457,7 +484,7 @@ impl App {
                     .push_str("\nOutput is recorded execution evidence, not simulation.");
             }
             DialogKind::Help => {
-                dialog.body = dialog.body.replace("All tasks, models, runs, and files are simulated.", "Changes save immediately. Run starts Codex; Pause stops workers.\nChecks, review and validation gate success. Failed work uses the remediation model.\nModels: provider/model, optional effort. l: project events.\nTask breakdown is not connected yet.");
+                dialog.body = dialog.body.replace("All tasks, models, runs, and files are simulated.", "Changes save immediately. Run starts Codex in a background supervisor; Pause stops it.\nChecks, review and validation gate success. Failed work uses the remediation model.\nx abandons a waiting attempt without spending budget. Task breakdown is not connected yet.");
             }
             _ => {}
         }
@@ -540,6 +567,10 @@ impl App {
                     .as_mut()
                     .unwrap()
                     .answer(target()?, dialog.value(0))
+                    .map_err(|e| e.to_string())?;
+            }
+            DialogKind::Abandon(_) => {
+                crate::runner::abandon(self.service.as_mut().unwrap(), target()?, dialog.value(0))
                     .map_err(|e| e.to_string())?;
             }
             DialogKind::Task { id, insert } => {
@@ -831,6 +862,44 @@ fn project_revision(revision: &domain::Revision) -> Result<model::Revision, Stri
         repaired: false,
     })
 }
+fn step_label(role: &str) -> &'static str {
+    match role {
+        "execution" => "Execution",
+        "check" => "Checks",
+        "review" => "Review",
+        "validation" => "Validation",
+        _ => "Remediation",
+    }
+}
+/// The attempt's own report first, then each step's finding; empty until something was recorded.
+/// An open question is shown in its own panel, so it is not repeated here.
+fn report_text(attempt: &domain::Attempt) -> String {
+    let mut text = attempt
+        .report
+        .clone()
+        .filter(|report| {
+            attempt.question.as_deref() != Some(report.trim())
+                && attempt.outcome.as_deref().map(str::trim) != Some(report.trim())
+        })
+        .unwrap_or_default();
+    let last = attempt.steps.len();
+    for (i, step) in attempt.steps.iter().enumerate() {
+        let finding = step.report.as_deref().unwrap_or_default().trim();
+        if finding.is_empty() || text.contains(finding) {
+            continue;
+        }
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        let state = if attempt.state == "waiting" && i + 1 == last {
+            "waiting"
+        } else {
+            step.state.as_str()
+        };
+        text.push_str(&format!("{} · {state}: {finding}", step_label(&step.role)));
+    }
+    text
+}
 fn project_task(task: &domain::Task) -> Result<model::Task, String> {
     let revisions = task
         .revisions
@@ -860,7 +929,26 @@ fn project_task(task: &domain::Task) -> Result<model::Task, String> {
                         + Duration::from_millis(at.saturating_sub(domain::now_ms()).max(0) as u64)
                 }),
                 logs: a.logs.clone(),
-                outcome: a.outcome.clone().unwrap_or_else(|| a.state.clone()),
+                outcome: a.outcome.clone().unwrap_or_else(|| match a.state.as_str() {
+                    "waiting" => "Waiting".to_owned(),
+                    state => state.to_owned(),
+                }),
+                report: report_text(a),
+                question: a.question.clone(),
+                steps: a
+                    .steps
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| {
+                        // A waiting attempt resumes its last step; it has not failed.
+                        let state = if a.state == "waiting" && i + 1 == a.steps.len() {
+                            "waiting".to_owned()
+                        } else {
+                            s.state.clone()
+                        };
+                        (step_label(&s.role).to_owned(), state)
+                    })
+                    .collect(),
                 step: 0,
                 cost_cents: a.cost_microusd.unwrap_or(0) as usize / 10_000,
                 elapsed_ms: a.active_ms as u64,
