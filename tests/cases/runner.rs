@@ -241,6 +241,8 @@ fn reviewers_receive_durable_supervisor_evidence_not_stale_attempt_claims() -> R
         "previous failed check\n"
     );
     let remediation = fs::read_to_string(f.scratch.path().join("prompt-remediation"))?;
+    let writable_checks = "Run the project's checks and test suite yourself";
+    assert!(remediation.contains(writable_checks));
     assert!(remediation.contains(failed_artifact.to_str().unwrap()));
     assert!(remediation.contains("Check exited 7"));
     for role in ["review", "validation"] {
@@ -248,11 +250,18 @@ fn reviewers_receive_durable_supervisor_evidence_not_stale_attempt_claims() -> R
         assert!(prompt.contains(artifact.to_str().unwrap()));
         assert!(prompt.contains("\"exit_code\":0"));
         assert!(prompt.contains("read-only"));
+        assert!(
+            prompt
+                .to_lowercase()
+                .contains("do not rerun writable tests")
+        );
+        assert!(!prompt.contains(writable_checks));
         assert!(!prompt.contains("Previous attempt:"));
         assert!(!prompt.contains(failed_artifact.to_str().unwrap()));
         assert!(!prompt.contains("Check exited 7"));
     }
     let execution = fs::read_to_string(f.scratch.path().join("prompt-execution"))?;
+    assert!(execution.contains(writable_checks));
     assert!(execution.contains("temporary files only under the supplied TMPDIR"));
     f.no_scratch()?;
     Ok(())
