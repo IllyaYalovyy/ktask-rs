@@ -138,7 +138,8 @@ impl Service {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (lifecycle, status) = checked(&tx, self.project_id, target)?;
         require(
-            lifecycle == "ready" && status == "failed",
+            lifecycle == "ready"
+                && matches!(status.as_str(), "failed" | "interrupted" | "cancelled"),
             "Only failed current can be remediated",
         )?;
         let current: Option<i64> = tx
@@ -271,6 +272,18 @@ impl Service {
         definition: &Definition,
         ready: bool,
     ) -> Result<()> {
+        let actor = self.actor.clone();
+        self.revise_as(target, definition, ready, &actor, None)
+    }
+    /// A revision by an explicit actor, such as the failure judge, with its reason recorded.
+    pub fn revise_as(
+        &mut self,
+        target: VersionedTask,
+        definition: &Definition,
+        ready: bool,
+        actor: &Actor,
+        reason: Option<&str>,
+    ) -> Result<()> {
         let tx = self
             .db
             .connection_mut()
@@ -288,7 +301,13 @@ impl Service {
             "Keep the kind of an attempted task",
         )?;
         let now = now_ms();
-        insert_revision(&tx, target.id, number, definition, ready, now, &self.actor)?;
+        insert_revision(&tx, target.id, number, definition, ready, now, actor)?;
+        if let Some(reason) = reason {
+            tx.execute(
+                "UPDATE task_revisions SET change_reason=?3 WHERE task_id=?1 AND revision=?2",
+                params![target.id, number, reason],
+            )?;
+        }
         if ready {
             tx.execute(
                 "UPDATE tasks SET lifecycle = 'ready' WHERE id = ?1",
@@ -302,7 +321,15 @@ impl Service {
             target.id,
             now,
             "revision.created",
-            &format!("#{} revision {number} saved", target.id),
+            &reason.map_or_else(
+                || format!("#{} revision {number} saved", target.id),
+                |reason| {
+                    format!(
+                        "#{} revision {number} saved by {}: {reason}",
+                        target.id, actor.name
+                    )
+                },
+            ),
         )?;
         tx.commit()?;
         Ok(())

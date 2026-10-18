@@ -126,6 +126,13 @@ printf '{{"type":"thread.started","thread_id":"%s"}}\n' "$session"
 printf '%s\n' "$model" >> "$HOME/provider-invocations"
 mkdir -p "$TMPDIR/generated/deep"
 printf debris > "$TMPDIR/generated/deep/file"
+case "$prompt" in *"You are the failure judge"*)
+ case '{mode}' in
+  judge-revise) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"revise\",\"title\":\"Clarified task\",\"goal\":\"Do the clarified thing.\",\"criteria\":[\"Clarified check passes\"],\"reason\":\"The goal contradicted the criteria\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
+  judge-ask) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"ask\",\"question\":\"Keep or drop the legacy export?\",\"reason\":\"Both readings satisfy the criteria\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
+  *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"repair\",\"plan\":\"Rerun the check after writing result.txt\",\"reason\":\"The check failed on a missing file\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
+ esac;;
+esac
 case '{mode}' in
  slow) sleep 3;;
  descendants) setsid sleep 30 & printf '%s' "$!" > descendant.pid; sleep 30;;
@@ -143,6 +150,16 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
         let path = self.scratch.path().join("bin/codex");
         fs::write(&path, script)?;
         fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+        Ok(())
+    }
+    /// A project check that fails exactly once, so the next attempt goes through the judge.
+    fn fail_first_check(&self) -> Result {
+        let marker = self.scratch.path().join("check-ran");
+        let command = format!(
+            "test -f '{0}' || {{ : > '{0}'; echo 'first check fails'; exit 7; }}",
+            marker.display()
+        );
+        self.ok(&["check-set", "build", "--command", &command])?;
         Ok(())
     }
     fn no_scratch(&self) -> Result {
@@ -366,9 +383,73 @@ fn check_failure_is_real_and_remediation_stays_with_current() -> Result {
             [],
             |r| r.get::<_, i64>(0)
         )?,
-        2
+        // Each repair attempt opens with the read-only failure judge, then the worker.
+        4
+    );
+    let worker_prompt = fs::read_to_string(f.scratch.path().join("prompt-remediation"))?;
+    assert!(
+        worker_prompt.contains("Repair plan from the failure judge"),
+        "{worker_prompt}"
     );
     assert!(f.root.join("result.txt").exists());
+    f.no_scratch()?;
+    Ok(())
+}
+#[test]
+fn failure_judge_can_rewrite_the_task_without_spending_budget() -> Result {
+    let f = Fixture::new()?;
+    f.provider("judge-revise")?;
+    f.fail_first_check()?;
+    f.add("Contradictory task")?;
+    let output = f.process().args(["run"]).output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["lifecycle"], "succeeded");
+    assert_eq!(task["title"], "Clarified task");
+    assert_eq!(task["selected_revision"], 2);
+    let states: Vec<_> = task["attempts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["state"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(states, ["failed", "interrupted", "succeeded"]);
+    assert_eq!(task["attempts_used"], 2);
+    let db = f.db()?;
+    let (actor_kind, actor, reason): (String, String, String) = db.connection().query_row(
+        "SELECT created_by_kind, created_by, change_reason FROM task_revisions WHERE task_id=1 AND revision=2",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    assert_eq!((actor_kind.as_str(), actor.as_str()), ("ai", "judge"));
+    assert_eq!(reason, "The goal contradicted the criteria");
+    f.no_scratch()?;
+    Ok(())
+}
+#[test]
+fn failure_judge_asks_the_owner_only_as_a_product_question() -> Result {
+    let f = Fixture::new()?;
+    f.provider("judge-ask")?;
+    f.fail_first_check()?;
+    f.add("Ambiguous task")?;
+    f.ok(&["run"])?;
+    f.state("waiting")?;
+    let task = f.ok(&["show", "1"])?;
+    let attempts = task["attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[1]["question"], "Keep or drop the legacy export?");
+    assert_eq!(task["attempts_used"], 1);
+    f.ok(&["answer", "1", "--text", "Human answer: keep it"])?;
+    f.ok(&["resume"])?;
+    f.state("succeeded")?;
+    assert_eq!(
+        f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
+        2
+    );
     f.no_scratch()?;
     Ok(())
 }

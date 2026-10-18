@@ -42,6 +42,19 @@ design and are told so; every role is told that permissions, sandbox limits and 
 questions for the owner. A worker that still returns `blocked` is nudged once, in the same
 session, to decide on its own. Only a repeated product question reaches you; a reviewer that
 refuses to decide twice stops the task as a protocol failure, which spends no budget.
+
+The judges hold a fixed bar. Review judges the diff against Clean Code: intention-revealing
+names, small single-purpose functions, no duplication of what the project already has, no dead
+or commented-out code, comments only where code cannot speak, consistent structure, tests kept
+fast, independent and intact, no scope creep, and the code at least as clean as before.
+Validation judges the evidence: every configured check ran and exited zero, nothing was skipped,
+ignored, removed or weakened, and each criterion has proof. Both read; neither runs anything.
+
+A failed attempt is judged before the next one starts. The failure judge reads the evidence in
+a read-only turn of the remediation model and returns one decision: a repair plan for the next
+worker, a rewritten task when the definition itself is wrong, prerequisite tasks inserted before
+it, an escalated execution model, or a product question for the owner. Anything but a repair ends
+that attempt as interrupted, spending no budget, and the queue continues on the new plan.
 Forms support paste, cursor editing, `Ctrl-A` to clear, `Ctrl-S` to apply, and `Esc` to cancel.
 Insertion/move dialogs offer Earlier/Later buttons (`Alt-Up/Down`) and show neighboring IDs.
 Mouse can be disabled in Configuration; keyboard controls always remain available.

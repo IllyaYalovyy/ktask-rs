@@ -53,6 +53,14 @@ impl Service {
         let Some(attempt) = attempt else {
             return Ok("No previous attempt output is recorded.".into());
         };
+        self.attempt_evidence(attempt, artifact_root)
+    }
+    /// Durable output, retained check transcripts and findings of one attempt.
+    pub fn attempt_evidence(
+        &self,
+        attempt: i64,
+        artifact_root: &std::path::Path,
+    ) -> Result<String> {
         let mut evidence = String::from(
             "Latest attempt output, including execution, checks, review, and validation:\n",
         );

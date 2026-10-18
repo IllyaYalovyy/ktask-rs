@@ -39,6 +39,9 @@ enum Outcome {
     Paused,
     Question(String),
     RateLimit,
+    /// The failure judge changed the plan (task revised, work inserted, model escalated);
+    /// this attempt ends without spending budget, the plan is applied, and the loop goes on.
+    Replanned(codex::Judgment),
 }
 struct Context<'a> {
     paths: &'a Paths,
@@ -143,7 +146,9 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
             started: Instant::now(),
             prior_ms: run.active_ms,
         };
-        let repair = task.attempts.iter().any(|a| a.state == "failed");
+        // Only an attempt that directly follows a failure is a repair; a judge-replanned
+        // attempt ends as interrupted, so the next one starts fresh on the new plan.
+        let repair = task.attempts.last().is_some_and(|a| a.state == "failed");
         service.output(
             &run,
             "system",
@@ -208,6 +213,15 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
             Outcome::Question(question) => {
                 service.finish_run(&run, "waiting", None, &question, None)?;
                 return Ok(format!("Waiting for answer: {question}"));
+            }
+            Outcome::Replanned(judgment) => {
+                let message = describe(&judgment);
+                service.finish_run(&run, "interrupted", Some("interrupted"), &message, None)?;
+                apply_judgment(service, &run, paths, judgment)?;
+                if stop.load(Ordering::Relaxed) {
+                    return Ok(message);
+                }
+                continue;
             }
             Outcome::Failed(category, message) => {
                 service.finish_run(&run, "failed", Some(category), &message, None)?;
@@ -278,8 +292,16 @@ fn pipeline(
                 .join("\n")
         })
         .unwrap_or_default();
-    let context = format!("{answers}\nPrevious attempt: {prior}");
+    let mut context = format!("{answers}\nPrevious attempt: {prior}");
     let role = if repair { "remediation" } else { "execution" };
+    if repair {
+        match judge(service, run, ctx)? {
+            Outcome::Passed(plan) => {
+                context.push_str(&format!("\nRepair plan from the failure judge:\n{plan}"));
+            }
+            other => return Ok(other),
+        }
+    }
     let mut evidence = match ai(service, run, ctx, role, &context)? {
         Outcome::Passed(s) => {
             format!(
@@ -487,6 +509,170 @@ fn ai_turn(
         )
     })
 }
+/// The failure judge: a read-only turn of the remediation model that decides whether the
+/// next worker repairs, the task is rewritten, prerequisite work is inserted, the model is
+/// escalated, or the owner must decide. Applied immediately; nothing runs twice.
+fn judge(service: &mut Service, run: &Run, ctx: &mut Context<'_>) -> Result<Outcome> {
+    let model = run.definition.models[3].as_ref().expect("preflight models");
+    let scope = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex")))
+        .ok_or_else(|| Error::Conflict("Codex auth home is not configured".into()))?;
+    let step = service.start_ai_step(run, "remediation", model, &scope.to_string_lossy(), false)?;
+    service.output(
+        run,
+        "system",
+        &format!(
+            "failure judge: {}/{} · read-only",
+            model.provider, model.model
+        ),
+    )?;
+    let failed = service
+        .task(run.task)?
+        .and_then(|t| {
+            t.attempts
+                .iter()
+                .rev()
+                .find(|a| a.state == "failed")
+                .map(|a| a.id)
+        })
+        .ok_or_else(|| Error::Conflict("No failed attempt to judge".into()))?;
+    let evidence = service.attempt_evidence(failed, &ctx.paths.state)?;
+    let invocation = Invocation {
+        executable: ctx.codex.clone(),
+        // Sandbox follows the validation role: read-only by design.
+        args: codex::args(model, &step, "validation")?,
+        cwd: ctx.workspace.root.clone(),
+        prompt: codex::judge_prompt(run, &evidence),
+        schema: Some(codex::judge_schema()),
+        scratch_root: ctx.paths.cache.join("workers"),
+        worker_lock: ctx.workspace.worker_lock.clone(),
+    };
+    let mut stream = codex::Stream::default();
+    match execute(
+        service,
+        run,
+        &step,
+        ctx,
+        &invocation,
+        None,
+        true,
+        &mut stream,
+    )? {
+        Outcome::Passed(_) => {}
+        Outcome::Failed(category, message) => {
+            service.finish_step(&step, false, &message, None)?;
+            return Ok(Outcome::Failed(category, message));
+        }
+        other => return Ok(other),
+    }
+    if !stream.completed || stream.failed {
+        let message = "Failure judge ended without a complete turn".to_owned();
+        service.finish_step(&step, false, &message, None)?;
+        return Ok(Outcome::Failed("protocol", message));
+    }
+    let judgment = match codex::parse_judgment(stream.last_message.as_deref().unwrap_or("")) {
+        Ok(j) => j,
+        Err(e) => {
+            service.finish_step(&step, false, &e.to_string(), None)?;
+            return Ok(Outcome::Failed("protocol", e.to_string()));
+        }
+    };
+    let (summary, outcome) = match judgment {
+        codex::Judgment::Repair { plan, reason } => {
+            (format!("Repair: {reason}"), Outcome::Passed(plan))
+        }
+        codex::Judgment::Ask { question, reason } => {
+            service.finish_step(
+                &step,
+                false,
+                &format!("Owner decision needed: {reason}"),
+                None,
+            )?;
+            return Ok(Outcome::Question(question));
+        }
+        other => (describe(&other), Outcome::Replanned(other)),
+    };
+    service.finish_step(&step, true, &summary, None)?;
+    Ok(outcome)
+}
+
+fn describe(judgment: &codex::Judgment) -> String {
+    match judgment {
+        codex::Judgment::Repair { reason, .. } => format!("Repair: {reason}"),
+        codex::Judgment::Revise { reason, .. } => {
+            format!("Task revised by the failure judge: {reason}")
+        }
+        codex::Judgment::Insert { tasks, reason } => format!(
+            "{} prerequisite task(s) inserted by the failure judge: {reason}",
+            tasks.len()
+        ),
+        codex::Judgment::Escalate { model, reason } => format!(
+            "Execution escalated to {}/{} by the failure judge: {reason}",
+            model.provider, model.model
+        ),
+        codex::Judgment::Ask { reason, .. } => format!("Owner decision needed: {reason}"),
+    }
+}
+
+/// Applied once the judged attempt has ended, so ordinary revision and insertion rules hold.
+fn apply_judgment(
+    service: &mut Service,
+    run: &Run,
+    paths: &Paths,
+    judgment: codex::Judgment,
+) -> Result<()> {
+    let task = service
+        .task(run.task)?
+        .ok_or_else(|| Error::Conflict("Current task disappeared".into()))?;
+    let target = VersionedTask {
+        id: task.id,
+        version: task.version,
+    };
+    let ready = service.preferences(&paths.config).is_ok_and(|p| {
+        p.planner_approval != crate::application::preferences::PlannerApproval::ReviewRequired
+    });
+    let judge = crate::application::Actor {
+        kind: crate::application::ActorKind::Ai,
+        name: "judge".into(),
+    };
+    match judgment {
+        codex::Judgment::Revise {
+            title,
+            goal,
+            criteria,
+            reason,
+        } => {
+            let mut definition = run.definition.clone();
+            definition.title = title;
+            definition.goal = goal;
+            definition.criteria = criteria;
+            service.revise_as(target, &definition, ready, &judge, Some(&reason))?;
+        }
+        codex::Judgment::Insert { tasks, reason } => {
+            let defaults = service.defaults()?;
+            let repairs: Vec<_> = tasks
+                .iter()
+                .map(|t| crate::application::Definition {
+                    title: t.title.clone(),
+                    goal: t.goal.clone(),
+                    kind: crate::application::Kind::Ai,
+                    criteria: t.criteria.clone(),
+                    models: defaults.clone(),
+                    attempt_limit: Some(3),
+                    timeout_ms: Some(600_000),
+                })
+                .collect();
+            service.apply_remediation(target, None, &repairs, &reason, ready)?;
+        }
+        codex::Judgment::Escalate { model, reason } => {
+            service.apply_remediation(target, Some(model), &[], &reason, true)?;
+        }
+        codex::Judgment::Repair { .. } | codex::Judgment::Ask { .. } => {}
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn execute(
     service: &mut Service,

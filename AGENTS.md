@@ -34,6 +34,10 @@
   drafts separately. Store execution state only on attempts; derive the displayed task status.
   Keep per-role model/optional effort and attempt/time limits on each revision. Rate-limit
   waits resume the same attempt; infrastructure failures do not consume the coding budget.
+- Judges never run anything: review holds the Clean Code bar on the diff, validation checks the
+  evidence is complete. Every repair attempt opens with the read-only failure judge, whose
+  decision (repair, revise, insert, escalate, ask) is applied before any worker runs. Permission,
+  sandbox and tooling limits are never questions for the owner.
 - Normalize input_tokens to uncached input for every provider; cache read/write are disjoint.
 - Before switching tasks, preserve useful work, stop/reap workers, and clean owned scratch.
   Same-task retries may keep their workspace and reuse a compatible AI session. Never discard
