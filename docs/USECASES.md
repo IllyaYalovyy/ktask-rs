@@ -19,7 +19,8 @@
 
 - Open the app → inspect current task and status; an empty queue shows no current task and an Add action.
 - Monitor current → read the situation line, the step results, and the attempt report; follow the raw log while it runs; scroll back and return to the latest output.
-- Current waits on a question → the question is shown on screen with Answer first; Abandon ends a waiting or paused attempt without spending budget.
+- Current waits on a question → the question is shown on screen with Answer first; Abandon gives up on the task (History, cancelled) or drops only the waiting or paused attempt without spending budget.
+- Current failed and not worth more attempts → Abandon on Current, or Delete on it in Queue, moves it to History as cancelled with its attempts and evidence; Resolve records it as done or superseded instead.
 - Run current → see it running; pause → see it paused with progress retained and no later task started; resume → continue the same task.
 - Retry failed current → start a new attempt on that task, preserving previous attempts and their evidence.
 - Inspect failure → ask the capable model to remediate → it raises model/effort in a new revision or inserts ordinary repair tasks before failed current → execution continues; ask for human approval only when required.

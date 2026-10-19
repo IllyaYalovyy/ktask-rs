@@ -792,6 +792,16 @@ pub fn abandon(
     service.abandon_run(target, reason)
 }
 
+/// Give up on the whole task; it moves to History as cancelled with its attempts intact.
+pub fn abandon_task(
+    service: &mut Service,
+    target: crate::application::VersionedTask,
+    reason: &str,
+) -> Result<()> {
+    let _workspace = Workspace::acquire(&service.project_root()?)?;
+    service.abandon_task(target, reason)
+}
+
 /// Launch the exact supervisor executable, never a PATH-selected ktask or a rebuild target.
 pub fn background(service: &mut Service, paths: &Paths, queue: bool) -> Result<()> {
     drop(Workspace::acquire(&service.project_root()?)?);

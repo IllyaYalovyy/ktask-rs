@@ -60,21 +60,51 @@ impl Service {
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let attempt: Option<i64> = tx.query_row("SELECT latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3 AND status IN ('paused','waiting')", params![self.project_id,target.id,target.version], |r| r.get(0)).optional()?;
+        let (status, attempt) = current_status(&tx, self.project_id, target)?;
+        let attempt = attempt.filter(|_| matches!(status.as_str(), "paused" | "waiting"));
         let attempt = attempt.ok_or_else(|| {
             Error::Conflict(
                 "Only paused or waiting current can be abandoned; refresh the task".into(),
             )
         })?;
         let now = now_ms();
-        let report = format!("Abandoned: {reason}");
-        require(tx.execute("UPDATE attempts SET state='interrupted',finished_at_ms=?2,outcome=?3,failure_category='interrupted',report=?3,wait_reason=NULL,waiting_since_ms=NULL,resume_at_ms=NULL WHERE id=?1 AND state IN ('paused','waiting')", params![attempt,now,report])? == 1, "Attempt changed; refresh the task")?;
-        tx.execute("UPDATE questions SET state='cancelled',resolved_at_ms=?2 WHERE attempt_id=?1 AND state='open'", params![attempt,now])?;
-        tx.execute(
-            "UPDATE tasks SET row_version=row_version+1,updated_at_ms=?2 WHERE id=?1",
-            params![target.id, now],
+        interrupt(&tx, self.project_id, target.id, attempt, now, reason)?;
+        bump(&tx, target, now)?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// Give up on current: any paused or waiting attempt is interrupted without spending
+    /// budget, and the task moves to History as cancelled with its attempts and evidence.
+    /// The caller must hold the runner lease.
+    pub fn abandon_task(&mut self, target: VersionedTask, reason: &str) -> Result<()> {
+        require(!reason.trim().is_empty(), "A reason is required")?;
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (status, attempt) = current_status(&tx, self.project_id, target)?;
+        let now = now_ms();
+        match (status.as_str(), attempt) {
+            ("paused" | "waiting", Some(attempt)) => {
+                interrupt(&tx, self.project_id, target.id, attempt, now, reason)?;
+            }
+            ("failed" | "interrupted" | "cancelled", _) => {}
+            _ => {
+                return Err(Error::Conflict(
+                    "Only failed, paused or waiting current can be abandoned; refresh the task"
+                        .into(),
+                ));
+            }
+        }
+        super::commands::close(
+            &tx,
+            self.project_id,
+            &self.actor,
+            target,
+            "cancelled",
+            reason,
+            now,
         )?;
-        tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'attempt.interrupted','info',?5)", params![self.project_id,target.id,attempt,now,report])?;
         tx.commit()?;
         Ok(())
     }
@@ -403,4 +433,34 @@ impl Service {
         tx.commit()?;
         Ok(())
     }
+}
+
+/// Status and latest attempt of current, if it is this exact task version.
+fn current_status(
+    tx: &Transaction<'_>,
+    project: i64,
+    target: VersionedTask,
+) -> Result<(String, Option<i64>)> {
+    tx.query_row(
+        "SELECT status, latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3",
+        params![project, target.id, target.version],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()?
+    .ok_or_else(|| Error::Conflict("Task is not current, or changed elsewhere; refresh the task".into()))
+}
+
+fn interrupt(
+    tx: &Transaction<'_>,
+    project: i64,
+    task: i64,
+    attempt: i64,
+    now: i64,
+    reason: &str,
+) -> Result<()> {
+    let report = format!("Abandoned: {reason}");
+    require(tx.execute("UPDATE attempts SET state='interrupted',finished_at_ms=?2,outcome=?3,failure_category='interrupted',report=?3,wait_reason=NULL,waiting_since_ms=NULL,resume_at_ms=NULL WHERE id=?1 AND state IN ('paused','waiting')", params![attempt,now,report])? == 1, "Attempt changed; refresh the task")?;
+    tx.execute("UPDATE questions SET state='cancelled',resolved_at_ms=?2 WHERE attempt_id=?1 AND state='open'", params![attempt,now])?;
+    tx.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'attempt.interrupted','info',?5)", params![project,task,attempt,now,report])?;
+    Ok(())
 }

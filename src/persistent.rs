@@ -31,6 +31,9 @@ impl Drop for ProposalJob {
     }
 }
 
+const ABANDON_TASK: &str = "Whole task";
+const ABANDON_ATTEMPT: &str = "This attempt";
+
 impl App {
     pub(crate) fn stored_cost(&self, id: usize) -> String {
         cost_label(self.stored.get(&id).and_then(|t| {
@@ -103,6 +106,30 @@ impl App {
         }
         self.reconcile();
         Ok(())
+    }
+    /// Abandon gives up on the task. A waiting or paused attempt may be dropped alone instead.
+    fn open_abandon(&mut self, id: usize) {
+        let Some(task) = self.task(id) else {
+            return;
+        };
+        let live = !task.status().failed();
+        let title = format!("Abandon #{id} · {}", task.definition().title);
+        let mut fields = vec![Field::text("Reason", "")];
+        if live {
+            fields.push(Field::choice(
+                "Scope",
+                &[ABANDON_TASK, ABANDON_ATTEMPT],
+                ABANDON_TASK,
+            ));
+        }
+        let body = if live {
+            "Whole task: it moves to History as cancelled; the attempt is interrupted.\nThis attempt: interrupted without spending budget; the task stays current for Run."
+        } else {
+            "Gives up on this task. It moves to History as cancelled; attempts and evidence stay."
+        };
+        let mut dialog = Dialog::new(DialogKind::Abandon(id), &title, body, fields);
+        dialog.expected = self.target(id).ok();
+        self.dialog = Some(dialog);
     }
     fn target(&self, id: usize) -> Result<VersionedTask, String> {
         self.stored
@@ -187,14 +214,16 @@ impl App {
             }
             Action::Abandon => {
                 let id = self.current().expect("enabled current").id;
-                let mut dialog = Dialog::new(
-                    DialogKind::Abandon(id),
-                    "Abandon this attempt",
-                    "Marks the waiting or paused attempt interrupted without spending budget.\nThe task stays current; afterwards Run starts a fresh attempt or Resolve closes it.",
-                    vec![Field::text("Reason", "")],
-                );
-                dialog.expected = self.target(id).ok();
-                self.dialog = Some(dialog);
+                self.open_abandon(id);
+                return true;
+            }
+            Action::Delete
+                if self
+                    .selected_task()
+                    .is_some_and(|t| crate::actions::abandonable(t.status())) =>
+            {
+                let id = self.selected_task().expect("enabled task").id;
+                self.open_abandon(id);
                 return true;
             }
             Action::Approve | Action::Acknowledge => {
@@ -695,8 +724,14 @@ impl App {
                     .map_err(|e| e.to_string())?;
             }
             DialogKind::Abandon(_) => {
-                crate::runner::abandon(self.service.as_mut().unwrap(), target()?, dialog.value(0))
-                    .map_err(|e| e.to_string())?;
+                let service = self.service.as_mut().unwrap();
+                let attempt_only = dialog.fields.len() > 1 && dialog.value(1) == ABANDON_ATTEMPT;
+                if attempt_only {
+                    crate::runner::abandon(service, target()?, dialog.value(0))
+                } else {
+                    crate::runner::abandon_task(service, target()?, dialog.value(0))
+                }
+                .map_err(|e| e.to_string())?;
             }
             DialogKind::Task { id, insert } => {
                 let mut definition = if let Some(id) = id {

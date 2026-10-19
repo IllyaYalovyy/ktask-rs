@@ -152,6 +152,8 @@ pub enum Resolution {
     SucceededOverride,
     FailedSkipped,
     Superseded,
+    /// The owner gave up on the task; attempts and evidence stay in History.
+    Cancelled,
 }
 impl Resolution {
     fn as_str(self) -> &'static str {
@@ -159,6 +161,7 @@ impl Resolution {
             Self::SucceededOverride => "succeeded_override",
             Self::FailedSkipped => "failed_skipped",
             Self::Superseded => "superseded",
+            Self::Cancelled => "cancelled",
         }
     }
 }

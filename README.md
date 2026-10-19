@@ -33,9 +33,10 @@ switches screens; `j/k`, arrows, `PgUp/PgDn`, and `Home/End` navigate. `?` shows
 calls for, and the action bar lists that action first. An open question from the worker gets its
 own panel. The output pane shows the attempt report once work settles and the raw log while it
 runs; `o` switches between them. The status panel lists budget, model, and each supervisor step
-with its result. Activity shows events for the current task; `l` opens all events. A waiting or
-paused attempt with no supervisor can be abandoned with `x` (or `ktask abandon ID --reason TEXT`)
-without spending budget.
+with its result. Activity shows events for the current task; `l` opens all events. `x` abandons
+current when it is failed, waiting or paused: the task moves to History as cancelled with its
+attempts and evidence; a waiting or paused attempt can instead be dropped alone, without spending
+budget, so the task stays for a fresh run. Queue's `d` does the same for that task.
 
 Workers do not get to ask for permission. Review and validation run in a read-only sandbox by
 design and are told so; every role is told that permissions, sandbox limits and tooling are never
@@ -169,8 +170,9 @@ An unresolved failure never advances the queue. Human work/approval/questions st
 
 CLI: `run` executes current; `run --queue` continues, and `--background` detaches. `resume` and
 `retry` are aliases that still target only current. `pause ID` requests shutdown; `answer ID
---text TEXT` saves an answer, then `resume` continues. `abandon ID --reason TEXT` gives up a paused or
-waiting attempt nobody will resume (it spends no budget); then resolve the task or run it again. `recover` marks a crashed supervisor's
+--text TEXT` saves an answer, then `resume` continues. `abandon ID --reason TEXT` gives up on failed,
+paused or waiting current (History, cancelled); `--attempt` drops only the paused or waiting attempt
+nobody will resume, without spending budget, so the task can run again. `recover` marks a crashed supervisor's
 attempt interrupted only when repository and worker locks are free. Inspect its work first.
 If the guardian itself died without confirming cleanup, execution stays blocked; only after
 stopping orphaned processes and preserving work, use `recover --confirm-worker-cleanup`.

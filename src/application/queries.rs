@@ -56,6 +56,9 @@ impl Service {
         self.attempt_evidence(attempt, artifact_root)
     }
     /// Durable output, retained check transcripts and findings of one attempt.
+    /// Evidence of one attempt for a read-only judge or remediator. Each source keeps its own
+    /// tail budget so verbose runner output never erases check failures or findings; together
+    /// they stay well under the provider's input limit.
     pub fn attempt_evidence(
         &self,
         attempt: i64,
@@ -72,10 +75,8 @@ impl Service {
         chunks.reverse();
         for (stream, text) in chunks {
             evidence.push_str(&format!("\n[{stream}] {text}"));
-            retain_tail(&mut evidence, 2 * 1024 * 1024);
+            retain_tail(&mut evidence, OUTPUT_TAIL);
         }
-        // Reserve independent budgets: verbose runner output must not erase check failures.
-        retain_tail(&mut evidence, 2 * 1024 * 1024);
         let mut transcripts = String::new();
         let mut artifacts = self.db.connection().prepare("SELECT name,relative_path FROM artifacts WHERE attempt_id=?1 AND pruned_at_ms IS NULL ORDER BY id")?;
         let paths = artifacts.query_map([attempt], |r| {
@@ -91,15 +92,18 @@ impl Service {
             }
             let path = artifact_root.join(relative);
             if let Ok(mut file) = std::fs::File::open(path) {
-                let start = file.metadata()?.len().saturating_sub(1024 * 1024);
+                let start = file
+                    .metadata()?
+                    .len()
+                    .saturating_sub(TRANSCRIPT_TAIL as u64);
                 file.seek(std::io::SeekFrom::Start(start))?;
                 let mut bytes = Vec::new();
-                file.take(1024 * 1024).read_to_end(&mut bytes)?;
+                file.take(TRANSCRIPT_TAIL as u64).read_to_end(&mut bytes)?;
                 transcripts.push_str(&format!(
                     "\n\nFailed check transcript ({name}):\n{}",
                     String::from_utf8_lossy(&bytes)
                 ));
-                retain_tail(&mut transcripts, 1024 * 1024);
+                retain_tail(&mut transcripts, TRANSCRIPT_TAIL);
             }
         }
         evidence.push_str(&transcripts);
@@ -117,7 +121,7 @@ impl Service {
         })? {
             let (role, report) = row?;
             reports.push_str(&format!("\n[{role} finding] {report}"));
-            retain_tail(&mut reports, 1024 * 1024);
+            retain_tail(&mut reports, FINDINGS_TAIL);
         }
         evidence.push_str(&reports);
         Ok(evidence)
@@ -326,6 +330,12 @@ fn attempts(db: &Connection, task: i64) -> Result<Vec<Attempt>> {
 }
 
 /// Keep the newest evidence, advancing over any partial UTF-8 character.
+/// Codex rejects a turn above 1,048,576 characters; the three tails sum to 768 KiB of bytes,
+/// which is never more characters than that.
+const OUTPUT_TAIL: usize = 384 * 1024;
+const TRANSCRIPT_TAIL: usize = 256 * 1024;
+const FINDINGS_TAIL: usize = 128 * 1024;
+
 fn retain_tail(text: &mut String, limit: usize) {
     let mut start = text.len().saturating_sub(limit);
     while !text.is_char_boundary(start) {

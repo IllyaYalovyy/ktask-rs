@@ -509,18 +509,38 @@ impl Service {
             valid,
             "Only failed current can be resolved, or ready Human current acknowledged",
         )?;
-        let now = now_ms();
-        tx.execute("UPDATE tasks SET lifecycle = ?2, closed_at_ms = max(created_at_ms, ?3), resolution_reason = ?4, resolved_by_kind = ?5, resolved_by = ?6 WHERE id = ?1", params![target.id, lifecycle, now, reason, self.actor.kind.as_str(), self.actor.name])?;
-        bump(&tx, target, now)?;
-        event(
+        close(
             &tx,
             self.project_id,
-            target.id,
-            now,
-            "task.resolved",
-            &format!("#{} {lifecycle}: {reason}", target.id),
+            &self.actor,
+            target,
+            lifecycle,
+            reason,
+            now_ms(),
         )?;
         tx.commit()?;
         Ok(())
     }
+}
+
+/// Move a task to History with its final lifecycle; attempts and evidence are untouched.
+pub(super) fn close(
+    tx: &Transaction<'_>,
+    project: i64,
+    actor: &Actor,
+    target: VersionedTask,
+    lifecycle: &str,
+    reason: &str,
+    now: i64,
+) -> Result<()> {
+    tx.execute("UPDATE tasks SET lifecycle = ?2, closed_at_ms = max(created_at_ms, ?3), resolution_reason = ?4, resolved_by_kind = ?5, resolved_by = ?6 WHERE id = ?1", params![target.id, lifecycle, now, reason, actor.kind.as_str(), actor.name])?;
+    bump(tx, target, now)?;
+    event(
+        tx,
+        project,
+        target.id,
+        now,
+        "task.resolved",
+        &format!("#{} {lifecycle}: {reason}", target.id),
+    )
 }

@@ -127,6 +127,7 @@ printf '%s\n' "$model" >> "$HOME/provider-invocations"
 mkdir -p "$TMPDIR/generated/deep"
 printf debris > "$TMPDIR/generated/deep/file"
 case "$prompt" in *"You are the failure judge"*)
+ printf '%s' "$prompt" > "$HOME/prompt-judge"
  case '{mode}' in
   judge-revise) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"revise\",\"title\":\"Clarified task\",\"goal\":\"Do the clarified thing.\",\"criteria\":[\"Clarified check passes\"],\"reason\":\"The goal contradicted the criteria\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
   judge-ask) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"ask\",\"question\":\"Keep or drop the legacy export?\",\"reason\":\"Both readings satisfy the criteria\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
@@ -431,6 +432,33 @@ fn failure_judge_can_rewrite_the_task_without_spending_budget() -> Result {
     Ok(())
 }
 #[test]
+fn judge_evidence_stays_within_the_provider_input_limit() -> Result {
+    let f = Fixture::new()?;
+    f.provider("judge")?;
+    let marker = f.scratch.path().join("check-ran");
+    let command = format!(
+        "test -f '{0}' || {{ : > '{0}'; head -c 1500000 /dev/zero | tr '\\0' x; echo; echo 'first check fails'; exit 7; }}",
+        marker.display()
+    );
+    f.ok(&["check-set", "build", "--command", &command])?;
+    f.add("Noisy failure")?;
+    f.ok(&["run"])?;
+    assert_eq!(f.ok(&["show", "1"])?["lifecycle"], "succeeded");
+    let prompt = fs::read_to_string(f.scratch.path().join("prompt-judge"))?;
+    assert!(prompt.contains("You are the failure judge"));
+    assert!(
+        prompt.contains("first check fails"),
+        "the failure itself survives trimming"
+    );
+    assert!(
+        prompt.chars().count() < 1_048_576,
+        "Codex rejects longer turns; prompt was {} chars",
+        prompt.chars().count()
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+#[test]
 fn failure_judge_asks_the_owner_only_as_a_product_question() -> Result {
     let f = Fixture::new()?;
     f.provider("judge-ask")?;
@@ -560,18 +588,31 @@ fn reviewer_that_keeps_asking_stops_the_task_without_a_question_or_budget() -> R
     Ok(())
 }
 #[test]
-fn waiting_attempt_can_be_abandoned_then_resolved_without_spending_budget() -> Result {
+fn waiting_attempt_can_be_dropped_then_the_task_abandoned_without_spending_budget() -> Result {
     let f = Fixture::new()?;
     f.provider("question")?;
     f.add("Question")?;
-    let refused = f
-        .process()
-        .args(["abandon", "1", "--reason", "x"])
-        .output()?;
-    assert_eq!(refused.status.code(), Some(4));
+    for args in [
+        vec!["abandon", "1", "--reason", "x", "--attempt"],
+        vec!["abandon", "1", "--reason", "x"],
+    ] {
+        let refused = f.process().args(&args).output()?;
+        assert_eq!(
+            refused.status.code(),
+            Some(4),
+            "pending work is deleted, not abandoned"
+        );
+    }
     f.ok(&["run"])?;
     f.state("waiting")?;
-    f.ok(&["abandon", "1", "--reason", "Owner stopped this attempt"])?;
+    let dropped = f.ok(&[
+        "abandon",
+        "1",
+        "--reason",
+        "Owner stopped this attempt",
+        "--attempt",
+    ])?;
+    assert_eq!(dropped["scope"], "attempt");
     f.state("interrupted")?;
     let shown = f.ok(&["show", "1"])?;
     assert_eq!(shown["attempts_used"], 0);
@@ -583,15 +624,30 @@ fn waiting_attempt_can_be_abandoned_then_resolved_without_spending_budget() -> R
             .unwrap()
             .contains("Owner stopped")
     );
-    f.ok(&[
-        "resolve",
-        "1",
-        "--outcome",
-        "failed-skipped",
-        "--reason",
-        "Superseded by manual work",
-    ])?;
-    assert_eq!(f.ok(&["list", "--scope", "history"])?["count"], 1);
+    let abandoned = f.ok(&["abandon", "1", "--reason", "Not worth another attempt"])?;
+    assert_eq!(abandoned["scope"], "task");
+    let history = f.ok(&["list", "--scope", "history"])?;
+    assert_eq!(history["count"], 1);
+    assert_eq!(history["tasks"][0]["status"], "cancelled");
+    let shown = f.ok(&["show", "1"])?;
+    assert_eq!(shown["resolution_reason"], "Not worth another attempt");
+    assert_eq!(shown["attempts"].as_array().unwrap().len(), 1);
+    f.no_scratch()?;
+    Ok(())
+}
+#[test]
+fn waiting_task_is_abandoned_whole_in_one_command() -> Result {
+    let f = Fixture::new()?;
+    f.provider("question")?;
+    f.add("Question")?;
+    f.ok(&["run"])?;
+    f.state("waiting")?;
+    f.ok(&["abandon", "1", "--reason", "Wrong direction"])?;
+    let shown = f.ok(&["show", "1"])?;
+    assert_eq!(shown["lifecycle"], "cancelled");
+    assert_eq!(shown["attempts_used"], 0);
+    assert_eq!(shown["attempts"][0]["state"], "interrupted");
+    assert_eq!(f.ok(&["list"])?["count"], 0);
     f.no_scratch()?;
     Ok(())
 }
@@ -624,29 +680,48 @@ fn real_tui_shows_the_open_question_and_abandons_by_keyboard_and_mouse() -> Resu
         } else {
             t.send("x")?;
         }
-        t.screen("abandon form", |s| s.contains("Abandon this attempt"))?;
+        let form = t.screen("abandon form", |s| s.contains("Abandon #1 · Ask owner"))?;
+        println!("ABANDON FORM (mouse={mouse})\n{form}");
+        assert!(form.contains("Whole task") && form.contains("History as cancelled"));
         t.send("Not worth answering")?;
         t.screen("reason typed", |s| s.contains("Not worth answering"))?;
         if mouse {
+            // Default scope: the whole task leaves the queue in one step.
             t.click("Apply")?;
+            let empty = t.screen("queue empty", |s| s.contains("No current task"))?;
+            println!("AFTER ABANDON (mouse={mouse})\n{empty}");
+            t.send("3")?;
+            let history = t.screen("history", |s| s.contains("CANCELLED"))?;
+            assert!(history.contains("Ask owner"));
         } else {
+            // Tab to Scope, Space switches it to this attempt only.
+            t.send("\t ")?;
+            t.screen("attempt scope", |s| s.contains("This attempt"))?;
             t.send("\r")?;
-        }
-        let interrupted = t.screen("interrupted", |s| {
-            s.contains("Current #1 · INTERRUPTED") && s.contains("Report · attempt 1")
-        })?;
-        println!("ABANDONED SCREEN (mouse={mouse})\n{interrupted}");
-        assert!(interrupted.contains("Abandoned: Not worth answering"));
-        assert!(interrupted.contains("[t Retry]") && interrupted.contains("[z Resolve]"));
-        assert!(!interrupted.contains("Question from the worker"));
-        if mouse {
-            t.click("o Log")?;
-        } else {
+            let interrupted = t.screen("interrupted", |s| {
+                s.contains("Current #1 · INTERRUPTED") && s.contains("Report · attempt 1")
+            })?;
+            println!("ATTEMPT DROPPED (mouse={mouse})\n{interrupted}");
+            assert!(interrupted.contains("Abandoned: Not worth answering"));
+            assert!(interrupted.contains("[t Retry]") && interrupted.contains("[x Abandon]"));
+            assert!(interrupted.contains("Failed · t Retry · d Remediate · x Abandon"));
+            assert!(!interrupted.contains("Question from the worker"));
             t.send("o")?;
+            t.screen("raw log", |s| {
+                s.contains("Log · following · attempt 1 · o: report")
+            })?;
+            // Queue's Delete on a failed task is the same abandon.
+            t.send("2")?;
+            t.screen("queue", |s| s.contains("[d Delete]"))?;
+            t.send("d")?;
+            let form = t.screen("task form", |s| s.contains("Abandon #1 · Ask owner"))?;
+            assert!(
+                !form.contains("Whole task"),
+                "a failed task has no attempt to keep"
+            );
+            t.send("Done by hand\r")?;
+            t.screen("queue empty", |s| s.contains("No tasks here."))?;
         }
-        t.screen("raw log", |s| {
-            s.contains("Log · following · attempt 1 · o: report")
-        })?;
         t.send("q")?;
         t.finish()?;
         let shown = f.ok(&["show", "1"])?;

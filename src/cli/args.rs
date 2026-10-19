@@ -83,12 +83,16 @@ pub enum Command {
         #[arg(long, value_parser=nonempty)]
         text: String,
     },
-    /// Give up a paused or waiting attempt nobody will resume; then resolve or run again.
+    /// Give up on current: it moves to History as cancelled, keeping attempts and evidence.
+    /// With --attempt only the paused or waiting attempt is interrupted; the task stays.
     Abandon {
         #[command(flatten)]
         target: Target,
         #[arg(long, value_parser = nonempty)]
         reason: String,
+        /// Interrupt the paused or waiting attempt only, without spending budget.
+        #[arg(long)]
+        attempt: bool,
     },
     /// Recover an abandoned attempt, only when both supervisor and worker leases are free.
     Recover {

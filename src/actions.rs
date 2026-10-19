@@ -72,16 +72,11 @@ impl App {
                         t.definition().kind == Kind::Human && t.status() == Status::Pending
                     })
             }
-            // Only a stored attempt that no supervisor owns can be abandoned.
+            // Stored current that no supervisor owns: failed, or waiting on something.
             Action::Abandon => {
                 self.view == View::Current
                     && self.service.is_some()
-                    && current.is_some_and(|t| {
-                        matches!(
-                            t.status(),
-                            Status::Question | Status::Waiting | Status::Paused
-                        )
-                    })
+                    && current.is_some_and(|t| abandonable(t.status()))
             }
             Action::Output => {
                 self.view == View::Current
@@ -104,7 +99,16 @@ impl App {
                             || (t.status().failed() && self.current().is_some_and(|c| c.id == t.id))
                     })
             }
-            Action::Delete | Action::Move => {
+            // Delete removes pending work; on stored current it abandons the task instead.
+            Action::Delete => {
+                self.view == View::Queue
+                    && selected.is_some_and(|t| {
+                        t.status() == Status::Pending
+                            || (self.service.is_some()
+                                && (t.status() == Status::New || abandonable(t.status())))
+                    })
+            }
+            Action::Move => {
                 self.view == View::Queue
                     && selected.is_some_and(|t| {
                         t.status() == Status::Pending
@@ -297,7 +301,7 @@ impl App {
                 self.follow = true;
             }
             Action::Abandon => {
-                self.message("Abandon applies to stored attempts only");
+                self.message("Abandon applies to stored tasks only");
             }
             Action::Inspect => {
                 if let Some(task) = self.selected_task() {
@@ -586,7 +590,7 @@ impl App {
         self.dialog = Some(Dialog::new(
             DialogKind::Help,
             "Keyboard help",
-            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nCurrent: r run/resume, p pause, t retry, d remediate\nCurrent: z resolve failed; x abandon a waiting attempt\nCurrent: c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nCurrent: o toggles report / raw log; l all events\nQueue: a add, i insert, e edit, d delete, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C always quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
+            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nCurrent: r run/resume, p pause, t retry, d remediate\nCurrent: x abandon the task; z resolve failed as done\nCurrent: c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nCurrent: o toggles report / raw log; l all events\nQueue: a add, i insert, e edit, d delete/abandon, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C always quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
             vec![],
         ));
     }
@@ -733,7 +737,7 @@ impl App {
         }
         match dialog.kind.clone() {
             DialogKind::Task { id, insert } => self.save_task(dialog, id, insert)?,
-            DialogKind::Abandon(_) => return Err("Abandon applies to stored attempts only".into()),
+            DialogKind::Abandon(_) => return Err("Abandon applies to stored tasks only".into()),
             DialogKind::Delete(id) => {
                 let pos = self
                     .queue
@@ -1068,4 +1072,9 @@ fn import_settings(parts: &[&str], task: &mut Task) -> Result<(), String> {
         .parse()
         .map_err(|_| "Invalid imported active time limit")?;
     Ok(())
+}
+
+/// Current that no supervisor owns and that the owner may give up on.
+pub(crate) fn abandonable(status: Status) -> bool {
+    status.failed() || matches!(status, Status::Question | Status::Waiting | Status::Paused)
 }

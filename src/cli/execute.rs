@@ -137,12 +137,22 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
         Command::Abandon {
             target: input,
             reason,
+            attempt,
         } => {
             let (_, target) = target(service, input)?;
-            crate::runner::abandon(service, target, reason)?;
+            let (scope, text) = if *attempt {
+                crate::runner::abandon(service, target, reason)?;
+                (
+                    "attempt",
+                    "Attempt abandoned; resolve the task or run it again\n",
+                )
+            } else {
+                crate::runner::abandon_task(service, target, reason)?;
+                ("task", "Task abandoned; it is in History as cancelled\n")
+            };
             Ok(Reply {
-                data: json!({"action":"abandoned","id":target.id}),
-                text: "Attempt abandoned; resolve the task or run it again\n".into(),
+                data: json!({"action":"abandoned","id":target.id,"scope":scope}),
+                text: text.into(),
             })
         }
         Command::Answer {

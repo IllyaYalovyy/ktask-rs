@@ -212,6 +212,7 @@ fn current_controls(app: &App) -> Vec<(&'static str, Action)> {
         Some(s) if s.failed() => vec![
             ("t Retry", Action::Retry),
             ("d Remediate", Action::Diagnose),
+            ("x Abandon", Action::Abandon),
             ("z Resolve", Action::Resolve),
         ],
         _ => vec![
@@ -483,7 +484,7 @@ fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
         Status::Running => ("Running (simulated) · p Pause".into(), ACCENT),
         Status::Paused => (format!("Paused · r Resume{abandon}"), WARN),
         s if s.failed() => (
-            "Attempt failed · t Retry · d Remediate · z Resolve".into(),
+            format!("Failed · t Retry · d Remediate{abandon} · z Resolve as done"),
             BAD,
         ),
         Status::Pending if human => ("Human task · y Acknowledge when it is done".into(), MUTED),
