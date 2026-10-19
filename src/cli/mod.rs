@@ -246,6 +246,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
                     notify: *notify,
                     recover: false,
                     confirm_worker_cleanup: false,
+                    recover_target: None,
                 },
             )?
         };

@@ -29,6 +29,27 @@ pub fn git(root: &Path, args: &[&str]) -> Result<String> {
         .into())
 }
 impl Workspace {
+    pub fn supervisor_alive(root: &Path) -> Result<bool> {
+        let common = match git(
+            root,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        ) {
+            Ok(path) => PathBuf::from(path),
+            Err(Error::Conflict(_)) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let path = common.join("ktask-runner.lock");
+        let file = match File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        match file.try_lock() {
+            Ok(()) => Ok(false),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+            Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+        }
+    }
     pub fn acquire(root: &Path) -> Result<Self> {
         Self::acquire_with_cleanup_confirmation(root, false)
     }

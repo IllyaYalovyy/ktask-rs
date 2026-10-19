@@ -68,12 +68,12 @@ impl App {
             .expect("SQLite mode")
             .snapshot()
             .map_err(|e| e.to_string())?;
-        let queue = snapshot
+        let mut queue = snapshot
             .queue
             .iter()
             .map(project_task)
             .collect::<Result<Vec<_>, _>>()?;
-        let history = snapshot
+        let mut history = snapshot
             .history
             .iter()
             .map(project_task)
@@ -85,6 +85,35 @@ impl App {
             .chain(snapshot.history)
             .map(|t| (t.id as usize, t))
             .collect();
+        let alive = crate::runner::supervisor_alive(self.service.as_ref().unwrap())
+            .map_err(|e| e.to_string())?;
+        self.supervisor_alive = alive;
+        if !alive {
+            for task in queue.iter_mut().chain(history.iter_mut()) {
+                let abandoned = match task.status() {
+                    Status::Running => true,
+                    Status::Paused | Status::Waiting | Status::Question => {
+                        let attempt = self.stored.get(&(task.id)).and_then(|t| t.attempts.last());
+                        match attempt {
+                            Some(attempt) => !self
+                                .service
+                                .as_ref()
+                                .unwrap()
+                                .supervisor_released(attempt.id)
+                                .map_err(|e| e.to_string())?,
+                            None => false,
+                        }
+                    }
+                    _ => false,
+                };
+                if abandoned {
+                    task.stored_status = Some(Status::Abandoned);
+                    if let Some(attempt) = task.attempts.last_mut() {
+                        attempt.state = Status::Abandoned;
+                    }
+                }
+            }
+        }
         self.queue = queue;
         self.history = history;
         let current = self.current().map(|t| t.id as i64);
@@ -169,6 +198,22 @@ impl App {
             if let Err(error) = self.propose_remediation() {
                 self.message(error);
             }
+            return true;
+        }
+        if matches!(action, Action::Recover) {
+            let id = self.current().expect("enabled current").id;
+            let mut dialog = Dialog::new(
+                DialogKind::Recover,
+                "Recover abandoned attempt",
+                "The supervisor is absent. Inspect the workspace and any worker descendants before recovery.\nIf a worker died without cleanup confirmation, explicitly confirm its cleanup below. Recovery retains repository changes and evidence; retry explicitly.",
+                vec![Field::choice(
+                    "Worker cleanup",
+                    &["Not confirmed", "I confirm cleanup"],
+                    "Not confirmed",
+                )],
+            );
+            dialog.expected = self.target(id).ok();
+            self.dialog = Some(dialog);
             return true;
         }
         let result = match action {
@@ -675,6 +720,19 @@ impl App {
                 .ok_or_else(|| "Missing task version; reopen the form".to_owned())
         };
         match &dialog.kind {
+            DialogKind::Recover => {
+                crate::runner::run(
+                    self.service.as_mut().unwrap(),
+                    &self.instance.paths().map_err(|e| e.to_string())?,
+                    &crate::runner::Options {
+                        recover: true,
+                        confirm_worker_cleanup: dialog.value(0) == "I confirm cleanup",
+                        recover_target: Some(target()?),
+                        ..Default::default()
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            }
             DialogKind::RemediationPending | DialogKind::BreakdownPending => return Ok(false),
             DialogKind::BreakdownReview { .. } => unreachable!("handled before generic forms"),
             DialogKind::RemediationReview { id: _, proposal } => {

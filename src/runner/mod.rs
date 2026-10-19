@@ -32,6 +32,7 @@ pub struct Options {
     pub notify: bool,
     pub recover: bool,
     pub confirm_worker_cleanup: bool,
+    pub recover_target: Option<VersionedTask>,
 }
 enum Outcome {
     Passed(String),
@@ -63,6 +64,13 @@ fn executable(name: &str) -> Result<PathBuf> {
     .map_err(Into::into)
 }
 pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<String> {
+    if let Some(expected) = options.recover_target {
+        let current = service.current_task()?;
+        require(
+            current.is_some_and(|t| t.id == expected.id && t.version == expected.version),
+            "Current task changed; reopen Recover",
+        )?;
+    }
     let workspace = Workspace::acquire_with_cleanup_confirmation(
         &service.project_root()?,
         options.recover && options.confirm_worker_cleanup,
@@ -71,11 +79,11 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
         if options.confirm_worker_cleanup
             && service
                 .current_task()?
-                .is_none_or(|t| t.status != "running")
+                .is_none_or(|t| !matches!(t.status.as_str(), "running" | "paused" | "waiting"))
         {
             return Ok("Worker cleanup confirmed; retry current explicitly".into());
         }
-        service.recover_run()?;
+        service.recover_run(options.recover_target)?;
         return Ok("Recovered abandoned attempt; retry explicitly".into());
     }
     let codex = executable("codex")?;
@@ -195,6 +203,7 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
                 if options.queue && wait_for_backoff(service, &run, &context)? {
                     continue;
                 }
+                service.release_supervisor(&run)?;
                 return Ok(
                     "Waiting for rate limit backoff; resume the same attempt after 60 seconds"
                         .into(),
@@ -208,10 +217,12 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
                     "Paused; useful work and session retained",
                     None,
                 )?;
+                service.release_supervisor(&run)?;
                 return Ok("Paused".into());
             }
             Outcome::Question(question) => {
                 service.finish_run(&run, "waiting", None, &question, None)?;
+                service.release_supervisor(&run)?;
                 return Ok(format!("Waiting for answer: {question}"));
             }
             Outcome::Replanned(judgment) => {
@@ -244,6 +255,11 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
         }
     }
 }
+
+pub fn supervisor_alive(service: &Service) -> Result<bool> {
+    Workspace::supervisor_alive(&service.project_root()?)
+}
+
 fn wait_for_backoff(service: &mut Service, run: &Run, ctx: &Context<'_>) -> Result<bool> {
     service.output(run,"system","Automatic rate-limit backoff; Pause stops the scheduler without discarding the wait or session")?;
     loop {

@@ -11,6 +11,11 @@ impl App {
         let current = self.current();
         let selected = self.selected_task();
         match action {
+            Action::Recover => {
+                self.service.is_some()
+                    && self.view == View::Current
+                    && current.is_some_and(|t| t.status() == Status::Abandoned)
+            }
             Action::Run => {
                 self.view == View::Current
                     && current.is_some_and(|t| {
@@ -209,6 +214,7 @@ impl App {
             }
             Action::Follow => self.follow = true,
             Action::Run | Action::Retry => self.start_current(),
+            Action::Recover => {}
             Action::Pause => {
                 if let Some(task) = self.queue.first_mut()
                     && let Some(attempt) = task.attempts.last_mut()
@@ -590,7 +596,7 @@ impl App {
         self.dialog = Some(Dialog::new(
             DialogKind::Help,
             "Keyboard help",
-            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nCurrent: r run/resume, p pause, t retry, d remediate\nCurrent: x abandon the task; z resolve failed as done\nCurrent: c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nCurrent: o toggles report / raw log; l all events\nQueue: a add, i insert, e edit, d delete/abandon, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C always quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
+            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nCurrent: r run/resume, p pause, t retry, d remediate\nCurrent: R recover abandoned, x abandon task, z resolve failed\nCurrent: c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nCurrent: o toggles report / raw log; l all events\nQueue: a add, i insert, e edit, d delete/abandon, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C always quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
             vec![],
         ));
     }
@@ -738,6 +744,7 @@ impl App {
         match dialog.kind.clone() {
             DialogKind::Task { id, insert } => self.save_task(dialog, id, insert)?,
             DialogKind::Abandon(_) => return Err("Abandon applies to stored tasks only".into()),
+            DialogKind::Recover => return Err("Recover applies to stored tasks only".into()),
             DialogKind::Delete(id) => {
                 let pos = self
                     .queue

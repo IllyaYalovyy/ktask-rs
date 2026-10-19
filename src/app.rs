@@ -48,6 +48,7 @@ pub enum Action {
     Quit,
     Help,
     Run,
+    Recover,
     Pause,
     Retry,
     Diagnose,
@@ -99,6 +100,7 @@ pub struct Catalog {
 
 pub struct App {
     pub service: Option<crate::application::Service>,
+    pub supervisor_alive: bool,
     pub(crate) proposal_job: Option<crate::persistent::ProposalJob>,
     pub stored: BTreeMap<usize, crate::application::Task>,
     pub durable_undo: Option<crate::application::VersionedTask>,
@@ -155,6 +157,7 @@ impl App {
         };
         Self {
             service: None,
+            supervisor_alive: false,
             proposal_job: None,
             stored: BTreeMap::new(),
             durable_undo: None,
@@ -342,6 +345,7 @@ impl App {
         match self.view {
             View::Current => match code {
                 KeyCode::Char('r') => Some(Action::Run),
+                KeyCode::Char('R') => Some(Action::Recover),
                 KeyCode::Char('p') => Some(Action::Pause),
                 KeyCode::Char('t') => Some(Action::Retry),
                 KeyCode::Char('d') => Some(Action::Diagnose),
@@ -547,7 +551,24 @@ impl App {
                             self.message(error);
                         }
                     }
-                    Ok(false) => return false,
+                    Ok(false) => {
+                        if self.current().is_some_and(|t| {
+                            matches!(
+                                t.status(),
+                                Status::Running
+                                    | Status::Paused
+                                    | Status::Waiting
+                                    | Status::Question
+                                    | Status::Abandoned
+                            )
+                        }) {
+                            if let Err(error) = self.reload() {
+                                self.message(error);
+                            }
+                            return true;
+                        }
+                        return false;
+                    }
                     Err(error) => self.message(error.to_string()),
                 }
                 return true;

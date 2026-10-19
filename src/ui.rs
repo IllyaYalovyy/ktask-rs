@@ -24,7 +24,8 @@ fn status_color(status: Status) -> Color {
     match status {
         Status::Running => ACCENT,
         Status::Done | Status::Override => OK,
-        Status::Failed
+        Status::Abandoned
+        | Status::Failed
         | Status::Interrupted
         | Status::Cancelled
         | Status::Rejected
@@ -95,7 +96,24 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         x += rect.width + 1;
     }
     let current = app.current().map_or("No current task".into(), |t| {
-        format!("Current #{} · {}", t.id, t.status().label())
+        let supervisor = if app.service.is_some()
+            && matches!(
+                t.status(),
+                Status::Running
+                    | Status::Paused
+                    | Status::Waiting
+                    | Status::Question
+                    | Status::Abandoned
+            ) {
+            if app.supervisor_alive {
+                " · supervisor alive"
+            } else {
+                " · supervisor absent"
+            }
+        } else {
+            ""
+        };
+        format!("Current #{} · {}{supervisor}", t.id, t.status().label())
     });
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -197,6 +215,7 @@ fn current_controls(app: &App) -> Vec<(&'static str, Action)> {
         "r Run"
     };
     let mut controls = match status {
+        Some(Status::Abandoned) => vec![("R Recover", Action::Recover)],
         Some(Status::Question) => vec![
             ("w Answer", Action::Answer),
             (run, Action::Run),
@@ -465,6 +484,10 @@ fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
         ""
     };
     match task.status() {
+        Status::Abandoned => (
+            "Supervisor absent · R Recover after inspecting the workspace".into(),
+            BAD,
+        ),
         Status::Question if app.enabled(Action::Run) => (
             "Answer saved · r Resume continues the same attempt".into(),
             OK,

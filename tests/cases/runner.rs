@@ -492,6 +492,9 @@ fn pause_resume_keeps_attempt_session_and_cleans_worker_tmp() -> Result {
     f.ok(&["pause", "1"])?;
     run.0.wait()?;
     f.state("paused")?;
+    let recover = f.process().arg("recover").output()?;
+    assert_eq!(recover.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&recover.stderr).contains("yielded this attempt normally"));
     f.no_scratch()?;
     f.provider("normal")?;
     f.ok(&["resume"])?;
@@ -517,6 +520,9 @@ fn questions_require_answer_and_reuse_attempt() -> Result {
     f.add("Question")?;
     f.ok(&["run"])?;
     f.state("waiting")?;
+    let recover = f.process().arg("recover").output()?;
+    assert_eq!(recover.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&recover.stderr).contains("yielded this attempt normally"));
     let failed = f.process().arg("resume").output()?;
     assert!(!failed.status.success());
     f.ok(&["answer", "1", "--text", "Human answer: verified"])?;
@@ -758,6 +764,294 @@ fn supervisor_death_stops_worker_and_recovery_is_explicit() -> Result {
     Ok(())
 }
 #[test]
+fn real_tui_shows_liveness_and_recovers_with_both_inputs_and_cleanup_guard() -> Result {
+    for (mouse, unconfirmed_worker) in [(true, false), (false, true)] {
+        let f = Fixture::new()?;
+        f.provider("slow")?;
+        f.add("Recover orphaned attempt")?;
+        let mut run = Running(f.process().arg("run").stdout(Stdio::null()).spawn()?);
+        f.state("running")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
+        println!(
+            "LIVE\n{}",
+            t.screen("live supervisor", |s| {
+                s.contains("RUNNING · supervisor alive")
+            })?
+        );
+        run.0.kill()?;
+        run.0.wait()?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let runner_lock = f.root.join(".git/ktask-runner.lock");
+        loop {
+            let lock = fs::File::open(&runner_lock)?;
+            if lock.try_lock().is_ok()
+                && fs::metadata(f.root.join(".git/ktask-worker.lock"))?.len() == 0
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "guardian did not release its lease"
+            );
+            thread::sleep(Duration::from_millis(40));
+        }
+        println!(
+            "ABANDONED\n{}",
+            t.screen("abandoned current", |s| {
+                s.contains("ABANDONED · supervisor absent") && s.contains("R Recover")
+            })?
+        );
+        for (key, name) in [
+            ("2", "Queue"),
+            ("3", "History"),
+            ("4", "Config"),
+            ("5", "About"),
+        ] {
+            t.send(key)?;
+            let screen = t.screen(name, |s| {
+                s.contains("ABANDONED · supervisor absent") && s.contains(name)
+            })?;
+            println!("{name}\n{screen}");
+        }
+        t.send("1")?;
+        t.screen("current again", |s| s.contains("R Recover"))?;
+        if mouse {
+            t.click("R Recover")?;
+        } else {
+            t.send("R")?;
+        }
+        println!(
+            "RECOVER DIALOG\n{}",
+            t.screen("recover dialog", |s| s
+                .contains("Recover abandoned attempt")
+                && s.contains("Worker cleanup"))?
+        );
+
+        // The lease check is repeated at Apply, even if the dialog opened while free.
+        let live_guardian = fs::File::open(&runner_lock)?;
+        live_guardian.lock()?;
+        if mouse {
+            t.click("Apply")?;
+        } else {
+            t.send("\r")?;
+        }
+        println!(
+            "LIVE GUARD\n{}",
+            t.screen("live guardian refused", |s| s
+                .contains("already owned by a runner/worker"))?
+        );
+        drop(live_guardian);
+
+        let before = f.ok(&["show", "1"])?;
+        let head = f.git(&["rev-parse", "HEAD"])?;
+        let files = f.git(&["status", "--porcelain"])?;
+        if unconfirmed_worker {
+            fs::write(
+                f.root.join(".git/ktask-worker.lock"),
+                "guardian interrupted\n",
+            )?;
+            t.send("\r")?;
+            println!(
+                "CLEANUP REQUIRED\n{}",
+                t.screen("cleanup required", |s| s.contains("cleanup confirmation"))?
+            );
+            assert_eq!(f.ok(&["show", "1"])?["status"], "running");
+            t.send(" ")?;
+            t.send("\r")?;
+        } else {
+            t.click("Apply")?;
+        }
+        println!(
+            "RECOVERED\n{}",
+            t.screen("recovered", |s| s.contains("INTERRUPTED")
+                && s.contains("Recover orphaned attempt"))?
+        );
+        let after = f.ok(&["show", "1"])?;
+        assert_eq!(after["status"], "interrupted");
+        assert_eq!(before["attempts"][0]["logs"], after["attempts"][0]["logs"]);
+        assert_eq!(
+            before["attempts"][0]["steps"],
+            after["attempts"][0]["steps"]
+        );
+        assert_eq!(
+            before["attempts"][0]["report"],
+            after["attempts"][0]["report"]
+        );
+        assert_eq!(f.git(&["rev-parse", "HEAD"])?, head);
+        assert_eq!(f.git(&["status", "--porcelain"])?, files);
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+#[test]
+fn real_tui_recovers_lost_paused_and_waiting_supervisors() -> Result {
+    for (state, mouse) in [("paused", false), ("waiting", true)] {
+        let f = Fixture::new()?;
+        f.provider(if state == "paused" { "slow" } else { "rate" })?;
+        f.add("Recover stopped supervisor")?;
+        let mut run = Running(
+            f.process()
+                .args(if state == "paused" {
+                    vec!["run"]
+                } else {
+                    vec!["run", "--queue"]
+                })
+                .stdout(Stdio::null())
+                .spawn()?,
+        );
+        if state == "paused" {
+            f.state("running")?;
+            f.ok(&["pause", "1"])?;
+            run.0.wait()?;
+            f.state("paused")?;
+            // Reproduce a crash after the state commit and before the handoff event.
+            f.db()?.connection().execute(
+                "DELETE FROM events WHERE kind='supervisor.released' AND attempt_id=(SELECT id FROM attempts WHERE task_id=1)",
+                [],
+            )?;
+        } else {
+            f.state("waiting")?;
+            let mut live = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
+            println!(
+                "LIVE WAIT\n{}",
+                live.screen("waiting supervisor alive", |s| {
+                    s.contains("WAITING · supervisor alive")
+                })?
+            );
+            live.send("q")?;
+            live.finish()?;
+            run.0.kill()?;
+            run.0.wait()?;
+        }
+        let runner_lock = f.root.join(".git/ktask-runner.lock");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if fs::File::open(&runner_lock)?.try_lock().is_ok() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "supervisor kept its lease");
+            thread::sleep(Duration::from_millis(40));
+        }
+        let before = f.ok(&["show", "1"])?;
+        let head = f.git(&["rev-parse", "HEAD"])?;
+        let files = f.git(&["status", "--porcelain"])?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
+        println!(
+            "ABANDONED {state}\n{}",
+            t.screen("abandoned attempt", |s| {
+                s.contains("ABANDONED · supervisor absent") && s.contains("[R Recover]")
+            })?
+        );
+        for (key, screen_name) in [
+            ("2", "Queue"),
+            ("3", "History"),
+            ("4", "Config"),
+            ("5", "About"),
+        ] {
+            t.send(key)?;
+            println!(
+                "{state} {screen_name}\n{}",
+                t.screen(screen_name, |s| s.contains("ABANDONED · supervisor absent"))?
+            );
+        }
+        t.send("1")?;
+        t.screen("current recovery control", |s| s.contains("[R Recover]"))?;
+        if mouse {
+            t.click("R Recover")?;
+            t.screen("recover dialog", |s| {
+                s.contains("Recover abandoned attempt")
+            })?;
+            t.click("Apply")?;
+        } else {
+            t.send("R")?;
+            t.send("\r")?;
+        }
+        println!(
+            "RECOVERED {state}\n{}",
+            t.screen("recovered attempt", |s| s.contains("INTERRUPTED"))?
+        );
+        let after = f.ok(&["show", "1"])?;
+        assert_eq!(after["status"], "interrupted");
+        for field in ["logs", "steps", "report"] {
+            assert_eq!(before["attempts"][0][field], after["attempts"][0][field]);
+        }
+        assert_eq!(f.git(&["rev-parse", "HEAD"])?, head);
+        assert_eq!(f.git(&["status", "--porcelain"])?, files);
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+#[test]
+fn real_tui_recovers_lost_question_and_rejects_stale_dialog() -> Result {
+    let f = Fixture::new()?;
+    f.provider("question")?;
+    f.add("Recover unanswered question")?;
+    f.ok(&["run"])?;
+    f.state("waiting")?;
+    let before = f.ok(&["show", "1"])?;
+    f.db()?.connection().execute(
+        "DELETE FROM events WHERE kind='supervisor.released' AND attempt_id=(SELECT id FROM attempts WHERE task_id=1)",
+        [],
+    )?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
+    println!(
+        "ABANDONED QUESTION\n{}",
+        t.screen("lost question supervisor", |s| {
+            s.contains("ABANDONED · supervisor absent") && s.contains("[R Recover]")
+        })?
+    );
+    t.send("R")?;
+    println!(
+        "QUESTION RECOVER DIALOG\n{}",
+        t.screen("question recovery dialog", |s| s
+            .contains("Recover abandoned attempt"))?
+    );
+    f.ok(&["answer", "1", "--text", "Human answer: verified"])?;
+    t.send("\r")?;
+    println!(
+        "STALE RECOVER REFUSED\n{}",
+        t.screen("stale recovery", |s| s
+            .contains("Current task changed; reopen Recover"))?
+    );
+    assert_eq!(f.ok(&["show", "1"])?["status"], "waiting");
+    t.send("\x1b")?;
+    t.screen("abandoned after refresh", |s| {
+        s.contains("[R Recover]")
+            && s.contains("Answer saved; resume")
+            && !s.contains("Recover abandoned attempt")
+    })?;
+    t.send("R")?;
+    t.screen("fresh recovery dialog", |s| {
+        s.contains("Recover abandoned attempt")
+    })?;
+    t.send("\r")?;
+    println!(
+        "RECOVERED QUESTION\n{}",
+        t.screen("recovered question", |s| s.contains("INTERRUPTED"))?
+    );
+    let after = f.ok(&["show", "1"])?;
+    assert_eq!(after["status"], "interrupted");
+    for field in ["logs", "steps", "report"] {
+        assert_eq!(before["attempts"][0][field], after["attempts"][0][field]);
+    }
+    assert_eq!(
+        f.db()?.connection().query_row(
+            "SELECT state FROM questions WHERE attempt_id=(SELECT id FROM attempts WHERE task_id=1)",
+            [],
+            |r| r.get::<_, String>(0),
+        )?,
+        "answered"
+    );
+    t.send("q")?;
+    t.finish()?;
+    f.no_scratch()?;
+    Ok(())
+}
+#[test]
 fn real_tui_runner_mouse_pause_keyboard_resume_and_live_history() -> Result {
     let f = Fixture::new()?;
     f.provider("slow")?;
@@ -771,7 +1065,12 @@ fn real_tui_runner_mouse_pause_keyboard_resume_and_live_history() -> Result {
             && s.contains("new session"))?
     );
     t.click("p Pause")?;
-    println!("PAUSED\n{}", t.screen("paused", |s| s.contains("PAUSED"))?);
+    println!(
+        "PAUSED\n{}",
+        t.screen("paused", |s| s.contains("PAUSED · supervisor absent")
+            && s.contains("[r Resume]")
+            && !s.contains("[R Recover]"))?
+    );
     f.provider("normal")?;
     t.send("r")?;
     println!(
@@ -916,6 +1215,8 @@ fn real_tui_question_answer_mouse_and_keyboard_resume() -> Result {
         let waiting = t.screen("question", |s| s.contains("QUESTION"))?;
         println!("QUESTION CONTROLS (mouse={mouse})\n{waiting}");
         assert!(waiting.contains("w Answer"));
+        assert!(waiting.contains("QUESTION · supervisor absent"));
+        assert!(!waiting.contains("[R Recover]"));
         assert!(!waiting.contains("[r R"));
         let waiting_task = f.ok(&["show", "1"])?;
         let attempts = waiting_task["attempts"].as_array().unwrap();

@@ -30,27 +30,83 @@ impl Service {
     pub fn attempt_base(&self, task: i64) -> Result<Option<String>> {
         Ok(self.db.connection().query_row("SELECT base_commit FROM attempts WHERE project_id=?1 AND task_id=?2 ORDER BY number DESC LIMIT 1",params![self.project_id,task],|r|r.get(0)).optional()?.flatten())
     }
-    pub fn recover_run(&mut self) -> Result<()> {
+    pub fn supervisor_released(&self, attempt: i64) -> Result<bool> {
+        let kind: Option<String> = self.db.connection().query_row(
+            "SELECT kind FROM events WHERE attempt_id=?1 AND kind IN ('attempt.paused','attempt.waiting','supervisor.released') ORDER BY id DESC LIMIT 1",
+            [attempt],
+            |r| r.get(0),
+        ).optional()?;
+        Ok(kind.as_deref() == Some("supervisor.released"))
+    }
+    /// Record a deliberate handoff after the worker and its scratch have been cleaned.
+    pub fn release_supervisor(&mut self, run: &Run) -> Result<()> {
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require(tx.execute(
+            "INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message)
+             SELECT ?1,?2,id,?4,'supervisor.released','info','Supervisor yielded this attempt for resume'
+             FROM attempts WHERE id=?3 AND execution_token=?5 AND state IN ('paused','waiting')",
+            params![self.project_id, run.task, run.attempt, now_ms(), run.token],
+        )? == 1, "Attempt changed before supervisor handoff")?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn recover_run(&mut self, expected: Option<VersionedTask>) -> Result<()> {
         let task = self
             .current_task()?
             .ok_or_else(|| Error::Conflict("Queue is empty".into()))?;
-        require(task.status == "running", "No abandoned running attempt")?;
-        let (attempt,revision,token,active_ms)=self.db.connection().query_row("SELECT id,revision,execution_token,active_ms FROM attempts WHERE task_id=?1 AND state='running'",[task.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
-        let run = Run {
-            attempt,
-            task: task.id,
-            revision,
-            token,
-            active_ms,
-            definition: task.definition().definition.clone(),
-        };
-        self.finish_run(
-            &run,
-            "interrupted",
-            Some("interrupted"),
-            "Recovered abandoned supervisor; work and session retained",
-            None,
-        )
+        if let Some(expected) = expected {
+            require(
+                task.id == expected.id && task.version == expected.version,
+                "Current task changed; reopen Recover",
+            )?;
+        }
+        require(
+            matches!(task.status.as_str(), "running" | "paused" | "waiting"),
+            "No abandoned attempt",
+        )?;
+        if matches!(task.status.as_str(), "paused" | "waiting") {
+            let attempt = task.attempts.last().expect("live attempt has a row");
+            require(
+                !self.supervisor_released(attempt.id)?,
+                "Supervisor yielded this attempt normally; resume or abandon it",
+            )?;
+        }
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = now_ms();
+        require(tx.execute(
+            "UPDATE attempts SET state='interrupted', finished_at_ms=?3, failure_category='interrupted',
+             outcome='Recovered abandoned supervisor; work and evidence retained',
+             wait_reason=NULL, waiting_since_ms=NULL, resume_at_ms=NULL
+             WHERE id=(SELECT latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?4)
+             AND state IN ('running','paused','waiting')",
+            params![self.project_id, task.id, now, task.version],
+        )? == 1, "Attempt changed; refresh the task")?;
+        tx.execute(
+            "UPDATE questions SET state='cancelled', resolved_at_ms=?3
+             WHERE attempt_id=(SELECT latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2)
+             AND state='open'",
+            params![self.project_id, task.id, now],
+        )?;
+        tx.execute(
+            "UPDATE tasks SET row_version=row_version+1, updated_at_ms=?2 WHERE id=?1",
+            params![task.id, now],
+        )?;
+        event(
+            &tx,
+            self.project_id,
+            task.id,
+            now,
+            "attempt.interrupted",
+            "Recovered abandoned supervisor; work and evidence retained",
+        )?;
+        tx.commit()?;
+        Ok(())
     }
     /// Abandon a paused or waiting attempt that nobody will resume. The caller must hold the
     /// runner lease so no live supervisor owns it. Interrupted attempts spend no budget.
@@ -281,13 +337,11 @@ impl Service {
             "UPDATE tasks SET row_version=row_version+1,updated_at_ms=?2 WHERE id=?1",
             params![run.task, now],
         )?;
-        event(
-            &tx,
-            self.project_id,
-            run.task,
-            now,
-            "attempt.waiting",
-            "Provider rate limited; same attempt retained. Resume eligible in 60 seconds (backoff, not a provider reset estimate)",
+        tx.execute(
+            "INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message)
+             VALUES (?1,?2,?3,?4,'attempt.waiting','info',?5)",
+            params![self.project_id,run.task,run.attempt,now,
+                "Provider rate limited; same attempt retained. Resume eligible in 60 seconds (backoff, not a provider reset estimate)"],
         )?;
         tx.commit()?;
         Ok(())
