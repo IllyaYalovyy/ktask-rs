@@ -230,19 +230,24 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
     })?;
     if let Command::Run {
         queue,
+        one,
         background,
         notify,
     } = command
     {
+        let queue = *queue
+            || (!*one
+                && service.preferences(&paths.config)?.continuation
+                    == application::preferences::Continuation::Queue);
         let message = if *background {
-            crate::runner::background(&mut service, &paths, *queue)?;
+            crate::runner::background(&mut service, &paths, queue)?;
             "Runner started; inspect Current in the TUI".to_owned()
         } else {
             crate::runner::run(
                 &mut service,
                 &paths,
                 &crate::runner::Options {
-                    queue: *queue,
+                    queue,
                     notify: *notify,
                     recover: false,
                     confirm_worker_cleanup: false,

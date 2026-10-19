@@ -2,6 +2,12 @@
 
 A TUI-first workspace for supervising AI coding tasks.
 
+Define the outcome, constraints, and observable success criteria. A capable execution model
+handles investigation, design, implementation, and verification within the task. Configure
+stronger models for independent review and remediation. Planning stays brief; separate specs
+and task breakdown are optional. Missing implementation details are for the executor to resolve,
+with human questions reserved for consequential product decisions.
+
 Requires Linux, Rust 1.97+, Git and a terminal. AI execution requires an authenticated Codex CLI
 (tested with 0.162.1). Start with `cargo run --locked`; run checks with `make check`.
 
@@ -68,10 +74,10 @@ New AI tasks have no invented model defaults. **Models** accepts `provider/model
 effort, and limits. Saving makes a new approved revision; previous attempts keep their inputs.
 Configuration provides project model defaults, check management, and saved preferences.
 Mouse, run-one/continue-queue, and planner approval preferences persist per project and instance.
-Planner defaults and approval policy are stored but do not enable task breakdown yet.
+Break down uses the configured planning model and previews ordinary subtasks before applying them.
 
 Codex execution, shell checks, independent AI review/validation, and bounded remediation are real.
-AI task breakdown and other provider adapters are not connected. Normal mode never simulates
+AI task breakdown uses the planning model; other provider adapters are not connected. Normal mode never simulates
 success or creates fake attempts. Use `cargo run --locked -- --demo` to explore
 the isolated simulator: 120 queued/current and 120 historical tasks, no SQLite access.
 
@@ -145,7 +151,7 @@ installed supervisor. Tests and `ktask-dev` use separate databases; execution in
 repository is mutually exclusive across instances. Use private checkouts for concurrent test runs.
 
 Open **Configuration → Defaults** to set models, **Checks** to add an enabled check,
-and **Preferences** to select Run one (default) or Continue queue. Check edits are blocked
+and **Preferences** to select Continue queue (default) or Run one. Check edits are blocked
 during running, paused, or waiting attempts. Cancel and invalid edits leave saved values unchanged;
 stale forms must be reopened. Defaults and checks use relational SQLite rows; preferences use
 a typed, atomically replaced file under the instance config directory.
@@ -163,13 +169,18 @@ ktask
 
 Defaults apply to new tasks only. Use **Models** or `edit --model` for existing tasks.
 In Current, **Run** starts a detached supervisor using the saved run mode. Run one stops after
-current succeeds; Continue queue advances after verified success.
+current succeeds; Continue queue advances after verified success. The Run button names its mode;
+**m Run mode** opens preferences directly from Current. The global strip shows that preference
+and the next task; Current shows the goal, proof required, and the active supervisor phase.
+In queue mode, answering a question, approving current, or acknowledging Human work continues
+automatically. A saved intervention stays saved if starting fails; the footer explains the blocker.
 **Pause** stops/reaps workers before recording paused state; **Run/resume** retains the attempt
 and compatible session. Closing the TUI does not stop the supervisor. Failed checks/review/
 validation use the remediation model on a new attempt, bounded by the task's attempt limit.
 An unresolved failure never advances the queue. Human work/approval/questions stop automatic work.
 
-CLI: `run` executes current; `run --queue` continues, and `--background` detaches. `resume` and
+CLI: `run` follows the saved run mode (Continue queue by default); `run --queue`
+forces queue execution, `run --one` stops after current, and `--background` detaches. `resume` and
 `retry` are aliases that still target only current. `pause ID` requests shutdown; `answer ID
 --text TEXT` saves an answer, then `resume` continues. `abandon ID --reason TEXT` gives up on failed,
 paused or waiting current (History, cancelled); `--attempt` drops only the paused or waiting attempt
@@ -177,7 +188,9 @@ nobody will resume, without spending budget, so the task can run again. `recover
 attempt interrupted only when repository and worker locks are free. Inspect its work first.
 If the guardian itself died without confirming cleanup, execution stays blocked; only after
 stopping orphaned processes and preserving work, use `recover --confirm-worker-cleanup`.
-Infrastructure failures do not spend the coding budget. Rate limits retain the attempt/session
+Execution, review, validation and repair-worker connection failures retry twice within the same attempt, with short
+interruptible backoff and preserved work/session. Repeated failures stop with evidence;
+infrastructure failures do not spend the coding budget. Rate limits retain the attempt/session
 and a 60-second backoff (not a claimed provider reset time); queue mode resumes automatically.
 Pause stops automatic waiting; a later resume cannot bypass its recorded deadline.
 

@@ -81,7 +81,7 @@ pub fn judge_schema() -> Value {
 
 pub fn judge_prompt(run: &Run, evidence: &str) -> String {
     format!(
-        "You are the failure judge: a read-only senior engineer who decides what happens after a failed attempt. You cannot build, run tests or edit files, and you must not ask to; judge from the repository and the failure evidence. Return exactly one judgment:\n- repair: the task is right and the fix is within reach; give the next worker a concrete plan (what was wrong, what to change, where, how to prove it). Prefer this.\n- revise: the task definition itself is wrong, unclear, contradictory or too big; return a replacement title, goal and acceptance criteria that keep the owner's intent and can actually be met.\n- insert: prerequisite work is missing; return ordinary tasks to run before this one, each independently verifiable.\n- escalate: the evidence shows the model, not the task, is the limit; provider codex only, a stronger model or effort than {}.\n- ask: only for a product decision that the owner alone can make. Permissions, sandbox limits, environment and tooling are never questions.\nHold the Clean Code bar in every plan and criterion. Keep the reason specific and cite evidence.\nTask: {}\nGoal: {}\nCriteria:\n{}\nFailure evidence:\n{evidence}",
+        "You are the failure judge: a read-only senior engineer who decides what happens after a failed attempt. You cannot build, run tests or edit files, and you must not ask to; judge from the repository and the failure evidence. Return exactly one judgment:\n- repair: the task is right and the fix is within reach; give the next worker a concrete plan (what was wrong, what to change, where, how to prove it). Prefer this.\n- revise: the task definition itself is wrong, unclear, contradictory or too big; return a replacement title, goal and acceptance criteria that keep the owner's intent and can actually be met.\n- insert: prerequisite work is missing; return ordinary tasks to run before this one, each independently verifiable.\n- escalate: the evidence shows the model, not the task, is the limit; provider codex only, a stronger model or effort than {}.\n- ask: only for a product decision that the owner alone can make. Permissions, sandbox limits, environment and tooling are never questions.\nHigh-level goals are expected: missing implementation detail alone is not a reason to revise, split, or ask. Preserve the full goal and acceptance bar; never weaken them to make a failure pass. Hold the Clean Code bar. Keep the reason specific and cite evidence.\nTask: {}\nGoal: {}\nCriteria:\n{}\nFailure evidence:\n{evidence}",
         run.definition.models[0]
             .as_ref()
             .map_or("the current model".to_owned(), |m| format!(
@@ -472,9 +472,11 @@ pub fn prompt(run: &Run, role: &str, context: &str) -> String {
             "Independently validate that the objective was achieved as written, not a narrower version of it, and that the evidence is complete: every configured supervisor check ran and exited 0 (see the supervisor check evidence and transcripts in Context), no test was skipped, ignored, removed or weakened compared with the baseline, and every acceptance criterion has concrete proof in the transcripts, rendered screens or repository. Your sandbox is read-only by design: you cannot build, run tests, or edit files, and you must not ask to. Do not trust executor claims; fail unmet criteria or missing evidence, naming exactly what is missing."
         }
         "remediation" => {
-            "Diagnose the previous failure, preserve useful work, and implement the smallest sound repair. Run relevant checks."
+            "Use the failure judgment and evidence to repair the task end to end. Resolve implementation details yourself, preserve useful work, and implement the smallest sound repair without narrowing the goal. Run relevant checks."
         }
-        _ => "Implement this task and run relevant checks. Preserve unrelated work.",
+        _ => {
+            "Own this high-level task end to end: inspect the repository, infer the necessary implementation details, choose a sound design, implement it, and run relevant checks. Keep planning brief and inside this execution; no separate specification or breakdown is required. Make routine engineering decisions autonomously, stay within the goal and constraints, and report consequential assumptions with evidence. Preserve unrelated work."
+        }
     };
     let checks = if matches!(role, "review" | "validation") {
         ""

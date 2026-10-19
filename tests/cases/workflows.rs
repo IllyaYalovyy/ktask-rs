@@ -22,7 +22,7 @@ fn guided(t: &mut Terminal) -> Result {
     key(t, "\t\t ", "< Guided >")?;
     key(t, "\x13", "Reset mock workspace?")?;
     key(t, "\x13", "Configuration applied")?;
-    key(t, "1", "Queue 3")?;
+    key(t, "e\t\t\t\t\t\t \r1", "Queue 3")?;
     Ok(())
 }
 
@@ -74,7 +74,7 @@ fn queue_search_filter_navigation_history_and_selection_are_independent() -> Res
     key(&mut t, "\x1b[B", "› #3 ")?;
     key(&mut t, "\x1b[A", "› #2 ")?;
     key(&mut t, "k", "› #1 ")?;
-    key(&mut t, "\x1b[6~", "› #19 ")?;
+    key(&mut t, "\x1b[6~", "› #18 ")?;
     key(&mut t, "\x1b[5~", "› #1 ")?;
     let queue = key(&mut t, "G", "› #120 ")?;
     key(&mut t, "1", "Current #1 · FAILED")?;
@@ -239,7 +239,7 @@ fn mouse_execution_logs_attempts_and_statistics() -> Result {
     t.wheel(false, 40, 10)?;
     t.screen("mouse output scroll", |s| s.contains("Log · scrolled"))?;
     key(&mut t, "\x1b[H", "PASS  queue fixture 01")?;
-    key(&mut t, "\x1b[6~", "PASS  queue fixture 11")?;
+    key(&mut t, "\x1b[6~", "PASS  queue fixture 10")?;
     key(&mut t, "\x1b[5~", "PASS  queue fixture 01")?;
     click(&mut t, "End Follow", "Log · following")?;
     println!(
@@ -263,7 +263,7 @@ fn mouse_execution_logs_attempts_and_statistics() -> Result {
         t.screen("next human", |s| s.contains("Current #2 · PENDING"))?
     );
     click(&mut t, "y Acknowledge", "Current #3 · PENDING")?;
-    click(&mut t, "r Run", "Current #3 · RUNNING")?;
+    click(&mut t, "r Run one", "Current #3 · RUNNING")?;
     t.screen("question", |s| s.contains("Current #3 · QUESTION"))?;
     println!(
         "MINIMUM QUESTION\n{}",
@@ -467,7 +467,7 @@ fn mouse_insertion_positions_paste_and_pending_breakdown() -> Result {
     click(&mut t, "Earlier", "after #118 / before #119")?;
     click(&mut t, "Apply", "#241 moved")?;
     key(&mut t, "g", "› #1 ")?;
-    click(&mut t, "#2 ", "› #2 ")?;
+    click(&mut t, "#2   PENDING", "› #2 ")?;
     key(
         &mut t,
         "b\x01Review first\t\x01Approve next\r",

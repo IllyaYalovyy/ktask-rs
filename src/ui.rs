@@ -55,7 +55,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let [header, tabs, status, toolbar, body, actions, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(2),
         Constraint::Length(2),
         Constraint::Min(0),
         Constraint::Length(3),
@@ -116,22 +116,25 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         format!("Current #{} · {}{supervisor}", t.id, t.status().label())
     });
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                format!(" {current}"),
-                Style::new()
-                    .fg(app.current().map_or(MUTED, |t| status_color(t.status())))
-                    .bold(),
-            ),
-            Span::styled(
-                format!(
-                    "   |   Queue {} · History {}",
-                    app.queue.len(),
-                    app.history.len()
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled(
+                    format!(" {current}"),
+                    Style::new()
+                        .fg(app.current().map_or(MUTED, |t| status_color(t.status())))
+                        .bold(),
                 ),
-                Style::new().fg(MUTED),
-            ),
-        ])),
+                Span::styled(
+                    format!(
+                        "   |   Queue {} · History {}",
+                        app.queue.len(),
+                        app.history.len()
+                    ),
+                    Style::new().fg(MUTED),
+                ),
+            ]),
+            Line::styled(queue_progress(app, status.width), Style::new().fg(ACCENT)),
+        ]),
         status,
     );
     match app.view {
@@ -154,6 +157,56 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.dialog.is_some() {
         draw_dialog(frame, app, area);
     }
+}
+
+fn active_phase(task: &crate::presentation::Task) -> String {
+    if let Some(message) = task.attempts.last().and_then(|attempt| attempt.logs.last())
+        && message.starts_with("Provider connection failed")
+    {
+        return "Provider connection retry · work and session retained".into();
+    }
+    let role = task
+        .attempts
+        .last()
+        .and_then(|attempt| {
+            attempt
+                .steps
+                .iter()
+                .rev()
+                .find(|(_, state)| state == "running")
+        })
+        .map(|(label, _)| label.as_str());
+    match role {
+        Some("Execution") => "AI implementing the task".into(),
+        Some("Remediation") => "AI diagnosing or repairing a failure".into(),
+        Some("Review") => "Independent review of the changes".into(),
+        Some("Validation") => "Independent validation of the evidence".into(),
+        Some(label) => format!("Checking: {label}"),
+        None => "Supervisor preparing the next step".into(),
+    }
+}
+
+fn queue_progress(app: &App, width: u16) -> String {
+    let mode = if app.auto_advance {
+        "Queue preference"
+    } else {
+        "Run one preference"
+    };
+    let next = app.queue.get(1).map_or_else(
+        || {
+            if app.queue.is_empty() {
+                "no queued work"
+            } else {
+                "last task"
+            }
+            .to_owned()
+        },
+        |task| format!("Next #{}: {}", task.id, task.definition().title),
+    );
+    shortened(
+        &format!(" {mode} · {next} · m: run mode in Current"),
+        width as usize,
+    )
 }
 
 fn controls(app: &App) -> Vec<(&'static str, Action)> {
@@ -212,7 +265,11 @@ fn current_controls(app: &App) -> Vec<(&'static str, Action)> {
     ) {
         "r Resume"
     } else {
-        "r Run"
+        if app.auto_advance {
+            "r Run queue"
+        } else {
+            "r Run one"
+        }
     };
     let mut controls = match status {
         Some(Status::Abandoned) => vec![("R Recover", Action::Recover)],
@@ -245,6 +302,7 @@ fn current_controls(app: &App) -> Vec<(&'static str, Action)> {
         controls.extend([("v Approve", Action::Approve), ("n Reject", Action::Reject)]);
     }
     controls.extend([
+        ("m Run mode", Action::Configure),
         ("c Models", Action::Models),
         ("Enter Details", Action::Inspect),
         (
@@ -335,8 +393,27 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
     );
     let [left, right] =
         Layout::horizontal([Constraint::Length(30), Constraint::Min(0)]).areas(area);
-    let [summary, events] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(5)]).areas(left);
+    let [summary, events] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(if left.height >= 17 { 5 } else { 3 }),
+    ])
+    .areas(left);
+    let [purpose, right] =
+        Layout::vertical([Constraint::Length(4), Constraint::Min(3)]).areas(right);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::raw(shortened(
+                &format!("Goal: {}", task.definition().goal),
+                purpose.width.saturating_sub(2) as usize,
+            )),
+            Line::raw(shortened(
+                &format!("Proof: {}", task.definition().check),
+                purpose.width.saturating_sub(2) as usize,
+            )),
+        ])
+        .block(panel(" Task brief · Enter: full details ")),
+        purpose,
+    );
     let attempt = task.attempts.last();
     let inner = summary.width.saturating_sub(2) as usize;
     let settings = &task.definition().settings;
@@ -417,6 +494,7 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         .filter(|a| a.state == Status::Question)
         .and_then(|a| a.question.clone());
     let task_id = task.id;
+    app.hits.push((purpose, Action::Inspect));
     frame.render_widget(
         Paragraph::new(lines).block(panel(" Status · Enter: details ")),
         summary,
@@ -500,10 +578,9 @@ fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
             format!("Provider rate limit · resumes by itself{abandon}"),
             WARN,
         ),
-        Status::Running if app.service.is_some() => (
-            "Running in the background supervisor · p Pause".into(),
-            ACCENT,
-        ),
+        Status::Running if app.service.is_some() => {
+            (format!("{} · p Pause", active_phase(task)), ACCENT)
+        }
         Status::Running => ("Running (simulated) · p Pause".into(), ACCENT),
         Status::Paused => (format!("Paused · r Resume{abandon}"), WARN),
         s if s.failed() => (
@@ -512,7 +589,11 @@ fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
         ),
         Status::Pending if human => ("Human task · y Acknowledge when it is done".into(), MUTED),
         Status::Pending if app.service.is_some() => (
-            "Ready · r Run starts an attempt in the background".into(),
+            if app.auto_advance {
+                "Ready · r Run queue; checks and repair run automatically".into()
+            } else {
+                "Run one selected · m Run mode to continue the queue".into()
+            },
             MUTED,
         ),
         Status::Pending => ("Ready · r Run starts a simulated attempt".into(), MUTED),

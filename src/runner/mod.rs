@@ -408,7 +408,28 @@ fn ai(
     role: &'static str,
     evidence: &str,
 ) -> Result<Outcome> {
-    ai_turn(service, run, ctx, role, evidence, None)
+    for retry in 0..=2 {
+        let outcome = ai_turn(service, run, ctx, role, evidence, None)?;
+        if !matches!(outcome, Outcome::Failed("transport", _)) || retry == 2 {
+            return Ok(outcome);
+        }
+        service.output(
+            run,
+            "system",
+            &format!(
+                "Provider connection failed · automatic retry {}/2 · same attempt, work retained",
+                retry + 1
+            ),
+        )?;
+        let until = Instant::now() + Duration::from_secs(1 << retry);
+        while Instant::now() < until {
+            if ctx.stop.load(Ordering::Relaxed) || service.control_cursor(run)? > ctx.cursor {
+                return Ok(Outcome::Paused);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    unreachable!("bounded provider retries")
 }
 /// One provider turn. A first `blocked` answer is nudged once in the same session, because
 /// permission and sandbox limits are not questions for the owner; only a repeated, genuine
@@ -848,9 +869,7 @@ pub fn background(service: &mut Service, paths: &Paths, queue: bool) -> Result<(
         .stdout(Stdio::piped())
         .stderr(log)
         .process_group(0);
-    if queue {
-        command.arg("--queue");
-    }
+    command.arg(if queue { "--queue" } else { "--one" });
     let mut child = command.spawn()?;
     let output = child.stdout.take().expect("piped stdout");
     let (tx, rx) = std::sync::mpsc::channel();

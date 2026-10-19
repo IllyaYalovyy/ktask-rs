@@ -135,6 +135,7 @@ case "$prompt" in *"You are the failure judge"*)
  esac;;
 esac
 case '{mode}' in
+ transient) if [ ! -f "$HOME/transport-retried" ]; then touch "$HOME/transport-retried"; printf '{{"type":"turn.failed","error":{{"message":"connection reset"}}}}\n'; exit 2; fi;;
  slow) sleep 3;;
  descendants) setsid sleep 30 & printf '%s' "$!" > descendant.pid; sleep 30;;
  rate) printf '{{"type":"turn.failed","error":{{"message":"rate_limit reached"}}}}\n'; exit 2;;
@@ -315,7 +316,7 @@ fn actual_runner_streams_checks_validates_checkpoints_and_advances() -> Result {
     let f = Fixture::new()?;
     f.add("First")?;
     f.add("Second")?;
-    let result = f.ok(&["run", "--queue"])?;
+    let result = f.ok(&["run"])?;
     println!("RUNNER {result}");
     assert!(f.ok(&["list"])?["tasks"].as_array().unwrap().is_empty());
     assert_eq!(
@@ -1058,7 +1059,7 @@ fn real_tui_runner_mouse_pause_keyboard_resume_and_live_history() -> Result {
     f.add("Observed execution")?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 110, 32)?;
     t.screen("ready", |s| s.contains("Observed execution"))?;
-    t.click("r Run")?;
+    t.click("r Run queue")?;
     println!(
         "RUNNING\n{}",
         t.screen("running", |s| s.contains("RUNNING")
@@ -1158,7 +1159,7 @@ fn rate_limit_keeps_same_attempt_and_stores_resume_time_without_spending_budget(
     let f = Fixture::new()?;
     f.provider("rate")?;
     f.add("Wait")?;
-    f.ok(&["run"])?;
+    f.ok(&["run", "--one"])?;
     let task = f.ok(&["show", "1"])?;
     assert_eq!(task["status"], "waiting");
     assert_eq!(task["attempts_used"], 0);
@@ -1200,7 +1201,7 @@ fn escaped_descendants_are_stopped_and_duplicate_runners_are_rejected() -> Resul
     Ok(())
 }
 #[test]
-fn real_tui_question_answer_mouse_and_keyboard_resume() -> Result {
+fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.provider("question")?;
@@ -1208,7 +1209,7 @@ fn real_tui_question_answer_mouse_and_keyboard_resume() -> Result {
         let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
         t.screen("current", |s| s.contains("Ask owner"))?;
         if mouse {
-            t.click("r Run")?;
+            t.click("r Run queue")?;
         } else {
             t.send("r")?;
         }
@@ -1253,20 +1254,6 @@ fn real_tui_question_answer_mouse_and_keyboard_resume() -> Result {
             t.click("Apply")?;
         } else {
             t.send("\r")?;
-        }
-        let answered = t.screen("answer controls", |s| {
-            s.contains("Saved to SQLite") && s.contains("r Resume")
-        })?;
-        println!("ANSWERED CONTROLS (mouse={mouse})\n{answered}");
-        assert!(!answered.contains("w Answer"));
-        t.send("w")?;
-        t.screen("answered question cannot reopen", |s| {
-            s.contains("Unavailable here") && !s.contains("Answer AI question")
-        })?;
-        if mouse {
-            t.click("r Resume")?;
-        } else {
-            t.send("r")?;
         }
         let complete = t.screen("complete", |s| s.contains("Queue complete."))?;
         println!("RESUMED SAME ATTEMPT (mouse={mouse})\n{complete}");
@@ -1429,7 +1416,7 @@ fn real_tui_persisted_single_and_continue_modes_with_two_tasks() -> Result {
             let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
             t.screen("restart", |s| s.contains("First configured task"))?;
             if mouse {
-                t.click("r Run")?;
+                t.click(if queue { "r Run queue" } else { "r Run one" })?;
             } else {
                 t.send("r")?;
             }
@@ -1517,5 +1504,215 @@ fn real_tui_configuration_errors_and_live_check_guard() -> Result {
     t.send("\x1b\x03")?;
     t.finish()?;
     f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn real_tui_recovers_connection_and_checks_then_continues_queue() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("transient")?;
+        f.fail_first_check()?;
+        f.add("Recover connection and failed check")?;
+        f.add("Continue without another Run")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        let ready = t.screen("queue overview", |s| s.contains("r Run queue"))?;
+        println!("AUTONOMOUS QUEUE mouse={mouse}\n{ready}");
+        assert!(ready.contains("Goal: Create result.txt"));
+        assert!(ready.contains("Proof: result.txt contains verified"));
+        assert!(ready.contains("Next #2: Continue without another Run"));
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "CONNECTION RECOVERY mouse={mouse}\n{}",
+            t.screen("bounded retry", |s| s.contains("automatic retry 1/2"))?
+        );
+        let complete = t.screen("two verified tasks", |s| {
+            s.contains("Queue complete.") && s.contains("History 2")
+        })?;
+        println!("AUTONOMOUS RESULT mouse={mouse}\n{complete}");
+        assert!(complete.contains("no queued work"));
+        let first = f.ok(&["show", "1"])?;
+        assert_eq!(first["status"], "succeeded");
+        assert_eq!(first["attempts"].as_array().unwrap().len(), 2);
+        assert_eq!(first["attempts_used"], 2);
+        assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            "execution\nexecution\nremediation\nremediation\nreview\nvalidation\nexecution\nreview\nvalidation\n"
+        );
+        assert!(f.git(&["status", "--porcelain"])?.is_empty());
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn real_tui_approval_and_human_ack_continue_with_mouse_and_keyboard() -> Result {
+    for mouse in [false, true] {
+        for human in [false, true] {
+            let f = Fixture::new()?;
+            f.ok(&[
+                "add",
+                "--title",
+                "Owner gate",
+                "--goal",
+                "Confirm direction",
+                "--criterion",
+                "Direction confirmed",
+                "--kind",
+                if human { "human" } else { "ai" },
+                "--approval",
+                if human { "ready" } else { "draft" },
+            ])?;
+            f.add("Continue after owner gate")?;
+            let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
+            println!(
+                "OWNER GATE mouse={mouse} human={human}\n{}",
+                t.screen("owner gate", |s| s.contains("Owner gate"))?
+            );
+            if mouse {
+                t.click(if human { "y Acknowledge" } else { "v Approve" })?;
+            } else {
+                t.send(if human { "y" } else { "v" })?;
+            }
+            println!(
+                "GATE CLEARED mouse={mouse} human={human}\n{}",
+                t.screen("automatic continuation", |s| s.contains("Queue complete.")
+                    && s.contains("History 2"))?
+            );
+            assert_eq!(f.ok(&["show", "2"])?["status"], "succeeded");
+            t.send("q")?;
+            t.finish()?;
+            f.no_scratch()?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn cli_run_modes_share_preferences_and_allow_explicit_overrides() -> Result {
+    use ktask_rs_mk3::application::{Service, preferences::Continuation};
+    for explicit_queue in [false, true] {
+        let f = Fixture::new()?;
+        f.add("First CLI task")?;
+        f.add("Second CLI task")?;
+        let service = Service::open(f.db()?, &f.root, None)?;
+        let config = f.scratch.path().join("config/ktask-dev");
+        let original = service.preferences(&config)?;
+        let mut saved = original.clone();
+        if explicit_queue {
+            saved.continuation = Continuation::Single;
+        }
+        service.save_preferences(&config, &original, &saved)?;
+        f.ok(&["run", if explicit_queue { "--queue" } else { "--one" }])?;
+        assert_eq!(
+            f.ok(&["show", "2"])?["status"],
+            if explicit_queue { "succeeded" } else { "ready" }
+        );
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn real_tui_pause_during_connection_recovery_stops_queue() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("fail")?;
+        f.add("Pause connection recovery")?;
+        f.add("Must remain pending")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
+        t.screen("ready", |s| s.contains("r Run queue"))?;
+        t.send("r")?;
+        println!(
+            "RETRY BEFORE PAUSE mouse={mouse}\n{}",
+            t.screen("retrying", |s| s.contains("retry 1/2")
+                && s.contains("RUNNING"))?
+        );
+        if mouse {
+            t.click("p Pause")?;
+        } else {
+            t.send("p")?;
+        }
+        println!(
+            "RETRY PAUSED mouse={mouse}\n{}",
+            t.screen("paused", |s| s.contains("PAUSED")
+                && s.contains("supervisor absent"))?
+        );
+        let task = f.ok(&["show", "1"])?;
+        assert_eq!(task["attempts_used"], 0);
+        assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+        assert!(
+            f.ok(&["show", "2"])?["attempts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn real_tui_current_run_mode_control_changes_saved_single_preference() -> Result {
+    use ktask_rs_mk3::application::{Service, preferences::Continuation};
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.add("First visible mode task")?;
+        f.add("Second visible mode task")?;
+        let service = Service::open(f.db()?, &f.root, None)?;
+        let config = f.scratch.path().join("config/ktask-dev");
+        let original = service.preferences(&config)?;
+        let mut single = original.clone();
+        single.continuation = Continuation::Single;
+        service.save_preferences(&config, &original, &single)?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
+        println!(
+            "SAVED SINGLE MODE mouse={mouse}\n{}",
+            t.screen("single visible", |s| s.contains("r Run one")
+                && s.contains("Run one selected"))?
+        );
+        if mouse {
+            t.click("m Run mode")?;
+        } else {
+            t.send("m")?;
+        }
+        println!(
+            "CURRENT MODE FORM mouse={mouse}\n{}",
+            t.screen("mode form", |s| s.contains("Project preferences"))?
+        );
+        if mouse {
+            t.click("< Run one >")?;
+            t.click("Apply")?;
+        } else {
+            t.send("\t\t \x13")?;
+        }
+        t.screen("queue visible", |s| s.contains("r Run queue"))?;
+        assert_eq!(
+            service.preferences(&config)?.continuation,
+            Continuation::Queue
+        );
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "MODE CHANGED RESULT mouse={mouse}\n{}",
+            t.screen("queue finished", |s| s.contains("Queue complete.")
+                && s.contains("History 2"))?
+        );
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
     Ok(())
 }

@@ -17,13 +17,15 @@
 
 ## Flows
 
+- Define a high-level goal, constraints, and observable success criteria → a capable execution model investigates, designs, implements, and verifies within the task → stronger models review and remediate; separate planning or breakdown is optional.
+
 - Open the app → inspect current task and status; an empty queue shows no current task and an Add action.
 - Monitor current → read the situation line, the step results, and the attempt report; follow the raw log while it runs; scroll back and return to the latest output.
 - Current waits on a question → the question is shown on screen with Answer first; Abandon gives up on the task (History, cancelled) or drops only the waiting or paused attempt without spending budget.
 - Current failed and not worth more attempts → Abandon on Current, or Delete on it in Queue, moves it to History as cancelled with its attempts and evidence; Resolve records it as done or superseded instead.
-- Run current → see it running; pause → see it paused with progress retained and no later task started; resume → continue the same task.
+- Run current → continue the queue by default, with Run one available explicitly; see the mode, goal, current phase and next task; pause → see it paused with progress retained and no later task started; resume → continue the same task.
 - Retry failed current → start a new attempt on that task, preserving previous attempts and their evidence.
-- Inspect failure → ask the capable model to remediate → it raises model/effort in a new revision or inserts ordinary repair tasks before failed current → execution continues; ask for human approval only when required.
+- Inspect failure → the stronger remediation model judges the evidence and repairs within the task by default → revise, escalate, or insert prerequisites only when the evidence warrants it; ask the owner only for a consequential product decision and require approval only by policy.
 - Review a new task → approve with one action to make it ready, or reject it; show who approved its revision (human or AI).
 - Resolve failed current → choose succeeded override, failed skipped, or superseded → record actor/reason and move it to History without rewriting the failed attempt.
 - Configure a task → choose execution, review, validation, and remediation model/effort → save a new revision; previous attempts retain their original settings.
@@ -35,7 +37,7 @@
 - Delete a pending task → confirm removal → see the updated queue; undo restores it, while cancel changes nothing.
 - Reorder or insert pending work → choose an execution position → see the new order; show neighboring task IDs even when filtered. Insertion before current is allowed unless it is running; never insert into History.
 - Acknowledge a current Human task → record completion and advance; until acknowledged, execution waits.
-- Answer current AI questions → submit valid answers → record them and continue; incomplete answers leave the task waiting.
+- Answer current AI questions → submit valid answers → record them and automatically continue in queue mode; incomplete answers leave the task waiting.
 - View project statistics → see task counts, completed work, failures, elapsed execution time, and cost.
 - Inspect History → find a task → read its result, changes, cost, and attempts without altering execution.
 - Export tasks → choose scope and destination → see success or an actionable error; confirm before overwriting a file.

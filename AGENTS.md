@@ -1,5 +1,10 @@
 # Working agreement
 
+- High-level tasks are the default. A capable execution model owns investigation, design,
+  implementation and verification within the task; stronger models review and remediate.
+  Keep planning brief. Separate specifications and breakdown are optional, never prerequisites
+  merely because implementation details are unspecified. Preserve the full goal and acceptance bar.
+
 - Normal TUI tasks are now persistent. The owner authorized SQLite wiring through shared
   application commands. Keep deterministic execution/AI fixtures isolated behind `--demo`;
   never execute them against a real project or open its database in demo mode.

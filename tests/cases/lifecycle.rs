@@ -9,7 +9,7 @@ fn planner_subtasks_need_approval_only_by_policy() -> Result {
     key(&mut t, "j", "› #242 ")?;
     key(&mut t, "nDiscard duplicate\r", "revision 1 rejected")?;
     key(&mut t, "1", "Current #241 · PENDING")?;
-    click(&mut t, "r Run", "Current #241 · RUNNING")?;
+    click(&mut t, "r Run one", "Current #241 · RUNNING")?;
     quit(&mut t)
 }
 
@@ -40,8 +40,13 @@ fn click(t: &mut Terminal, label: &str, text: &str) -> Result<String> {
     t.screen(text, |s| s.contains(text))
 }
 fn open() -> Result<Terminal> {
-    let t = Terminal::open(70, 22)?;
+    let mut t = Terminal::open(70, 22)?;
     t.screen("startup", |s| s.contains("Current #1 · FAILED"))?;
+    // These interaction tests explicitly use Run one; the queue-default flow is tested separately.
+    t.send("4e\t\t\t\t\t\t \r1")?;
+    t.screen("single task interaction mode", |s| {
+        s.contains("Run one preference")
+    })?;
     Ok(t)
 }
 fn quit(t: &mut Terminal) -> Result {

@@ -522,7 +522,7 @@ fn breakdown_pending_queue_row_keeps_failed_current_in_place() -> Result {
         }
         t.screen("queue", |s| s.contains("Pending after failure"))?;
         if mouse {
-            t.click("Pending after failure")?;
+            t.click("#2   PENDING")?;
         } else {
             t.send("j")?;
         }

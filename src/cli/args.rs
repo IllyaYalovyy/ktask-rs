@@ -62,9 +62,12 @@ pub enum Command {
     /// Execute/resume current. Failed checks invoke bounded remediation; never skips a failure.
     #[command(visible_aliases = ["resume", "retry"])]
     Run {
-        /// Continue to the next task after verified success. Stops for approvals/human work.
+        /// Continue the queue (the default); overrides a saved Run one preference.
         #[arg(long)]
         queue: bool,
+        /// Stop after current succeeds; failures still receive bounded remediation.
+        #[arg(long, conflicts_with = "queue")]
+        one: bool,
         /// Detach from this terminal; inspect progress in the TUI.
         #[arg(long)]
         background: bool,

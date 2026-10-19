@@ -321,16 +321,67 @@ impl App {
             _ => return false,
         };
         match result {
-            Ok(()) => self.committed(match action {
-                Action::Run | Action::Retry => {
-                    "Supervisor started · close TUI safely · Pause stops execution"
+            Ok(()) => {
+                let continue_queue = matches!(action, Action::Acknowledge)
+                    || (matches!(action, Action::Approve)
+                        && self.selected_task().is_some_and(|selected| {
+                            self.current()
+                                .is_some_and(|current| current.id == selected.id)
+                        }));
+                self.committed(match action {
+                    Action::Run | Action::Retry => {
+                        "Supervisor started · close TUI safely · Pause stops execution"
+                    }
+                    Action::Pause => "Pause requested · waiting for worker shutdown and cleanup",
+                    _ => "Saved to SQLite",
+                });
+                if continue_queue {
+                    self.continue_queue();
                 }
-                Action::Pause => "Pause requested · waiting for worker shutdown and cleanup",
-                _ => "Saved to SQLite",
-            }),
+            }
             Err(error) => self.message(error),
         }
         true
+    }
+
+    /// A committed intervention must not be presented as a failed form if starting fails.
+    pub(crate) fn continue_queue(&mut self) {
+        if !self.auto_advance {
+            self.continuation_pending = None;
+            return;
+        }
+        self.continuation_pending = None;
+        let runnable = self.current().is_some_and(|task| {
+            task.definition().kind == Kind::Ai
+                && (task.status() == Status::Pending
+                    || task.status().failed()
+                    || (task.status() == Status::Question
+                        && self
+                            .service
+                            .as_ref()
+                            .unwrap()
+                            .open_question(task.id as i64)
+                            .is_ok_and(|question| question.is_none())))
+        });
+        if !runnable {
+            return;
+        }
+        if self.supervisor_alive {
+            self.continuation_pending = self.current().map(|task| task.id);
+            return;
+        }
+        let result = self
+            .instance
+            .paths()
+            .map_err(|e| e.to_string())
+            .and_then(|paths| {
+                crate::runner::background(self.service.as_mut().unwrap(), &paths, true)
+                    .map_err(|e| e.to_string())
+            });
+        match result {
+            Ok(()) => self.committed("Saved to SQLite · queue continuing automatically"),
+            Err(error) => self.message(format!("Saved to SQLite · queue stopped: {error}")),
+        }
     }
 
     fn propose_remediation(&mut self) -> Result<(), String> {
@@ -710,6 +761,12 @@ impl App {
             } else {
                 "Saved to SQLite"
             });
+            if matches!(
+                dialog.kind,
+                DialogKind::Answer(_) | DialogKind::RemediationReview { .. }
+            ) {
+                self.continue_queue();
+            }
         }
         Ok(result)
     }

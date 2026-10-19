@@ -126,6 +126,7 @@ pub struct App {
     pub cleanup_fail_once: bool,
     pub clean_retry: bool,
     pub auto_advance: bool,
+    pub(crate) continuation_pending: Option<usize>,
     pub last_workspace: Option<usize>,
     pub tick_ms: u64,
     pub hits: Vec<(Rect, Action)>,
@@ -203,7 +204,8 @@ impl App {
             review_required: false,
             cleanup_fail_once: false,
             clean_retry: false,
-            auto_advance: false,
+            auto_advance: true,
+            continuation_pending: None,
             last_workspace: Some(1),
             tick_ms: 400,
             hits: Vec::new(),
@@ -345,6 +347,7 @@ impl App {
         match self.view {
             View::Current => match code {
                 KeyCode::Char('r') => Some(Action::Run),
+                KeyCode::Char('m') => Some(Action::Configure),
                 KeyCode::Char('R') => Some(Action::Recover),
                 KeyCode::Char('p') => Some(Action::Pause),
                 KeyCode::Char('t') => Some(Action::Retry),
@@ -540,6 +543,16 @@ impl App {
         if self.service.is_some() {
             if self.dialog.is_none() && self.last_tick.elapsed() >= Duration::from_millis(500) {
                 self.last_tick = Instant::now();
+                if let Some(expected) = self.continuation_pending {
+                    match self.reload() {
+                        Ok(()) if self.current().is_some_and(|task| task.id == expected) => {
+                            self.continue_queue()
+                        }
+                        Ok(()) => self.continuation_pending = None,
+                        Err(error) => self.message(error),
+                    }
+                    return true;
+                }
                 match self
                     .service
                     .as_ref()
