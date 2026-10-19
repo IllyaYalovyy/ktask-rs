@@ -141,7 +141,7 @@ fn real_configuration_forms_mouse_keyboard_restart_and_validation() -> Result {
         open(&mut t, mouse, "e", "e Preferences", "Project preferences")?;
         if mouse {
             t.click("Planner approval")?;
-            t.click("< Run one >")?;
+            t.click("< Continue queue >")?;
         } else {
             t.send("\t \t ")?;
         }
@@ -150,12 +150,13 @@ fn real_configuration_forms_mouse_keyboard_restart_and_validation() -> Result {
             service(root)?
                 .preferences(&root.join("config/ktask-dev"))?
                 .continuation,
-            Continuation::Single
+            Continuation::Queue,
+            "continuing the queue is the default; cancel keeps it"
         );
         open(&mut t, mouse, "e", "e Preferences", "Project preferences")?;
         if mouse {
             t.click("Planner approval")?;
-            t.click("< Run one >")?;
+            t.click("< Continue queue >")?;
         } else {
             t.send("\t \t ")?;
         }
@@ -173,7 +174,7 @@ fn real_configuration_forms_mouse_keyboard_restart_and_validation() -> Result {
         screen(&t, "No current task")?;
         t.send("4")?;
         let restored = screen(&t, "Mouse: Disabled")?;
-        assert!(restored.contains("Run mode: Continue queue"));
+        assert!(restored.contains("Run mode: Run one"));
         assert!(restored.contains("Planner approval: Review required"));
         t.send("e")?; // Keyboard re-enables mouse.
         screen(&t, "Project preferences")?;

@@ -1341,10 +1341,8 @@ fn real_tui_rate_wait_and_mouse_pause_stop_automatic_retry() -> Result {
     f.add("Rate limited")?;
     let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
     t.screen("current", |s| s.contains("Rate limited"))?;
-    t.send("4e")?;
-    t.screen("preferences", |s| s.contains("Project preferences"))?;
-    t.send("\t\t \x13")?;
-    t.screen("queue continuation selected", |s| {
+    t.send("4")?;
+    t.screen("queue continuation is the default", |s| {
         s.contains("Run mode: Continue queue")
     })?;
     t.send("1")?;
@@ -1412,9 +1410,10 @@ fn real_tui_persisted_single_and_continue_modes_with_two_tasks() -> Result {
                 "RUN PREFERENCES mouse={mouse} queue={queue}\n{}",
                 t.screen("preferences", |s| s.contains("Project preferences"))?
             );
-            if queue {
+            // Continuing the queue is the default; running one task is the opt-in.
+            if !queue {
                 if mouse {
-                    t.click("< Run one >")?;
+                    t.click("< Continue queue >")?;
                 } else {
                     t.send("\t\t ")?;
                 }

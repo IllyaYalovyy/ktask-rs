@@ -17,8 +17,9 @@ pub enum PlannerApproval {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Continuation {
-    #[default]
     Single,
+    /// The supervisor keeps taking the next task until something needs the owner.
+    #[default]
     Queue,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

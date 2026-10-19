@@ -78,8 +78,9 @@ the isolated simulator: 120 queued/current and 120 historical tasks, no SQLite a
 Implemented in the simulator: execution/pause/retry, ordinary remediation tasks, revision approval,
 per-role models/effort and limits, failure resolutions, timed waits, workspace handoffs, Human
 acknowledgment, AI questions, queue management, search/filter, history/attempts, statistics,
-settings, and import/export previews. Continue queue is optional and stops for failures or
-human intervention. Insertion before current is allowed unless it is running.
+settings, and import/export previews. Continue queue is the default: the supervisor keeps taking
+the next task and stops only for a question, an approval, Human work, or an exhausted budget.
+Insertion before current is allowed unless it is running.
 
 Try **Remediate → Apply** on the initial failure: escalate its execution model or insert a repair
 task before it. Configuration controls whether planner changes need approval. **Models** edits
