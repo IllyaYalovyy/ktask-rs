@@ -665,13 +665,29 @@ fn ai_turn(
         }
         other => return Ok(other),
     }
-    let assessment = match stream.assessment(run.definition.criteria.len()) {
+    let mut assessment = match stream.assessment(run.definition.criteria.len()) {
         Ok(a) => a,
         Err(e) => {
             service.finish_step(&step, false, &e.to_string(), None)?;
             return Ok(Outcome::Failed("protocol", e.to_string()));
         }
     };
+    if role == "validation" {
+        for reason in service.check_regressions(run)? {
+            assessment.findings.push(codex::Finding {
+                severity: codex::Severity::Critical,
+                description: reason,
+            });
+        }
+        if !assessment.findings.is_empty()
+            && assessment
+                .findings
+                .iter()
+                .any(|finding| finding.severity == codex::Severity::Critical)
+        {
+            assessment.outcome = "changes_requested".into();
+        }
+    }
     if assessment.outcome == "blocked" {
         service.finish_assessment(&step, false, &assessment.summary)?;
         let question = assessment.question.expect("validated");

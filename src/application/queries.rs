@@ -410,7 +410,9 @@ fn attempts(db: &Connection, task: i64) -> Result<Vec<Attempt>> {
             .query_map([attempt.id], |r| r.get(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut steps = db.prepare_cached(
-            "SELECT role, state, report FROM attempt_steps WHERE attempt_id = ?1 ORDER BY ordinal",
+            "SELECT s.role, s.state, s.report, c.name, s.passed_count, s.failed_count, s.ignored_count
+             FROM attempt_steps s LEFT JOIN project_checks c ON c.id=s.project_check_id
+             WHERE s.attempt_id = ?1 ORDER BY s.ordinal",
         )?;
         attempt.steps = steps
             .query_map([attempt.id], |r| {
@@ -418,6 +420,15 @@ fn attempts(db: &Connection, task: i64) -> Result<Vec<Attempt>> {
                     role: r.get(0)?,
                     state: r.get(1)?,
                     report: r.get(2)?,
+                    check_name: r.get(3)?,
+                    counts: match r.get::<_, Option<i64>>(4)? {
+                        Some(passed) => Some(CheckCounts {
+                            passed,
+                            failed: r.get(5)?,
+                            ignored: r.get(6)?,
+                        }),
+                        None => None,
+                    },
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

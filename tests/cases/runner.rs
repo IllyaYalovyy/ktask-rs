@@ -124,6 +124,8 @@ if [ '{mode}' = check-launch-failure ]; then
 fi
 prompt=$(cat)
 printf '%s' "$prompt" > "$HOME/prompt-$model"
+if [ "$model" = review ] && [ ! -f "$HOME/first-review-prompt" ]; then printf '%s' "$prompt" > "$HOME/first-review-prompt"; fi
+if [ "$model" = validation ] && [ ! -f "$HOME/first-validation-prompt" ]; then printf '%s' "$prompt" > "$HOME/first-validation-prompt"; fi
 case "$prompt" in *"Repair plan from the failure judge"*) printf '%s' "$prompt" > "$HOME/prompt-repair-worker";; esac
 [ -n "$session" ] || session="session-$model-$$"
 printf '{{"type":"thread.started","thread_id":"%s"}}\n' "$session"
@@ -148,6 +150,13 @@ case "$prompt" in *"You are the failure judge"*)
   *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"repair\",\"plan\":\"Rerun the check after writing result.txt\",\"reason\":\"The check failed on a missing file\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
  esac;;
 esac
+if [ '{mode}' = noisy-review-once ] && [ "$model" = review ]; then
+ i=0
+ while [ "$i" -lt 2100 ]; do
+  printf '{{"type":"item.completed","item":{{"type":"command_execution","command":"late output","aggregated_output":"late output %s","exit_code":0}}}}\n' "$i"
+  i=$((i + 1))
+ done
+fi
 case '{mode}' in
  follow-up)
   if [ "$model" = execution ]; then
@@ -206,7 +215,7 @@ case '{mode}' in
     *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"failed\",\"summary\":\"Missing independent inspection evidence\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":false,\"evidence\":\"The review summary alone does not establish inspection\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
    esac;;
  esac;;
- review-once) if [ "$model" = review ] && [ ! -f "$HOME/review-failed" ]; then touch "$HOME/review-failed"; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"failed\",\"summary\":\"result.txt:1: missing edge-case handling; repair and prove the boundary.\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":false,\"evidence\":\"Boundary case fails\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0; fi;;
+ review-once|noisy-review-once) if [ "$model" = review ] && [ ! -f "$HOME/review-failed" ]; then touch "$HOME/review-failed"; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"failed\",\"summary\":\"result.txt:1: missing edge-case handling; repair and prove the boundary.\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":false,\"evidence\":\"Boundary case fails\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0; fi;;
  transient) if [ ! -f "$HOME/transport-retried" ]; then touch "$HOME/transport-retried"; printf '{{"type":"turn.failed","error":{{"message":"connection reset"}}}}\n'; exit 2; fi;;
  slow-repair) if [ "$model" = remediation ]; then touch "$HOME/repair-started"; sleep 30; fi;;
  slow-review) if [ "$model" = review ]; then touch "$HOME/review-started"; sleep 30; fi;;
@@ -1059,6 +1068,226 @@ fn failed_check_transcript_is_retained_for_remediation() -> Result {
     assert!(prompt.contains(artifact.to_str().unwrap()));
     assert_eq!(fs::read_to_string(artifact)?, "concrete failure evidence\n");
     assert!(!f.scratch.path().join("prompt-review").exists());
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn real_binary_records_check_counts_and_rejects_regression_at_validation() -> Result {
+    let f = Fixture::new()?;
+    f.ok(&[
+        "check-set", "build", "--command",
+        "if [ ! -f \"$HOME/count-baseline\" ]; then touch \"$HOME/count-baseline\"; printf 'test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; printf 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; elif [ ! -f \"$HOME/count-regressed\" ]; then touch \"$HOME/count-regressed\"; printf 'test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out\\n'; printf 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; else printf 'test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; printf 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; fi; test -f result.txt",
+    ])?;
+    f.add("Baseline counts")?;
+    f.ok(&["run", "--one"])?;
+    let first = f.ok(&["show", "1"])?;
+    let baseline = first["attempts"][0]["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["role"] == "check")
+        .unwrap();
+    assert_eq!(
+        baseline["counts"],
+        serde_json::json!({"passed": 5, "failed": 0, "ignored": 0})
+    );
+    fs::remove_file(f.scratch.path().join("first-review-prompt"))?;
+    fs::remove_file(f.scratch.path().join("first-validation-prompt"))?;
+
+    f.add("Regressed counts")?;
+    f.ok(&["run", "--one"])?;
+    let second = f.ok(&["show", "2"])?;
+    assert_eq!(second["status"], "succeeded");
+    let steps = second["attempts"][0]["steps"].as_array().unwrap();
+    let check_counts = steps
+        .iter()
+        .filter(|step| step["role"] == "check")
+        .map(|step| step["counts"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        check_counts[0],
+        serde_json::json!({"passed": 4, "failed": 0, "ignored": 1})
+    );
+    assert_eq!(
+        check_counts[1],
+        serde_json::json!({"passed": 5, "failed": 0, "ignored": 0})
+    );
+    let rejected = steps
+        .iter()
+        .find(|step| step["role"] == "validation" && step["state"] == "changes_requested")
+        .unwrap();
+    let report = rejected["report"].as_str().unwrap();
+    assert!(
+        report.contains("passed tests dropped from 5 at the previous checkpoint to 4"),
+        "{report}"
+    );
+    assert!(
+        report.contains("ignored tests rose from 0 at the previous checkpoint to 1"),
+        "{report}"
+    );
+    println!("CHECK COUNT REGRESSION REJECTED\n{report}");
+    for role in ["review", "validation"] {
+        let prompt = fs::read_to_string(f.scratch.path().join(format!("first-{role}-prompt")))?;
+        assert!(
+            prompt.contains("current_counts"),
+            "{role} prompt missing current counts"
+        );
+        assert!(
+            prompt.contains("previous_checkpoint_counts"),
+            "{role} prompt missing previous counts"
+        );
+        assert!(
+            prompt.contains("\"passed\":4"),
+            "{role} prompt missing regressed passed count"
+        );
+        assert!(
+            prompt.contains("\"ignored\":1"),
+            "{role} prompt missing ignored count"
+        );
+    }
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn missing_counts_after_a_counted_checkpoint_request_validation_repair() -> Result {
+    let f = Fixture::new()?;
+    f.ok(&[
+        "check-set", "build", "--command",
+        "if [ ! -f \"$HOME/count-baseline\" ]; then touch \"$HOME/count-baseline\"; printf 'test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; elif [ ! -f \"$HOME/count-missing\" ]; then touch \"$HOME/count-missing\"; printf 'check succeeded without a test summary\\n'; else printf 'test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'; fi; test -f result.txt",
+    ])?;
+    f.add("Counted checkpoint")?;
+    f.ok(&["run", "--one"])?;
+    f.add("Missing count summary")?;
+    f.ok(&["run", "--one"])?;
+    let task = f.ok(&["show", "2"])?;
+    let steps = task["attempts"][0]["steps"].as_array().unwrap();
+    let first_check = steps.iter().find(|step| step["role"] == "check").unwrap();
+    assert!(first_check["counts"].is_null());
+    let validation = steps
+        .iter()
+        .find(|step| step["role"] == "validation" && step["state"] == "changes_requested")
+        .unwrap();
+    assert!(
+        validation["report"]
+            .as_str()
+            .unwrap()
+            .contains("reported no test counts")
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn plain_show_retains_ordered_check_counts_after_logs_are_truncated() -> Result {
+    let f = Fixture::new()?;
+    f.provider("noisy-review-once")?;
+    f.ok(&[
+        "check-set", "build", "--command",
+        "if [ ! -f \"$HOME/count-first\" ]; then touch \"$HOME/count-first\"; passed=3; else passed=5; fi; printf 'test result: ok. %s passed; 0 failed; 1 ignored; 0 measured; 0 filtered out\\n' \"$passed\"; test -f result.txt",
+    ])?;
+    f.ok(&[
+        "check-set",
+        "zero\t\u{1b}",
+        "--command",
+        "printf 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'",
+    ])?;
+    f.ok(&["check-set", "uncounted", "--command", "true"])?;
+    f.add("Persist check counts beyond log retention")?;
+    f.ok(&["run", "--one"])?;
+    let task = f.ok(&["show", "1"])?;
+    assert_eq!(task["status"], "succeeded");
+    let attempt = &task["attempts"][0];
+    let checks = attempt["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|step| step["role"] == "check")
+        .map(|step| (step["check_name"].clone(), step["counts"].clone()))
+        .collect::<Vec<_>>();
+    let expected_counts = serde_json::json!([
+        ["build", {"passed": 3, "failed": 0, "ignored": 1}],
+        ["zero\t\u{1b}", {"passed": 0, "failed": 0, "ignored": 0}],
+        ["uncounted", null],
+        ["build", {"passed": 5, "failed": 0, "ignored": 1}],
+        ["zero\t\u{1b}", {"passed": 0, "failed": 0, "ignored": 0}],
+        ["uncounted", null]
+    ]);
+    assert_eq!(serde_json::to_value(checks)?, expected_counts);
+    let logs = attempt["logs"].as_array().unwrap();
+    assert_eq!(logs.len(), 2000);
+    assert!(logs.iter().all(|line| {
+        let line = line.as_str().unwrap();
+        !line.contains("Check ") && !line.contains("test result:")
+    }));
+    let shown = f.process().args(["show", "1"]).output()?;
+    assert!(shown.status.success());
+    let text = String::from_utf8(shown.stdout)?;
+    let summaries = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("  Check "))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        summaries,
+        [
+            "build: 3 passed, 0 failed, 1 ignored",
+            "zero\\t\\u{1b}: 0 passed, 0 failed, 0 ignored",
+            "uncounted: test counts unavailable",
+            "build: 5 passed, 0 failed, 1 ignored",
+            "zero\\t\\u{1b}: 0 passed, 0 failed, 0 ignored",
+            "uncounted: test counts unavailable",
+        ]
+    );
+    assert!(!text.contains('\u{1b}'));
+    println!(
+        "PERSISTED CHECK COUNTS: JSON retained {} logs with no check summaries; plain show:\n{}",
+        logs.len(),
+        summaries.join("\n")
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn current_screen_shows_recorded_check_counts_in_real_terminal() -> Result {
+    let f = Fixture::new()?;
+    f.provider("slow-review")?;
+    f.ok(&["check-set", "build", "--command", "printf 'test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out\\n'; test -f result.txt"])?;
+    f.add("Visible check counts")?;
+    let mut runner = f.process().args(["run", "--one"]).spawn()?;
+    let until = Instant::now() + Duration::from_secs(10);
+    while !f.scratch.path().join("review-started").exists() {
+        assert!(
+            Instant::now() < until,
+            "review did not start after the count-bearing check"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 35)?;
+    let screen = t.screen("current check counts", |s| {
+        s.contains("Check build: 3 passed, 0 failed, 1 ignored")
+    })?;
+    println!("CURRENT COUNTS\n{screen}");
+    f.ok(&["pause", "1"])?;
+    assert!(runner.wait()?.success());
+    t.screen("paused current", |s| s.contains("Current #1 · PAUSED"))?;
+    t.send("o")?;
+    let report = t.screen("paused current count report", |s| {
+        s.contains("Report · attempt 1") && s.contains("Check build: 3 passed, 0 failed, 1 ignored")
+    })?;
+    println!("PAUSED COUNT REPORT\n{report}");
+    t.click("o Log")?;
+    t.screen("mouse switches counts report to log", |s| {
+        s.contains("Log ·") && s.contains("attempt 1") && !s.contains("Report · attempt 1")
+    })?;
+    t.click("o Report")?;
+    let report = t.screen("mouse reopens paused current count report", |s| {
+        s.contains("Report · attempt 1") && s.contains("Check build: 3 passed, 0 failed, 1 ignored")
+    })?;
+    println!("PAUSED COUNT REPORT MOUSE\n{report}");
+    t.send("q")?;
+    t.finish()?;
     f.no_scratch()?;
     Ok(())
 }

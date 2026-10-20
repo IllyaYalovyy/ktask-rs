@@ -463,6 +463,91 @@ impl Service {
             provider_session: None,
         })
     }
+    pub fn record_check_counts(&self, step: &Step, counts: CheckCounts) -> Result<()> {
+        require(
+            self.db.connection().execute(
+                "UPDATE attempt_steps SET passed_count=?2,failed_count=?3,ignored_count=?4
+                 WHERE id=?1 AND role='check' AND state<>'running'",
+                params![step.id, counts.passed, counts.failed, counts.ignored],
+            )? == 1,
+            "Check step changed before counts were recorded",
+        )
+    }
+    pub fn previous_check_counts(&self, run: &Run, check: i64) -> Result<Option<CheckCounts>> {
+        self.db
+            .connection()
+            .query_row(
+                "SELECT s.passed_count,s.failed_count,s.ignored_count FROM attempt_steps s
+             WHERE s.attempt_id=(SELECT previous.id FROM attempts previous
+               WHERE previous.project_id=?1 AND previous.state='succeeded'
+                 AND previous.head_commit=(SELECT base_commit FROM attempts WHERE id=?2)
+               ORDER BY previous.id DESC LIMIT 1)
+               AND s.project_check_id=?3 AND s.role='check' AND s.state='succeeded'
+               ORDER BY s.id DESC LIMIT 1",
+                params![self.project_id, run.attempt, check],
+                |r| {
+                    Ok(match r.get::<_, Option<i64>>(0)? {
+                        Some(passed) => Some(CheckCounts {
+                            passed,
+                            failed: r.get(1)?,
+                            ignored: r.get(2)?,
+                        }),
+                        None => None,
+                    })
+                },
+            )
+            .optional()
+            .map(Option::flatten)
+            .map_err(Into::into)
+    }
+    pub fn check_regressions(&self, run: &Run) -> Result<Vec<String>> {
+        let mut regressions = Vec::new();
+        for check in self.checks()? {
+            let current = self
+                .db
+                .connection()
+                .query_row(
+                    "SELECT passed_count,failed_count,ignored_count FROM attempt_steps
+                 WHERE attempt_id=?1 AND project_check_id=?2 AND state='succeeded'
+                 ORDER BY id DESC LIMIT 1",
+                    params![run.attempt, check.id],
+                    |r| {
+                        Ok(match r.get::<_, Option<i64>>(0)? {
+                            Some(passed) => Some(CheckCounts {
+                                passed,
+                                failed: r.get(1)?,
+                                ignored: r.get(2)?,
+                            }),
+                            None => None,
+                        })
+                    },
+                )
+                .optional()?
+                .flatten();
+            if let Some(previous) = self.previous_check_counts(run, check.id)? {
+                let Some(current) = current else {
+                    regressions.push(format!(
+                        "Supervisor check {} reported no test counts; previous checkpoint recorded {} passed, {} failed, {} ignored, so test coverage cannot be validated",
+                        check.name, previous.passed, previous.failed, previous.ignored
+                    ));
+                    continue;
+                };
+                if current.passed < previous.passed {
+                    regressions.push(format!(
+                        "Supervisor check {} passed tests dropped from {} at the previous checkpoint to {}",
+                        check.name, previous.passed, current.passed
+                    ));
+                }
+                if current.ignored > previous.ignored {
+                    regressions.push(format!(
+                        "Supervisor check {} ignored tests rose from {} at the previous checkpoint to {}",
+                        check.name, previous.ignored, current.ignored
+                    ));
+                }
+            }
+        }
+        Ok(regressions)
+    }
     pub fn finish_step(
         &mut self,
         step: &Step,

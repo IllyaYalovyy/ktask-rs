@@ -134,6 +134,21 @@ fn task_text(task: &Task) -> String {
             a.revision,
             safe(a.outcome.as_deref().unwrap_or("in progress"))
         ));
+        for step in a.steps.iter().filter(|step| step.role == "check") {
+            let counts = step.counts.map_or_else(
+                || "test counts unavailable".into(),
+                |counts| {
+                    format!(
+                        "{} passed, {} failed, {} ignored",
+                        counts.passed, counts.failed, counts.ignored
+                    )
+                },
+            );
+            text.push_str(&format!(
+                "  Check {}: {counts}\n",
+                safe(step.check_name.as_deref().unwrap_or("unknown"))
+            ));
+        }
         for line in &a.logs {
             text.push_str(&format!("  {}\n", safe(line)));
         }

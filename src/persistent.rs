@@ -1247,6 +1247,18 @@ fn report_text(attempt: &domain::Attempt) -> String {
         .unwrap_or_default();
     let last = attempt.steps.len();
     for (i, step) in attempt.steps.iter().enumerate() {
+        if let Some(counts) = step.counts {
+            if !text.is_empty() {
+                text.push_str("\n\n");
+            }
+            text.push_str(&format!(
+                "Check {}: {} passed, {} failed, {} ignored",
+                step.check_name.as_deref().unwrap_or("unknown"),
+                counts.passed,
+                counts.failed,
+                counts.ignored
+            ));
+        }
         let finding = step.report.as_deref().unwrap_or_default().trim();
         if finding.is_empty() || text.contains(finding) {
             continue;

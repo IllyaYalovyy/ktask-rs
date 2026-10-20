@@ -110,6 +110,14 @@ pub struct Step {
     pub role: String,
     pub state: String,
     pub report: Option<String>,
+    pub check_name: Option<String>,
+    pub counts: Option<CheckCounts>,
+}
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+pub struct CheckCounts {
+    pub passed: i64,
+    pub failed: i64,
+    pub ignored: i64,
 }
 #[derive(Clone, Debug)]
 pub struct Task {

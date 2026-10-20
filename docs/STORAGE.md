@@ -244,6 +244,8 @@ Durable phase within one attempt. Initial implementation is round zero; at most 
 
 Ordered phases inside an attempt. A completed assessment requesting fixes has state changes_requested; its provider call succeeded. Unmet criterion evidence uses needs_work, not a failed task. AI phases record session/provider/model and optional effort; tool checks record command context. Terminal steps require finish time. The two composite parent keys enforce exact revision/project references in criterion_results and model_calls; attempt_id/ordinal enforces phase order.
 
+Check counts sum completed Rust test-harness summaries in each retained transcript. All three counts are NULL when no supported summary was reported. Review and validation see the current run and the latest successful check from the checkpoint matching the attempt's base commit. Validation requests a repair when passed tests drop, ignored tests rise, or a previously counted check stops reporting counts.
+
 | Column | Type | Nullable | Definition |
 | --- | --- | --- | --- |
 | `id` | INTEGER | no | Stable row ID. |
@@ -264,6 +266,9 @@ Ordered phases inside an attempt. A completed assessment requesting fixes has st
 | `working_directory` | TEXT | yes | Working directory relative to the project root; validated by runner. |
 | `timeout_ms` | INTEGER | yes | Positive execution timeout. |
 | `exit_code` | INTEGER | yes | Tool exit status; NULL if no exit was observed. |
+| `passed_count` | INTEGER | yes | Nonnegative passed test count parsed from the check transcript; NULL when no supported summary was found. |
+| `failed_count` | INTEGER | yes | Nonnegative failed test count, stored with passed and ignored counts. |
+| `ignored_count` | INTEGER | yes | Nonnegative ignored test count, stored with passed and failed counts. |
 | `started_at_ms` | INTEGER | no | Start time. |
 | `finished_at_ms` | INTEGER | yes | Finish time; NULL while active. |
 | `report` | TEXT | yes | Human-readable summary/evidence; not a serialized entity. |

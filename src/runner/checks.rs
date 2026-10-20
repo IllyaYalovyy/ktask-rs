@@ -1,7 +1,7 @@
 use super::{Context, Outcome, codex, execute, operational_backoff, process::Invocation};
 use crate::{
     application::{
-        Service,
+        CheckCounts, Service,
         execution::{Check, Run},
         require,
     },
@@ -18,14 +18,15 @@ pub(super) fn run(
     let mut evidence = String::new();
     for check in checks {
         for recheck in 0..=2 {
-            let (outcome, path) = run_one(service, run, ctx, check)?;
+            let (outcome, path, counts) = run_one(service, run, ctx, check)?;
             match outcome {
                 Outcome::Passed(_) => {
                     evidence.push_str(&format!(
                         "\nSupervisor check evidence: {}",
                         serde_json::json!({
                             "name": check.name, "command": check.command, "exit_code": 0,
-                            "transcript": path,
+                            "transcript": path, "current_counts": counts,
+                            "previous_checkpoint_counts": service.previous_check_counts(run, check.id)?,
                         })
                     ));
                     break;
@@ -78,7 +79,7 @@ fn run_one(
     run: &Run,
     ctx: &mut Context<'_>,
     check: &Check,
-) -> Result<(Outcome, PathBuf)> {
+) -> Result<(Outcome, PathBuf, Option<CheckCounts>)> {
     let step = service.start_check(run, check)?;
     let cwd = ctx.workspace.root.join(&check.directory).canonicalize()?;
     require(
@@ -128,5 +129,67 @@ fn run_one(
         &relative,
         transcript.metadata()?.len() as i64,
     )?;
-    Ok((result?, path))
+    let counts = if matches!(
+        &result,
+        Ok(Outcome::Passed(_) | Outcome::Failed("check", _))
+    ) {
+        parse_counts(&std::fs::read_to_string(&path)?)
+    } else {
+        None
+    };
+    if let Some(counts) = counts {
+        service.record_check_counts(&step, counts)?;
+        service.output(
+            run,
+            "system",
+            &format!(
+                "Check {}: {} passed, {} failed, {} ignored",
+                check.name, counts.passed, counts.failed, counts.ignored
+            ),
+        )?;
+    }
+    Ok((result?, path, counts))
+}
+
+/// Sum completed Rust test harness suites in the check's captured output.
+fn parse_counts(transcript: &str) -> Option<CheckCounts> {
+    let mut total: Option<CheckCounts> = None;
+    for line in transcript.lines() {
+        let Some(summary) = line.trim().strip_prefix("test result: ") else {
+            continue;
+        };
+        let mut counts = [None; 3];
+        for segment in summary.split(';') {
+            let words = segment.split_whitespace().collect::<Vec<_>>();
+            let Some([number, kind]) = words
+                .windows(2)
+                .find(|pair| matches!(pair[1], "passed" | "failed" | "ignored"))
+            else {
+                continue;
+            };
+            let index = match *kind {
+                "passed" => 0,
+                "failed" => 1,
+                "ignored" => 2,
+                _ => continue,
+            };
+            counts[index] = number.parse::<i64>().ok().filter(|n| *n >= 0);
+        }
+        if let [Some(passed), Some(failed), Some(ignored)] = counts {
+            let next = CheckCounts {
+                passed,
+                failed,
+                ignored,
+            };
+            total = Some(match total {
+                Some(prior) => CheckCounts {
+                    passed: prior.passed.checked_add(next.passed)?,
+                    failed: prior.failed.checked_add(next.failed)?,
+                    ignored: prior.ignored.checked_add(next.ignored)?,
+                },
+                None => next,
+            });
+        }
+    }
+    total
 }

@@ -209,6 +209,9 @@ CREATE TABLE attempt_steps (
     working_directory TEXT,
     timeout_ms INTEGER CHECK (timeout_ms > 0),
     exit_code INTEGER,
+    passed_count INTEGER CHECK (passed_count >= 0),
+    failed_count INTEGER CHECK (failed_count >= 0),
+    ignored_count INTEGER CHECK (ignored_count >= 0),
     started_at_ms INTEGER NOT NULL CHECK (started_at_ms >= 0),
     finished_at_ms INTEGER CHECK (finished_at_ms >= started_at_ms),
     report TEXT,
@@ -219,6 +222,8 @@ CREATE TABLE attempt_steps (
     FOREIGN KEY (session_id, project_id, task_id, role, provider) REFERENCES ai_sessions(id, project_id, task_id, role, provider),
     FOREIGN KEY (project_check_id, project_id) REFERENCES project_checks(id, project_id),
     CHECK ((state = 'running' AND finished_at_ms IS NULL) OR (state <> 'running' AND finished_at_ms IS NOT NULL)),
+    CHECK ((passed_count IS NULL AND failed_count IS NULL AND ignored_count IS NULL)
+        OR (role = 'check' AND passed_count IS NOT NULL AND failed_count IS NOT NULL AND ignored_count IS NOT NULL)),
     CHECK ((role IN ('execution', 'review', 'validation', 'remediation') AND session_id IS NOT NULL
                 AND provider IS NOT NULL AND length(trim(provider)) > 0
                 AND model IS NOT NULL AND length(trim(model)) > 0
