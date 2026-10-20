@@ -176,6 +176,50 @@ fn plain_log_click_keeps_following_as_output_arrives() -> Result {
 }
 
 #[test]
+fn selecting_modal_text_does_not_stop_the_underlying_log() -> Result {
+    for (cols, rows) in [(70, 22), (120, 30)] {
+        let mut t = Terminal::open(cols, rows)?;
+        ready(&t)?;
+        key(&mut t, "4e", "Step delay (ms)")?;
+        key(&mut t, "\t\x012000\x13", "Configuration applied")?;
+        let running = key(&mut t, "1t", "Log · following")?;
+        let log = location(&running, "Log · following")?;
+
+        let help = key(&mut t, "?", "w answer AI")?;
+        let (word_x, word_y) = location(&help, "w answer AI")?;
+        let phrase = (word_x + 1, word_y);
+        assert!(
+            phrase.0 >= log.0 && phrase.1 > log.1,
+            "log={log:?}, phrase={phrase:?}\n{help}"
+        );
+        drag(&mut t, phrase, (phrase.0 + 8, phrase.1))?;
+        let selected = t.screen("modal text selected", |_| t.selected_at(phrase.0, phrase.1))?;
+        println!("MODAL MOUSE SELECTED {cols}x{rows}\n{selected}");
+        assert!(mouse_copy(&mut t)?.contains("answer"));
+        t.click("Close")?;
+        let after_mouse = t.screen("log still follows after modal mouse selection", |s| {
+            s.contains("Log · following") && !s.contains("Keyboard help")
+        })?;
+        println!("MODAL MOUSE CLOSED {cols}x{rows}\n{after_mouse}");
+
+        key(&mut t, "?", "Keyboard help")?;
+        for keys in ["\x1b[12~", "\x1b[6~", "\x1b[4~"] {
+            let before = t.redraw_count();
+            t.send(keys)?;
+            t.screen("modal keyboard selection moved", |_| {
+                t.redraw_count() > before
+            })?;
+        }
+        key(&mut t, "\x1b", "Keyboard help")?;
+        let after_keyboard = key(&mut t, "\x1b", "Log · following")?;
+        println!("MODAL KEYBOARD CLOSED {cols}x{rows}\n{after_keyboard}");
+        assert!(!after_keyboard.contains("Keyboard help"));
+        quit(&mut t)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn full_following_log_freezes_on_mouse_down_before_drag() -> Result {
     let mut t = Terminal::open(70, 22)?;
     ready(&t)?;

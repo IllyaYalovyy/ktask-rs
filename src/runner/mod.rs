@@ -524,7 +524,16 @@ fn ai_turn(
     }
     service.finish_step(&step, passed, &assessment.summary, None)?;
     Ok(if passed {
-        Outcome::Passed(assessment.summary)
+        Outcome::Passed(
+            serde_json::json!({
+                "task_id": run.task,
+                "attempt_id": run.attempt,
+                "step_id": step.id,
+                "role": role,
+                "assessment": assessment,
+            })
+            .to_string(),
+        )
     } else {
         Outcome::Failed(
             if matches!(role, "review" | "validation") {

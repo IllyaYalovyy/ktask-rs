@@ -5,10 +5,10 @@ use crate::{
     },
     storage::{Error, Result, usage::TokenUsage},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Assessment {
     pub outcome: String,
@@ -16,7 +16,7 @@ pub struct Assessment {
     pub question: Option<String>,
     pub criteria: Vec<Evidence>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Evidence {
     pub ordinal: i64,
@@ -498,6 +498,9 @@ fn numbered(criteria: &[String]) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+// Command-completion events contain the entire captured command output.
+const MAX_EVENT_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Default)]
 pub struct Stream {
     pub completed: bool,
@@ -513,15 +516,19 @@ pub enum Event {
 }
 impl Stream {
     pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<Event>> {
-        self.pending.extend_from_slice(bytes);
-        if self.pending.len() > 1024 * 1024 {
-            return Err(Error::Conflict("Codex event exceeds 1 MiB".into()));
-        }
         let mut events = Vec::new();
-        while let Some(end) = self.pending.iter().position(|b| *b == b'\n') {
-            let line: Vec<_> = self.pending.drain(..=end).collect();
-            let value: Value = serde_json::from_slice(&line)
+        // Scan only new bytes, and bound individual records rather than a batch.
+        for segment in bytes.split_inclusive(|b| *b == b'\n') {
+            if segment.len() > MAX_EVENT_BYTES - self.pending.len() {
+                return Err(Error::Conflict("Codex event exceeds 16 MiB".into()));
+            }
+            self.pending.extend_from_slice(segment);
+            if !segment.ends_with(b"\n") {
+                continue;
+            }
+            let value: Value = serde_json::from_slice(&self.pending)
                 .map_err(|e| Error::Conflict(format!("Invalid Codex event: {e}")))?;
+            self.pending.clear();
             match value["type"].as_str().unwrap_or("") {
                 "thread.started" => {
                     if let Some(id) = value["thread_id"].as_str() {
@@ -659,6 +666,68 @@ fn item_text(item: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_command_event_preserves_output_across_pipe_reads() {
+        let output = format!("START\n{}\nEND", "x".repeat(1250000));
+        let record = format!(
+            "{}\n",
+            json!({"type":"item.completed","item":{
+                "type":"command_execution","command":"make check",
+                "aggregated_output":output,"exit_code":0
+            }})
+        );
+        let mut stream = Stream::default();
+        let mut events = Vec::new();
+        for chunk in record.as_bytes().chunks(4096) {
+            events.extend(stream.feed(chunk).unwrap());
+        }
+        assert_eq!(events.len(), 1);
+        assert!(
+            matches!(&events[0], Event::Text(text) if text == &format!("$ make check\n{output}\nexit 0"))
+        );
+        let assessment = json!({"outcome":"complete","summary":"Checked","question":null,
+            "criteria":[{"ordinal":1,"passed":true,"evidence":"Full transcript"}]});
+        stream.feed(format!(
+            "{}\n{}\n",
+            json!({"type":"item.completed","item":{"type":"agent_message","text":assessment.to_string()}}),
+            json!({"type":"turn.completed","usage":{}})
+        ).as_bytes()).unwrap();
+        assert_eq!(
+            stream.assessment(1).unwrap().criteria[0].evidence,
+            "Full transcript"
+        );
+    }
+
+    #[test]
+    fn stream_bounds_records_instead_of_batches() {
+        let record = format!(
+            "{{\"type\":\"ignored\",\"text\":\"{}\"}}\n",
+            "x".repeat(4096)
+        );
+        let batch = record.repeat(MAX_EVENT_BYTES / record.len() + 1);
+        let mut stream = Stream::default();
+        assert!(stream.feed(batch.as_bytes()).unwrap().is_empty());
+        assert!(stream.pending.is_empty());
+        // An exactly bounded event remains valid even when its newline arrives separately.
+        let record = format!("{{\"text\":\"{}\"}}\n", "x".repeat(MAX_EVENT_BYTES - 12));
+        assert_eq!(record.len(), MAX_EVENT_BYTES);
+        stream.feed(&record.as_bytes()[..record.len() - 1]).unwrap();
+        stream.feed(b"\n").unwrap();
+        assert!(stream.pending.is_empty());
+        // Reject oversized complete and unfinished events without growing past the bound.
+        for tail in [b"\n".as_slice(), b"x".as_slice()] {
+            let mut stream = Stream::default();
+            stream.feed(&vec![b' '; MAX_EVENT_BYTES]).unwrap();
+            assert!(stream.feed(tail).is_err());
+            assert_eq!(stream.pending.len(), MAX_EVENT_BYTES);
+        }
+        assert!(
+            Stream::default()
+                .feed(&vec![b' '; MAX_EVENT_BYTES + 1])
+                .is_err()
+        );
+    }
 
     #[test]
     fn nudges_tell_each_role_that_limits_are_not_questions() {

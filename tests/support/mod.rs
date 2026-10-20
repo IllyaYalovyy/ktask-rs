@@ -112,7 +112,26 @@ pub fn copy_key(t: &mut Terminal, keys: &str) -> Result<String> {
 }
 
 pub fn mouse_copy(t: &mut Terminal) -> Result<String> {
-    copy_after(t, "new OSC 52 copy from mouse", |t| t.click("Copy"))
+    copy_after(t, "new OSC 52 copy from mouse", |t| {
+        // A modal can cover the main Copy button; click its visible button.
+        let screen = t.current_screen();
+        let (row, col) = screen
+            .lines()
+            .enumerate()
+            .filter_map(|(row, line)| {
+                line.find("[Copy]")
+                    .map(|byte| (row, line[..byte].chars().count()))
+            })
+            .last()
+            .ok_or("Copy button missing")?;
+        t.send(&format!(
+            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+            col + 1,
+            row + 1,
+            col + 1,
+            row + 1
+        ))
+    })
 }
 
 fn copy_after(

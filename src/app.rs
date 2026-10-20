@@ -353,7 +353,10 @@ impl App {
             return;
         }
         if self.selection.keyboard_key(key) {
-            if self.view == View::Current && self.selection.keyboard_in(self.log_rect) {
+            if self.dialog.is_none()
+                && self.view == View::Current
+                && self.selection.keyboard_in(self.log_rect)
+            {
                 self.follow = false;
             }
             if self.selection.copy_requested() {
@@ -560,7 +563,8 @@ impl App {
                     return;
                 }
                 self.selection.mouse_down(event.column, event.row);
-                self.log_follow_before_mouse_down = (self.view == View::Current
+                self.log_follow_before_mouse_down = (self.dialog.is_none()
+                    && self.view == View::Current
                     && self.log_rect.contains(point))
                 .then_some(self.follow);
                 if self.log_follow_before_mouse_down.is_some() {

@@ -142,6 +142,18 @@ case "$prompt" in *"You are the failure judge"*)
  esac;;
 esac
 case '{mode}' in
+ large-evidence) case "$model" in
+  execution|remediation)
+   printf '{{"type":"item.completed","item":{{"type":"command_execution","command":"large check transcript","aggregated_output":"START'
+   head -c 1250000 /dev/zero | tr '\000' x
+   printf 'END","exit_code":0}}}}\n';;
+  review)
+   printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"complete\",\"summary\":\"Review passed\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":true,\"evidence\":\"Inspected rendered PTY screens and the supervisor check transcript\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
+  validation)
+   case "$prompt" in *"Inspected rendered PTY screens and the supervisor check transcript"*) :;;
+    *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"failed\",\"summary\":\"Missing independent inspection evidence\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":false,\"evidence\":\"The review summary alone does not establish inspection\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
+   esac;;
+ esac;;
  review-once) if [ "$model" = review ] && [ ! -f "$HOME/review-failed" ]; then touch "$HOME/review-failed"; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"failed\",\"summary\":\"result.txt:1: missing edge-case handling; repair and prove the boundary.\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":false,\"evidence\":\"Boundary case fails\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0; fi;;
  transient) if [ ! -f "$HOME/transport-retried" ]; then touch "$HOME/transport-retried"; printf '{{"type":"turn.failed","error":{{"message":"connection reset"}}}}\n'; exit 2; fi;;
  slow-repair) if [ "$model" = remediation ]; then touch "$HOME/repair-started"; sleep 30; fi;;
@@ -2032,6 +2044,62 @@ fn manual_handoff_rejects_stale_target_and_changed_baseline_without_committing()
     assert_eq!(service.current_task()?.unwrap().version, original.version);
     assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
     f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn real_tui_preserves_large_output_and_full_review_evidence_through_queue() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("large-evidence")?;
+        f.add("Large output and independent evidence")?;
+        f.add("Following task")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        println!(
+            "LARGE EVIDENCE START mouse={mouse}\n{}",
+            t.screen("ready", |s| s.contains("r Run queue"))?
+        );
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "LARGE EVIDENCE COMPLETE mouse={mouse}\n{}",
+            t.screen("verified queue", |s| s.contains("Queue complete.")
+                && s.contains("History 2"))?
+        );
+        t.send("q")?;
+        t.finish()?;
+        for id in ["1", "2"] {
+            let task = f.ok(&["show", id])?;
+            assert_eq!(task["lifecycle"], "succeeded");
+            assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+            let logs = task["attempts"][0]["logs"].to_string();
+            assert!(logs.contains(&format!("START{}END", "x".repeat(1250000))));
+        }
+        let prompt = fs::read_to_string(f.scratch.path().join("prompt-validation"))?;
+        let report: Value = serde_json::from_str(prompt.rsplit_once("\nreview: ").unwrap().1)?;
+        assert_eq!(report["task_id"], 2);
+        assert_eq!(report["attempt_id"], 2);
+        assert_eq!(report["role"], "review");
+        let review_id: i64 = f.db()?.connection().query_row(
+            "SELECT id FROM attempt_steps WHERE attempt_id=2 AND role='review'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(report["step_id"], review_id);
+        assert_eq!(report["assessment"]["summary"], "Review passed");
+        assert_eq!(
+            report["assessment"]["criteria"][0]["evidence"],
+            "Inspected rendered PTY screens and the supervisor check transcript"
+        );
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            "execution\nreview\nvalidation\nexecution\nreview\nvalidation\n"
+        );
+        f.no_scratch()?;
+    }
     Ok(())
 }
 
