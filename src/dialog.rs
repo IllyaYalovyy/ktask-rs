@@ -26,6 +26,7 @@ pub enum DialogKind {
     Answer(usize),
     Abandon(usize),
     Recover,
+    Readiness,
     Import,
     ImportPreview(Vec<Task>),
     StoredImport(Vec<crate::application::Definition>),
@@ -198,6 +199,7 @@ impl Dialog {
         matches!(
             self.kind,
             DialogKind::RemediationPending
+                | DialogKind::Readiness
                 | DialogKind::BreakdownPending
                 | DialogKind::Help
                 | DialogKind::Stats

@@ -2148,6 +2148,503 @@ fn real_tui_configuration_errors_and_live_check_guard() -> Result {
 }
 
 #[test]
+fn readiness_launch_failure_reopens_and_retries_with_mouse_and_keyboard() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.add("Readiness recovery")?;
+        fs::remove_file(f.scratch.path().join("bin/codex"))?;
+        let original = fs::read(f.root.join("README.md"))?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+        let initial = t.screen("readiness before launch", |s| s.contains("Run blocked (1)"))?;
+        println!("READINESS CURRENT mouse={mouse}\n{initial}");
+        if mouse {
+            t.click("u Readiness")?;
+        } else {
+            t.send("u")?;
+        }
+        let details = t.screen("provider blocker", |s| {
+            s.contains("codex executable not found")
+        })?;
+        assert!(details.contains("OK · Project checks"));
+        assert!(details.contains("OK · Workspace baseline"));
+        println!("READINESS DETAILS mouse={mouse}\n{details}");
+        if mouse {
+            t.click("m Models")?;
+        } else {
+            t.send("m")?;
+        }
+        t.screen("linked model action", |s| {
+            s.contains("Task models and limits")
+        })?;
+        t.send("\x1b")?;
+        t.screen("model form closed", |s| {
+            !s.contains("Task models and limits")
+        })?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        let failed = t.screen("launch failure", |s| {
+            s.contains("codex executable not found on PATH")
+        })?;
+        println!("READINESS LAUNCH FAILED mouse={mouse}\n{failed}");
+        assert!(
+            f.ok(&["show", "1"])?["attempts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(fs::read(f.root.join("README.md"))?, original);
+        t.send("q")?;
+        t.finish()?;
+
+        let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+        reopened.screen("reopened current", |s| s.contains("Readiness recovery"))?;
+        if mouse {
+            reopened.click("u Readiness")?;
+        } else {
+            reopened.send("u")?;
+        }
+        let retained = reopened.screen("retained startup error", |s| {
+            s.contains("Last launch failure:")
+        })?;
+        assert!(retained.contains("codex executable not found on PATH"));
+        println!("READINESS REOPENED mouse={mouse}\n{retained}");
+        f.provider("normal")?;
+        if mouse {
+            reopened.click("u Refresh")?;
+        } else {
+            reopened.send("u")?;
+        }
+        let ready =
+            reopened.screen("readiness refreshed", |s| s.contains("Can run · 0 blocker"))?;
+        println!("READINESS REPAIRED mouse={mouse}\n{ready}");
+        if mouse {
+            reopened.click("r Run")?;
+        } else {
+            reopened.send("r")?;
+        }
+        let completed = reopened.screen("run after repair", |s| s.contains("Queue complete."))?;
+        println!("READINESS RETRIED mouse={mouse}\n{completed}");
+        reopened.send("q")?;
+        reopened.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn readiness_lists_independent_blockers_and_recovers_stale_worker() -> Result {
+    use ktask_rs_mk3::application::{Service, VersionedTask};
+    let f = Fixture::new()?;
+    f.add("Blocked setup")?;
+    let mut service = Service::open(f.db()?, &f.root, None)?;
+    let task = service.task(1)?.unwrap();
+    let mut definition = task.definition().definition.clone();
+    definition.models[2] = None;
+    service.revise(
+        VersionedTask {
+            id: 1,
+            version: task.version,
+        },
+        &definition,
+        true,
+    )?;
+    let checks = service.project_checks()?;
+    let mut disabled = checks[0].clone();
+    disabled.enabled = false;
+    service.save_check(&checks, &disabled)?;
+    fs::remove_file(f.scratch.path().join("bin/codex"))?;
+    fs::write(f.root.join("outside.txt"), "preserve me")?;
+    let worker_marker = f.root.join(".git/ktask-worker.lock");
+    fs::write(&worker_marker, "stale guardian marker")?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 38)?;
+    t.send("u")?;
+    let details = t.screen("all readiness blockers", |s| {
+        s.contains("Worker cleanup is unconfirmed")
+    })?;
+    for cause in [
+        "No enabled check",
+        "validation model",
+        "codex executable not found",
+        "Uncommitted work outside this task",
+    ] {
+        assert!(details.contains(cause), "{cause} absent:\n{details}");
+    }
+    println!("READINESS MULTIPLE BLOCKERS\n{details}");
+    t.click("c Checks")?;
+    let check_form = t.screen("checks link", |s| s.contains("Project checks"))?;
+    println!("READINESS CHECK ACTION\n{check_form}");
+    t.send("\x1b")?;
+    t.screen("checks closed", |s| !s.contains("Project checks"))?;
+    t.send("u")?;
+    t.screen("readiness again", |s| s.contains("Execution readiness"))?;
+    t.click("R Recover")?;
+    t.screen("recover action", |s| {
+        s.contains("Recover workspace ownership")
+    })?;
+    t.send(" \r")?;
+    let recovered = t.screen("worker ownership recovered", |s| {
+        s.contains("Saved to SQLite")
+    })?;
+    println!("READINESS WORKER RECOVERED\n{recovered}");
+    assert_eq!(fs::metadata(&worker_marker)?.len(), 0);
+    assert_eq!(
+        fs::read_to_string(f.root.join("outside.txt"))?,
+        "preserve me"
+    );
+    assert!(service.task(1)?.unwrap().attempts.is_empty());
+    t.send("q")?;
+    t.finish()?;
+    Ok(())
+}
+
+#[test]
+fn readiness_recovers_worker_marker_on_failed_current_without_losing_attempt() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.add("Failed with stale worker")?;
+        f.fail_provider()?;
+        let before = f.ok(&["show", "1"])?;
+        assert_eq!(before["status"], "failed");
+        let marker = f.root.join(".git/ktask-worker.lock");
+        fs::write(&marker, "stale guardian marker")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+        t.screen("failed task ready for readiness", |s| {
+            s.contains("Failed with stale worker")
+        })?;
+        if mouse {
+            t.click("u Readiness")?;
+        } else {
+            t.send("u")?;
+        }
+        let blocked = t.screen("failed worker blocker", |s| {
+            s.contains("Worker cleanup is unconfirmed")
+        })?;
+        assert!(blocked.contains("R Recover"));
+        println!("READINESS FAILED WORKER mouse={mouse}\n{blocked}");
+        if mouse {
+            t.click("R Recover")?;
+        } else {
+            t.send("R")?;
+        }
+        t.screen("recover failed worker", |s| {
+            s.contains("Recover workspace ownership")
+        })?;
+        t.send(" \r")?;
+        let recovered = t.screen("failed worker recovered", |s| s.contains("Saved to SQLite"))?;
+        println!("READINESS FAILED RECOVERED mouse={mouse}\n{recovered}");
+        assert_eq!(fs::metadata(marker)?.len(), 0);
+        let after = f.ok(&["show", "1"])?;
+        assert_eq!(after["status"], "failed");
+        assert_eq!(after["attempts"], before["attempts"]);
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn readiness_retains_next_task_preflight_failure_after_reopen() -> Result {
+    use ktask_rs_mk3::application::{Service, VersionedTask};
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.add("First task succeeds")?;
+        f.add("Second task needs review model")?;
+        let mut service = Service::open(f.db()?, &f.root, None)?;
+        let second = service.task(2)?.unwrap();
+        let mut definition = second.definition().definition.clone();
+        definition.models[1] = None;
+        service.revise(
+            VersionedTask {
+                id: 2,
+                version: second.version,
+            },
+            &definition,
+            true,
+        )?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+        t.screen("first task ready", |s| s.contains("First task succeeds"))?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        let stopped = t.screen("next task preflight stopped", |s| {
+            s.contains("Second task needs review model") && s.contains("Run blocked")
+        })?;
+        println!("READINESS NEXT TASK STOPPED mouse={mouse}\n{stopped}");
+        assert!(
+            f.ok(&["show", "2"])?["attempts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        t.send("q")?;
+        t.finish()?;
+
+        let mut reopened = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+        reopened.screen("second task reopened", |s| {
+            s.contains("Second task needs review model")
+        })?;
+        if mouse {
+            reopened.click("u Readiness")?;
+        } else {
+            reopened.send("u")?;
+        }
+        let retained = reopened.screen("next task reason retained", |s| {
+            s.contains("review model") && s.contains("Queue: stopped")
+        })?;
+        println!("READINESS NEXT TASK REOPENED mouse={mouse}\n{retained}");
+        if mouse {
+            reopened.click("m Models")?;
+        } else {
+            reopened.send("m")?;
+        }
+        reopened.screen("repair second model", |s| {
+            s.contains("Task models and limits")
+        })?;
+        if mouse {
+            reopened.click("Review provider/model")?;
+            reopened.send("codex/review")?;
+            reopened.click("Apply")?;
+        } else {
+            reopened.send("\t\tcodex/review\x13")?;
+        }
+        let saved = reopened.screen("second model saved", |s| s.contains("Saved to SQLite"))?;
+        println!("READINESS NEXT TASK REPAIRED mouse={mouse}\n{saved}");
+        if mouse {
+            reopened.click("r Run queue")?;
+        } else {
+            reopened.send("r")?;
+        }
+        let complete = reopened.screen("second task run", |s| s.contains("Queue complete."))?;
+        println!("READINESS NEXT TASK COMPLETE mouse={mouse}\n{complete}");
+        reopened.send("q")?;
+        reopened.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn readiness_approval_action_is_available_with_mouse_and_keyboard() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.ok(&[
+            "add",
+            "--title",
+            "Approval readiness",
+            "--goal",
+            "Create result.txt",
+            "--criterion",
+            "result.txt contains verified",
+            "--approval",
+            "draft",
+        ])?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+        t.screen("draft current", |s| s.contains("Approval readiness"))?;
+        if mouse {
+            t.click("u Readiness")?;
+        } else {
+            t.send("u")?;
+        }
+        let blocked = t.screen("approval blocker", |s| {
+            s.contains("Current revision needs approval")
+        })?;
+        assert!(blocked.contains("v Approve"));
+        println!("READINESS APPROVAL BLOCKED mouse={mouse}\n{blocked}");
+        if mouse {
+            t.click("v Approve")?;
+        } else {
+            t.send("v")?;
+        }
+        let ready = t.screen("approved current", |s| s.contains("Can run · u Readiness"))?;
+        println!("READINESS APPROVED mouse={mouse}\n{ready}");
+        assert!(
+            f.ok(&["show", "1"])?["attempts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        t.send("q")?;
+        t.finish()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn readiness_distinguishes_open_and_answered_questions() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("question")?;
+        f.add("Answer then resume")?;
+        f.ok(&["run", "--one"])?;
+        f.state("waiting")?;
+        let attempt = f.ok(&["show", "1"])?["attempts"][0]["id"].clone();
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+        t.screen("question current", |s| s.contains("Answer then resume"))?;
+        if mouse {
+            t.click("u Readiness")?;
+        } else {
+            t.send("u")?;
+        }
+        let waiting = t.screen("open question blocks", |s| {
+            s.contains("Answer the open question")
+        })?;
+        println!("READINESS QUESTION OPEN mouse={mouse}\n{waiting}");
+        if mouse {
+            t.click("w Answer")?;
+        } else {
+            t.send("w")?;
+        }
+        t.screen("answer action", |s| s.contains("Answer AI question"))?;
+        t.send("Human answer: verified")?;
+        if mouse {
+            t.click("Apply")?;
+        } else {
+            t.send("\x13")?;
+        }
+        t.screen("answer saved", |s| s.contains("Answer saved"))?;
+        if mouse {
+            t.click("u Readiness")?;
+        } else {
+            t.send("u")?;
+        }
+        let ready = t.screen("answered question is ready", |s| {
+            s.contains("Can run · 0 blocker")
+        })?;
+        println!("READINESS QUESTION ANSWERED mouse={mouse}\n{ready}");
+        if mouse {
+            t.click("r Run")?;
+        } else {
+            t.send("r")?;
+        }
+        t.screen("same attempt resumes", |s| s.contains("Queue complete."))?;
+        assert_eq!(f.ok(&["show", "1"])?["attempts"][0]["id"], attempt);
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn readiness_refreshes_answered_question_while_browsing_queue() -> Result {
+    let f = Fixture::new()?;
+    f.provider("question")?;
+    f.add("Question while browsing")?;
+    f.ok(&["run", "--one"])?;
+    f.state("waiting")?;
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+    t.screen("question at Current", |s| {
+        s.contains("Question while browsing")
+    })?;
+    t.send("2")?;
+    let queue = t.screen("browsing queue", |s| s.contains("Queue · 1 shown"))?;
+    println!("READINESS QUEUE BEFORE ANSWER\n{queue}");
+    f.ok(&["answer", "1", "--text", "Human answer: verified"])?;
+    t.send("1")?;
+    let current = t.screen("answer becomes runnable", |s| {
+        s.contains("Can run · u Readiness")
+    })?;
+    println!("READINESS CURRENT AFTER QUEUE ANSWER\n{current}");
+    t.send("u")?;
+    let details = t.screen("readiness after queue answer", |s| {
+        s.contains("Can run · 0 blocker")
+    })?;
+    println!("READINESS DETAILS AFTER QUEUE ANSWER\n{details}");
+    t.send("\x1b")?;
+    t.screen("readiness closed", |s| !s.contains("Execution readiness"))?;
+    t.send("q")?;
+    t.finish()?;
+    Ok(())
+}
+
+#[test]
+fn readiness_shows_live_supervisor_and_worker_owners_without_taking_their_locks() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.add("Live ownership")?;
+        let original = fs::read(f.root.join("README.md"))?;
+        let supervisor_path = f.root.join(".git/ktask-runner.lock");
+        let worker_path = f.root.join(".git/ktask-worker.lock");
+        let supervisor = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&supervisor_path)?;
+        let worker = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&worker_path)?;
+        supervisor.try_lock()?;
+        worker.try_lock()?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+        t.screen("live owner current", |s| s.contains("Live ownership"))?;
+        if mouse {
+            t.click("u Readiness")?;
+        } else {
+            t.send("u")?;
+        }
+        let blocked = t.screen("both live owners", |s| {
+            s.contains("A live supervisor owns") && s.contains("A live worker owns")
+        })?;
+        println!("READINESS LIVE OWNERS mouse={mouse}\n{blocked}");
+        assert!(
+            f.ok(&["show", "1"])?["attempts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(fs::read(f.root.join("README.md"))?, original);
+        assert_eq!(fs::metadata(&supervisor_path)?.len(), 0);
+        assert_eq!(fs::metadata(&worker_path)?.len(), 0);
+        if mouse {
+            t.click("c Checks")?;
+        } else {
+            t.send("c")?;
+        }
+        let checks = t.screen("linked checks action", |s| s.contains("Project checks"))?;
+        println!("READINESS CHECKS LINK mouse={mouse}\n{checks}");
+        t.send("\x1b")?;
+        t.screen("checks action closed", |s| !s.contains("Project checks"))?;
+        drop(worker);
+        drop(supervisor);
+        if mouse {
+            t.click("u Readiness")?;
+        } else {
+            t.send("u")?;
+        }
+        let ready = t.screen("owners released", |s| s.contains("Can run · 0 blocker"))?;
+        println!("READINESS OWNERS RELEASED mouse={mouse}\n{ready}");
+        assert_eq!(fs::read(f.root.join("README.md"))?, original);
+        if mouse {
+            t.click("r Run")?;
+        } else {
+            t.send("r")?;
+        }
+        let completed = t.screen("run after ownership release", |s| {
+            s.contains("Queue complete.")
+        })?;
+        println!("READINESS OWNERS LAUNCHED mouse={mouse}\n{completed}");
+        assert_eq!(
+            f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
+            1
+        );
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
 fn real_tui_recovers_connection_and_checks_then_continues_queue() -> Result {
     for mouse in [false, true] {
         let f = Fixture::new()?;
@@ -3950,6 +4447,150 @@ fn real_tui_check_launch_backoff_deadline_survives_restart_and_requires_explicit
         t.finish()?;
         f.supervisor_stopped()?;
         f.launch_workers_reaped()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn readiness_refreshes_external_models_and_reports_reload_errors() -> Result {
+    use ktask_rs_mk3::application::{Service, VersionedTask};
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.add("External setup repair")?;
+        let mut service = Service::open(f.db()?, &f.root, None)?;
+        let task = service.task(1)?.unwrap();
+        let ready = task.definition().definition.clone();
+        let mut missing = ready.clone();
+        missing.models[1] = None;
+        service.revise(
+            VersionedTask {
+                id: 1,
+                version: task.version,
+            },
+            &missing,
+            true,
+        )?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+        t.screen("external models current", |s| {
+            s.contains("External setup repair")
+        })?;
+        if mouse {
+            t.click("u Readiness")?;
+        } else {
+            t.send("u")?;
+        }
+        let blocked = t.screen("external missing role", |s| {
+            s.contains("review model: No model selected")
+        })?;
+        println!("READINESS EXTERNAL MODEL BLOCKED mouse={mouse}\n{blocked}");
+        let task = service.task(1)?.unwrap();
+        service.revise(
+            VersionedTask {
+                id: 1,
+                version: task.version,
+            },
+            &ready,
+            true,
+        )?;
+        if mouse {
+            t.click("u Refresh")?;
+        } else {
+            t.send("u")?;
+        }
+        let refreshed = t.screen("external model fixed in dialog", |s| {
+            s.contains("Can run · 0 blocker")
+        })?;
+        println!("READINESS EXTERNAL MODEL REFRESHED mouse={mouse}\n{refreshed}");
+        let db = f.db()?;
+        db.connection()
+            .execute_batch("ALTER TABLE execution_sessions RENAME TO unavailable_sessions")?;
+        if mouse {
+            t.click("u Refresh")?;
+        } else {
+            t.send("u")?;
+        }
+        let error = t.screen("reload failure replaces readiness", |s| {
+            s.contains("BLOCK · Refresh failed:")
+        })?;
+        assert!(!error.contains("Can run · 0 blocker"));
+        assert!(!error.contains("[r Run]"));
+        println!("READINESS REFRESH ERROR mouse={mouse}\n{error}");
+        db.connection()
+            .execute_batch("ALTER TABLE unavailable_sessions RENAME TO execution_sessions")?;
+        if mouse {
+            t.click("u Refresh")?;
+        } else {
+            t.send("u")?;
+        }
+        t.screen("reload recovered", |s| s.contains("Can run · 0 blocker"))?;
+        if mouse {
+            t.click("r Run")?;
+        } else {
+            t.send("r")?;
+        }
+        let complete = t.screen("external model run", |s| s.contains("Queue complete."))?;
+        println!("READINESS EXTERNAL MODEL COMPLETE mouse={mouse}\n{complete}");
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn readiness_waits_for_rate_limit_then_resumes_same_attempt() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("rate")?;
+        f.add("Readiness rate wait")?;
+        f.ok(&["run", "--one"])?;
+        let before = f.ok(&["show", "1"])?;
+        let attempt = before["attempts"][0]["id"].clone();
+        let db = f.db()?;
+        db.connection().execute(
+            "UPDATE attempts SET resume_at_ms=CAST(strftime('%s','now') AS INTEGER)*1000+6000 WHERE state='waiting'",
+            [],
+        )?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 120, 36)?;
+        t.screen("waiting current", |s| s.contains("Readiness rate wait"))?;
+        if mouse {
+            t.click("u Readiness")?;
+        } else {
+            t.send("u")?;
+        }
+        let blocked = t.screen("rate limit readiness blocked", |s| {
+            s.contains("Rate-limit wait:")
+                && s.contains("remaining; then Refresh")
+                && s.contains("Resume →")
+        })?;
+        assert!(!blocked.contains("[r Run]"));
+        println!("READINESS RATE BLOCKED mouse={mouse}\n{blocked}");
+        t.send("r")?;
+        assert_eq!(f.ok(&["show", "1"])?["status"], "waiting");
+        f.provider("normal")?;
+        thread::sleep(Duration::from_millis(6100));
+        if mouse {
+            t.click("u Refresh")?;
+        } else {
+            t.send("u")?;
+        }
+        let ready = t.screen("rate limit expired", |s| {
+            s.contains("Can run · 0 blocker") && s.contains("Eligible in 0s")
+        })?;
+        println!("READINESS RATE EXPIRED mouse={mouse}\n{ready}");
+        if mouse {
+            t.click("r Run")?;
+        } else {
+            t.send("r")?;
+        }
+        let complete = t.screen("rate limit resumed", |s| s.contains("Queue complete."))?;
+        println!("READINESS RATE RESUMED mouse={mouse}\n{complete}");
+        let after = f.ok(&["show", "1"])?;
+        assert_eq!(after["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(after["attempts"][0]["id"], attempt);
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
     }
     Ok(())
 }

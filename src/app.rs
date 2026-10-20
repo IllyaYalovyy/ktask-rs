@@ -50,6 +50,7 @@ pub enum Action {
     Copy,
     Run,
     Recover,
+    Readiness,
     Pause,
     Retry,
     Diagnose,
@@ -128,6 +129,8 @@ pub struct App {
     pub clean_retry: bool,
     pub auto_advance: bool,
     pub(crate) execution_session: Option<crate::application::session::ExecutionSession>,
+    pub launch_issue: Option<String>,
+    pub readiness: Option<crate::readiness::Readiness>,
     pub last_workspace: Option<usize>,
     pub tick_ms: u64,
     pub hits: Vec<(Rect, Action)>,
@@ -212,6 +215,8 @@ impl App {
             clean_retry: false,
             auto_advance: true,
             execution_session: None,
+            launch_issue: None,
+            readiness: None,
             last_workspace: Some(1),
             tick_ms: 400,
             hits: Vec::new(),
@@ -398,6 +403,7 @@ impl App {
     fn view_key(&mut self, code: KeyCode) -> Option<Action> {
         match self.view {
             View::Current => match code {
+                KeyCode::Char('u') => Some(Action::Readiness),
                 KeyCode::Char('r') => Some(Action::Run),
                 KeyCode::Char('m') => Some(Action::Configure),
                 KeyCode::Char('R') => Some(Action::Recover),
@@ -454,6 +460,29 @@ impl App {
         }
     }
     fn dialog_key(&mut self, key: KeyEvent) {
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| matches!(dialog.kind, crate::dialog::DialogKind::Readiness))
+        {
+            let action = match key.code {
+                KeyCode::Char('c') => Some(Action::ProjectChecks),
+                KeyCode::Char('m') => Some(Action::Models),
+                KeyCode::Char('v') => Some(Action::Approve),
+                KeyCode::Char('w') => Some(Action::Answer),
+                KeyCode::Char('y') => Some(Action::Acknowledge),
+                KeyCode::Char('p') => Some(Action::Pause),
+                KeyCode::Char('R') => Some(Action::Recover),
+                KeyCode::Char('r') => Some(Action::Run),
+                KeyCode::Char('t') => Some(Action::Retry),
+                KeyCode::Char('u') => Some(Action::Readiness),
+                _ => None,
+            };
+            if let Some(action) = action {
+                self.act(action);
+                return;
+            }
+        }
         let readonly = self.dialog.as_ref().is_some_and(Dialog::read_only);
         if key.code == KeyCode::Esc || (readonly && matches!(key.code, KeyCode::Char('q' | '?'))) {
             self.act(Action::Cancel);

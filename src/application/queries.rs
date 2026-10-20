@@ -14,6 +14,11 @@ pub struct Event {
 }
 
 const TASK_COLUMNS: &str = "id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, resolved_by_kind || ': ' || resolved_by";
+pub struct WaitingResume {
+    pub resume_at_ms: Option<i64>,
+    pub eligible: bool,
+    pub remaining_seconds: i64,
+}
 fn task_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     Ok(Task {
         id: r.get(0)?,
@@ -39,6 +44,43 @@ fn complete_task(db: &Connection, mut task: Task) -> Result<Task> {
 }
 
 impl Service {
+    /// Persisted waiting-attempt timing, read without changing the attempt or its guards.
+    pub fn waiting_resume(&self, task: i64) -> Result<Option<WaitingResume>> {
+        self.db
+            .connection()
+            .query_row(
+                "SELECT a.resume_at_ms, (a.waiting_since_ms IS NULL OR a.waiting_since_ms <= ?3)
+                AND (a.resume_at_ms IS NULL OR a.resume_at_ms <= ?3)
+                , (max(coalesce(a.resume_at_ms,0),coalesce(a.waiting_since_ms,0),?3)-?3+999)/1000
+             FROM attempts a JOIN current_tasks t ON t.latest_attempt_id=a.id
+             WHERE t.project_id=?1 AND t.id=?2 AND a.state='waiting'",
+                params![self.project_id, task, now_ms()],
+                |row| {
+                    Ok(WaitingResume {
+                        resume_at_ms: row.get(0)?,
+                        eligible: row.get(1)?,
+                        remaining_seconds: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+    /// Launch diagnostics are durable even when preflight stops before an attempt exists.
+    pub fn record_launch_result(&mut self, task: i64, message: &str) -> Result<()> {
+        self.db.connection().execute(
+            "INSERT INTO events(project_id,task_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,'launch',?4,?5)",
+            params![self.project_id, task, now_ms(), if message.is_empty() { "info" } else { "error" }, if message.is_empty() { "Supervisor started" } else { message }],
+        )?;
+        Ok(())
+    }
+
+    pub fn latest_launch_issue(&self, task: i64) -> Result<Option<String>> {
+        self.db.connection().query_row(
+            "SELECT level,message FROM events WHERE project_id=?1 AND task_id=?2 AND kind='launch' ORDER BY id DESC LIMIT 1",
+            params![self.project_id, task], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        ).optional().map(|value| value.and_then(|(level, message)| (level == "error").then_some(message))).map_err(Into::into)
+    }
     /// Gather the latest attempt's durable output and retained check transcripts for a proposal.
     pub fn remediation_evidence(
         &self,

@@ -35,6 +35,52 @@ const ABANDON_TASK: &str = "Whole task";
 const ABANDON_ATTEMPT: &str = "This attempt";
 
 impl App {
+    pub(crate) fn open_readiness(&mut self) {
+        let report = match self.reload() {
+            Ok(()) => self.readiness.clone().expect("reload inspects readiness"),
+            Err(error) => crate::readiness::Readiness {
+                lines: vec![format!(
+                    "BLOCK · Refresh failed: {error} → Refresh before running"
+                )],
+                blockers: 1,
+                refresh_failed: true,
+                resume_blocked: true,
+            },
+        };
+        self.readiness = Some(report.clone());
+        let mut body = format!(
+            "{} · {} blocker(s)\n\n{}",
+            if report.blockers == 0 {
+                "Can run"
+            } else {
+                "Run blocked"
+            },
+            report.blockers,
+            report.lines.join("\n")
+        );
+        if let Some(issue) = &self.launch_issue
+            && !report.refresh_failed
+        {
+            body.push_str(&format!("\n\nLast launch failure: {issue}"));
+        }
+        if let Some(session) = &self.execution_session
+            && !report.refresh_failed
+            && session.state != "running"
+            && session.state != "completed"
+        {
+            body.push_str(&format!(
+                "\n\nQueue: {} · {}",
+                session.state, session.reason
+            ));
+        }
+        body.push_str("\n\nAfter fixing setup, Refresh here or Run/Retry from Current. Inspection creates no attempt.");
+        self.dialog = Some(Dialog::new(
+            DialogKind::Readiness,
+            "Execution readiness",
+            &body,
+            vec![],
+        ));
+    }
     pub(crate) fn stored_cost(&self, id: usize) -> String {
         cost_label(self.stored.get(&id).and_then(|t| {
             t.attempts
@@ -122,6 +168,15 @@ impl App {
         }
         self.queue = queue;
         self.history = history;
+        self.launch_issue = match self.current().map(|task| task.id as i64) {
+            Some(id) => self
+                .service
+                .as_ref()
+                .unwrap()
+                .latest_launch_issue(id)
+                .map_err(|e| e.to_string())?,
+            None => None,
+        };
         let current = self.current().map(|t| t.id as i64);
         self.task_events = snapshot
             .events
@@ -140,6 +195,7 @@ impl App {
             self.log_offset = 0;
         }
         self.reconcile();
+        self.readiness = Some(crate::readiness::inspect(self));
         Ok(())
     }
     /// Abandon gives up on the task. A waiting or paused attempt may be dropped alone instead.
@@ -182,6 +238,10 @@ impl App {
         }
     }
     pub(crate) fn persistent_action(&mut self, action: Action) -> bool {
+        if matches!(action, Action::Readiness) {
+            self.open_readiness();
+            return true;
+        }
         if matches!(
             action,
             Action::Configure | Action::ProjectModels | Action::ProjectChecks
@@ -210,7 +270,14 @@ impl App {
             let id = self.current().expect("enabled current").id;
             let mut dialog = Dialog::new(
                 DialogKind::Recover,
-                "Recover abandoned attempt",
+                if self
+                    .current()
+                    .is_some_and(|task| task.status() == Status::Abandoned)
+                {
+                    "Recover abandoned attempt"
+                } else {
+                    "Recover workspace ownership"
+                },
                 "The supervisor is absent. Inspect the workspace and any worker descendants before recovery.\nIf a worker died without cleanup confirmation, explicitly confirm its cleanup below. Recovery retains repository changes and evidence; retry explicitly.",
                 vec![Field::choice(
                     "Worker cleanup",
@@ -342,6 +409,11 @@ impl App {
         };
         match result {
             Ok(()) => {
+                if matches!(action, Action::Run | Action::Retry)
+                    && let Some(id) = self.current().map(|task| task.id as i64)
+                {
+                    let _ = self.service.as_mut().unwrap().record_launch_result(id, "");
+                }
                 let continue_queue = matches!(action, Action::Acknowledge)
                     || (matches!(action, Action::Approve)
                         && self.selected_task().is_some_and(|selected| {
@@ -359,7 +431,19 @@ impl App {
                     self.continue_queue();
                 }
             }
-            Err(error) => self.message(error),
+            Err(error) => {
+                if matches!(action, Action::Run | Action::Retry)
+                    && let Some(id) = self.current().map(|task| task.id as i64)
+                {
+                    let _ = self
+                        .service
+                        .as_mut()
+                        .unwrap()
+                        .record_launch_result(id, &error);
+                    let _ = self.reload();
+                }
+                self.message(error);
+            }
         }
         true
     }

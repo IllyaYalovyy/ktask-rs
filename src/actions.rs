@@ -8,13 +8,36 @@ use std::time::Instant;
 
 impl App {
     pub fn enabled(&self, action: Action) -> bool {
+        if matches!(action, Action::Run | Action::Retry)
+            && self
+                .readiness
+                .as_ref()
+                .is_some_and(|report| report.refresh_failed)
+        {
+            return false;
+        }
         let current = self.current();
         let selected = self.selected_task();
         match action {
             Action::Recover => {
                 self.service.is_some()
                     && self.view == View::Current
-                    && current.is_some_and(|t| t.status() == Status::Abandoned)
+                    && current.is_some_and(|t| {
+                        t.status() == Status::Abandoned
+                            || (matches!(
+                                t.status(),
+                                Status::Pending
+                                    | Status::Failed
+                                    | Status::Interrupted
+                                    | Status::New
+                            ) && !self.supervisor_alive
+                                && self.readiness.as_ref().is_some_and(|report| {
+                                    report
+                                        .lines
+                                        .iter()
+                                        .any(|line| line.contains("Worker cleanup is unconfirmed"))
+                                }))
+                    })
             }
             Action::Run => {
                 self.view == View::Current
@@ -23,7 +46,13 @@ impl App {
                         t.definition().kind == Kind::Ai
                             && match t.status() {
                                 Status::Pending | Status::Paused => true,
-                                Status::Waiting => self.service.is_some(),
+                                Status::Waiting => {
+                                    self.service.is_some()
+                                        && self
+                                            .readiness
+                                            .as_ref()
+                                            .is_some_and(|report| !report.resume_blocked)
+                                }
                                 // Saving an answer retains the waiting attempt until resumed.
                                 Status::Question => self.service.as_ref().is_some_and(|service| {
                                     service
@@ -167,6 +196,35 @@ impl App {
             return;
         }
         self.selection.clear();
+        if matches!(action, Action::Run | Action::Retry)
+            && self
+                .dialog
+                .as_ref()
+                .is_some_and(|dialog| matches!(dialog.kind, DialogKind::Readiness))
+            && !self.enabled(action)
+        {
+            return;
+        }
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| matches!(dialog.kind, DialogKind::Readiness))
+            && matches!(
+                action,
+                Action::ProjectChecks
+                    | Action::Models
+                    | Action::Approve
+                    | Action::Answer
+                    | Action::Acknowledge
+                    | Action::Pause
+                    | Action::Recover
+                    | Action::Run
+                    | Action::Retry
+                    | Action::Readiness
+            )
+        {
+            self.dialog = None;
+        }
         if self.search_before.is_some() {
             match action {
                 Action::Submit => {
@@ -249,6 +307,7 @@ impl App {
             Action::Follow => self.follow = true,
             Action::Run | Action::Retry => self.start_current(),
             Action::Recover => {}
+            Action::Readiness => {}
             Action::Pause => {
                 if let Some(task) = self.queue.first_mut()
                     && let Some(attempt) = task.attempts.last_mut()
@@ -933,7 +992,8 @@ impl App {
                 }
                 self.record("Configuration applied · session only");
             }
-            DialogKind::Help
+            DialogKind::Readiness
+            | DialogKind::Help
             | DialogKind::Stats
             | DialogKind::Events
             | DialogKind::Inspect { .. } => {}

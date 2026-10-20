@@ -10,6 +10,7 @@ pub mod instance;
 mod mock;
 mod persistent;
 mod presentation;
+mod readiness;
 pub mod runner;
 pub mod scratch;
 mod selection;

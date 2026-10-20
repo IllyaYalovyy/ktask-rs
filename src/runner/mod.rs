@@ -4,7 +4,7 @@ mod cycle;
 mod output;
 pub(crate) mod process;
 pub mod remediation;
-mod workspace;
+pub(crate) mod workspace;
 
 use crate::{
     application::{
@@ -18,7 +18,7 @@ use crate::{
 use process::{Invocation, Message, Worker};
 use std::{
     io::{BufRead, Read, Seek, SeekFrom, Write},
-    os::unix::process::CommandExt,
+    os::unix::{fs::PermissionsExt, process::CommandExt},
     path::PathBuf,
     process::{Command, Stdio},
     sync::{
@@ -82,15 +82,17 @@ impl Context<'_> {
             ))
     }
 }
-fn executable(name: &str) -> Result<PathBuf> {
-    std::env::split_paths(
+pub(crate) fn executable(name: &str) -> Result<PathBuf> {
+    let path = std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin".into()),
     )
     .map(|p| p.join(name))
-    .find(|p| p.is_file())
-    .ok_or_else(|| Error::Conflict(format!("{name} executable not found on PATH")))?
-    .canonicalize()
-    .map_err(Into::into)
+    .find(|p| {
+        p.metadata()
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    })
+    .ok_or_else(|| Error::Conflict(format!("{name} executable not found on PATH")))?;
+    path.canonicalize().map_err(Into::into)
 }
 pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<String> {
     if let Some(expected) = options.recover_target {

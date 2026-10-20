@@ -6,7 +6,7 @@ pub mod preferences;
 pub mod progress;
 mod queries;
 pub mod session;
-pub use queries::Event;
+pub use queries::{Event, WaitingResume};
 pub mod transfer;
 
 use crate::storage::{Database, Error, Result};

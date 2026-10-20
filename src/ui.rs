@@ -408,6 +408,7 @@ fn current_controls(app: &App) -> Vec<(&'static str, Action)> {
         controls.extend([("v Approve", Action::Approve), ("n Reject", Action::Reject)]);
     }
     controls.extend([
+        ("u Readiness", Action::Readiness),
         ("m Run mode", Action::Configure),
         ("c Models", Action::Models),
         ("Enter Details", Action::Inspect),
@@ -545,6 +546,16 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
             format!("Budget {} of {} used", task.used(), settings.attempt_limit)
         }),
     ];
+    if let Some(readiness) = &app.readiness {
+        lines.push(Line::styled(
+            if readiness.blockers == 0 {
+                "Can run · u Readiness".to_owned()
+            } else {
+                format!("Run blocked ({}) · u Readiness", readiness.blockers)
+            },
+            Style::new().fg(if readiness.blockers == 0 { OK } else { WARN }),
+        ));
+    }
     let role = attempt
         .and_then(|a| a.steps.last())
         .map(|(label, _)| label.as_str());
@@ -576,8 +587,8 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         Status::Waiting => {
             let seconds = attempt.and_then(|a| a.resume_at).map_or(0, |at| {
                 at.saturating_duration_since(std::time::Instant::now())
-                    .as_secs()
-                    + 1
+                    .as_millis()
+                    .div_ceil(1000)
             });
             let automatic = app.supervisor_alive
                 && app.execution_session.as_ref().is_none_or(|session| {
@@ -763,6 +774,14 @@ fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
             "Supervisor preparing the next task · p Pause stops the queue".into(),
             ACCENT,
         ),
+        Status::Pending
+            if app.service.is_some() && app.readiness.as_ref().is_some_and(|r| r.blockers > 0) =>
+        {
+            (
+                "Run blocked · u Readiness shows causes and actions".into(),
+                WARN,
+            )
+        }
         Status::Pending if app.service.is_some() => (
             if app.auto_advance {
                 "Ready · r Run queue; checks and repair run automatically".into()
@@ -822,6 +841,10 @@ fn draw_output(frame: &mut Frame, app: &mut App, output: Rect) {
                 "Needs approval. Review the task, then Approve or Reject.".to_owned()
             } else if task.definition().kind == crate::presentation::Kind::Human {
                 "Human task: inspect the goal and acknowledge when done.".to_owned()
+            } else if app.service.is_some()
+                && app.readiness.as_ref().is_some_and(|r| r.blockers > 0)
+            {
+                "Run is blocked. Press u Readiness for each cause and a direct action. Refresh after setup; Run retries from Current.".to_owned()
             } else if app.service.is_some() {
                 "Ready. r starts an attempt in the background supervisor; this pane follows its log.\nDefaults and checks live in Config; c pins models for this task.".to_owned()
             } else {
@@ -1140,7 +1163,11 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         Constraint::Min(1),
         Constraint::Length(dialog.fields.len().min(dialog.field_capacity) as u16 * 2),
         Constraint::Length(2),
-        Constraint::Length(2),
+        Constraint::Length(if matches!(dialog.kind, DialogKind::Readiness) {
+            3
+        } else {
+            2
+        }),
     ])
     .areas(inner);
     dialog.max_scroll = lines.len().saturating_sub(body.height as usize);
@@ -1205,8 +1232,31 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
             ("Next", Action::NextAttempt),
         ]);
     }
+    if matches!(dialog.kind, DialogKind::Readiness) {
+        controls = readiness_controls(app);
+    }
     buttons(frame, app, actions, &controls, true);
     app.dialog = Some(dialog);
+}
+
+fn readiness_controls(app: &App) -> Vec<(&'static str, Action)> {
+    let mut controls = vec![("c Checks", Action::ProjectChecks)];
+    for (label, action) in [
+        ("m Models", Action::Models),
+        ("v Approve", Action::Approve),
+        ("w Answer", Action::Answer),
+        ("y Acknowledge", Action::Acknowledge),
+        ("p Pause", Action::Pause),
+        ("R Recover", Action::Recover),
+        ("r Run", Action::Run),
+        ("t Retry", Action::Retry),
+    ] {
+        if app.enabled(action) {
+            controls.push((label, action));
+        }
+    }
+    controls.extend([("u Refresh", Action::Readiness), ("Close", Action::Cancel)]);
+    controls
 }
 
 fn draw_fields(frame: &mut Frame, app: &mut App, dialog: &Dialog, area: Rect) {
