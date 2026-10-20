@@ -160,6 +160,10 @@ pub struct Attempt {
     pub step: usize,
     pub cost_cents: usize,
     pub elapsed_ms: u64,
+    pub waiting_ms: u64,
+    pub usage: String,
+    pub usage_tokens: String,
+    pub usage_cost: String,
 }
 impl Attempt {
     pub fn start(revision: Revision, session: usize) -> Self {
@@ -182,6 +186,10 @@ impl Attempt {
             step: 0,
             cost_cents: 0,
             elapsed_ms: 0,
+            waiting_ms: 0,
+            usage: String::new(),
+            usage_tokens: String::new(),
+            usage_cost: String::new(),
         }
     }
 }

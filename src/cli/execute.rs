@@ -411,25 +411,25 @@ fn edit(service: &mut Service, input: &Target, pending: bool, changes: &Changes)
 fn stats(service: &mut Service) -> Result<Reply> {
     let snapshot = service.snapshot()?;
     let all: Vec<_> = snapshot.queue.iter().chain(&snapshot.history).collect();
-    let attempts: Vec<_> = all.iter().flat_map(|t| &t.attempts).collect();
     let succeeded = all
         .iter()
         .filter(|t| matches!(t.lifecycle.as_str(), "succeeded" | "succeeded_override"))
         .count();
-    let failed = attempts.iter().filter(|a| a.state == "failed").count();
-    let active_ms: i64 = attempts.iter().map(|a| a.active_ms).sum();
-    let cost = attempts
-        .iter()
-        .filter_map(|a| a.cost_microusd)
-        .reduce(|a, b| a + b);
+    let timing = service.project_timing()?;
+    let failed = timing.failed;
+    let active_ms = timing.active_ms;
+    let waiting_ms = timing.waiting_ms;
+    let usage = service.project_usage()?;
+    let cost = usage.cost_microusd;
     Ok(Reply {
-        data: json!({"queue":snapshot.queue.len(),"history":snapshot.history.len(),"succeeded":succeeded,"attempts":attempts.len(),"failed_attempts":failed,"active_ms":active_ms,"recorded_cost_microusd":cost}),
+        data: json!({"queue":snapshot.queue.len(),"history":snapshot.history.len(),"succeeded":succeeded,"attempts":timing.attempts,"failed_attempts":failed,"active_ms":active_ms,"waiting_ms":waiting_ms,"recorded_cost_microusd":cost,"usage":usage}),
         text: format!(
-            "Queue: {}\nHistory: {}\nSucceeded: {succeeded}\nAttempts: {}\nFailed attempts: {failed}\nActive ms: {active_ms}\nRecorded cost (micro-USD): {}\n",
+            "Queue: {}\nHistory: {}\nSucceeded: {succeeded}\nAttempts: {}\nFailed attempts: {failed}\nActive ms: {active_ms}\nWaiting ms: {waiting_ms}\nProject usage: {}\nRecorded cost (micro-USD): {}\n",
             snapshot.queue.len(),
             snapshot.history.len(),
-            attempts.len(),
-            cost.map_or("not recorded".into(), |n| n.to_string())
+            timing.attempts,
+            usage.label(),
+            cost.map_or("unknown".into(), |n| n.to_string())
         ),
     })
 }

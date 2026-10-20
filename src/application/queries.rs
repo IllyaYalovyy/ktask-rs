@@ -20,6 +20,12 @@ pub struct WaitingResume {
     pub eligible: bool,
     pub remaining_seconds: i64,
 }
+pub struct ProjectTiming {
+    pub attempts: i64,
+    pub failed: i64,
+    pub active_ms: i64,
+    pub waiting_ms: i64,
+}
 fn task_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     Ok(Task {
         id: r.get(0)?,
@@ -55,6 +61,33 @@ fn follow_ups(db: &Connection, task: i64) -> Result<Vec<(i64, String)>> {
 }
 
 impl Service {
+    pub fn project_usage(&self) -> Result<super::usage_report::UsageTotals> {
+        super::usage_report::project(self.db.connection(), self.project_id)
+    }
+    pub fn project_timing(&self) -> Result<ProjectTiming> {
+        let db = self.db.connection();
+        let mut timing = ProjectTiming {
+            attempts: 0,
+            failed: 0,
+            active_ms: 0,
+            waiting_ms: 0,
+        };
+        let mut stmt = db.prepare("SELECT id,state,active_ms FROM attempts WHERE project_id=?1")?;
+        for row in stmt.query_map([self.project_id], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })? {
+            let (id, state, active) = row?;
+            timing.attempts += 1;
+            timing.failed += i64::from(matches!(state.as_str(), "failed" | "interrupted"));
+            timing.active_ms = timing.active_ms.saturating_add(active);
+            timing.waiting_ms = timing.waiting_ms.saturating_add(waiting_time(db, id)?);
+        }
+        Ok(timing)
+    }
     const OUTPUT_ROWS: usize = 80;
 
     pub fn output_watermark(&self, attempt: i64) -> Result<i64> {
@@ -745,6 +778,9 @@ fn attempts(
                 state: r.get(2)?,
                 outcome: r.get(3)?,
                 active_ms: r.get(4)?,
+                waiting_ms: 0,
+                usage: Default::default(),
+                role_usage: Vec::new(),
                 wait_reason: r.get(5)?,
                 resume_at_ms: r.get(6)?,
                 session: r.get(7)?,
@@ -758,6 +794,9 @@ fn attempts(
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let latest = attempts.last().map(|attempt| attempt.id);
     for attempt in &mut attempts {
+        (attempt.usage, attempt.role_usage) = super::usage_report::attempt(db, attempt.id)?;
+        attempt.cost_microusd = attempt.usage.cost_microusd;
+        attempt.waiting_ms = waiting_time(db, attempt.id)?;
         // The live pane only follows the current attempt. Historical output is
         // fetched in bounded pages when its evidence browser is opened.
         if historical_logs || (live_logs && Some(attempt.id) == latest) {
@@ -791,6 +830,36 @@ fn attempts(
             .collect::<rusqlite::Result<Vec<_>>>()?;
     }
     Ok(attempts)
+}
+
+fn waiting_time(db: &Connection, attempt: i64) -> Result<i64> {
+    let finished: Option<i64> = db.query_row(
+        "SELECT finished_at_ms FROM attempts WHERE id=?1",
+        [attempt],
+        |r| r.get(0),
+    )?;
+    let mut total: i64 = 0;
+    let mut started: Option<i64> = None;
+    let mut stmt = db.prepare_cached("SELECT occurred_at_ms,kind FROM events WHERE attempt_id=?1 AND kind IN ('attempt.waiting','attempt.paused','attempt.resumed','attempt.succeeded','attempt.failed','attempt.interrupted') ORDER BY id")?;
+    for row in stmt.query_map([attempt], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+    })? {
+        let (at, kind) = row?;
+        match kind.as_str() {
+            "attempt.waiting" | "attempt.paused" => {
+                started.get_or_insert(at);
+            }
+            _ => {
+                if let Some(start) = started.take() {
+                    total = total.saturating_add(at.saturating_sub(start));
+                }
+            }
+        }
+    }
+    if let Some(start) = started {
+        total = total.saturating_add(finished.unwrap_or_else(now_ms).saturating_sub(start));
+    }
+    Ok(total)
 }
 
 /// Keep the newest evidence, advancing over any partial UTF-8 character.

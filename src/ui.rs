@@ -496,6 +496,109 @@ fn current_brief(task: &crate::presentation::Task, width: u16) -> Vec<Line<'stat
     lines
 }
 
+fn current_usage_lines(
+    persistent: bool,
+    attempt: Option<&crate::presentation::Attempt>,
+    width: usize,
+) -> Vec<Line<'static>> {
+    match (persistent, attempt) {
+        (true, Some(attempt)) => vec![
+            Line::raw(shortened(
+                &format!(
+                    "Active {} · Wait {} ms",
+                    attempt.elapsed_ms, attempt.waiting_ms
+                ),
+                width,
+            )),
+            Line::raw(if attempt.usage_tokens.chars().count() <= width {
+                attempt.usage_tokens.clone()
+            } else if attempt.usage_tokens.contains('?') {
+                "Tokens ? · Enter: details".to_owned()
+            } else {
+                "Tokens · Enter: details".to_owned()
+            }),
+            Line::raw(shortened(&attempt.usage_cost, width)),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+fn current_model_lines(
+    model: &crate::presentation::Model,
+    persistent: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    if persistent {
+        vec![Line::raw(shortened(
+            &format!(
+                "Model {} / {}",
+                model.name,
+                model.effort.as_deref().unwrap_or("none")
+            ),
+            width,
+        ))]
+    } else {
+        let mut lines = vec![Line::raw(shortened(
+            &format!("Model {}", model.name),
+            width,
+        ))];
+        if let Some(effort) = &model.effort {
+            lines.push(Line::raw(shortened(&format!("Effort {effort}"), width)));
+        }
+        lines
+    }
+}
+
+fn initial_status_lines(
+    task: &crate::presentation::Task,
+    status: Status,
+    limit: usize,
+    persistent: bool,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::styled(
+        format!("{} · {}", status.label(), task.definition().kind.label()),
+        Style::new().fg(status_color(status)).bold(),
+    )];
+    lines.push(Line::raw(if task.attempts.is_empty() {
+        "No attempts yet".to_owned()
+    } else if persistent {
+        format!("Attempt {}", task.attempts.len())
+    } else {
+        format!(
+            "Attempt {} · step {}/6",
+            task.attempts.len(),
+            task.attempts.last().map_or(0, |a| a.step)
+        )
+    }));
+    if !persistent || task.attempts.is_empty() {
+        lines.push(Line::raw(if limit == 0 {
+            format!("Budget {} used · no limit", task.used())
+        } else {
+            format!("Budget {} of {} used", task.used(), limit)
+        }));
+    }
+    lines
+}
+
+fn current_step_line(
+    task: &crate::presentation::Task,
+    persistent: bool,
+    width: usize,
+) -> Option<Line<'static>> {
+    if !persistent || !matches!(task.status(), Status::Running | Status::Abandoned) {
+        return None;
+    }
+    let step = task
+        .attempts
+        .last()
+        .and_then(|a| a.steps.iter().rev().find(|(_, state)| state == "running"))
+        .map_or_else(|| active_phase(task), |(label, _)| label.clone());
+    Some(Line::styled(
+        shortened(&format!("Step: {step}"), width),
+        Style::new().fg(ACCENT),
+    ))
+}
+
 fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
     let Some(task) = app.current() else {
         frame.render_widget(
@@ -525,8 +628,11 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         ]),
         toolbar,
     );
-    let [left, right] =
-        Layout::horizontal([Constraint::Length(30), Constraint::Min(0)]).areas(area);
+    let [left, right] = Layout::horizontal([
+        Constraint::Length(if area.width >= 88 { 46 } else { 30 }),
+        Constraint::Min(0),
+    ])
+    .areas(area);
     let [summary, events] = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(if left.height >= 17 { 5 } else { 3 }),
@@ -544,39 +650,14 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
     );
     let attempt = task.attempts.last();
     let inner = summary.width.saturating_sub(2) as usize;
-    let settings = &task.definition().settings;
-    let mut lines = vec![
-        Line::styled(
-            format!("{} · {}", status.label(), task.definition().kind.label()),
-            Style::new().fg(status_color(status)).bold(),
-        ),
-        Line::raw(if task.attempts.is_empty() {
-            "No attempts yet".to_owned()
-        } else if app.service.is_some() {
-            format!("Attempt {}", task.attempts.len())
-        } else {
-            format!(
-                "Attempt {} · step {}/6",
-                task.attempts.len(),
-                attempt.map_or(0, |a| a.step)
-            )
-        }),
-        Line::raw(if settings.attempt_limit == 0 {
-            format!("Budget {} used · no limit", task.used())
-        } else {
-            format!("Budget {} of {} used", task.used(), settings.attempt_limit)
-        }),
-    ];
-    if let Some(readiness) = &app.readiness {
-        lines.push(Line::styled(
-            if readiness.blockers == 0 {
-                "Can run · u Readiness".to_owned()
-            } else {
-                format!("Run blocked ({}) · u Readiness", readiness.blockers)
-            },
-            Style::new().fg(if readiness.blockers == 0 { OK } else { WARN }),
-        ));
+    let settings = &if app.service.is_some() {
+        attempt.map_or_else(|| task.definition(), |a| &a.revision)
+    } else {
+        task.definition()
     }
+    .settings;
+    let mut lines =
+        initial_status_lines(task, status, settings.attempt_limit, app.service.is_some());
     let role = attempt
         .and_then(|a| a.steps.last())
         .map(|(label, _)| label.as_str());
@@ -591,12 +672,25 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         _ => 0,
     };
     let model = &settings.models[model_index];
-    lines.push(Line::raw(shortened(
-        &format!("Model {}", model.name),
-        inner,
-    )));
-    if let Some(effort) = &model.effort {
-        lines.push(Line::raw(shortened(&format!("Effort {effort}"), inner)));
+    lines.extend(current_step_line(task, app.service.is_some(), inner));
+    lines.extend(current_model_lines(model, app.service.is_some(), inner));
+    lines.extend(current_usage_lines(app.service.is_some(), attempt, inner));
+    if app.service.is_some() && !task.attempts.is_empty() {
+        lines.push(Line::raw(if settings.attempt_limit == 0 {
+            format!("Budget {} used · no limit", task.used())
+        } else {
+            format!("Budget {} of {} used", task.used(), settings.attempt_limit)
+        }));
+    }
+    if let Some(readiness) = &app.readiness {
+        lines.push(Line::styled(
+            if readiness.blockers == 0 {
+                "Can run · u Readiness".to_owned()
+            } else {
+                format!("Run blocked ({}) · u Readiness", readiness.blockers)
+            },
+            Style::new().fg(if readiness.blockers == 0 { OK } else { WARN }),
+        ));
     }
     if app.service.is_none() {
         lines.push(Line::raw(format!(
@@ -637,7 +731,6 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         _ => {}
     }
     if let Some(attempt) = attempt.filter(|a| !a.steps.is_empty()) {
-        lines.push(Line::raw(""));
         for (label, state) in attempt.steps.iter().rev().take(5).rev() {
             let (glyph, color) = match state.as_str() {
                 "succeeded" => ("✓", OK),
@@ -1020,7 +1113,7 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                 .collect::<String>()
         );
         format!(
-            "{}\n#{} · {} · {}\n\nGoal: {}\n\nCheck: {}\n\nAttempts: {} · {}{}",
+            "{}\n#{} · {} · {}\n\nGoal: {}\n\nCheck: {}\n\nAttempts: {} · {}{}{}",
             t.definition().title,
             t.id,
             t.status().label(),
@@ -1033,7 +1126,25 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
             } else {
                 format!("${:.2}", t.cost() as f64 / 100.0)
             },
-            links
+            links,
+            if app.service.is_some() {
+                t.attempts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| {
+                        format!(
+                            "\nAttempt {} · {} · active {} ms · waiting {} ms\n{}",
+                            i + 1,
+                            a.state.label(),
+                            a.elapsed_ms,
+                            a.waiting_ms,
+                            a.usage
+                        )
+                    })
+                    .collect::<String>()
+            } else {
+                String::new()
+            }
         )
     });
     frame.render_widget(

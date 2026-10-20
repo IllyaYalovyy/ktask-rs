@@ -577,6 +577,40 @@ fn normalized_provider_usage_has_identical_meaning_and_safe_aggregate_totals() -
 }
 
 #[test]
+fn usage_projection_groups_roles_and_keeps_missing_cost_unknown() -> Result {
+    use ktask_rs_mk3::application::usage_report;
+    let scratch = support::sandbox()?;
+    let store = Database::open_in(scratch.path())?;
+    let db = store.connection();
+    let project_id = project(db, "usage-projection")?;
+    let task_id = task(db, project_id, "5")?;
+    db.execute("INSERT INTO attempts(project_id,task_id,revision,number,state,execution_token,started_at_ms,finished_at_ms,outcome,failure_category) VALUES (?1,?2,1,1,'failed','usage-run',100,200,'failed','check')", params![project_id,task_id])?;
+    let attempt_id = db.last_insert_rowid();
+    for (ordinal, role) in [(1, "execution"), (2, "review")] {
+        db.execute("INSERT INTO ai_sessions(project_id,task_id,role,provider,provider_scope,state,created_at_ms,last_used_at_ms) VALUES (?1,?2,?3,'codex','test','open',100,100)", params![project_id,task_id,role])?;
+        let session = db.last_insert_rowid();
+        db.execute("INSERT INTO attempt_steps(attempt_id,project_id,task_id,revision,ordinal,role,state,session_id,provider,model,effort,invocation,started_at_ms,finished_at_ms) VALUES (?1,?2,?3,1,?4,?5,'succeeded',?6,'codex','model','high','start',100,150)", params![attempt_id,project_id,task_id,ordinal,role,session])?;
+        let step = db.last_insert_rowid();
+        db.execute("INSERT INTO model_calls(project_id,task_id,revision,step_id,role,provider,model,effort,request_key,state,started_at_ms,finished_at_ms,input_tokens,cache_read_tokens,cache_write_tokens,output_tokens,cost_microusd) VALUES (?1,?2,1,?3,?4,'codex','model','high',?5,'succeeded',100,150,10,5,0,3,?6)", params![project_id,task_id,step,role,format!("call-{role}"),if ordinal == 1 {Some(100)} else {None}])?;
+    }
+    db.execute("INSERT INTO model_calls(project_id,role,provider,model,request_key,state,started_at_ms,finished_at_ms,input_tokens) VALUES (?1,'planning','codex','model','planning','succeeded',100,110,7)", [project_id])?;
+    let (attempt, roles) = usage_report::attempt(db, attempt_id)?;
+    assert_eq!(attempt.calls, 2);
+    assert_eq!(attempt.input, Some(20));
+    assert_eq!(attempt.cache_read, Some(10));
+    assert_eq!(attempt.output, Some(6));
+    assert_eq!(attempt.cost_microusd, None);
+    assert_eq!(roles.len(), 2);
+    assert_eq!(roles[0].provider_elapsed_ms, 50);
+    let project = usage_report::project(db, project_id)?;
+    assert_eq!(project.calls, 3);
+    assert_eq!(project.input, Some(27));
+    assert_eq!(project.cache_read, None);
+    assert_eq!(project.cost_microusd, None);
+    Ok(())
+}
+
+#[test]
 fn concurrent_openers_migrate_once_and_wal_readers_see_only_commits() -> Result {
     let scratch = support::sandbox()?;
     let barrier = Arc::new(Barrier::new(6));

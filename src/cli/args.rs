@@ -249,7 +249,7 @@ pub enum Command {
         #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(i64).range(1..=1000))]
         limit: i64,
     },
-    /// Project counts, active attempt time, and recorded cost.
+    /// Project counts, active and waiting time, recorded token usage, and cost.
     Stats,
 }
 

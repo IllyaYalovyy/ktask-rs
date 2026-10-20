@@ -82,11 +82,14 @@ impl App {
         ));
     }
     pub(crate) fn stored_cost(&self, id: usize) -> String {
-        cost_label(self.stored.get(&id).and_then(|t| {
-            t.attempts
-                .iter()
-                .filter_map(|a| a.cost_microusd)
-                .reduce(|a, b| a + b)
+        let Some(task) = self.stored.get(&id) else {
+            return "unknown".into();
+        };
+        if task.attempts.is_empty() {
+            return "unknown".into();
+        }
+        cost_label(task.attempts.iter().try_fold(0_i64, |sum, attempt| {
+            sum.checked_add(attempt.usage.cost_microusd?)
         }))
     }
     pub fn persistent(instance: Instance, service: Service) -> Result<Self, String> {
@@ -384,22 +387,32 @@ impl App {
                 result
             }
             Action::Stats => {
-                let attempts: Vec<_> = self.stored.values().flat_map(|t| &t.attempts).collect();
+                let usage = match self.service.as_ref().unwrap().project_usage() {
+                    Ok(usage) => usage,
+                    Err(error) => {
+                        self.message(error.to_string());
+                        return true;
+                    }
+                };
+                let timing = match self.service.as_ref().unwrap().project_timing() {
+                    Ok(timing) => timing,
+                    Err(error) => {
+                        self.message(error.to_string());
+                        return true;
+                    }
+                };
                 self.dialog = Some(Dialog::new(
                     DialogKind::Stats,
                     "Project statistics · SQLite",
                     &format!(
-                        "Queue: {}\nHistory: {}\nAttempts: {}\nActive time: {} ms\nRecorded cost: {}\nMissing cost is unknown, not zero.\nHuman acknowledgments do not create AI attempts.",
+                        "Queue: {}\nHistory: {}\nAttempts: {} ({} failed/interrupted)\nActive time: {} ms\nWaiting time: {} ms\nProject usage: {}\nHuman acknowledgments do not create AI attempts.",
                         self.queue.len(),
                         self.history.len(),
-                        attempts.len(),
-                        attempts.iter().map(|a| a.active_ms).sum::<i64>(),
-                        cost_label(
-                            attempts
-                                .iter()
-                                .filter_map(|a| a.cost_microusd)
-                                .reduce(|a, b| a + b)
-                        )
+                        timing.attempts,
+                        timing.failed,
+                        timing.active_ms,
+                        timing.waiting_ms,
+                        usage.label()
                     ),
                     vec![],
                 ));
@@ -846,12 +859,16 @@ impl App {
                         .find(|revision| revision.number == record.revision)
                         .unwrap_or_else(|| task.definition());
                     dialog.body.push_str(&format!(
-                        "\n\nAttempt inputs: revision {} · session {}\n{}\n\n{overview}",
+                        "\n\nAttempt inputs: revision {} · session {}\n{}\nActive {} ms · waiting {} ms\nUsage: {}\n{}\n\n{overview}",
                         record.revision,
                         record
                             .session
                             .map_or("not recorded".into(), |id| id.to_string()),
                         revision_overview(revision),
+                        record.active_ms,
+                        record.waiting_ms,
+                        record.usage.label(),
+                        record.role_usage.iter().map(|role| format!("{} {} / {}: {} · provider elapsed {} ms", role.role, role.model, role.effort.as_deref().unwrap_or("none"), role.totals.label(), role.provider_elapsed_ms)).collect::<Vec<_>>().join("\n"),
                     ));
                 } else {
                     dialog.body = format!("{overview}\nNo attempt evidence recorded.");
@@ -1213,9 +1230,12 @@ fn limit(text: &str) -> Result<Option<i64>, String> {
     }
 }
 fn cost_label(cost: Option<i64>) -> String {
-    cost.map_or("not recorded".into(), |n| {
+    cost.map_or("unknown".into(), |n| {
         format!("${:.6}", n as f64 / 1_000_000.0)
     })
+}
+fn number(value: Option<i64>) -> String {
+    value.map_or("?".into(), |n| n.to_string())
 }
 
 fn status(value: &str) -> Result<Status, String> {
@@ -1378,6 +1398,16 @@ fn project_task(task: &domain::Task) -> Result<model::Task, String> {
                 step: 0,
                 cost_cents: a.cost_microusd.unwrap_or(0) as usize / 10_000,
                 elapsed_ms: a.active_ms as u64,
+                waiting_ms: a.waiting_ms as u64,
+                usage: a.usage.label(),
+                usage_tokens: format!(
+                    "I {} R {} W {} O {}",
+                    number(a.usage.input),
+                    number(a.usage.cache_read),
+                    number(a.usage.cache_write),
+                    number(a.usage.output)
+                ),
+                usage_cost: format!("Cost {}", cost_label(a.usage.cost_microusd)),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -1466,19 +1496,42 @@ fn revision_overview(revision: &domain::Revision) -> String {
 }
 
 fn task_overview(task: &domain::Task) -> String {
+    let cost = if task.attempts.is_empty() {
+        None
+    } else {
+        task.attempts
+            .iter()
+            .try_fold(0_i64, |sum, a| sum.checked_add(a.usage.cost_microusd?))
+    };
     let mut body = format!(
         "Task #{} · {} · {}\nCurrent task definition\n{}\nTask cost: {}",
         task.id,
         task.definition().definition.title,
         task.status,
         revision_overview(task.definition()),
-        cost_label(
-            task.attempts
-                .iter()
-                .filter_map(|a| a.cost_microusd)
-                .reduce(|a, b| a + b)
-        )
+        cost_label(cost)
     );
+    for (index, attempt) in task.attempts.iter().enumerate() {
+        body.push_str(&format!(
+            "\nAttempt {} · revision {} · {} · active {} ms · waiting {} ms\nUsage: {}",
+            index + 1,
+            attempt.revision,
+            attempt.state,
+            attempt.active_ms,
+            attempt.waiting_ms,
+            attempt.usage.label()
+        ));
+        for role in &attempt.role_usage {
+            body.push_str(&format!(
+                "\n{} {} / {}: {} · provider elapsed {} ms",
+                role.role,
+                role.model,
+                role.effort.as_deref().unwrap_or("none"),
+                role.totals.label(),
+                role.provider_elapsed_ms
+            ));
+        }
+    }
     for revision in task.revisions.iter().filter(|revision| {
         revision.lifecycle == "draft" && revision.number > task.definition().number
     }) {

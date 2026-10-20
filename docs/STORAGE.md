@@ -45,6 +45,10 @@ attempts.wait_reason distinguishes question, rate_limit, and provider_unavailabl
 records waiting_since_ms and optional resume_at_ms (earliest UTC resume time). A rate limit
 normally suspends the same attempt; it is not a failed coding attempt. Question waits require
 answers before resumption. Wait events retain the history after the current wait fields clear.
+CLI `show` exposes `waiting_ms` on each attempt and `provider_elapsed_ms` on each role usage
+record. Open wait and provider intervals advance on fresh reads; completed intervals stay fixed.
+Recovery caps an open interval at the attempt's recorded finish time. Current Task refreshes
+live timing, while an open details or statistics dialog shows the snapshot taken when opened.
 Three rate-limit waits per attempt use visible 60, 120 and 240 second backoffs; exhaustion
 stops automatic execution and retains work for an explicit retry.
 

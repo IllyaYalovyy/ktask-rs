@@ -45,6 +45,326 @@ fn terminal(root: &Path) -> Result<Terminal> {
 }
 
 #[test]
+fn recorded_usage_is_visible_in_current_details_history_and_statistics() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (id, attempt) = failed_task(root)?;
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let connection = db.connection();
+    connection.execute("UPDATE model_calls SET input_tokens=10,cache_read_tokens=5,cache_write_tokens=0,output_tokens=3,cost_microusd=100 WHERE role='review' AND step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1)", [attempt])?;
+    connection.execute("UPDATE model_calls SET input_tokens=NULL,cache_read_tokens=10,cache_write_tokens=NULL,output_tokens=4,cost_microusd=NULL WHERE role='validation' AND step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1)", [attempt])?;
+    drop(db);
+    let mut service = service(root)?;
+    let mut newer = service.task(id)?.unwrap().definition().definition.clone();
+    newer.attempt_limit = Some(7);
+    newer.models[1].as_mut().unwrap().model = "new-review-model".into();
+    let revision_target = target(&mut service, id)?;
+    service.revise(revision_target, &newer, true)?;
+    drop(service);
+    let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 100, 45)?;
+    let current = t.screen("current recorded usage", |s| {
+        s.contains("I ? R 15 W ? O 7") && s.contains("Cost unknown")
+    })?;
+    println!("USAGE CURRENT\n{current}");
+    let details = key(&mut t, "\r", "Task details / attempts")?;
+    println!("USAGE DETAILS\n{details}");
+    assert!(details.contains("Attempt inputs: revision 1"));
+    assert!(details.contains("Usage: 2 calls"));
+    assert!(details.contains("new-review-model"));
+    t.click("Close")?;
+    t.screen("details closed", |s| !s.contains("Task details / attempts"))?;
+    t.click("s Stats")?;
+    let stats = t.screen("project usage", |s| {
+        s.contains("Project usage: 2 calls") && s.contains("cost unknown")
+    })?;
+    println!("USAGE STATS\n{stats}");
+    t.click("Close")?;
+    quit(&mut t)?;
+    let mut service = self::service(root)?;
+    let resolution_target = target(&mut service, id)?;
+    service.resolve(resolution_target, Resolution::FailedSkipped, "Reviewed")?;
+    drop(service);
+    let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 100, 45)?;
+    let history = key(&mut t, "3", "History")?;
+    println!("USAGE HISTORY\n{history}");
+    t.send("\r")?;
+    let detail = t.screen("history attempt usage", |s| s.contains("Usage: 2 calls"))?;
+    println!("USAGE HISTORY DETAILS\n{detail}");
+    quit(&mut t)
+}
+
+fn scroll_usage(t: &mut Terminal, mouse: bool, needle: &str) -> Result<String> {
+    for _ in 0..24 {
+        let screen = t.screen("usage dialog", |_| true)?;
+        if screen.contains(needle) {
+            return Ok(screen);
+        }
+        if mouse {
+            t.wheel(true, 10, 8)?;
+        } else {
+            t.send("\x1b[6~")?;
+        }
+    }
+    Err(format!("Usage {needle:?} was not visible after scrolling").into())
+}
+
+#[test]
+fn exact_large_tokens_expand_by_keyboard_and_mouse_at_both_sizes() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (id, attempt) = failed_task(root)?;
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    db.connection().execute(
+        "UPDATE model_calls SET input_tokens=123456789012,cache_read_tokens=98765432109,cache_write_tokens=87654321098,output_tokens=76543210987,cost_microusd=100 WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1)",
+        [attempt],
+    )?;
+    drop(db);
+    let task = service(root)?.task(id)?.unwrap();
+    let usage = &task.attempts[0].usage;
+    assert_eq!(usage.input, Some(246913578024));
+    assert_eq!(usage.cache_read, Some(197530864218));
+    assert_eq!(usage.cache_write, Some(175308642196));
+    assert_eq!(usage.output, Some(153086421974));
+    let json = serde_json::to_value(&task.attempts[0])?;
+    assert_eq!(json["usage"]["input"], 246913578024_i64);
+    assert_eq!(json["usage"]["cache_read"], 197530864218_i64);
+    assert_eq!(json["usage"]["cache_write"], 175308642196_i64);
+    assert_eq!(json["usage"]["output"], 153086421974_i64);
+    for (cols, rows) in [(70, 22), (100, 45)] {
+        for mouse in [false, true] {
+            let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, cols, rows)?;
+            let current = t.screen("exact token expansion hint", |s| {
+                s.contains("Tokens · Enter: details") && s.contains("Current #1")
+            })?;
+            println!("LARGE USAGE CURRENT {cols}x{rows} mouse={mouse}\n{current}");
+            if mouse {
+                t.click("Status")?;
+            } else {
+                t.send("\r")?;
+            }
+            let details = t.screen("attempt details", |s| s.contains("Task details / attempts"))?;
+            println!("LARGE USAGE DETAILS FIRST {cols}x{rows} mouse={mouse}\n{details}");
+            for needle in [
+                "246913578024",
+                "197530864218",
+                "175308642196",
+                "153086421974",
+            ] {
+                let exact = scroll_usage(&mut t, mouse, needle)?;
+                println!("LARGE USAGE DETAILS EXACT {needle} {cols}x{rows} mouse={mouse}\n{exact}");
+            }
+            if mouse {
+                t.click("Close")?;
+            } else {
+                t.send("\x1b")?;
+            }
+            t.screen("usage details closed", |s| {
+                !s.contains("Task details / attempts") && s.contains("s Stats")
+            })?;
+            if mouse {
+                t.click("s Stats")?;
+            } else {
+                t.send("s")?;
+            }
+            t.screen("usage statistics opened", |s| {
+                s.contains("Project statistics")
+            })?;
+            for needle in [
+                "246913578024",
+                "197530864218",
+                "175308642196",
+                "153086421974",
+            ] {
+                let stats = scroll_usage(&mut t, mouse, needle)?;
+                println!("LARGE USAGE STATS {needle} {cols}x{rows} mouse={mouse}\n{stats}");
+            }
+            if mouse {
+                t.click("Close")?;
+            } else {
+                t.send("\x1b")?;
+            }
+            t.screen("usage statistics closed", |s| {
+                !s.contains("Project statistics") && s.contains("s Stats")
+            })?;
+            quit(&mut t)?;
+        }
+    }
+    let mut writer = service(root)?;
+    let target = target(&mut writer, id)?;
+    writer.resolve(target, Resolution::FailedSkipped, "Reviewed")?;
+    drop(writer);
+    for (cols, rows) in [(70, 22), (100, 45)] {
+        for mouse in [false, true] {
+            let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, cols, rows)?;
+            t.screen("completed current before history", |s| {
+                s.contains("Queue complete.") && s.contains("3 History")
+            })?;
+            if mouse {
+                t.click("3 History")?;
+            } else {
+                t.send("3")?;
+            }
+            let history = t.screen("history row", |s| {
+                s.contains("History") && s.contains("Failed current")
+            })?;
+            println!("LARGE USAGE HISTORY {cols}x{rows} mouse={mouse}\n{history}");
+            if mouse {
+                t.click("Enter Details")?;
+            } else {
+                t.send("\r")?;
+            }
+            let details = t.screen("history details", |s| s.contains("Task details / attempts"))?;
+            println!("LARGE USAGE HISTORY DETAILS FIRST {cols}x{rows} mouse={mouse}\n{details}");
+            for needle in [
+                "246913578024",
+                "197530864218",
+                "175308642196",
+                "153086421974",
+            ] {
+                let exact = scroll_usage(&mut t, mouse, needle)?;
+                println!(
+                    "LARGE USAGE HISTORY DETAILS EXACT {needle} {cols}x{rows} mouse={mouse}\n{exact}"
+                );
+            }
+            quit(&mut t)?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn recorded_wait_intervals_sum_once_after_resume_and_interruption() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let mut writer = service(root)?;
+    let id = writer.create(&[definition("Waiting total")], None, true)?[0];
+    let project = writer.project_id;
+    drop(writer);
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let connection = db.connection();
+    connection.execute("INSERT INTO attempts(project_id,task_id,revision,number,state,execution_token,started_at_ms,finished_at_ms,active_ms,outcome,failure_category) VALUES (?1,?2,1,1,'interrupted','intervals',100,500,200,'Interrupted','interrupted')", rusqlite::params![project,id])?;
+    let attempt = connection.last_insert_rowid();
+    for (at, kind) in [
+        (150, "attempt.waiting"),
+        (190, "attempt.resumed"),
+        (220, "attempt.paused"),
+        (290, "attempt.resumed"),
+        (400, "attempt.waiting"),
+        (430, "attempt.interrupted"),
+    ] {
+        connection.execute("INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,?5,'info','timing')", rusqlite::params![project,id,attempt,at,kind])?;
+    }
+    drop(db);
+    let mut reader = service(root)?;
+    let timing = reader.project_timing()?;
+    assert_eq!(
+        (
+            timing.attempts,
+            timing.failed,
+            timing.active_ms,
+            timing.waiting_ms
+        ),
+        (1, 1, 200, 140)
+    );
+    let snapshot = reader.snapshot()?;
+    assert_eq!(snapshot.queue[0].attempts[0].waiting_ms, 140);
+    assert_eq!(reader.project_timing()?.waiting_ms, 140);
+    Ok(())
+}
+
+#[test]
+fn recovered_open_intervals_and_json_timing_remain_fixed() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (mut writer, run) = running_fixture(root, "Recover open timing")?;
+    let model = ModelConfig {
+        provider: "codex".into(),
+        model: "fixture-model".into(),
+        effort: None,
+    };
+    writer.start_ai_step(&run, "execution", &model, "fixture", false)?;
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let start = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64
+        - 200;
+    db.connection().execute(
+        "UPDATE model_calls SET started_at_ms=?1 WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?2)",
+        rusqlite::params![start, run.attempt],
+    )?;
+    db.connection().execute(
+        "INSERT INTO events(project_id,task_id,attempt_id,occurred_at_ms,kind,level,message) VALUES (?1,?2,?3,?4,'attempt.waiting','info','waiting')",
+        rusqlite::params![writer.project_id, run.task, run.attempt, start],
+    )?;
+    drop(db);
+    let live = writer.task(run.task)?.unwrap().attempts.pop().unwrap();
+    let live_json = serde_json::to_value(&live)?;
+    assert!(live_json["waiting_ms"].as_i64().unwrap() >= 200);
+    assert!(
+        live_json["role_usage"][0]["provider_elapsed_ms"]
+            .as_i64()
+            .unwrap()
+            >= 200
+    );
+    writer.recover_run(None)?;
+    let completed = writer.task(run.task)?.unwrap().attempts.pop().unwrap();
+    let completed_json = serde_json::to_value(&completed)?;
+    let waiting = completed.waiting_ms;
+    let provider = completed.role_usage[0].provider_elapsed_ms;
+    assert_eq!(completed_json["waiting_ms"], waiting);
+    assert_eq!(
+        completed_json["role_usage"][0]["provider_elapsed_ms"],
+        provider
+    );
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    let later = writer.task(run.task)?.unwrap().attempts.pop().unwrap();
+    assert_eq!(later.waiting_ms, waiting);
+    assert_eq!(later.role_usage[0].provider_elapsed_ms, provider);
+    assert_eq!(writer.project_timing()?.waiting_ms, waiting);
+    Ok(())
+}
+
+#[test]
+fn running_step_and_token_expansion_stay_visible_at_minimum_size() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    let (mut writer, run) = running_fixture(root, "Running usage")?;
+    let model = ModelConfig {
+        provider: "codex".into(),
+        model: "fixture-model".into(),
+        effort: None,
+    };
+    writer.start_ai_step(&run, "execution", &model, "fixture", false)?;
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    db.connection().execute(
+        "UPDATE model_calls SET input_tokens=123456789012,cache_read_tokens=98765432109,cache_write_tokens=87654321098,output_tokens=76543210987 WHERE step_id IN (SELECT id FROM attempt_steps WHERE attempt_id=?1)",
+        [run.attempt],
+    )?;
+    drop(db);
+    for mouse in [false, true] {
+        let mut t = terminal(root)?;
+        let screen = t.screen("minimum running step and exact token path", |s| {
+            s.contains("Current #1 · ABANDONED")
+                && s.contains("Step: Execution")
+                && s.contains("Tokens · Enter: details")
+                && s.contains("Run")
+        })?;
+        println!("RUNNING USAGE MINIMUM mouse={mouse}\n{screen}");
+        if mouse {
+            t.click("Status")?;
+        } else {
+            t.send("\r")?;
+        }
+        let details = t.screen("running details", |s| s.contains("Task details / attempts"))?;
+        println!("RUNNING USAGE DETAILS MINIMUM mouse={mouse}\n{details}");
+        let exact = scroll_usage(&mut t, mouse, "123456789012")?;
+        println!("RUNNING USAGE EXACT MINIMUM mouse={mouse}\n{exact}");
+        quit(&mut t)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn persistent_report_and_log_support_mouse_text_copy() -> Result {
     let scratch = support::sandbox()?;
     let root = scratch.path();

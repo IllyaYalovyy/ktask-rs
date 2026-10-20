@@ -220,6 +220,7 @@ case '{mode}' in
  slow-repair) if [ "$model" = remediation ]; then touch "$HOME/repair-started"; sleep 30; fi;;
  slow-review) if [ "$model" = review ]; then touch "$HOME/review-started"; sleep 30; fi;;
  slow) sleep 3;;
+ usage-live) if [ "$model" = execution ]; then sleep 30; fi;;
  descendants) setsid sleep 30 & printf '%s' "$!" > descendant.pid; sleep 30;;
  rate) printf '{{"type":"turn.failed","error":{{"message":"rate_limit reached"}}}}\n'; exit 2;;
  malformed-work) printf 'verified\n' > result.txt; printf '{{"type":"turn.completed","usage":{{}}}}\n'; exit 0;;
@@ -1521,9 +1522,13 @@ fn paused_repair_resumes_its_reserved_round_and_same_attempt() -> Result {
             assert!(Instant::now() < deadline, "repair worker never started");
             thread::sleep(Duration::from_millis(10));
         }
-        t.screen("repair running", |s| {
-            s.contains("p Pause") && s.contains("Attempt 1") && s.contains("Remediation … running")
+        let running = t.screen("repair running", |s| {
+            s.contains("RUNNING · supervisor alive")
+                && s.contains("p Pause")
+                && s.contains("Attempt 1")
+                && s.contains("Step: Remediation")
         })?;
+        println!("REPAIR RUNNING mouse={mouse}\n{running}");
         if mouse {
             t.click("p Pause")?;
         } else {
@@ -1578,6 +1583,27 @@ fn questions_require_answer_and_reuse_attempt() -> Result {
         f.ok(&["show", "1"])?["attempts"].as_array().unwrap().len(),
         1
     );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn cli_show_exposes_attempt_wait_and_provider_elapsed_time() -> Result {
+    let f = Fixture::new()?;
+    f.add("Timing JSON")?;
+    f.ok(&["run"])?;
+    let shown = f.ok(&["show", "1"])?;
+    let attempt = &shown["attempts"][0];
+    assert!(attempt["waiting_ms"].as_i64().is_some(), "{shown}");
+    let roles = attempt["role_usage"].as_array().unwrap();
+    assert!(!roles.is_empty(), "{shown}");
+    for role in roles {
+        assert!(role["provider_elapsed_ms"].as_i64().is_some(), "{shown}");
+    }
+    thread::sleep(Duration::from_millis(25));
+    let repeated = f.ok(&["show", "1"])?;
+    assert_eq!(repeated["attempts"][0]["waiting_ms"], attempt["waiting_ms"]);
+    assert_eq!(repeated["attempts"][0]["role_usage"], attempt["role_usage"]);
     f.no_scratch()?;
     Ok(())
 }
@@ -2248,6 +2274,15 @@ fn escaped_descendants_are_stopped_and_duplicate_runners_are_rejected() -> Resul
 }
 #[test]
 fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result {
+    fn stable_evidence(mut attempts: Value) -> Value {
+        for attempt in attempts.as_array_mut().unwrap() {
+            attempt.as_object_mut().unwrap().remove("waiting_ms");
+            for role in attempt["role_usage"].as_array_mut().unwrap() {
+                role.as_object_mut().unwrap().remove("provider_elapsed_ms");
+            }
+        }
+        attempts
+    }
     for mouse in [false, true] {
         let f = Fixture::new()?;
         f.provider("question")?;
@@ -2282,7 +2317,32 @@ fn real_tui_question_answer_mouse_and_keyboard_automatically_resume() -> Result 
         println!("PREMATURE RUN REJECTED (mouse={mouse})\n{still_waiting}");
         assert!(still_waiting.contains("w Answer"));
         assert!(!still_waiting.contains("[r R"));
-        assert_eq!(f.ok(&["show", "1"])?["attempts"], waiting_task["attempts"]);
+        let after_rejected = f.ok(&["show", "1"])?;
+        assert!(
+            after_rejected["attempts"][0]["waiting_ms"]
+                .as_i64()
+                .unwrap()
+                >= waiting_task["attempts"][0]["waiting_ms"].as_i64().unwrap()
+        );
+        for (before_role, after_role) in waiting_task["attempts"][0]["role_usage"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(
+                after_rejected["attempts"][0]["role_usage"]
+                    .as_array()
+                    .unwrap(),
+            )
+        {
+            assert!(
+                after_role["provider_elapsed_ms"].as_i64().unwrap()
+                    >= before_role["provider_elapsed_ms"].as_i64().unwrap()
+            );
+        }
+        assert_eq!(
+            stable_evidence(after_rejected["attempts"].clone()),
+            stable_evidence(waiting_task["attempts"].clone())
+        );
         assert_eq!(fs::read_to_string(&invocations)?, calls_before);
         assert_eq!(fs::read(&log)?, log_before);
         if mouse {
@@ -2334,6 +2394,49 @@ fn closing_tui_does_not_stop_supervisor() -> Result {
     t.finish()?;
     f.state("succeeded")?;
     f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn live_usage_keeps_step_and_pause_visible_at_minimum_size() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("usage-live")?;
+        f.add("Live recorded usage")?;
+        let mut run = Running(f.process().arg("run").stdout(Stdio::null()).spawn()?);
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 70, 22)?;
+        t.screen("live execution", |s| {
+            s.contains("RUNNING · supervisor alive") && s.contains("Step: Execution")
+        })?;
+        let db = f.db()?;
+        let changed = db.connection().execute(
+            "UPDATE model_calls SET input_tokens=123456789012,cache_read_tokens=98765432109,cache_write_tokens=87654321098,output_tokens=76543210987 WHERE role='execution' AND state='running'",
+            [],
+        )?;
+        assert_eq!(changed, 1);
+        drop(db);
+        let screen = t.screen("live usage and execution control", |s| {
+            s.contains("RUNNING · supervisor alive")
+                && s.contains("Step: Execution")
+                && s.contains("Tokens · Enter: details")
+                && s.contains("p Pause")
+        })?;
+        println!("LIVE USAGE 70x22 mouse={mouse}\n{screen}");
+        if mouse {
+            t.click("p Pause")?;
+        } else {
+            t.send("p")?;
+        }
+        let paused = t.screen("paused live usage", |s| {
+            s.contains("PAUSED · supervisor absent")
+        })?;
+        println!("LIVE USAGE PAUSED 70x22 mouse={mouse}\n{paused}");
+        run.0.wait()?;
+        f.state("paused")?;
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
     Ok(())
 }
 

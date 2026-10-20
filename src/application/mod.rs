@@ -9,6 +9,7 @@ pub mod preferences;
 pub mod progress;
 mod queries;
 pub mod session;
+pub mod usage_report;
 pub use queries::{Event, WaitingResume};
 pub mod transfer;
 
@@ -96,6 +97,10 @@ pub struct Attempt {
     pub state: String,
     pub outcome: Option<String>,
     pub active_ms: i64,
+    /// Live waits advance until the attempt finishes; closed intervals remain fixed.
+    pub waiting_ms: i64,
+    pub usage: usage_report::UsageTotals,
+    pub role_usage: Vec<usage_report::RoleUsage>,
     pub wait_reason: Option<String>,
     pub resume_at_ms: Option<i64>,
     pub session: Option<i64>,
