@@ -108,6 +108,22 @@ impl Service {
             }
         }
         evidence.push_str(&transcripts);
+        // Decisions can precede megabytes of check output. Keep their original
+        // structured responses available independently of the general log tail.
+        let mut decisions = String::new();
+        let mut stmt = self.db.connection().prepare(
+            "SELECT content FROM attempt_output o WHERE attempt_id=?1 AND stream='stdout'
+             AND CASE WHEN json_valid(content) THEN json_type(content,'$.judgment')='object' ELSE 0 END
+             AND EXISTS (SELECT 1 FROM attempt_steps s WHERE s.attempt_id=o.attempt_id
+                 AND s.role='remediation' AND s.state='succeeded' AND s.report LIKE 'Repair:%'
+                 AND o.recorded_at_ms BETWEEN s.started_at_ms AND s.finished_at_ms)
+             ORDER BY sequence",
+        )?;
+        for row in stmt.query_map([attempt], |r| r.get::<_, String>(0))? {
+            decisions.push_str(&format!("\nRecorded judgment output:\n{}", row?));
+            retain_tail(&mut decisions, FINDINGS_TAIL);
+        }
+        evidence.push_str(&decisions);
         // Structured findings can be absent from output, or precede a verbose final check.
         let mut reports = String::new();
         let mut stmt = self.db.connection().prepare(

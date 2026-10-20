@@ -158,7 +158,11 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
         };
         // Only an attempt that directly follows a failure is a repair; a judge-replanned
         // attempt ends as interrupted, so the next one starts fresh on the new plan.
-        let repair = task.attempts.last().is_some_and(|a| a.state == "failed");
+        let repair = task.attempts.last().is_some_and(|a| {
+            a.state == "failed"
+                || (matches!(a.state.as_str(), "paused" | "waiting")
+                    && a.steps.iter().any(|step| step.role == "remediation"))
+        });
         service.output(
             &run,
             "system",
@@ -568,7 +572,11 @@ fn judge_attempt(
             model.provider, model.model
         ),
     )?;
-    let evidence = service.attempt_evidence(failed, &ctx.paths.state)?;
+    let evidence = format!(
+        "{}\nRecorded answers for this attempt:\n{}",
+        service.attempt_evidence(failed, &ctx.paths.state)?,
+        service.answers(run)?
+    );
     let invocation = Invocation {
         executable: ctx.codex.clone(),
         // Sandbox follows the validation role: read-only by design.
@@ -610,9 +618,10 @@ fn judge_attempt(
         }
     };
     let (summary, outcome) = match judgment {
-        codex::Judgment::Repair { plan, reason } => {
-            (format!("Repair: {reason}"), Outcome::Passed(plan))
-        }
+        codex::Judgment::Repair { plan, reason } => (
+            format!("Repair: {reason}\nAuthorized repair plan:\n{plan}"),
+            Outcome::Passed(plan),
+        ),
         codex::Judgment::Ask { question, reason } => {
             service.finish_step(
                 &step,

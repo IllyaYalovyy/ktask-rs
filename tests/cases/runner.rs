@@ -132,7 +132,9 @@ case "$prompt" in *"read-only remediation planner"*)
 esac
 case "$prompt" in *"You are the failure judge"*)
  printf '%s' "$prompt" > "$HOME/prompt-judge"
- case '{mode}' in
+ judge_mode='{mode}'
+ case "$prompt" in *"Human answer"*) judge_mode=normal;; esac
+ case "$judge_mode" in
   judge-insert) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"insert\",\"tasks\":[{{\"title\":\"Repair prerequisite\",\"goal\":\"Finish the preserved result\",\"criteria\":[\"result.txt contains verified\"]}}],\"reason\":\"Preserve the partial implementation before the repair\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
   judge-revise) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"revise\",\"title\":\"Clarified task\",\"goal\":\"Do the clarified thing.\",\"criteria\":[\"Clarified check passes\"],\"reason\":\"The goal contradicted the criteria\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
   judge-ask) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"ask\",\"question\":\"Keep or drop the legacy export?\",\"reason\":\"Both readings satisfy the criteria\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
@@ -142,6 +144,7 @@ esac
 case '{mode}' in
  review-once) if [ "$model" = review ] && [ ! -f "$HOME/review-failed" ]; then touch "$HOME/review-failed"; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"failed\",\"summary\":\"result.txt:1: missing edge-case handling; repair and prove the boundary.\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":false,\"evidence\":\"Boundary case fails\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0; fi;;
  transient) if [ ! -f "$HOME/transport-retried" ]; then touch "$HOME/transport-retried"; printf '{{"type":"turn.failed","error":{{"message":"connection reset"}}}}\n'; exit 2; fi;;
+ slow-repair) if [ "$model" = remediation ]; then touch "$HOME/repair-started"; sleep 30; fi;;
  slow) sleep 3;;
  descendants) setsid sleep 30 & printf '%s' "$!" > descendant.pid; sleep 30;;
  rate) printf '{{"type":"turn.failed","error":{{"message":"rate_limit reached"}}}}\n'; exit 2;;
@@ -447,7 +450,7 @@ fn judge_evidence_stays_within_the_provider_input_limit() -> Result {
     f.provider("judge")?;
     let marker = f.scratch.path().join("check-ran");
     let command = format!(
-        "test -f '{0}' || {{ : > '{0}'; head -c 1500000 /dev/zero | tr '\\0' x; echo; echo 'first check fails'; exit 7; }}",
+        "test -f '{0}' || {{ : > '{0}'; echo 'first check fails'; exit 7; }}; test -f '{0}-second' || {{ : > '{0}-second'; head -c 1500000 /dev/zero | tr '\\0' x; echo; echo 'second check fails'; exit 7; }}",
         marker.display()
     );
     f.ok(&["check-set", "build", "--command", &command])?;
@@ -457,9 +460,11 @@ fn judge_evidence_stays_within_the_provider_input_limit() -> Result {
     let prompt = fs::read_to_string(f.scratch.path().join("prompt-judge"))?;
     assert!(prompt.contains("You are the failure judge"));
     assert!(
-        prompt.contains("first check fails"),
+        prompt.contains("second check fails"),
         "the failure itself survives trimming"
     );
+    assert!(prompt.contains("Authorized repair plan:\nRerun the check after writing result.txt"));
+    assert!(prompt.contains("Recorded judgment output:\n{\"judgment\":"));
     assert!(
         prompt.chars().count() < 1_048_576,
         "Codex rejects longer turns; prompt was {} chars",
@@ -521,6 +526,61 @@ fn pause_resume_keeps_attempt_session_and_cleans_worker_tmp() -> Result {
         1
     );
     f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn paused_repair_resumes_with_a_fresh_judge_and_the_same_attempt() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("slow-repair")?;
+        f.fail_first_check()?;
+        f.add("Pause and resume repair")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        t.screen("ready", |s| s.contains("r Run queue"))?;
+        t.send("r")?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !f.scratch.path().join("repair-started").exists() {
+            assert!(Instant::now() < deadline, "repair worker never started");
+            thread::sleep(Duration::from_millis(10));
+        }
+        t.screen("repair running", |s| {
+            s.contains("p Pause") && s.contains("Attempt 2") && s.contains("Remediation … running")
+        })?;
+        if mouse {
+            t.click("p Pause")?;
+        } else {
+            t.send("p")?;
+        }
+        println!(
+            "REPAIR PAUSED mouse={mouse}\n{}",
+            t.screen("repair paused", |s| s.contains("[r Resume]")
+                && s.contains("PAUSED"))?
+        );
+        let before = f.ok(&["show", "1"])?;
+        let attempt = before["attempts"][1]["id"].clone();
+        f.provider("normal")?;
+        if mouse {
+            t.click("r Resume")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "REPAIR RESUMED mouse={mouse}\n{}",
+            t.screen("repair complete", |s| s.contains("Queue complete."))?
+        );
+        let after = f.ok(&["show", "1"])?;
+        assert_eq!(after["attempts"].as_array().unwrap().len(), 2);
+        assert_eq!(after["attempts"][1]["id"], attempt);
+        assert_eq!(after["lifecycle"], "succeeded");
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            "execution\nremediation\nremediation\nremediation\nremediation\nreview\nvalidation\n"
+        );
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
     Ok(())
 }
 #[test]
