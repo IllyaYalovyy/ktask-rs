@@ -750,6 +750,15 @@ fn situation(app: &App, task: &crate::presentation::Task) -> (String, Color) {
             BAD,
         ),
         Status::Pending if human => ("Human task · y Acknowledge when it is done".into(), MUTED),
+        Status::Pending
+            if app.service.is_some()
+                && app
+                    .execution_session
+                    .as_ref()
+                    .is_some_and(|session| session.state == "paused") =>
+        {
+            ("Queue paused before the next task".into(), WARN)
+        }
         Status::Pending if app.service.is_some() && app.supervisor_alive => (
             "Supervisor preparing the next task · p Pause stops the queue".into(),
             ACCENT,

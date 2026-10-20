@@ -2320,7 +2320,11 @@ fn pause_at_ready_task_handoff_never_starts_the_next_attempt() -> Result {
     })?;
     println!("READY HANDOFF\n{handoff}");
     t.click("p Pause")?;
-    let paused = t.screen("handoff paused", |s| s.contains("Session: Queue · paused"))?;
+    let paused = t.screen("handoff paused", |s| {
+        s.contains("Session: Queue · paused")
+            && s.contains("Queue paused before the next task")
+            && !s.contains("Supervisor preparing the next task")
+    })?;
     println!("PAUSED AT HANDOFF\n{paused}");
     thread::sleep(Duration::from_millis(3200));
     assert!(
