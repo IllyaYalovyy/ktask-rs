@@ -13,11 +13,119 @@ pub type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 const TIMEOUT: Duration = Duration::from_secs(5);
 const FRAME_END: &[u8] = b"\x1b[?2026l";
 
+/// A private Git baseline for storage fixtures; generated fixture/state files stay ignored.
+pub fn empty_repository(root: &Path) -> Result {
+    let git = |args: &[&str]| -> Result {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
+    };
+    git(&["init", "-q"])?;
+    std::fs::write(root.join(".git/info/exclude"), "*\n")?;
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "baseline",
+    ])
+}
+
+pub fn location(screen: &str, needle: &str) -> Result<(usize, usize)> {
+    screen
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| {
+            line.find(needle)
+                .map(|byte| (line[..byte].chars().count(), row))
+        })
+        .ok_or_else(|| format!("missing {needle:?} in screen:\n{screen}").into())
+}
+
+pub fn drag(t: &mut Terminal, from: (usize, usize), to: (usize, usize)) -> Result {
+    let (x, y) = from;
+    let (end_x, end_y) = to;
+    t.send(&format!(
+        "\x1b[<0;{};{}M\x1b[<32;{};{}M\x1b[<0;{};{}m",
+        x + 1,
+        y + 1,
+        end_x + 1,
+        end_y + 1,
+        end_x + 1,
+        end_y + 1
+    ))
+}
+
+pub fn copied(t: &Terminal) -> Result<String> {
+    let raw = t.output_bytes();
+    let start = raw
+        .windows(7)
+        .rposition(|w| w == b"\x1b]52;c;")
+        .ok_or("OSC 52 copy not emitted")?
+        + 7;
+    let end = raw[start..]
+        .iter()
+        .position(|b| *b == 7)
+        .ok_or("OSC 52 terminator missing")?
+        + start;
+    let mut decoded = Vec::new();
+    let mut bits = 0u32;
+    let mut count = 0;
+    for &b in &raw[start..end] {
+        let value = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            _ => return Err("invalid base64".into()),
+        };
+        bits = (bits << 6) | value as u32;
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            decoded.push((bits >> count) as u8);
+            bits &= (1 << count) - 1;
+        }
+    }
+    Ok(String::from_utf8(decoded)?)
+}
+
+pub fn copy(t: &mut Terminal) -> Result<String> {
+    let before = t
+        .output_bytes()
+        .windows(7)
+        .filter(|w| *w == b"\x1b]52;c;")
+        .count();
+    t.send("\x1b[17~")?;
+    t.screen("new OSC 52 copy", |_| {
+        t.output_bytes()
+            .windows(7)
+            .filter(|w| *w == b"\x1b]52;c;")
+            .count()
+            > before
+    })?;
+    copied(t)
+}
+
 pub struct Terminal {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     parser: Arc<Mutex<vt100::Parser>>,
+    output: Arc<Mutex<Vec<u8>>>,
     frames: mpsc::Receiver<String>,
     exit: mpsc::Receiver<std::io::Result<portable_pty::ExitStatus>>,
     reader: Option<thread::JoinHandle<()>>,
@@ -85,6 +193,8 @@ impl Terminal {
         let mut stream = pair.master.try_clone_reader()?;
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
         let read_parser = Arc::clone(&parser);
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let read_output = Arc::clone(&output);
         let (send_frame, frames) = mpsc::channel();
         let reader = thread::spawn(move || {
             let mut bytes = [0; 4096];
@@ -93,6 +203,10 @@ impl Terminal {
                 if count == 0 {
                     break;
                 }
+                read_output
+                    .lock()
+                    .unwrap()
+                    .extend_from_slice(&bytes[..count]);
                 let mut parser = read_parser.lock().unwrap();
                 for byte in &bytes[..count] {
                     parser.process(&[*byte]);
@@ -115,6 +229,7 @@ impl Terminal {
             writer,
             killer,
             parser,
+            output,
             frames,
             exit,
             reader: Some(reader),
@@ -128,6 +243,22 @@ impl Terminal {
         self.writer.write_all(keys.as_bytes())?;
         self.writer.flush()?;
         Ok(())
+    }
+
+    pub fn output_bytes(&self) -> Vec<u8> {
+        self.output.lock().unwrap().clone()
+    }
+
+    pub fn selected_at(&self, col: usize, row: usize) -> bool {
+        self.parser
+            .lock()
+            .unwrap()
+            .screen()
+            .cell(row as u16, col as u16)
+            .is_some_and(|cell| cell.bgcolor() == vt100::Color::Rgb(255, 210, 111))
+    }
+    pub fn mouse_capture(&self) -> bool {
+        self.parser.lock().unwrap().screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None
     }
 
     pub fn click(&mut self, label: &str) -> Result {

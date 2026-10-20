@@ -72,6 +72,7 @@ fn cli_remediate_json_returns_proposal_receipts_and_exit_four_for_noncurrent() -
     for action in ["insert", "escalate"] {
         let scratch = support::sandbox()?;
         let root = scratch.path();
+        support::empty_repository(root)?;
         let mut service = Service::open(
             Database::open_in(&root.join("state/ktask-dev"))?,
             root,

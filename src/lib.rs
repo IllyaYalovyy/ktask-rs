@@ -12,6 +12,7 @@ mod persistent;
 mod presentation;
 pub mod runner;
 pub mod scratch;
+mod selection;
 pub mod storage;
 mod task_actions;
 mod ui;
@@ -104,6 +105,14 @@ fn run(terminal: &mut ratatui::DefaultTerminal, mut app: app::App) -> io::Result
             .map(|frame| frame.area.as_size());
         execute!(terminal.backend_mut(), EndSynchronizedUpdate)?;
         let drawn_size = drawn?;
+        if let Some(copy) = app.copy_pending.take() {
+            let encoded = selection::base64(copy.as_bytes());
+            use std::io::Write;
+            terminal
+                .backend_mut()
+                .write_all(format!("\x1b]52;c;{encoded}\x07").as_bytes())?;
+            terminal.backend_mut().flush()?;
+        }
         loop {
             if event::poll(std::time::Duration::from_millis(40))? {
                 let fits = ui::fits(terminal.size()?);

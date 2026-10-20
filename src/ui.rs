@@ -41,6 +41,7 @@ pub fn fits(size: Size) -> bool {
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
+    app.selection.begin_frame();
     app.hits.clear();
     app.list_rect = Rect::default();
     app.log_rect = Rect::default();
@@ -146,9 +147,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     controls.extend([("? Help", Action::Help), ("q Quit", Action::Quit)]);
     buttons(frame, app, actions, &controls, false);
     frame.render_widget(
-        Paragraph::new(app.notice.as_str())
-            .wrap(Wrap { trim: false })
-            .style(Style::new().fg(MUTED)),
+        Paragraph::new(vec![
+            Line::raw(shortened(&app.notice, footer.width as usize)),
+            Line::styled(
+                "Drag · F6 copy · F2 select · Shift arrows · Esc clear · F7 native",
+                Style::new().fg(MUTED),
+            ),
+        ]),
         footer,
     );
     if app.search_before.is_some() {
@@ -157,6 +162,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.dialog.is_some() {
         draw_dialog(frame, app, area);
     }
+    app.selection.finish_frame(frame.buffer_mut());
+}
+
+fn content(rect: Rect) -> Rect {
+    Rect::new(
+        rect.x + 1,
+        rect.y + 1,
+        rect.width.saturating_sub(2),
+        rect.height.saturating_sub(2),
+    )
 }
 
 fn active_phase(task: &crate::presentation::Task) -> String {
@@ -495,11 +510,13 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         .and_then(|a| a.question.clone());
     let task_id = task.id;
     app.hits.push((purpose, Action::Inspect));
+    app.selection.zone(content(purpose));
     frame.render_widget(
         Paragraph::new(lines).block(panel(" Status · Enter: details ")),
         summary,
     );
     app.hits.push((summary, Action::Inspect));
+    app.selection.zone(content(summary));
     let activity: Vec<_> = app.task_events.iter().take(3).collect();
     frame.render_widget(
         Paragraph::new(if activity.is_empty() {
@@ -520,6 +537,7 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         events,
     );
     app.hits.push((events, Action::Events));
+    app.selection.zone(content(events));
     let output = if let Some(question) = question {
         let text = wrapped(&question, right.width.saturating_sub(2) as usize);
         let height = (text.len() as u16 + 2).min(right.height / 2).max(3);
@@ -537,6 +555,7 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
             ask,
         );
         app.hits.push((ask, Action::Answer));
+        app.selection.zone(content(ask));
         rest
     } else {
         right
@@ -659,6 +678,7 @@ fn draw_output(frame: &mut Frame, app: &mut App, output: Rect) {
     app.log_height = output.height.saturating_sub(2) as usize;
     app.log_rows = lines.len();
     app.log_rect = output;
+    app.selection.zone(content(output));
     let last = lines.len().saturating_sub(app.log_height);
     app.log_offset = if app.follow {
         last
@@ -775,6 +795,12 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                 Rect::new(list.x + 1, list.y + 1 + row as u16, list.width - 2, 1),
                 Action::Select(*id),
             ));
+            app.selection.zone(Rect::new(
+                list.x + 3,
+                list.y + 1 + row as u16,
+                list.width.saturating_sub(4),
+                1,
+            ));
         }
     }
     let text = app.selected_task().map_or("Nothing selected.".into(), |t| {
@@ -801,6 +827,7 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         detail,
     );
     app.hits.push((detail, Action::Inspect));
+    app.selection.zone(content(detail));
 }
 
 fn draw_information(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
@@ -881,6 +908,7 @@ fn draw_information(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect)
             .block(panel(format!(" {} ", app.view.label()))),
         area,
     );
+    app.selection.zone(content(area));
 }
 
 fn draw_search(frame: &mut Frame, app: &mut App, toolbar: Rect, actions: Rect) {
@@ -908,6 +936,7 @@ fn draw_search(frame: &mut Frame, app: &mut App, toolbar: Rect, actions: Rect) {
 
 fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     app.hits.clear();
+    app.selection.begin_frame();
     let mut dialog = app.dialog.take().expect("dialog exists");
     let position = dialog.position_field();
     let body_text = if let Some((index, excluding)) = position {
@@ -966,6 +995,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
         ),
         body,
     );
+    app.selection.zone(body);
     draw_fields(frame, app, &dialog, fields);
     let hint = if dialog.error.is_empty() && position.is_some() {
         "Alt-Up/Down: position · Ctrl-S: apply · Esc: cancel"
@@ -1041,6 +1071,8 @@ fn draw_fields(frame: &mut Frame, app: &mut App, dialog: &Dialog, area: Rect) {
             rect,
         );
         app.hits.push((rect, Action::Field(index)));
+        app.selection
+            .zone(Rect::new(rect.x, rect.y + 1, rect.width, 1));
     }
 }
 

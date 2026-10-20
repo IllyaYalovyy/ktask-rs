@@ -1,4 +1,4 @@
-use crate::support::{self, Result, Terminal};
+use crate::support::{self, Result, Terminal, copy, drag, location};
 use ktask_rs_mk3::{
     application::{Definition, Kind, ModelConfig, Service, VersionedTask, transfer},
     storage::Database,
@@ -39,6 +39,61 @@ fn target(service: &mut Service, id: i64) -> Result<VersionedTask> {
 }
 fn terminal(root: &Path) -> Result<Terminal> {
     Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, 70, 22)
+}
+
+#[test]
+fn persistent_report_and_log_support_mouse_text_copy() -> Result {
+    let scratch = support::sandbox()?;
+    let root = scratch.path();
+    failed_task(root)?;
+    let mut t = terminal(root)?;
+    let report = t.screen("real failed report", |s| {
+        s.contains("Current #1") && s.contains("Report")
+    })?;
+    println!("PERSISTENT REPORT BEFORE SELECTION\n{report}");
+    let goal = location(&report, "Goal:")?;
+    drag(&mut t, goal, (goal.0 + 11, goal.1 + 1))?;
+    let selected = t.screen("persistent goal selected", |_| {
+        t.selected_at(goal.0, goal.1)
+    })?;
+    println!("PERSISTENT GOAL SELECTED\n{selected}");
+    assert!(copy(&mut t)?.starts_with("Goal: Persist"));
+    assert!(t.output_bytes().windows(7).any(|w| w == b"\x1b]52;c;"));
+    key(&mut t, "\x1b", "Current #1")?;
+    let report_at = location(&report, "Review · failed")?;
+    drag(&mut t, report_at, (report_at.0 + 14, report_at.1))?;
+    t.screen("report selected", |_| {
+        t.selected_at(report_at.0, report_at.1)
+    })?;
+    assert!(copy(&mut t)?.starts_with("Review · failed"));
+    key(&mut t, "\x1b", "Current #1")?;
+    let log = key(&mut t, "o", "Log ·")?;
+    assert!(log.contains("Check failed: transcript evidence"));
+    println!("PERSISTENT RAW LOG\n{log}");
+    let evidence_at = location(&log, "Check failed: transcript evidence")?;
+    drag(&mut t, evidence_at, (evidence_at.0 + 19, evidence_at.1))?;
+    t.screen("raw evidence selected", |_| {
+        t.selected_at(evidence_at.0, evidence_at.1)
+    })?;
+    let log_copy = copy(&mut t)?;
+    assert!(log_copy.starts_with("Check failed: transc"), "{log_copy:?}");
+    key(&mut t, "\x1b", "Current #1")?;
+    let mut details = key(&mut t, "\r", "Task details / attempts")?;
+    for _ in 0..10 {
+        if details.contains("Check failed: transcript evidence") {
+            break;
+        }
+        details = key(&mut t, "\x1b[6~", "Task details / attempts")?;
+    }
+    assert!(details.contains("Check failed: transcript evidence"));
+    println!("PERSISTENT EVIDENCE DIALOG\n{details}");
+    let dialog_at = location(&details, "Check failed: transcript evidence")?;
+    drag(&mut t, dialog_at, (dialog_at.0 + 19, dialog_at.1))?;
+    t.screen("dialog evidence selected", |_| {
+        t.selected_at(dialog_at.0, dialog_at.1)
+    })?;
+    assert!(copy(&mut t)?.starts_with("Check failed: transc"));
+    quit(&mut t)
 }
 fn key(t: &mut Terminal, keys: &str, text: &str) -> Result<String> {
     t.send(keys)?;
@@ -616,6 +671,7 @@ fn exercise_remediation(
     use ktask_rs_mk3::application::preferences::{Continuation, PlannerApproval, Preferences};
     let scratch = support::sandbox()?;
     let root = scratch.path();
+    support::empty_repository(root)?;
     let (id, attempt) = failed_task(root)?;
     let mut service = service(root)?;
     let before = service.task(id)?.unwrap();

@@ -799,6 +799,10 @@ impl App {
                         Some(model.clone())
                     }
                     crate::runner::codex::RemediationProposal::Insert { tasks, .. } => {
+                        let timeout_ms = self.stored[&(target()?.id as usize)]
+                            .definition()
+                            .definition
+                            .timeout_ms;
                         let defaults = self
                             .service
                             .as_ref()
@@ -814,7 +818,7 @@ impl App {
                                 criteria: t.criteria.clone(),
                                 models: defaults.clone(),
                                 attempt_limit: Some(3),
-                                timeout_ms: Some(600_000),
+                                timeout_ms,
                             })
                             .collect();
                         None
@@ -825,11 +829,15 @@ impl App {
                     | crate::runner::codex::RemediationProposal::Insert { reason, .. } => reason,
                 };
                 let ready = !self.review_required;
-                self.service
-                    .as_mut()
-                    .unwrap()
-                    .apply_remediation(target()?, model, &repairs, reason, ready)
-                    .map_err(|e| e.to_string())?;
+                crate::runner::remediation::apply(
+                    self.service.as_mut().unwrap(),
+                    target()?,
+                    model,
+                    &repairs,
+                    reason,
+                    ready,
+                )
+                .map_err(|e| e.to_string())?;
             }
             DialogKind::Answer(_) => {
                 self.service

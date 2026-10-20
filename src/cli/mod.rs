@@ -335,7 +335,7 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
                                 criteria: t.criteria.clone(),
                                 models: defaults.clone(),
                                 attempt_limit: Some(3),
-                                timeout_ms: Some(600_000),
+                                timeout_ms: definition.timeout_ms,
                             })
                             .collect(),
                         reason.clone(),
@@ -344,7 +344,8 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             };
             let ready = service.preferences(&paths.config)?.planner_approval
                 == application::preferences::PlannerApproval::Automatic;
-            receipts = service.apply_remediation(
+            receipts = crate::runner::remediation::apply(
+                &mut service,
                 application::VersionedTask {
                     id: current.id,
                     version: current.version,

@@ -126,9 +126,13 @@ printf '{{"type":"thread.started","thread_id":"%s"}}\n' "$session"
 printf '%s\n' "$model" >> "$HOME/provider-invocations"
 mkdir -p "$TMPDIR/generated/deep"
 printf debris > "$TMPDIR/generated/deep/file"
+case "$prompt" in *"read-only remediation planner"*)
+ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"proposal\":{{\"action\":\"insert\",\"tasks\":[{{\"title\":\"Manual repair prerequisite\",\"goal\":\"Finish the preserved result\",\"criteria\":[\"result.txt contains verified\"]}}],\"reason\":\"Preserve the partial implementation before the repair\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
+esac
 case "$prompt" in *"You are the failure judge"*)
  printf '%s' "$prompt" > "$HOME/prompt-judge"
  case '{mode}' in
+  judge-insert) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"insert\",\"tasks\":[{{\"title\":\"Repair prerequisite\",\"goal\":\"Finish the preserved result\",\"criteria\":[\"result.txt contains verified\"]}}],\"reason\":\"Preserve the partial implementation before the repair\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
   judge-revise) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"revise\",\"title\":\"Clarified task\",\"goal\":\"Do the clarified thing.\",\"criteria\":[\"Clarified check passes\"],\"reason\":\"The goal contradicted the criteria\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
   judge-ask) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"ask\",\"question\":\"Keep or drop the legacy export?\",\"reason\":\"Both readings satisfy the criteria\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
   *) printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"repair\",\"plan\":\"Rerun the check after writing result.txt\",\"reason\":\"The check failed on a missing file\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
@@ -1714,5 +1718,254 @@ fn real_tui_current_run_mode_control_changes_saved_single_preference() -> Result
         t.finish()?;
         f.no_scratch()?;
     }
+    Ok(())
+}
+
+#[test]
+fn remediation_insert_preserves_failed_work_before_running_prerequisite() -> Result {
+    let f = Fixture::new()?;
+    f.provider("judge-insert")?;
+    f.fail_first_check()?;
+    f.add("Original with useful unfinished work")?;
+    f.ok(&["edit", "1", "--timeout-ms", "unlimited"])?;
+    f.ok(&["run", "--queue"])?;
+    let original = f.ok(&["show", "1"])?;
+    let repair = f.ok(&["show", "2"])?;
+    assert_eq!(original["lifecycle"], "succeeded");
+    assert_eq!(original["attempts"][0]["state"], "failed");
+    assert_eq!(original["attempts"][1]["state"], "interrupted");
+    assert_eq!(repair["lifecycle"], "succeeded");
+    let preservation = f.git(&["log", "--format=%H %s"])?;
+    assert!(
+        preservation.contains("preserve unfinished task #1, attempt #2"),
+        "{preservation}"
+    );
+    assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
+    assert!(f.git(&["status", "--porcelain"])?.trim().is_empty());
+    let db = f.db()?;
+    let limit: Option<i64> = db.connection().query_row(
+        "SELECT attempt_timeout_ms FROM task_revisions WHERE task_id=2",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(
+        limit, None,
+        "repair must inherit the unlimited parent deadline"
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn background_startup_returns_actual_error_in_cli_and_tui() -> Result {
+    for (mouse, cols, rows) in [(false, 70, 22), (true, 120, 30)] {
+        let f = Fixture::new()?;
+        f.add("Cannot start with unrelated work")?;
+        fs::write(f.root.join("unrelated.txt"), "keep this user work")?;
+        fs::write(
+            f.scratch.path().join("state/ktask-dev/runner-1.log"),
+            "OLD unrelated startup failure\n",
+        )?;
+        let result = f
+            .process()
+            .args(["--json", "run", "--background"])
+            .output()?;
+        assert_eq!(result.status.code(), Some(4));
+        let error = String::from_utf8(result.stderr)?;
+        assert!(error.contains("uncommitted work"), "{error}");
+        assert!(!error.contains("OLD unrelated"), "{error}");
+        assert!(!error.contains("inspect /"), "{error}");
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
+        t.screen("pending", |s| {
+            s.contains("Cannot start with unrelated work")
+        })?;
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "STARTUP ERROR mouse={mouse}\n{}",
+            t.screen("real startup reason", |s| s.contains("uncommitted work"))?
+        );
+        assert!(
+            f.ok(&["show", "1"])?["attempts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            fs::read_to_string(f.root.join("unrelated.txt"))?,
+            "keep this user work"
+        );
+        t.send("q")?;
+        t.finish()?;
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn tui_remediation_handoff_preserves_dirty_work_and_failed_attempt() -> Result {
+    use ktask_rs_mk3::application::{Service, preferences::Continuation};
+    for (mouse, cols, rows) in [(false, 70, 22), (true, 120, 30)] {
+        let f = Fixture::new()?;
+        f.add("Failed original with partial result")?;
+        f.ok(&[
+            "edit",
+            "1",
+            "--attempt-limit",
+            "1",
+            "--timeout-ms",
+            "unlimited",
+        ])?;
+        f.ok(&["check-set", "build", "--command", "false"])?;
+        let failed = f.process().args(["run"]).output()?;
+        assert_eq!(failed.status.code(), Some(4));
+        assert!(
+            String::from_utf8(failed.stderr)?.contains("automatic repair budget exhausted (1/1)")
+        );
+        let before = f.ok(&["show", "1"])?;
+        assert!(!f.git(&["status", "--porcelain"])?.trim().is_empty());
+        let service = Service::open(f.db()?, &f.root, None)?;
+        let config = f.scratch.path().join("config/ktask-dev");
+        let old = service.preferences(&config)?;
+        let mut single = old.clone();
+        single.continuation = Continuation::Single;
+        service.save_preferences(&config, &old, &single)?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
+        t.screen("failed original", |s| s.contains("Current #1 · FAILED"))?;
+        if mouse {
+            t.click("d Remediate")?;
+        } else {
+            t.send("d")?;
+        }
+        println!(
+            "DIRTY HANDOFF PROPOSAL mouse={mouse}\n{}",
+            t.screen("proposal", |s| s.contains("Remediation proposal"))?
+        );
+        if mouse {
+            t.click("Apply")?;
+        } else {
+            t.send("\x13")?;
+        }
+        println!(
+            "DIRTY HANDOFF APPLIED mouse={mouse}\n{}",
+            t.screen("repair ready", |s| s.contains("Current #2 · PENDING"))?
+        );
+        assert_eq!(f.ok(&["show", "1"])?["attempts"], before["attempts"]);
+        assert_eq!(
+            f.ok(&["show", "2"])?["definition"]["timeout_ms"],
+            Value::Null
+        );
+        assert!(f.git(&["status", "--porcelain"])?.trim().is_empty());
+        assert!(
+            f.git(&["log", "-1", "--format=%s"])?
+                .contains("preserve unfinished task #1, attempt #1")
+        );
+        assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
+        f.ok(&["check-set", "build", "--command", "test -f result.txt"])?;
+        f.ok(&["edit", "1", "--attempt-limit", "3"])?;
+        if mouse {
+            t.click("r Run one")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "DIRTY HANDOFF REPAIR COMPLETE mouse={mouse}\n{}",
+            t.screen("original resumes eligibility", |s| s
+                .contains("Current #1 · FAILED")
+                && s.contains("History 1"))?
+        );
+        t.send("q")?;
+        t.finish()?;
+        f.ok(&["run", "--queue"])?;
+        assert_eq!(f.ok(&["show", "1"])?["lifecycle"], "succeeded");
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn detached_runner_survives_launching_cli_and_keeps_stderr() -> Result {
+    let f = Fixture::new()?;
+    f.add("Detached task")?;
+    let provider = f.scratch.path().join("bin/codex");
+    let script = fs::read_to_string(&provider)?.replace(
+        "case \"$model\" in execution|remediation)",
+        "sleep 0.3\nprintf 'detached diagnostic\\n' >&2\ncase \"$model\" in execution|remediation)",
+    );
+    fs::write(provider, script)?;
+    f.ok(&["run", "--queue", "--background"])?;
+    f.state("succeeded")?;
+    assert_eq!(f.ok(&["show", "1"])?["lifecycle"], "succeeded");
+    let task = f.ok(&["show", "1"])?;
+    assert!(
+        task["attempts"][0]["logs"]
+            .to_string()
+            .contains("detached diagnostic")
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn manual_handoff_rejects_stale_target_and_changed_baseline_without_committing() -> Result {
+    use ktask_rs_mk3::application::{Service, VersionedTask};
+    let f = Fixture::new()?;
+    f.add("Failed original")?;
+    f.ok(&["edit", "1", "--attempt-limit", "1"])?;
+    f.ok(&["check-set", "build", "--command", "false"])?;
+    assert!(!f.process().args(["run"]).output()?.status.success());
+    let mut service = Service::open(f.db()?, &f.root, None)?;
+    let original = service.current_task()?.unwrap();
+    let target = VersionedTask {
+        id: original.id,
+        version: original.version,
+    };
+    let mut repair = original.definition().definition.clone();
+    repair.title = "Repair".into();
+    let before = f.git(&["rev-parse", "HEAD"])?;
+    let stale = VersionedTask {
+        version: target.version - 1,
+        ..target
+    };
+    let error = ktask_rs_mk3::runner::remediation::apply(
+        &mut service,
+        stale,
+        None,
+        &[repair.clone()],
+        "Repair partial work",
+        true,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("Current task changed"));
+    assert_eq!(f.git(&["rev-parse", "HEAD"])?, before);
+    f.git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "external baseline change",
+    ])?;
+    let changed = f.git(&["rev-parse", "HEAD"])?;
+    let error = ktask_rs_mk3::runner::remediation::apply(
+        &mut service,
+        target,
+        None,
+        &[repair],
+        "Repair partial work",
+        true,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("changed HEAD"));
+    assert_eq!(f.git(&["rev-parse", "HEAD"])?, changed);
+    assert!(service.task(2)?.is_none());
+    assert_eq!(service.current_task()?.unwrap().version, original.version);
+    assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
+    f.no_scratch()?;
     Ok(())
 }

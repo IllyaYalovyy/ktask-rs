@@ -1,4 +1,5 @@
-use crate::support::{Result, Terminal};
+use crate::support::{self, Result, Terminal};
+use support::{copy, drag, location};
 
 fn ready(t: &Terminal) -> Result<String> {
     t.screen("current at startup", |s| {
@@ -16,6 +17,181 @@ fn click(t: &mut Terminal, label: &str, text: &str) -> Result<String> {
 fn quit(t: &mut Terminal) -> Result {
     t.send("\x03")?;
     t.finish()
+}
+
+#[test]
+fn text_selection_copy_and_native_fallback_in_real_terminals() -> Result {
+    for (cols, rows) in [(70, 22), (120, 30)] {
+        let mut t = Terminal::open(cols, rows)?;
+        ready(&t)?;
+        let queue = key(&mut t, "2", "Goal:")?;
+        let goal = location(&queue, "Goal:")?;
+        let end = (goal.0 + 8, goal.1 + 1);
+        drag(&mut t, goal, end)?;
+        let selected = t.screen("mouse selection highlighted", |s| s.contains("Goal:"))?;
+        assert!(t.selected_at(goal.0, goal.1), "drag did not highlight goal");
+        println!("SELECTED QUEUE {cols}x{rows}\n{selected}");
+        let text = copy(&mut t)?;
+        assert!(text.contains("Goal:"), "copied {text:?}");
+        assert!(
+            text.contains('\n'),
+            "multi-line drag copied one line: {text:?}"
+        );
+        assert!(
+            !text.contains(['│', '╭', '╮', '╰', '╯']),
+            "decoration copied: {text:?}"
+        );
+        let check = location(&selected, "Check:")?;
+        drag(&mut t, check, (check.0 + 10, check.1))?;
+        let replaced = copy(&mut t)?;
+        assert!(
+            replaced.starts_with("Check:"),
+            "new drag reused the old anchor: {replaced:?}"
+        );
+        assert!(!replaced.contains("Goal:"));
+        drag(&mut t, end, goal)?;
+        t.screen("reverse drag highlighted", |_| {
+            t.selected_at(goal.0, goal.1)
+        })?;
+        assert!(
+            copy(&mut t)?.contains("Goal:"),
+            "reverse drag lost cross-line text"
+        );
+        let row_two = location(&selected, "#2   PENDING")?;
+        drag(&mut t, goal, (row_two.0 + 2, row_two.1))?;
+        let no_action = t.screen("drag over row did not select it", |s| {
+            s.contains("#1 · FAILED · AI")
+        })?;
+        assert!(no_action.contains("Goal: Include every task"));
+        t.send(&format!(
+            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+            row_two.0 + 3,
+            row_two.1 + 1,
+            row_two.0 + 3,
+            row_two.1 + 1
+        ))?;
+        t.screen("row click still selects", |s| {
+            s.contains("#2 · PENDING · Human")
+        })?;
+        key(&mut t, "\x1b", "Queue · 120 shown")?;
+        let keyboard = key(&mut t, "\x1b[12~\x1b[1;2F", "Drag · F6 copy")?;
+        println!("KEYBOARD SELECTION {cols}x{rows}\n{keyboard}");
+        let keyboard_copy = copy(&mut t)?;
+        assert!(!keyboard_copy.is_empty());
+        println!("KEYBOARD COPIED {cols}x{rows}: {keyboard_copy:?}");
+        let history = key(&mut t, "3", "History · 120 shown")?;
+        assert!(history.contains("History · 120 shown"));
+        println!("F2 NORMAL KEY REACHES HISTORY {cols}x{rows}\n{history}");
+        key(&mut t, "2", "Queue · 120 shown")?;
+        let native = key(&mut t, "\x1b[18~", "native text selection")?;
+        assert!(
+            !t.mouse_capture(),
+            "F7 did not release terminal mouse capture"
+        );
+        println!("NATIVE FALLBACK {cols}x{rows}\n{native}");
+        key(&mut t, "\x1b[18~", "Mouse capture on")?;
+        assert!(t.mouse_capture(), "F7 did not restore mouse capture");
+        key(&mut t, "\x1b", "Queue · 120 shown")?;
+        key(&mut t, "3", "History · 120 shown")?;
+        key(&mut t, "2", "Queue · 120 shown")?;
+        quit(&mut t)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn live_log_selection_stays_put_as_output_arrives() -> Result {
+    let mut t = Terminal::open(120, 30)?;
+    ready(&t)?;
+    t.send("t")?;
+    let running = t.screen("running log", |s| {
+        s.contains("RUNNING") && s.contains("Executor:")
+    })?;
+    let start = location(&running, "Executor:")?;
+    drag(&mut t, start, (start.0 + 10, start.1 + 1))?;
+    let marked = t.screen("log selection", |_| t.selected_at(start.0, start.1))?;
+    println!("LIVE LOG SELECTED\n{marked}");
+    let after = t.screen("new output while selected", |s| {
+        s.contains("Checks: running")
+    })?;
+    assert!(
+        t.selected_at(start.0, start.1),
+        "new output removed the selection"
+    );
+    println!("LIVE LOG UPDATED\n{after}");
+    let text = copy(&mut t)?;
+    assert!(text.contains("Executor:"), "log copy: {text:?}");
+    assert!(!text.contains('│'));
+    quit(&mut t)
+}
+
+#[test]
+fn plain_log_click_keeps_following_as_output_arrives() -> Result {
+    for (cols, rows) in [(70, 22), (120, 30)] {
+        let mut t = Terminal::open(cols, rows)?;
+        ready(&t)?;
+        key(&mut t, "4e", "Step delay (ms)")?;
+        key(&mut t, "\t\x012000\x13", "Configuration applied")?;
+        key(&mut t, "1t", "RUNNING")?;
+        t.screen("log approaches capacity", |s| s.contains("step 2/6"))?;
+        let before = t.screen("following before click", |s| {
+            s.contains("step 3/6") && s.contains("Log · following")
+        })?;
+        assert!(before.contains("Checks: running"), "{before}");
+        println!("LOG BEFORE PLAIN CLICK {cols}x{rows}\n{before}");
+        t.click("Executor:")?;
+        let clicked = t.screen("plain click retains follow", |s| {
+            s.contains("Log · following") && s.contains("step 3/6")
+        })?;
+        println!("LOG AFTER PLAIN CLICK {cols}x{rows}\n{clicked}");
+        let updated = t.screen("following receives new output", |s| {
+            s.contains("step 4/6")
+                && s.contains("Log · following")
+                && s.contains("Review: checking the result")
+        })?;
+        println!("LOG FOLLOWING AFTER OUTPUT {cols}x{rows}\n{updated}");
+        quit(&mut t)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn full_following_log_freezes_on_mouse_down_before_drag() -> Result {
+    let mut t = Terminal::open(70, 22)?;
+    ready(&t)?;
+    key(&mut t, "4e", "Step delay (ms)")?;
+    key(&mut t, "\t\x012000\x13", "Configuration applied")?;
+    key(&mut t, "1t", "RUNNING")?;
+    t.screen("log approaches capacity", |s| s.contains("step 2/6"))?;
+    let full = t.screen("full following log", |s| {
+        s.contains("Checks: running") && s.contains("Log · following")
+    })?;
+    let start = location(&full, "Executor:")?;
+    println!("FULL LOG BEFORE MOUSE DOWN\n{full}");
+    t.send(&format!("\x1b[<0;{};{}M", start.0 + 1, start.1 + 1))?;
+    let frozen = t.screen("mouse down freezes log", |s| s.contains("Log · scrolled"))?;
+    assert_eq!(location(&frozen, "Executor:")?, start);
+    println!("FULL LOG FROZEN ON MOUSE DOWN\n{frozen}");
+    let updated = t.screen("new output before drag", |s| {
+        s.contains("step 4/6") && s.contains("Log · scrolled")
+    })?;
+    assert_eq!(location(&updated, "Executor:")?, start);
+    assert!(!updated.contains("Review: checking the result"));
+    println!("FULL LOG UPDATED BEFORE DRAG\n{updated}");
+    t.send(&format!(
+        "\x1b[<32;{};{}M\x1b[<0;{};{}m",
+        start.0 + 10,
+        start.1 + 1,
+        start.0 + 10,
+        start.1 + 1
+    ))?;
+    let selected = t.screen("frozen text selected", |_| t.selected_at(start.0, start.1))?;
+    println!("FULL LOG SELECTED AFTER UPDATE\n{selected}");
+    let copied = copy(&mut t)?;
+    assert!(copied.starts_with("Executor:"), "copied {copied:?}");
+    assert!(!copied.contains('│'));
+    println!("FULL LOG COPIED AFTER UPDATE: {copied:?}");
+    quit(&mut t)
 }
 fn guided(t: &mut Terminal) -> Result {
     key(t, "4e", "Configuration")?;
@@ -264,7 +440,17 @@ fn mouse_execution_logs_attempts_and_statistics() -> Result {
     );
     click(&mut t, "y Acknowledge", "Current #3 · PENDING")?;
     click(&mut t, "r Run one", "Current #3 · RUNNING")?;
-    t.screen("question", |s| s.contains("Current #3 · QUESTION"))?;
+    let open_question = t.screen("question", |s| {
+        s.contains("Current #3 · QUESTION") && s.contains("Which export format")
+    })?;
+    let question_at = location(&open_question, "Which export format")?;
+    drag(&mut t, question_at, (question_at.0 + 18, question_at.1))?;
+    let selected_question = t.screen("question selected", |_| {
+        t.selected_at(question_at.0, question_at.1)
+    })?;
+    println!("MINIMUM QUESTION SELECTED\n{selected_question}");
+    assert!(copy(&mut t)?.starts_with("Which export format"));
+    key(&mut t, "\x1b", "Current #3 · QUESTION")?;
     println!(
         "MINIMUM QUESTION\n{}",
         click(&mut t, "w Answer", "Answer AI question")?

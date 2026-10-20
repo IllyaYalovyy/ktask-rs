@@ -137,8 +137,10 @@ The normal tests use deterministic provider processes; the opt-in live test uses
 
 Use an ordinary Git baseline commit and a clean checkout for a new task. No hidden worktrees,
 automatic resets, or deletion of project files. Successful work is committed locally by ktask;
-failed/paused work stays in place for the same task. Commit/preserve it yourself before switching
-to another task. Project checks are trusted shell commands, not an additional sandbox.
+failed/paused work stays in place for the same task. Inserting remediation tasks automatically
+checkpoints that unfinished work under the workspace lease before switching tasks. The commit
+is labelled unfinished and does not change the failed attempt or claim success. Other task
+switches require a clean baseline. Project checks are trusted shell commands, not an additional sandbox.
 
 For self-hosting, explicitly install `ktask` with `make install` (`scripts/install-user.sh [--root DIR]`),
 then use that installed executable to supervise this source tree. The script installs outside build
@@ -177,6 +179,9 @@ automatically. A saved intervention stays saved if starting fails; the footer ex
 **Pause** stops/reaps workers before recording paused state; **Run/resume** retains the attempt
 and compatible session. Closing the TUI does not stop the supervisor. Failed checks/review/
 validation use the remediation model on a new attempt, bounded by the task's attempt limit.
+Inserted repairs inherit the failed task's time limit, including unlimited. Insertion does not
+reset the original coding budget; Models/limits can grant additional attempts while keeping all
+failure evidence. Startup failures show the runner's error directly in the TUI and CLI.
 An unresolved failure never advances the queue. Human work/approval/questions stop automatic work.
 
 CLI: `run` follows the saved run mode (Continue queue by default); `run --queue`

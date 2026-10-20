@@ -132,11 +132,14 @@ pub struct App {
     pub hits: Vec<(Rect, Action)>,
     pub list_rect: Rect,
     pub log_rect: Rect,
+    pub selection: crate::selection::Selection,
+    pub copy_pending: Option<String>,
     pub page_size: usize,
     pub log_offset: usize,
     pub log_rows: usize,
     pub log_height: usize,
     pub follow: bool,
+    log_follow_before_mouse_down: Option<bool>,
     /// Show the raw log instead of the attempt report when a report exists.
     pub show_log: bool,
     pub quit: bool,
@@ -211,11 +214,14 @@ impl App {
             hits: Vec::new(),
             list_rect: Rect::default(),
             log_rect: Rect::default(),
+            selection: crate::selection::Selection::default(),
+            copy_pending: None,
             page_size: 1,
             log_offset: 0,
             log_rows: 0,
             log_height: 1,
             follow: true,
+            log_follow_before_mouse_down: None,
             show_log: false,
             quit: false,
             last_tick: Instant::now(),
@@ -284,6 +290,7 @@ impl App {
     }
     pub fn switch(&mut self, view: View) {
         if self.view != view {
+            self.selection.clear();
             self.previous = self.view;
             self.view = view;
         }
@@ -292,6 +299,17 @@ impl App {
     }
     pub fn message(&mut self, text: impl Into<String>) {
         self.notice = text.into();
+    }
+    fn copy_selection(&mut self) {
+        if let Some(text) = self.selection.text() {
+            self.message(format!(
+                "Sent {} characters via OSC 52 · F7: native selection fallback",
+                text.chars().count()
+            ));
+            self.copy_pending = Some(text);
+        } else {
+            self.message("Drag text, or F2 then Shift-arrows; F6 copies · F7: native selection");
+        }
     }
     pub fn record(&mut self, text: impl Into<String>) {
         let text = text.into();
@@ -309,6 +327,32 @@ impl App {
         if !fits {
             if key.code == KeyCode::Char('q') {
                 self.quit = true;
+            }
+            return;
+        }
+        if key.code == KeyCode::F(7) {
+            self.mouse_enabled = !self.mouse_enabled;
+            self.message(if self.mouse_enabled {
+                "Mouse capture on · drag selects text"
+            } else {
+                "Mouse capture off · use the terminal's native text selection"
+            });
+            return;
+        }
+        if key.code == KeyCode::F(6) {
+            self.copy_selection();
+            return;
+        }
+        if key.code == KeyCode::Esc && self.selection.active() {
+            self.selection.clear();
+            return;
+        }
+        if self.selection.keyboard_key(key) {
+            if self.view == View::Current && self.selection.keyboard_in(self.log_rect) {
+                self.follow = false;
+            }
+            if self.selection.copy_requested() {
+                self.copy_selection();
             }
             return;
         }
@@ -503,6 +547,27 @@ impl App {
         let point = (event.column, event.row).into();
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                self.selection.mouse_down(event.column, event.row);
+                self.log_follow_before_mouse_down = (self.view == View::Current
+                    && self.log_rect.contains(point))
+                .then_some(self.follow);
+                if self.log_follow_before_mouse_down.is_some() {
+                    self.follow = false;
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                self.selection.mouse_drag(event.column, event.row);
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                let dragged = self.selection.mouse_up(event.column, event.row);
+                if let Some(previous) = self.log_follow_before_mouse_down.take()
+                    && !dragged
+                {
+                    self.follow = previous;
+                }
+                if dragged {
+                    return;
+                }
                 if let Some((_, action)) = self
                     .hits
                     .iter()
@@ -513,6 +578,7 @@ impl App {
                 }
             }
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                self.selection.clear();
                 let delta = if event.kind == MouseEventKind::ScrollUp {
                     -3
                 } else {

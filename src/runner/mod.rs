@@ -1,6 +1,7 @@
 pub(crate) mod codex;
 mod output;
 pub(crate) mod process;
+pub mod remediation;
 mod workspace;
 
 use crate::{
@@ -14,7 +15,7 @@ use crate::{
 };
 use process::{Invocation, Message, Worker};
 use std::{
-    io::{BufRead, Write},
+    io::{BufRead, Read, Seek, SeekFrom, Write},
     os::unix::process::CommandExt,
     path::PathBuf,
     process::{Command, Stdio},
@@ -228,7 +229,7 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
             Outcome::Replanned(judgment) => {
                 let message = describe(&judgment);
                 service.finish_run(&run, "interrupted", Some("interrupted"), &message, None)?;
-                apply_judgment(service, &run, paths, judgment)?;
+                apply_judgment(service, &run, paths, &workspace, judgment)?;
                 if stop.load(Ordering::Relaxed) {
                     return Ok(message);
                 }
@@ -247,8 +248,17 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
                     continue;
                 }
                 return Err(Error::Conflict(format!(
-                    "Task #{} stopped ({category}): {message}",
-                    run.task
+                    "Task #{} stopped ({category}){}: {message}",
+                    run.task,
+                    if budget.is_some_and(|n| next.attempts_used >= n) {
+                        format!(
+                            "; automatic repair budget exhausted ({}/{})",
+                            next.attempts_used,
+                            budget.unwrap()
+                        )
+                    } else {
+                        String::new()
+                    },
                 )));
             }
             Outcome::Passed(_) => unreachable!(),
@@ -657,6 +667,7 @@ fn apply_judgment(
     service: &mut Service,
     run: &Run,
     paths: &Paths,
+    workspace: &Workspace,
     judgment: codex::Judgment,
 ) -> Result<()> {
     let task = service
@@ -697,9 +708,10 @@ fn apply_judgment(
                     criteria: t.criteria.clone(),
                     models: defaults.clone(),
                     attempt_limit: Some(3),
-                    timeout_ms: Some(600_000),
+                    timeout_ms: run.definition.timeout_ms,
                 })
                 .collect();
+            remediation::preserve(service, workspace, target)?;
             service.apply_remediation(target, None, &repairs, &reason, ready)?;
         }
         codex::Judgment::Escalate { model, reason } => {
@@ -855,11 +867,14 @@ pub fn background(service: &mut Service, paths: &Paths, queue: bool) -> Result<(
         }
     }
     std::fs::create_dir_all(&paths.state)?;
-    let log = std::fs::OpenOptions::new().create(true).append(true).open(
-        paths
-            .state
-            .join(format!("runner-{}.log", service.project_id)),
-    )?;
+    let log_path = paths
+        .state
+        .join(format!("runner-{}.log", service.project_id));
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+    let log_start = log.metadata()?.len();
     let mut command = Command::new(&paths.executable);
     command
         .arg("--project")
@@ -877,23 +892,40 @@ pub fn background(service: &mut Service, paths: &Paths, queue: bool) -> Result<(
         let mut reader = std::io::BufReader::new(output);
         let mut line = String::new();
         let _ = reader.read_line(&mut line);
-        let _ = tx.send(line);
+        let ready = line.trim() == "ready";
+        if ready {
+            let _ = tx.send(Ok(()));
+        }
         let _ = std::io::copy(&mut reader, &mut std::io::sink());
         let _ = child.wait();
+        if !ready {
+            // Stderr stays attached to a file so a detached runner survives its
+            // launching CLI. Read bytes appended since startup, never old errors.
+            let error = (|| -> std::io::Result<String> {
+                let mut log = std::fs::File::open(log_path)?;
+                let end = log.metadata()?.len();
+                log.seek(SeekFrom::Start(log_start.max(end.saturating_sub(8192))))?;
+                let mut bytes = Vec::new();
+                log.take(8192).read_to_end(&mut bytes)?;
+                Ok(String::from_utf8_lossy(&bytes).into_owned())
+            })()
+            .unwrap_or_default();
+            let _ = tx.send(Err(if error.trim().is_empty() {
+                format!("Runner exited before startup: {}", line.trim())
+            } else {
+                error
+                    .trim()
+                    .strip_prefix("conflict: command conflict: ")
+                    .unwrap_or(error.trim())
+                    .to_owned()
+            }));
+        }
     });
-    let line = rx.recv_timeout(Duration::from_secs(10)).map_err(|_| {
-        Error::Conflict(
-            "Runner startup still pending; inspect runner log before starting again".into(),
-        )
-    })?;
-    require(
-        line.trim() == "ready",
-        &format!(
-            "Runner could not start; inspect {}",
-            paths
-                .state
-                .join(format!("runner-{}.log", service.project_id))
-                .display()
-        ),
-    )
+    rx.recv_timeout(Duration::from_secs(10))
+        .map_err(|_| {
+            Error::Conflict(
+                "Runner startup still pending; inspect runner log before starting again".into(),
+            )
+        })?
+        .map_err(Error::Conflict)
 }

@@ -94,6 +94,15 @@ impl Workspace {
         Ok(git(&self.root, &["status", "--porcelain"])?.is_empty())
     }
     pub fn checkpoint(&self, task: i64, attempt: i64, base: &str) -> Result<String> {
+        self.commit(base, &format!("ktask: task #{task}, attempt #{attempt}"))
+    }
+    pub fn preserve(&self, task: i64, attempt: i64, base: &str) -> Result<String> {
+        self.commit(
+            base,
+            &format!("ktask: preserve unfinished task #{task}, attempt #{attempt} for remediation"),
+        )
+    }
+    fn commit(&self, base: &str, message: &str) -> Result<String> {
         if self.head()? != base {
             return Err(Error::Conflict(
                 "Agent changed HEAD; preserve work and inspect before continuing".into(),
@@ -114,7 +123,7 @@ impl Workspace {
                     "core.hooksPath=/dev/null",
                     "commit",
                     "-m",
-                    &format!("ktask: task #{task}, attempt #{attempt}"),
+                    message,
                 ],
             )?;
         }
