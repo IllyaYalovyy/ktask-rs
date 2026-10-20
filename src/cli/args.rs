@@ -18,6 +18,9 @@ pub struct Cli {
     pub actor_kind: ActorKind,
     #[arg(long, global = true)]
     pub actor: Option<String>,
+    /// Attempt capability for the restricted worker callback.
+    #[arg(long, global = true, hide = true)]
+    pub worker_token: Option<String>,
     /// Print this executable's instance-specific paths without opening storage.
     #[arg(long, conflicts_with = "demo")]
     pub paths: bool,
@@ -146,6 +149,15 @@ pub enum Command {
     Current,
     /// Add a task. --criterion is repeatable; default approval is ready.
     Add(Add),
+    /// File a follow-up draft from an active worker attempt.
+    FollowUp {
+        #[arg(long, value_parser = nonempty)]
+        title: String,
+        #[arg(long, value_parser = nonempty)]
+        goal: String,
+        #[arg(long, required = true, value_parser = nonempty)]
+        criterion: Vec<String>,
+    },
     /// Append a revision. Unspecified fields and approval state are preserved.
     Edit {
         #[command(flatten)]

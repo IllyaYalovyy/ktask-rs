@@ -47,7 +47,9 @@ CREATE TABLE tasks (
     order_key TEXT COLLATE BINARY NOT NULL CHECK (length(order_key) > 0
         AND order_key NOT GLOB '*[^0-9a-f]*' AND substr(order_key, -1) <> '0'),
     lifecycle TEXT NOT NULL CHECK (lifecycle IN ('new', 'ready', 'blocked', 'succeeded', 'succeeded_override', 'failed_skipped', 'superseded', 'cancelled', 'deleted')),
-    origin TEXT NOT NULL CHECK (origin IN ('human', 'planner', 'remediator', 'import')),
+    origin TEXT NOT NULL CHECK (origin IN ('human', 'planner', 'remediator', 'import', 'worker')),
+    origin_task_id INTEGER REFERENCES tasks(id),
+    origin_attempt_id INTEGER,
     recovery_root_id INTEGER REFERENCES tasks(id),
     automatic_replans INTEGER NOT NULL DEFAULT 0 CHECK (automatic_replans BETWEEN 0 AND 10),
     row_version INTEGER NOT NULL DEFAULT 1 CHECK (row_version > 0),
@@ -59,6 +61,9 @@ CREATE TABLE tasks (
     resolved_by TEXT,
     UNIQUE (id, project_id),
     UNIQUE (project_id, order_key),
+    FOREIGN KEY (origin_attempt_id, origin_task_id) REFERENCES attempts(id, task_id),
+    CHECK ((origin = 'worker' AND origin_task_id IS NOT NULL AND origin_attempt_id IS NOT NULL)
+        OR (origin <> 'worker' AND origin_task_id IS NULL AND origin_attempt_id IS NULL)),
     CHECK ((lifecycle IN ('new', 'ready', 'blocked') AND closed_at_ms IS NULL)
         OR (lifecycle IN ('succeeded', 'succeeded_override', 'failed_skipped', 'superseded', 'cancelled', 'deleted') AND closed_at_ms IS NOT NULL)),
     CHECK (lifecycle NOT IN ('succeeded_override', 'failed_skipped') OR
@@ -317,6 +322,7 @@ CREATE TABLE artifacts (
 ) STRICT;
 
 CREATE INDEX ix_tasks_history ON tasks(project_id, closed_at_ms DESC, id DESC);
+CREATE INDEX ix_tasks_origin ON tasks(origin_task_id, order_key) WHERE origin_task_id IS NOT NULL;
 CREATE INDEX ix_revisions_ready ON task_revisions(task_id, lifecycle, revision DESC);
 CREATE INDEX ix_task_links_related ON task_links(related_task_id, project_id);
 CREATE INDEX ix_attempts_project ON attempts(project_id, id);

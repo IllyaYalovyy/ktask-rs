@@ -251,6 +251,7 @@ pub(super) fn command(service: &mut Service, command: &Command) -> Result<Reply>
                 matches!(add.approval, Approval::Ready),
             )?))
         }
+        Command::FollowUp { .. } => unreachable!("worker callback dispatch"),
         Command::Edit {
             target: input,
             pending,

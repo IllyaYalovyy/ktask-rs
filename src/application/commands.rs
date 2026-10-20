@@ -42,6 +42,80 @@ fn insert_revision(
 }
 
 impl Service {
+    /// A worker capability can only insert a draft after its active current task.
+    pub fn file_follow_up(
+        &mut self,
+        token: &str,
+        expected_task: i64,
+        expected_attempt: i64,
+        definition: &Definition,
+    ) -> Result<i64> {
+        require(!token.trim().is_empty(), "Worker token is required")?;
+        definition.validate()?;
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let source: Option<(i64, i64, String)> = tx.query_row(
+            "SELECT a.task_id, a.id, t.order_key FROM attempts a JOIN current_tasks t ON t.id=a.task_id AND t.project_id=a.project_id WHERE a.project_id=?1 AND a.execution_token=?2 AND a.state='running' AND EXISTS (SELECT 1 FROM attempt_steps s WHERE s.attempt_id=a.id AND s.role IN ('execution','remediation') AND s.state='running')",
+            params![self.project_id, token],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional()?;
+        let (origin_task, origin_attempt, mut lower) = source.ok_or_else(|| {
+            Error::Conflict(
+                "Worker callback requires an active execution attempt on current task".into(),
+            )
+        })?;
+        require(
+            origin_task == expected_task && origin_attempt == expected_attempt,
+            "Worker callback source changed",
+        )?;
+        let mut upper = None;
+        {
+            let mut following = tx.prepare("SELECT order_key,origin_task_id FROM tasks WHERE project_id=?1 AND order_key>?2 ORDER BY order_key")?;
+            for row in following.query_map(params![self.project_id, lower], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+            })? {
+                let (key, parent) = row?;
+                if parent == Some(origin_task) {
+                    lower = key;
+                } else {
+                    upper = Some(key);
+                    break;
+                }
+            }
+        }
+        let key = ordering::between(Some(&lower), upper.as_deref())?;
+        let now = now_ms();
+        tx.execute("INSERT INTO tasks(project_id,order_key,lifecycle,origin,origin_task_id,origin_attempt_id,created_at_ms,updated_at_ms) VALUES (?1,?2,'new','worker',?3,?4,?5,?5)",
+            params![self.project_id,key,origin_task,origin_attempt,now])?;
+        let id = tx.last_insert_rowid();
+        insert_revision(
+            &tx,
+            id,
+            1,
+            definition,
+            false,
+            now,
+            &Actor {
+                kind: ActorKind::Ai,
+                name: format!("worker attempt #{origin_attempt}"),
+            },
+        )?;
+        event(
+            &tx,
+            self.project_id,
+            id,
+            now,
+            "task.created",
+            &format!(
+                "#{id} follow-up draft from task #{origin_task}, attempt #{origin_attempt}: {}",
+                definition.title
+            ),
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
     /// Automatic judge handoffs share one durable budget, including inserted prerequisites.
     pub fn automatic_replans(&self, task: i64) -> Result<i64> {
         let count = self.db.connection().query_row(

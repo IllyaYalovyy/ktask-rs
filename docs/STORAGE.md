@@ -33,6 +33,11 @@ current can make remediation current. New/unapproved current is never silently s
 Planner/remediator work uses ordinary tasks, not proposal tables. Approval is a human or AI
 decision on the revision. An override/skip/supersede resolves the task without rewriting its
 attempts. Escalation creates a new revision with new role settings.
+An active execution worker may use the supervisor's absolute executable and its attempt token
+to file a follow-up draft immediately after current. The CLI sends the request through a
+guardian-owned endpoint in the worker's TMPDIR; only the guardian opens SQLite and applies this
+command. The draft records both origin IDs and AI creator attribution. The worker sandbox cannot
+write the supervisor's state root, and the endpoint accepts no other mutation.
 
 ## Waiting and limits
 
@@ -96,6 +101,8 @@ erDiagram
     projects ||--o| execution_sessions : "project_id"
     projects ||--o{ tasks : "project_id"
     tasks ||--o{ tasks : "recovery_root_id"
+    tasks ||--o{ tasks : "origin_task_id"
+    attempts ||--o{ tasks : "origin_attempt_id, origin_task_id"
     tasks ||--o{ task_revisions : "task_id"
     task_revisions ||--o{ revision_models : "task_id, revision"
     task_revisions ||--o{ acceptance_criteria : "task_id, revision"
@@ -557,7 +564,9 @@ Stable task identity, readiness, and final resolution. Execution status exists o
 | `project_id` | INTEGER | no | Owning project. |
 | `order_key` | TEXT | no | Canonical fractional string, BINARY execution order; never NULL. |
 | `lifecycle` | TEXT | no | new, ready, blocked, succeeded, succeeded_override, failed_skipped, superseded, cancelled, deleted. |
-| `origin` | TEXT | no | human, planner, remediator, import. |
+| `origin` | TEXT | no | human, planner, remediator, import, worker. |
+| `origin_task_id` | INTEGER | yes | Source task for a worker draft; required only when origin is worker. |
+| `origin_attempt_id` | INTEGER | yes | Source attempt for a worker draft; required only when origin is worker. |
 | `recovery_root_id` | INTEGER | yes | Original task whose automatic replan budget this prerequisite shares. |
 | `automatic_replans` | INTEGER | no | Number of automatic judge handoffs for the recovery root, at most ten. |
 | `row_version` | INTEGER | no | Positive optimistic concurrency version, default 1. |
@@ -570,8 +579,11 @@ Stable task identity, readiness, and final resolution. Execution status exists o
 
 - PK `(id)`.
 - FK `(project_id)` → `projects(id)`.
+- FK `(origin_attempt_id, origin_task_id)` → `attempts(id, task_id)`.
+- FK `(origin_task_id)` → `tasks(id)`.
 - FK `(recovery_root_id)` → `tasks(id)`.
 - Index `ix_tasks_history`: `INDEX ix_tasks_history ON tasks(project_id, closed_at_ms DESC, id DESC)`.
+- Index `ix_tasks_origin`: `INDEX ix_tasks_origin ON tasks(origin_task_id, order_key) WHERE origin_task_id IS NOT NULL`.
 - UQ `(project_id, order_key)`.
 - UQ `(id, project_id)`.
 

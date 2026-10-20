@@ -469,6 +469,33 @@ fn buttons(frame: &mut Frame, app: &mut App, area: Rect, controls: &[(&str, Acti
     }
 }
 
+fn current_brief(task: &crate::presentation::Task, width: u16) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::raw(shortened(
+            &format!("Goal: {}", task.definition().goal),
+            width.saturating_sub(2) as usize,
+        )),
+        Line::raw(shortened(
+            &format!("Proof: {}", task.definition().check),
+            width.saturating_sub(2) as usize,
+        )),
+    ];
+    if !task.follow_ups.is_empty() {
+        lines.push(Line::raw(shortened(
+            &format!(
+                "Follow-ups: {} · Queue for details",
+                task.follow_ups
+                    .iter()
+                    .map(|(id, _)| format!("#{id}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            width.saturating_sub(2) as usize,
+        )));
+    }
+    lines
+}
+
 fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
     let Some(task) = app.current() else {
         frame.render_widget(
@@ -505,20 +532,14 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         Constraint::Length(if left.height >= 17 { 5 } else { 3 }),
     ])
     .areas(left);
-    let [purpose, right] =
-        Layout::vertical([Constraint::Length(4), Constraint::Min(3)]).areas(right);
+    let [purpose, right] = Layout::vertical([
+        Constraint::Length(if task.follow_ups.is_empty() { 4 } else { 5 }),
+        Constraint::Min(3),
+    ])
+    .areas(right);
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::raw(shortened(
-                &format!("Goal: {}", task.definition().goal),
-                purpose.width.saturating_sub(2) as usize,
-            )),
-            Line::raw(shortened(
-                &format!("Proof: {}", task.definition().check),
-                purpose.width.saturating_sub(2) as usize,
-            )),
-        ])
-        .block(panel(" Task brief · Enter: full details ")),
+        Paragraph::new(current_brief(task, purpose.width))
+            .block(panel(" Task brief · Enter: full details ")),
         purpose,
     );
     let attempt = task.attempts.last();
@@ -988,8 +1009,18 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         }
     }
     let text = app.selected_task().map_or("Nothing selected.".into(), |t| {
+        let links = format!(
+            "{}{}",
+            t.origin.map_or(String::new(), |(task, attempt)| format!(
+                "\nFollow-up from task #{task}, attempt #{attempt}"
+            )),
+            t.follow_ups
+                .iter()
+                .map(|(id, title)| format!("\nFollow-up #{id}: {title}"))
+                .collect::<String>()
+        );
         format!(
-            "{}\n#{} · {} · {}\n\nGoal: {}\n\nCheck: {}\n\nAttempts: {} · {}",
+            "{}\n#{} · {} · {}\n\nGoal: {}\n\nCheck: {}\n\nAttempts: {} · {}{}",
             t.definition().title,
             t.id,
             t.status().label(),
@@ -1001,7 +1032,8 @@ fn draw_catalog(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                 app.stored_cost(t.id)
             } else {
                 format!("${:.2}", t.cost() as f64 / 100.0)
-            }
+            },
+            links
         )
     });
     frame.render_widget(

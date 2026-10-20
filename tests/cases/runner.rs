@@ -149,6 +149,29 @@ case "$prompt" in *"You are the failure judge"*)
  esac;;
 esac
 case '{mode}' in
+ follow-up)
+  if [ "$model" = execution ]; then
+   export XDG_STATE_HOME="$TMPDIR/no-supervisor-state"
+   callback=$(printf '%s\n' "$prompt" | sed -n 's/.*exact executable: \(.*\) --title TITLE.*/\1/p')
+   [ -n "$callback" ] || exit 12
+   eval "$callback --title 'Discovered follow-up' --goal 'Investigate discovered work' --criterion 'Review the discovery'" > "$HOME/follow-up-receipt" || exit 13
+   eval "$callback --title 'Second discovery' --goal 'Check second issue' --criterion 'Review second issue'" > "$HOME/second-follow-up-receipt" || exit 14
+   prefix=$(printf '%s' "$callback" | sed 's/ follow-up$//')
+   for forbidden in 'run --one' 'approve 1' 'ack 1' 'resolve 1 --outcome failed-skipped --reason denied' 'delete 1' 'edit 1 --title denied'; do
+    eval "$prefix $forbidden" > "$HOME/forbidden-out" 2>&1
+    printf '%s\n' "$?" >> "$HOME/forbidden-statuses"
+   done
+   no_token=$(printf '%s' "$prefix" | sed "s/ --worker-token '[^']*'//")
+   eval "$no_token run --one" > "$HOME/forbidden-out" 2>&1
+   printf '%s\n' "$?" >> "$HOME/forbidden-statuses"
+   bad=$(printf '%s' "$callback" | sed "s/--worker-token '[^']*'/--worker-token 'wrong'/")
+   eval "$bad --title 'Denied' --goal 'No access' --criterion 'No change'" > "$HOME/forbidden-out" 2>&1
+   printf '%s\n' "$?" >> "$HOME/forbidden-statuses"
+   env -u KTASK_WORKER_CALLBACK -u KTASK_CALLBACK_DIR sh -c "eval \"$no_token run --one\"" > "$HOME/forbidden-out" 2>&1
+   printf '%s\n' "$?" >> "$HOME/forbidden-statuses"
+   touch "$HOME/follow-up-created"
+   until [ -f "$HOME/release-follow-up" ]; do sleep 0.02; done
+  fi;;
  check-launch-failure)
   if [ "$model" = execution ] && [ ! -f "$HOME/check-launch-armed" ]; then
    touch "$HOME/check-launch-armed"
@@ -292,6 +315,170 @@ impl Drop for Running {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+#[test]
+fn worker_callback_files_only_linked_drafts_and_terminal_shows_both_links() -> Result {
+    let f = Fixture::new()?;
+    f.provider("follow-up")?;
+    f.add("Origin task")?;
+    f.add("Later task")?;
+    let mut runner = Running(f.process().args(["run", "--one"]).spawn()?);
+    // Release and reap the held provider even if a PTY assertion unwinds.
+    let result = std::panic::catch_unwind(|| -> Result {
+        let marker = f.scratch.path().join("follow-up-created");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            marker.exists(),
+            "deterministic provider did not create its draft"
+        );
+        let queue = f.ok(&["list"])?;
+        let rows = queue["tasks"].as_array().unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row["id"].as_i64().unwrap())
+                .collect::<Vec<_>>(),
+            [1, 3, 4, 2]
+        );
+        assert_eq!(rows[0]["status"], "running");
+        assert_eq!(rows[1]["status"], "new");
+        assert_eq!(rows[1]["origin_task_id"], 1);
+        let attempt = rows[1]["origin_attempt_id"].as_i64().unwrap();
+        assert!(attempt > 0);
+        let draft = f.ok(&["show", "3"])?;
+        assert_eq!(draft["revisions"][0]["lifecycle"], "draft");
+        assert_eq!(
+            draft["revisions"][0]["actor"],
+            format!("ai: worker attempt #{attempt}")
+        );
+        assert_eq!(f.ok(&["show", "1"])?["follow_ups"][0]["id"], 3);
+        assert_eq!(f.ok(&["show", "1"])?["follow_ups"][1]["id"], 4);
+        let statuses = fs::read_to_string(f.scratch.path().join("forbidden-statuses"))?;
+        let statuses = statuses.lines().collect::<Vec<_>>();
+        assert_eq!(&statuses[..7], &["2"; 7]);
+        assert_eq!(statuses[7], "4");
+        assert_ne!(statuses[8], "0");
+        let invalid = f
+            .process()
+            .args([
+                "--worker-token",
+                "wrong",
+                "follow-up",
+                "--title",
+                "Denied",
+                "--goal",
+                "No access",
+                "--criterion",
+                "No change",
+            ])
+            .output()?;
+        assert_eq!(invalid.status.code(), Some(4));
+        let unchanged = f.ok(&["list"])?;
+        assert_eq!(unchanged["tasks"], queue["tasks"]);
+        for (cols, rows, mouse) in [(105, 30, false), (70, 22, true)] {
+            let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, cols, rows)?;
+            println!(
+                "FOLLOW-UP RUNNING CURRENT {cols}x{rows}\n{}",
+                t.screen("running source with both follow-ups", |s| {
+                    s.contains("Current #1 · RUNNING") && s.contains("Follow-ups: #3, #4")
+                })?
+            );
+            if mouse {
+                t.click("Enter Details")?;
+            } else {
+                t.send("\r")?;
+            }
+            t.screen("running source details opened", |s| {
+                s.contains("Task details / attempts")
+            })?;
+            t.send("\x1b[F")?;
+            println!(
+                "FOLLOW-UP RUNNING SOURCE DETAIL mouse={mouse} {cols}x{rows}\n{}",
+                t.screen("running source details link both drafts", |s| {
+                    s.contains("Follow-up #3: Discovered follow-up")
+                        && s.contains("Follow-up #4: Second discovery")
+                })?
+            );
+            t.send("\x1b")?;
+            t.screen("running source details closed", |s| {
+                s.contains("Follow-ups: #3, #4") && !s.contains("Task details / attempts")
+            })?;
+            t.send("q")?;
+            t.finish()?;
+        }
+        Ok(())
+    });
+    fs::write(f.scratch.path().join("release-follow-up"), "go")?;
+    let status = runner.0.wait()?;
+    match result {
+        Ok(result) => result?,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+    assert!(status.success(), "runner exited {status}");
+    assert_eq!(f.ok(&["show", "1"])?["status"], "succeeded");
+    let stale_token: String = f.db()?.connection().query_row(
+        "SELECT execution_token FROM attempts WHERE task_id=1",
+        [],
+        |row| row.get(0),
+    )?;
+    let stale = f
+        .process()
+        .args([
+            "--worker-token",
+            &stale_token,
+            "follow-up",
+            "--title",
+            "Denied",
+            "--goal",
+            "No access",
+            "--criterion",
+            "No change",
+        ])
+        .output()?;
+    assert_eq!(stale.status.code(), Some(4));
+    assert_eq!(f.ok(&["current"])?["id"], 3);
+    let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 105, 30)?;
+    println!(
+        "FOLLOW-UP CURRENT\n{}",
+        t.screen("draft current", |s| s.contains("Current #3 · NEW"))?
+    );
+    t.send("2")?;
+    println!(
+        "FOLLOW-UP QUEUE KEYBOARD\n{}",
+        t.screen("linked queue", |s| s
+            .contains("Follow-up from task #1, attempt"))?
+    );
+    t.send("\r")?;
+    println!(
+        "FOLLOW-UP DETAIL KEYBOARD\n{}",
+        t.screen("linked detail", |s| s
+            .contains("Follow-up from task #1, attempt"))?
+    );
+    t.send("\x1b")?;
+    t.screen("detail closed", |s| {
+        s.contains("3 History") && !s.contains("Task details / attempts")
+    })?;
+    t.click("3 History")?;
+    println!(
+        "FOLLOW-UP HISTORY MOUSE\n{}",
+        t.screen("source link", |s| s
+            .contains("Follow-up #3: Discovered follow-up"))?
+    );
+    t.click("Enter Details")?;
+    t.send("\x1b[F")?;
+    println!(
+        "FOLLOW-UP SOURCE DETAIL MOUSE\n{}",
+        t.screen("source detail", |s| s
+            .contains("Follow-up #3: Discovered follow-up"))?
+    );
+    t.send("\x1b")?;
+    t.send("q")?;
+    t.kill()?;
+    f.no_scratch()?;
+    Ok(())
 }
 
 #[test]

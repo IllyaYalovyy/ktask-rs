@@ -1,6 +1,6 @@
 [package]
 name = "ktask-rs-mk3"
-version = "0.11.3"
+version = "0.11.4"
 edition = "2024"
 rust-version = "1.97"
 publish = false

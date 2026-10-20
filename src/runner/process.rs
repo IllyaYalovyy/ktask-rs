@@ -1,6 +1,7 @@
 //! A small worker guardian: stdin is a lifeline, not a terminal. Losing the supervisor
 //! stops the entire child process group before releasing its workspace/scratch leases.
 use crate::{
+    runner::callback::{Capability, Server},
     scratch::Scratch,
     storage::{Error, Result},
 };
@@ -33,6 +34,7 @@ pub struct Invocation {
     pub schema: Option<serde_json::Value>,
     pub scratch_root: PathBuf,
     pub worker_lock: PathBuf,
+    pub callback: Option<Capability>,
 }
 
 /// Use the isolated guardian so descendants cannot retain pipes or outlive cancellation.
@@ -193,15 +195,25 @@ pub fn worker() -> Result<()> {
     writeln!(&mut lease, "guardian {}", std::process::id())?;
     lease.sync_all()?;
     let scratch = Scratch::new(&spec.scratch_root)?;
+    let callback = spec
+        .callback
+        .map(|capability| Server::start(scratch.path(), capability))
+        .transpose()?;
     let mut command = Command::new(&spec.executable);
     command
         .args(&spec.args)
         .current_dir(&spec.cwd)
         .env("TMPDIR", scratch.path())
+        .env("KTASK_WORKER_CALLBACK", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
+    if let Some(callback) = &callback {
+        command.env("KTASK_CALLBACK_DIR", callback.path());
+    } else {
+        command.env_remove("KTASK_CALLBACK_DIR");
+    }
     if let Some(schema) = &spec.schema {
         let path = scratch.path().join("response-schema.json");
         std::fs::write(&path, serde_json::to_vec(schema).map_err(io::Error::other)?)?;
@@ -270,6 +282,7 @@ pub fn worker() -> Result<()> {
     stderr
         .join()
         .map_err(|_| io::Error::other("stderr reader panicked"))?;
+    drop(callback);
     scratch.close()?;
     lease.set_len(0)?;
     lease.sync_all()?;

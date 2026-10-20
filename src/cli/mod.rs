@@ -166,6 +166,26 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
         crate::launch_tui(instance, &root, cli.project_name.as_deref(), cli.demo)?;
         return Ok(());
     };
+    if let Command::FollowUp {
+        title,
+        goal,
+        criterion,
+    } = command
+    {
+        let id = crate::runner::callback::file(
+            cli.worker_token.as_deref().unwrap_or_default(),
+            title,
+            goal,
+            criterion,
+        )?;
+        return emit(
+            output::Reply {
+                data: json!({"action":"created","tasks":[{"id":id,"version":1}]}),
+                text: format!("created follow-up draft: #{id} v1\n"),
+            },
+            cli.json,
+        );
+    }
     // Preview is file validation only: no project registration or database initialization.
     if let Command::Import {
         file,
@@ -434,6 +454,27 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
 }
 
 fn validate(cli: &Cli) -> Result<()> {
+    if std::env::var_os("KTASK_WORKER_CALLBACK").is_some()
+        && !matches!(cli.command, Some(Command::FollowUp { .. }))
+    {
+        return Err(Failure::usage("Workers may only file follow-up drafts"));
+    }
+    if cli.worker_token.is_some() != matches!(cli.command, Some(Command::FollowUp { .. })) {
+        return Err(Failure::usage(
+            "Worker callbacks may only file follow-up drafts; follow-up requires --worker-token",
+        ));
+    }
+    if cli.worker_token.is_some()
+        && (cli.actor.is_some()
+            || !matches!(cli.actor_kind, args::ActorKind::Human)
+            || cli.project_name.is_some()
+            || cli.paths
+            || cli.demo)
+    {
+        return Err(Failure::usage(
+            "Worker callbacks cannot set actor or instance options",
+        ));
+    }
     if matches!(cli.command, Some(Command::Run { notify: true, .. })) && cli.json {
         return Err(Failure::usage(
             "--notify is an internal startup handshake, not JSON output",

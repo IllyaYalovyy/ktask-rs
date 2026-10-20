@@ -13,7 +13,7 @@ pub struct Event {
     pub message: String,
 }
 
-const TASK_COLUMNS: &str = "id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, resolved_by_kind || ': ' || resolved_by";
+const TASK_COLUMNS: &str = "id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, resolved_by_kind || ': ' || resolved_by, origin_task_id, origin_attempt_id";
 pub struct WaitingResume {
     pub resume_at_ms: Option<i64>,
     pub eligible: bool,
@@ -26,6 +26,9 @@ fn task_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         lifecycle: r.get(2)?,
         status: r.get(3)?,
         order_key: r.get(4)?,
+        origin_task_id: r.get(8)?,
+        origin_attempt_id: r.get(9)?,
+        follow_ups: Vec::new(),
         resolution_reason: r.get(5)?,
         attempts_used: r.get(6)?,
         resolved_by: r.get(7)?,
@@ -40,7 +43,14 @@ fn complete_task(db: &Connection, mut task: Task) -> Result<Task> {
         "Stored task has no revision; database needs repair",
     )?;
     task.attempts = attempts(db, task.id)?;
+    task.follow_ups = follow_ups(db, task.id)?;
     Ok(task)
+}
+fn follow_ups(db: &Connection, task: i64) -> Result<Vec<(i64, String)>> {
+    let mut stmt = db.prepare_cached("SELECT id, coalesce(title, (SELECT title FROM task_revisions WHERE task_id=t.id ORDER BY revision DESC LIMIT 1)) FROM task_details t WHERE origin_task_id=?1 AND lifecycle<>'deleted' ORDER BY order_key")?;
+    Ok(stmt
+        .query_map([task], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 impl Service {
@@ -270,7 +280,7 @@ impl Service {
         let mut queue = Vec::new();
         let mut history = Vec::new();
         {
-            let mut stmt = tx.prepare("SELECT id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, closed_at_ms, resolved_by_kind || ': ' || resolved_by FROM task_details WHERE project_id = ?1 AND lifecycle <> 'deleted' ORDER BY CASE WHEN closed_at_ms IS NULL THEN 0 ELSE 1 END, CASE WHEN attempt_state = 'running' THEN 0 ELSE 1 END, closed_at_ms DESC, CASE WHEN closed_at_ms IS NOT NULL THEN id END DESC, order_key")?;
+            let mut stmt = tx.prepare("SELECT id, row_version, lifecycle, status, order_key, resolution_reason, attempts_used, closed_at_ms, resolved_by_kind || ': ' || resolved_by, origin_task_id, origin_attempt_id FROM task_details WHERE project_id = ?1 AND lifecycle <> 'deleted' ORDER BY CASE WHEN closed_at_ms IS NULL THEN 0 ELSE 1 END, CASE WHEN attempt_state = 'running' THEN 0 ELSE 1 END, closed_at_ms DESC, CASE WHEN closed_at_ms IS NOT NULL THEN id END DESC, order_key")?;
             let rows = stmt.query_map([self.project_id], |r| {
                 Ok((
                     Task {
@@ -279,6 +289,9 @@ impl Service {
                         lifecycle: r.get(2)?,
                         status: r.get(3)?,
                         order_key: r.get(4)?,
+                        origin_task_id: r.get(9)?,
+                        origin_attempt_id: r.get(10)?,
+                        follow_ups: Vec::new(),
                         resolution_reason: r.get(5)?,
                         resolved_by: r.get(8)?,
                         attempts_used: r.get(6)?,
@@ -296,6 +309,7 @@ impl Service {
                     "Stored task has no revision; database needs repair",
                 )?;
                 task.attempts = attempts(&tx, task.id)?;
+                task.follow_ups = follow_ups(&tx, task.id)?;
                 if closed.is_some() {
                     history.push(task);
                 } else {

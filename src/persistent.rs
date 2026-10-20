@@ -1333,6 +1333,15 @@ fn project_task(task: &domain::Task) -> Result<model::Task, String> {
     }
     Ok(model::Task {
         id: task.id as usize,
+        origin: task
+            .origin_task_id
+            .zip(task.origin_attempt_id)
+            .map(|(task, attempt)| (task as usize, attempt as usize)),
+        follow_ups: task
+            .follow_ups
+            .iter()
+            .map(|(id, title)| (*id as usize, title.clone()))
+            .collect(),
         stored_status: Some(stored_status),
         stored_budget: Some(task.attempts_used as usize),
         revisions,

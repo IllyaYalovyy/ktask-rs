@@ -192,6 +192,8 @@ pub struct Task {
     pub stored_status: Option<Status>,
     pub stored_budget: Option<usize>,
     pub id: usize,
+    pub origin: Option<(usize, usize)>,
+    pub follow_ups: Vec<(usize, String)>,
     pub revisions: Vec<Revision>,
     pub attempts: Vec<Attempt>,
     pub resolution: Option<Status>,
@@ -207,6 +209,8 @@ impl Task {
             stored_status: None,
             stored_budget: None,
             id,
+            origin: None,
+            follow_ups: Vec::new(),
             revisions: vec![Revision {
                 number: 1,
                 state: RevisionState::Ready,

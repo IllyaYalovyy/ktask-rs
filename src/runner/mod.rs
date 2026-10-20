@@ -1,3 +1,4 @@
+pub(crate) mod callback;
 mod checks;
 pub(crate) mod codex;
 mod cycle;
@@ -624,12 +625,27 @@ fn ai_turn(
         args: codex::args(model, &step, role)?,
         cwd: ctx.workspace.root.clone(),
         prompt: nudge.map_or_else(
-            || codex::prompt(run, role, evidence),
+            || {
+                codex::prompt(
+                    run,
+                    role,
+                    evidence,
+                    &ctx.paths.executable,
+                    &ctx.workspace.root,
+                )
+            },
             |question| codex::nudge(role, question),
         ),
         schema: Some(codex::schema()),
         scratch_root: ctx.paths.cache.join("workers"),
         worker_lock: ctx.workspace.worker_lock.clone(),
+        callback: matches!(role, "execution" | "remediation").then(|| callback::Capability {
+            project: ctx.workspace.root.clone(),
+            state: ctx.paths.state.clone(),
+            task: run.task,
+            attempt: run.attempt,
+            token: run.token.clone(),
+        }),
     };
     let mut stream = codex::Stream::default();
     match execute(
@@ -808,6 +824,7 @@ fn judge_once(
         schema: Some(schema),
         scratch_root: ctx.paths.cache.join("workers"),
         worker_lock: ctx.workspace.worker_lock.clone(),
+        callback: None,
     };
     let mut stream = codex::Stream::default();
     match execute(

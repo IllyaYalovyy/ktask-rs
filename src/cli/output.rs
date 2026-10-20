@@ -59,7 +59,8 @@ pub fn summary(task: &Task) -> Value {
         r.lifecycle == "draft" && (selected.lifecycle != "ready" || r.number > selected.number)
     });
     json!({"id":task.id,"version":task.version,"lifecycle":task.lifecycle,"status":task.status,"order_key":task.order_key,
-        "title":selected.definition.title,"kind":selected.definition.kind,"selected_revision":selected.number,"pending_revision":pending.map(|r| r.number), "attempts_used":task.attempts_used})
+        "title":selected.definition.title,"kind":selected.definition.kind,"selected_revision":selected.number,"pending_revision":pending.map(|r| r.number), "attempts_used":task.attempts_used,
+        "origin_task_id":task.origin_task_id,"origin_attempt_id":task.origin_attempt_id,"follow_ups":task.follow_ups.iter().map(|(id,title)| json!({"id":id,"title":title})).collect::<Vec<_>>()})
 }
 pub fn task_value(task: &Task) -> Value {
     let mut value = summary(task);
@@ -91,6 +92,14 @@ fn task_text(task: &Task) -> String {
     );
     for c in &d.criteria {
         text.push_str(&format!("Check: {}\n", safe(c)));
+    }
+    if let (Some(task_id), Some(attempt_id)) = (task.origin_task_id, task.origin_attempt_id) {
+        text.push_str(&format!(
+            "Follow-up from task #{task_id}, attempt #{attempt_id}\n"
+        ));
+    }
+    for (id, title) in &task.follow_ups {
+        text.push_str(&format!("Follow-up #{id}: {}\n", safe(title)));
     }
     for (role, model) in ROLES.iter().zip(&d.models) {
         text.push_str(&format!(

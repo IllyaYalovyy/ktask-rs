@@ -98,6 +98,7 @@ fn run_one(
         schema: None,
         scratch_root: ctx.paths.cache.join("workers"),
         worker_lock: ctx.workspace.worker_lock.clone(),
+        callback: None,
     };
     let mut stream = codex::Stream::default();
     let cursor = service.output_cursor(run)?;

@@ -779,8 +779,19 @@ impl App {
                 a.revision.summary()
             )
         });
+        let links = format!(
+            "{}{}",
+            task.origin
+                .map_or(String::new(), |(source, attempt)| format!(
+                    "\nFollow-up from task #{source}, attempt #{attempt}"
+                )),
+            task.follow_ups
+                .iter()
+                .map(|(id, title)| format!("\nFollow-up #{id}: {title}"))
+                .collect::<String>()
+        );
         let body = format!(
-            "{body}\n\n{}\nResolution: {}{pending}{snapshot}",
+            "{body}\n\n{}\nResolution: {}{pending}{snapshot}{links}",
             task.definition().summary(),
             task.resolution_reason
         );
