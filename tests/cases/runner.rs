@@ -121,6 +121,7 @@ while [ "$#" -gt 0 ]; do
 done
 prompt=$(cat)
 printf '%s' "$prompt" > "$HOME/prompt-$model"
+case "$prompt" in *"Repair plan from the failure judge"*) printf '%s' "$prompt" > "$HOME/prompt-repair-worker";; esac
 [ -n "$session" ] || session="session-$model-$$"
 printf '{{"type":"thread.started","thread_id":"%s"}}\n' "$session"
 printf '%s\n' "$model" >> "$HOME/provider-invocations"
@@ -139,6 +140,7 @@ case "$prompt" in *"You are the failure judge"*)
  esac;;
 esac
 case '{mode}' in
+ review-once) if [ "$model" = review ] && [ ! -f "$HOME/review-failed" ]; then touch "$HOME/review-failed"; printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"outcome\":\"failed\",\"summary\":\"result.txt:1: missing edge-case handling; repair and prove the boundary.\",\"question\":null,\"criteria\":[{{\"ordinal\":1,\"passed\":false,\"evidence\":\"Boundary case fails\"}}]}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0; fi;;
  transient) if [ ! -f "$HOME/transport-retried" ]; then touch "$HOME/transport-retried"; printf '{{"type":"turn.failed","error":{{"message":"connection reset"}}}}\n'; exit 2; fi;;
  slow) sleep 3;;
  descendants) setsid sleep 30 & printf '%s' "$!" > descendant.pid; sleep 30;;
@@ -228,7 +230,7 @@ fn check_evidence_preserves_unicode_split_across_pipe_reads() -> Result {
 }
 
 #[test]
-fn reviewers_receive_durable_supervisor_evidence_not_stale_attempt_claims() -> Result {
+fn reviewers_receive_current_proof_and_authorized_repair_context() -> Result {
     let f = Fixture::new()?;
     f.ok(&[
         "check-set",
@@ -278,8 +280,10 @@ fn reviewers_receive_durable_supervisor_evidence_not_stale_attempt_claims() -> R
         assert!(prompt.contains("must not ask to"));
         assert!(!prompt.contains(writable_checks));
         assert!(!prompt.contains("Previous attempt:"));
-        assert!(!prompt.contains(failed_artifact.to_str().unwrap()));
-        assert!(!prompt.contains("Check exited 7"));
+        assert!(prompt.contains("scope only; not proof of current success"));
+        assert!(prompt.contains("Repair plan from the failure judge"));
+        assert!(prompt.contains(failed_artifact.to_str().unwrap()));
+        assert!(prompt.contains("Check exited 7"));
     }
     let execution = fs::read_to_string(f.scratch.path().join("prompt-execution"))?;
     assert!(execution.contains(writable_checks));
@@ -303,7 +307,7 @@ fn failed_check_transcript_is_retained_for_remediation() -> Result {
     let prompt = fs::read_to_string(f.scratch.path().join("prompt-remediation"))?;
     let db = f.db()?;
     let relative: String = db.connection().query_row(
-        "SELECT relative_path FROM artifacts WHERE attempt_id=2",
+        "SELECT relative_path FROM artifacts ORDER BY attempt_id DESC LIMIT 1",
         [],
         |r| r.get(0),
     )?;
@@ -389,10 +393,11 @@ fn check_failure_is_real_and_remediation_stays_with_current() -> Result {
             [],
             |r| r.get::<_, i64>(0)
         )?,
-        // Each repair attempt opens with the read-only failure judge, then the worker.
-        4
+        // Two repair attempts open with a judge and worker; the final failure
+        // also gets read-only diagnosis without another coding attempt.
+        5
     );
-    let worker_prompt = fs::read_to_string(f.scratch.path().join("prompt-remediation"))?;
+    let worker_prompt = fs::read_to_string(f.scratch.path().join("prompt-repair-worker"))?;
     assert!(
         worker_prompt.contains("Repair plan from the failure judge"),
         "{worker_prompt}"
@@ -1967,5 +1972,152 @@ fn manual_handoff_rejects_stale_target_and_changed_baseline_without_committing()
     assert_eq!(service.current_task()?.unwrap().version, original.version);
     assert_eq!(fs::read_to_string(f.root.join("result.txt"))?, "verified\n");
     f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn review_failure_is_judged_repaired_and_queue_continues_automatically() -> Result {
+    for mouse in [false, true] {
+        let f = Fixture::new()?;
+        f.provider("review-once")?;
+        f.add("Review repair")?;
+        f.add("Following task")?;
+        let mut t = Terminal::open_project(BIN, f.scratch.path(), &f.root, 100, 30)?;
+        println!(
+            "REVIEW RECOVERY START mouse={mouse}\n{}",
+            t.screen("ready", |s| s.contains("r Run queue"))?
+        );
+        if mouse {
+            t.click("r Run queue")?;
+        } else {
+            t.send("r")?;
+        }
+        println!(
+            "REVIEW RECOVERY COMPLETE mouse={mouse}\n{}",
+            t.screen("queue completed after review repair", |s| s
+                .contains("Queue complete.")
+                && s.contains("History 2"))?
+        );
+        t.send("q")?;
+        t.finish()?;
+        let first = f.ok(&["show", "1"])?;
+        assert!(
+            first["attempts"][0]["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|step| step["role"] == "review" && step["state"] == "failed")
+        );
+        assert_eq!(first["attempts"].as_array().unwrap().len(), 2);
+        assert_eq!(first["lifecycle"], "succeeded");
+        assert_eq!(f.ok(&["show", "2"])?["lifecycle"], "succeeded");
+        assert_eq!(
+            fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+            "execution\nreview\nremediation\nremediation\nreview\nvalidation\nexecution\nreview\nvalidation\n"
+        );
+        f.no_scratch()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn final_review_failure_gets_diagnosis_without_exceeding_worker_budget() -> Result {
+    let f = Fixture::new()?;
+    f.provider("review-once")?;
+    f.add("Last allowed attempt")?;
+    f.add("Must remain pending")?;
+    f.ok(&["edit", "1", "--attempt-limit", "1"])?;
+    let result = f.process().args(["run", "--queue"]).output()?;
+    assert_eq!(result.status.code(), Some(4));
+    let first = f.ok(&["show", "1"])?;
+    assert_eq!(first["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(first["attempts_used"], 1);
+    assert!(
+        first["attempts"][0]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["role"] == "review" && step["state"] == "failed")
+    );
+    assert!(
+        first["attempts"][0]["report"]
+            .as_str()
+            .unwrap()
+            .contains("Next repair plan:")
+    );
+    assert!(
+        f.ok(&["show", "2"])?["attempts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+        "execution\nreview\nremediation\n"
+    );
+    assert!(
+        fs::read_to_string(f.scratch.path().join("prompt-judge"))?
+            .contains("missing edge-case handling")
+    );
+    f.no_scratch()?;
+    Ok(())
+}
+
+#[test]
+fn executable_busy_recheck_retains_both_outcomes_without_a_second_coding_attempt() -> Result {
+    for persistent in [false, true] {
+        let f = Fixture::new()?;
+        f.add("Busy executable check")?;
+        f.ok(&["edit", "1", "--attempt-limit", "1"])?;
+        let command = if persistent {
+            "printf 'Error: Os { code: 26, kind: ExecutableFileBusy, message: Text file busy }\\n'; exit 1"
+        } else {
+            "if [ ! -f \"$HOME/check-once\" ]; then touch \"$HOME/check-once\"; printf 'Error: Os { code: 26, kind: ExecutableFileBusy, message: Text file busy }\\n'; exit 1; fi; echo 'recheck passed'"
+        };
+        f.ok(&["check-set", "build", "--command", command])?;
+        let result = f.process().args(["run"]).output()?;
+        assert_eq!(result.status.success(), !persistent);
+        let task = f.ok(&["show", "1"])?;
+        assert_eq!(task["attempts"].as_array().unwrap().len(), 1);
+        let db = f.db()?;
+        let mut query = db
+            .connection()
+            .prepare("SELECT state,exit_code FROM attempt_steps WHERE role='check' ORDER BY id")?;
+        let checks = query
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i32>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(
+            checks,
+            vec![
+                ("failed".into(), 1),
+                (
+                    if persistent { "failed" } else { "succeeded" }.into(),
+                    if persistent { 1 } else { 0 }
+                )
+            ]
+        );
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT count(*) FROM artifacts", [], |r| r.get::<_, i64>(0))?,
+            2
+        );
+        if !persistent {
+            assert_eq!(
+                fs::read_to_string(f.scratch.path().join("provider-invocations"))?,
+                "execution\nreview\nvalidation\n"
+            );
+            for role in ["review", "validation"] {
+                let prompt = fs::read_to_string(f.scratch.path().join(format!("prompt-{role}")))?;
+                assert!(
+                    prompt.contains("Earlier supervisor check failed with executable contention")
+                );
+                assert!(prompt.contains("does not prove the root cause is fixed"));
+                assert_eq!(prompt.matches("step-").count(), 2);
+            }
+        } else {
+            assert_eq!(task["attempts_used"], 1);
+        }
+        f.no_scratch()?;
+    }
     Ok(())
 }

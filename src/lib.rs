@@ -118,6 +118,14 @@ fn run(terminal: &mut ratatui::DefaultTerminal, mut app: app::App) -> io::Result
                 let fits = ui::fits(terminal.size()?);
                 match event::read()? {
                     Event::Key(key) if key.kind != KeyEventKind::Release => app.key(key, fits),
+                    Event::Mouse(mouse) if mouse.kind == event::MouseEventKind::Moved => {
+                        // Hover does not change the UI, but must not starve live
+                        // state refresh or resize handling during continuous motion.
+                        if app.tick() || terminal.size()? != drawn_size {
+                            break;
+                        }
+                        continue;
+                    }
                     Event::Mouse(mouse) => app.mouse(mouse, fits),
                     Event::Paste(text) => app.paste(&text, fits),
                     _ => {}

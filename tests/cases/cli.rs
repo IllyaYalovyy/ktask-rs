@@ -45,7 +45,12 @@ fn json_result(output: Output, exit: i32) -> Result<Value> {
     Ok(value)
 }
 fn json(root: &Path, args: &[&str], exit: i32) -> Result<Value> {
-    json_result(process(DEV, root).arg("--json").args(args).output()?, exit)
+    let output = process(DEV, root)
+        .arg("--json")
+        .args(args)
+        .output()
+        .map_err(|error| format!("launch ktask-dev with {args:?}: {error}"))?;
+    json_result(output, exit)
 }
 fn add(root: &Path, title: &str) -> Result<i64> {
     let result = json(
@@ -634,23 +639,37 @@ fn cli_concurrent_writers_cannot_overwrite_the_same_version() -> Result {
 
 #[test]
 fn cli_project_and_instance_isolation_survives_renaming_and_callbacks() -> Result {
+    fn step<T, E: std::fmt::Display>(name: &str, result: std::result::Result<T, E>) -> Result<T> {
+        result.map_err(|error| format!("{name}: {error}").into())
+    }
+
     let scratch = support::sandbox()?;
     let root = scratch.path();
-    add(root, "Dev only")?;
-    json_result(process(PROD, root).args(["--json", "list"]).output()?, 3)?;
+    step("add development task", add(root, "Dev only"))?;
+    let production = step(
+        "launch production binary",
+        process(PROD, root).args(["--json", "list"]).output(),
+    )?;
+    json_result(production, 3)?;
     let renamed = root.join("ktask");
-    std::fs::copy(DEV, &renamed)?;
+    step("copy development binary", std::fs::copy(DEV, &renamed))?;
     let paths = json_result(
-        process(renamed.to_str().unwrap(), root)
-            .args(["--paths", "--json"])
-            .output()?,
+        step(
+            "launch renamed binary",
+            process(renamed.to_str().unwrap(), root)
+                .args(["--paths", "--json"])
+                .output(),
+        )?,
         0,
     )?;
     assert_eq!(paths["data"]["instance"], "ktask-dev");
     let callback = paths["data"]["executable"].as_str().unwrap();
     assert_eq!(
         json_result(
-            process(callback, root).args(["list", "--json"]).output()?,
+            step(
+                "launch callback binary",
+                process(callback, root).args(["list", "--json"]).output()
+            )?,
             0
         )?["data"]["count"],
         1
@@ -658,9 +677,12 @@ fn cli_project_and_instance_isolation_survives_renaming_and_callbacks() -> Resul
     let other = root.join("other");
     std::fs::create_dir(&other)?;
     json_result(
-        process(DEV, root)
-            .args(["--project", other.to_str().unwrap(), "--json", "list"])
-            .output()?,
+        step(
+            "launch development binary for other project",
+            process(DEV, root)
+                .args(["--project", other.to_str().unwrap(), "--json", "list"])
+                .output(),
+        )?,
         3,
     )?;
     json(

@@ -91,7 +91,7 @@ impl Service {
                 continue;
             }
             let path = artifact_root.join(relative);
-            if let Ok(mut file) = std::fs::File::open(path) {
+            if let Ok(mut file) = std::fs::File::open(&path) {
                 let start = file
                     .metadata()?
                     .len()
@@ -100,7 +100,8 @@ impl Service {
                 let mut bytes = Vec::new();
                 file.take(TRANSCRIPT_TAIL as u64).read_to_end(&mut bytes)?;
                 transcripts.push_str(&format!(
-                    "\n\nFailed check transcript ({name}):\n{}",
+                    "\n\nSupervisor check transcript ({name}, {}):\n{}",
+                    path.display(),
                     String::from_utf8_lossy(&bytes)
                 ));
                 retain_tail(&mut transcripts, TRANSCRIPT_TAIL);

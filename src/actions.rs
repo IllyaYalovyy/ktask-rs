@@ -133,6 +133,10 @@ impl App {
     }
 
     pub fn act(&mut self, action: Action) {
+        if matches!(action, Action::Copy) {
+            self.copy_selection();
+            return;
+        }
         self.selection.clear();
         if self.search_before.is_some() {
             match action {
@@ -303,6 +307,7 @@ impl App {
                 ))
             }
             Action::Help => self.open_help(),
+            Action::Copy => unreachable!("handled before selection is cleared"),
             Action::Output => {
                 self.show_log = !self.show_log;
                 self.follow = true;
@@ -597,7 +602,7 @@ impl App {
         self.dialog = Some(Dialog::new(
             DialogKind::Help,
             "Keyboard help",
-            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nDrag body text to select; F6 copies via OSC 52.\nF2 selects a text pane; F2 again moves to the next pane.\nShift-arrows extend selection; Enter copies; Esc clears.\nF7 releases mouse capture for native terminal selection.\nCurrent: r run/resume, p pause, t retry, d remediate\nCurrent: R recover abandoned, x abandon task, z resolve failed\nCurrent: c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nCurrent: o toggles report / raw log; l all events\nQueue: a add, i insert, e edit, d delete/abandon, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C always quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
+            "1 Current  2 Queue  3 History  4 Config  5 About\nTab / Shift-Tab: next / previous screen\nClick tabs, rows, buttons, and fields; wheel scrolls.\nDrag body text to select; click Copy or press F6 for OSC 52.\nF2 selects a text pane; F2 again moves to the next pane.\nShift-arrows extend selection; Enter copies; Esc clears.\nF7 releases mouse capture for native terminal selection.\nCurrent: r run/resume, p pause, t retry, d remediate\nCurrent: R recover abandoned, x abandon task, z resolve failed\nCurrent: c models/limits; v approve; n reject\nCurrent: y acknowledge Human, w answer AI\nCurrent: o toggles report / raw log; l all events\nQueue: a add, i insert, e edit, d delete/abandon, u undo\nQueue: m move, b break down, o import, x export\nQueue: c models/limits; v approve; n reject\nQueue/History: / search, f filter, Esc clear\nj/k or arrows: move/scroll; PgUp/PgDn: page\nHome/End: first/last; End follows current output\nEnter: inspect selected task; [ / ]: inspect attempts\ns: project statistics; ?: help; q: quit\nForms: Tab/arrows focus; Space cycles choices\nForms: Ctrl-A clears field; Ctrl-S/Enter applies\nEsc cancels dialogs/search; Ctrl-C always quits\nSearch: Enter applies; Esc restores previous query\nAll tasks, models, runs, and files are simulated.",
             vec![],
         ));
     }

@@ -29,6 +29,7 @@ pub struct Selection {
     zone: Option<usize>,
     keyboard: bool,
     requested: bool,
+    frozen: Option<String>,
 }
 
 impl Selection {
@@ -58,15 +59,13 @@ impl Selection {
         self.end = None;
         self.zone = None;
         self.keyboard = false;
+        self.frozen = None;
     }
     pub fn active(&self) -> bool {
         self.anchor.is_some() || self.keyboard
     }
     pub fn mouse_down(&mut self, x: u16, y: u16) {
-        self.anchor = None;
-        self.end = None;
-        self.zone = None;
-        self.keyboard = false;
+        self.clear();
         self.down = Some(Point { x, y });
     }
     pub fn mouse_drag(&mut self, x: u16, y: u16) {
@@ -86,6 +85,7 @@ impl Selection {
         let down = self.down.take();
         if let Some(zone) = self.zone.filter(|_| self.anchor.is_some()) {
             self.end = Some(self.clamp(Point { x, y }, zone));
+            self.frozen = self.selected_text();
             return true;
         }
         self.clear();
@@ -96,6 +96,7 @@ impl Selection {
             if self.zones.is_empty() {
                 return true;
             }
+            self.frozen = None;
             let zone = if self.keyboard {
                 (self.zone.unwrap_or(0) + 1) % self.zones.len()
             } else {
@@ -158,6 +159,7 @@ impl Selection {
                 return false;
             }
         };
+        self.frozen = None;
         if key.modifiers.contains(KeyModifiers::SHIFT) {
             self.anchor.get_or_insert(p);
         } else {
@@ -211,6 +213,9 @@ impl Selection {
         }
     }
     pub fn text(&self) -> Option<String> {
+        self.frozen.clone().or_else(|| self.selected_text())
+    }
+    fn selected_text(&self) -> Option<String> {
         let (a, b) = (self.anchor?, self.end?);
         if a == b {
             return None;

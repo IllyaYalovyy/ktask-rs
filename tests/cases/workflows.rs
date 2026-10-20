@@ -1,5 +1,5 @@
 use crate::support::{self, Result, Terminal};
-use support::{copy, drag, location};
+use support::{copy, copy_key, drag, location, mouse_copy};
 
 fn ready(t: &Terminal) -> Result<String> {
     t.screen("current at startup", |s| {
@@ -31,7 +31,8 @@ fn text_selection_copy_and_native_fallback_in_real_terminals() -> Result {
         let selected = t.screen("mouse selection highlighted", |s| s.contains("Goal:"))?;
         assert!(t.selected_at(goal.0, goal.1), "drag did not highlight goal");
         println!("SELECTED QUEUE {cols}x{rows}\n{selected}");
-        let text = copy(&mut t)?;
+        assert!(selected.contains("[Copy]"));
+        let text = mouse_copy(&mut t)?;
         assert!(text.contains("Goal:"), "copied {text:?}");
         assert!(
             text.contains('\n'),
@@ -41,6 +42,25 @@ fn text_selection_copy_and_native_fallback_in_real_terminals() -> Result {
             !text.contains(['│', '╭', '╮', '╰', '╯']),
             "decoration copied: {text:?}"
         );
+        let redraws = t.redraw_count();
+        t.send("\x1b[12~\x1b[1;2F")?;
+        let keyboard_after_mouse = t.screen("keyboard selection after mouse", |_| {
+            t.redraw_count() > redraws
+        })?;
+        println!("KEYBOARD AFTER MOUSE {cols}x{rows}\n{keyboard_after_mouse}");
+        let f6_copy = copy(&mut t)?;
+        assert!(
+            f6_copy.contains("Recover a failed check") && !f6_copy.contains("Goal:"),
+            "F6 copied stale mouse text: {f6_copy:?}"
+        );
+        drag(&mut t, goal, end)?;
+        t.screen("mouse selection restored", |_| {
+            t.selected_at(goal.0, goal.1)
+        })?;
+        t.send("\x1b[12~\x1b[1;2F")?;
+        let enter_copy = copy_key(&mut t, "\r")?;
+        assert_eq!(enter_copy, f6_copy, "Enter copied stale mouse text");
+        println!("KEYBOARD AFTER MOUSE COPIED {cols}x{rows}: {enter_copy:?}");
         let check = location(&selected, "Check:")?;
         drag(&mut t, check, (check.0 + 10, check.1))?;
         let replaced = copy(&mut t)?;
@@ -236,7 +256,10 @@ fn all_screens_mouse_navigation_minimum_size_and_help() -> Result {
     println!("HELP\n{help}");
     click(&mut t, "Down", "All tasks, models")?;
     click(&mut t, "Up", "1 Current  2 Queue")?;
-    click(&mut t, "Close", "ktask RS ·")?;
+    t.click("Close")?;
+    t.screen("help closed", |s| {
+        s.contains("ktask RS ·") && !s.contains("Keyboard help")
+    })?;
     t.click("q Quit")?;
     t.finish()
 }

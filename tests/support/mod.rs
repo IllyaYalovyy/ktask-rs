@@ -104,19 +104,41 @@ pub fn copied(t: &Terminal) -> Result<String> {
 }
 
 pub fn copy(t: &mut Terminal) -> Result<String> {
+    copy_after(t, "new OSC 52 copy", |t| t.send("\x1b[17~"))
+}
+
+pub fn copy_key(t: &mut Terminal, keys: &str) -> Result<String> {
+    copy_after(t, "new OSC 52 copy from key", |t| t.send(keys))
+}
+
+pub fn mouse_copy(t: &mut Terminal) -> Result<String> {
+    copy_after(t, "new OSC 52 copy from mouse", |t| t.click("Copy"))
+}
+
+fn copy_after(
+    t: &mut Terminal,
+    description: &str,
+    trigger: impl FnOnce(&mut Terminal) -> Result,
+) -> Result<String> {
     let before = t
         .output_bytes()
         .windows(7)
         .filter(|w| *w == b"\x1b]52;c;")
         .count();
-    t.send("\x1b[17~")?;
-    t.screen("new OSC 52 copy", |_| {
-        t.output_bytes()
-            .windows(7)
-            .filter(|w| *w == b"\x1b]52;c;")
-            .count()
-            > before
-    })?;
+    trigger(t)?;
+    // OSC 52 is emitted after the frame terminator and may arrive in a later
+    // read. Wait for its complete payload, not another rendered frame.
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let bytes = t.output_bytes();
+        if bytes.windows(7).filter(|w| *w == b"\x1b]52;c;").count() > before && copied(t).is_ok() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("{description}: no complete OSC 52 payload").into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
     copied(t)
 }
 
@@ -249,6 +271,13 @@ impl Terminal {
         self.output.lock().unwrap().clone()
     }
 
+    pub fn redraw_count(&self) -> usize {
+        self.output_bytes()
+            .windows(FRAME_END.len())
+            .filter(|window| *window == FRAME_END)
+            .count()
+    }
+
     pub fn selected_at(&self, col: usize, row: usize) -> bool {
         self.parser
             .lock()
@@ -293,6 +322,10 @@ impl Terminal {
             col + 1,
             row + 1
         ))
+    }
+
+    pub fn current_screen(&self) -> String {
+        self.parser.lock().unwrap().screen().contents()
     }
 
     pub fn screen(&self, description: &str, matches: impl Fn(&str) -> bool) -> Result<String> {

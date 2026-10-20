@@ -1,3 +1,4 @@
+mod checks;
 pub(crate) mod codex;
 mod output;
 pub(crate) mod process;
@@ -235,13 +236,43 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
                 }
                 continue;
             }
-            Outcome::Failed(category, message) => {
+            Outcome::Failed(category, mut message) => {
+                let exhausted = coding_failure(category)
+                    && run
+                        .definition
+                        .attempt_limit
+                        .is_some_and(|limit| task.attempts_used + 1 >= limit);
+                if exhausted
+                    && !stop.load(Ordering::Relaxed)
+                    && service.control_cursor(&run)? <= context.cursor
+                {
+                    // Diagnose the final failure while this attempt still owns its worker.
+                    // The coding limit stops another repair, not read-only diagnosis.
+                    let diagnosis = match judge_attempt(service, &run, &mut context, run.attempt) {
+                        Ok(Outcome::Passed(plan)) => format!("Next repair plan: {plan}"),
+                        Ok(Outcome::Replanned(proposal)) => format!(
+                            "Proposed recovery: {}",
+                            serde_json::to_string(&proposal).expect("judgment JSON")
+                        ),
+                        Ok(Outcome::Question(question)) => {
+                            format!("Product decision needed: {question}")
+                        }
+                        Ok(Outcome::Failed(_, error)) => format!("Diagnosis failed: {error}"),
+                        Ok(Outcome::Paused) => "Diagnosis interrupted by pause".into(),
+                        Ok(Outcome::RateLimit) => {
+                            "Diagnosis deferred by provider rate limit".into()
+                        }
+                        Err(error) => format!("Diagnosis unavailable: {error}"),
+                    };
+                    message.push_str(&format!("\n{diagnosis}\nAutomatic repair stopped at the configured attempt limit; no additional worker was started."));
+                    service.output(&run, "system", &diagnosis)?;
+                }
                 service.finish_run(&run, "failed", Some(category), &message, None)?;
                 let next = service
                     .current_task()?
                     .ok_or_else(|| Error::Conflict("Current task disappeared".into()))?;
                 let budget = next.definition().definition.attempt_limit;
-                if matches!(category, "check" | "review" | "validation" | "agent")
+                if coding_failure(category)
                     && budget.is_none_or(|n| next.attempts_used < n)
                     && !stop.load(Ordering::Relaxed)
                 {
@@ -264,6 +295,10 @@ pub fn run(service: &mut Service, paths: &Paths, options: &Options) -> Result<St
             Outcome::Passed(_) => unreachable!(),
         }
     }
+}
+
+fn coding_failure(category: &str) -> bool {
+    matches!(category, "check" | "review" | "validation" | "agent")
 }
 
 pub fn supervisor_alive(service: &Service) -> Result<bool> {
@@ -318,7 +353,9 @@ fn pipeline(
                 .join("\n")
         })
         .unwrap_or_default();
-    let mut context = format!("{answers}\nPrevious attempt: {prior}");
+    let mut context = format!(
+        "{answers}\nPrior failure context (scope only; not proof of current success): {prior}"
+    );
     let role = if repair { "remediation" } else { "execution" };
     if repair {
         match judge(service, run, ctx)? {
@@ -331,75 +368,14 @@ fn pipeline(
     let mut evidence = match ai(service, run, ctx, role, &context)? {
         Outcome::Passed(s) => {
             format!(
-                "{answers}\nCurrent attempt executor assessment (not independent evidence):\n{s}"
+                "{context}\nCurrent attempt executor assessment (not independent evidence):\n{s}"
             )
         }
         other => return Ok(other),
     };
-    for check in checks {
-        let step = service.start_check(run, check)?;
-        let cwd = ctx.workspace.root.join(&check.directory).canonicalize()?;
-        require(
-            cwd.starts_with(&ctx.workspace.root),
-            "Check directory escapes project",
-        )?;
-        service.output(
-            run,
-            "system",
-            &format!("Check {}: {}", check.name, check.command),
-        )?;
-        let invocation = Invocation {
-            executable: PathBuf::from("/bin/sh"),
-            args: vec!["-c".into(), check.command.clone()],
-            cwd,
-            prompt: String::new(),
-            schema: None,
-            scratch_root: ctx.paths.cache.join("workers"),
-            worker_lock: ctx.workspace.worker_lock.clone(),
-        };
-        let mut stream = codex::Stream::default();
-        let output_cursor = service.output_cursor(run)?;
-        let result = execute(
-            service,
-            run,
-            &step,
-            ctx,
-            &invocation,
-            Some(check.timeout_ms),
-            false,
-            &mut stream,
-        );
-        // Keep supervisor evidence outside the worktree and disposable worker scratch.
-        let relative = format!("evidence/attempt-{}/step-{}.log", run.attempt, step.id);
-        let path = ctx.paths.state.join(&relative);
-        std::fs::create_dir_all(path.parent().expect("evidence directory"))?;
-        let mut transcript = std::fs::File::create_new(&path)?;
-        service.write_output_since(run, output_cursor, &mut transcript)?;
-        transcript.sync_all()?;
-        service.record_artifact(
-            run,
-            &check.name,
-            &relative,
-            transcript.metadata()?.len() as i64,
-        )?;
-        match result? {
-            Outcome::Passed(_) => {
-                service.finish_step(&step, true, "Check passed", Some(0))?;
-                evidence.push_str(&format!(
-                    "\nSupervisor check evidence: {}",
-                    serde_json::json!({
-                        "name": check.name, "command": check.command, "exit_code": 0,
-                        "transcript": path,
-                    })
-                ));
-            }
-            Outcome::Failed(category, message) => {
-                let message = format!("{message}; supervisor transcript: {}", path.display());
-                service.finish_step(&step, false, &message, None)?;
-                return Ok(Outcome::Failed(category, message));
-            }
-            other => return Ok(other),
-        }
+    match checks::run(service, run, ctx, checks)? {
+        Outcome::Passed(checks) => evidence.push_str(&checks),
+        other => return Ok(other),
     }
     for role in ["review", "validation"] {
         match ai(service, run, ctx, role, &evidence)? {
@@ -560,6 +536,24 @@ fn ai_turn(
 /// next worker repairs, the task is rewritten, prerequisite work is inserted, the model is
 /// escalated, or the owner must decide. Applied immediately; nothing runs twice.
 fn judge(service: &mut Service, run: &Run, ctx: &mut Context<'_>) -> Result<Outcome> {
+    let failed = service
+        .task(run.task)?
+        .and_then(|t| {
+            t.attempts
+                .iter()
+                .rev()
+                .find(|a| a.state == "failed")
+                .map(|a| a.id)
+        })
+        .ok_or_else(|| Error::Conflict("No failed attempt to judge".into()))?;
+    judge_attempt(service, run, ctx, failed)
+}
+fn judge_attempt(
+    service: &mut Service,
+    run: &Run,
+    ctx: &mut Context<'_>,
+    failed: i64,
+) -> Result<Outcome> {
     let model = run.definition.models[3].as_ref().expect("preflight models");
     let scope = std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
@@ -574,16 +568,6 @@ fn judge(service: &mut Service, run: &Run, ctx: &mut Context<'_>) -> Result<Outc
             model.provider, model.model
         ),
     )?;
-    let failed = service
-        .task(run.task)?
-        .and_then(|t| {
-            t.attempts
-                .iter()
-                .rev()
-                .find(|a| a.state == "failed")
-                .map(|a| a.id)
-        })
-        .ok_or_else(|| Error::Conflict("No failed attempt to judge".into()))?;
     let evidence = service.attempt_evidence(failed, &ctx.paths.state)?;
     let invocation = Invocation {
         executable: ctx.codex.clone(),

@@ -20,6 +20,31 @@ const WARN: Color = Color::Rgb(255, 199, 105);
 const OK: Color = Color::Rgb(126, 211, 141);
 const BAD: Color = Color::Rgb(255, 128, 128);
 
+#[derive(Default)]
+pub(crate) struct OutputCache {
+    text: String,
+    width: usize,
+    rows: Vec<String>,
+}
+impl OutputCache {
+    fn prepare(&mut self, text: String, width: usize) {
+        if self.width != width || self.text != text {
+            if self.width == width && text.starts_with(&self.text) && !self.rows.is_empty() {
+                // Only the last logical line can change when output is appended.
+                // Rewrap that line too: its final word/grapheme may be incomplete.
+                let tail = self.text.rfind('\n').map_or(0, |index| index + 1);
+                let old_tail_rows = wrapped(&self.text[tail..], width).len();
+                self.rows.truncate(self.rows.len() - old_tail_rows);
+                self.rows.extend(wrapped(&text[tail..], width));
+            } else {
+                self.rows = wrapped(&text, width);
+            }
+            self.text = text;
+            self.width = width;
+        }
+    }
+}
+
 fn status_color(status: Status) -> Color {
     match status {
         Status::Running => ACCENT,
@@ -144,13 +169,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         View::Config | View::About => draw_information(frame, app, toolbar, body),
     }
     let mut controls = controls(app);
+    controls.insert(0, ("Copy", Action::Copy));
     controls.extend([("? Help", Action::Help), ("q Quit", Action::Quit)]);
     buttons(frame, app, actions, &controls, false);
     frame.render_widget(
         Paragraph::new(vec![
             Line::raw(shortened(&app.notice, footer.width as usize)),
             Line::styled(
-                "Drag · F6 copy · F2 select · Shift arrows · Esc clear · F7 native",
+                "Drag · F6 copy / Copy · F2 select · Shift arrows · F7 native",
                 Style::new().fg(MUTED),
             ),
         ]),
@@ -674,7 +700,9 @@ fn draw_output(frame: &mut Frame, app: &mut App, output: Rect) {
             &[],
         ),
     };
-    let lines = wrapped(&text, output.width.saturating_sub(2) as usize);
+    app.output_cache
+        .prepare(text, output.width.saturating_sub(2) as usize);
+    let lines = &app.output_cache.rows;
     app.log_height = output.height.saturating_sub(2) as usize;
     app.log_rows = lines.len();
     app.log_rect = output;
@@ -688,12 +716,15 @@ fn draw_output(frame: &mut Frame, app: &mut App, output: Rect) {
     frame.render_widget(
         Paragraph::new(
             lines
-                .into_iter()
+                .iter()
                 .skip(app.log_offset)
                 .take(app.log_height)
                 .map(|line| {
                     let warning = warn_prefixes.iter().any(|p| line.starts_with(p));
-                    Line::styled(line, Style::new().fg(if warning { WARN } else { TEXT }))
+                    Line::styled(
+                        line.as_str(),
+                        Style::new().fg(if warning { WARN } else { TEXT }),
+                    )
                 })
                 .collect::<Vec<_>>(),
         )
@@ -1024,6 +1055,7 @@ fn draw_dialog(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         vec![("Apply", Action::Submit), ("Cancel", Action::Cancel)]
     };
+    controls.insert(0, ("Copy", Action::Copy));
     controls.extend([("Up", Action::Scroll(-8)), ("Down", Action::Scroll(8))]);
     if dialog.fields.len() > dialog.field_capacity {
         controls.extend([
@@ -1133,18 +1165,61 @@ pub fn wrapped(text: &str, width: usize) -> Vec<String> {
     let mut rows = Vec::new();
     for line in text.split('\n') {
         let mut current = String::new();
+        let mut current_width = 0;
         for ch in line.chars() {
-            if Line::raw(current.as_str()).width() + Span::raw(ch.to_string()).width() > width {
+            let ch_width = if ch.is_ascii() {
+                usize::from(!ch.is_ascii_control())
+            } else {
+                Span::raw(ch.to_string()).width()
+            };
+            if current_width + ch_width > width {
                 if let Some(space) = current.rfind(' ').filter(|n| *n > 0) {
                     rows.push(current[..space].into());
                     current = current[space + 1..].to_owned();
                 } else {
                     rows.push(std::mem::take(&mut current));
                 }
+                current_width = Line::raw(current.as_str()).width();
             }
             current.push(ch);
+            current_width = if ch.is_ascii() {
+                current_width + ch_width
+            } else {
+                // Non-ASCII can change the width of a preceding grapheme (ZWJ,
+                // variation selectors); ASCII appends need no full-line scan.
+                Line::raw(current.as_str()).width()
+            };
         }
         rows.push(current);
     }
     rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OutputCache;
+
+    #[test]
+    fn appended_output_reflows_partial_words_and_invalidates_on_resize_or_replacement() {
+        let mut cache = OutputCache::default();
+        for (text, width, expected) in [
+            ("alpha be", 6, vec!["alpha", "be"]),
+            ("alpha beta gamma", 6, vec!["alpha", "beta", "gamma"]),
+            ("alpha beta gamma\n", 6, vec!["alpha", "beta", "gamma", ""]),
+            (
+                "alpha beta gamma\nx",
+                6,
+                vec!["alpha", "beta", "gamma", "x"],
+            ),
+            ("alpha beta gamma\nx", 16, vec!["alpha beta gamma", "x"]),
+            ("你好", 4, vec!["你好"]),
+            ("你好世界", 4, vec!["你好", "世界"]),
+            ("new task", 8, vec!["new task"]),
+            ("", 8, vec![""]),
+            ("next", 8, vec!["next"]),
+        ] {
+            cache.prepare(text.into(), width);
+            assert_eq!(cache.rows, expected, "{text:?} at width {width}");
+        }
+    }
 }

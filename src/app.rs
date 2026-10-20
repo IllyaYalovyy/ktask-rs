@@ -47,6 +47,7 @@ pub enum Action {
     Back,
     Quit,
     Help,
+    Copy,
     Run,
     Recover,
     Pause,
@@ -133,7 +134,9 @@ pub struct App {
     pub list_rect: Rect,
     pub log_rect: Rect,
     pub selection: crate::selection::Selection,
+    pub output_cache: crate::ui::OutputCache,
     pub copy_pending: Option<String>,
+    copy_pressed: bool,
     pub page_size: usize,
     pub log_offset: usize,
     pub log_rows: usize,
@@ -215,7 +218,9 @@ impl App {
             list_rect: Rect::default(),
             log_rect: Rect::default(),
             selection: crate::selection::Selection::default(),
+            output_cache: crate::ui::OutputCache::default(),
             copy_pending: None,
+            copy_pressed: false,
             page_size: 1,
             log_offset: 0,
             log_rows: 0,
@@ -300,7 +305,7 @@ impl App {
     pub fn message(&mut self, text: impl Into<String>) {
         self.notice = text.into();
     }
-    fn copy_selection(&mut self) {
+    pub(crate) fn copy_selection(&mut self) {
         if let Some(text) = self.selection.text() {
             self.message(format!(
                 "Sent {} characters via OSC 52 · F7: native selection fallback",
@@ -547,6 +552,13 @@ impl App {
         let point = (event.column, event.row).into();
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                self.copy_pressed = self
+                    .hits
+                    .iter()
+                    .any(|(rect, action)| rect.contains(point) && matches!(action, Action::Copy));
+                if self.copy_pressed {
+                    return;
+                }
                 self.selection.mouse_down(event.column, event.row);
                 self.log_follow_before_mouse_down = (self.view == View::Current
                     && self.log_rect.contains(point))
@@ -559,6 +571,14 @@ impl App {
                 self.selection.mouse_drag(event.column, event.row);
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if std::mem::take(&mut self.copy_pressed) {
+                    if self.hits.iter().any(|(rect, action)| {
+                        rect.contains(point) && matches!(action, Action::Copy)
+                    }) {
+                        self.act(Action::Copy);
+                    }
+                    return;
+                }
                 let dragged = self.selection.mouse_up(event.column, event.row);
                 if let Some(previous) = self.log_follow_before_mouse_down.take()
                     && !dragged
@@ -602,57 +622,63 @@ impl App {
             _ => {}
         }
     }
+    fn refresh_persistent(&mut self) -> bool {
+        if let Some(expected) = self.continuation_pending {
+            match self.reload() {
+                Ok(()) if self.current().is_some_and(|task| task.id == expected) => {
+                    self.continue_queue()
+                }
+                Ok(()) => self.continuation_pending = None,
+                Err(error) => self.message(error),
+            }
+            return true;
+        }
+        match self
+            .service
+            .as_ref()
+            .expect("SQLite mode")
+            .externally_changed()
+        {
+            Ok(true) => {
+                if let Err(error) = self.reload() {
+                    self.message(error);
+                }
+            }
+            Ok(false) => {
+                if self.current().is_some_and(|t| {
+                    matches!(
+                        t.status(),
+                        Status::Running
+                            | Status::Paused
+                            | Status::Waiting
+                            | Status::Question
+                            | Status::Abandoned
+                    )
+                }) {
+                    if let Err(error) = self.reload() {
+                        self.message(error);
+                    }
+                    return true;
+                }
+                return false;
+            }
+            Err(error) => self.message(error.to_string()),
+        }
+        true
+    }
     pub fn tick(&mut self) -> bool {
         if self.poll_remediation() {
             return true;
         }
         if self.service.is_some() {
-            if self.dialog.is_none() && self.last_tick.elapsed() >= Duration::from_millis(500) {
-                self.last_tick = Instant::now();
-                if let Some(expected) = self.continuation_pending {
-                    match self.reload() {
-                        Ok(()) if self.current().is_some_and(|task| task.id == expected) => {
-                            self.continue_queue()
-                        }
-                        Ok(()) => self.continuation_pending = None,
-                        Err(error) => self.message(error),
-                    }
-                    return true;
-                }
-                match self
-                    .service
-                    .as_ref()
-                    .expect("SQLite mode")
-                    .externally_changed()
-                {
-                    Ok(true) => {
-                        if let Err(error) = self.reload() {
-                            self.message(error);
-                        }
-                    }
-                    Ok(false) => {
-                        if self.current().is_some_and(|t| {
-                            matches!(
-                                t.status(),
-                                Status::Running
-                                    | Status::Paused
-                                    | Status::Waiting
-                                    | Status::Question
-                                    | Status::Abandoned
-                            )
-                        }) {
-                            if let Err(error) = self.reload() {
-                                self.message(error);
-                            }
-                            return true;
-                        }
-                        return false;
-                    }
-                    Err(error) => self.message(error.to_string()),
-                }
-                return true;
+            if self.dialog.is_some() || self.last_tick.elapsed() < Duration::from_millis(500) {
+                return false;
             }
-            return false;
+            let changed = self.refresh_persistent();
+            // A slow snapshot must not make every queued input trigger another
+            // snapshot. Leave an input-processing interval after refresh finishes.
+            self.last_tick = Instant::now();
+            return changed;
         }
         if self.last_tick.elapsed() < Duration::from_millis(self.tick_ms) {
             return false;

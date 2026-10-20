@@ -1,0 +1,115 @@
+use super::{Context, Outcome, codex, execute, process::Invocation};
+use crate::{
+    application::{
+        Service,
+        execution::{Check, Run},
+        require,
+    },
+    storage::Result,
+};
+use std::{io::Write, path::PathBuf};
+
+pub(super) fn run(
+    service: &mut Service,
+    run: &Run,
+    ctx: &mut Context<'_>,
+    checks: &[Check],
+) -> Result<Outcome> {
+    let mut evidence = String::new();
+    for check in checks {
+        for recheck in 0..=1 {
+            let (outcome, path) = run_one(service, run, ctx, check)?;
+            match outcome {
+                Outcome::Passed(_) => {
+                    evidence.push_str(&format!(
+                        "\nSupervisor check evidence: {}",
+                        serde_json::json!({
+                            "name": check.name, "command": check.command, "exit_code": 0,
+                            "transcript": path,
+                        })
+                    ));
+                    break;
+                }
+                Outcome::Failed(category, message) => {
+                    let message = format!("{message}; supervisor transcript: {}", path.display());
+                    if category == "check" && recheck == 0 && executable_busy(&path)? {
+                        evidence.push_str(&format!("\nEarlier supervisor check failed with executable contention: {message}. One verification retry follows, without another AI worker. This does not prove the root cause is fixed."));
+                        service.output(run, "system", "Check encountered ETXTBSY (executable busy): verification retry 1/1 in the same attempt; original failure and transcript retained")?;
+                        continue;
+                    }
+                    return Ok(Outcome::Failed(category, message));
+                }
+                other => return Ok(other),
+            }
+        }
+    }
+    Ok(Outcome::Passed(evidence))
+}
+
+fn executable_busy(path: &std::path::Path) -> Result<bool> {
+    use std::io::BufRead;
+    let transcript = std::io::BufReader::new(std::fs::File::open(path)?);
+    for line in transcript.lines() {
+        let line = line?;
+        if (line.contains("code: 26") && line.contains("kind: ExecutableFileBusy"))
+            || line.contains("[Errno 26] Text file busy")
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn run_one(
+    service: &mut Service,
+    run: &Run,
+    ctx: &mut Context<'_>,
+    check: &Check,
+) -> Result<(Outcome, PathBuf)> {
+    let step = service.start_check(run, check)?;
+    let cwd = ctx.workspace.root.join(&check.directory).canonicalize()?;
+    require(
+        cwd.starts_with(&ctx.workspace.root),
+        "Check directory escapes project",
+    )?;
+    service.output(
+        run,
+        "system",
+        &format!("Check {}: {}", check.name, check.command),
+    )?;
+    let invocation = Invocation {
+        executable: PathBuf::from("/bin/sh"),
+        args: vec!["-c".into(), check.command.clone()],
+        cwd,
+        prompt: String::new(),
+        schema: None,
+        scratch_root: ctx.paths.cache.join("workers"),
+        worker_lock: ctx.workspace.worker_lock.clone(),
+    };
+    let mut stream = codex::Stream::default();
+    let cursor = service.output_cursor(run)?;
+    let result = execute(
+        service,
+        run,
+        &step,
+        ctx,
+        &invocation,
+        Some(check.timeout_ms),
+        false,
+        &mut stream,
+    );
+    let relative = format!("evidence/attempt-{}/step-{}.log", run.attempt, step.id);
+    let path = ctx.paths.state.join(&relative);
+    std::fs::create_dir_all(path.parent().expect("evidence directory"))?;
+    let mut transcript = std::fs::File::create_new(&path)?;
+    service.write_output_since(run, cursor, &mut transcript)?;
+    transcript.flush()?;
+    transcript.sync_all()?;
+    service.record_artifact(
+        run,
+        &check.name,
+        &relative,
+        transcript.metadata()?.len() as i64,
+    )?;
+    Ok((result?, path))
+}

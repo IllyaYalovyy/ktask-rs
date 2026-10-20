@@ -1,4 +1,4 @@
-use crate::support::{self, Result, Terminal, copy, drag, location};
+use crate::support::{self, Result, Terminal, copy, drag, location, mouse_copy};
 use ktask_rs_mk3::{
     application::{Definition, Kind, ModelConfig, Service, VersionedTask, transfer},
     storage::Database,
@@ -94,6 +94,109 @@ fn persistent_report_and_log_support_mouse_text_copy() -> Result {
     })?;
     assert!(copy(&mut t)?.starts_with("Check failed: transc"));
     quit(&mut t)
+}
+
+fn running_fixture(
+    root: &Path,
+    title: &str,
+) -> Result<(Service, ktask_rs_mk3::application::execution::Run)> {
+    let mut writer = service(root)?;
+    let mut task = definition(title);
+    for model in &mut task.models {
+        *model = Some(ModelConfig {
+            provider: "codex".into(),
+            model: "fixture-model".into(),
+            effort: None,
+        });
+    }
+    let id = writer.create(&[task], None, true)?[0];
+    let expected = target(&mut writer, id)?;
+    let run = writer.begin_run(expected, "test-token", "test-base")?;
+    Ok((writer, run))
+}
+
+#[test]
+fn live_sqlite_log_selection_survives_new_output_and_mouse_copy() -> Result {
+    for (cols, rows, release_over_copy) in [
+        (70, 22, false),
+        (120, 30, false),
+        (70, 22, true),
+        (120, 30, true),
+    ] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        let (mut writer, run) = running_fixture(root, "Live log selection")?;
+        for i in 0..18 {
+            writer.output(&run, "stdout", &format!("Persistent line {i:02}"))?;
+        }
+        writer.output(&run, "stdout", "ANCHOR fixed text for mouse copy")?;
+        let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, cols, rows)?;
+        let before = t.screen("SQLite log ready", |s| {
+            s.contains("SQLite · real tasks")
+                && s.contains("ANCHOR fixed text")
+                && s.contains("[Copy]")
+        })?;
+        println!(
+            "LIVE SQLITE BEFORE {cols}x{rows} release_over_copy={release_over_copy}\n{before}"
+        );
+        let anchor = location(&before, "ANCHOR fixed text")?;
+        let endpoint = if release_over_copy {
+            location(&before, "Copy]")?
+        } else {
+            (anchor.0 + 11, anchor.1)
+        };
+        let start = if release_over_copy {
+            (anchor.0 + 11, anchor.1)
+        } else {
+            anchor
+        };
+        drag(&mut t, start, endpoint)?;
+        let selected = t.screen("SQLite log selected", |_| t.selected_at(anchor.0, anchor.1))?;
+        println!(
+            "LIVE SQLITE SELECTED {cols}x{rows} release_over_copy={release_over_copy}\n{selected}"
+        );
+        assert!(
+            !t.output_bytes().windows(7).any(|w| w == b"\x1b]52;c;"),
+            "Releasing a log drag over Copy must not activate the button"
+        );
+        let expected = mouse_copy(&mut t)?;
+        assert_eq!(expected, "ANCHOR fixed", "{cols}x{rows}");
+        let redraws = t.redraw_count();
+        for i in 0..8 {
+            writer.output(&run, "stdout", &format!("NEW SQLITE OUTPUT {i:02}"))?;
+        }
+        let updated = t.screen("SQLite output arrived while selected", |s| {
+            t.redraw_count() > redraws
+                && s.contains("Log · scrolled")
+                && t.selected_at(anchor.0, anchor.1)
+        })?;
+        assert_eq!(location(&updated, "ANCHOR fixed text")?, anchor);
+        assert!(t.selected_at(anchor.0, anchor.1));
+        assert!(
+            writer.snapshot()?.queue[0].attempts[0]
+                .logs
+                .iter()
+                .any(|line| line.contains("NEW SQLITE OUTPUT 07"))
+        );
+        println!(
+            "LIVE SQLITE UPDATED {cols}x{rows} release_over_copy={release_over_copy}\n{updated}"
+        );
+        assert_eq!(
+            mouse_copy(&mut t)?,
+            expected,
+            "copy changed after log update"
+        );
+        t.click("End Follow")?;
+        let latest = t.screen("new SQLite output shown in terminal", |s| {
+            s.contains("NEW SQLITE OUTPUT 07") && s.contains("Log · following")
+        })?;
+        println!(
+            "LIVE SQLITE FOLLOWED {cols}x{rows} release_over_copy={release_over_copy}\n{latest}"
+        );
+        t.send("\x03")?;
+        t.finish()?;
+    }
+    Ok(())
 }
 fn key(t: &mut Terminal, keys: &str, text: &str) -> Result<String> {
     t.send(keys)?;
@@ -1437,5 +1540,83 @@ fn sqlite_queue_and_history_handle_240_tasks_in_execution_order() -> Result {
     key(&mut t, "1", "Current #121")?;
     quit(&mut t)?;
     assert_eq!(s.snapshot()?.queue.len(), 120);
+    Ok(())
+}
+
+#[test]
+fn large_current_log_stays_responsive_to_mouse_motion_and_screen_switches() -> Result {
+    use std::time::{Duration, Instant};
+    for (cols, rows) in [(70, 22), (120, 30)] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        let (mut writer, run) = running_fixture(root, "Large current log")?;
+        let pending: Vec<_> = (0..200)
+            .map(|i| definition(&format!("Pending {i}")))
+            .collect();
+        writer.create(&pending, None, true)?;
+        let line =
+            "Large task output: retain every line without rewrapping on every pointer move.\n";
+        writer.output(&run, "stdout", &line.repeat(28_000))?;
+        writer.output(&run, "stdout", "LAST LOG MARKER")?;
+        let mut t = Terminal::open_real(env!("CARGO_BIN_EXE_ktask-dev"), root, cols, rows)?;
+        println!(
+            "LARGE CURRENT {cols}x{rows}\n{}",
+            t.screen("large log loaded", |s| s.contains("LAST LOG MARKER"))?
+        );
+        let started = Instant::now();
+        t.send(&"\x1b[<35;50;12M".repeat(60))?;
+        t.click("2 Queue")?;
+        let queue = t.screen("queue after pointer flood", |s| {
+            s.contains("Queue · 201 shown")
+        })?;
+        let mouse_latency = started.elapsed();
+        println!("MOUSE LATENCY {cols}x{rows}: {mouse_latency:?}\n{queue}");
+        assert!(
+            mouse_latency < Duration::from_secs(2),
+            "mouse input was blocked for {mouse_latency:?}"
+        );
+        t.send("1")?;
+        t.screen("current revisited", |s| s.contains("LAST LOG MARKER"))?;
+        let started = Instant::now();
+        t.send("2")?;
+        let queue = t.screen("keyboard queue", |s| s.contains("Queue · 201 shown"))?;
+        let keyboard_latency = started.elapsed();
+        println!("KEYBOARD LATENCY {cols}x{rows}: {keyboard_latency:?}\n{queue}");
+        assert!(keyboard_latency < Duration::from_secs(2));
+        writer.output(&run, "stdout", "NEW OUTPUT INVALIDATES CACHE")?;
+        t.send("1")?;
+        println!(
+            "CURRENT CACHE UPDATED {cols}x{rows}\n{}",
+            t.screen("new output visible", |s| s
+                .contains("NEW OUTPUT INVALIDATES CACHE"))?
+        );
+        writer.output(&run, "stdout", "OUTPUT DURING CONTINUOUS HOVER")?;
+        let started = Instant::now();
+        let mut motion = 0;
+        let hovered = loop {
+            t.send(&format!("\x1b[<35;{};12M", 45 + motion % 10))?;
+            motion += 1;
+            let screen = t.current_screen();
+            if screen.contains("OUTPUT DURING CONTINUOUS HOVER") {
+                break screen;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "continuous hover starved live SQLite refresh:\n{screen}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        println!(
+            "CURRENT REFRESH DURING HOVER {cols}x{rows} after {:?}\n{hovered}",
+            started.elapsed()
+        );
+        let exit_started = Instant::now();
+        quit(&mut t)
+            .map_err(|error| format!("quit after continuous hover at {cols}x{rows}: {error}"))?;
+        println!(
+            "QUIT AFTER HOVER {cols}x{rows}: {:?}",
+            exit_started.elapsed()
+        );
+    }
     Ok(())
 }
