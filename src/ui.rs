@@ -329,6 +329,7 @@ fn current_controls(app: &App) -> Vec<(&'static str, Action)> {
         Some(s) if s.failed() => vec![
             ("t Retry", Action::Retry),
             ("d Remediate", Action::Diagnose),
+            ("w Answer", Action::Answer),
             ("x Abandon", Action::Abandon),
             ("z Resolve", Action::Resolve),
         ],
@@ -531,9 +532,8 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
         }
     }
     // An open question is the one thing that needs the owner; it gets its own panel.
-    let question = attempt
-        .filter(|a| a.state == Status::Question)
-        .and_then(|a| a.question.clone());
+    let question = attempt.and_then(|a| a.question.clone());
+    let failed_question = task.status().failed();
     let task_id = task.id;
     app.hits.push((purpose, Action::Inspect));
     app.selection.zone(content(purpose));
@@ -576,7 +576,12 @@ fn draw_current(frame: &mut Frame, app: &mut App, toolbar: Rect, area: Rect) {
                     .collect::<Vec<_>>(),
             )
             .block(
-                panel(" Question from the worker · w: answer ").border_style(Style::new().fg(WARN)),
+                panel(if failed_question {
+                    " Owner decision · w: answer "
+                } else {
+                    " Question from the worker · w: answer "
+                })
+                .border_style(Style::new().fg(WARN)),
             ),
             ask,
         );

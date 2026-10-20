@@ -582,9 +582,10 @@ fn judge_attempt(
         ),
     )?;
     let evidence = format!(
-        "{}\nRecorded answers for this attempt:\n{}",
+        "{}\nRecorded answers for this attempt:\n{}\n{}",
         service.attempt_evidence(failed, &ctx.paths.state)?,
-        service.answers(run)?
+        service.answers(run)?,
+        service.failure_decisions(run.task)?,
     );
     let invocation = Invocation {
         executable: ctx.codex.clone(),

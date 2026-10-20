@@ -42,6 +42,67 @@ fn insert_revision(
 }
 
 impl Service {
+    /// Retain an interactive failure judgment without changing the failed attempt.
+    pub fn record_failure_judgment(
+        &mut self,
+        target: VersionedTask,
+        action: &str,
+        detail: &str,
+        reason: &str,
+    ) -> Result<()> {
+        require(
+            matches!(action, "repair" | "ask"),
+            "Unknown failure judgment",
+        )?;
+        require(
+            !detail.trim().is_empty() && !reason.trim().is_empty(),
+            "Incomplete failure judgment",
+        )?;
+        let tx = self
+            .db
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (lifecycle, status) = checked(&tx, self.project_id, target)?;
+        let attempt: Option<i64> = tx.query_row(
+            "SELECT latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3",
+            params![self.project_id, target.id, target.version], |row| row.get(0),
+        ).optional()?.flatten();
+        require(
+            lifecycle == "ready" && status == "failed" && attempt.is_some(),
+            "Only failed current can be remediated",
+        )?;
+        let attempt = attempt.unwrap();
+        let now = now_ms();
+        if action == "ask" {
+            require(
+                tx.query_row(
+                    "SELECT count(*) FROM questions WHERE attempt_id=?1 AND state='open'",
+                    [attempt],
+                    |row| row.get::<_, i64>(0),
+                )? == 0,
+                "Answer the open question first",
+            )?;
+            tx.execute("INSERT INTO questions(attempt_id,prompt,state,created_at_ms) VALUES (?1,?2,'open',?3)", params![attempt, detail, now])?;
+        }
+        event(
+            &tx,
+            self.project_id,
+            target.id,
+            now,
+            &format!("remediation.{action}"),
+            &format!(
+                "Reason: {reason}\n{}: {detail}",
+                if action == "ask" {
+                    "Question"
+                } else {
+                    "Repair plan"
+                }
+            ),
+        )?;
+        bump(&tx, target, now)?;
+        tx.commit()?;
+        Ok(())
+    }
     /// Replace pending work or failed current with planner tasks in one transaction.
     pub fn apply_breakdown(
         &mut self,

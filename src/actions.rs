@@ -33,8 +33,27 @@ impl App {
                             }
                     })
             }
-            Action::Retry | Action::Diagnose => {
-                self.view == View::Current && current.is_some_and(|t| t.status().failed())
+            Action::Retry => {
+                self.view == View::Current
+                    && current.is_some_and(|t| t.status().failed())
+                    && self.service.as_ref().is_none_or(|service| {
+                        current.is_some_and(|t| {
+                            service
+                                .open_question(t.id as i64)
+                                .is_ok_and(|question| question.is_none())
+                        })
+                    })
+            }
+            Action::Diagnose => {
+                self.view == View::Current
+                    && current.is_some_and(|t| t.status().failed())
+                    && self.service.as_ref().is_none_or(|service| {
+                        current.is_some_and(|t| {
+                            service
+                                .open_question(t.id as i64)
+                                .is_ok_and(|question| question.is_none())
+                        })
+                    })
             }
             Action::Approve | Action::Reject => {
                 self.view != View::History
@@ -63,7 +82,8 @@ impl App {
             Action::Answer => {
                 self.view == View::Current
                     && current.is_some_and(|t| {
-                        t.status() == Status::Question
+                        (t.status() == Status::Question
+                            || (self.service.is_some() && t.status().failed()))
                             && self.service.as_ref().is_none_or(|service| {
                                 service
                                     .open_question(t.id as i64)

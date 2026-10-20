@@ -18,7 +18,7 @@ pub(crate) struct ProposalJob {
     handle: Option<std::thread::JoinHandle<Result<ProposalResult, String>>>,
 }
 pub(crate) enum ProposalResult {
-    Remediation(crate::runner::codex::RemediationProposal),
+    Remediation(crate::runner::codex::Judgment),
     Breakdown(crate::runner::codex::BreakdownProposal),
 }
 impl Drop for ProposalJob {
@@ -420,8 +420,7 @@ impl App {
                 crate::runner::codex::propose_remediation(
                     &stop,
                     &model,
-                    &definition.title,
-                    &definition.goal,
+                    &definition,
                     &evidence,
                     &paths.cache.join("workers"),
                     &cwd,
@@ -432,7 +431,7 @@ impl App {
         });
         self.dialog = Some(Dialog::new(
             DialogKind::RemediationPending,
-            "Requesting remediation proposal",
+            "Requesting failure judgment",
             "Reading failure evidence with the remediation model.\nCancel stops the request and changes nothing. Timeout: 120 seconds.",
             vec![],
         ));
@@ -516,8 +515,8 @@ impl App {
             .unwrap_or_else(|_| Err("Remediation worker panicked".into()));
         self.dialog = None;
         match result {
-            Ok(ProposalResult::Remediation(proposal)) => {
-                self.show_remediation(job.target, proposal)
+            Ok(ProposalResult::Remediation(judgment)) => {
+                self.show_remediation(job.target, judgment)
             }
             Ok(ProposalResult::Breakdown(proposal)) => self.show_breakdown(job.target, proposal),
             Err(error) => self.message(error),
@@ -559,12 +558,30 @@ impl App {
     fn show_remediation(
         &mut self,
         target: VersionedTask,
-        proposal: crate::runner::codex::RemediationProposal,
+        judgment: crate::runner::codex::Judgment,
     ) {
         let id = target.id as usize;
-        let (title, body) = match &proposal {
-            crate::runner::codex::RemediationProposal::Escalate { model, reason } => (
-                "Remediation proposal · escalate model".to_owned(),
+        let (title, body) = match &judgment {
+            crate::runner::codex::Judgment::Repair { plan, reason } => (
+                "Failure judgment · repair plan".to_owned(),
+                format!(
+                    "Plan: {plan}\nReason: {reason}\n\nApply records this plan for the next failure judge. Cancel changes nothing."
+                ),
+            ),
+            crate::runner::codex::Judgment::Revise {
+                title,
+                goal,
+                criteria,
+                reason,
+            } => (
+                "Failure judgment · revise task".to_owned(),
+                format!(
+                    "Title: {title}\nGoal: {goal}\nCriteria: {}\nReason: {reason}\n\nApply creates an AI judge revision. Cancel changes nothing.",
+                    criteria.join("; ")
+                ),
+            ),
+            crate::runner::codex::Judgment::Escalate { model, reason } => (
+                "Failure judgment · escalate model".to_owned(),
                 format!(
                     "Execution model: {}/{} · {}\nReason: {reason}\n\nApply creates an approved revision; failed attempts remain unchanged. Cancel changes nothing.",
                     model.provider,
@@ -572,8 +589,8 @@ impl App {
                     model.effort.as_deref().unwrap_or("no effort")
                 ),
             ),
-            crate::runner::codex::RemediationProposal::Insert { tasks, reason } => (
-                "Remediation proposal · insert repair tasks".to_owned(),
+            crate::runner::codex::Judgment::Insert { tasks, reason } => (
+                "Failure judgment · insert prerequisites".to_owned(),
                 format!(
                     "{} repair task(s) before current:\n{}\nReason: {reason}\n\nApproval follows planner preference. Cancel changes nothing.",
                     tasks.len(),
@@ -589,10 +606,16 @@ impl App {
                         .join("\n")
                 ),
             ),
+            crate::runner::codex::Judgment::Ask { question, reason } => (
+                "Failure judgment · ask owner".to_owned(),
+                format!(
+                    "Question: {question}\nReason: {reason}\n\nApply saves an answerable question on failed current. Cancel changes nothing."
+                ),
+            ),
         };
         let expected = Some(target);
         self.dialog = Some(Dialog::new(
-            crate::dialog::DialogKind::RemediationReview { id, proposal },
+            crate::dialog::DialogKind::RemediationReview { id, judgment },
             &title,
             &body,
             vec![],
@@ -761,10 +784,19 @@ impl App {
             } else {
                 "Saved to SQLite"
             });
-            if matches!(
-                dialog.kind,
-                DialogKind::Answer(_) | DialogKind::RemediationReview { .. }
-            ) {
+            let continue_after_remediation = match &dialog.kind {
+                DialogKind::RemediationReview {
+                    judgment: crate::runner::codex::Judgment::Ask { .. },
+                    ..
+                } => false,
+                DialogKind::RemediationReview {
+                    judgment: crate::runner::codex::Judgment::Revise { .. },
+                    ..
+                } => !self.review_required,
+                DialogKind::RemediationReview { .. } => true,
+                _ => false,
+            };
+            if matches!(dialog.kind, DialogKind::Answer(_)) || continue_after_remediation {
                 self.continue_queue();
             }
         }
@@ -792,49 +824,12 @@ impl App {
             }
             DialogKind::RemediationPending | DialogKind::BreakdownPending => return Ok(false),
             DialogKind::BreakdownReview { .. } => unreachable!("handled before generic forms"),
-            DialogKind::RemediationReview { id: _, proposal } => {
-                let mut repairs = Vec::new();
-                let model = match proposal {
-                    crate::runner::codex::RemediationProposal::Escalate { model, .. } => {
-                        Some(model.clone())
-                    }
-                    crate::runner::codex::RemediationProposal::Insert { tasks, .. } => {
-                        let timeout_ms = self.stored[&(target()?.id as usize)]
-                            .definition()
-                            .definition
-                            .timeout_ms;
-                        let defaults = self
-                            .service
-                            .as_ref()
-                            .unwrap()
-                            .defaults()
-                            .map_err(|e| e.to_string())?;
-                        repairs = tasks
-                            .iter()
-                            .map(|t| Definition {
-                                title: t.title.clone(),
-                                goal: t.goal.clone(),
-                                kind: domain::Kind::Ai,
-                                criteria: t.criteria.clone(),
-                                models: defaults.clone(),
-                                attempt_limit: Some(3),
-                                timeout_ms,
-                            })
-                            .collect();
-                        None
-                    }
-                };
-                let reason = match proposal {
-                    crate::runner::codex::RemediationProposal::Escalate { reason, .. }
-                    | crate::runner::codex::RemediationProposal::Insert { reason, .. } => reason,
-                };
+            DialogKind::RemediationReview { id: _, judgment } => {
                 let ready = !self.review_required;
-                crate::runner::remediation::apply(
+                crate::runner::remediation::apply_judgment(
                     self.service.as_mut().unwrap(),
                     target()?,
-                    model,
-                    &repairs,
-                    reason,
+                    judgment,
                     ready,
                 )
                 .map_err(|e| e.to_string())?;

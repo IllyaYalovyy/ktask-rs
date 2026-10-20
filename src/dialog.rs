@@ -17,7 +17,7 @@ pub enum DialogKind {
     },
     RemediationReview {
         id: usize,
-        proposal: crate::runner::codex::RemediationProposal,
+        judgment: crate::runner::codex::Judgment,
     },
     Models(usize),
     Resolve(usize),

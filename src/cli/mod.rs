@@ -307,56 +307,29 @@ fn run(instance: Instance, cli: &Cli) -> Result<()> {
             message: "Configure a remediation model first".into(),
         })?;
         let evidence = service.remediation_evidence(*id, &paths.state)?;
-        let proposal = crate::runner::codex::propose_remediation(
+        let judgment = crate::runner::codex::propose_remediation(
             crate::runner::process::stopped()?.as_ref(),
             model,
-            &definition.title,
-            &definition.goal,
+            &definition,
             &evidence,
             &paths.cache.join("workers"),
             &root,
         )?;
         let mut receipts = Vec::new();
         if *apply {
-            let (model, repairs, reason) = match &proposal {
-                crate::runner::codex::RemediationProposal::Escalate { model, reason } => {
-                    (Some(model.clone()), Vec::new(), reason.clone())
-                }
-                crate::runner::codex::RemediationProposal::Insert { tasks, reason } => {
-                    let defaults = service.defaults()?;
-                    (
-                        None,
-                        tasks
-                            .iter()
-                            .map(|t| application::Definition {
-                                title: t.title.clone(),
-                                goal: t.goal.clone(),
-                                kind: application::Kind::Ai,
-                                criteria: t.criteria.clone(),
-                                models: defaults.clone(),
-                                attempt_limit: Some(3),
-                                timeout_ms: definition.timeout_ms,
-                            })
-                            .collect(),
-                        reason.clone(),
-                    )
-                }
-            };
             let ready = service.preferences(&paths.config)?.planner_approval
                 == application::preferences::PlannerApproval::Automatic;
-            receipts = crate::runner::remediation::apply(
+            receipts = crate::runner::remediation::apply_judgment(
                 &mut service,
                 application::VersionedTask {
                     id: current.id,
                     version: current.version,
                 },
-                model,
-                &repairs,
-                &reason,
+                &judgment,
                 ready,
             )?;
         }
-        let data = json!({"proposal":proposal,"applied":apply,"receipts":receipts});
+        let data = json!({"judgment":judgment,"applied":apply,"receipts":receipts});
         return emit(
             output::Reply {
                 text: format!("{}\n", serde_json::to_string(&data).unwrap()),

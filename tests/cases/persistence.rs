@@ -282,7 +282,7 @@ fn provider_fixture(root: &Path, proposal: serde_json::Value, fail: bool) -> Res
         "not-json\n".to_owned()
     } else {
         let message = if proposal.get("action").is_some() {
-            serde_json::json!({"proposal": proposal}).to_string()
+            serde_json::json!({"judgment": proposal}).to_string()
         } else {
             proposal.to_string()
         };
@@ -718,28 +718,39 @@ fn breakdown_pending_queue_row_keeps_failed_current_in_place() -> Result {
 }
 
 #[test]
-fn failed_current_remediation_proposals_use_real_pty_apply_cancel_and_provider_errors() -> Result {
+fn failed_current_judgments_use_real_pty_apply_cancel_and_provider_errors() -> Result {
     use ktask_rs_mk3::application::preferences::PlannerApproval;
     for mouse in [false, true] {
         for approval in [PlannerApproval::Automatic, PlannerApproval::ReviewRequired] {
             for (name, proposal, expected) in [
                 (
+                    "repair",
+                    serde_json::json!({"action":"repair","plan":"Fix the check boundary and verify it.","reason":"The task remains correct."}),
+                    "Failure judgment · repair plan",
+                ),
+                (
+                    "revise",
+                    serde_json::json!({"action":"revise","title":"Revised failed task","goal":"Prove the corrected behavior","criteria":["Correct behavior is verified"],"reason":"The original goal missed the boundary."}),
+                    "Failure judgment · revise task",
+                ),
+                (
                     "escalate",
                     serde_json::json!({"action":"escalate","model":{"provider":"codex","model":"fixture-strong","effort":"max"},"reason":"The failed check needs a stronger execution model."}),
-                    "Remediation proposal · escalate model",
+                    "Failure judgment · escalate model",
                 ),
                 (
                     "insert",
                     serde_json::json!({"action":"insert","tasks":[{"title":"Repair the check boundary","goal":"Fix the failing boundary before retrying current.","criteria":["The check passes"]},{"title":"Verify repaired boundary","goal":"Confirm the repair.","criteria":["Regression passes"]}],"reason":"Isolate the failing boundary first."}),
-                    "Remediation proposal · insert repair tasks",
+                    "Failure judgment · insert prerequisites",
                 ),
                 (
-                    "cancel",
-                    serde_json::json!({"action":"escalate","model":{"provider":"codex","model":"cancelled-model","effort":"high"},"reason":"Cancel must preserve state."}),
-                    "Remediation proposal · escalate model",
+                    "ask",
+                    serde_json::json!({"action":"ask","question":"Which boundary should be authoritative?","reason":"Only the owner can settle the product behavior."}),
+                    "Failure judgment · ask owner",
                 ),
             ] {
-                exercise_remediation(name, proposal, expected, mouse, approval)?;
+                exercise_remediation(name, proposal.clone(), expected, mouse, approval, false)?;
+                exercise_remediation(name, proposal, expected, mouse, approval, true)?;
             }
         }
     }
@@ -770,6 +781,7 @@ fn exercise_remediation(
     expected: &str,
     mouse: bool,
     approval: ktask_rs_mk3::application::preferences::PlannerApproval,
+    cancel: bool,
 ) -> Result {
     use ktask_rs_mk3::application::preferences::{Continuation, PlannerApproval, Preferences};
     let scratch = support::sandbox()?;
@@ -810,10 +822,16 @@ fn exercise_remediation(
         serde_json::from_slice(&fs::read(root.join("provider-schema"))?)?;
     assert_eq!(schema["type"], "object");
     assert_eq!(schema["additionalProperties"], false);
-    assert_eq!(schema["required"], serde_json::json!(["proposal"]));
-    assert!(schema["properties"]["proposal"]["anyOf"].is_array());
+    assert_eq!(schema["required"], serde_json::json!(["judgment"]));
+    assert_eq!(
+        schema["properties"]["judgment"]["anyOf"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
     assert!(fs::read_to_string(root.join("provider-prompt"))?.contains("transcript evidence"));
-    if name == "cancel" {
+    if cancel {
         if mouse {
             terminal.click("Cancel")?;
         } else {
@@ -824,7 +842,7 @@ fn exercise_remediation(
     } else {
         terminal.send("\x13")?;
     }
-    if name != "cancel" {
+    if !cancel {
         println!(
             "REMEDIATION {name} APPLIED\n{}",
             terminal.screen("applied", |s| s.contains("Saved to SQLite"))?
@@ -832,14 +850,14 @@ fn exercise_remediation(
     } else {
         println!(
             "REMEDIATION CANCELLED\n{}",
-            terminal.screen("cancelled", |s| !s.contains("Remediation proposal"))?
+            terminal.screen("cancelled", |s| !s.contains("Failure judgment ·"))?
         );
     }
     let after = service.task(id)?.unwrap();
     assert_eq!(attempts_contents(root)?, attempts_before);
     assert_eq!(after.attempts[0].id, attempt);
     assert_eq!(after.attempts[0].state, "failed");
-    if name == "cancel" {
+    if cancel {
         assert_eq!(storage_contents(root)?, storage_before);
         assert_eq!(after.revisions.len(), before.revisions.len());
         assert_eq!(after.version, before.version);
@@ -857,10 +875,20 @@ fn verify_applied_remediation(
     name: &str,
     approval: ktask_rs_mk3::application::preferences::PlannerApproval,
 ) -> Result {
-    use ktask_rs_mk3::application::preferences::PlannerApproval;
     let mut service = service(root)?;
     let after = service.task(id)?.unwrap();
     match name {
+        "repair" => {
+            assert_eq!(after.revisions.len(), 1);
+            assert!(
+                service
+                    .remediation_evidence(id, &root.join("state/ktask-dev"))?
+                    .contains("Fix the check boundary and verify it.")
+            );
+        }
+        "revise" => {
+            verify_revised_remediation(root, id, &after, approval)?;
+        }
         "escalate" => {
             assert_eq!(after.revisions.len(), 2);
             let revision = after.revisions.last().unwrap();
@@ -880,31 +908,241 @@ fn verify_applied_remediation(
             assert_eq!(reason, "The failed check needs a stronger execution model.");
         }
         "insert" => {
-            let snapshot = service.snapshot()?;
-            assert_eq!(snapshot.queue.len(), 3);
+            verify_inserted_remediation(&mut service, id, approval)?;
+        }
+        "ask" => {
+            assert_eq!(after.revisions.len(), 1);
             assert_eq!(
-                snapshot.queue[1].definition().definition.title,
-                "Verify repaired boundary"
+                service.open_question(id)?.unwrap().1,
+                "Which boundary should be authoritative?"
             );
-            assert_eq!(snapshot.queue[2].id, id);
-            assert_eq!(
-                snapshot.queue[0].definition().definition.title,
-                "Repair the check boundary"
-            );
-            assert_eq!(
-                snapshot.queue[0].definition().lifecycle,
-                if approval == PlannerApproval::Automatic {
-                    "ready"
-                } else {
-                    "draft"
-                }
-            );
-            assert_eq!(
-                snapshot.queue[0].revisions[0].actor.as_deref(),
-                Some("ai: remediator")
-            );
+            let db = Database::open_in(&root.join("state/ktask-dev"))?;
+            let reason: String = db.connection().query_row("SELECT message FROM events WHERE task_id=?1 AND kind='remediation.ask' ORDER BY id DESC LIMIT 1", [id], |row| row.get(0))?;
+            assert!(reason.contains("Only the owner can settle the product behavior."));
         }
         _ => unreachable!(),
+    }
+    Ok(())
+}
+
+fn verify_revised_remediation(
+    root: &Path,
+    id: i64,
+    task: &ktask_rs_mk3::application::Task,
+    approval: ktask_rs_mk3::application::preferences::PlannerApproval,
+) -> Result {
+    use ktask_rs_mk3::application::preferences::PlannerApproval;
+    assert_eq!(task.revisions.len(), 2);
+    let revision = task.revisions.last().unwrap();
+    assert_eq!(revision.definition.title, "Revised failed task");
+    assert_eq!(revision.definition.goal, "Prove the corrected behavior");
+    assert_eq!(
+        revision.definition.criteria,
+        ["Correct behavior is verified"]
+    );
+    assert_eq!(revision.actor.as_deref(), Some("ai: judge"));
+    assert_eq!(
+        revision.lifecycle,
+        if approval == PlannerApproval::Automatic {
+            "ready"
+        } else {
+            "draft"
+        }
+    );
+    let db = Database::open_in(&root.join("state/ktask-dev"))?;
+    let reason: String = db.connection().query_row(
+        "SELECT change_reason FROM task_revisions WHERE task_id=?1 AND revision=?2",
+        rusqlite::params![id, revision.number],
+        |row| row.get(0),
+    )?;
+    assert_eq!(reason, "The original goal missed the boundary.");
+    Ok(())
+}
+
+#[test]
+fn revised_failure_waits_for_approval_before_queue_continues() -> Result {
+    use ktask_rs_mk3::application::preferences::{Continuation, PlannerApproval};
+    for mouse in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        support::empty_repository(root)?;
+        let (id, attempt) = failed_task(root)?;
+        let mut writer = service(root)?;
+        writer.set_check("proof", "true", 60_000)?;
+        let config = root.join("config/ktask-dev");
+        let previous = writer.preferences(&config)?;
+        let mut review = previous.clone();
+        review.planner_approval = PlannerApproval::ReviewRequired;
+        review.continuation = Continuation::Queue;
+        writer.save_preferences(&config, &previous, &review)?;
+        let attempts_before = attempts_contents(root)?;
+        provider_fixture(
+            root,
+            serde_json::json!({"action":"revise","title":"Revised failed task","goal":"Prove the corrected behavior","criteria":["Correct behavior is verified"],"reason":"The original goal missed the boundary."}),
+            false,
+        )?;
+        let mut terminal = terminal(root)?;
+        terminal.screen("failed current", |s| s.contains("d Remediate"))?;
+        if mouse {
+            terminal.click("d Remediate")?;
+        } else {
+            terminal.send("d")?;
+        }
+        let proposal = terminal.screen("revise judgment", |s| {
+            s.contains("Failure judgment · revise task")
+        })?;
+        println!("REVISE BEFORE APPROVAL mouse={mouse}\n{proposal}");
+
+        // Any accidental continuation now has a configured check and reaches a real attempt.
+        // The replacement provider exits promptly so even a regression cannot leave a worker.
+        let approved_prompt = root.join("approved-prompt");
+        fs::write(
+            root.join("bin/codex"),
+            format!("#!/bin/sh\ncat > '{}'\nexit 9\n", approved_prompt.display()),
+        )?;
+        if mouse {
+            terminal.click("Apply")?;
+        } else {
+            terminal.send("\x13")?;
+        }
+        terminal.screen("draft awaits approval", |s| {
+            s.contains("Pending revision 2 · needs approval")
+        })?;
+        terminal.send("2")?;
+        terminal.screen("queue event processed", |s| s.contains("Queue · 1 / 1"))?;
+        assert_eq!(attempts_contents(root)?, attempts_before);
+        assert!(!approved_prompt.exists());
+        let draft = writer.task(id)?.unwrap();
+        assert_eq!(draft.attempts.len(), 1);
+        assert_eq!(draft.attempts[0].id, attempt);
+        verify_revised_remediation(root, id, &draft, PlannerApproval::ReviewRequired)?;
+        terminal.send("1")?;
+        let pending = terminal.screen("owner approval pending", |s| {
+            s.contains("Pending revision 2 · needs approval") && s.contains("v Approve")
+        })?;
+        println!("REVISE AWAITS APPROVAL mouse={mouse}\n{pending}");
+
+        if mouse {
+            terminal.click("v Approve")?;
+        } else {
+            terminal.send("v")?;
+        }
+        let after = terminal.screen("approved revision attempted", |s| {
+            s.contains("Attempt 2") && s.contains("FAILED")
+        })?;
+        println!("REVISE AFTER APPROVAL mouse={mouse}\n{after}");
+        let task = writer.task(id)?.unwrap();
+        assert_eq!(task.attempts.len(), 2);
+        assert_eq!(task.attempts[0].id, attempt);
+        assert_eq!(task.attempts[1].revision, 2);
+        assert_eq!(task.definition().number, 2);
+        assert!(fs::read_to_string(approved_prompt)?.contains("Task: Revised failed task"));
+        quit(&mut terminal)?;
+    }
+    Ok(())
+}
+
+fn verify_inserted_remediation(
+    service: &mut Service,
+    id: i64,
+    approval: ktask_rs_mk3::application::preferences::PlannerApproval,
+) -> Result {
+    use ktask_rs_mk3::application::preferences::PlannerApproval;
+    let snapshot = service.snapshot()?;
+    assert_eq!(snapshot.queue.len(), 3);
+    assert_eq!(
+        snapshot.queue[1].definition().definition.title,
+        "Verify repaired boundary"
+    );
+    assert_eq!(snapshot.queue[2].id, id);
+    assert_eq!(
+        snapshot.queue[0].definition().definition.title,
+        "Repair the check boundary"
+    );
+    assert_eq!(
+        snapshot.queue[0].definition().lifecycle,
+        if approval == PlannerApproval::Automatic {
+            "ready"
+        } else {
+            "draft"
+        }
+    );
+    assert_eq!(
+        snapshot.queue[0].revisions[0].actor.as_deref(),
+        Some("ai: remediator")
+    );
+    Ok(())
+}
+
+#[test]
+fn failed_judge_question_can_be_answered_by_mouse_and_keyboard() -> Result {
+    use ktask_rs_mk3::application::preferences::{Continuation, Preferences};
+    for mouse in [false, true] {
+        let scratch = support::sandbox()?;
+        let root = scratch.path();
+        support::empty_repository(root)?;
+        let (id, _) = failed_task(root)?;
+        let writer = service(root)?;
+        let config = root.join("config/ktask-dev");
+        let previous = writer.preferences(&config)?;
+        writer.save_preferences(
+            &config,
+            &previous,
+            &Preferences {
+                version: 0,
+                mouse: true,
+                planner_approval: previous.planner_approval,
+                continuation: Continuation::Single,
+            },
+        )?;
+        provider_fixture(
+            root,
+            serde_json::json!({"action":"ask","question":"Which behavior is intended?","reason":"Product decision is missing."}),
+            false,
+        )?;
+        let mut terminal = terminal(root)?;
+        terminal.screen("failed current", |screen| screen.contains("d Remediate"))?;
+        if mouse {
+            terminal.click("d Remediate")?;
+        } else {
+            terminal.send("d")?;
+        }
+        terminal.screen("ask judgment", |screen| {
+            screen.contains("Failure judgment · ask owner")
+        })?;
+        if mouse {
+            terminal.click("Apply")?;
+        } else {
+            terminal.send("\x13")?;
+        }
+        let screen = terminal.screen("open question", |screen| {
+            screen.contains("Which behavior is intended?") && screen.contains("Owner decision")
+        })?;
+        if mouse {
+            terminal.click("Owner decision")?;
+        } else {
+            terminal.send("w")?;
+        }
+        terminal.screen("answer form", |screen| {
+            screen.contains("Answer AI question")
+        })?;
+        terminal.send("Keep the documented behavior")?;
+        if mouse {
+            terminal.click("Apply")?;
+        } else {
+            terminal.send("\x13")?;
+        }
+        terminal.screen("answered", |screen| {
+            !screen.contains("Answer AI question") && screen.contains("FAILED")
+        })?;
+        assert!(service(root)?.open_question(id)?.is_none());
+        assert!(
+            service(root)?
+                .failure_decisions(id)?
+                .contains("Keep the documented behavior")
+        );
+        println!("JUDGE QUESTION mouse={mouse}\n{screen}");
+        quit(&mut terminal)?;
     }
     Ok(())
 }
@@ -935,7 +1173,7 @@ fn remediation_stalled_provider_can_cancel_and_quit_without_leaking_children() -
         println!(
             "REMEDIATION STALLED {input}\n{}",
             terminal.screen("pending proposal", |s| s
-                .contains("Requesting remediation proposal"))?
+                .contains("Requesting failure judgment"))?
         );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while !root.join("descendant-pid").exists() {
@@ -944,7 +1182,7 @@ fn remediation_stalled_provider_can_cancel_and_quit_without_leaking_children() -
         }
         terminal.send("\r")?;
         terminal.screen("pending Enter is inert", |s| {
-            s.contains("Requesting remediation proposal") && !s.contains("Simulation")
+            s.contains("Requesting failure judgment") && !s.contains("Simulation")
         })?;
         match input {
             "mouse" => terminal.click("Cancel")?,
@@ -955,7 +1193,7 @@ fn remediation_stalled_provider_can_cancel_and_quit_without_leaking_children() -
             println!(
                 "REMEDIATION REQUEST CANCELLED {input}\n{}",
                 terminal.screen("cancelled pending request", |s| !s
-                    .contains("Requesting remediation proposal"))?
+                    .contains("Requesting failure judgment"))?
             );
             terminal.send("2")?;
             println!(
@@ -1013,7 +1251,7 @@ fn remediation_reaps_pipe_holding_descendants_and_reports_provider_failure() -> 
         let expected = if fail {
             "fixture-provider-failed"
         } else {
-            "Remediation proposal · escalate model"
+            "Failure judgment · escalate model"
         };
         println!(
             "REMEDIATION PIPE HOLDER fail={fail}\n{}",

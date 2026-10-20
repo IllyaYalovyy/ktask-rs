@@ -127,8 +127,8 @@ printf '{{"type":"thread.started","thread_id":"%s"}}\n' "$session"
 printf '%s\n' "$model" >> "$HOME/provider-invocations"
 mkdir -p "$TMPDIR/generated/deep"
 printf debris > "$TMPDIR/generated/deep/file"
-case "$prompt" in *"read-only remediation planner"*)
- printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"proposal\":{{\"action\":\"insert\",\"tasks\":[{{\"title\":\"Manual repair prerequisite\",\"goal\":\"Finish the preserved result\",\"criteria\":[\"result.txt contains verified\"]}}],\"reason\":\"Preserve the partial implementation before the repair\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
+case "$prompt" in *"Interactive Remediate action"*)
+ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"{{\"judgment\":{{\"action\":\"insert\",\"tasks\":[{{\"title\":\"Manual repair prerequisite\",\"goal\":\"Finish the preserved result\",\"criteria\":[\"result.txt contains verified\"]}}],\"reason\":\"Preserve the partial implementation before the repair\"}}}}"}}}}' '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_tokens":40,"output_tokens":10}}}}'; exit 0;;
 esac
 case "$prompt" in *"You are the failure judge"*)
  printf '%s' "$prompt" > "$HOME/prompt-judge"
@@ -1919,7 +1919,7 @@ fn tui_remediation_handoff_preserves_dirty_work_and_failed_attempt() -> Result {
         }
         println!(
             "DIRTY HANDOFF PROPOSAL mouse={mouse}\n{}",
-            t.screen("proposal", |s| s.contains("Remediation proposal"))?
+            t.screen("proposal", |s| s.contains("Failure judgment"))?
         );
         if mouse {
             t.click("Apply")?;

@@ -70,11 +70,11 @@ fn add(root: &Path, title: &str) -> Result<i64> {
 }
 
 #[test]
-fn cli_remediate_json_returns_proposal_receipts_and_exit_four_for_noncurrent() -> Result {
+fn cli_remediate_json_returns_judgment_receipts_and_exit_four_for_noncurrent() -> Result {
     use ktask_rs_mk3::application::{Definition, Kind, ModelConfig, Service, VersionedTask};
     use ktask_rs_mk3::storage::Database;
     use std::{fs, os::unix::fs::PermissionsExt};
-    for action in ["insert", "escalate"] {
+    for action in ["repair", "revise", "insert", "escalate", "ask"] {
         let scratch = support::sandbox()?;
         let root = scratch.path();
         support::empty_repository(root)?;
@@ -136,13 +136,25 @@ fn cli_remediate_json_returns_proposal_receipts_and_exit_four_for_noncurrent() -
 
         let bin = root.join("bin");
         fs::create_dir_all(&bin)?;
-        let proposal = serde_json::json!({"action":"insert","tasks":[{"title":"Repair via CLI","goal":"Fix the failure before retry.","criteria":["Check passes"]}],"reason":"The failed check needs a focused repair."});
-        let proposal = if action == "escalate" {
-            serde_json::json!({"action":"escalate","model":{"provider":"codex","model":"stronger-model","effort":"max"},"reason":"Use stronger reasoning for the failure."})
-        } else {
-            proposal
+        let judgment = match action {
+            "repair" => {
+                serde_json::json!({"action":"repair","plan":"Repair the failing check","reason":"Task is sound"})
+            }
+            "revise" => {
+                serde_json::json!({"action":"revise","title":"Revised CLI task","goal":"Verify behavior","criteria":["Behavior passes"],"reason":"Clarify boundary"})
+            }
+            "insert" => {
+                serde_json::json!({"action":"insert","tasks":[{"title":"Repair via CLI","goal":"Fix the failure before retry.","criteria":["Check passes"]}],"reason":"The failed check needs a focused repair."})
+            }
+            "escalate" => {
+                serde_json::json!({"action":"escalate","model":{"provider":"codex","model":"stronger-model","effort":"max"},"reason":"Use stronger reasoning for the failure."})
+            }
+            "ask" => {
+                serde_json::json!({"action":"ask","question":"Which behavior is intended?","reason":"Owner decision required"})
+            }
+            _ => unreachable!(),
         };
-        let events = [serde_json::json!({"type":"thread.started","thread_id":"cli-fixture"}), serde_json::json!({"type":"item.completed","item":{"type":"agent_message","text":serde_json::json!({"proposal":proposal}).to_string()}}), serde_json::json!({"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}})].iter().map(serde_json::Value::to_string).collect::<Vec<_>>().join("\n") + "\n";
+        let events = [serde_json::json!({"type":"thread.started","thread_id":"cli-fixture"}), serde_json::json!({"type":"item.completed","item":{"type":"agent_message","text":serde_json::json!({"judgment":judgment}).to_string()}}), serde_json::json!({"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}})].iter().map(serde_json::Value::to_string).collect::<Vec<_>>().join("\n") + "\n";
         let output_file = root.join("events.jsonl");
         fs::write(&output_file, events)?;
         let executable = bin.join("codex");
@@ -161,7 +173,7 @@ fn cli_remediate_json_returns_proposal_receipts_and_exit_four_for_noncurrent() -
             .arg("--json")
             .args(["remediate", &id.to_string()]);
         let preview = json_result(command.output()?, 0)?;
-        assert_eq!(preview["data"]["proposal"]["action"], action);
+        assert_eq!(preview["data"]["judgment"], judgment);
         assert_eq!(preview["data"]["receipts"].as_array().unwrap().len(), 0);
         let mut command = process(DEV, root);
         command
@@ -170,36 +182,16 @@ fn cli_remediate_json_returns_proposal_receipts_and_exit_four_for_noncurrent() -
             .args(["remediate", &id.to_string(), "--apply"]);
         let applied = json_result(command.output()?, 0)?;
         assert_eq!(applied["schema_version"], 1);
-        assert_eq!(applied["data"]["receipts"].as_array().unwrap().len(), 1);
-        let mut verify = Service::open(
-            Database::open_in(&root.join("state/ktask-dev"))?,
-            root,
-            None,
-        )?;
-        let original = verify.task(id)?.unwrap();
-        assert_eq!(format!("{:?}", original.attempts), attempt_before);
-        if action == "escalate" {
-            assert_eq!(
-                original.definition().definition.models[0]
-                    .as_ref()
-                    .unwrap()
-                    .model,
-                "stronger-model"
-            );
-            assert_eq!(original.revisions.len(), 2);
-        }
-        let snapshot = verify.snapshot()?;
-        let receipt = applied["data"]["receipts"][0].as_i64().unwrap();
-        let inserted = snapshot
-            .queue
-            .iter()
-            .find(|task| task.id == receipt)
-            .unwrap();
-        assert_eq!(inserted.definition().lifecycle, "ready");
+        assert_eq!(applied["data"]["judgment"], judgment);
         assert_eq!(
-            inserted.definition().actor.as_deref(),
-            Some("ai: remediator")
+            applied["data"]["receipts"].as_array().unwrap().len(),
+            if matches!(action, "repair" | "ask") {
+                0
+            } else {
+                1
+            }
         );
+        let version = verify_cli_judgment(root, id, action, &attempt_before, &applied)?;
         let rejected = json(root, &["remediate", &other.to_string()], 4)?;
         assert_eq!(rejected["error"]["code"], "conflict");
         println!(
@@ -216,10 +208,79 @@ fn cli_remediate_json_returns_proposal_receipts_and_exit_four_for_noncurrent() -
             .args(["--json", "remediate", &id.to_string(), "--apply"]);
         let failed = json_result(command.output()?, 4)?;
         assert_eq!(failed["error"]["code"], "conflict");
-        assert_eq!(verify.task(id)?.unwrap().version, original.version);
+        let mut verify = Service::open(
+            Database::open_in(&root.join("state/ktask-dev"))?,
+            root,
+            None,
+        )?;
+        assert_eq!(verify.task(id)?.unwrap().version, version);
         println!("CLI REMEDIATE FAILURE\n{failed}");
     }
     Ok(())
+}
+
+fn verify_cli_judgment(
+    root: &Path,
+    id: i64,
+    action: &str,
+    attempt_before: &str,
+    applied: &Value,
+) -> Result<i64> {
+    use ktask_rs_mk3::{application::Service, storage::Database};
+    let mut service = Service::open(
+        Database::open_in(&root.join("state/ktask-dev"))?,
+        root,
+        None,
+    )?;
+    let task = service.task(id)?.unwrap();
+    if action != "ask" {
+        assert_eq!(format!("{:?}", task.attempts), attempt_before);
+    } else {
+        assert_eq!(task.attempts[0].state, "failed");
+        assert_eq!(task.attempts[0].outcome.as_deref(), Some("fixture failure"));
+    }
+    match action {
+        "escalate" => {
+            assert_eq!(
+                task.definition().definition.models[0]
+                    .as_ref()
+                    .unwrap()
+                    .model,
+                "stronger-model"
+            );
+            assert_eq!(task.revisions.len(), 2);
+        }
+        "insert" => {
+            let receipt = applied["data"]["receipts"][0].as_i64().unwrap();
+            let snapshot = service.snapshot()?;
+            let inserted = snapshot
+                .queue
+                .iter()
+                .find(|task| task.id == receipt)
+                .unwrap();
+            assert_eq!(inserted.definition().lifecycle, "ready");
+            assert_eq!(
+                inserted.definition().actor.as_deref(),
+                Some("ai: remediator")
+            );
+        }
+        "revise" => {
+            let revision = task.revisions.last().unwrap();
+            assert_eq!(revision.actor.as_deref(), Some("ai: judge"));
+            assert_eq!(revision.definition.title, "Revised CLI task");
+        }
+        "ask" => assert_eq!(
+            service.open_question(id)?.unwrap().1,
+            "Which behavior is intended?"
+        ),
+        "repair" => assert!(
+            service
+                .failure_decisions(id)?
+                .contains("Repair the failing check")
+        ),
+        _ => unreachable!(),
+    }
+    Ok(task.version)
 }
 
 #[test]

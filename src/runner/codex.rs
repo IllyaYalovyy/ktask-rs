@@ -25,18 +25,6 @@ pub struct Evidence {
 }
 
 #[derive(Clone, Debug, Deserialize, serde::Serialize)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-pub enum RemediationProposal {
-    Escalate {
-        model: ModelConfig,
-        reason: String,
-    },
-    Insert {
-        tasks: Vec<RepairTask>,
-        reason: String,
-    },
-}
-#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RepairTask {
     pub title: String,
@@ -80,9 +68,13 @@ pub fn judge_schema() -> Value {
 }
 
 pub fn judge_prompt(run: &Run, evidence: &str) -> String {
+    judge_prompt_for(&run.definition, evidence)
+}
+
+pub fn judge_prompt_for(definition: &crate::application::Definition, evidence: &str) -> String {
     format!(
         "You are the failure judge: a read-only senior engineer who decides what happens after a failed attempt. You cannot build, run tests or edit files, and you must not ask to; judge from the repository and the failure evidence. Before choosing, inspect the current working tree and verify each reported defect against current code: historical reports may predate committed or uncommitted repairs. Treat old findings as claims to check, not instructions to repeat. Prior failure-judge plans authorize repair scope; reconcile a scope-creep allegation with those plans before ordering removal of diagnostics. If the reported defect is already fixed, direct verification of the current implementation rather than undoing useful work or inventing another defect. Consider recorded answers before asking an already answered question. Cite current file/line evidence for remaining defects and distinguish unverified claims. Return exactly one judgment:\n- repair: the task is right and the fix is within reach; give the next worker a concrete plan (what was wrong, what to change, where, how to prove it). Prefer this.\n- revise: the task definition itself is wrong, unclear, contradictory or too big; return a replacement title, goal and acceptance criteria that keep the owner's intent and can actually be met.\n- insert: prerequisite work is missing; return ordinary tasks to run before this one, each independently verifiable.\n- escalate: the evidence shows the model, not the task, is the limit; provider codex only, a stronger model or effort than {}.\n- ask: only for a product decision that the owner alone can make. Permissions, sandbox limits, environment and tooling are never questions.\nHigh-level goals are expected: missing implementation detail alone is not a reason to revise, split, or ask. Preserve the full goal and acceptance bar; never weaken them to make a failure pass. Hold the Clean Code bar. Keep the reason specific and cite evidence.\nTask: {}\nGoal: {}\nCriteria:\n{}\nFailure evidence:\n{evidence}",
-        run.definition.models[0]
+        definition.models[0]
             .as_ref()
             .map_or("the current model".to_owned(), |m| format!(
                 "{}/{} {}",
@@ -90,9 +82,9 @@ pub fn judge_prompt(run: &Run, evidence: &str) -> String {
                 m.model,
                 m.effort.as_deref().unwrap_or("default effort")
             )),
-        run.definition.title,
-        run.definition.goal,
-        numbered(&run.definition.criteria),
+        definition.title,
+        definition.goal,
+        numbered(&definition.criteria),
     )
 }
 
@@ -284,28 +276,14 @@ fn readonly_proposal(
     Ok(response)
 }
 
-pub fn remediation_schema() -> Value {
-    json!({"type":"object","additionalProperties":false,"required":["proposal"],"properties":{"proposal":{"anyOf":[
-        {"type":"object","additionalProperties":false,"required":["action","model","reason"],"properties":{"action":{"type":"string","enum":["escalate"]},"model":{"type":"object","additionalProperties":false,"required":["provider","model","effort"],"properties":{"provider":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]}}},"reason":{"type":"string"}}},
-        {"type":"object","additionalProperties":false,"required":["action","tasks","reason"],"properties":{"action":{"type":"string","enum":["insert"]},"tasks":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["title","goal","criteria"],"properties":{"title":{"type":"string"},"goal":{"type":"string"},"criteria":{"type":"array","minItems":1,"items":{"type":"string"}}}}},"reason":{"type":"string"}}}
-    ]}}})
-}
-
-pub fn remediation_prompt(title: &str, goal: &str, evidence: &str) -> String {
-    format!(
-        "You are a read-only remediation planner. Do not edit files or run commands. Based on failure evidence, return an object with one proposal field containing exactly one structured proposal: either escalate the execution model/effort as a new revision, or insert one or more ordinary repair tasks before current. Use only codex provider for escalation. Keep reason specific.\nTask: {title}\nGoal: {goal}\nFailure evidence:\n{evidence}"
-    )
-}
-
 pub fn propose_remediation(
     cancelled: &std::sync::atomic::AtomicBool,
     model: &ModelConfig,
-    title: &str,
-    goal: &str,
+    definition: &crate::application::Definition,
     evidence: &str,
     scratch_root: &std::path::Path,
     cwd: &std::path::Path,
-) -> Result<RemediationProposal> {
+) -> Result<Judgment> {
     use crate::scratch::Scratch;
     let executable = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|p| p.join("codex"))
@@ -313,10 +291,10 @@ pub fn propose_remediation(
         .ok_or_else(|| Error::Conflict("codex executable not found on PATH".into()))?
         .canonicalize()?;
     let scratch = Scratch::new(scratch_root)?;
-    let schema = scratch.path().join("remediation-schema.json");
+    let schema = scratch.path().join("judgment-schema.json");
     std::fs::write(
         &schema,
-        serde_json::to_vec(&remediation_schema()).map_err(std::io::Error::other)?,
+        serde_json::to_vec(&judge_schema()).map_err(std::io::Error::other)?,
     )?;
     let step = Step {
         id: 0,
@@ -330,7 +308,10 @@ pub fn propose_remediation(
         schema.display().to_string(),
         "-".into(),
     ]);
-    let prompt = remediation_prompt(title, goal, evidence);
+    let prompt = format!(
+        "Interactive Remediate action.\n{}",
+        judge_prompt_for(definition, evidence)
+    );
     let (code, stdout, stderr) = super::process::capture_readonly(
         &super::process::Invocation {
             executable,
@@ -357,43 +338,9 @@ pub fn propose_remediation(
             "Remediation provider returned an incomplete response".into(),
         ));
     }
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Response {
-        proposal: RemediationProposal,
-    }
-    let response: Response = serde_json::from_str(stream.last_message.as_deref().unwrap_or(""))
-        .map_err(|e| Error::Conflict(format!("Invalid remediation proposal: {e}")))?;
-    let proposal = response.proposal;
-    match &proposal {
-        RemediationProposal::Escalate { model, reason } => {
-            if model.provider != "codex"
-                || model.model.trim().is_empty()
-                || model
-                    .effort
-                    .as_ref()
-                    .is_some_and(|effort| effort.trim().is_empty())
-                || reason.trim().is_empty()
-            {
-                return Err(Error::Conflict("Invalid escalation proposal".into()));
-            }
-        }
-        RemediationProposal::Insert { tasks, reason } => {
-            if tasks.is_empty()
-                || reason.trim().is_empty()
-                || tasks.iter().any(|t| {
-                    t.title.trim().is_empty()
-                        || t.goal.trim().is_empty()
-                        || t.criteria.is_empty()
-                        || t.criteria.iter().any(|c| c.trim().is_empty())
-                })
-            {
-                return Err(Error::Conflict("Invalid repair task proposal".into()));
-            }
-        }
-    }
+    let judgment = parse_judgment(stream.last_message.as_deref().unwrap_or(""))?;
     scratch.close()?;
-    Ok(proposal)
+    Ok(judgment)
 }
 
 pub fn schema() -> Value {

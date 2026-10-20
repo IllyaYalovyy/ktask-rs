@@ -181,7 +181,7 @@ pub enum Command {
         #[arg(long, value_parser = nonempty)]
         reason: String,
     },
-    /// Ask the configured remediation model for a proposal; --apply commits it.
+    /// Ask the configured failure judge for a judgment; --apply commits it.
     Remediate {
         #[arg(value_parser = positive)]
         id: i64,

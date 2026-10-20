@@ -224,6 +224,10 @@ impl Service {
             task.id == target.id && task.version == target.version,
             "Current task changed before execution",
         )?;
+        require(
+            task.status != "failed" || self.open_question(task.id)?.is_none(),
+            "Answer the owner question before retrying",
+        )?;
         let resume = matches!(task.status.as_str(), "paused" | "waiting");
         let (attempt, revision, token, active_ms) = if resume {
             let (id, rev, saved, active) = self.db.connection().query_row("SELECT id,revision,execution_token,active_ms FROM attempts WHERE task_id=?1 AND state IN ('paused','waiting')", [task.id], |r| Ok((r.get(0)?,r.get(1)?,r.get::<_,String>(2)?,r.get(3)?)))?;
@@ -352,7 +356,7 @@ impl Service {
             .db
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        require(tx.execute("UPDATE questions SET state='answered',answer=?4,answered_by=?5,resolved_at_ms=?6 WHERE state='open' AND attempt_id IN (SELECT latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3 AND status='waiting')", params![self.project_id,target.id,target.version,answer,self.actor.name,now_ms()])? > 0, "Question changed or task is not current")?;
+        require(tx.execute("UPDATE questions SET state='answered',answer=?4,answered_by=?5,resolved_at_ms=?6 WHERE state='open' AND attempt_id IN (SELECT latest_attempt_id FROM current_tasks WHERE project_id=?1 AND id=?2 AND row_version=?3 AND status IN ('waiting','failed'))", params![self.project_id,target.id,target.version,answer,self.actor.name,now_ms()])? > 0, "Question changed or task is not current")?;
         bump(&tx, target, now_ms())?;
         event(
             &tx,

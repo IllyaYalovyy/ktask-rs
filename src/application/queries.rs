@@ -53,7 +53,30 @@ impl Service {
         let Some(attempt) = attempt else {
             return Ok("No previous attempt output is recorded.".into());
         };
-        self.attempt_evidence(attempt, artifact_root)
+        let mut evidence = self.attempt_evidence(attempt, artifact_root)?;
+        evidence.push_str(&self.failure_decisions(task)?);
+        Ok(evidence)
+    }
+    pub fn failure_decisions(&self, task: i64) -> Result<String> {
+        let mut evidence = String::new();
+        let mut stmt = self.db.connection().prepare(
+            "SELECT message FROM events WHERE project_id=?1 AND task_id=?2 AND kind IN ('remediation.repair','remediation.ask') ORDER BY id DESC LIMIT 10",
+        )?;
+        for message in stmt.query_map(params![self.project_id, task], |row| {
+            row.get::<_, String>(0)
+        })? {
+            evidence.push_str(&format!("\nInteractive failure judgment:\n{}", message?));
+        }
+        let mut stmt = self.db.connection().prepare(
+            "SELECT q.prompt,q.answer FROM questions q JOIN attempts a ON a.id=q.attempt_id WHERE a.project_id=?1 AND a.task_id=?2 AND q.state='answered' ORDER BY q.id DESC LIMIT 10",
+        )?;
+        for answer in stmt.query_map(params![self.project_id, task], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })? {
+            let (question, answer) = answer?;
+            evidence.push_str(&format!("\nOwner answer to '{question}': {answer}"));
+        }
+        Ok(evidence)
     }
     /// Durable output, retained check transcripts and findings of one attempt.
     /// Evidence of one attempt for a read-only judge or remediator. Each source keeps its own
